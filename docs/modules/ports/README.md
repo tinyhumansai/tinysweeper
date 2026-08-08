@@ -38,3 +38,14 @@ difference between a cheap re-review and a ruinous one.
 | --- | --- |
 | `forge.rs` | `ForgeRead`, `ForgeWrite` |
 | `model.rs` | `Model`, plus `Message`, `ModelRequest`, `ModelResponse`, `Usage` |
+| `embed.rs` | `Embedder` |
+| `index.rs` | `ChunkIndex` |
+| `graph.rs` | `GraphStore` |
+| `knowledge.rs` | `KnowledgeStore` |
+
+## The retrieval ports
+
+Four traits, one adapter module. Their value types live in `src/index/types.rs`
+and the reasoning behind their shape — why `Embedder` must be able to name
+itself, why `ChunkIndex` needs deletes, and what MongoDB has to be — is in
+[`docs/modules/index/README.md`](../index/README.md).
