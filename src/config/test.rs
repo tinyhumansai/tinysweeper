@@ -24,6 +24,32 @@ fn repo(config: Option<&str>, presets: &[(&str, &str)]) -> TempDir {
     dir
 }
 
+/// Write a rule document into a repository skeleton's `presets/rules/`.
+fn with_rules(dir: &TempDir, name: &str, text: &str) {
+    let rules_dir = dir.path().join("presets").join("rules");
+    std::fs::create_dir_all(&rules_dir).expect("create rules dir");
+    std::fs::write(rules_dir.join(format!("{name}.md")), text).expect("write rule document");
+}
+
+/// Copy this repository's own rule documents into a skeleton, so a shipped
+/// preset that references one resolves.
+fn with_shipped_rules(dir: &TempDir) {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("presets")
+        .join("rules");
+    for entry in std::fs::read_dir(&source).expect("read shipped rules") {
+        let entry = entry.expect("dir entry");
+        if entry.path().extension().is_some_and(|e| e == "md") {
+            let name = entry.path().file_stem().unwrap().to_string_lossy().into_owned();
+            with_rules(
+                dir,
+                &name,
+                &std::fs::read_to_string(entry.path()).expect("read rule document"),
+            );
+        }
+    }
+}
+
 fn parse(text: &str) -> Config {
     let dir = repo(Some(text), &[]);
     load(dir.path(), None).expect("loads").config
