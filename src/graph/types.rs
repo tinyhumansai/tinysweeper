@@ -219,11 +219,16 @@ pub enum UnresolvedReason {
     UnknownSymbol,
 }
 
-/// What the resolver could not turn into an edge.
+/// An import specifier the resolver could not turn into an edge.
 ///
 /// The whole point of keeping these is that coverage is *measurable*. A
 /// resolver that silently drops what it cannot handle reports the same
 /// (perfect) success rate whether it resolves everything or nothing.
+///
+/// Only import specifiers are listed. Ambiguous *usages* are counted in
+/// [`Coverage`] instead: `new` and `len` are defined in dozens of files on any
+/// real repository, and listing each occurrence would bury the handful of
+/// broken imports this list exists to surface.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unresolved {
     /// The file the specifier or usage was written in.
