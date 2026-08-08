@@ -593,11 +593,17 @@ mod tests {
             .await
             .expect("posted");
 
+        let read_back = forge.review_comments(&repo(), 7).await.expect("read");
         assert_eq!(
-            forge.review_comments(&repo(), 7).await.expect("read"),
-            vec![comment],
+            read_back.len(),
+            1,
             "dedupe reads these back; a mock that dropped them would make every \
              dedupe test pass for the wrong reason"
+        );
+        assert_eq!(read_back[0].body, comment.body);
+        assert_eq!(
+            read_back[0].author, "tinysweeper[bot]",
+            "the forge assigns the author, and dedupe only trusts our own"
         );
     }
 
