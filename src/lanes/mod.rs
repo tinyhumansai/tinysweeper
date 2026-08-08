@@ -24,7 +24,7 @@ use crate::evidence::diff::FileDiff;
 use crate::findings::types::Finding;
 use crate::forge::types::{CheckConclusion, Commit, PullRequest};
 use crate::harness::schema::LaneResponse;
-use crate::ports::model::Usage;
+use crate::ports::model::Spend;
 use crate::scan::types::{Finding as ScanFinding, ScanKind};
 
 /// Everything a lane is given.
@@ -113,8 +113,8 @@ pub struct LaneOutcome {
     pub findings: Vec<Finding>,
     /// Titles of earlier findings this revision fixed.
     pub resolved: Vec<String>,
-    /// What the model calls cost.
-    pub usage: Usage,
+    /// What the model calls cost, and which models actually answered.
+    pub spend: Spend,
     /// Set when the lane did not apply to this pull request at all.
     pub skipped: Option<String>,
 }
@@ -140,7 +140,7 @@ impl LaneOutcome {
         parsed: LaneResponse,
         diffs: &[FileDiff],
         anchoring: Anchoring,
-        usage: Usage,
+        spend: Spend,
     ) -> Self {
         let mut findings = Vec::new();
         let mut discarded = 0usize;
@@ -185,7 +185,7 @@ impl LaneOutcome {
             summary,
             findings,
             resolved: parsed.resolved,
-            usage,
+            spend,
             skipped: None,
         }
     }

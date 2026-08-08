@@ -25,7 +25,7 @@ use crate::evidence::diff::{FileDiff, render as render_diffs};
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
-use crate::ports::model::{Message, Model, ModelRequest};
+use crate::ports::model::{Message, Model, ModelRequest, Spend};
 
 /// The tests lane.
 pub struct Tests {
@@ -93,13 +93,16 @@ impl Lane for Tests {
             })
             .await?;
 
+        // Taken before the value is moved out: the spend belongs to the model
+        // that answered, whether or not its answer parses.
+        let spend = Spend::of(&response);
         let parsed = schema::parse(LaneId::Tests, response.value)?;
         Ok(LaneOutcome::from_response(
             LaneId::Tests,
             parsed,
             input.diffs,
             Anchoring::Strict,
-            response.usage,
+            spend,
         ))
     }
 }

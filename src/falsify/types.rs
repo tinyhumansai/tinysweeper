@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use crate::config::types::LaneId;
 use crate::findings::types::Finding;
-use crate::ports::model::Usage;
+use crate::ports::model::Spend;
 
 /// What the filter answers with.
 ///
@@ -50,8 +50,8 @@ pub struct FalsifyOutcome {
     pub findings: Vec<Finding>,
     /// The findings the diff disproved.
     pub rejected: Vec<Rejection>,
-    /// What the call cost.
-    pub usage: Usage,
+    /// What the call cost, and which model it went to.
+    pub spend: Spend,
     /// Set when the pass could not run and let everything through.
     pub failed_open: Option<String>,
 }
