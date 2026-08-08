@@ -61,7 +61,10 @@ impl<'a> Falsifier<'a> {
 
         let request = ModelRequest {
             // Cheap tier: this is a check against one document, not a review.
-            model: self.config.model_for_workload(Workload::Falsify).to_string(),
+            model: self
+                .config
+                .model_for_workload(Workload::Falsify)
+                .to_string(),
             messages: vec![
                 Message::system(INSTRUCTIONS),
                 Message::user(user_message(&findings, rendered_diff)),

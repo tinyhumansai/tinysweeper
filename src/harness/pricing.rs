@@ -224,7 +224,10 @@ mod tests {
     #[test]
     fn an_unpriced_model_does_not_silently_cost_zero() {
         let cost = completion_cost("someone/unreleased", 1_000_000, 0, 0);
-        assert!(cost > 0.0, "an unpriced model must still count against the budget");
+        assert!(
+            cost > 0.0,
+            "an unpriced model must still count against the budget"
+        );
         // The ceiling, not a guess: the most expensive input rate in the table.
         assert!((cost - ceiling().input).abs() < 1e-9, "{cost}");
     }

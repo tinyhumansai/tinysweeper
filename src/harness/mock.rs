@@ -120,7 +120,10 @@ impl MockModel {
 #[async_trait]
 impl Model for MockModel {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse> {
-        let model = self.answers_as.clone().unwrap_or_else(|| request.model.clone());
+        let model = self
+            .answers_as
+            .clone()
+            .unwrap_or_else(|| request.model.clone());
         self.requests.lock().expect("mock model lock").push(request);
 
         let queued = {
@@ -220,6 +223,10 @@ mod tests {
         let model = MockModel::silent().answering_as("vendor/fallback");
         let response = model.complete(request()).await.expect("answers");
         assert_eq!(response.model, "vendor/fallback");
-        assert_eq!(model.requests()[0].model, "mock", "the request is unchanged");
+        assert_eq!(
+            model.requests()[0].model,
+            "mock",
+            "the request is unchanged"
+        );
     }
 }

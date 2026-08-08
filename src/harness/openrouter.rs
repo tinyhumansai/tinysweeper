@@ -15,8 +15,8 @@ use tinyagents::harness::providers::openai::OpenAiModel;
 use tinyagents::harness::runtime::{AgentHarness, RunPolicy};
 
 use crate::config::types::Models;
-use crate::harness::pricing;
 use crate::error::{Error, Result};
+use crate::harness::pricing;
 use crate::ports::model::{Model, ModelRequest, ModelResponse, Role, Usage};
 
 /// A model reached through an OpenAI-compatible gateway.
