@@ -71,6 +71,47 @@ impl fmt::Display for LaneId {
     }
 }
 
+/// What a strictness level means in gate terms.
+///
+/// The defaults are deliberately quiet. A reviewer that raises four things on
+/// every pull request gets read for a week and ignored thereafter, and the
+/// findings people actually want — a real bug, a leaked credential — are the
+/// ones that get lost in that noise. Level 2 posts high-severity findings the
+/// model is genuinely confident about, and folds everything else into the
+/// summary where it costs nobody anything to skim.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Strictness {
+    /// Minimum severity to post.
+    pub severity: Severity,
+    /// Minimum confidence to post.
+    pub confidence: f64,
+    /// A short description, for `doctor`.
+    pub label: &'static str,
+}
+
+impl Strictness {
+    /// The gates for `level`, clamped to the valid range.
+    pub fn for_level(level: u8) -> Self {
+        match level {
+            0 | 1 => Self {
+                severity: Severity::Critical,
+                confidence: 0.85,
+                label: "chill — only findings that are both severe and near-certain",
+            },
+            2 => Self {
+                severity: Severity::High,
+                confidence: 0.75,
+                label: "default — high-severity findings the model is confident about",
+            },
+            _ => Self {
+                severity: Severity::Medium,
+                confidence: 0.55,
+                label: "assertive — medium and above, including less certain calls",
+            },
+        }
+    }
+}
+
 /// How much a finding matters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -201,11 +242,17 @@ pub struct Review {
     /// Which lanes run. Order does not matter; lanes run concurrently.
     pub lanes: Vec<String>,
     /// The single noise dial: 1 chill, 2 default, 3 assertive.
+    ///
+    /// This actually sets the gates — see [`Config::severity_gate`] and
+    /// [`Config::confidence_min`]. It was inert for a while: documented as the
+    /// dial, validated for range, and read by nothing.
     pub strictness: u8,
-    /// Post findings at or above this severity; fold the rest into the summary.
-    pub severity_gate: String,
-    /// Drop findings the model is less sure about than this.
-    pub confidence_min: f64,
+    /// Post findings at or above this severity. Overrides what `strictness`
+    /// would choose; leave it unset unless you need to.
+    pub severity_gate: Option<String>,
+    /// Drop findings the model is less sure about than this. Overrides what
+    /// `strictness` would choose.
+    pub confidence_min: Option<f64>,
     /// Hard cap on posted comments per pull request.
     pub max_comments: usize,
     /// Review only the commits added since the last reviewed SHA.
@@ -468,8 +515,26 @@ impl Config {
     }
 
     /// The severity at or above which findings are posted.
+    ///
+    /// From `strictness` unless the repository set it explicitly.
     pub fn severity_gate(&self) -> Severity {
-        Severity::parse(&self.review.severity_gate).unwrap_or(Severity::Medium)
+        self.review
+            .severity_gate
+            .as_deref()
+            .and_then(Severity::parse)
+            .unwrap_or_else(|| self.strictness().severity)
+    }
+
+    /// The confidence a finding needs before it is posted.
+    pub fn confidence_min(&self) -> f64 {
+        self.review
+            .confidence_min
+            .unwrap_or_else(|| self.strictness().confidence)
+    }
+
+    /// The gates `review.strictness` implies.
+    fn strictness(&self) -> Strictness {
+        Strictness::for_level(self.review.strictness)
     }
 
     /// The lane-specific overrides for `lane`, if it has any.
