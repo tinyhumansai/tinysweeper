@@ -4,11 +4,14 @@
 //! fact about a *person over time*, not about one pull request, and a whitelist
 //! that resets on every run is not a whitelist.
 //!
-//! What lives here is deliberately narrow — identity, trust, and delivery
-//! bookkeeping. Review state stays on GitHub in the durable comment's markers,
-//! so losing this database costs the trust decisions and nothing else. That is
-//! a design choice worth keeping: it means the database is never the thing
-//! standing between a pull request and its review.
+//! What lives here is deliberately narrow — identity, trust, delivery
+//! bookkeeping, and a *cache* of the last review of each pull request. What has
+//! already been said still lives on GitHub, in the `tinysweeper:fp=` markers on
+//! the comments themselves, so losing this database costs the trust decisions
+//! and a prompt-cache hit and nothing else. That is a design choice worth
+//! keeping: it means the database is never the thing standing between a pull
+//! request and its review, and `review_state` must never become the only place
+//! a fingerprint is recorded.
 //!
 //! Two collections carry unique indexes and are used for *claiming* rather than
 //! storing: `deliveries` makes a redelivered webhook a no-op, and `leases` stops
