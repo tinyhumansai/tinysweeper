@@ -323,10 +323,23 @@ pub async fn review_with_state(
     if let Some(store) = store
         && config.review.incremental
     {
+        // What the next review must not repeat: everything already suppressed,
+        // plus the identities this review is about to publish. Recording only
+        // the former would mean a first review remembers nothing, so the second
+        // review re-posts every finding — the exact duplication this store
+        // exists to prevent.
+        let mut fingerprints: BTreeSet<String> = suppressed.iter().cloned().collect();
+        fingerprints.extend(
+            lanes
+                .iter()
+                .flat_map(|lane| lane.findings.iter())
+                .filter_map(|finding| finding.identity.clone()),
+        );
+
         let next = ReviewedState {
             head_sha: context.pull_request.head_sha.clone(),
             evidence: replay::render(&diffs),
-            fingerprints: suppressed.iter().cloned().collect(),
+            fingerprints: fingerprints.into_iter().collect(),
             titles: still_open_titles(&prior_titles, &lanes),
         };
         if let Err(err) = store.save_state(&state_key, &next).await {
