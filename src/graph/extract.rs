@@ -88,11 +88,17 @@ pub fn parse_as(file: &SourceFile, language: Language) -> Result<ParsedFile> {
             && let Some(kind) = lang::symbol_kind(capture_name)
         {
             let name = text(name_node, source);
-            if language == Language::Rust
-                && capture_name == "def.module"
-                && decl_node.child_by_field_name("body").is_none()
-            {
-                bodyless_mods.push((name.clone(), line(name_node)));
+            if language == Language::Rust && capture_name == "def.module" {
+                if decl_node.child_by_field_name("body").is_none() {
+                    bodyless_mods.push((
+                        name.clone(),
+                        rust_path_attribute(decl_node, source),
+                        line(name_node),
+                        decl_node.start_byte(),
+                    ));
+                } else {
+                    inline_mods.push((decl_node.start_byte(), decl_node.end_byte()));
+                }
             }
             defs.push(Definition {
                 name,
