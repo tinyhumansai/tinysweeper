@@ -240,7 +240,8 @@ mod tests {
         let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
         let raw = RawFinding {
             path: "src/lib.rs".into(),
-            line: 1,
+            existing_code: Some("let key = \"…\";".into()),
+            line: Some(1),
             end_line: None,
             rule: "hardcoded-credential".into(),
             title: format!("Remove the hardcoded key {key}"),
@@ -261,7 +262,8 @@ mod tests {
     fn confidence_outside_the_range_is_clamped() {
         let raw = RawFinding {
             path: "src/lib.rs".into(),
-            line: 1,
+            existing_code: Some("let key = \"…\";".into()),
+            line: Some(1),
             end_line: None,
             rule: "r".into(),
             title: "t".into(),
@@ -281,7 +283,8 @@ mod tests {
         let long = "x".repeat(200);
         let raw = RawFinding {
             path: "src/lib.rs".into(),
-            line: 1,
+            existing_code: Some("let key = \"…\";".into()),
+            line: Some(1),
             end_line: None,
             rule: "r".into(),
             title: long,
