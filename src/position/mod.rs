@@ -189,35 +189,36 @@ fn project_old(hunk: &Hunk) -> Vec<(u64, &str)> {
 /// For each line of a hunk, the head-revision line a comment about it should
 /// sit on.
 fn nearest_new_lines(hunk: &Hunk) -> Vec<u64> {
-    let mut anchors = vec![hunk.new_start.max(1); hunk.lines.len()];
+    let mut anchors: Vec<Option<u64>> = vec![None; hunk.lines.len()];
 
-    // Backwards first, so every line inherits the next surviving line: a
-    // comment on a deleted block reads best against the code that replaced it.
-    let mut next = None;
+    // Backwards first, so every line inherits the *next* surviving line: a
+    // comment about a deleted block reads best against the code that replaced
+    // it, which is what follows the deletion.
+    let mut next: Option<u64> = None;
     for (index, line) in hunk.lines.iter().enumerate().rev() {
         if let Some(new_line) = line.new_line {
             next = Some(new_line);
         }
-        if let Some(new_line) = next {
-            anchors[index] = new_line;
-        }
+        anchors[index] = next;
     }
 
-    // Then forwards, for a trailing deletion that has nothing after it.
-    let mut previous = None;
+    // Then forwards, for a deletion at the end of the hunk with nothing after
+    // it to inherit from.
+    let mut previous: Option<u64> = None;
     for (index, line) in hunk.lines.iter().enumerate() {
-        match line.new_line {
-            Some(new_line) => previous = Some(new_line),
-            None if next.is_none() || line.new_line.is_none() => {
-                if anchors[index] == hunk.new_start.max(1)
-                    && let Some(new_line) = previous
-                {
-                    anchors[index] = new_line;
-                }
-            }
-            None => {}
+        if let Some(new_line) = line.new_line {
+            previous = Some(new_line);
+        }
+        if anchors[index].is_none() {
+            anchors[index] = previous;
         }
     }
 
+    // A hunk of nothing but deletions leaves the whole file shorter; its head
+    // revision position is where the hunk starts. Line 0 does not exist.
+    let fallback = hunk.new_start.max(1);
     anchors
+        .into_iter()
+        .map(|anchor| anchor.unwrap_or(fallback))
+        .collect()
 }
