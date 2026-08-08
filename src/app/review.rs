@@ -467,9 +467,10 @@ fn still_open_titles(prior_titles: &[String], lanes: &[LaneProposal]) -> Vec<Str
     // the open-finding count remains meaningful.
     const MAX_OPEN_TITLES: usize = 100;
     if titles.len() > MAX_OPEN_TITLES {
+        let len = titles.len();
         titles = titles
             .into_iter()
-            .skip(titles.len() - MAX_OPEN_TITLES)
+            .skip(len - MAX_OPEN_TITLES)
             .collect();
     }
 
