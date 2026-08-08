@@ -346,6 +346,36 @@ pub struct Models {
     pub budget_usd_per_pr: f64,
 }
 
+/// Model work that is not a lane.
+///
+/// Tiering is the one lever that changes what a review costs by an order of
+/// magnitude, so it is stated as policy in one place rather than as a
+/// `models.scan` reference scattered across call sites. Everything here is
+/// mechanical — copying a span out of a diff, checking a claim against a single
+/// document, pulling facts out of a document — and mechanical work does not get
+/// the expensive tier. Reviewing does.
+///
+/// (open-code-review runs one model for everything. That is simpler and it is
+/// the reason its cheap operations cost the same as its expensive ones.)
+///
+/// tinyagents ships `ModelRouter`/`WorkloadRoute` for the same idea, and it was
+/// considered. It resolves aliases *inside* a tinyagents harness, complete with
+/// capability gates and a `FallbackPolicy`; tinysweeper picks its tier before
+/// the [`Model`](crate::ports::model::Model) port, in the default build, where
+/// tinyagents is not linked at all. Adopting it would drag the harness into the
+/// offline build to answer a question two string fields already answer. The
+/// place it *would* pay for itself is `GatewayModel`'s hand-rolled fallback
+/// chain, which is a separate change on the feature-gated side of the port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Workload {
+    /// Re-locating a quoted snippet in a diff (`src/position/relocate.rs`).
+    Relocate,
+    /// The falsification pass (`src/falsify`).
+    Falsify,
+    /// Extracting facts from a curated knowledge document.
+    KnowledgeExtraction,
+}
+
 /// Per-lane overrides.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
