@@ -89,6 +89,14 @@ pub struct Usage {
     /// Prompt tokens served from the provider's cache. The difference between
     /// a cheap re-review and a ruinous one.
     pub cached_tokens: u64,
+    /// Tokens sent to an embedding model.
+    ///
+    /// Counted apart from `input_tokens` because embeddings are priced on their
+    /// own scale entirely and mixing them into the prompt total would make the
+    /// cache hit rate — computed against `input_tokens` — quietly wrong. Once a
+    /// repository is indexed this is the dominant line item, so it has to be
+    /// visible rather than folded away.
+    pub embed_tokens: u64,
     /// Cost in USD, when the provider reports it.
     pub cost_usd: f64,
 }
@@ -99,7 +107,59 @@ impl Usage {
         self.input_tokens += other.input_tokens;
         self.output_tokens += other.output_tokens;
         self.cached_tokens += other.cached_tokens;
+        self.embed_tokens += other.embed_tokens;
         self.cost_usd += other.cost_usd;
+    }
+}
+
+/// Usage, plus the models that actually produced it.
+///
+/// The two travel together because reporting one without the other is how the
+/// cost line came to lie: it named the model the config *asked* for while the
+/// usage came from whichever model answered. A fallback is exactly the case
+/// worth reporting — it is the moment the review got cheaper and worse — so the
+/// model id is recorded at the point the response arrives and never re-derived
+/// from config afterwards.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Spend {
+    /// Tokens and dollars.
+    pub usage: Usage,
+    /// Every distinct model that answered, in first-seen order.
+    pub models: Vec<String>,
+}
+
+impl Spend {
+    /// What one response cost, attributed to the model that returned it.
+    pub fn of(response: &ModelResponse) -> Self {
+        let mut spend = Self::default();
+        spend.record(&response.model, response.usage);
+        spend
+    }
+
+    /// Attribute `usage` to `model`.
+    pub fn record(&mut self, model: &str, usage: Usage) {
+        self.usage.add(usage);
+        self.note(model);
+    }
+
+    /// Note that `model` answered, without any usage of its own.
+    pub fn note(&mut self, model: &str) {
+        if !self.models.iter().any(|known| known == model) {
+            self.models.push(model.to_string());
+        }
+    }
+
+    /// Fold another spend into this one.
+    pub fn merge(&mut self, other: Spend) {
+        self.usage.add(other.usage);
+        for model in other.models {
+            self.note(&model);
+        }
+    }
+
+    /// Dollars spent.
+    pub fn cost_usd(&self) -> f64 {
+        self.usage.cost_usd
     }
 }
 
