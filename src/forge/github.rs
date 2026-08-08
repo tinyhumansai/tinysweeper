@@ -128,33 +128,35 @@ impl ForgeRead for GitHubRead {
     }
 
     async fn commits(&self, repo: &RepoId, number: u64) -> Result<Vec<Commit>> {
-        let page = self
-            .client
-            .pulls(&repo.owner, &repo.name)
-            .pr_commits(number)
-            .await
-            .map_err(api)?;
+        // Raw route rather than the typed builder: octocrab's commit builder
+        // does not resolve to a future here, and the payload we need is three
+        // fields deep in a shape that is not going to change.
+        let route = format!(
+            "/repos/{}/{}/pulls/{number}/commits?per_page=100",
+            repo.owner, repo.name
+        );
+        let raw: serde_json::Value = self.client.get(route, None::<&()>).await.map_err(api)?;
 
-        Ok(page
-            .items
-            .into_iter()
-            .map(|c| Commit {
-                sha: c.sha,
-                message: c.commit.message,
-                author_name: c
-                    .commit
-                    .author
-                    .as_ref()
-                    .map(|a| a.name.clone())
-                    .unwrap_or_default(),
-                author_email: c
-                    .commit
-                    .author
-                    .as_ref()
-                    .map(|a| a.email.clone())
-                    .unwrap_or_default(),
+        Ok(raw
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|c| Commit {
+                        sha: c["sha"].as_str().unwrap_or_default().to_string(),
+                        message: c["commit"]["message"].as_str().unwrap_or_default().to_string(),
+                        author_name: c["commit"]["author"]["name"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                        author_email: c["commit"]["author"]["email"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                    })
+                    .collect()
             })
-            .collect())
+            .unwrap_or_default())
     }
 
     async fn comments(&self, repo: &RepoId, number: u64) -> Result<Vec<IssueComment>> {
@@ -275,32 +277,29 @@ impl GitHubWrite {
 #[async_trait]
 impl ForgeWrite for GitHubWrite {
     async fn publish_check(&self, repo: &RepoId, check: CheckRun) -> Result<()> {
-        use octocrab::params::checks::{CheckRunConclusion, CheckRunStatus};
-
         let conclusion = match check.conclusion {
-            CheckConclusion::Success => CheckRunConclusion::Success,
-            CheckConclusion::Failure => CheckRunConclusion::Failure,
-            CheckConclusion::ActionRequired => CheckRunConclusion::ActionRequired,
-            CheckConclusion::Neutral => CheckRunConclusion::Neutral,
-            CheckConclusion::Skipped => CheckRunConclusion::Skipped,
+            CheckConclusion::Success => "success",
+            CheckConclusion::Failure => "failure",
+            CheckConclusion::ActionRequired => "action_required",
+            CheckConclusion::Neutral => "neutral",
+            CheckConclusion::Skipped => "skipped",
         };
 
-        self.client
-            .checks(&repo.owner, &repo.name)
-            .create_check_run(check.name, check.head_sha)
-            .status(CheckRunStatus::Completed)
-            .conclusion(conclusion)
-            .output(octocrab::models::checks::CheckRunOutput {
-                title: check.title,
-                summary: check.summary,
-                text: None,
-                annotations: vec![],
-                images: vec![],
-            })
-            .send()
-            .await
-            .map_err(api)?;
+        // A check-run summary is capped at 65535 characters by the API, and a
+        // rejected request means no check at all — which reads as "the bot did
+        // not run" rather than "the bot said too much".
+        let summary: String = check.summary.chars().take(60_000).collect();
 
+        let body = serde_json::json!({
+            "name": check.name,
+            "head_sha": check.head_sha,
+            "status": "completed",
+            "conclusion": conclusion,
+            "output": { "title": check.title, "summary": summary },
+        });
+
+        let route = format!("/repos/{}/{}/check-runs", repo.owner, repo.name);
+        let _: serde_json::Value = self.client.post(route, Some(&body)).await.map_err(api)?;
         Ok(())
     }
 

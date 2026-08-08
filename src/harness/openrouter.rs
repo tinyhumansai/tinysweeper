@@ -99,11 +99,12 @@ impl GatewayModel {
             ))
         })?;
 
+        let totals = run.usage.usage;
         let usage = Usage {
-            input_tokens: run.usage.input_tokens as u64,
-            output_tokens: run.usage.output_tokens as u64,
-            cached_tokens: run.usage.cached_input_tokens as u64,
-            cost_usd: run.cost.total_usd,
+            input_tokens: totals.input_tokens,
+            output_tokens: totals.output_tokens,
+            cached_tokens: totals.cache_read_tokens,
+            cost_usd: estimate_cost(model, &totals),
         };
 
         Ok(ModelResponse {
@@ -142,6 +143,43 @@ impl Model for GatewayModel {
     }
 }
 
+/// Per-million-token prices, verified against openrouter.ai on 2026-08-08.
+///
+/// tinyagents reports tokens but not cost, and the budget ceiling is denominated
+/// in dollars, so the conversion happens here. An unknown model yields zero —
+/// which is honest about not knowing rather than inventing a number, and is why
+/// [`estimate_cost`] warns instead of silently costing nothing.
+const PRICES: &[(&str, f64, f64, f64)] = &[
+    // (model, input, output, cache read)
+    ("moonshotai/kimi-k3", 3.00, 15.00, 0.30),
+    ("moonshotai/kimi-k2.7-code", 0.70, 3.50, 0.15),
+    ("moonshotai/kimi-k2.6", 0.58, 2.44, 0.15),
+    ("minimax/minimax-m3", 0.30, 1.20, 0.06),
+    ("minimax/minimax-m2.1", 0.30, 1.20, 0.03),
+];
+
+/// Estimate what a call cost, in USD.
+fn estimate_cost(model: &str, usage: &tinyagents::harness::usage::Usage) -> f64 {
+    let Some((_, input, output, cached)) = PRICES.iter().find(|(id, ..)| *id == model) else {
+        tracing::warn!(
+            model,
+            "no price known for this model; it will not count against the budget"
+        );
+        return 0.0;
+    };
+
+    // Cached input tokens are billed at the cache-read rate, not the input
+    // rate, and on kimi-k3 that is a tenfold difference — charging them at full
+    // price would make every re-review look ten times more expensive than it is.
+    let fresh_input = usage.input_tokens.saturating_sub(usage.cache_read_tokens);
+    let million = 1_000_000.0;
+
+    (fresh_input as f64 * input
+        + usage.cache_read_tokens as f64 * cached
+        + usage.output_tokens as f64 * output)
+        / million
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,6 +195,32 @@ mod tests {
             max_tokens: 100,
             budget_usd_per_pr: 1.0,
         }
+    }
+
+    #[test]
+    fn cached_tokens_are_billed_at_the_cache_rate() {
+        // kimi-k3 reads cache at a tenth of the input price. Charging cached
+        // tokens at full rate would make every re-review look ten times more
+        // expensive than it is, and trip the budget ceiling for no reason.
+        let usage = tinyagents::harness::usage::Usage {
+            input_tokens: 100_000,
+            cache_read_tokens: 90_000,
+            output_tokens: 1_000,
+            ..Default::default()
+        };
+
+        let cost = estimate_cost("moonshotai/kimi-k3", &usage);
+        // 10k fresh at $3/M + 90k cached at $0.30/M + 1k out at $15/M
+        assert!((cost - (0.03 + 0.027 + 0.015)).abs() < 1e-9, "{cost}");
+    }
+
+    #[test]
+    fn an_unknown_model_costs_zero_rather_than_a_guess() {
+        let usage = tinyagents::harness::usage::Usage {
+            input_tokens: 1_000_000,
+            ..Default::default()
+        };
+        assert_eq!(estimate_cost("someone/unreleased", &usage), 0.0);
     }
 
     #[test]
