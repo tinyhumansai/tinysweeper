@@ -206,7 +206,7 @@ mod tests {
             .await
             .expect("valid answer");
         assert_eq!(result.0, ""); // Empty snippet
-        assert!(result.1.cost_usd == 0.0); // Default cost (no usage set in mock)
+        assert_eq!(result.1.cost_usd(), 0.0); // Default cost (no usage set in mock)
     }
 
     #[tokio::test]
