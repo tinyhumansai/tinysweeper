@@ -83,6 +83,20 @@ pub struct LaneProposal {
     pub summary: String,
     /// Findings that survived filtering.
     pub findings: Vec<Finding>,
+    /// Titles of earlier findings this revision fixed.
+    ///
+    /// The lane says so and it is reported rather than discarded: a review that
+    /// only ever adds objections gives an author no way to see progress, and a
+    /// fixed finding that goes unacknowledged reads as an unfixed one.
+    #[serde(default)]
+    pub resolved: Vec<String>,
+    /// Findings that were suppressed because they are already on the pull
+    /// request from an earlier push.
+    ///
+    /// Counted rather than dropped silently: this number is how anyone can tell
+    /// dedupe from an empty review.
+    #[serde(default)]
+    pub deduped: usize,
 }
 
 impl Proposal {
