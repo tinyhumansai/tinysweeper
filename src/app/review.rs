@@ -263,9 +263,9 @@ fn lane_proposal(config: &Config, lane: LaneId, outcome: LaneOutcome) -> LanePro
     findings.truncate(config.review.max_comments);
 
     let summary = if over_cap > 0 {
-        format!("{} (+{over_cap} more not shown)", outcome.summary)
+        format!("{outcome_summary} (+{over_cap} more not shown)")
     } else {
-        outcome.summary
+        outcome_summary
     };
 
     LaneProposal {
