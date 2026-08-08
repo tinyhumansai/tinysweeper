@@ -470,6 +470,10 @@ mod tests {
             PullRequest {
                 number: 7,
                 title: "feat: something".into(),
+                // A real body: the `description` lane fails a pull request
+                // that has none, so an empty one here would make every
+                // "clean review" fixture blocked for an unrelated reason.
+                body: "Adds an index into the item list, guarded by the caller.".into(),
                 head_sha: "abc123".into(),
                 labels,
                 ..PullRequest::default()
