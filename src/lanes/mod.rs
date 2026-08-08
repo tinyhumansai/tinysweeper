@@ -28,6 +28,13 @@ pub struct LaneInput<'a> {
     pub pull_request: &'a PullRequest,
     /// The parsed diffs, one per changed file.
     pub diffs: &'a [FileDiff],
+    /// Head-revision content of the changed files, keyed by path.
+    ///
+    /// Optional evidence: a run with a checkout fills it, a forge-only run
+    /// leaves it empty. It exists so `src/position` can fall back to the whole
+    /// file when a finding quotes context the diff did not include; with it
+    /// empty that stage is simply skipped.
+    pub file_contents: &'a BTreeMap<String, String>,
     /// Findings the deterministic scanners already produced, for the lanes that
     /// adjudicate rather than re-discover.
     pub scan_findings: &'a [ScanFinding],
