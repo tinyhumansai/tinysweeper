@@ -49,7 +49,13 @@ pub fn parse_as(file: &SourceFile, language: Language) -> Result<ParsedFile> {
     let mut refs: Vec<Usage> = Vec::new();
     // Rust `mod foo;` is both a declaration and a file reference. Recorded here
     // so the import walk can see it without re-querying the tree.
-    let mut bodyless_mods: Vec<(String, u32)> = Vec::new();
+    let mut bodyless_mods: Vec<(String, Option<String>, u32, usize)> = Vec::new();
+    // Byte ranges of Rust `mod name { ... }` blocks. A module written inline
+    // has no file, so `use super::*` inside one names the *enclosing file*
+    // rather than a sibling module — the single most common `use` in this
+    // codebase, and one a file-based resolver would otherwise report as a
+    // missing module forever.
+    let mut inline_mods: Vec<(usize, usize)> = Vec::new();
     // Byte ranges of import statements. The names inside an import clause are
     // matched by the bare-identifier pattern too, and keeping them would make
     // every import also a `references` edge — including one from a file to
