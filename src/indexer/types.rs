@@ -56,8 +56,15 @@ impl IndexState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "settled", rename_all = "lowercase")]
 pub enum Settled {
-    /// The run completed.
-    Done,
+    /// The run completed, and this is what it leaves on record.
+    Done {
+        /// The commit the index now reflects.
+        revision: Option<String>,
+        /// How many chunks the repository has.
+        chunks: u64,
+        /// What the run spent, to be added to the repository's running total.
+        usage: EmbedUsage,
+    },
     /// The run gave up.
     Failed {
         /// Why, for a human reading the repository's status.
