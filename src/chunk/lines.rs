@@ -37,8 +37,13 @@ pub fn split(text: &str, first_line: u32, options: &ChunkOptions) -> Vec<SourceC
         // so a chunk that is already substantial ends at one rather than at an
         // arbitrary character count part-way through a paragraph of code.
         let blank = line.trim().is_empty();
-        let would_exceed = !buffer.is_empty() && buffer.len() + line.len() > options.target_chars;
-        let at_a_seam = blank && buffer.len() >= options.target_chars / 2;
+        // A buffer holding only blank lines is never flushed: it would be
+        // dropped as whitespace and those lines would vanish from the file the
+        // chunks reconstruct. It keeps accumulating instead, and the blank run
+        // ends up at the head of the next real chunk.
+        let flushable = !buffer.trim().is_empty();
+        let would_exceed = flushable && buffer.len() + line.len() > options.target_chars;
+        let at_a_seam = flushable && blank && buffer.len() >= options.target_chars / 2;
 
         if would_exceed || at_a_seam {
             push(&mut chunks, &mut buffer, buffer_start, line_number - 1);
