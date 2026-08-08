@@ -97,6 +97,13 @@ impl ProviderEmbedder {
         let Some(signature) = config.signature() else {
             return Ok(None);
         };
+        if signature.provider == "openrouter" {
+            return Err(Error::config(
+                "the `openrouter` embedding provider is served by `OpenRouterEmbedder`, \
+                 not this adapter; build it with `crate::index::embedder_from_config`"
+                    .to_string(),
+            ));
+        }
 
         // Process-global, and set before the first call rather than after: the
         // limiter exists to keep a cold full index out of the provider's own

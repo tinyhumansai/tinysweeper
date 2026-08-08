@@ -151,3 +151,53 @@ TINYSWEEPER_TEST_MONGODB_URI='mongodb://tinysweeper:devpass@localhost:27017/?aut
 
 Each live test uses its own repository ids: they share one process and therefore
 one database.
+
+## Embedding providers
+
+Two implementations of the `Embedder` port, chosen by `embeddings.provider`
+through `index::embedder_from_config`.
+
+`openrouter` (the default) is a direct HTTP client in `index/openrouter.rs`.
+Everything else goes through `index/provider.rs`, which wraps tinyagents'
+`EmbeddingModel` and its Voyage / OpenAI / Cohere / Ollama adapters.
+
+The split exists for one reason: tinyagents' `EmbeddingModel::embed` returns a
+bare `Vec<Vec<f32>>`, and every adapter behind it decodes the response and
+discards the `usage` object. OpenRouter sends one carrying both `prompt_tokens`
+and the `cost` it charged, and indexing a repository is the largest token count
+this program produces — the line of the bill least well served by an estimate.
+Routing it through that trait would throw the number away and fall back to
+`estimate_tokens`, which is four bytes to a token.
+
+So the accounting has three tiers, best first:
+
+| Constructor | Tokens | Cost |
+|---|---|---|
+| `Embedded::charged` | provider | provider |
+| `Embedded::metered` | provider | local price table |
+| `Embedded::billed` | estimated | local price table |
+
+The gateway's own cost is preferred over `harness::pricing` wherever it is
+present. That table is hand-maintained and goes stale silently; a gateway
+quoting what it actually billed cannot disagree with the invoice, and it
+already includes any routing markup a per-model table would miss. The table
+remains the fallback for a response that omits `cost`.
+
+### Dimensions
+
+`embeddings.dimensions` is pinned in configuration and is **not** discoverable
+from the API — OpenRouter's model listing does not report it. It is both the
+index partition key and the width the search index is created with, so a wrong
+value is not an error but confidently wrong retrieval against vectors from
+another space. `OpenRouterEmbedder` refuses any response whose vector width
+disagrees with the configured signature.
+
+Measured against the live API:
+
+| Model | dims | $/M | context |
+|---|---|---|---|
+| `openai/text-embedding-3-small` (default) | 1536 | 0.02 | 8k |
+| `voyageai/voyage-4` | 1024 | 0.06 | 32k |
+| `mistralai/codestral-embed-2505` | 1536 | 0.15 | 8k |
+| `qwen/qwen3-embedding-8b` | 4096 | 0.01 | 32k |
+| `baai/bge-m3` | 1024 | 0.01 | 8k |
