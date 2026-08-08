@@ -16,6 +16,7 @@ pub mod evidence;
 pub mod findings;
 pub mod forge;
 pub mod harness;
+pub mod index;
 pub mod lanes;
 pub mod ports;
 pub mod scan;
