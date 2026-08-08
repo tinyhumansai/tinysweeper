@@ -67,6 +67,22 @@ pub async fn apply(
     let event = review_event(config, proposal, blocking_now);
     let comments = inline_comments(proposal);
 
+    // Collect the identities of findings we are about to publish, so the store
+    // can be extended with them after successful publication.
+    let newly_posted: Vec<String> = comments
+        .iter()
+        .filter_map(|comment| {
+            // Extract the fingerprint from the marker in the comment body.
+            let marker = format!("{{{key}=", key = "fp");
+            comment.body.find(&marker).and_then(|start| {
+                let value_start = start + marker.len();
+                let rest = &comment.body[value_start..];
+                let end = rest.find("}")?;
+                Some(rest[..end].to_string())
+            })
+        })
+        .collect();
+
     // An Approve is submitted even with nothing to say, because its entire job
     // is to clear the previous block.
     if !comments.is_empty() || event == ReviewEvent::Approve {
@@ -79,6 +95,18 @@ pub async fn apply(
                 event,
             )
             .await?;
+
+        // After successful publish, extend the stored state with newly posted
+        // fingerprints so the next review dedupes them correctly.
+        if let Some(store) = store && !newly_posted.is_empty() {
+            let state_key = crate::state::key(&proposal.repo, proposal.number);
+            if let Ok(Some(mut current_state)) = store.load_state(&state_key).await {
+                current_state.fingerprints.extend(newly_posted.clone());
+                if let Err(err) = store.save_state(&state_key, &current_state).await {
+                    tracing::warn!(%err, "could not record newly posted fingerprints");
+                }
+            }
+        }
     }
 
     Ok(())
