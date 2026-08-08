@@ -66,9 +66,18 @@ impl std::fmt::Debug for AppAuth {
 impl AppAuth {
     /// Build from an app id and a PEM private key.
     pub fn new(app_id: impl Into<String>, pem: &str) -> Result<Self> {
-        let key = EncodingKey::from_rsa_pem(pem.as_bytes())
-            .map_err(|err| Error::Forge(format!("the app private key is not a usable PEM: {err}")))?;
+        let key = EncodingKey::from_rsa_pem(pem.as_bytes()).map_err(|err| {
+            Error::Forge(format!("the app private key is not a usable PEM: {err}"))
+        })?;
+        Ok(Self::with_key(app_id, key)?)
+    }
 
+    /// Build from an app id and a DER private key.
+    pub fn from_der(app_id: impl Into<String>, der: &[u8]) -> Result<Self> {
+        Self::with_key(app_id, EncodingKey::from_rsa_der(der))
+    }
+
+    fn with_key(app_id: impl Into<String>, key: EncodingKey) -> Result<Self> {
         Ok(Self {
             app_id: app_id.into(),
             key,
@@ -192,17 +201,15 @@ fn parse_expiry(text: &str) -> Option<SystemTime> {
 mod tests {
     use super::*;
 
-    /// A throwaway 2048-bit key, generated for these tests and used nowhere.
-    fn test_key() -> String {
-        // Generated with `openssl genrsa 2048`. Not a credential: it protects
-        // nothing and is checked in deliberately so the tests need no fixture
-        // file and no network.
-        include_str!("test_key.pem").to_string()
+    use crate::server::test_key::test_key_der;
+
+    fn auth(app_id: &str) -> AppAuth {
+        AppAuth::from_der(app_id, &test_key_der()).expect("builds")
     }
 
     #[test]
     fn a_signed_jwt_has_three_parts_and_the_app_id_as_issuer() {
-        let auth = AppAuth::new("4526585", &test_key()).expect("builds");
+        let auth = auth("4526585");
         let jwt = auth.app_jwt().expect("signs");
 
         let parts: Vec<&str> = jwt.split('.').collect();
@@ -217,8 +224,7 @@ mod tests {
 
     #[test]
     fn the_jwt_is_backdated_because_server_clocks_drift() {
-        let auth = AppAuth::new("1", &test_key()).expect("builds");
-        let jwt = auth.app_jwt().expect("signs");
+        let jwt = auth("1").app_jwt().expect("signs");
         let payload = jwt.split('.').nth(1).unwrap();
         let padded = format!("{payload}{}", "=".repeat((4 - payload.len() % 4) % 4));
         let json: serde_json::Value =
@@ -241,8 +247,7 @@ mod tests {
 
     #[test]
     fn debug_never_prints_the_private_key() {
-        let auth = AppAuth::new("1", &test_key()).expect("builds");
-        let rendered = format!("{auth:?}");
+        let rendered = format!("{:?}", auth("1"));
         assert!(!rendered.contains("PRIVATE"), "{rendered}");
         assert!(rendered.contains("<redacted>"));
     }

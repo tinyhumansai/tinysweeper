@@ -22,6 +22,8 @@
 pub mod auth;
 pub mod routes;
 pub mod store;
+#[cfg(test)]
+mod test_key;
 pub mod webhook;
 
 pub use crate::server::routes::{ServerConfig, serve};
