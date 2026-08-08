@@ -33,5 +33,6 @@ mod test_key;
 pub mod webhook;
 
 pub use crate::server::admin::AdminAuth;
+pub use crate::server::indexing::IndexBackend;
 pub use crate::server::routes::{ServerConfig, serve};
 pub use crate::server::store::{Contributor, Store, Trust};
