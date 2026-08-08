@@ -264,12 +264,16 @@ async fn run_serve(bind: String, config_path: Option<std::path::PathBuf>) -> Res
 
     let store = Store::from_env().await?;
     let auth = AppAuth::from_env()?;
+    // Read before binding: a half-configured embedding provider is a mistake,
+    // and the server says so rather than quietly running without retrieval.
+    let embedding = tinysweeper::index::MongoIndex::signature_from_env()?;
 
     serve(
         ServerConfig {
             bind,
             webhook_secret,
             config: loaded.config,
+            embedding,
         },
         store,
         auth,

@@ -19,6 +19,8 @@ use tokio::sync::Semaphore;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::forge::RepoId;
+use crate::index::mongo::MongoIndex;
+use crate::index::types::EmbedSignature;
 use crate::server::auth::AppAuth;
 use crate::server::store::{Store, Trust};
 use crate::server::webhook::{self, Action, Payload};
