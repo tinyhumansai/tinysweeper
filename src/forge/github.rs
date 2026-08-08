@@ -183,7 +183,7 @@ impl ForgeRead for GitHubRead {
     }
 
     async fn review_comments(&self, repo: &RepoId, number: u64) -> Result<Vec<ReviewComment>> {
-        let page = self
+        let mut page = self
             .client
             .pulls(&repo.owner, &repo.name)
             .list_comments(Some(number))
@@ -191,20 +191,27 @@ impl ForgeRead for GitHubRead {
             .await
             .map_err(api)?;
 
-        Ok(page
-            .items
-            .into_iter()
-            .map(|c| ReviewComment {
-                path: c.path,
-                line: c.line.unwrap_or(0),
-                start_line: c.start_line,
-                // Carried through because dedupe refuses to trust a marker in
-                // anyone else's comment. No author means no trusted marker: an
-                // unattributed comment is treated exactly like a stranger's.
-                author: c.user.map(|u| u.login).unwrap_or_default(),
-                body: c.body,
-            })
-            .collect())
+        let mut comments = Vec::new();
+        loop {
+            for c in &page.items {
+                comments.push(ReviewComment {
+                    path: c.path.clone(),
+                    line: c.line.unwrap_or(0),
+                    start_line: c.start_line,
+                    // Carried through because dedupe refuses to trust a marker in
+                    // anyone else's comment. No author means no trusted marker: an
+                    // unattributed comment is treated exactly like a stranger's.
+                    author: c.user.as_ref().map(|u| u.login.clone()).unwrap_or_default(),
+                    body: c.body.clone(),
+                });
+            }
+            match self.client.get_page(&page.next).await.map_err(api)? {
+                Some(next) => page = next,
+                None => break,
+            }
+        }
+
+        Ok(comments)
     }
 
     async fn own_review_state(&self, repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
