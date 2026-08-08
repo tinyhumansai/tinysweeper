@@ -5,7 +5,7 @@
 //! delivery from a forged one is the HMAC. It is therefore checked before the
 //! body is parsed, not after, and compared in constant time.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
