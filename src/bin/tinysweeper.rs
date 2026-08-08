@@ -216,6 +216,34 @@ async fn run_apply(repo: &str, pr: u64, findings: &std::path::Path) -> Result<()
     Ok(())
 }
 
+/// A `findings.json` must actually describe the pull request the caller
+/// named before anything touches the network.
+///
+/// `--repo`/`--pr` were only syntax-checked and otherwise discarded, so a
+/// proposal reused from a previous run — or simply the wrong file — would
+/// have published under whatever repository and number it names, silently,
+/// to a token that happens to have access to both.
+#[cfg(feature = "github")]
+fn validate_apply_target(
+    proposal: &tinysweeper::app::Proposal,
+    repo: &tinysweeper::forge::RepoId,
+    pr: u64,
+) -> Result<()> {
+    if proposal.number != pr {
+        return Err(tinysweeper::Error::config(format!(
+            "the proposal is for #{} but --pr says #{pr}",
+            proposal.number
+        )));
+    }
+    if proposal.repo != repo.to_string() {
+        return Err(tinysweeper::Error::config(format!(
+            "the proposal is for `{}` but --repo says `{repo}`",
+            proposal.repo
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(not(feature = "github"))]
 async fn run_apply(_repo: &str, _pr: u64, _findings: &std::path::Path) -> Result<()> {
     Err(tinysweeper::Error::FeatureDisabled(
