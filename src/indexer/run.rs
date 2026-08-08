@@ -155,8 +155,7 @@ impl<'a> Indexer<'a> {
         // been deleted or newly ignored, and its chunks have to go.
         let seen: BTreeSet<&String> = selection.selected.iter().collect();
         let removed: Vec<String> = self
-            .manifest_paths(repo_id, &signature)
-            .await?
+            
             .into_iter()
             .filter(|path| !seen.contains(path))
             .collect();
@@ -276,21 +275,6 @@ impl<'a> Indexer<'a> {
                 },
             )
             .await
-    }
-
-    async fn manifest_paths(
-        &self,
-        repo_id: &str,
-        signature: &EmbedSignature,
-    ) -> Result<Vec<String>> {
-        // The port answers per path rather than per repository on purpose — a
-        // repository-wide listing is a query no incremental push needs. The
-        // full-index path is the one caller that does, and it reconstructs it
-        // from what the walk saw plus what the store still holds.
-        self.manifest
-            .indexed(repo_id, signature, &[])
-            .await
-            .map(|files| files.into_iter().map(|file| file.path).collect())
     }
 
     async fn run(

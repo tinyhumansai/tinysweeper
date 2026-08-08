@@ -53,16 +53,6 @@ impl MockManifest {
             .unwrap_or_else(|| RepoIndex::absent(repo_id, signature.key()))
     }
 
-    /// Every path on record for a repository.
-    pub fn paths(&self, repo_id: &str, signature: &EmbedSignature) -> Vec<String> {
-        let inner = self.inner.lock().expect("manifest lock");
-        inner
-            .files
-            .keys()
-            .filter(|(repo, sig, _)| repo == repo_id && *sig == signature.key())
-            .map(|(_, _, path)| path.clone())
-            .collect()
-    }
 }
 
 fn key(repo_id: &str, signature: &EmbedSignature) -> (String, String) {
@@ -139,6 +129,16 @@ impl IndexManifest for MockManifest {
                     .get(&(repo_id.to_string(), signature.key(), path.clone()))
                     .cloned()
             })
+            .collect())
+    }
+
+    async fn paths(&self, repo_id: &str, signature: &EmbedSignature) -> Result<Vec<String>> {
+        let inner = self.inner.lock().expect("manifest lock");
+        Ok(inner
+            .files
+            .keys()
+            .filter(|(repo, sig, _)| repo == repo_id && *sig == signature.key())
+            .map(|(_, _, path)| path.clone())
             .collect())
     }
 
