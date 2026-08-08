@@ -480,6 +480,7 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             cached_tokens: 0,
+            embed_tokens: 0,
             models: vec![],
         }
     }

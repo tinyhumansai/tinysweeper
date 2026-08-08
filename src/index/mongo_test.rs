@@ -336,7 +336,9 @@ live_test!(
             let vector = embedder
                 .embed_query("resolve_git_range")
                 .await
-                .expect("embeds");
+                .expect("embeds")
+                .into_query_vector()
+                .expect("one vector");
             let query = HybridQuery::new(signature(), "resolve_git_range", vector).in_repo("o/r");
             found = index.code.query(&query).await.expect("queries");
             if !found.is_empty() {
