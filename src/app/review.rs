@@ -222,8 +222,8 @@ pub async fn review_with_state(
                 diffs: &diffs,
                 scan_findings: &scan_findings,
                 repo_policy: repo_policy().as_deref(),
-                reviewed_evidence: "",
-                prior_findings: &[],
+                reviewed_evidence: &reviewed_evidence,
+                prior_findings: &prior_titles,
             })
             .await?;
 
