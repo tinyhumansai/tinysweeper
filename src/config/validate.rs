@@ -197,6 +197,80 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
     }
 }
 
+/// Check `[embeddings]`.
+///
+/// Every field is checked *only* when the section is enabled. A disabled
+/// section is allowed to be blank, because that is what the default is, and
+/// rejecting a blank disabled block would make every deployment that does not
+/// want retrieval fill in a model id it will never call.
+fn validate_embeddings(config: &Config, problems: &mut Vec<String>) {
+    let embeddings = &config.embeddings;
+    if !embeddings.enabled {
+        return;
+    }
+
+    // The three halves of the signature. A blank one is not a default anyone
+    // could want: it would silently partition the index under `":"`, which is a
+    // key that reads as configured and matches nothing a provider ever wrote.
+    for (key, value) in [
+        ("provider", &embeddings.provider),
+        ("model", &embeddings.model),
+        ("api_key_env", &embeddings.api_key_env),
+    ] {
+        if value.trim().is_empty() {
+            problems.push(format!(
+                "`embeddings.{key}` is empty but `embeddings.enabled = true`"
+            ));
+        }
+    }
+
+    if embeddings
+        .api_key_env
+        .contains(|c: char| c.is_ascii_lowercase())
+    {
+        // Same heuristic, same reason, same redaction as `models.api_key_env`:
+        // this message reaches a check-run summary.
+        problems.push(format!(
+            "`embeddings.api_key_env` ({}) looks like a value, not an environment variable name; \
+             never put a key in the config file",
+            crate::scan::types::redact(&embeddings.api_key_env)
+        ));
+    }
+
+    if embeddings.dimensions == 0 {
+        problems.push(
+            "`embeddings.dimensions = 0` describes no vector; it is the width the search index is \
+             created with and must match what the provider returns"
+                .into(),
+        );
+    }
+
+    if !embeddings.base_url.trim().is_empty()
+        && !embeddings.base_url.starts_with("http://")
+        && !embeddings.base_url.starts_with("https://")
+    {
+        problems.push(format!(
+            "`embeddings.base_url = \"{}\"` is not an http(s) URL; leave it empty for the \
+             provider's own default",
+            embeddings.base_url
+        ));
+    }
+
+    if embeddings.batch == 0 {
+        problems.push("`embeddings.batch = 0` would send no texts per call".into());
+    }
+
+    // Same `!is_finite()` guard as the review budget, and for the same reason:
+    // nan sails through `<= 0.0` and would leave indexing unbounded.
+    if !embeddings.budget_usd_per_index.is_finite() || embeddings.budget_usd_per_index <= 0.0 {
+        problems.push(format!(
+            "`embeddings.budget_usd_per_index = {}` must be a finite number above zero; it is the \
+             hard ceiling for indexing one repository",
+            embeddings.budget_usd_per_index
+        ));
+    }
+}
+
 fn validate_knowledge(config: &Config, problems: &mut Vec<String>) {
     let knowledge = &config.knowledge;
 
