@@ -46,9 +46,10 @@ flagged.
 
 ## Design commitments
 
-- **The model never holds a write token.** Lanes run against a read-only
-  checkout; write credentials are minted only in the apply path, after every
-  model call has returned.
+- **The model never holds a write token.** Lanes take a `ForgeRead` and only the
+  apply path takes a `ForgeWrite`, so a lane structurally cannot mutate a pull
+  request. The installation token used for writing is minted after every model
+  call has returned.
 - **Contributor code is never executed.** tinysweeper reads the diff and the
   tree. It does not build, install dependencies, or run the target repo's
   scripts.
