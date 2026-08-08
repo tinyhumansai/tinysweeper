@@ -55,6 +55,43 @@ impl std::fmt::Display for EmbedSignature {
     }
 }
 
+/// How a chunk's boundaries were chosen.
+///
+/// Recorded on every chunk, and this is a correctness signal rather than
+/// telemetry. A [`ChunkMethod::Parsed`] chunk is guaranteed to contain whole
+/// definitions, so quoting it back at a reviewer quotes something that compiles
+/// in isolation; a [`ChunkMethod::Lines`] chunk carries no such promise and may
+/// begin halfway through a function. Retrieval that treated the two alike would
+/// present a half-function with the same confidence as a whole one, so the
+/// distinction is stored rather than inferred from the language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChunkMethod {
+    /// A grammar named the boundaries: the span is one or more whole
+    /// definitions and never cuts a body in half.
+    Parsed,
+    /// No grammar was available, or the definition was too large to keep whole,
+    /// so the span was cut on line boundaries. The default, because a chunk
+    /// that has not said otherwise has not earned the stronger claim.
+    #[default]
+    Lines,
+}
+
+impl ChunkMethod {
+    /// Whether a grammar chose these boundaries.
+    pub fn is_parsed(self) -> bool {
+        matches!(self, Self::Parsed)
+    }
+
+    /// The stable string written onto an indexed document.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Parsed => "parsed",
+            Self::Lines => "lines",
+        }
+    }
+}
+
 /// One indexed span of a file.
 ///
 /// Line numbers are 1-based and inclusive at both ends, matching how the
