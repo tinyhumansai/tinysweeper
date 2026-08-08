@@ -336,10 +336,7 @@ mod tests {
     #[tokio::test]
     async fn recorded_files_come_back_and_forgotten_ones_do_not() {
         let manifest = MockManifest::new();
-        let file = IndexedFile {
-            path: "src/a.rs".into(),
-            chunks: vec!["id-1".into()],
-        };
+        let file = IndexedFile::confirmed("src/a.rs", vec!["id-1".into()]);
         manifest
             .record("o/r", &signature(), std::slice::from_ref(&file))
             .await
