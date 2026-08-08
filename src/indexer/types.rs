@@ -53,7 +53,7 @@ impl IndexState {
 }
 
 /// How an indexing run ended, as reported back to the manifest.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "settled", rename_all = "lowercase")]
 pub enum Settled {
     /// The run completed, and this is what it leaves on record.
