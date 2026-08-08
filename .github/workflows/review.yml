@@ -72,21 +72,29 @@ on:
           requests from forks.
         required: false
 
-permissions:
-  contents: read
-  checks: write
-  pull-requests: write
-
 jobs:
+  # Two jobs, deliberately. `AGENTS.md` says the model never holds a write
+  # token, and a single job would break that: the App token would be in the
+  # environment of the very process making model calls.
+  #
+  # So `review` runs read-only and hands its verdict over as an artifact, and
+  # `publish` mints the write token afterwards and does nothing but post. That
+  # is the propose/apply split the whole design rests on, expressed as job
+  # boundaries — the one place Actions can enforce it for us.
   review:
     name: review
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Read-only. This job holds the model key; it must not hold write scope.
+    permissions:
+      contents: read
     # `issue_comment` fires for issues as well as pull requests, and the payload
     # only distinguishes them by the presence of this field.
     if: >-
       github.event_name != 'issue_comment' ||
       github.event.issue.pull_request != null
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
     steps:
       # The pull request number lives in a different place depending on which
       # event woke us up.
@@ -109,17 +117,6 @@ jobs:
           sha=$(gh api "/repos/$REPO/pulls/$NUMBER" --jq .head.sha)
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
-      # An App installation token is preferred over GITHUB_TOKEN for one
-      # concrete reason: a fork pull request gives GITHUB_TOKEN read-only
-      # scope, so it cannot publish a check run. The App token can.
-      - name: Mint an installation token
-        id: app-token
-        if: inputs.app-id != '' && secrets.app-private-key != ''
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ inputs.app-id }}
-          private-key: ${{ secrets.app-private-key }}
-
       # LOAD-BEARING: the head ref is checked out for *reading* only. Nothing in
       # this workflow builds it, installs its dependencies, or runs any script
       # from it. That invariant is what makes reviewing fork pull requests safe;
@@ -135,7 +132,7 @@ jobs:
       - name: Install tinysweeper
         env:
           VERSION: ${{ inputs.version }}
-          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           gh release download "$VERSION" \
@@ -147,7 +144,9 @@ jobs:
 
       - name: Review
         env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          # Read-only on purpose. This step makes the model calls, so it must
+          # not be able to write even if something goes wrong.
+          GITHUB_TOKEN: ${{ github.token }}
           OPENROUTER_API_KEY: ${{ secrets.openrouter-api-key }}
           # Untrusted values reach the binary as environment variables, never
           # interpolated into this shell. A pull request title is attacker
@@ -163,4 +162,70 @@ jobs:
           [ -n "$TS_LANES" ] && args+=(--lanes "$TS_LANES")
           [ -n "$TS_CONFIG" ] && args+=(--config "$TS_CONFIG")
           [ "$TS_DRY_RUN" = "true" ] && args+=(--dry-run)
-          tinysweeper "${args[@]}"
+          tinysweeper "${args[@]}" --propose-to findings.json
+
+      - name: Fail if the review left the checkout dirty
+        run: |
+          set -euo pipefail
+          # The review reads; it never writes. A dirty tree means something
+          # executed that should not have, and publishing on top of that would
+          # be publishing a verdict about a tree nobody reviewed.
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::the review modified the checkout; refusing to continue"
+            git status --porcelain
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tinysweeper-findings
+          path: findings.json
+          retention-days: 1
+
+  publish:
+    name: publish
+    needs: review
+    if: ${{ !inputs.dry-run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+    steps:
+      # The write token is minted here and nowhere else — after every model
+      # call in the `review` job has returned. A fork pull request gives
+      # GITHUB_TOKEN read-only scope, so the App token is what makes posting a
+      # check run on a fork possible at all.
+      - name: Mint an installation token
+        id: app-token
+        if: inputs.app-id != '' && secrets.app-private-key != ''
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tinysweeper-findings
+
+      - name: Install tinysweeper
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$VERSION" \
+            --repo tinyhumansai/tinysweeper \
+            --pattern 'tinysweeper-x86_64-unknown-linux-gnu' \
+            --output /usr/local/bin/tinysweeper
+          chmod +x /usr/local/bin/tinysweeper
+
+      # No OPENROUTER_API_KEY here: this step must not be able to call a model.
+      # It applies a verdict that was already reached.
+      - name: Publish
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          TS_REPO: ${{ github.repository }}
+          TS_PR: ${{ needs.review.outputs.number }}
+        run: tinysweeper apply --repo "$TS_REPO" --pr "$TS_PR" --findings findings.json
