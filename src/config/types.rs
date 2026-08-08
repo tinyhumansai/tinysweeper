@@ -225,6 +225,8 @@ pub struct Config {
     pub models: Models,
     /// The knowledge centre: curated documents and rule extraction.
     pub knowledge: Knowledge,
+    /// Which embedding provider fills and queries the code index.
+    pub embeddings: Embeddings,
     /// Per-lane overrides, keyed by lane id.
     pub lanes: BTreeMap<String, Lane>,
     /// Auto-merge policy.
