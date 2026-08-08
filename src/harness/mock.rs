@@ -109,10 +109,7 @@ impl MockModel {
 impl Model for MockModel {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse> {
         let model = request.model.clone();
-        self.requests
-            .lock()
-            .expect("mock model lock")
-            .push(request);
+        self.requests.lock().expect("mock model lock").push(request);
 
         let queued = {
             let mut responses = self.responses.lock().expect("mock model lock");
@@ -170,7 +167,10 @@ mod tests {
     async fn running_out_of_responses_is_an_error_not_a_silent_default() {
         let model = MockModel::new();
         let err = model.complete(request()).await.unwrap_err();
-        assert!(err.to_string().contains("ran out of queued responses"), "{err}");
+        assert!(
+            err.to_string().contains("ran out of queued responses"),
+            "{err}"
+        );
     }
 
     #[tokio::test]

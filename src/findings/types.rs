@@ -201,7 +201,10 @@ mod tests {
         let f = finding();
         assert!(f.meets(Severity::Medium, 0.6));
         assert!(!f.meets(Severity::High, 0.6), "below the severity gate");
-        assert!(!f.meets(Severity::Medium, 0.95), "below the confidence gate");
+        assert!(
+            !f.meets(Severity::Medium, 0.95),
+            "below the confidence gate"
+        );
     }
 
     #[test]

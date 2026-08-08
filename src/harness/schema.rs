@@ -215,7 +215,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(err.to_string().contains("did not match the schema"), "{err}");
+        assert!(
+            err.to_string().contains("did not match the schema"),
+            "{err}"
+        );
         assert!(err.to_string().contains("critique"), "{err}");
     }
 
@@ -262,7 +265,10 @@ mod tests {
     fn the_schema_forbids_unknown_properties() {
         let schema = json_schema();
         assert_eq!(schema["additionalProperties"], json!(false));
-        assert_eq!(schema["properties"]["findings"]["items"]["additionalProperties"], json!(false));
+        assert_eq!(
+            schema["properties"]["findings"]["items"]["additionalProperties"],
+            json!(false)
+        );
     }
 
     #[test]
@@ -271,14 +277,17 @@ mod tests {
         let description = schema["properties"]["findings"]["description"]
             .as_str()
             .expect("described");
-        assert!(description.contains("empty array is a valid"), "{description}");
+        assert!(
+            description.contains("empty array is a valid"),
+            "{description}"
+        );
     }
 
     #[test]
     fn severity_round_trips_through_the_schema_enum() {
-        let allowed = json_schema()["properties"]["findings"]["items"]["properties"]["severity"]
-            ["enum"]
-            .clone();
+        let allowed =
+            json_schema()["properties"]["findings"]["items"]["properties"]["severity"]["enum"]
+                .clone();
         assert_eq!(allowed, json!(["low", "medium", "high", "critical"]));
         for severity in Severity::ALL {
             let value = serde_json::to_value(severity).expect("serialises");

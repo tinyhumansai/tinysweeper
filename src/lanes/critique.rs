@@ -189,7 +189,8 @@ mod tests {
             .unwrap()
     }
 
-    const PATCH: &str = "@@ -1,3 +1,5 @@\n fn main() {\n+    let x = items[i];\n+    println!(\"{x}\");\n }\n";
+    const PATCH: &str =
+        "@@ -1,3 +1,5 @@\n fn main() {\n+    let x = items[i];\n+    println!(\"{x}\");\n }\n";
 
     fn diffs() -> Vec<FileDiff> {
         vec![parse_file_patch("src/main.rs", PATCH)]
@@ -256,7 +257,11 @@ mod tests {
         let outcome = run_with(model, &config(), &diffs()).await;
 
         assert!(outcome.findings.is_empty(), "{:#?}", outcome.findings);
-        assert!(outcome.summary.contains("1 finding discarded"), "{}", outcome.summary);
+        assert!(
+            outcome.summary.contains("1 finding discarded"),
+            "{}",
+            outcome.summary
+        );
     }
 
     #[tokio::test]
@@ -291,7 +296,10 @@ mod tests {
 
         assert!(outcome.findings.is_empty());
         assert_eq!(outcome.summary, "Nothing to report.");
-        assert!(outcome.skipped.is_none(), "silence is not the same as skipping");
+        assert!(
+            outcome.skipped.is_none(),
+            "silence is not the same as skipping"
+        );
     }
 
     #[tokio::test]
@@ -373,9 +381,15 @@ mod tests {
         let system = &request.messages[0].content;
         let user = &request.messages[1].content;
 
-        assert!(system.contains("+earlier"), "replay must be in the cached half");
+        assert!(
+            system.contains("+earlier"),
+            "replay must be in the cached half"
+        );
         assert!(!user.contains("+earlier"));
-        assert!(user.contains("Guard the index"), "prior findings are volatile");
+        assert!(
+            user.contains("Guard the index"),
+            "prior findings are volatile"
+        );
     }
 
     #[tokio::test]
@@ -398,7 +412,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(err.to_string().contains("did not match the schema"), "{err}");
+        assert!(
+            err.to_string().contains("did not match the schema"),
+            "{err}"
+        );
     }
 
     #[tokio::test]
@@ -410,6 +427,9 @@ mod tests {
         }));
         let outcome = run_with(model, &config(), &diffs()).await;
 
-        assert_eq!(outcome.resolved, vec!["Guard the index before dereferencing"]);
+        assert_eq!(
+            outcome.resolved,
+            vec!["Guard the index before dereferencing"]
+        );
     }
 }
