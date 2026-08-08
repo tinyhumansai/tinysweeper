@@ -175,7 +175,9 @@ fn junk_suffix(path: &str) -> Option<Finding> {
         path,
         "committed-artifact",
         format!("`{path}` was committed ({label})"),
-        format!("Files ending in `{suffix}` are generated or local. Add the pattern to .gitignore."),
+        format!(
+            "Files ending in `{suffix}` are generated or local. Add the pattern to .gitignore."
+        ),
     ))
 }
 

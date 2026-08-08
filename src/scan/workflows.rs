@@ -80,7 +80,9 @@ fn write_all_permissions(path: &str, line: u64, text: &str) -> Option<Finding> {
 }
 
 fn unpinned_action(path: &str, line: u64, text: &str) -> Option<Finding> {
-    let reference = text.strip_prefix("- uses:").or_else(|| text.strip_prefix("uses:"))?;
+    let reference = text
+        .strip_prefix("- uses:")
+        .or_else(|| text.strip_prefix("uses:"))?;
     let reference = reference.trim().trim_matches(['"', '\'']);
 
     // Local (`./.github/actions/x`) and container (`docker://`) references are
@@ -333,10 +335,8 @@ mod tests {
     #[test]
     fn trusted_context_in_a_run_block_is_left_alone() {
         assert!(
-            scan(&[
-                "      - run: echo \"${{ github.sha }} on ${{ github.repository }}\"",
-            ])
-            .is_empty()
+            scan(&["      - run: echo \"${{ github.sha }} on ${{ github.repository }}\"",])
+                .is_empty()
         );
     }
 
