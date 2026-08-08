@@ -199,6 +199,7 @@ fn print_prose(loaded: &Loaded) {
     // runs rather than after it has been billed.
     let configured: Vec<&str> = config
         .enabled_lanes()
+        .into_iter()
         .map(|lane| config.model_for(lane))
         .chain([config.models.scan.as_str(), config.models.deep.as_str()])
         .chain(config.models.fallback.iter().map(String::as_str))
