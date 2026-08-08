@@ -1,0 +1,47 @@
+version = 1
+
+[review]
+lanes = ["critique", "security", "tests", "commits", "description"]
+strictness = 2
+severity_gate = "medium"
+confidence_min = 0.6
+max_comments = 20
+incremental = true
+draft_prs = false
+respect_agents_md = true
+
+[paths]
+ignore = [
+    "**/Cargo.lock",
+    "target/**",
+    "vendor/**",
+    "**/generated/**",
+]
+
+[[path_instructions]]
+glob = "src/ports/**"
+instructions = """
+One trait per file. Flag any port whose signature leaks a concrete backend type,
+and any port added without a matching offline mock.
+"""
+
+[[path_instructions]]
+glob = "Cargo.toml"
+instructions = """
+Flag a new non-optional dependency that pulls in an HTTP client or otherwise
+breaks the offline default build. Network dependencies belong behind a feature.
+"""
+
+[[path_instructions]]
+glob = "src/**/*.rs"
+instructions = """
+Flag `unwrap()`, `expect()` and `panic!` on paths reachable from library code
+rather than tests. Functions should return the crate `Result<T>`.
+"""
+
+[lanes.tests]
+model = "scan"
+
+[lanes.security]
+model = "deep"
+fail_on = "high"
