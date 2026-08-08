@@ -341,4 +341,5 @@ fn line_of(starts: &[usize], byte: usize) -> u32 {
 }
 
 #[cfg(test)]
-mod test;
+#[path = "tree_test.rs"]
+mod tests;
