@@ -4,6 +4,7 @@
 //! repository under review. It parses diffs and reads files.
 
 pub mod diff;
+pub mod replay;
 
 pub use crate::evidence::diff::{
     DiffLine, FileDiff, Hunk, LineKind, parse_changed_files, parse_file_patch,

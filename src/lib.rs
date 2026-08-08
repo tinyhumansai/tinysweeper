@@ -24,6 +24,7 @@ pub mod position;
 pub mod scan;
 #[cfg(feature = "serve")]
 pub mod server;
+pub mod state;
 
 pub use crate::error::{Error, Result};
 

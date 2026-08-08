@@ -183,6 +183,19 @@ impl MockForge {
         self
     }
 
+    /// Simulate a push: move a pull request's head and replace its files.
+    ///
+    /// Everything already posted on it — review comments, the last review state
+    /// — is deliberately kept, because that is what a real push does and what
+    /// cross-push dedupe has to survive.
+    pub fn push(&self, number: u64, head_sha: &str, files: Vec<ChangedFile>) {
+        let mut state = self.state.lock().expect("mock state lock");
+        if let Some(pull_request) = state.pull_requests.get_mut(&number) {
+            pull_request.head_sha = head_sha.to_string();
+        }
+        state.files.insert(number, files);
+    }
+
     /// Record writes but never apply them — what `--dry-run` uses.
     pub fn read_only(mut self) -> Self {
         self.read_only = true;
@@ -349,7 +362,13 @@ impl ForgeWrite for MockForge {
                 .review_comments
                 .entry(number)
                 .or_default()
-                .extend(comments.iter().cloned());
+                .extend(comments.iter().cloned().map(|mut comment| {
+                    // The forge assigns the author, and dedupe only trusts our
+                    // own. A mock that left it empty would make the three-push
+                    // regression test pass for the wrong reason.
+                    comment.author = "tinysweeper[bot]".into();
+                    comment
+                }));
             state.own_reviews.insert(number, event);
         }
         self.record(Write::Review {
@@ -573,6 +592,7 @@ mod tests {
             path: "src/lib.rs".into(),
             line: 42,
             start_line: None,
+            author: String::new(),
             body: "finding".into(),
         };
         forge
@@ -586,11 +606,17 @@ mod tests {
             .await
             .expect("posted");
 
+        let read_back = forge.review_comments(&repo(), 7).await.expect("read");
         assert_eq!(
-            forge.review_comments(&repo(), 7).await.expect("read"),
-            vec![comment],
+            read_back.len(),
+            1,
             "dedupe reads these back; a mock that dropped them would make every \
              dedupe test pass for the wrong reason"
+        );
+        assert_eq!(read_back[0].body, comment.body);
+        assert_eq!(
+            read_back[0].author, "tinysweeper[bot]",
+            "the forge assigns the author, and dedupe only trusts our own"
         );
     }
 
