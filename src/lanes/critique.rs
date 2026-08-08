@@ -124,55 +124,6 @@ impl Lane for Critique {
     }
 }
 
-/// Whether a finding points at a line this pull request actually changed.
-///
-/// A finding marked `late` is exempt — it is explicitly about untouched code,
-/// and the model had to justify that separately.
-fn anchored_in_diff(finding: &Finding, diffs: &[FileDiff]) -> bool {
-    if finding.late {
-        return diffs.iter().any(|d| d.path == finding.path);
-    }
-
-    let Some((start, end)) = finding.range() else {
-        return false;
-    };
-    diffs
-        .iter()
-        .find(|d| d.path == finding.path)
-        .is_some_and(|d| d.touches_range(start, end))
-}
-
-/// Render the diffs into the text the model sees.
-fn render_diffs(diffs: &[FileDiff]) -> String {
-    let mut out = String::new();
-    for diff in diffs {
-        if diff.hunks.is_empty() {
-            continue;
-        }
-        out.push_str(&format!("--- {}\n", diff.path));
-        for hunk in &diff.hunks {
-            out.push_str(&format!(
-                "@@ -{},{} +{},{} @@\n",
-                hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines
-            ));
-            for line in &hunk.lines {
-                let marker = match line.kind {
-                    crate::evidence::diff::LineKind::Added => '+',
-                    crate::evidence::diff::LineKind::Removed => '-',
-                    crate::evidence::diff::LineKind::Context => ' ',
-                };
-                // Line numbers are included so the model anchors to real ones
-                // rather than counting, which it does badly.
-                match line.new_line {
-                    Some(n) => out.push_str(&format!("{n:>5} {marker}{}\n", line.text)),
-                    None => out.push_str(&format!("      {marker}{}\n", line.text)),
-                }
-            }
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
