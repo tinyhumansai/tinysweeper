@@ -252,6 +252,15 @@ impl Resolver {
                         return Resolution::Resolved(vec![path]);
                     }
                 }
+                // The module may be a flat `foo.rs` beside the `foo/`
+                // directory rather than a `foo/mod.rs` inside it. Both layouts
+                // are legal and both appear in the same codebases.
+                if !candidate_dir.is_empty()
+                    && let Some(path) =
+                        self.rust_module_file(&dir_of(&candidate_dir), stem(&candidate_dir))
+                {
+                    return Resolution::Resolved(vec![path]);
+                }
                 continue;
             }
             let parent = dir_of(&candidate_dir);
