@@ -59,6 +59,14 @@ pub struct LaneInput<'a> {
     pub reviewed_evidence: &'a str,
     /// Titles of findings raised in earlier cycles.
     pub prior_findings: &'a [String],
+    /// Code retrieved from the index for this pull request: what the change
+    /// resembles, and what it reaches.
+    ///
+    /// **Volatile.** It is composed from this diff, so it belongs in the
+    /// prompt's suffix and nowhere near the cacheable prefix — see
+    /// `crate::harness::prompt`. Empty when retrieval is off, degraded, or
+    /// found nothing, in which case the lane reviews the diff alone.
+    pub retrieved_context: &'a str,
 }
 
 impl LaneInput<'_> {

@@ -84,6 +84,20 @@ max_file_bytes = 65536
 pinned_doc_chars = 4000
 pinned_total_chars = 12000
 
+# Retrieval budgets. `context_tokens` is the number that matters: at roughly
+# four bytes to a token, 8000 tokens is ~32 KB of related code per lane, which
+# is comparable to the diff it accompanies rather than a garnish beside it, and
+# across five lanes it is about 12% of `models.budget_usd_per_pr` at the deep
+# tier's input price. Raise it if reviews keep asking for code they were not
+# shown; lower it if the cost line is dominated by context nobody used.
+[retrieval]
+enabled = true
+query_chars = 4000
+context_tokens = 8000
+max_chunks = 40
+graph_hops = 2
+max_graph_nodes = 60
+
 [lanes.critique]
 model = "deep"
 fail_on = "high"

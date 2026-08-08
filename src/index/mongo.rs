@@ -676,6 +676,38 @@ impl ChunkIndex for MongoChunkIndex {
         }
         Ok(hits)
     }
+
+    async fn chunks_in_paths(
+        &self,
+        signature: &EmbedSignature,
+        repo_id: &str,
+        paths: &[String],
+        limit: usize,
+    ) -> Result<Vec<Chunk>> {
+        if paths.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        // An ordinary `find`, not an aggregation: this is the one retrieval
+        // path that must keep working on a deployment whose `mongot` is down,
+        // because it is what graph expansion degrades *to*.
+        let mut cursor = self
+            .collection
+            .find(doc! {
+                "sig": signature.key(),
+                "repo_id": repo_id,
+                "path": { "$in": paths },
+            })
+            .sort(doc! { "path": 1, "start_line": 1 })
+            .limit(limit as i64)
+            .await
+            .map_err(mongo)?;
+
+        let mut chunks = Vec::new();
+        while let Some(next) = cursor.next().await {
+            chunks.push(chunk_from_document(&next.map_err(mongo)?));
+        }
+        Ok(chunks)
+    }
 }
 
 /// A [`GraphStore`] over two MongoDB collections.

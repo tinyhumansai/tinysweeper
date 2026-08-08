@@ -25,6 +25,7 @@ pub mod knowledge;
 pub mod lanes;
 pub mod ports;
 pub mod position;
+pub mod retrieve;
 pub mod scan;
 #[cfg(feature = "serve")]
 pub mod server;

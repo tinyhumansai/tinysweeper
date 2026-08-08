@@ -299,6 +299,31 @@ impl ChunkIndex for MockChunkIndex {
         scored.truncate(query.limit);
         Ok(scored)
     }
+
+    async fn chunks_in_paths(
+        &self,
+        signature: &EmbedSignature,
+        repo_id: &str,
+        paths: &[String],
+        limit: usize,
+    ) -> Result<Vec<Chunk>> {
+        if paths.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let key = signature.key();
+        let rows = self.rows.lock().expect("index lock");
+        let mut found: Vec<Chunk> = rows
+            .values()
+            .filter(|row| row.signature == key && row.chunk.repo_id == repo_id)
+            .filter(|row| paths.contains(&row.chunk.path))
+            .map(|row| row.chunk.clone())
+            .collect();
+        // Same total order the adapter sorts on, so a test written against the
+        // mock describes what the real store will do when the cap bites.
+        found.sort_by(|a, b| a.path.cmp(&b.path).then(a.start_line.cmp(&b.start_line)));
+        found.truncate(limit);
+        Ok(found)
+    }
 }
 
 /// An in-memory code graph.
