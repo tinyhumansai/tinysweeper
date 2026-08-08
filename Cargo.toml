@@ -125,3 +125,11 @@ all = ["harness", "github", "serve", "treesitter"]
 
 [dev-dependencies]
 tempfile = "3"
+
+# Declared explicitly (`autoexamples = false`) so a credential-needing smoke
+# test never builds in CI. This one needs an embedding provider and a MongoDB
+# 8.2+ deployment with mongot attached; `serve` pulls in `harness` for the
+# provider adapter.
+[[example]]
+name = "index_and_retrieve"
+required-features = ["serve"]
