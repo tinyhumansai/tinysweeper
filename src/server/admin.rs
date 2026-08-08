@@ -546,6 +546,16 @@ async fn delete_doc(
     Ok(Json(json!({ "deleted": id })))
 }
 
+/// The `owner/name` repository id for a path pair, both checked.
+///
+/// The same validators the knowledge routes use, because this string is a
+/// database key on the index side exactly as it is on theirs.
+fn valid_repo(owner: &str, name: &str) -> std::result::Result<String, ApiError> {
+    let owner = valid_login(owner)?;
+    let name = valid_repository_name(name)?;
+    Ok(format!("{owner}/{name}"))
+}
+
 /// The repository scope for an `owner`/`name` pair, both checked.
 fn repo_scope(owner: &str, name: &str) -> std::result::Result<KnowledgeScope, ApiError> {
     let owner = valid_login(owner)?;
