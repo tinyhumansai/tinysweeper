@@ -300,7 +300,14 @@ async fn run_and_publish(
 
     let write_token = state.auth.installation_token(installation).await?;
     let write = crate::forge::github::GitHubWrite::new(&write_token)?;
-    crate::app::apply(forge, &write, &state.config.config, &proposal, Some(&state.store)).await?;
+    crate::app::apply(
+        forge,
+        &write,
+        &state.config.config,
+        &proposal,
+        Some(&state.store),
+    )
+    .await?;
 
     Ok(proposal)
 }

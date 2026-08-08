@@ -97,7 +97,9 @@ pub async fn apply(
 
         // After successful publish, extend the stored state with newly posted
         // fingerprints so the next review dedupes them correctly.
-        if let Some(store) = store && !newly_posted.is_empty() {
+        if let Some(store) = store
+            && !newly_posted.is_empty()
+        {
             let state_key = crate::state::key(&proposal.repo, proposal.number);
             if let Ok(Some(mut current_state)) = store.load_state(&state_key).await {
                 current_state.fingerprints.extend(newly_posted.clone());

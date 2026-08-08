@@ -456,10 +456,7 @@ fn still_open_titles(prior_titles: &[String], lanes: &[LaneProposal]) -> Vec<Str
     const MAX_OPEN_TITLES: usize = 100;
     if titles.len() > MAX_OPEN_TITLES {
         let len = titles.len();
-        titles = titles
-            .into_iter()
-            .skip(len - MAX_OPEN_TITLES)
-            .collect();
+        titles = titles.into_iter().skip(len - MAX_OPEN_TITLES).collect();
     }
 
     titles
