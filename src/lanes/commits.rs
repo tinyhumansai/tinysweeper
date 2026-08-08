@@ -192,6 +192,7 @@ mod tests {
     use crate::harness::mock::MockModel;
     use crate::scan::types::{Finding as ScanFinding, redact};
     use serde_json::json;
+    use std::collections::BTreeMap;
 
     fn config() -> Config {
         crate::config::DEFAULTS
@@ -265,6 +266,7 @@ mod tests {
                 config,
                 pull_request: &pr,
                 diffs: &diffs,
+                file_contents: &BTreeMap::new(),
                 scan_findings,
                 commits,
                 repo_policy: None,

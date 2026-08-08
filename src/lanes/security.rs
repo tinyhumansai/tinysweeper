@@ -232,6 +232,7 @@ mod tests {
     use crate::forge::types::PullRequest;
     use crate::harness::mock::MockModel;
     use serde_json::json;
+    use std::collections::BTreeMap;
 
     fn config() -> Config {
         crate::config::DEFAULTS
@@ -268,6 +269,7 @@ mod tests {
                 config,
                 pull_request: &pr,
                 diffs,
+                file_contents: &BTreeMap::new(),
                 scan_findings,
                 commits: &[],
                 repo_policy: None,
@@ -466,6 +468,7 @@ mod tests {
                 config: &config,
                 pull_request: &pr,
                 diffs: &diffs,
+                file_contents: &BTreeMap::new(),
                 scan_findings: &[],
                 commits: &[],
                 repo_policy: None,

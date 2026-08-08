@@ -221,28 +221,58 @@ fn is_inert_path(path: &str) -> bool {
 
 /// Whether the added lines are an in-file test block rather than behaviour.
 fn adds_inline_tests(diff: &FileDiff) -> bool {
-    let mut saw_test_attribute = false;
-    for (_, text) in diff.added_lines() {
-        let trimmed = text.trim_start();
-        if trimmed.starts_with("#[cfg(test)]")
-            || trimmed.starts_with("#[test]")
-            || trimmed.starts_with("#[tokio::test]")
-        {
-            saw_test_attribute = true;
-        } else if !trimmed.is_empty()
-            && !trimmed.starts_with("//")
-            && !trimmed.starts_with('}')
-            && !trimmed.starts_with("use ")
-            && !trimmed.starts_with("mod tests")
-            && !trimmed.starts_with("fn ")
-            && !trimmed.starts_with("assert")
-            && !trimmed.starts_with("let ")
-            && !saw_test_attribute
-        {
-            return false;
+    let mut awaiting_test_module = false;
+    let mut test_module_depth: Option<i32> = None;
+    let mut saw_test_module = false;
+
+    for hunk in &diff.hunks {
+        for line in &hunk.lines {
+            if line.kind == crate::evidence::diff::LineKind::Removed {
+                continue;
+            }
+
+            let trimmed = line.text.trim_start();
+            let is_cfg_test = trimmed.starts_with("#[cfg(test)]");
+            let starts_test_module = awaiting_test_module && trimmed.starts_with("mod tests");
+
+            if is_cfg_test {
+                awaiting_test_module = true;
+            }
+
+            if starts_test_module {
+                let depth = brace_delta(trimmed);
+                test_module_depth = (depth > 0).then_some(depth);
+                awaiting_test_module = false;
+                saw_test_module = true;
+            } else if line.kind == crate::evidence::diff::LineKind::Added
+                && test_module_depth.is_none()
+                && !is_cfg_test
+            {
+                // Do not infer test-only status from an attribute alone. A
+                // production addition before, between, or after test blocks
+                // means this file must stay in the source inventory.
+                return false;
+            }
+
+            if !starts_test_module && let Some(depth) = &mut test_module_depth {
+                *depth += brace_delta(trimmed);
+                if *depth <= 0 {
+                    test_module_depth = None;
+                }
+            }
         }
     }
-    saw_test_attribute
+
+    saw_test_module
+}
+
+/// Net brace count for the small structural test-block classifier.
+fn brace_delta(text: &str) -> i32 {
+    text.bytes().fold(0, |depth, byte| match byte {
+        b'{' => depth + 1,
+        b'}' => depth - 1,
+        _ => depth,
+    })
 }
 
 // Not `mod tests`: this file *is* the tests lane, and a `tests` module inside
@@ -255,6 +285,7 @@ mod lane_tests {
     use crate::forge::types::PullRequest;
     use crate::harness::mock::MockModel;
     use serde_json::json;
+    use std::collections::BTreeMap;
 
     fn config() -> Config {
         crate::config::DEFAULTS
@@ -287,6 +318,7 @@ mod lane_tests {
                 config,
                 pull_request: &pr,
                 diffs,
+                file_contents: &BTreeMap::new(),
                 scan_findings: &[],
                 commits: &[],
                 repo_policy: None,
@@ -389,6 +421,28 @@ mod lane_tests {
 
         assert_eq!(inventory.tests, vec!["src/pricing.rs".to_string()]);
         assert!(inventory.source.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mixed_inline_tests_and_production_edits_stay_in_the_source_inventory() {
+        let model = MockModel::silent();
+        let diff = parse_file_patch(
+            "src/pricing.rs",
+            "@@ -1,3 +1,10 @@\n fn total(items: &[Item]) -> u64 {\n+    let discount = 0;\n     items.len() as u64\n }\n+#[cfg(test)]\n+mod tests {\n+    #[test]\n+    fn total_is_counted() { assert_eq!(total(&[]), 0); }\n+}\n+pub fn discount() -> u64 { discount }\n",
+        );
+
+        let inventory = Inventory::of(std::slice::from_ref(&diff));
+        assert_eq!(inventory.source, vec!["src/pricing.rs"]);
+        assert!(inventory.tests.is_empty());
+
+        run_with(model.clone(), &config(), &[diff]).await;
+        assert_eq!(model.calls(), 1, "mixed edits must be reviewed");
+        assert!(
+            model
+                .last_prompt()
+                .expect("recorded")
+                .contains("behaviour: src/pricing.rs")
+        );
     }
 
     #[test]

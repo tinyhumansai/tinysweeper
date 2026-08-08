@@ -71,13 +71,14 @@ impl Lane for Critique {
         }
 
         let new_evidence = render_diffs(input.diffs);
+        let changed_paths = input.changed_paths();
         let built = prompt::build(&PromptInputs {
-            lane: LaneId::Critique,
-            config: input.config,
             repo_policy: input.repo_policy,
             reviewed_evidence: input.reviewed_evidence,
             prior_findings: input.prior_findings,
             new_evidence: &new_evidence,
+            changed_paths: &changed_paths,
+            ..PromptInputs::new(LaneId::Critique, input.config)
         });
 
         // The prefix goes in the system message and the suffix in the user
