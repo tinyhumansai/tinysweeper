@@ -146,23 +146,46 @@ pub async fn review(
         lanes.push(lane_proposal(config, lane_id, outcome));
     }
 
-    // Scanner findings that no lane adjudicated still have to reach a human.
-    // A committed private key must not vanish because the lane that would have
-    // discussed it has not been written yet.
+    // Scanner findings that no lane actually adjudicated still have to reach a
+    // human. A committed private key must not vanish because the lane that
+    // would have discussed it has not been written yet.
+    //
+    // The condition here was wrong, and tinysweeper caught it reviewing itself:
+    // it keyed on whether the `commits` lane was *enabled* rather than whether
+    // it had actually run. Under the default config `commits` is enabled and
+    // unimplemented, so it contributed a Neutral placeholder and swallowed every
+    // scanner finding — a committed secret would have passed silently, which is
+    // precisely the failure this code exists to prevent. The unit test agreed
+    // with the code because it disabled `commits` to reach the branch, so it
+    // tested the shape of the implementation rather than the requirement.
     let unclaimed: Vec<Finding> = scan_findings
         .iter()
         .cloned()
         .map(Finding::from)
         .filter(|f| f.severity >= Severity::High)
         .collect();
-    if !unclaimed.is_empty() && !config.enabled_lanes().contains(&LaneId::Commits) {
-        lanes.push(LaneProposal {
-            lane: LaneId::Commits,
-            check_name: LaneId::Commits.check_name(),
-            conclusion: CheckConclusion::Failure,
-            summary: format!("{} scanner finding(s).", unclaimed.len()),
-            findings: unclaimed,
-        });
+
+    if !unclaimed.is_empty() {
+        let adjudicated = lanes
+            .iter()
+            .any(|l| l.lane == LaneId::Commits && l.conclusion != CheckConclusion::Neutral);
+
+        if !adjudicated {
+            // Replace the placeholder rather than sitting beside it, so the
+            // check run for `commits` reports the findings instead of claiming
+            // there was nothing to do.
+            lanes.retain(|l| l.lane != LaneId::Commits);
+            lanes.push(LaneProposal {
+                lane: LaneId::Commits,
+                check_name: LaneId::Commits.check_name(),
+                conclusion: CheckConclusion::Failure,
+                summary: format!(
+                    "{} finding(s) from the deterministic scanners.",
+                    unclaimed.len()
+                ),
+                findings: unclaimed,
+            });
+        }
     }
 
     lanes.push(gate(&lanes));
@@ -461,21 +484,66 @@ mod tests {
         assert!(!proposal.blocked());
     }
 
-    #[tokio::test]
-    async fn a_committed_secret_fails_even_though_its_lane_is_not_written_yet() {
-        // Otherwise a private key would sail through simply because the lane
-        // that would have discussed it does not exist.
+    fn file_with_committed_secret() -> ChangedFile {
         let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
-        let file = ChangedFile {
+        ChangedFile {
             path: "src/config.rs".into(),
             status: FileStatus::Modified,
             patch: Some(format!("@@ -1 +1,2 @@\n a\n+const K: &str = \"{key}\";\n")),
             ..ChangedFile::default()
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn a_committed_secret_fails_under_the_default_configuration() {
+        // The regression test for the bug tinysweeper found in itself. The
+        // original test disabled the `commits` lane to reach the branch it was
+        // exercising, which meant it agreed with the implementation instead of
+        // checking the requirement — and under the shipped defaults a committed
+        // key passed silently.
+        let forge = forge_with(vec![file_with_committed_secret()], vec![]);
+        let proposal = review(&forge, Arc::new(MockModel::silent()), &config(), &repo(), 7)
+            .await
+            .expect("reviews");
+
+        assert!(proposal.blocked(), "{:#?}", proposal.lanes);
+        let commits = proposal
+            .lanes
+            .iter()
+            .find(|l| l.lane == LaneId::Commits)
+            .expect("the commits lane reports it");
+        assert_eq!(commits.conclusion, CheckConclusion::Failure);
+        assert_eq!(commits.findings.len(), 1);
+
+        let rendered = serde_json::to_string(&proposal).unwrap();
+        assert!(!rendered.contains("IOSFODNN7EXAMPLE"), "value leaked");
+    }
+
+    #[tokio::test]
+    async fn only_one_commits_lane_is_ever_reported() {
+        // The placeholder must be replaced, not accompanied: two check runs of
+        // the same name is a confusing way to fail.
+        let forge = forge_with(vec![file_with_committed_secret()], vec![]);
+        let proposal = review(&forge, Arc::new(MockModel::silent()), &config(), &repo(), 7)
+            .await
+            .expect("reviews");
+
+        assert_eq!(
+            proposal
+                .lanes
+                .iter()
+                .filter(|l| l.lane == LaneId::Commits)
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn a_committed_secret_fails_even_with_the_commits_lane_disabled() {
         let mut config = config();
         config.review.lanes = vec!["critique".into()];
 
-        let forge = forge_with(vec![file], vec![]);
+        let forge = forge_with(vec![file_with_committed_secret()], vec![]);
         let proposal = review(&forge, Arc::new(MockModel::silent()), &config, &repo(), 7)
             .await
             .expect("reviews");
