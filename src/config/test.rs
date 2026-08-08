@@ -24,6 +24,37 @@ fn repo(config: Option<&str>, presets: &[(&str, &str)]) -> TempDir {
     dir
 }
 
+/// Write a rule document into a repository skeleton's `presets/rules/`.
+fn with_rules(dir: &TempDir, name: &str, text: &str) {
+    let rules_dir = dir.path().join("presets").join("rules");
+    std::fs::create_dir_all(&rules_dir).expect("create rules dir");
+    std::fs::write(rules_dir.join(format!("{name}.md")), text).expect("write rule document");
+}
+
+/// Copy this repository's own rule documents into a skeleton, so a shipped
+/// preset that references one resolves.
+fn with_shipped_rules(dir: &TempDir) {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("presets")
+        .join("rules");
+    for entry in std::fs::read_dir(&source).expect("read shipped rules") {
+        let entry = entry.expect("dir entry");
+        if entry.path().extension().is_some_and(|e| e == "md") {
+            let name = entry
+                .path()
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            with_rules(
+                dir,
+                &name,
+                &std::fs::read_to_string(entry.path()).expect("read rule document"),
+            );
+        }
+    }
+}
+
 fn parse(text: &str) -> Config {
     let dir = repo(Some(text), &[]);
     load(dir.path(), None).expect("loads").config
@@ -405,9 +436,107 @@ fn the_shipped_presets_load_and_validate() {
                     .expect("read shipped preset"),
             )],
         );
+        with_shipped_rules(&dir);
         let loaded = load(dir.path(), None).unwrap_or_else(|e| panic!("{name}: {e}"));
         let problems = validate::validate(&loaded.config);
         assert!(problems.is_empty(), "{name}: {problems:#?}");
+
+        // A rule document that failed to resolve would leave an entry with the
+        // reference and no content, which reads as a rule with no rules.
+        for rule in &loaded.config.path_instructions {
+            assert!(
+                !rule.instructions.trim().is_empty(),
+                "{name}: `{}` has no instructions",
+                rule.glob
+            );
+        }
+    }
+}
+
+#[test]
+fn a_rule_document_is_inlined_into_its_path_instruction() {
+    // Rule documents are data under presets/. Adding one is a file and a line
+    // of TOML, never a module.
+    let dir = repo(
+        Some("version = 1\n[[path_instructions]]\nglob = \"**/*.rs\"\nrules = \"rust\"\n"),
+        &[],
+    );
+    with_rules(&dir, "rust", "## Rust\n\nDo NOT report naming.\n");
+
+    let config = load(dir.path(), None).expect("loads").config;
+    assert_eq!(config.path_instructions.len(), 1);
+    assert!(
+        config.path_instructions[0]
+            .instructions
+            .contains("Do NOT report naming."),
+        "{:?}",
+        config.path_instructions[0]
+    );
+}
+
+#[test]
+fn inline_instructions_and_a_rule_document_are_both_kept() {
+    let dir = repo(
+        Some(
+            "version = 1\n[[path_instructions]]\nglob = \"**/*.rs\"\n\
+             instructions = \"One trait per file.\"\nrules = \"rust\"\n",
+        ),
+        &[],
+    );
+    with_rules(&dir, "rust", "Do NOT report naming.\n");
+
+    let config = load(dir.path(), None).expect("loads").config;
+    let text = &config.path_instructions[0].instructions;
+    assert!(text.contains("One trait per file."), "{text}");
+    assert!(text.contains("Do NOT report naming."), "{text}");
+}
+
+#[test]
+fn a_missing_rule_document_names_every_path_it_looked_in() {
+    // Resolved at load time on purpose: a typo has to be an error a human sees
+    // once, not a silently weaker review on every run.
+    let dir = repo(
+        Some("version = 1\n[[path_instructions]]\nglob = \"**/*.rs\"\nrules = \"nope\"\n"),
+        &[],
+    );
+    let err = load(dir.path(), None).unwrap_err().to_string();
+
+    assert!(err.contains("rule document `nope` not found"), "{err}");
+    assert!(err.contains("rules/nope.md"), "{err}");
+}
+
+#[test]
+fn a_rule_document_name_cannot_escape_the_presets_directory() {
+    let dir = repo(
+        Some(
+            "version = 1\n[[path_instructions]]\nglob = \"**/*.rs\"\n\
+             rules = \"../../etc/passwd\"\n",
+        ),
+        &[],
+    );
+    let err = load(dir.path(), None).unwrap_err().to_string();
+    assert!(err.contains("path separator"), "{err}");
+}
+
+#[test]
+fn every_shipped_rule_document_carries_a_negative_list() {
+    // Roughly half of each document is the "do NOT report" half, and that is
+    // where the precision comes from. A rule document without one makes the
+    // review noisier, not better.
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("presets")
+        .join("rules");
+    for entry in std::fs::read_dir(&dir).expect("read rules") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().is_none_or(|e| e != "md") || path.ends_with("README.md") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("read rule document");
+        assert!(
+            text.contains("Do NOT report") || text.contains("do NOT report"),
+            "{} has no negative list",
+            path.display()
+        );
     }
 }
 

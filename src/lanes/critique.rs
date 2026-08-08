@@ -81,13 +81,14 @@ impl Lane for Critique {
         } else {
             replay::split(input.reviewed_evidence, &evidence)
         };
+        let changed_paths = input.changed_paths();
         let built = prompt::build(&PromptInputs {
-            lane: LaneId::Critique,
-            config: input.config,
             repo_policy: input.repo_policy,
             reviewed_evidence: &reviewed_evidence,
             prior_findings: input.prior_findings,
             new_evidence: &new_evidence,
+            changed_paths: &changed_paths,
+            ..PromptInputs::new(LaneId::Critique, input.config)
         });
 
         // The prefix goes in the system message and the suffix in the user
@@ -325,6 +326,7 @@ fn helper() {
                 diffs,
                 file_contents,
                 scan_findings: &[],
+                commits: &[],
                 repo_policy: None,
                 reviewed_evidence: "",
                 prior_findings: &[],
@@ -644,6 +646,7 @@ fn helper() {
                 diffs: &diffs,
                 file_contents: &BTreeMap::new(),
                 scan_findings: &[],
+                commits: &[],
                 repo_policy: None,
                 reviewed_evidence: "",
                 prior_findings: &[],
@@ -693,6 +696,7 @@ fn helper() {
                 diffs: &diffs,
                 file_contents: &BTreeMap::new(),
                 scan_findings: &[],
+                commits: &[],
                 repo_policy: None,
                 reviewed_evidence: &reviewed,
                 prior_findings: &["Close the socket on the error path".to_string()],
@@ -734,6 +738,7 @@ fn helper() {
                 diffs: &diffs,
                 file_contents: &BTreeMap::new(),
                 scan_findings: &[],
+                commits: &[],
                 repo_policy: None,
                 reviewed_evidence: "",
                 prior_findings: &[],

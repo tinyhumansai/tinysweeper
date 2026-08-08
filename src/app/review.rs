@@ -22,11 +22,15 @@ use crate::findings::anchor;
 use crate::findings::prior::{self, PriorReview};
 use crate::findings::types::Finding;
 use crate::forge::types::{CheckConclusion, PullRequestContext, RepoId};
-use crate::lanes::{Lane, LaneInput, LaneOutcome, critique::Critique};
+use crate::lanes::{
+    self, Lane, LaneInput, LaneOutcome, commits::Commits, critique::Critique,
+    description::Description, security::Security, tests::Tests,
+};
 use crate::ports::forge::ForgeRead;
 use crate::ports::model::{Model, Usage};
 use crate::ports::review_state::ReviewStateStore;
 use crate::scan;
+use crate::scan::types::ScanKind;
 use crate::state::types::ReviewedState;
 
 /// What a review run concluded, ready for `apply` to publish.
@@ -218,22 +222,14 @@ pub async fn review_with_state(
     for lane_id in config.enabled_lanes() {
         let lane: Box<dyn Lane> = match lane_id {
             LaneId::Critique => Box::new(Critique::new(model.clone())),
-            // The remaining lanes land in M4. Until then they report Neutral
-            // rather than Success: claiming a lane passed when it never ran
-            // would make requiring it in branch protection meaningless.
-            _ => {
-                lanes.push(LaneProposal {
-                    lane: lane_id,
-                    check_name: lane_id.check_name(),
-                    conclusion: CheckConclusion::Neutral,
-                    summary: "Not implemented yet.".into(),
-                    findings: vec![],
-                    resolved: vec![],
-                    deduped: 0,
-                    highest_severity: None,
-                });
-                continue;
-            }
+            LaneId::Security => Box::new(Security::new(model.clone())),
+            LaneId::Tests => Box::new(Tests::new(model.clone())),
+            LaneId::Commits => Box::new(Commits::new(model.clone())),
+            LaneId::Description => Box::new(Description::new(model.clone())),
+            // The gate is the deterministic aggregate of the others and never
+            // runs as a lane; it is appended below, after they have all
+            // reported.
+            LaneId::Gate => continue,
         };
 
         let outcome = lane
@@ -243,6 +239,7 @@ pub async fn review_with_state(
                 diffs: &diffs,
                 file_contents: &file_contents,
                 scan_findings: &scan_findings,
+                commits: &context.commits,
                 repo_policy: repo_policy().as_deref(),
                 reviewed_evidence: &reviewed_evidence,
                 prior_findings: &prior_titles,
@@ -283,52 +280,11 @@ pub async fn review_with_state(
     // precisely the failure this code exists to prevent. The unit test agreed
     // with the code because it disabled `commits` to reach the branch, so it
     // tested the shape of the implementation rather than the requirement.
-    let mut unclaimed: Vec<Finding> = scan_findings
-        .iter()
-        .cloned()
-        .map(Finding::from)
-        .filter(|f| f.severity >= Severity::High)
-        .collect();
-    anchor::stamp(&mut unclaimed, &diffs);
-
-    if !unclaimed.is_empty() {
-        let adjudicated = lanes
-            .iter()
-            .any(|l| l.lane == LaneId::Commits && l.conclusion != CheckConclusion::Neutral);
-
-        if !adjudicated {
-            // Replace the placeholder rather than sitting beside it, so the
-            // check run for `commits` reports the findings instead of claiming
-            // there was nothing to do.
-            lanes.retain(|l| l.lane != LaneId::Commits);
-            let total = unclaimed.len();
-            // The conclusion is decided above from every scanner finding, not
-            // from the ones that survive dedupe: a committed key already
-            // reported on an earlier push is still a committed key, and the
-            // check must keep failing even though the comment is not repeated.
-            let posted: Vec<Finding> = unclaimed
-                .into_iter()
-                .filter(|f| !already_posted(f, &suppressed))
-                .collect();
-            let deduped = total - posted.len();
-
-            let mut summary = format!("{total} finding(s) from the deterministic scanners.");
-            if deduped > 0 {
-                summary = format!("{summary} ({deduped} already reported on an earlier push)");
-            }
-
-            lanes.push(LaneProposal {
-                lane: LaneId::Commits,
-                check_name: LaneId::Commits.check_name(),
-                conclusion: CheckConclusion::Failure,
-                summary,
-                findings: posted,
-                resolved: vec![],
-                deduped,
-                highest_severity: Some(Severity::High),
-            });
-        }
-    }
+    // Each scanner kind has exactly one owning lane, and that lane republishes
+    // its findings itself. This is the fallback for when the owner did not run
+    // at all — disabled in config, or skipped as a draft — in which case it
+    // reported Neutral and its findings would otherwise vanish silently.
+    publish_unclaimed(&mut lanes, &scan_findings);
 
     lanes.push(gate(&lanes));
 
@@ -608,6 +564,62 @@ fn lane_proposal(
     }
 }
 
+/// Publish scanner findings whose owning lane never ran.
+///
+/// The owner is decided by kind: `security` adjudicates workflow and dependency
+/// matches, `commits` adjudicates secrets, blobs and junk. When the owner ran it
+/// has already republished them verbatim, and doing it again here would report
+/// the same committed key twice.
+fn publish_unclaimed(lanes: &mut Vec<LaneProposal>, scan_findings: &[scan::types::Finding]) {
+    for owner in [LaneId::Security, LaneId::Commits] {
+        let ran = lanes
+            .iter()
+            .any(|l| l.lane == owner && l.conclusion != CheckConclusion::Neutral);
+        if ran {
+            continue;
+        }
+
+        let kinds: &[ScanKind] = match owner {
+            LaneId::Security => &lanes::security::ADJUDICATES,
+            _ => &lanes::commits::ADJUDICATES,
+        };
+
+        // Only findings that would block. A low-severity junk file is not worth
+        // failing a check nobody's lane was asked to look at.
+        let unclaimed: Vec<Finding> = scan_findings
+            .iter()
+            .filter(|f| kinds.contains(&f.kind) && f.severity >= Severity::High)
+            .cloned()
+            .map(|scan| {
+                let mut finding = Finding::from(scan);
+                finding.lane = owner;
+                finding
+            })
+            .collect();
+
+        if unclaimed.is_empty() {
+            continue;
+        }
+
+        // Replace the Neutral placeholder rather than sitting beside it: two
+        // check runs of the same name is a confusing way to fail.
+        lanes.retain(|l| l.lane != owner);
+        lanes.push(LaneProposal {
+            lane: owner,
+            check_name: owner.check_name(),
+            conclusion: CheckConclusion::Failure,
+            summary: format!(
+                "{} finding(s) from the deterministic scanners.",
+                unclaimed.len()
+            ),
+            findings: unclaimed,
+            resolved: vec![],
+            deduped: 0,
+            highest_severity: Some(Severity::High),
+        });
+    }
+}
+
 /// The deterministic aggregate every other lane feeds.
 fn gate(lanes: &[LaneProposal]) -> LaneProposal {
     let blocking: Vec<&LaneProposal> = lanes.iter().filter(|l| l.conclusion.blocks()).collect();
@@ -729,6 +741,12 @@ mod tests {
             .unwrap()
     }
 
+    fn critique_config() -> Config {
+        let mut config = config();
+        config.review.lanes = vec!["critique".into()];
+        config
+    }
+
     fn repo() -> RepoId {
         RepoId::parse("tinyhumansai/tinysweeper").unwrap()
     }
@@ -740,6 +758,10 @@ mod tests {
             PullRequest {
                 number: 7,
                 title: "feat: something".into(),
+                // A real body: the `description` lane fails a pull request
+                // that has none, so an empty one here would make every
+                // "clean review" fixture blocked for an unrelated reason.
+                body: "Adds an index into the item list, guarded by the caller.".into(),
                 head_sha: "abc123".into(),
                 labels,
                 ..PullRequest::default()
@@ -894,8 +916,14 @@ mod tests {
                 "body": "…", "severity": "high", "confidence": 0.9
             }]
         }));
+        // Only the critique lane runs: the point here is `reviewable_diffs`,
+        // and five lanes answering the same canned response would merely
+        // multiply the number being asserted on.
+        let mut config = config();
+        config.review.lanes = vec!["critique".into()];
+
         let forge = forge_with(vec![submodule, rust_file()], vec![]);
-        let proposal = review(&forge, Arc::new(model), &config(), &repo(), 7)
+        let proposal = review(&forge, Arc::new(model), &config, &repo(), 7)
             .await
             .expect("reviews");
 
@@ -1042,18 +1070,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_lane_that_has_not_been_written_is_neutral_not_successful() {
+    async fn every_enabled_lane_actually_runs() {
+        // The bug this replaces: four of the five lanes hit a `_ =>` arm that
+        // reported `Neutral` and "Not implemented yet.", so `tinysweeper/gate`
+        // aggregated one lane's opinion while presenting as five. A required
+        // check that reports on work nobody did is worse than no check.
         let forge = forge_with(vec![rust_file()], vec![]);
         let proposal = review(&forge, Arc::new(MockModel::silent()), &config(), &repo(), 7)
             .await
             .expect("reviews");
 
-        let security = proposal
+        for lane in [LaneId::Critique, LaneId::Security, LaneId::Tests] {
+            let reported = proposal
+                .lanes
+                .iter()
+                .find(|l| l.lane == lane)
+                .unwrap_or_else(|| panic!("{lane} is enabled but did not report"));
+            assert_eq!(
+                reported.conclusion,
+                CheckConclusion::Success,
+                "{lane}: {}",
+                reported.summary
+            );
+            assert!(
+                !reported.summary.contains("Not implemented"),
+                "{lane} is still a placeholder"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_lane_with_nothing_to_do_is_neutral_not_successful() {
+        // `commits` has no commits and no scanner findings on this fixture, so
+        // it skips. Claiming success for work that never happened would make
+        // requiring the check in branch protection meaningless.
+        let forge = forge_with(vec![rust_file()], vec![]);
+        let proposal = review(&forge, Arc::new(MockModel::silent()), &config(), &repo(), 7)
+            .await
+            .expect("reviews");
+
+        let commits = proposal
             .lanes
             .iter()
-            .find(|l| l.lane == LaneId::Security)
+            .find(|l| l.lane == LaneId::Commits)
             .expect("present");
-        assert_eq!(security.conclusion, CheckConclusion::Neutral);
+        assert_eq!(commits.conclusion, CheckConclusion::Neutral);
     }
 
     #[test]
@@ -1130,7 +1191,7 @@ mod tests {
     async fn a_finding_is_posted_exactly_once_across_three_pushes() {
         // *The* regression guard for the 48-thread incident. Three pushes, the
         // same unfixed problem, one model that says so every time. One comment.
-        let config = config();
+        let config = critique_config();
         let forge = forge_with(vec![rust_file()], vec![]);
         let model = Arc::new(insistent_model());
 
@@ -1165,7 +1226,7 @@ mod tests {
         // A contributor who copies the marker out of a real comment — or
         // guesses one — must not be able to silence the next review. Authorship
         // is the thing they cannot forge.
-        let config = config();
+        let config = critique_config();
         let forge = forge_with(vec![rust_file()], vec![]);
         let model = Arc::new(insistent_model());
 
@@ -1217,7 +1278,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_fixed_finding_is_not_re_raised() {
-        let config = config();
+        let config = critique_config();
         let forge = forge_with(vec![rust_file()], vec![]);
 
         let first = review(&forge, Arc::new(insistent_model()), &config, &repo(), 7)
@@ -1301,7 +1362,7 @@ mod tests {
     async fn turning_incremental_off_reviews_every_push_from_scratch() {
         // The escape hatch for anyone who would rather have a duplicate comment
         // than a suppressed one. It has to actually do something.
-        let mut config = config();
+        let mut config = critique_config();
         config.review.incremental = false;
         let forge = forge_with(vec![rust_file()], vec![]);
         let model = Arc::new(insistent_model());
@@ -1323,7 +1384,7 @@ mod tests {
     async fn the_review_state_store_remembers_what_was_reviewed() {
         // The store is an optimisation, and this is the thing it buys: the
         // evidence bytes prompt layer 3 replays. Dedupe above works without it.
-        let config = config();
+        let config = critique_config();
         let forge = forge_with(vec![rust_file()], vec![]);
         let store = crate::state::MemoryState::new();
 
@@ -1360,7 +1421,7 @@ mod tests {
     async fn a_remembered_review_dedupes_even_when_the_comments_are_gone() {
         // Somebody deleted the comment threads, or GitHub has not caught up.
         // The store is the second source, and either alone is enough.
-        let config = config();
+        let config = critique_config();
         let store = crate::state::MemoryState::new();
         let model = Arc::new(insistent_model());
 

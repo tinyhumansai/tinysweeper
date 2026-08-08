@@ -282,9 +282,23 @@ pub struct Paths {
 #[serde(default, deny_unknown_fields)]
 pub struct PathInstruction {
     /// The glob these instructions apply to.
+    ///
+    /// The table is **ordered and first match wins**: a path takes the rules of
+    /// the first entry it matches and no other. That is what stops a Rust
+    /// file's reviewer being handed the workflow rules — a token saving, and
+    /// more importantly a precision one, because every rule a reviewer is shown
+    /// is another thing it can find an opinion about.
     pub glob: String,
     /// The instructions, injected verbatim into the lane prompt.
     pub instructions: String,
+    /// A rule document under `presets/rules/<name>.md`, appended to
+    /// `instructions` when the config is loaded.
+    ///
+    /// Rule documents are **data**: adding one is a new file under `presets/`,
+    /// never a new module. Keeping the long ones out of the TOML is what makes
+    /// a rule's negative list — the "do NOT report" half that does most of the
+    /// precision work — practical to write and to review.
+    pub rules: Option<String>,
 }
 
 /// Review-cache behaviour. See `docs/modules/cache/README.md`.
