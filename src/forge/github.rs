@@ -244,6 +244,38 @@ impl ForgeRead for GitHubRead {
         }))
     }
 
+    async fn file_at(&self, repo: &RepoId, path: &str, sha: &str) -> Result<Option<String>> {
+        let result = self
+            .client
+            .repos(&repo.owner, &repo.name)
+            .get_content()
+            .path(path)
+            .r#ref(sha)
+            .send()
+            .await;
+
+        let contents = match result {
+            Ok(contents) => contents,
+            // A repository without the file is the common answer, not a
+            // failure: most repositories have no `AGENTS.md`, and turning that
+            // into an error would make the knowledge centre noisy on nearly
+            // every review.
+            Err(octocrab::Error::GitHub { source, .. }) if source.status_code == 404 => {
+                return Ok(None);
+            }
+            Err(err) => return Err(api(err)),
+        };
+
+        // A directory answers with several items and no content of its own;
+        // taking the first item's content yields `None` for it, which is the
+        // right answer — a directory is not an instruction file.
+        Ok(contents
+            .items
+            .into_iter()
+            .next()
+            .and_then(|item| item.decoded_content()))
+    }
+
     async fn issue(&self, repo: &RepoId, number: u64) -> Result<Issue> {
         let issue = self
             .client

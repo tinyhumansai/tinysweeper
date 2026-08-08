@@ -42,6 +42,18 @@ pub trait ForgeRead: Send + Sync {
     /// the merge button forever.
     async fn own_review_state(&self, repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>>;
 
+    /// Fetch one file's contents at a commit.
+    ///
+    /// `None` when the file does not exist there, which is the common answer
+    /// and not an error: most repositories have no `AGENTS.md`.
+    ///
+    /// Pinned to a commit rather than a branch on purpose. The knowledge
+    /// centre reads the repository's instruction files through this, and
+    /// reading them at a moving ref would mean reviewing one tree while
+    /// applying another tree's policy — and would let a push land new policy
+    /// between the review starting and the file being read.
+    async fn file_at(&self, repo: &RepoId, path: &str, sha: &str) -> Result<Option<String>>;
+
     /// Fetch an issue.
     async fn issue(&self, repo: &RepoId, number: u64) -> Result<Issue>;
 

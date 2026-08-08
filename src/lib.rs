@@ -19,6 +19,7 @@ pub mod forge;
 pub mod graph;
 pub mod harness;
 pub mod index;
+pub mod knowledge;
 pub mod lanes;
 pub mod ports;
 pub mod position;

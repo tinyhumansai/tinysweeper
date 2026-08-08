@@ -102,6 +102,27 @@ pub struct MockState {
     pub issues: BTreeMap<u64, Issue>,
     /// tinysweeper's own last review state, keyed by pull request number.
     pub own_reviews: BTreeMap<u64, ReviewEvent>,
+    /// Repository file contents, keyed by [`file_key`].
+    ///
+    /// Keyed by commit as well as path because that is the distinction the
+    /// knowledge centre depends on: a test has to be able to prove a file was
+    /// read at the pull request's head and not at some other ref.
+    pub blobs: BTreeMap<String, String>,
+}
+
+/// The key a file's contents are stored under.
+///
+/// A unit separator, like the index's document ids, so a path containing the
+/// delimiter cannot forge a different commit's key.
+pub fn file_key(sha: &str, path: &str) -> String {
+    format!("{sha}\u{1f}{path}")
+}
+
+impl MockState {
+    /// Serve `content` for `path` at `sha`.
+    pub fn set_file(&mut self, sha: &str, path: &str, content: &str) {
+        self.blobs.insert(file_key(sha, path), content.to_string());
+    }
 }
 
 /// An offline forge that serves canned reads and records every write.
@@ -276,6 +297,11 @@ impl ForgeRead for MockForge {
     async fn own_review_state(&self, _repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
         let state = self.state.lock().expect("mock state lock");
         Ok(state.own_reviews.get(&number).copied())
+    }
+
+    async fn file_at(&self, _repo: &RepoId, path: &str, sha: &str) -> Result<Option<String>> {
+        let state = self.state.lock().expect("mock state lock");
+        Ok(state.blobs.get(&file_key(sha, path)).cloned())
     }
 
     async fn issue(&self, _repo: &RepoId, number: u64) -> Result<Issue> {
