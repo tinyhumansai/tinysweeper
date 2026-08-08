@@ -26,8 +26,8 @@ fn tsconfig_paths_are_joined_onto_base_url() {
     assert_eq!(
         alias_map(&config),
         BTreeMap::from([
-            ("@/*".to_string(), vec!["src".to_string()]),
-            ("~ui/*".to_string(), vec!["src/components".to_string()]),
+            ("@/*".to_string(), vec!["src/*".to_string()]),
+            ("~ui/*".to_string(), vec!["src/components/*".to_string()]),
         ])
     );
     assert_eq!(config.ts_base_urls, vec![String::new()]);
