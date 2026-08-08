@@ -28,9 +28,33 @@ pub fn is_workflow(path: &str) -> bool {
 }
 
 /// Scan one workflow file's added lines.
+///
+/// Convenience wrapper for callers with no access to the file at head.
 pub fn scan_added_lines<'a>(
     path: &str,
     added: impl Iterator<Item = (u64, &'a str)>,
+) -> Vec<Finding> {
+    scan_workflow(path, added, None)
+}
+
+/// Scan a workflow file, with the whole file available for context.
+///
+/// Findings are still only ever raised against **added** lines — this pull
+/// request's doing — but some rules need to read the rest of the file to know
+/// whether an added line is dangerous. `pull_request_target` is the case that
+/// matters: a pull request that adds only
+///
+/// ```text
+/// ref: ${{ github.event.pull_request.head.sha }}
+/// ```
+///
+/// to a workflow whose trigger was already `pull_request_target` has just
+/// handed the repository to any contributor — and looking only at added lines
+/// sees a harmless checkout ref. `file_text` is the file at the head revision.
+pub fn scan_workflow<'a>(
+    path: &str,
+    added: impl Iterator<Item = (u64, &'a str)>,
+    file_text: Option<&str>,
 ) -> Vec<Finding> {
     if !is_workflow(path) {
         return Vec::new();
@@ -54,7 +78,7 @@ pub fn scan_added_lines<'a>(
     }
 
     findings.extend(script_injection(path, &lines));
-    findings.extend(dangerous_target_checkout(path, &lines));
+    findings.extend(dangerous_target_checkout(path, &lines, file_text));
 
     findings
 }
@@ -216,10 +240,20 @@ fn script_injection(path: &str, lines: &[(u64, &str)]) -> Vec<Finding> {
 /// then building or testing it hands the repository to the contributor. This is
 /// the single most exploited GitHub Actions pattern, and it is why tinysweeper
 /// itself never builds the code it reviews.
-fn dangerous_target_checkout(path: &str, lines: &[(u64, &str)]) -> Vec<Finding> {
-    let uses_target = lines
-        .iter()
-        .any(|(_, text)| text.contains("pull_request_target"));
+fn dangerous_target_checkout(
+    path: &str,
+    lines: &[(u64, &str)],
+    file_text: Option<&str>,
+) -> Vec<Finding> {
+    // The trigger is a property of the file, not of this diff. Reading it only
+    // from added lines misses the dangerous case entirely: a workflow that was
+    // already `pull_request_target` before this pull request touched it.
+    let uses_target = match file_text {
+        Some(text) => text.contains("pull_request_target"),
+        None => lines
+            .iter()
+            .any(|(_, text)| text.contains("pull_request_target")),
+    };
     if !uses_target {
         return Vec::new();
     }
@@ -266,6 +300,57 @@ mod tests {
             .map(|(i, l)| (i as u64 + 1, *l))
             .collect();
         scan_added_lines(".github/workflows/ci.yml", numbered.into_iter())
+    }
+
+    /// Scan `added` lines against a file whose full text is `file_text`.
+    fn scan_with_file(added: &[&str], file_text: &str) -> Vec<Finding> {
+        let numbered: Vec<(u64, &str)> = added
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (i as u64 + 1, *l))
+            .collect();
+        scan_workflow(
+            ".github/workflows/ci.yml",
+            numbered.into_iter(),
+            Some(file_text),
+        )
+    }
+
+    #[test]
+    fn a_checkout_added_to_an_existing_pull_request_target_workflow_is_caught() {
+        // The whole exploit: the trigger was already there, so the diff shows
+        // nothing but an innocuous-looking `ref:` line.
+        let file = "on:\n  pull_request_target:\njobs:\n  x:\n    steps:\n      - uses: actions/checkout@v5\n        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n";
+        let findings = scan_with_file(
+            &["          ref: ${{ github.event.pull_request.head.sha }}"],
+            file,
+        );
+
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|f| f.rule == "pull-request-target-checkout")
+                .count(),
+            1,
+            "{findings:#?}"
+        );
+    }
+
+    #[test]
+    fn the_same_line_in_a_plain_pull_request_workflow_stays_clean() {
+        let file =
+            "on:\n  pull_request:\njobs:\n  x:\n    steps:\n      - uses: actions/checkout@v5\n";
+        let findings = scan_with_file(
+            &["          ref: ${{ github.event.pull_request.head.sha }}"],
+            file,
+        );
+
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.rule == "pull-request-target-checkout"),
+            "{findings:#?}"
+        );
     }
 
     #[test]
