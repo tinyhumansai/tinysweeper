@@ -187,6 +187,7 @@ fn a_chunk_round_trips_through_its_document() {
         lang: Some("rust".into()),
         symbol: Some("alpha".into()),
         content_hash: "abc".into(),
+        chunked_by: ChunkMethod::Parsed,
     };
     let document = chunk_document(
         &signature(),
@@ -315,6 +316,7 @@ live_test!(
                     lang: Some("rust".into()),
                     symbol: None,
                     content_hash: format!("{:x}", text.len()),
+                    chunked_by: ChunkMethod::Parsed,
                 },
             });
         }
@@ -363,6 +365,7 @@ live_test!(
                     lang: None,
                     symbol: None,
                     content_hash: "h".into(),
+                    chunked_by: ChunkMethod::Parsed,
         chunked_by: ChunkMethod::Parsed,
                 },
             })
