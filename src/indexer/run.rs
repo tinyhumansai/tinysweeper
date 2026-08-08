@@ -502,15 +502,6 @@ impl FileWork {
     fn confirmation(&self) -> IndexedFile {
         IndexedFile::confirmed(self.path.clone(), self.ids.clone())
     }
-
-    /// Whether every chunk this file needed embedding for is among the first
-    /// `written` entries of the run's queue.
-    fn finished_by(&self, written: usize, queue: &[(usize, &Chunk)]) -> bool {
-        queue
-            .iter()
-            .skip(written)
-            .all(|(_, chunk)| !self.to_embed.iter().any(|mine| mine.id() == chunk.id()))
-    }
 }
 
 #[cfg(test)]
