@@ -53,10 +53,11 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "fs
 # gate and the offline invariant above still holds. The grammars are what let
 # `src/graph/` extract real symbols instead of matching identifiers with a
 # regex; `tree-sitter-typescript` ships both the TypeScript and TSX grammars,
-# which is why there is no separate JavaScript dependency.
+# which is why JavaScript has its own grammar only for plain `.js` files.
 streaming-iterator = "0.1"
 tree-sitter = "0.26"
 tree-sitter-go = "0.25"
+tree-sitter-javascript = "0.25"
 tree-sitter-python = "0.25"
 tree-sitter-rust = "0.24"
 tree-sitter-typescript = "0.23"
@@ -92,7 +93,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 [features]
 # Offline by default: mock forge, mock model, deterministic scanners. This is
 # what CI's first job builds and what `cargo test` runs against.
-default = []
+default = ["treesitter"]
 # The tinyagents-backed model provider (OpenRouter / Moonshot / MiniMax, all
 # one OpenAI-compatible code path).
 harness = ["dep:tinyagents"]
@@ -110,8 +111,12 @@ serve = [
     "github",
     "harness",
 ]
+# Symbol-aware chunking. Without it `chunk` still works, on the line splitter,
+# and every chunk honestly reports itself as unparsed rather than pretending a
+# grammar named its enclosing symbol.
+treesitter = []
 # Everything a production run turns on.
-all = ["harness", "github", "serve"]
+all = ["harness", "github", "serve", "treesitter"]
 
 [dev-dependencies]
 tempfile = "3"

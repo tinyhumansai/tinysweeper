@@ -17,6 +17,7 @@ fn chunk(repo: &str, path: &str, line: u32, text: &str) -> Chunk {
         lang: Some("rust".into()),
         symbol: None,
         content_hash: format!("{:x}", text.len()),
+        chunked_by: crate::index::types::ChunkMethod::Parsed,
     }
 }
 

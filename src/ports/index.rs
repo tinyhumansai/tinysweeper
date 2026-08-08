@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 
 use crate::error::Result;
-use crate::index::types::{EmbedSignature, EmbeddedChunk, HybridQuery, ScoredChunk};
+use crate::index::types::{Chunk, EmbedSignature, EmbeddedChunk, HybridQuery, ScoredChunk};
 
 /// A searchable store of embedded code chunks.
 #[async_trait]
@@ -35,6 +35,15 @@ pub trait ChunkIndex: Send + Sync {
     /// the same span twice is one row.
     async fn upsert(&self, signature: &EmbedSignature, chunks: &[EmbeddedChunk]) -> Result<u64>;
 
+    /// Copy already-computed vectors to chunks whose content is unchanged but
+    /// whose location metadata changed, without another embedding call.
+    async fn relocate(
+        &self,
+        signature: &EmbedSignature,
+        repo_id: &str,
+        chunks: &[(String, Chunk)],
+    ) -> Result<u64>;
+
     /// Remove every chunk of a repository, returning how many went.
     async fn delete_repo(&self, repo_id: &str) -> Result<u64>;
 
@@ -45,6 +54,20 @@ pub trait ChunkIndex: Send + Sync {
     /// than everything — the destructive reading of an empty list is never the
     /// one a caller meant.
     async fn delete_paths(&self, repo_id: &str, paths: &[String]) -> Result<u64>;
+
+    /// Remove specific chunks by [`Chunk::id`](crate::index::types::Chunk::id).
+    ///
+    /// This is what makes an incremental re-index survivable.
+    /// [`ChunkIndex::delete_paths`] can only run *before* the new chunks are
+    /// written, which means a failure between the delete and the embed leaves
+    /// those files with no chunks at all and retrieval quietly missing them.
+    /// Deleting by id inverts the order: the new chunks are upserted first, and
+    /// only the ids that survived from the previous pass and are no longer
+    /// produced are removed. A crash anywhere in that sequence leaves the index
+    /// with duplicates at worst, never with a hole.
+    ///
+    /// An empty `ids` deletes nothing.
+    async fn delete_chunks(&self, repo_id: &str, ids: &[String]) -> Result<u64>;
 
     /// Run a hybrid dense + lexical query, best first.
     async fn query(&self, query: &HybridQuery) -> Result<Vec<ScoredChunk>>;

@@ -10,6 +10,7 @@
 //! Modules land milestone by milestone; see `ROADMAP.md`.
 
 pub mod app;
+pub mod chunk;
 pub mod config;
 pub mod error;
 pub mod evidence;
@@ -19,6 +20,7 @@ pub mod forge;
 pub mod graph;
 pub mod harness;
 pub mod index;
+pub mod indexer;
 pub mod knowledge;
 pub mod lanes;
 pub mod ports;

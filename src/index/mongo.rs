@@ -43,7 +43,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
 use crate::index::types::{
-    Chunk, EdgeKind, EmbedSignature, EmbeddedChunk, GraphEdge, GraphNode, HybridQuery,
+    Chunk, ChunkMethod, EdgeKind, EmbedSignature, EmbeddedChunk, GraphEdge, GraphNode, HybridQuery,
     KnowledgeDoc, KnowledgeScope, Neighbourhood, NodeKind, ScoredChunk,
 };
 use crate::ports::graph::GraphStore;
@@ -533,6 +533,7 @@ fn chunk_document(signature: &EmbedSignature, embedded: &EmbeddedChunk) -> Docum
         "lang": chunk.lang.as_deref(),
         "symbol": chunk.symbol.as_deref(),
         "content_hash": &chunk.content_hash,
+        "chunked_by": chunk.chunked_by.as_str(),
         "vector": encode_vector(&embedded.vector),
     }
 }
@@ -550,6 +551,12 @@ fn chunk_from_document(document: &Document) -> Chunk {
             .get_str("content_hash")
             .unwrap_or_default()
             .to_string(),
+        // A document written before the field existed reads back as the weaker
+        // claim, which is the safe direction for a missing value to resolve.
+        chunked_by: match document.get_str("chunked_by") {
+            Ok("parsed") => ChunkMethod::Parsed,
+            _ => ChunkMethod::Lines,
+        },
     }
 }
 
@@ -583,6 +590,41 @@ impl ChunkIndex for MongoChunkIndex {
         upsert_all(&self.collection, writes).await
     }
 
+    async fn relocate(
+        &self,
+        signature: &EmbedSignature,
+        repo_id: &str,
+        chunks: &[(String, Chunk)],
+    ) -> Result<u64> {
+        let mut copied = 0;
+        for (from, chunk) in chunks {
+            let Some(mut document) = self
+                .collection
+                .find_one(doc! { "_id": from, "repo_id": repo_id, "sig": signature.key() })
+                .await
+                .map_err(mongo)?
+            else {
+                continue;
+            };
+            document.insert("_id", chunk.id());
+            document.insert("path", &chunk.path);
+            document.insert("start_line", chunk.start_line as i64);
+            document.insert("end_line", chunk.end_line as i64);
+            document.insert("text", &chunk.text);
+            document.insert("lang", chunk.lang.as_deref());
+            document.insert("symbol", chunk.symbol.as_deref());
+            document.insert("content_hash", &chunk.content_hash);
+            document.insert("chunked_by", chunk.chunked_by.as_str());
+            self.collection
+                .replace_one(doc! { "_id": chunk.id() }, document)
+                .upsert(true)
+                .await
+                .map_err(mongo)?;
+            copied += 1;
+        }
+        Ok(copied)
+    }
+
     async fn delete_repo(&self, repo_id: &str) -> Result<u64> {
         Ok(self
             .collection
@@ -599,6 +641,20 @@ impl ChunkIndex for MongoChunkIndex {
         Ok(self
             .collection
             .delete_many(doc! { "repo_id": repo_id, "path": { "$in": paths } })
+            .await
+            .map_err(mongo)?
+            .deleted_count)
+    }
+
+    async fn delete_chunks(&self, repo_id: &str, ids: &[String]) -> Result<u64> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        // Filtered on `repo_id` as well as `_id` so a mistaken id cannot reach
+        // across repositories, exactly as the mock does.
+        Ok(self
+            .collection
+            .delete_many(doc! { "repo_id": repo_id, "_id": { "$in": ids } })
             .await
             .map_err(mongo)?
             .deleted_count)
