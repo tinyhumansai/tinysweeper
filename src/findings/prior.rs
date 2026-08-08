@@ -121,10 +121,14 @@ fn fingerprint_in(body: &str) -> Option<String> {
     is_fingerprint(value).then(|| value.to_string())
 }
 
-/// The value of the first `<!-- tinysweeper:<key><value> -->` marker in `body`.
+/// The value of the final `<!-- tinysweeper:<key><value> -->` marker in `body`.
+///
+/// The last marker is authoritative because `apply` appends the renderer-added
+/// marker after model-generated body text. This prevents a contributor from
+/// injecting a forged marker before the renderer footer.
 fn marker_value<'a>(body: &'a str, key: &str) -> Option<&'a str> {
     let opener = format!("<!-- {}{key}", crate::MARKER_PREFIX);
-    let start = body.find(&opener)? + opener.len();
+    let start = body.rfind(&opener)? + opener.len();
     let rest = &body[start..];
     let end = rest.find("-->")?;
     Some(rest[..end].trim())
