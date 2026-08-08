@@ -128,7 +128,7 @@ impl Lane for Critique {
 mod tests {
     use super::*;
     use crate::config::types::{Config, Severity};
-    use crate::evidence::diff::parse_file_patch;
+    use crate::evidence::diff::{FileDiff, parse_file_patch};
     use crate::forge::types::PullRequest;
     use crate::harness::mock::MockModel;
     use serde_json::json;
