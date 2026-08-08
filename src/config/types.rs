@@ -314,20 +314,143 @@ pub struct AutoMerge {
     pub block_labels: Vec<String>,
 }
 
-/// Issue triage. Scaffolded in v1.
+/// Issue triage: dedupe, classify, label, and either escalate with a
+/// code-grounded plan or explain and close.
+///
+/// Like every other model-facing surface, triage *proposes* and the apply path
+/// disposes. Nothing here closes an issue without the deterministic guards in
+/// [`IssueClose`] agreeing.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Issues {
     /// Whether issue triage runs.
     pub enabled: bool,
+    /// Which model tier triage runs on.
+    pub model: Option<ModelRef>,
+    /// Post a triage comment summarising the finding.
+    pub comment: bool,
+    /// Apply suggested labels, capped by `max_labels`.
+    pub apply_labels: bool,
+    /// Never apply more than this many labels to one issue.
+    pub max_labels: usize,
+    /// Labels tinysweeper may apply. Empty means any label already in the repo.
+    pub allow_labels: Vec<String>,
+    /// Never touch an issue carrying one of these.
+    pub block_labels: Vec<String>,
+    /// Search for and cross-link probable duplicates.
+    pub dedupe: bool,
+    /// Confidence required before two issues are called duplicates.
+    pub dedupe_confidence_min: f64,
+    /// When and whether triage may close an issue.
+    pub close: IssueClose,
 }
 
-/// Sentry issue promotion. Scaffolded in v1.
+/// The deterministic guards on closing an issue.
+///
+/// Closing someone's issue is the most expensive mistake this bot can make, so
+/// every guard here is an age or authorship check that no model output can
+/// override.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct IssueClose {
+    /// Whether triage may close anything at all.
+    pub enabled: bool,
+    /// Never close an issue younger than this, whatever the verdict.
+    pub min_age_days: u32,
+    /// Never close an issue with human activity in this many days.
+    pub quiet_days: u32,
+    /// Model confidence required before a close is even proposed.
+    pub confidence_min: f64,
+    /// Never close an issue carrying one of these labels.
+    pub protected_labels: Vec<String>,
+    /// Never close an issue opened by one of these users.
+    pub protected_authors: Vec<String>,
+    /// Propose the close as a comment and a label, but do not actually close.
+    pub dry_run: bool,
+}
+
+/// Scheduled repository automations, run from a cron workflow.
+///
+/// These are deliberately deterministic-first: labelling and nudging are cheap
+/// and predictable, and the model is only involved where judgement is genuinely
+/// required.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Automation {
+    /// Whether any automation runs.
+    pub enabled: bool,
+    /// Mark and eventually close inactive issues and pull requests.
+    pub stale: Stale,
+    /// Keep pull requests labelled by size, area and risk.
+    pub labeler: Labeler,
+    /// Re-run the gate and merge anything that has become eligible.
+    pub merge_sweep: bool,
+    /// Ask for a review when a pull request has sat unreviewed.
+    pub nudge_after_days: Option<u32>,
+}
+
+/// Stale-item handling.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Stale {
+    /// Whether stale handling runs.
+    pub enabled: bool,
+    /// Days of inactivity before an item is marked stale.
+    pub days_until_stale: u32,
+    /// Further days after marking before the item is closed. `None` never
+    /// closes — it only marks, which is the safe default.
+    pub days_until_close: Option<u32>,
+    /// The label applied when marking.
+    pub label: String,
+    /// Never mark an item carrying one of these.
+    pub exempt_labels: Vec<String>,
+}
+
+/// Automatic pull request labelling.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Labeler {
+    /// Whether labelling runs.
+    pub enabled: bool,
+    /// Apply `size:xs` … `size:xl` from the diff's line count.
+    pub size: bool,
+    /// Map changed paths to area labels, e.g. `"src/server/**" = "area:server"`.
+    pub area: BTreeMap<String, String>,
+}
+
+/// Sentry issue promotion: unresolved Sentry issues become GitHub issues,
+/// deduplicated, PII-scrubbed, and linked back.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Sentry {
-    /// Whether Sentry promotion runs.
+    /// Whether promotion runs.
     pub enabled: bool,
+    /// Sentry organisation slug.
+    pub org: Option<String>,
+    /// Sentry projects to sweep.
+    pub projects: Vec<String>,
+    /// Environment variable holding the Sentry auth token. Never the token.
+    pub token_env: String,
+    /// Sentry API base URL, for self-hosted installations.
+    pub base_url: String,
+    /// Promote only issues seen at least this many times.
+    pub min_events: u64,
+    /// Promote only issues affecting at least this many users.
+    pub min_users: u64,
+    /// Ignore issues whose culprit matches one of these globs.
+    pub ignore_culprits: Vec<String>,
+    /// Labels applied to every promoted issue.
+    pub labels: Vec<String>,
+    /// Cap on issues promoted per run, so a Sentry spike cannot flood the
+    /// tracker.
+    pub max_per_run: usize,
+    /// Comment the GitHub issue link back onto the Sentry issue.
+    pub annotate_sentry: bool,
+    /// Resolve the Sentry issue in the next release once it is tracked.
+    pub resolve_when_tracked: bool,
+    /// Redact anything matching these patterns before it reaches GitHub. This
+    /// runs on top of the always-on secret scrubbing, never instead of it.
+    pub scrub_patterns: Vec<String>,
 }
 
 impl Config {
