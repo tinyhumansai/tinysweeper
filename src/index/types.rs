@@ -113,6 +113,13 @@ pub struct Chunk {
     pub lang: Option<String>,
     /// The enclosing symbol, when the chunker could name one.
     pub symbol: Option<String>,
+    /// How the span's boundaries were chosen.
+    ///
+    /// `#[serde(default)]` so documents written before this field existed read
+    /// back as [`ChunkMethod::Lines`] — the weaker claim, which is the safe way
+    /// for a missing field to resolve.
+    #[serde(default)]
+    pub chunked_by: ChunkMethod,
     /// Hash of `text`.
     ///
     /// Re-indexing is incremental: a chunk whose hash is unchanged does not
