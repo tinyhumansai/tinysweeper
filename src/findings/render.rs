@@ -8,6 +8,7 @@
 
 use crate::config::types::Severity;
 use crate::findings::types::Finding;
+use crate::ports::model::Usage;
 
 /// Colour and label for each severity, as a shields.io badge.
 ///

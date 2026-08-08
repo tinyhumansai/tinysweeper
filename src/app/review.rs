@@ -73,6 +73,34 @@ pub struct Proposal {
 }
 
 impl Proposal {
+    /// The run's usage, reassembled from the flat fields the file stores.
+    ///
+    /// Kept flat on disk because the schema predates [`Usage`] being
+    /// serializable and old proposals still have to load.
+    pub fn usage(&self) -> Usage {
+        Usage {
+            input_tokens: self.input_tokens,
+            output_tokens: self.output_tokens,
+            cached_tokens: self.cached_tokens,
+            embed_tokens: self.embed_tokens,
+            cost_usd: self.cost_usd,
+        }
+    }
+
+    /// Each lane's spend, for the breakdown under the review body.
+    pub fn lane_costs(&self) -> Vec<(String, Usage, Vec<String>)> {
+        self.lanes
+            .iter()
+            .map(|lane| {
+                (
+                    lane.lane.as_str().to_string(),
+                    lane.usage,
+                    lane.models.clone(),
+                )
+            })
+            .collect()
+    }
+
     /// The share of prompt tokens served from cache.
     ///
     /// `None` when nothing was sent, so an idle run reads as "no data" rather

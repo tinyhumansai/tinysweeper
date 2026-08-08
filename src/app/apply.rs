@@ -236,14 +236,9 @@ fn review_body(proposal: &Proposal, event: ReviewEvent) -> String {
     // the difference between a cheap re-review and a ruinous one, and nobody
     // tunes a number they cannot see.
     body.push_str(&format!(
-        "\n\n<sub>{}</sub>",
-        crate::findings::render::cost_line(
-            proposal.cost_usd,
-            proposal.input_tokens,
-            proposal.output_tokens,
-            proposal.cached_tokens,
-            &proposal.models,
-        )
+        "\n\n<sub>{}{}</sub>",
+        crate::findings::render::cost_line(&proposal.usage(), &proposal.models),
+        crate::findings::render::per_lane_costs(&proposal.lane_costs()),
     ));
     body.push_str(&format!(
         "\n<!-- {MARKER_PREFIX}state v=1 sha={} -->",
