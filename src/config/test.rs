@@ -43,8 +43,32 @@ fn a_repository_with_no_config_runs_on_defaults() {
 
     assert!(loaded.source.is_none());
     assert_eq!(loaded.config.review.strictness, 2);
-    assert_eq!(loaded.config.severity_gate(), Severity::Medium);
+    // Quiet by default: high severity and real confidence. A reviewer that
+    // raises four things on every pull request gets ignored within a week.
+    assert_eq!(loaded.config.severity_gate(), Severity::High);
+    assert_eq!(loaded.config.confidence_min(), 0.75);
     assert!(!loaded.config.automerge.enabled);
+}
+
+#[test]
+fn strictness_actually_moves_the_gates() {
+    // It was documented as "the single noise dial", validated for range, and
+    // read by nothing at all.
+    let quiet = parse("version = 1\n[review]\nstrictness = 1\n");
+    let loud = parse("version = 1\n[review]\nstrictness = 3\n");
+
+    assert_eq!(quiet.severity_gate(), Severity::Critical);
+    assert_eq!(loud.severity_gate(), Severity::Medium);
+    assert!(quiet.confidence_min() > loud.confidence_min());
+}
+
+#[test]
+fn an_explicit_gate_overrides_the_dial() {
+    let config = parse(
+        "version = 1\n[review]\nstrictness = 1\nseverity_gate = \"low\"\nconfidence_min = 0.1\n",
+    );
+    assert_eq!(config.severity_gate(), Severity::Low);
+    assert_eq!(config.confidence_min(), 0.1);
 }
 
 #[test]

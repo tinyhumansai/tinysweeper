@@ -1,12 +1,15 @@
 //! The `tinysweeper` command-line entry point.
 //!
-//! One binary, three entry points that matter. `review` is what the GitHub Action
-//! runs, and `local-review` is the same engine over a local git range with no
-//! GitHub item and no tokens — which is how prompt changes get iterated without
-//! burning pull requests.
+//! One binary, three entry points that matter. `serve` runs the webhook server,
+//! which is how tinysweeper reaches every installed repository without a
+//! workflow file in any of them — it is the only distribution path, since the
+//! GitHub Actions one was removed.
 //!
-//! `serve` runs the webhook server, which is how tinysweeper reaches many
-//! repositories without a workflow file in each of them.
+//! `review` and `apply` are the same engine driven by hand against one pull
+//! request, kept for operator use and for debugging a delivery the server
+//! already handled. `local-review` is that engine over a local git range with
+//! no GitHub item and no tokens — which is how prompt changes get iterated
+//! without burning pull requests.
 
 use clap::{Parser, Subcommand};
 use tinysweeper::Result;
@@ -208,9 +211,10 @@ async fn run_apply(repo: &str, pr: u64, findings: &std::path::Path) -> Result<()
     let proposal = tinysweeper::app::read_proposal(findings)?;
     validate_apply_target(&proposal, &repo_id, pr)?;
 
+    let loaded = tinysweeper::config::load_validated(std::path::Path::new("."), None)?;
     let read = GitHubRead::from_env()?;
     let write = GitHubWrite::from_env()?;
-    tinysweeper::app::apply(&read, &write, &proposal).await?;
+    tinysweeper::app::apply(&read, &write, &loaded.config, &proposal).await?;
 
     println!("published {} check run(s)", proposal.lanes.len());
     Ok(())
@@ -255,12 +259,16 @@ async fn run_apply(_repo: &str, _pr: u64, _findings: &std::path::Path) -> Result
 /// Run the webhook server.
 #[cfg(feature = "serve")]
 async fn run_serve(bind: String, config_path: Option<std::path::PathBuf>) -> Result<()> {
-    use tinysweeper::server::{ServerConfig, Store, auth::AppAuth, serve};
+    use tinysweeper::server::{ServerConfig, Store, admin, auth::AppAuth, serve};
 
     let loaded =
         tinysweeper::config::load_validated(std::path::Path::new("."), config_path.as_deref())?;
 
     let webhook_secret = require_webhook_secret(std::env::var("TINYSWEEPER_WEBHOOK_SECRET").ok())?;
+
+    // Validated here rather than at first use: a bad admin token should stop
+    // the process at startup, not surface as a 401 an operator debugs later.
+    let admin_auth = admin::AdminAuth::from_env()?;
 
     let store = Store::from_env().await?;
     let auth = AppAuth::from_env()?;
@@ -274,6 +282,7 @@ async fn run_serve(bind: String, config_path: Option<std::path::PathBuf>) -> Res
             webhook_secret,
             config: loaded.config,
             embedding,
+            admin_auth,
         },
         store,
         auth,
@@ -342,17 +351,23 @@ fn render(proposal: &tinysweeper::app::Proposal) -> String {
         }
     }
     out.push_str(&format!(
-        "\n  ${:.4} · {} cached prompt tokens\n",
-        proposal.cost_usd, proposal.cached_tokens
+        "\n  {}\n",
+        tinysweeper::findings::render::cost_line(
+            proposal.cost_usd,
+            proposal.input_tokens,
+            proposal.output_tokens,
+            proposal.cached_tokens,
+            &proposal.models,
+        )
     ));
     out
 }
 
 /// Placeholder for a subcommand whose milestone has not landed yet.
 ///
-/// The CLI surface is declared in full from the start so downstream workflows
-/// and the composite action can be written against a stable interface while
-/// the internals are still being filled in.
+/// The CLI surface is declared in full from the start so scripts and operator
+/// runbooks can be written against a stable interface while the internals are
+/// still being filled in.
 fn not_yet(command: &str, milestone: &str) -> Result<()> {
     Err(tinysweeper::Error::config(format!(
         "`tinysweeper {command}` is not implemented yet (scheduled for {milestone})"
@@ -462,7 +477,10 @@ mod tests {
             head_sha: "abc123".into(),
             lanes: vec![],
             cost_usd: 0.0,
+            input_tokens: 0,
+            output_tokens: 0,
             cached_tokens: 0,
+            models: vec![],
         }
     }
 

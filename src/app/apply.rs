@@ -9,8 +9,9 @@
 //! than no review — it reports on code that has already been replaced.
 
 use crate::app::review::Proposal;
+use crate::config::types::{Config, Severity};
 use crate::error::{Error, Result};
-use crate::forge::types::{CheckRun, RepoId, ReviewComment};
+use crate::forge::types::{CheckRun, RepoId, ReviewComment, ReviewEvent};
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 use crate::{MARKER_PREFIX, VERSION};
 
@@ -18,6 +19,7 @@ use crate::{MARKER_PREFIX, VERSION};
 pub async fn apply(
     read: &dyn ForgeRead,
     write: &dyn ForgeWrite,
+    config: &Config,
     proposal: &Proposal,
 ) -> Result<()> {
     let repo = RepoId::parse(&proposal.repo)
@@ -50,14 +52,63 @@ pub async fn apply(
             .await?;
     }
 
+    // Whether we are already blocking this pull request. GitHub keeps only the
+    // latest review per reviewer, so this is also how a fixed pull request gets
+    // unblocked: without an explicit clearing verdict a stale objection blocks
+    // the merge button until a human dismisses it by hand.
+    let blocking_now = previously_blocked(read, &repo, proposal.number).await;
+    let event = review_event(config, proposal, blocking_now);
     let comments = inline_comments(proposal);
-    if !comments.is_empty() {
+
+    // An Approve is submitted even with nothing to say, because its entire job
+    // is to clear the previous block.
+    if !comments.is_empty() || event == ReviewEvent::Approve {
         write
-            .create_review(&repo, proposal.number, &review_body(proposal), comments)
+            .create_review(
+                &repo,
+                proposal.number,
+                &review_body(proposal, event),
+                comments,
+                event,
+            )
             .await?;
     }
 
     Ok(())
+}
+
+/// Decide how to submit the review.
+fn review_event(config: &Config, proposal: &Proposal, blocking_now: bool) -> ReviewEvent {
+    let Some(threshold) = config.request_changes_at() else {
+        return ReviewEvent::Comment;
+    };
+
+    let blocking_findings = proposal.findings().any(|f| f.severity >= threshold);
+    if blocking_findings {
+        ReviewEvent::RequestChanges
+    } else if blocking_now {
+        // Clean now, blocked before: clear it. Anything else leaves the author
+        // stuck behind an objection that no longer applies.
+        ReviewEvent::Approve
+    } else {
+        ReviewEvent::Comment
+    }
+}
+
+/// Whether tinysweeper's own last review on this pull request requested changes.
+///
+/// Read from the forge rather than remembered, so it stays correct across a
+/// restart, a redeploy, and a human dismissing the review by hand.
+async fn previously_blocked(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> bool {
+    match read.own_review_state(repo, number).await {
+        Ok(state) => state == Some(ReviewEvent::RequestChanges),
+        Err(err) => {
+            // Failing closed here would mean never clearing a block. Failing
+            // open at worst skips a redundant approval.
+            tracing::warn!(%err, "could not read the previous review state");
+            false
+        }
+    }
 }
 
 fn title_for(findings: usize, summary: &str) -> String {
@@ -69,49 +120,50 @@ fn title_for(findings: usize, summary: &str) -> String {
 }
 
 fn render_lane_summary(lane: &crate::app::review::LaneProposal) -> String {
-    let mut out = String::new();
-    out.push_str(&lane.summary);
-    out.push_str("\n\n");
-
-    if lane.findings.is_empty() {
-        out.push_str("No findings.\n");
-    } else {
-        for finding in &lane.findings {
-            out.push_str(&format!("### {}\n\n`{}`", finding.title, finding.path));
-            if let Some(line) = finding.line {
-                out.push_str(&format!(":{line}"));
-            }
-            out.push_str(&format!(
-                " · **{}** · confidence {:.0}%\n\n{}\n\n",
-                finding.severity,
-                finding.confidence * 100.0,
-                finding.body
-            ));
-        }
-    }
-
-    out.push_str(&format!("\n<sub>tinysweeper {VERSION}</sub>\n"));
-    out
+    crate::findings::render::lane_summary(&lane.summary, &lane.findings, VERSION)
 }
 
-fn review_body(proposal: &Proposal) -> String {
+fn review_body(proposal: &Proposal, event: ReviewEvent) -> String {
     let blocking = proposal
         .lanes
         .iter()
         .filter(|l| l.conclusion.blocks())
         .count();
-    let mut body = if blocking == 0 {
-        "tinysweeper found nothing blocking.".to_string()
-    } else {
-        format!("tinysweeper: {blocking} lane(s) blocking.")
+
+    let mut body = match event {
+        ReviewEvent::RequestChanges => {
+            let worst = proposal
+                .findings()
+                .map(|f| f.severity)
+                .max()
+                .unwrap_or(Severity::Low);
+            format!(
+                "Requesting changes: {blocking} lane(s) blocking, worst finding is **{worst}**.\n\n\
+                 Fix or reply to the findings below and push. The next review clears this \
+                 automatically once they are gone — you should not need to dismiss anything by \
+                 hand."
+            )
+        }
+        ReviewEvent::Approve => {
+            "The previously-blocking findings are resolved. Clearing the changes request."
+                .to_string()
+        }
+        ReviewEvent::Comment if blocking == 0 => "tinysweeper found nothing blocking.".to_string(),
+        ReviewEvent::Comment => format!("tinysweeper: {blocking} lane(s) blocking."),
     };
 
-    // Cost and cache-hit rate go in the body deliberately: prompt-cache hit
-    // rate is the difference between a cheap re-review and a ruinous one, and
-    // nobody looks at a metric they cannot see.
+    // The full token breakdown goes in the body deliberately. Cache hit rate is
+    // the difference between a cheap re-review and a ruinous one, and nobody
+    // tunes a number they cannot see.
     body.push_str(&format!(
-        "\n\n<sub>${:.3} · {} cached prompt tokens</sub>",
-        proposal.cost_usd, proposal.cached_tokens
+        "\n\n<sub>{}</sub>",
+        crate::findings::render::cost_line(
+            proposal.cost_usd,
+            proposal.input_tokens,
+            proposal.output_tokens,
+            proposal.cached_tokens,
+            &proposal.models,
+        )
     ));
     body.push_str(&format!(
         "\n<!-- {MARKER_PREFIX}state v=1 sha={} -->",
@@ -131,11 +183,12 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
                 line,
                 start_line: None,
                 body: format!(
-                    "**{}**\n\n{}\n\n<sub>{} · {} · <!-- {MARKER_PREFIX}fp={} --></sub>",
+                    "{} **{}**\n\n{}\n\n<sub>{} · {} · <!-- {MARKER_PREFIX}fp={} --></sub>",
+                    crate::findings::render::badge(finding.severity),
                     finding.title,
                     finding.body,
                     finding.lane,
-                    finding.severity,
+                    crate::findings::render::confidence_badge(finding.confidence),
                     finding.fingerprint(&finding.title),
                 ),
             })
@@ -151,6 +204,14 @@ mod tests {
     use crate::findings::types::Finding;
     use crate::forge::types::{CheckConclusion, PullRequest};
     use crate::forge::{MockForge, MockState, Write};
+
+    fn config() -> Config {
+        crate::config::DEFAULTS
+            .parse::<toml::Table>()
+            .unwrap()
+            .try_into()
+            .unwrap()
+    }
 
     fn proposal(head: &str, findings: Vec<Finding>) -> Proposal {
         Proposal {
@@ -170,7 +231,10 @@ mod tests {
                 findings,
             }],
             cost_usd: 0.01,
+            input_tokens: 10_000,
+            output_tokens: 400,
             cached_tokens: 800,
+            models: vec!["moonshotai/kimi-k3".into()],
         }
     }
 
@@ -206,7 +270,7 @@ mod tests {
     #[tokio::test]
     async fn a_check_run_is_published_per_lane() {
         let forge = forge("abc123");
-        apply(&forge, &forge, &proposal("abc123", vec![]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]))
             .await
             .expect("applies");
 
@@ -222,7 +286,7 @@ mod tests {
         // The review ran against a commit that has since been replaced.
         // Publishing would report on code nobody is looking at.
         let forge = forge("newer456");
-        apply(&forge, &forge, &proposal("abc123", vec![]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]))
             .await
             .expect("returns cleanly");
 
@@ -232,9 +296,14 @@ mod tests {
     #[tokio::test]
     async fn findings_become_inline_comments_carrying_a_fingerprint() {
         let forge = forge("abc123");
-        apply(&forge, &forge, &proposal("abc123", vec![finding()]))
-            .await
-            .expect("applies");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![finding()]),
+        )
+        .await
+        .expect("applies");
 
         let review = forge
             .writes()
@@ -258,7 +327,7 @@ mod tests {
     #[tokio::test]
     async fn a_clean_review_posts_no_inline_comments_at_all() {
         let forge = forge("abc123");
-        apply(&forge, &forge, &proposal("abc123", vec![]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]))
             .await
             .expect("applies");
 
@@ -271,12 +340,100 @@ mod tests {
         );
     }
 
+    fn review_of(forge: &MockForge) -> Option<(String, ReviewEvent)> {
+        forge.writes().into_iter().find_map(|w| match w {
+            Write::Review { body, event, .. } => Some((body, event)),
+            _ => None,
+        })
+    }
+
+    #[tokio::test]
+    async fn a_high_finding_requests_changes_and_blocks_the_merge() {
+        let forge = forge("abc123");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![finding()]),
+        )
+        .await
+        .expect("applies");
+
+        let (body, event) = review_of(&forge).expect("a review was posted");
+        assert_eq!(event, ReviewEvent::RequestChanges);
+        assert!(body.contains("Requesting changes"), "{body}");
+        assert!(body.contains("**high**"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_finding_below_the_threshold_only_comments() {
+        let mut low = finding();
+        low.severity = Severity::Medium;
+
+        let forge = forge("abc123");
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![low]))
+            .await
+            .expect("applies");
+
+        assert_eq!(review_of(&forge).expect("posted").1, ReviewEvent::Comment);
+    }
+
+    #[tokio::test]
+    async fn a_fixed_pull_request_has_its_block_cleared() {
+        // The half that matters most. GitHub keeps only the latest review per
+        // reviewer, so without an explicit approval a stale objection blocks
+        // the merge button until a human dismisses it by hand.
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::RequestChanges);
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]))
+            .await
+            .expect("applies");
+
+        let (body, event) = review_of(&forge).expect("an approval was posted");
+        assert_eq!(event, ReviewEvent::Approve);
+        assert!(body.contains("Clearing the changes request"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_clean_pull_request_that_was_never_blocked_stays_silent() {
+        // No approval to hand out: approving every green pull request would be
+        // a bot rubber-stamping work it did not really vouch for.
+        let forge = forge("abc123");
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]))
+            .await
+            .expect("applies");
+
+        assert!(review_of(&forge).is_none(), "{:#?}", forge.writes());
+    }
+
+    #[tokio::test]
+    async fn blocking_can_be_turned_off_entirely() {
+        let mut config = config();
+        config.review.request_changes_at = "off".into();
+
+        let forge = forge("abc123");
+        apply(
+            &forge,
+            &forge,
+            &config,
+            &proposal("abc123", vec![finding()]),
+        )
+        .await
+        .expect("applies");
+
+        assert_eq!(review_of(&forge).expect("posted").1, ReviewEvent::Comment);
+    }
+
     #[tokio::test]
     async fn the_review_body_reports_cost_and_cache_hits() {
         let forge = forge("abc123");
-        apply(&forge, &forge, &proposal("abc123", vec![finding()]))
-            .await
-            .expect("applies");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![finding()]),
+        )
+        .await
+        .expect("applies");
 
         let body = forge
             .writes()
@@ -287,7 +444,10 @@ mod tests {
             })
             .expect("review posted");
 
-        assert!(body.contains("$0.010"), "{body}");
-        assert!(body.contains("800 cached prompt tokens"), "{body}");
+        assert!(body.contains("$0.0100"), "{body}");
+        assert!(body.contains("10,000 in"), "{body}");
+        assert!(body.contains("400 out"), "{body}");
+        assert!(body.contains("800 cached (8%)"), "{body}");
+        assert!(body.contains("kimi-k3"), "{body}");
     }
 }
