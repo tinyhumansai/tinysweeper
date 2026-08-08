@@ -104,15 +104,16 @@ fn vector_index_name(signature: &EmbedSignature) -> String {
 ///
 /// Matched on rather than propagated because it is the one failure that means
 /// *the deployment is wrong*, and it deserves [`VECTOR_SEARCH_UNAVAILABLE`]
-/// instead of a stack of Mongo error codes.
-fn is_unsupported_stage(err: &mongodb::error::Error) -> bool {
-    let text = err.to_string();
-    text.contains("Unrecognized pipeline stage")
-        || text.contains("Atlas")
-        || text.contains("$vectorSearch")
-        || text.contains("$rankFusion")
-        || text.contains("$listSearchIndexes")
-        || text.contains("$search")
+/// instead of a stack of Mongo error codes. Matched on the message rather than
+/// the code because the server reports it as a plain `CommandNotSupported` /
+/// unrecognised-stage parse failure, indistinguishable by code from a genuine
+/// pipeline mistake.
+pub(crate) fn is_unsupported_stage(message: &str) -> bool {
+    message.contains("Unrecognized pipeline stage")
+        || message.contains("Atlas")
+        || message.contains("mongot")
+        || message.contains("not supported")
+        || message.contains("Unsupported")
 }
 
 fn unavailable(err: &mongodb::error::Error) -> Error {
