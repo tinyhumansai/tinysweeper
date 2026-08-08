@@ -79,12 +79,16 @@ pub async fn apply(
 
 /// Decide how to submit the review.
 fn review_event(config: &Config, proposal: &Proposal, blocking_now: bool) -> ReviewEvent {
-    let Some(threshold) = config.request_changes_at() else {
+    let Some(_threshold) = config.request_changes_at() else {
         return ReviewEvent::Comment;
     };
 
-    let blocking_findings = proposal.findings().any(|f| f.severity >= threshold);
-    if blocking_findings {
+    // Check if any lane is still blocking. This includes lanes with failing
+    // conclusions even if all their findings were deduped (already posted),
+    // so a recurred problem that is already visible still requests changes.
+    // Do not approve just because the post-dedupe findings are empty.
+    let has_blocking_lanes = proposal.blocked();
+    if has_blocking_lanes {
         ReviewEvent::RequestChanges
     } else if blocking_now {
         // Clean now, blocked before: clear it. Anything else leaves the author
