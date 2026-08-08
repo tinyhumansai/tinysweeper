@@ -26,6 +26,7 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_paths(config, &mut problems);
     validate_models(config, &mut problems);
     validate_knowledge(config, &mut problems);
+    validate_retrieval(config, &mut problems);
     validate_lanes(config, &mut problems);
     validate_automerge(config, &mut problems);
     validate_issues(config, &mut problems);
@@ -219,6 +220,54 @@ fn validate_knowledge(config: &Config, problems: &mut Vec<String>) {
              file to the extractor; set a byte limit or turn extraction off"
                 .into(),
         );
+    }
+}
+
+/// Catch a retrieval config that would run and retrieve nothing.
+///
+/// Every check here is for a value that leaves retrieval *enabled* while making
+/// it incapable of producing context. That combination is worse than turning it
+/// off: the review still pays to embed a query, and nobody reading the check
+/// run can tell why the reviewer never saw any related code.
+fn validate_retrieval(config: &Config, problems: &mut Vec<String>) {
+    let retrieval = &config.retrieval;
+    if !retrieval.enabled {
+        return;
+    }
+
+    for (name, value) in [
+        ("query_chars", retrieval.query_chars),
+        ("context_tokens", retrieval.context_tokens),
+        ("max_chunks", retrieval.max_chunks),
+    ] {
+        if value == 0 {
+            problems.push(format!(
+                "`retrieval.{name} = 0` with `retrieval.enabled = true` retrieves nothing while \
+                 still paying to embed a query; set it above zero or set \
+                 `retrieval.enabled = false`"
+            ));
+        }
+    }
+
+    // Not an error — a hop-less retrieval is still a working similarity search
+    // — but it silently gives up the one thing similarity cannot do.
+    if retrieval.graph_hops > 0 && retrieval.max_graph_nodes == 0 {
+        problems.push(
+            "`retrieval.max_graph_nodes = 0` disables graph expansion while `retrieval.graph_hops` \
+             is set; the walk would be discarded, so set the cap or set `graph_hops = 0`"
+                .into(),
+        );
+    }
+
+    // Three hops out of a widely imported module is most of the repository.
+    // The node cap would truncate it anyway, so this only ever buys a slower
+    // query for the same answer.
+    if retrieval.graph_hops > 2 {
+        problems.push(format!(
+            "`retrieval.graph_hops = {}` walks most of a repository; the node cap truncates it \
+             back, so this costs query time and returns no more context. Use 1 or 2",
+            retrieval.graph_hops
+        ));
     }
 }
 
