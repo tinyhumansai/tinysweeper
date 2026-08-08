@@ -201,6 +201,11 @@ const PLACEHOLDERS: &[&str] = &[
     "1234",
 ];
 
+/// Above this length a line is treated as machine-generated, and only the
+/// deterministic rulepack runs on it. The entropy heuristic on a minified
+/// bundle reports nothing but noise.
+const MAX_HEURISTIC_LINE: usize = 4096;
+
 /// Paths whose contents are expected to contain credential-shaped strings.
 const EXPECTED_PATHS: &[&str] = &[
     ".env.example",
@@ -220,12 +225,12 @@ pub fn scan_added_lines<'a>(
     let mut findings = Vec::new();
 
     for (line_no, text) in added {
-        // A line long enough to be minified or base64 asset data produces
-        // nothing but noise, and scanning it is how entropy heuristics
-        // embarrass themselves.
-        if text.len() > 4096 {
-            continue;
-        }
+        // A minified bundle or a base64 asset makes the *entropy heuristic*
+        // useless — but a real credential pasted into a long config line is
+        // still a real credential, so the rulepack keeps running. Skipping the
+        // whole line was a hole: one `JSON.stringify` and a leaked key becomes
+        // invisible.
+        let too_long_for_heuristics = text.len() > MAX_HEURISTIC_LINE;
 
         for (marker, label) in PEM_MARKERS {
             if text.contains(marker) {
@@ -271,6 +276,7 @@ pub fn scan_added_lines<'a>(
         // spaces, base64/hex alphabet), be long enough to be one, and carry
         // more entropy than an identifier or a sentence would.
         if !expected
+            && !too_long_for_heuristics
             && let Some((name, value)) = secret_assignment(text)
             && !looks_like_placeholder(value)
             && is_opaque_token(value)
@@ -606,10 +612,22 @@ mod tests {
     }
 
     #[test]
-    fn base64_asset_lines_are_skipped_rather_than_scanned() {
+    fn base64_asset_lines_do_not_trip_the_entropy_heuristic() {
         let line = format!("const LOGO: &str = \"{}\";", "QUJDRA".repeat(1000));
         let findings = scan("src/assets.rs", &line);
         assert!(findings.is_empty(), "{findings:#?}");
+    }
+
+    #[test]
+    fn a_real_credential_on_a_minified_line_is_still_caught() {
+        // Skipping long lines entirely was a hole: one `JSON.stringify` and a
+        // leaked key becomes invisible to the scanner.
+        let key = token("AKIA", "IOSFODNN7EXAMPLE");
+        let line = format!("{{\"padding\":\"{}\",\"aws\":\"{key}\"}}", "x".repeat(5000));
+        let findings = scan("config/bundle.json", &line);
+
+        assert_eq!(findings.len(), 1, "{findings:#?}");
+        assert_eq!(findings[0].rule, "aws-access-key-id");
     }
 
     #[test]
