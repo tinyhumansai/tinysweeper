@@ -198,6 +198,9 @@ impl ForgeRead for GitHubRead {
                 path: c.path,
                 line: c.line.unwrap_or(0),
                 start_line: c.start_line,
+                // Carried through because dedupe refuses to trust a marker in
+                // anyone else's comment.
+                author: c.user.login,
                 body: c.body,
             })
             .collect())
