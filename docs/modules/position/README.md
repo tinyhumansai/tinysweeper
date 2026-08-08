@@ -25,7 +25,7 @@ and the failure is now recoverable rather than silent.
 | --- | --- | --- |
 | 1 | Slide the snippet over every hunk: new side first, then the old side | free |
 | 2 | Slide it over the whole head-revision file | free |
-| 3 | One cheap model call that re-extracts the snippet, then stages 1–2 again | one `models.scan` call |
+| 3 | One cheap model call that re-extracts the snippet, then stages 1–2 again | one cheap-tier call (`Workload::Relocate`) |
 
 Stage 1 resolves nearly everything. Stage 2 needs the file, which only a run
 with a checkout has; without it the stage is skipped rather than guessed at.
