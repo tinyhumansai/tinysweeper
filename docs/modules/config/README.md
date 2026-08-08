@@ -59,6 +59,22 @@ port, in the default build, where tinyagents is not linked at all. The place it
 would pay for itself is `GatewayModel`'s hand-rolled fallback chain, on the
 feature-gated side of the port.
 
+## `[embeddings]` is a partition key, not a call setting
+
+`provider`, `model` and `dimensions` are not three more fields like
+`[models]`'s: together they *are* `EmbedSignature`, the key every indexed vector
+is written under and every query filters on. Editing one does not reconfigure a
+call, it invalidates the index. Keeping them in their own block is what makes
+that legible to whoever edits it, and it is why the embedding provider is
+configured here and **nowhere else** — a second place to set it (an environment
+variable, say) is a second way for the key to disagree with the vectors already
+written, and that disagreement is silent rather than an error.
+
+The section is off by default. An embedding provider costs money per indexed
+byte and needs a key nobody has by accident, so a deployment that has not said
+otherwise runs diff-only, exactly as tinysweeper did before an index existed.
+Only the API key lives in the environment, under the name `api_key_env` gives.
+
 ## Discovery
 
 `.tinysweeper.toml` at the repository root, then `.github/tinysweeper.toml`.
