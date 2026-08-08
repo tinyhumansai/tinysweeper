@@ -64,11 +64,20 @@ impl GatewayModel {
         let provider = OpenAiModel::new(&self.api_key)
             .with_base_url(&self.base_url)
             .with_model(model)
-            // kimi-k3 has thinking always on, and emits it inline ahead of the
-            // JSON body. Without this the structured parse sees reasoning prose
-            // at column 1, fails, and silently falls back to a weaker model on
-            // every single request — which halves review quality invisibly.
-            .with_reasoning_tag_extraction(Some(ReasoningTagExtraction::new("think")))
+            // Reasoning off, and this is load-bearing rather than a
+            // preference. `kimi-k3` thinks by default and its reasoning is
+            // billed against the same `max_tokens` as the answer, so on a large
+            // diff it spends the entire budget thinking and returns *empty*
+            // content — measured on a 49k-token prompt: finish_reason `length`,
+            // all 8000 completion tokens consumed, 17k characters of reasoning,
+            // nothing left to answer with. Every review then fell back to a
+            // weaker model, silently.
+            //
+            // OpenRouter's `reasoning: {max_tokens: N}` does not help: this
+            // model ignores it, and reasoning ran past a 4096 cap to 37k
+            // characters. Disabling it outright is the only setting that holds,
+            // and it is also four times faster (34s against 110s).
+            .with_default_provider_options(json!({ "reasoning": { "enabled": false } }))
             // Identifies us to OpenRouter, which is how per-application usage
             // shows up separately in their dashboard.
             .with_header(
