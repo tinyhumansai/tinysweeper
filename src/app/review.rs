@@ -215,7 +215,7 @@ pub fn read_proposal(path: &Path) -> Result<Proposal> {
 
 fn lane_proposal(config: &Config, lane: LaneId, outcome: LaneOutcome) -> LaneProposal {
     let gate = config.severity_gate();
-    let minimum = config.review.confidence_min;
+    let minimum = config.confidence_min();
 
     let mut findings: Vec<Finding> = outcome
         .findings
