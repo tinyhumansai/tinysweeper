@@ -314,9 +314,7 @@ fn python_import(node: Node, source: &[u8]) -> Vec<ImportStmt> {
                 return Vec::new();
             };
             let mut names = Vec::new();
-            let mut index = 0;
-            while let Some(child) = node.child_by_field_name_index("name", index) {
-                index += 1;
+            for child in fields(node, "name") {
                 let bound = match child.kind() {
                     "aliased_import" => child.child_by_field_name("alias"),
                     _ => Some(child),
