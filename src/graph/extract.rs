@@ -294,9 +294,7 @@ fn python_import(node: Node, source: &[u8]) -> Vec<ImportStmt> {
     match node.kind() {
         "import_statement" => {
             let mut out = Vec::new();
-            let mut index = 0;
-            while let Some(child) = node.child_by_field_name_index("name", index) {
-                index += 1;
+            for child in fields(node, "name") {
                 let module = match child.kind() {
                     "aliased_import" => child.child_by_field_name("name"),
                     _ => Some(child),
