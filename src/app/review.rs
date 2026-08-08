@@ -642,6 +642,9 @@ fn publish_unclaimed(lanes: &mut Vec<LaneProposal>, scan_findings: &[scan::types
             resolved: vec![],
             deduped: 0,
             highest_severity: Some(Severity::High),
+            // Scanners are deterministic and offline: no model, no spend.
+            usage: Usage::default(),
+            models: vec![],
         });
     }
 }
@@ -675,6 +678,10 @@ fn gate(lanes: &[LaneProposal]) -> LaneProposal {
         resolved: vec![],
         deduped: 0,
         highest_severity: None,
+        // The gate is an aggregate of the other lanes; attributing their spend
+        // to it as well would double-count every dollar in the summary.
+        usage: Usage::default(),
+        models: vec![],
     }
 }
 
