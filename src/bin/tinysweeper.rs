@@ -255,12 +255,16 @@ async fn run_apply(_repo: &str, _pr: u64, _findings: &std::path::Path) -> Result
 /// Run the webhook server.
 #[cfg(feature = "serve")]
 async fn run_serve(bind: String, config_path: Option<std::path::PathBuf>) -> Result<()> {
-    use tinysweeper::server::{ServerConfig, Store, auth::AppAuth, serve};
+    use tinysweeper::server::{ServerConfig, Store, admin, auth::AppAuth, serve};
 
     let loaded =
         tinysweeper::config::load_validated(std::path::Path::new("."), config_path.as_deref())?;
 
     let webhook_secret = require_webhook_secret(std::env::var("TINYSWEEPER_WEBHOOK_SECRET").ok())?;
+
+    // Validated here rather than at first use: a bad admin token should stop
+    // the process at startup, not surface as a 401 an operator debugs later.
+    let admin_auth = admin::AdminAuth::from_env()?;
 
     let store = Store::from_env().await?;
     let auth = AppAuth::from_env()?;
@@ -270,6 +274,7 @@ async fn run_serve(bind: String, config_path: Option<std::path::PathBuf>) -> Res
             bind,
             webhook_secret,
             config: loaded.config,
+            admin_auth,
         },
         store,
         auth,
