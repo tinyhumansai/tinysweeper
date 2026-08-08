@@ -39,4 +39,6 @@ pub use crate::indexer::types::{
 };
 
 #[cfg(feature = "serve")]
+pub use crate::indexer::fetch::Checkout;
+#[cfg(feature = "serve")]
 pub use crate::indexer::mongo::MongoManifest;
