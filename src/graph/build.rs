@@ -60,13 +60,7 @@ pub fn build(repo_id: &str, files: &[SourceFile]) -> Result<RepoGraph> {
         for definition in &file.defs {
             let mut node = GraphNode::symbol(repo_id, &file.path, &definition.name);
             node.lang = Some(file.lang.tag().to_string());
-            let edge = GraphEdge::new(
-                repo_id,
-                &file.path,
-                &node.id,
-                EdgeKind::Defines,
-                &file.path,
-            );
+            let edge = GraphEdge::new(repo_id, &file.path, &node.id, EdgeKind::Defines, &file.path);
             edges.insert(edge.id(), edge);
             nodes.insert(node.id.clone(), node);
         }
@@ -240,7 +234,8 @@ fn last_segment(specifier: &str) -> String {
 /// [`sync_paths`], which is the path a push actually takes.
 pub async fn sync_all(store: &dyn GraphStore, repo_id: &str, graph: &RepoGraph) -> Result<u64> {
     store.delete_repo(repo_id).await?;
-    let written = store.upsert_nodes(&graph.nodes).await? + store.upsert_edges(&graph.edges).await?;
+    let written =
+        store.upsert_nodes(&graph.nodes).await? + store.upsert_edges(&graph.edges).await?;
     Ok(written)
 }
 

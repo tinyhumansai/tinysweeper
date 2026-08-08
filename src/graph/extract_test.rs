@@ -226,7 +226,10 @@ function helper() { return 1; }
 
 #[test]
 fn a_call_never_also_counts_as_a_reference() {
-    let file = parsed("src/a.ts", "import { f } from './b';\nexport const x = f();\n");
+    let file = parsed(
+        "src/a.ts",
+        "import { f } from './b';\nexport const x = f();\n",
+    );
     let occurrences: Vec<&Usage> = file.usages.iter().filter(|u| u.name == "f").collect();
     assert_eq!(occurrences.len(), 1, "{occurrences:?}");
     assert!(occurrences[0].call);
@@ -239,9 +242,7 @@ fn references_are_kept_for_non_call_usages() {
         "import { Money } from './money';\nexport function price(): Money { return 0 as Money; }\n",
     );
     assert!(
-        file.usages
-            .iter()
-            .any(|u| u.name == "Money" && !u.call),
+        file.usages.iter().any(|u| u.name == "Money" && !u.call),
         "{:?}",
         file.usages
     );

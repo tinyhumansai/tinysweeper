@@ -102,9 +102,11 @@ impl AliasConfig {
             }
         }
 
-        config
-            .ts_paths
-            .sort_by(|a, b| b.specificity().cmp(&a.specificity()).then(a.pattern.cmp(&b.pattern)));
+        config.ts_paths.sort_by(|a, b| {
+            b.specificity()
+                .cmp(&a.specificity())
+                .then(a.pattern.cmp(&b.pattern))
+        });
         config.ts_paths.dedup_by(|a, b| a.pattern == b.pattern);
         config.ts_base_urls.dedup();
         config

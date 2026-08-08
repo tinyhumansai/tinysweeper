@@ -262,10 +262,7 @@ fn go_module_relative_imports_resolve_to_every_file_in_the_package() {
 #[test]
 fn go_third_party_imports_are_external() {
     let r = resolver_with(&[("go.mod", "module example.com/app\n"), ("cmd/main.go", "")]);
-    assert!(
-        r.resolve("cmd/main.go", Language::Go, "fmt")
-            .is_external()
-    );
+    assert!(r.resolve("cmd/main.go", Language::Go, "fmt").is_external());
     assert!(
         r.resolve("cmd/main.go", Language::Go, "github.com/pkg/errors")
             .is_external()

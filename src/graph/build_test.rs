@@ -484,7 +484,11 @@ fn this_crate() -> Vec<SourceFile> {
 #[test]
 fn this_repository_resolves_every_internal_import() {
     let files = this_crate();
-    assert!(files.len() > 50, "expected a real tree, got {}", files.len());
+    assert!(
+        files.len() > 50,
+        "expected a real tree, got {}",
+        files.len()
+    );
     let graph = build(REPO, &files).expect("builds");
 
     let internal = graph.coverage.imports_total - graph.coverage.imports_external;

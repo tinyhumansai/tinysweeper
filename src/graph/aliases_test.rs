@@ -114,10 +114,8 @@ fn the_most_specific_pattern_wins() {
 
 #[test]
 fn go_module_path_and_root_come_from_go_mod() {
-    let config = AliasConfig::discover(&files(&[(
-        "go.mod",
-        "module example.com/app\n\ngo 1.22\n",
-    )]));
+    let config =
+        AliasConfig::discover(&files(&[("go.mod", "module example.com/app\n\ngo 1.22\n")]));
     assert_eq!(config.go_module.as_deref(), Some("example.com/app"));
     assert_eq!(config.go_root, "");
 }

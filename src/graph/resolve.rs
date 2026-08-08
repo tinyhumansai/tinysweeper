@@ -217,23 +217,22 @@ impl Resolver {
         };
 
         let own_crate = self.aliases.rust_crate.as_deref();
-        let (base, rest): (String, &[&str]) = if *first == "crate"
-            || own_crate.is_some_and(|c| c == *first)
-        {
-            (self.aliases.rust_src_root.clone(), &segments[1..])
-        } else if *first == "self" {
-            (self.rust_module_dir(from), &segments[1..])
-        } else if *first == "super" {
-            let ups = segments.iter().take_while(|s| **s == "super").count();
-            let mut dir = self.rust_module_dir(from);
-            for _ in 0..ups {
-                dir = dir_of(&dir);
-            }
-            (dir, &segments[ups..])
-        } else {
-            // `std`, `serde`, another workspace crate: correctly outside.
-            return Resolution::Unresolved(UnresolvedReason::External);
-        };
+        let (base, rest): (String, &[&str]) =
+            if *first == "crate" || own_crate.is_some_and(|c| c == *first) {
+                (self.aliases.rust_src_root.clone(), &segments[1..])
+            } else if *first == "self" {
+                (self.rust_module_dir(from), &segments[1..])
+            } else if *first == "super" {
+                let ups = segments.iter().take_while(|s| **s == "super").count();
+                let mut dir = self.rust_module_dir(from);
+                for _ in 0..ups {
+                    dir = dir_of(&dir);
+                }
+                (dir, &segments[ups..])
+            } else {
+                // `std`, `serde`, another workspace crate: correctly outside.
+                return Resolution::Unresolved(UnresolvedReason::External);
+            };
 
         // Longest prefix first: `use crate::graph::types::Definition` names a
         // *type* in a module, so the module path is one segment shorter than

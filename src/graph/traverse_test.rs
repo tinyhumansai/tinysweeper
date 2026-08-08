@@ -89,7 +89,9 @@ async fn an_empty_seed_set_returns_nothing_without_asking_the_store() {
 #[tokio::test]
 async fn the_node_cap_is_hard() {
     let store = chain().await;
-    let query = NeighbourQuery::new(["a.ts".to_string()]).hops(4).max_nodes(2);
+    let query = NeighbourQuery::new(["a.ts".to_string()])
+        .hops(4)
+        .max_nodes(2);
     let hood = neighbours(&store, REPO, &query).await.expect("traverses");
     assert_eq!(hood.nodes.len(), 2);
 }
