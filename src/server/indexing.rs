@@ -230,35 +230,56 @@ pub async fn index_in_background(
         return;
     };
 
-    for attempt in 1..=REQUEUE_ATTEMPTS {
-        match backend
-            .ensure_indexed(&config, &repo, &revision, &token)
-            .await
-        {
+    let name = repo.to_string();
+    with_requeue(&name, REQUEUE_ATTEMPTS, REQUEUE_DELAY, || {
+        backend.ensure_indexed(&config, &repo, &revision, &token)
+    })
+    .await;
+}
+
+/// Run `attempt` until it stops answering [`IndexOutcome::Requeue`].
+///
+/// Split out of [`index_in_background`] so the contention behaviour is testable
+/// without a database: what matters here is that a refused claim *retries after
+/// a delay* and eventually gives up, rather than blocking a worker on a lock,
+/// and that is a property of this loop rather than of MongoDB.
+async fn with_requeue<F, Fut>(
+    repo: &str,
+    attempts: usize,
+    delay: std::time::Duration,
+    mut attempt: F,
+) -> Option<IndexOutcome>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<IndexOutcome>>,
+{
+    for round in 1..=attempts {
+        match attempt().await {
             Ok(IndexOutcome::AlreadyFresh) => {
-                tracing::debug!(%repo, %revision, "the index already reflects this commit");
-                return;
+                tracing::debug!(repo, "the index already reflects this commit");
+                return Some(IndexOutcome::AlreadyFresh);
             }
-            Ok(IndexOutcome::Indexed(_)) => return,
+            Ok(outcome @ IndexOutcome::Indexed(_)) => return Some(outcome),
             Ok(IndexOutcome::Requeue { holder }) => {
-                if attempt == REQUEUE_ATTEMPTS {
-                    // Not an error. The holder is doing this work; the only
-                    // cost of giving up is freshness, and the next push retries.
+                if round == attempts {
+                    // Not an error. The holder is doing this work; the only cost
+                    // of giving up is freshness, and the next push retries.
                     tracing::info!(
-                        %repo, ?holder,
+                        repo, ?holder,
                         "another worker still holds the index claim; leaving it to them"
                     );
-                    return;
+                    return Some(IndexOutcome::Requeue { holder });
                 }
-                tracing::debug!(%repo, ?holder, attempt, "index claim held; requeueing");
-                tokio::time::sleep(REQUEUE_DELAY).await;
+                tracing::debug!(repo, ?holder, round, "index claim held; requeueing");
+                tokio::time::sleep(delay).await;
             }
             Err(err) => {
-                tracing::warn!(%err, %repo, %revision, "indexing failed; the review degrades");
-                return;
+                tracing::warn!(%err, repo, "indexing failed; the review degrades");
+                return None;
             }
         }
     }
+    None
 }
 
 /// The git host repositories are fetched from.
