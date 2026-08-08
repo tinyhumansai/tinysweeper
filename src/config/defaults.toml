@@ -12,13 +12,21 @@ version = 1
 
 [review]
 lanes = ["critique", "security", "tests", "commits", "description"]
+# The one dial most repositories should touch. 1 chill, 2 default, 3 assertive.
+# `severity_gate` and `confidence_min` are deliberately absent: strictness sets
+# them, and setting them here would make the dial inert for everyone who never
+# overrode them — which is exactly the bug this replaced.
 strictness = 2
-severity_gate = "medium"
-confidence_min = 0.6
 max_comments = 20
 incremental = true
 draft_prs = false
 respect_agents_md = true
+
+# Block the merge button at this severity; "off" never blocks. A blocking review
+# has to be cleared by a human if it turns out to be wrong, so the floor sits at
+# the severity where that cost is worth paying — and the next clean review
+# clears it automatically, so the usual case needs nobody.
+request_changes_at = "high"
 
 [paths]
 ignore = [

@@ -208,9 +208,10 @@ async fn run_apply(repo: &str, pr: u64, findings: &std::path::Path) -> Result<()
     let proposal = tinysweeper::app::read_proposal(findings)?;
     validate_apply_target(&proposal, &repo_id, pr)?;
 
+    let loaded = tinysweeper::config::load_validated(std::path::Path::new("."), None)?;
     let read = GitHubRead::from_env()?;
     let write = GitHubWrite::from_env()?;
-    tinysweeper::app::apply(&read, &write, &proposal).await?;
+    tinysweeper::app::apply(&read, &write, &loaded.config, &proposal).await?;
 
     println!("published {} check run(s)", proposal.lanes.len());
     Ok(())
@@ -338,8 +339,14 @@ fn render(proposal: &tinysweeper::app::Proposal) -> String {
         }
     }
     out.push_str(&format!(
-        "\n  ${:.4} · {} cached prompt tokens\n",
-        proposal.cost_usd, proposal.cached_tokens
+        "\n  {}\n",
+        tinysweeper::findings::render::cost_line(
+            proposal.cost_usd,
+            proposal.input_tokens,
+            proposal.output_tokens,
+            proposal.cached_tokens,
+            &proposal.models,
+        )
     ));
     out
 }
@@ -458,7 +465,10 @@ mod tests {
             head_sha: "abc123".into(),
             lanes: vec![],
             cost_usd: 0.0,
+            input_tokens: 0,
+            output_tokens: 0,
             cached_tokens: 0,
+            models: vec![],
         }
     }
 
