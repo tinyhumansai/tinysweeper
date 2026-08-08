@@ -1,0 +1,86 @@
+# Built-in defaults — the bottom layer of the configuration merge.
+#
+# Merge order, later wins: these defaults, then the named preset, then the
+# repository's own .tinysweeper.toml. `tinysweeper doctor` reports which layer
+# set each effective value, and it reads that from the same merge that produces
+# the config, so the two can never disagree.
+#
+# Every value here has to be safe for a repository that has never seen the bot:
+# conservative gates, no auto-merge, no scaffolded feature enabled.
+
+version = 1
+
+[review]
+lanes = ["critique", "security", "tests", "commits", "description"]
+strictness = 2
+severity_gate = "medium"
+confidence_min = 0.6
+max_comments = 20
+incremental = true
+draft_prs = false
+respect_agents_md = true
+
+[paths]
+ignore = [
+    "**/*.lock",
+    "vendor/**",
+    "**/generated/**",
+    "**/node_modules/**",
+    "**/*.min.js",
+    "**/*.snap",
+]
+
+[cache]
+enabled = true
+semantic = true
+max_age_days = 14
+
+[labels]
+human_review = "tinysweeper:human-review"
+manual_only = "tinysweeper:manual-only"
+
+[models]
+gateway = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+scan = "minimax/minimax-m2.1"
+deep = "moonshotai/kimi-k3"
+fallback = ["moonshotai/kimi-k2.6"]
+max_tokens = 8000
+budget_usd_per_pr = 1.0
+
+[lanes.critique]
+model = "deep"
+fail_on = "high"
+
+[lanes.security]
+model = "deep"
+fail_on = "high"
+
+[lanes.tests]
+model = "scan"
+fail_on = "high"
+
+[lanes.commits]
+model = "scan"
+fail_on = "high"
+secret_rulepack = "default"
+max_blob_bytes = 1048576
+
+[lanes.description]
+model = "scan"
+fail_on = "high"
+
+[automerge]
+enabled = false
+require_checks = ["tinysweeper/gate"]
+require_approvals = 1
+method = "squash"
+allow_labels = ["automerge"]
+block_labels = ["do-not-merge", "wip"]
+
+[issues]
+enabled = false
+
+[sentry]
+enabled = false
