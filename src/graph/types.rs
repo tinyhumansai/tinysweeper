@@ -150,6 +150,9 @@ pub struct ImportStmt {
     pub names: Vec<String>,
     /// 1-based line of the statement.
     pub line: u32,
+    /// Byte offset of the statement, used to tell an import written inside an
+    /// inline module from one written at file scope.
+    pub byte: usize,
 }
 
 /// An identifier used somewhere in a file.
