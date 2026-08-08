@@ -10,7 +10,16 @@
 #   name: tinysweeper
 #   on:
 #     pull_request:
-#       types: [opened, synchronize, reopened, ready_for_review]
+#       types: [opened, synchronize, reopened, ready_for_review, edited]
+#     issue_comment:
+#       types: [created]
+#     pull_request_review:
+#       types: [submitted]
+#     pull_request_review_comment:
+#       types: [created]
+#   concurrency:
+#     group: tinysweeper-${{ github.event.pull_request.number || github.event.issue.number }}
+#     cancel-in-progress: true
 #   jobs:
 #     review:
 #       uses: tinyhumansai/tinysweeper/.github/workflows/review.yml@v1
@@ -73,7 +82,33 @@ jobs:
     name: review
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # `issue_comment` fires for issues as well as pull requests, and the payload
+    # only distinguishes them by the presence of this field.
+    if: >-
+      github.event_name != 'issue_comment' ||
+      github.event.issue.pull_request != null
     steps:
+      # The pull request number lives in a different place depending on which
+      # event woke us up.
+      - name: Resolve the pull request number
+        id: pr
+        env:
+          FROM_PR: ${{ github.event.pull_request.number }}
+          FROM_ISSUE: ${{ github.event.issue.number }}
+        run: echo "number=${FROM_PR:-$FROM_ISSUE}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the head SHA
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          # A comment event carries no head SHA, so ask for it.
+          sha=$(gh api "/repos/$REPO/pulls/$NUMBER" --jq .head.sha)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
       # An App installation token is preferred over GITHUB_TOKEN for one
       # concrete reason: a fork pull request gives GITHUB_TOKEN read-only
       # scope, so it cannot publish a check run. The App token can.
@@ -91,7 +126,7 @@ jobs:
       # see the security boundary in AGENTS.md before adding any step here.
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ steps.head.outputs.sha }}
           # Full history: the commits lane walks the pull request's range, and a
           # shallow clone has nothing to walk.
           fetch-depth: 0
@@ -118,7 +153,7 @@ jobs:
           # interpolated into this shell. A pull request title is attacker
           # controlled.
           TS_REPO: ${{ github.repository }}
-          TS_PR: ${{ github.event.pull_request.number }}
+          TS_PR: ${{ steps.pr.outputs.number }}
           TS_LANES: ${{ inputs.lanes }}
           TS_CONFIG: ${{ inputs.config }}
           TS_DRY_RUN: ${{ inputs.dry-run }}
