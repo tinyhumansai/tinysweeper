@@ -130,7 +130,7 @@ pub fn load(root: &Path, explicit: Option<&Path>) -> Result<Loaded> {
         merge::merge_layer(&mut merged, table, Layer::Repo, &mut provenance);
     }
 
-    let config: Config = merged.try_into().map_err(|err| {
+    let mut config: Config = merged.try_into().map_err(|err| {
         Error::config(format!(
             "the merged configuration is not valid: {err}\n\
              (this usually means an unknown key; run `tinysweeper check` for details)"
