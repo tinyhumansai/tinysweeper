@@ -663,16 +663,10 @@ fn kill_switch(config: &Config, context: &PullRequestContext) -> Option<String> 
 }
 
 fn reviewable_diffs(config: &Config, context: &PullRequestContext) -> Result<Vec<FileDiff>> {
-    let mut builder = globset::GlobSetBuilder::new();
-    for pattern in &config.paths.ignore {
-        builder.add(
-            globset::Glob::new(pattern)
-                .map_err(|err| Error::config(format!("invalid ignore glob `{pattern}`: {err}")))?,
-        );
-    }
-    let ignored = builder
-        .build()
-        .map_err(|err| Error::config(format!("could not build the ignore set: {err}")))?;
+    // Shared with the indexer's file selection: `paths.ignore` must mean the
+    // same thing to both halves of the product, and two spellings of it would
+    // be a config whose behaviour depended on which half was reading it.
+    let ignored = crate::chunk::select::ignore_globs(&config.paths.ignore)?;
 
     let kept: Vec<_> = context
         .files
