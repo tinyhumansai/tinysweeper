@@ -30,12 +30,11 @@ use crate::config::types::LaneId;
 use crate::error::Result;
 use crate::evidence::diff::FileDiff;
 use crate::falsify::Falsifier;
-use crate::findings::types::Finding;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema::{self, RawFinding};
 use crate::lanes::{Lane, LaneInput, LaneOutcome};
 use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
-use crate::ports::model::{Message, Model, ModelRequest, Usage};
+use crate::ports::model::{Message, Model, ModelRequest};
 
 /// The correctness lane.
 pub struct Critique {
