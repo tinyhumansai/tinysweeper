@@ -90,6 +90,49 @@ pub struct PromptInputs<'a> {
     pub prior_findings: &'a [String],
     /// The evidence that is new this run.
     pub new_evidence: &'a str,
+    /// What kind of thing `new_evidence` is: `diff`, `commits`, and so on. It
+    /// becomes the fence label, so it is also what tells the model that the
+    /// block is data rather than instructions.
+    pub evidence_label: &'a str,
+    /// The paths this prompt is about, used to select path rules.
+    ///
+    /// Empty means "the caller did not say", and the whole rule table is
+    /// injected — the pre-selection behaviour, kept so a caller that has no
+    /// path list does not silently lose its rules.
+    pub changed_paths: &'a [String],
+    /// The single file this prompt is scoped to, when the lane fans out one
+    /// conversation per changed file.
+    pub focus_path: Option<&'a str>,
+    /// Findings the deterministic scanners already produced, rendered for
+    /// adjudication. Untrusted only in the sense that it quotes paths, but
+    /// fenced like everything else.
+    pub scanner_evidence: &'a str,
+    /// The pull request's own title and body. Attacker-controlled text, so it
+    /// is fenced and labelled before it goes anywhere near the instructions.
+    pub pull_request_text: &'a str,
+}
+
+impl<'a> PromptInputs<'a> {
+    /// The empty prompt for `lane`: no evidence, no policy, no rules.
+    ///
+    /// A constructor rather than `Default` because the config is a borrow with
+    /// no sensible empty value. Lanes fill in the fields they actually have,
+    /// which keeps a new optional layer from touching every call site.
+    pub fn new(lane: LaneId, config: &'a Config) -> Self {
+        Self {
+            lane,
+            config,
+            repo_policy: None,
+            reviewed_evidence: "",
+            prior_findings: &[],
+            new_evidence: "",
+            evidence_label: "diff",
+            changed_paths: &[],
+            focus_path: None,
+            scanner_evidence: "",
+            pull_request_text: "",
+        }
+    }
 }
 
 /// Build a lane's prompt.
