@@ -9,8 +9,11 @@
 //!
 //! Modules land milestone by milestone; see `ROADMAP.md`.
 
+pub mod app;
 pub mod config;
 pub mod error;
+pub mod forge;
+pub mod ports;
 
 pub use crate::error::{Error, Result};
 

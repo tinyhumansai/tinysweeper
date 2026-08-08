@@ -282,11 +282,15 @@ impl ForgeWrite for MockForge {
         let id = self.allocate_id();
         if !self.read_only {
             let mut state = self.state.lock().expect("mock state lock");
-            state.comments.entry(number).or_default().push(IssueComment {
-                id: Some(id),
-                author: "tinysweeper".into(),
-                body: body.to_string(),
-            });
+            state
+                .comments
+                .entry(number)
+                .or_default()
+                .push(IssueComment {
+                    id: Some(id),
+                    author: "tinysweeper".into(),
+                    body: body.to_string(),
+                });
         }
         Ok(id)
     }
@@ -521,7 +525,11 @@ mod tests {
             .expect("updated");
 
         let comments = forge.comments(&repo(), 7).await.expect("read");
-        assert_eq!(comments.len(), 1, "editing must not create a second comment");
+        assert_eq!(
+            comments.len(),
+            1,
+            "editing must not create a second comment"
+        );
         assert_eq!(comments[0].body, "second");
     }
 
@@ -550,7 +558,13 @@ mod tests {
         forge.close_issue(&repo(), 3).await.expect("closed");
 
         assert!(!forge.issue(&repo(), 3).await.expect("read").open);
-        assert!(forge.open_issues(&repo(), 10).await.expect("read").is_empty());
+        assert!(
+            forge
+                .open_issues(&repo(), 10)
+                .await
+                .expect("read")
+                .is_empty()
+        );
     }
 
     #[tokio::test]

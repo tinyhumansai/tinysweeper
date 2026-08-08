@@ -45,11 +45,7 @@ pub trait ForgeRead: Send + Sync {
     ///
     /// Default-implemented in terms of the calls above so an adapter only has
     /// to override it when the forge offers something cheaper.
-    async fn pull_request_context(
-        &self,
-        repo: &RepoId,
-        number: u64,
-    ) -> Result<PullRequestContext> {
+    async fn pull_request_context(&self, repo: &RepoId, number: u64) -> Result<PullRequestContext> {
         Ok(PullRequestContext {
             pull_request: self.pull_request(repo, number).await?,
             files: self.changed_files(repo, number).await?,

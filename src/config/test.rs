@@ -204,9 +204,15 @@ budget_usd_per_pr = 0.0
         "models.scan",
         "models.budget_usd_per_pr",
     ] {
-        assert!(joined.contains(expected), "missing `{expected}` in:\n{joined}");
+        assert!(
+            joined.contains(expected),
+            "missing `{expected}` in:\n{joined}"
+        );
     }
-    assert!(problems.len() >= 8, "expected every problem, got {problems:#?}");
+    assert!(
+        problems.len() >= 8,
+        "expected every problem, got {problems:#?}"
+    );
 }
 
 #[test]
@@ -226,7 +232,9 @@ fn listing_the_gate_as_a_lane_is_rejected() {
     let config = parse("version = 1\n[review]\nlanes = [\"critique\", \"gate\"]\n");
     let problems = validate::validate(&config);
     assert!(
-        problems.iter().any(|p| p.contains("the gate is deterministic")),
+        problems
+            .iter()
+            .any(|p| p.contains("the gate is deterministic")),
         "{problems:#?}"
     );
 }

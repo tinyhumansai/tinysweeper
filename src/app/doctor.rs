@@ -165,7 +165,11 @@ fn print_prose(loaded: &Loaded) {
     // The point of doctor is to explain surprises, and the surprising values
     // are exactly the ones a preset or the repository moved off the default.
     let overridden: Vec<_> = loaded.provenance.overridden().collect();
-    println!("\noverridden ({} of {})", overridden.len(), loaded.provenance.len());
+    println!(
+        "\noverridden ({} of {})",
+        overridden.len(),
+        loaded.provenance.len()
+    );
     if overridden.is_empty() {
         println!("  <nothing — every value is a built-in default>");
     } else {
@@ -305,7 +309,11 @@ mod tests {
         let loaded = config::load(dir.path(), None).expect("loads");
         let reported = credentials(&loaded);
 
-        assert!(reported.iter().any(|(var, _, _)| var == "OPENROUTER_API_KEY"));
+        assert!(
+            reported
+                .iter()
+                .any(|(var, _, _)| var == "OPENROUTER_API_KEY")
+        );
         assert!(reported.iter().any(|(var, _, _)| var == "GITHUB_TOKEN"));
     }
 
@@ -319,9 +327,8 @@ mod tests {
                 .any(|(var, _, _)| var == "SENTRY_AUTH_TOKEN")
         );
 
-        let dir = repo(
-            "version = 1\n[sentry]\nenabled = true\norg = \"acme\"\nprojects = [\"api\"]\n",
-        );
+        let dir =
+            repo("version = 1\n[sentry]\nenabled = true\norg = \"acme\"\nprojects = [\"api\"]\n");
         let loaded = config::load(dir.path(), None).expect("loads");
         assert!(
             credentials(&loaded)

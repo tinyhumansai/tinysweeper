@@ -148,11 +148,8 @@ pub enum MergeMethod {
 
 impl MergeMethod {
     /// Every method, for error messages.
-    pub const ALL: [MergeMethod; 3] = [
-        MergeMethod::Squash,
-        MergeMethod::Merge,
-        MergeMethod::Rebase,
-    ];
+    pub const ALL: [MergeMethod; 3] =
+        [MergeMethod::Squash, MergeMethod::Merge, MergeMethod::Rebase];
 
     /// The method's stable id, as written in config.
     pub fn as_str(self) -> &'static str {
@@ -535,11 +532,7 @@ mod tests {
     #[test]
     fn enabled_lanes_deduplicates_and_sorts() {
         let mut config = Config::default();
-        config.review.lanes = vec![
-            "security".into(),
-            "critique".into(),
-            "security".into(),
-        ];
+        config.review.lanes = vec!["security".into(), "critique".into(), "security".into()];
         assert_eq!(
             config.enabled_lanes(),
             vec![LaneId::Critique, LaneId::Security]

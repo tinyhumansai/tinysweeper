@@ -97,8 +97,8 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Review { .. } => not_yet("review", "M3"),
         Command::LocalReview { .. } => not_yet("local-review", "M3"),
-        Command::Check { .. } => not_yet("check", "M1"),
-        Command::Doctor { .. } => not_yet("doctor", "M1"),
+        Command::Check { path } => tinysweeper::app::check(&path),
+        Command::Doctor { path, json } => tinysweeper::app::doctor(&path, json),
         Command::Serve { .. } => not_yet("serve", "M10"),
     }
 }

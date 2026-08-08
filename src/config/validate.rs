@@ -147,7 +147,10 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
             "`models.api_key_env` is empty; it names the environment variable holding the key, never the key itself"
                 .into(),
         );
-    } else if models.api_key_env.contains(|c: char| c.is_ascii_lowercase()) {
+    } else if models
+        .api_key_env
+        .contains(|c: char| c.is_ascii_lowercase())
+    {
         // Cheap heuristic that has caught the real mistake: pasting the key in
         // where the variable name goes.
         problems.push(format!(
@@ -317,7 +320,8 @@ fn validate_automation(config: &Config, problems: &mut Vec<String>) {
 
     if stale.enabled && stale.days_until_stale == 0 {
         problems.push(
-            "`automation.stale.days_until_stale = 0` would mark everything stale immediately".into(),
+            "`automation.stale.days_until_stale = 0` would mark everything stale immediately"
+                .into(),
         );
     }
 
@@ -337,7 +341,8 @@ fn validate_automation(config: &Config, problems: &mut Vec<String>) {
 
     if automation.merge_sweep && !config.automerge.enabled {
         problems.push(
-            "`automation.merge_sweep = true` has no effect while `automerge.enabled = false`".into(),
+            "`automation.merge_sweep = true` has no effect while `automerge.enabled = false`"
+                .into(),
         );
     }
 
@@ -385,7 +390,8 @@ fn validate_sentry(config: &Config, problems: &mut Vec<String>) {
         problems.push("`sentry.enabled = true` requires `sentry.org`".into());
     }
     if sentry.projects.is_empty() {
-        problems.push("`sentry.enabled = true` requires at least one `sentry.projects` entry".into());
+        problems
+            .push("`sentry.enabled = true` requires at least one `sentry.projects` entry".into());
     }
     if sentry.max_per_run == 0 {
         problems.push(
