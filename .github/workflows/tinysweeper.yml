@@ -116,8 +116,17 @@ jobs:
           app-id: ${{ vars.TINYSWEEPER_APP_ID }}
           private-key: ${{ secrets.TINYSWEEPER_APP_PRIVATE_KEY }}
 
+      # Explicitly the default branch, never the pull request. `publish` only
+      # posts what `review` already decided from `findings.json`; it does not
+      # need the pull request's own code, and it is the one job holding a
+      # write-scoped token. Building the PR's `build.rs` and binary here
+      # would hand a same-repository PR's arbitrary code that token — the
+      # exact write-token analogue of the P1 the review job accepts as a
+      # deliberate trade-off for the model key. There is no such trade-off to
+      # make here: `apply` gains nothing from the PR's own build.
       - uses: actions/checkout@v5
         with:
+          ref: ${{ github.event.repository.default_branch }}
           submodules: true
           persist-credentials: false
 
