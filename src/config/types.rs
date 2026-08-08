@@ -584,6 +584,22 @@ impl Config {
         }
     }
 
+    /// Resolve a non-lane [`Workload`] to a concrete model id.
+    ///
+    /// Every mechanical workload runs on the cheap tier, and the `match` is
+    /// exhaustive on purpose: adding a workload should make someone state which
+    /// tier it belongs to rather than inherit whichever one happens to be
+    /// first. Repositories cannot override this the way they override a lane —
+    /// paying deep-tier prices to copy a snippet out of a diff is not a
+    /// trade-off worth exposing.
+    pub fn model_for_workload(&self, workload: Workload) -> &str {
+        match workload {
+            Workload::Relocate | Workload::Falsify | Workload::KnowledgeExtraction => {
+                &self.models.scan
+            }
+        }
+    }
+
     /// The severity at which a review blocks the merge, if it ever does.
     pub fn request_changes_at(&self) -> Option<Severity> {
         let setting = self.review.request_changes_at.trim();
