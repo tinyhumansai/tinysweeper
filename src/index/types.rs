@@ -111,6 +111,28 @@ impl Embedded {
         }
     }
 
+    /// Bill `vectors` against a token count the **provider** reported.
+    ///
+    /// The counterpart to [`Embedded::billed`], and the difference is the only
+    /// interesting thing about it: this one is not an estimate. No provider
+    /// reachable through tinyagents' `EmbeddingModel` reports usage today —
+    /// the trait returns `Vec<Vec<f32>>` and the adapters decode `data` and
+    /// discard the response's `usage` object — so nothing in this build calls
+    /// it yet. It exists so that plumbing a real count through is a one-line
+    /// change at the call site instead of a redesign of the accounting, and so
+    /// that the estimate is visibly a *fallback* rather than the only shape the
+    /// type has.
+    pub fn metered(signature: &EmbedSignature, tokens: u64, vectors: Vec<Vec<f32>>) -> Self {
+        Self {
+            vectors,
+            usage: crate::ports::model::Usage {
+                embed_tokens: tokens,
+                cost_usd: crate::harness::pricing::embedding_cost(&signature.price_key(), tokens),
+                ..Default::default()
+            },
+        }
+    }
+
     /// The single vector a query embedding produced.
     pub fn into_query_vector(mut self) -> crate::error::Result<Vec<f32>> {
         self.vectors.pop().ok_or_else(|| {
