@@ -40,6 +40,10 @@ pub struct ServerConfig {
     pub webhook_secret: String,
     /// Review configuration used when a repository has no file of its own.
     pub config: Config,
+    /// The embedding signature retrieval runs under, when retrieval is enabled.
+    ///
+    /// `None` disables retrieval entirely, which is a supported deployment.
+    pub embedding: Option<EmbedSignature>,
 }
 
 /// Everything a handler needs.
