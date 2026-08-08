@@ -71,4 +71,26 @@ pub trait ChunkIndex: Send + Sync {
 
     /// Run a hybrid dense + lexical query, best first.
     async fn query(&self, query: &HybridQuery) -> Result<Vec<ScoredChunk>>;
+
+    /// Fetch the stored chunks of specific files, without ranking them.
+    ///
+    /// Graph expansion asks a **structural** question — *what is in the files
+    /// this change reaches?* — and no similarity query can answer it. The whole
+    /// reason the graph exists is that the caller three files away shares no
+    /// vocabulary with the diff, so it will never come back from
+    /// [`ChunkIndex::query`] however the weights are tuned.
+    ///
+    /// `limit` is a hard ceiling, not a hint: a widely-imported module's
+    /// neighbourhood is thousands of chunks, and a prompt that contains the
+    /// repository is worse than one that contains nothing. Results are ordered
+    /// by `(path, start_line)` so the truncation is deterministic rather than
+    /// whatever the store happened to return first. An empty `paths` or a zero
+    /// `limit` returns nothing.
+    async fn chunks_in_paths(
+        &self,
+        signature: &EmbedSignature,
+        repo_id: &str,
+        paths: &[String],
+        limit: usize,
+    ) -> Result<Vec<Chunk>>;
 }
