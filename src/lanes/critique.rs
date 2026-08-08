@@ -137,6 +137,19 @@ impl Lane for Critique {
             let mut finding = raw.into_finding(LaneId::Critique);
             finding.line = range.map(|(start, _)| start);
             finding.end_line = range.and_then(|(start, end)| (end > start).then_some(end));
+
+            // Postability is wider than the changed-line set, so a finding can
+            // now land on a context line the pull request never touched. That
+            // is a deliberate widening, but it must not be a silent one: the
+            // noise rule is "introduced by this pull request", and a reader has
+            // to be able to tell when a finding is not. Marking it `late` is
+            // what puts the pre-existing badge on it in the summary.
+            if let Some((start, end)) = range
+                && !diff.touches_range(start, end)
+            {
+                finding.late = true;
+            }
+
             findings.push(finding);
         }
 
@@ -562,6 +575,43 @@ fn helper() {
         let outcome = run_with(model, &config(), &diffs()).await;
         assert_eq!(outcome.findings.len(), 1);
         assert!(outcome.findings[0].late);
+    }
+
+    #[tokio::test]
+    async fn a_finding_quoting_a_context_line_is_marked_pre_existing() {
+        // Postability is the hunk, which is wider than the lines this pull
+        // request changed. A finding that lands on a context line is therefore
+        // about code the author did not touch, and the reader has to be able to
+        // tell — the model did not say `late`, the diff did.
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [finding_quoting("fn main() {")]
+        }));
+
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(outcome.findings[0].line, Some(1), "the context line");
+        assert!(
+            outcome.findings[0].late,
+            "an untouched line must carry the pre-existing badge"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_finding_quoting_an_added_line_is_not_marked_pre_existing() {
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [finding_quoting("    let x = items[i];")]
+        }));
+
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1);
+        assert!(
+            !outcome.findings[0].late,
+            "this pull request introduced the line"
+        );
     }
 
     #[tokio::test]
