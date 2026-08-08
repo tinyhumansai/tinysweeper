@@ -295,14 +295,11 @@ fn lane_proposal(config: &Config, lane: LaneId, outcome: LaneOutcome) -> LanePro
 /// has already republished them verbatim, and doing it again here would report
 /// the same committed key twice.
 fn publish_unclaimed(lanes: &mut Vec<LaneProposal>, scan_findings: &[scan::types::Finding]) {
-    let ran = |lane: LaneId| {
-        lanes
-            .iter()
-            .any(|l| l.lane == lane && l.conclusion != CheckConclusion::Neutral)
-    };
-
     for owner in [LaneId::Security, LaneId::Commits] {
-        if ran(owner) {
+        let ran = lanes
+            .iter()
+            .any(|l| l.lane == owner && l.conclusion != CheckConclusion::Neutral);
+        if ran {
             continue;
         }
 
