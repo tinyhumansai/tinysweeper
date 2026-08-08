@@ -166,6 +166,31 @@ pub async fn review_with_state(
 
     let scan_findings = run_scanners(config, &diffs, &context);
 
+    // What earlier cycles already said. `review.incremental = false` opts a
+    // repository out of the whole mechanism and reviews every push from
+    // scratch, which is the setting for anyone who would rather have duplicate
+    // comments than a suppressed one.
+    let state_key = crate::state::key(&repo.to_string(), number);
+    let (prior, remembered) = if config.review.incremental {
+        (
+            load_prior(forge, repo, number).await,
+            load_remembered(store, &state_key).await,
+        )
+    } else {
+        (PriorReview::default(), None)
+    };
+
+    // Prompt layer 3 replays the evidence the last cycle sent, byte for byte,
+    // and layer 4 lists what it concluded. Both were passed empty until this
+    // landed, which made the entire cache design inert and the re-review
+    // contract in `harness::prompt` unreachable.
+    let reviewed_evidence = remembered
+        .as_ref()
+        .map(|s| s.evidence.clone())
+        .unwrap_or_default();
+    let prior_titles = merge_titles(&prior, remembered.as_ref());
+    let suppressed = suppressed_fingerprints(&prior, remembered.as_ref());
+
     let mut lanes = Vec::new();
     let mut usage = Usage::default();
     let mut models: Vec<String> = Vec::new();
