@@ -544,3 +544,38 @@ async fn a_document_round_trips_and_deletes_once() {
     assert!(!store.delete("d").await.expect("deletes"));
     assert!(store.is_empty());
 }
+
+#[tokio::test]
+async fn embedding_reports_its_token_count_apart_from_prompt_tokens() {
+    // The index is about to be the largest token count this program produces.
+    // Counting it as prompt tokens would corrupt the cache hit rate; not
+    // counting it at all is what this test exists to prevent.
+    let embedder = MockEmbedder::new(8);
+    let texts = vec!["fn alpha() {}".to_string(), "fn beta() {}".to_string()];
+
+    let embedded = embedder.embed(&texts).await.expect("embeds");
+
+    assert!(embedded.usage.embed_tokens > 0);
+    assert_eq!(embedded.usage.input_tokens, 0);
+    assert_eq!(embedded.usage.output_tokens, 0);
+}
+
+#[tokio::test]
+async fn embedding_spend_folds_into_the_same_budget_a_lane_spends_from() {
+    // Embedding is not a second budget. It lands in the same `Spend` the lanes
+    // accumulate, so the pull-request ceiling covers indexing too.
+    let embedder = MockEmbedder::with_signature(EmbedSignature::new("acme", "unlisted", 8));
+    let embedded = embedder
+        .embed(&["a fairly long chunk of source code".to_string()])
+        .await
+        .expect("embeds");
+
+    let mut spend = crate::ports::model::Spend::default();
+    spend.record("acme/unlisted", embedded.usage);
+
+    assert!(
+        spend.cost_usd() > 0.0,
+        "an embedder with no price must not be free"
+    );
+    assert_eq!(spend.models, vec!["acme/unlisted".to_string()]);
+}

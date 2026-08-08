@@ -469,6 +469,26 @@ impl KnowledgeDoc {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn an_embedder_with_no_price_is_charged_rather_than_excused() {
+        let unknown = EmbedSignature::new("acme", "unlisted", 8);
+        let billed = Embedded::billed(&unknown, &["some text to embed".to_string()], vec![vec![
+            0.0; 8
+        ]]);
+        assert!(billed.usage.embed_tokens > 0);
+        assert!(billed.usage.cost_usd > 0.0);
+    }
+
+    #[test]
+    fn the_price_key_ignores_dimensionality() {
+        // Providers bill per token for a model; a shorter output vector is the
+        // same call at the same price.
+        assert_eq!(
+            EmbedSignature::new("voyage", "voyage-code-3", 1024).price_key(),
+            EmbedSignature::new("voyage", "voyage-code-3", 256).price_key()
+        );
+    }
     use super::*;
 
     #[test]
