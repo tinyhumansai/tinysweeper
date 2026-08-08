@@ -87,6 +87,33 @@ impl FileDiff {
         self.changed_lines.range(start..=end).next().is_some()
     }
 
+    /// Whether `start..=end` falls inside a hunk of this diff.
+    ///
+    /// Wider than [`FileDiff::touches_range`] — the changed lines are a subset
+    /// of the hunk spans — and it answers a different question: *can a comment
+    /// be posted here at all?* GitHub accepts an inline comment anywhere in a
+    /// hunk, including its context lines, and rejects one outside every hunk.
+    /// A finding that resolved to code the diff never showed therefore has to
+    /// go in the summary instead, however well it resolved.
+    pub fn within_hunk(&self, start: u64, end: u64) -> bool {
+        let (start, end) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        self.hunks.iter().any(|hunk| {
+            // A hunk of pure deletions (new_lines == 0) covers no head-revision
+            // lines at all, so no inline comment can be posted. A comment would
+            // have to land at the deletion boundary, but GitHub rejects comments
+            // on nonexistent lines.
+            if hunk.new_lines == 0 {
+                return false;
+            }
+            let hunk_end = hunk.new_start + hunk.new_lines.saturating_sub(1);
+            start <= hunk_end && end >= hunk.new_start
+        })
+    }
+
     /// The added lines, as `(line number, text)`.
     ///
     /// This is what the secret scanner walks: a secret already in the base
@@ -422,6 +449,33 @@ index 1234567..89abcde 100644
         assert!(diff.touches_range(1, 5), "spans the changed lines");
         assert!(diff.touches_range(3, 1), "reversed bounds are normalised");
         assert!(!diff.touches_range(10, 20), "entirely outside the change");
+    }
+
+    #[test]
+    fn a_hunks_context_lines_are_postable_even_though_they_are_unchanged() {
+        // GitHub accepts a comment anywhere in a hunk. The changed-line set is
+        // about what this pull request did; the hunk span is about what the
+        // API will take.
+        let diff = parse_file_patch("f.txt", SIMPLE);
+
+        assert!(diff.within_hunk(1, 1), "context line inside the hunk");
+        assert!(!diff.touches(1));
+        assert!(!diff.within_hunk(99, 99), "outside every hunk");
+        assert!(diff.within_hunk(3, 1), "reversed bounds are normalised");
+    }
+
+    #[test]
+    fn a_pure_deletion_hunk_is_not_postable_because_no_new_side_lines_exist() {
+        // A hunk with only deletions (new_lines == 0) covers no head-revision
+        // lines at all. GitHub rejects inline comments on nonexistent lines, so
+        // a finding that anchors to a pure-deletion hunk must either use an
+        // old-side anchor or remain unanchored.
+        let diff = parse_file_patch("f.txt", "@@ -4,2 +3,0 @@\n-gone();\n-also();\n");
+        assert!(
+            !diff.within_hunk(3, 3),
+            "pure-deletion hunks are not postable"
+        );
+        assert!(!diff.within_hunk(4, 4));
     }
 
     #[test]

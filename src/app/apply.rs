@@ -60,9 +60,15 @@ pub async fn apply(
     let event = review_event(config, proposal, blocking_now);
     let comments = inline_comments(proposal);
 
-    // An Approve is submitted even with nothing to say, because its entire job
-    // is to clear the previous block.
-    if !comments.is_empty() || event == ReviewEvent::Approve {
+    // Submit a review if:
+    // - there are inline comments to post, or
+    // - the verdict is Approve (clears a previous block), or
+    // - the verdict is RequestChanges (blocks the merge, even if only in the summary).
+    // Blocking verdicts must be submitted even without inline comments, because
+    // findings that could not be anchored to lines still appear in the summary
+    // and need the blocking verdict on GitHub to enforce the gate.
+    if !comments.is_empty() || event == ReviewEvent::Approve || event == ReviewEvent::RequestChanges
+    {
         write
             .create_review(
                 &repo,
@@ -363,6 +369,36 @@ mod tests {
         assert_eq!(event, ReviewEvent::RequestChanges);
         assert!(body.contains("Requesting changes"), "{body}");
         assert!(body.contains("**high**"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn an_unanchored_blocking_finding_still_submits_the_request_changes_verdict() {
+        // When a finding could not be anchored to a line, it has no inline
+        // comment but still appears in the review body/summary. The RequestChanges
+        // verdict must still be submitted to enforce the gate, even though no
+        // inline comments are present.
+        let mut unanchored = finding();
+        unanchored.line = None;
+
+        let forge = forge("abc123");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![unanchored]),
+        )
+        .await
+        .expect("applies");
+
+        let (body, event) = review_of(&forge).expect("a review was posted");
+        assert_eq!(event, ReviewEvent::RequestChanges);
+        assert!(body.contains("Requesting changes"), "{body}");
+        // No inline comments because the finding is unanchored
+        let writes = forge.writes();
+        assert!(!writes.iter().any(|w| matches!(w, Write::Review {
+            comments,
+            ..
+        } if !comments.is_empty())));
     }
 
     #[tokio::test]

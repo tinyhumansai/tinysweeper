@@ -128,6 +128,10 @@ pub async fn review(
 
     let scan_findings = run_scanners(config, &diffs, &context);
 
+    // No checkout on the forge-only path, so `src/position` has no whole-file
+    // fallback to run. It degrades to hunk matching rather than failing.
+    let file_contents = std::collections::BTreeMap::new();
+
     let mut lanes = Vec::new();
     let mut usage = Usage::default();
     let mut models: Vec<String> = Vec::new();
@@ -155,6 +159,7 @@ pub async fn review(
                 config,
                 pull_request: &context.pull_request,
                 diffs: &diffs,
+                file_contents: &file_contents,
                 scan_findings: &scan_findings,
                 repo_policy: repo_policy().as_deref(),
                 reviewed_evidence: "",
