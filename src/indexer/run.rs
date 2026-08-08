@@ -155,7 +155,9 @@ impl<'a> Indexer<'a> {
         // been deleted or newly ignored, and its chunks have to go.
         let seen: BTreeSet<&String> = selection.selected.iter().collect();
         let removed: Vec<String> = self
-            
+            .manifest
+            .paths(repo_id, &signature)
+            .await?
             .into_iter()
             .filter(|path| !seen.contains(path))
             .collect();
