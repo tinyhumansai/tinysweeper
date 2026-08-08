@@ -194,7 +194,7 @@ async fn a_resolvable_snippet_never_spends_a_model_call() {
     let model = MockModel::new();
     let config = config();
     let diff = diff();
-    let mut usage = Usage::default();
+    let mut spend = Spend::default();
 
     let resolution = Positioner::new(&model, &config)
         .resolve(
@@ -205,7 +205,7 @@ async fn a_resolvable_snippet_never_spends_a_model_call() {
                 comment: "…",
                 rendered_diff: PATCH,
             },
-            &mut usage,
+            &mut spend,
         )
         .await;
 
@@ -220,7 +220,7 @@ async fn a_hopeless_snippet_is_recovered_by_the_relocation_call() {
     }));
     let config = config();
     let diff = diff();
-    let mut usage = Usage::default();
+    let mut spend = Spend::default();
 
     let resolution = Positioner::new(&model, &config)
         .resolve(
@@ -231,7 +231,7 @@ async fn a_hopeless_snippet_is_recovered_by_the_relocation_call() {
                 comment: "Guard the index before dereferencing",
                 rendered_diff: PATCH,
             },
-            &mut usage,
+            &mut spend,
         )
         .await;
 
@@ -248,7 +248,7 @@ async fn a_failed_relocation_leaves_the_finding_unanchored_rather_than_wrong() {
     let model = MockModel::new().then(json!({"existing_code": "let z = elsewhere();"}));
     let config = config();
     let diff = diff();
-    let mut usage = Usage::default();
+    let mut spend = Spend::default();
 
     let resolution = Positioner::new(&model, &config)
         .resolve(
@@ -259,7 +259,7 @@ async fn a_failed_relocation_leaves_the_finding_unanchored_rather_than_wrong() {
                 comment: "…",
                 rendered_diff: PATCH,
             },
-            &mut usage,
+            &mut spend,
         )
         .await;
 
@@ -271,7 +271,7 @@ async fn a_relocation_call_that_errors_does_not_fail_the_resolution() {
     let model = MockModel::new().then_error("upstream exploded");
     let config = config();
     let diff = diff();
-    let mut usage = Usage::default();
+    let mut spend = Spend::default();
 
     let resolution = Positioner::new(&model, &config)
         .resolve(
@@ -282,12 +282,12 @@ async fn a_relocation_call_that_errors_does_not_fail_the_resolution() {
                 comment: "…",
                 rendered_diff: PATCH,
             },
-            &mut usage,
+            &mut spend,
         )
         .await;
 
     assert!(!resolution.is_anchored());
-    assert_eq!(usage, Usage::default(), "a failed call bills nothing");
+    assert_eq!(spend, Spend::default(), "a failed call bills nothing");
 }
 
 #[tokio::test]
@@ -302,7 +302,7 @@ async fn relocation_usage_is_accounted_for() {
         });
     let config = config();
     let diff = diff();
-    let mut usage = Usage::default();
+    let mut spend = Spend::default();
 
     Positioner::new(&model, &config)
         .resolve(
@@ -313,7 +313,7 @@ async fn relocation_usage_is_accounted_for() {
                 comment: "…",
                 rendered_diff: PATCH,
             },
-            &mut usage,
+            &mut spend,
         )
         .await;
 

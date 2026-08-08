@@ -10,6 +10,7 @@
 //! silently misbehaves when a model phrases something differently.
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::Result;
@@ -80,7 +81,12 @@ pub struct ModelResponse {
 }
 
 /// Token and cost accounting for one call.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+///
+/// Serializable because it is carried in the proposal `apply` publishes from,
+/// and `serde(default)` throughout so a proposal written before a counter
+/// existed still loads.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Usage {
     /// Prompt tokens.
     pub input_tokens: u64,

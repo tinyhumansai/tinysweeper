@@ -150,13 +150,14 @@ async fn review_file(
         })
         .await?;
 
+    let spend = Spend::of(&response);
     let parsed = schema::parse(LaneId::Security, response.value)?;
     let outcome = LaneOutcome::from_response(
         LaneId::Security,
         parsed,
         std::slice::from_ref(diff),
         Anchoring::Strict,
-        Spend::of(&response),
+        spend,
     );
 
     Ok(FileReview {
