@@ -69,7 +69,7 @@ impl AppAuth {
         let key = EncodingKey::from_rsa_pem(pem.as_bytes()).map_err(|err| {
             Error::Forge(format!("the app private key is not a usable PEM: {err}"))
         })?;
-        Ok(Self::with_key(app_id, key)?)
+        Self::with_key(app_id, key)
     }
 
     /// Build from an app id and a DER private key.
@@ -259,7 +259,15 @@ mod tests {
     fn github_expiry_timestamps_parse() {
         let parsed = parse_expiry("2026-08-08T14:30:00Z").expect("parses");
         let seconds = parsed.duration_since(UNIX_EPOCH).unwrap().as_secs();
-        assert_eq!(seconds, 1_785_162_600);
+        assert_eq!(seconds, 1_786_199_400);
+
+        // A leap year, and a date before March, which is where the civil-from-
+        // days algorithm is easiest to get wrong.
+        let leap = parse_expiry("2024-02-29T00:00:00Z").expect("parses");
+        assert_eq!(
+            leap.duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            1_709_164_800
+        );
     }
 
     #[test]

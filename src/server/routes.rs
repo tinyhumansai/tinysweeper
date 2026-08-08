@@ -25,7 +25,9 @@ use crate::server::webhook::{self, Action, Payload};
 /// How many reviews may run at once.
 ///
 /// Each one holds a model call open for minutes, so the limit is about spend
-/// and rate limits rather than CPU.
+/// and rate limits rather than CPU. Keep it low: a repository-wide force-push
+/// delivers a burst, and an unbounded worker pool turns that into an unbounded
+/// bill.
 const MAX_CONCURRENT_REVIEWS: usize = 4;
 
 /// How the server was configured.
@@ -258,14 +260,27 @@ async fn run_and_publish(
 mod tests {
     use super::*;
 
-    #[test]
-    fn concurrency_is_bounded_so_a_burst_cannot_run_up_a_bill() {
-        // Each review holds a model call open for minutes. Without a cap, a
-        // repository-wide force-push is an unbounded spend.
-        assert!(MAX_CONCURRENT_REVIEWS >= 1);
+    #[tokio::test]
+    async fn the_permit_pool_actually_bounds_concurrency() {
+        // Asserting on the constant would be a tautology; this asserts the
+        // semaphore behaves, which is what stops a delivery burst becoming an
+        // unbounded bill.
+        let permits = Arc::new(Semaphore::new(MAX_CONCURRENT_REVIEWS));
+        let mut held = Vec::new();
+        for _ in 0..MAX_CONCURRENT_REVIEWS {
+            held.push(permits.clone().acquire_owned().await.expect("acquires"));
+        }
+
+        assert_eq!(permits.available_permits(), 0);
         assert!(
-            MAX_CONCURRENT_REVIEWS <= 16,
-            "a high cap turns one busy minute into a large bill"
+            permits.clone().try_acquire_owned().is_err(),
+            "a review beyond the cap must wait rather than start"
+        );
+
+        drop(held.pop());
+        assert!(
+            permits.try_acquire_owned().is_ok(),
+            "a freed slot is reusable"
         );
     }
 }

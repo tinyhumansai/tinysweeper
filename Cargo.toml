@@ -63,7 +63,10 @@ tinyagents = { path = "vendor/tinyagents", optional = true }
 # comment still emit no webhook, so that state is polled either way.
 axum = { version = "0.8", optional = true }
 hmac = { version = "0.13", optional = true }
-jsonwebtoken = { version = "11", optional = true }
+# `rust_crypto` picks the provider explicitly: jsonwebtoken 11 panics at the
+# first signature if neither backend feature is chosen, and a panic on the
+# first webhook is a bad way to discover a build flag.
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto"], optional = true }
 mongodb = { version = "3", optional = true }
 bson = { version = "2", optional = true }
 subtle = { version = "2", optional = true }
