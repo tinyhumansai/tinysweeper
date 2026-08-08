@@ -217,6 +217,13 @@ fn lane_proposal(config: &Config, lane: LaneId, outcome: LaneOutcome) -> LanePro
     let gate = config.severity_gate();
     let minimum = config.review.confidence_min;
 
+    // `RawFinding::into_finding` scrubs a finding's own title and body, but
+    // the lane summary is free text the model wrote, and a model asked to
+    // review a diff containing a credential routinely repeats it back. This
+    // is the last stop before that text is serialized into the proposal,
+    // printed to CI logs, and rendered into a check-run summary.
+    let outcome_summary = scan::secrets::scrub(&outcome.summary);
+
     // The conclusion is decided from every confidence-qualified finding,
     // before the posting gate below hides some of them from view. A
     // `severity_gate` configured above a lane's `fail_on` (e.g. gate=high,
