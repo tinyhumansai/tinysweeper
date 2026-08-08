@@ -1,12 +1,15 @@
 //! The `tinysweeper` command-line entry point.
 //!
-//! One binary, three entry points that matter. `review` is what the GitHub Action
-//! runs, and `local-review` is the same engine over a local git range with no
-//! GitHub item and no tokens — which is how prompt changes get iterated without
-//! burning pull requests.
+//! One binary, three entry points that matter. `serve` runs the webhook server,
+//! which is how tinysweeper reaches every installed repository without a
+//! workflow file in any of them — it is the only distribution path, since the
+//! GitHub Actions one was removed.
 //!
-//! `serve` runs the webhook server, which is how tinysweeper reaches many
-//! repositories without a workflow file in each of them.
+//! `review` and `apply` are the same engine driven by hand against one pull
+//! request, kept for operator use and for debugging a delivery the server
+//! already handled. `local-review` is that engine over a local git range with
+//! no GitHub item and no tokens — which is how prompt changes get iterated
+//! without burning pull requests.
 
 use clap::{Parser, Subcommand};
 use tinysweeper::Result;
