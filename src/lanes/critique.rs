@@ -19,10 +19,10 @@ use async_trait::async_trait;
 
 use crate::config::types::LaneId;
 use crate::error::Result;
-use crate::evidence::diff::FileDiff;
-use crate::findings::types::Finding;
+use crate::evidence::diff::render as render_diffs;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
+use crate::lanes::anchor::anchored_in_diff;
 use crate::lanes::{Lane, LaneInput, LaneOutcome};
 use crate::ports::model::{Message, Model, ModelRequest};
 
