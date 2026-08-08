@@ -3,6 +3,8 @@
 //! [`mock::MockForge`] is always compiled: it backs the entire test suite and
 //! `--dry-run`. The real GitHub adapter arrives behind the `github` feature.
 
+#[cfg(feature = "github")]
+pub mod github;
 pub mod mock;
 pub mod types;
 

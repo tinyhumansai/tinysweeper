@@ -80,10 +80,19 @@ jobs:
       - name: Check all features
         run: cargo check --locked --all-features --all-targets
 
+  # Builds on every pull request; pushes only from main. A pull request must
+  # never be able to publish an image tag, because the image is what downstream
+  # repositories would run.
   docker:
     name: Docker
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # No `packages: write` here. This job runs on pull requests, and a token
+    # able to publish an image is a token a pull request should never hold —
+    # the image is what downstream repositories run. Publishing happens in the
+    # separate job below, which only runs on main.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -97,5 +106,49 @@ jobs:
         with:
           context: .
           push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  docker-publish:
+    name: Docker (publish)
+    needs: docker
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=sha,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

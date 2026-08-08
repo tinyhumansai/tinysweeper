@@ -19,6 +19,8 @@ pub mod harness;
 pub mod lanes;
 pub mod ports;
 pub mod scan;
+#[cfg(feature = "serve")]
+pub mod server;
 
 pub use crate::error::{Error, Result};
 
