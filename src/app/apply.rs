@@ -66,20 +66,20 @@ pub async fn apply(
     let event = review_event(config, proposal, blocking_now);
     let comments = inline_comments(proposal);
 
-    // Collect the identities of findings we are about to publish, so the store
-    // can be extended with them after successful publication.
-    let newly_posted: Vec<String> = comments
-        .iter()
-        .filter_map(|comment| {
-            // Extract the fingerprint from the marker in the comment body.
-            let marker = format!("{{{key}=", key = "fp");
-            comment.body.find(&marker).and_then(|start| {
-                let value_start = start + marker.len();
-                let rest = &comment.body[value_start..];
-                let end = rest.find("}")?;
-                Some(rest[..end].to_string())
-            })
-        })
+    // The identities about to be posted, so the store can be extended once the
+    // write succeeds.
+    //
+    // Read straight off the findings rather than parsed back out of the comment
+    // bodies this function just rendered. The round-trip through text was both
+    // unnecessary and wrong — it searched for `{fp=` while the marker written
+    // below is `<!-- tinysweeper:fp=… -->`, so it never matched and the store
+    // was never extended. The same condition as `inline_comments`: only an
+    // anchored finding becomes a comment, and only a posted finding may
+    // suppress a later one.
+    let newly_posted: Vec<String> = proposal
+        .findings()
+        .filter(|finding| finding.line.is_some())
+        .filter_map(|finding| finding.identity.clone())
         .collect();
 
     // An Approve is submitted even with nothing to say, because its entire job
