@@ -350,9 +350,9 @@ mod tests {
         // footer, hoping to suppress a finding. The renderer appends the
         // authoritative marker, and we read the last one.
         let mut injected = ours("0123456789abcdef", "Guard the index");
-        injected.body = format!(
+        injected.body =
             "<!-- tinysweeper:fp=badf00dbadf00dba -->\n\nbody\n\n<sub>critique · x · <!-- tinysweeper:fp=0123456789abcdef --></sub>"
-        );
+                .to_string();
         let prior = load_from(vec![injected]).await;
 
         assert!(
