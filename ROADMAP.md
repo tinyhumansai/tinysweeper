@@ -26,8 +26,10 @@ Engineering milestones. Each one is a shippable slice with its own verification.
   writing.
 - **M6 — the real forge.** octocrab adapter, incremental review, the three-stage
   cache with metrics and leases, and the `@tinysweeper` command router.
-- **M7 — delivery.** The composite action, example workflows, Docker image, and
-  the release and e2e workflows.
+- **M7 — delivery.** The GitHub App: the webhook server, its store, the admin
+  API, and the Docker image. The composite action and reusable workflow that
+  this milestone originally called for were built and then removed — see
+  "Removed" below.
 - **M8 — auto-merge.** Gate policy, label gating, and the merge path.
 
 ## Later
@@ -35,15 +37,32 @@ Engineering milestones. Each one is a shippable slice with its own verification.
 - **M9 — the rest of the scope.** Issue triage, the automator, and Sentry issues
   promoted into GitHub issues.
 
+## Removed
+
+- **The GitHub Actions distribution path.** The composite action, the reusable
+  `review.yml` every other repository was told to call, and this repository's
+  own `tinysweeper.yml`. All deleted; the server is the only surface.
+
+  The reusable workflow downloaded a release binary from a `v1` tag that was
+  never created and that nothing produced, so it was broken for every
+  repository except this one — where `tinysweeper.yml` deliberately built from
+  source and hid the gap (issue #20). The choice was to build a release
+  pipeline for a path we no longer want, or to delete the path. We deleted it.
+
+  The earlier argument for Actions-only was that Actions receives every event a
+  server would. True, and not the deciding factor: a contributor whitelist is a
+  fact about a *person over time* and a stateless job has nowhere to keep one,
+  43 repositories' worth of runner minutes is real money for work that is
+  mostly waiting on a model, and replying to a comment within seconds needs an
+  event loop rather than a cold runner.
+
+  The security boundary the two-job workflow enforced is unchanged and is now
+  enforced by the type system instead: lanes take a `ForgeRead`, only
+  `src/apply` takes a `ForgeWrite`, and the installation token used for writing
+  is minted in `src/server/routes.rs` only after `app::review` has returned.
+
 ## Not planned
 
-- **A webhook server.** Decided against, deliberately. Actions already receives
-  every repository event a server would have subscribed to, and the two things
-  people usually buy a server for — reacting to a resolved review thread or a 👎
-  reaction — have no webhook event at all, so a server could not do them either.
-  Repositories opt in through the reusable workflow in
-  `.github/workflows/review.yml`; rolling out to another repository is one file,
-  and the review logic stays in one place. See `docs/triggers.md`.
 - A hosted public service. tinysweeper is meant to run in your own org, on your
   own key.
 - Executing contributor code. See the security boundary in `AGENTS.md`.

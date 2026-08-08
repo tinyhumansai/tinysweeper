@@ -404,7 +404,7 @@ fn run_scanners(
 
 /// Repository policy for the prompt: this repository's own `AGENTS.md`.
 ///
-/// Read from the checkout rather than the API — the workflow already has the
+/// Read from the checkout rather than the API — the reviewer already has the
 /// tree, and reading a file is cheaper and more reliable than another request.
 fn repo_policy() -> Option<String> {
     for candidate in ["AGENTS.md", "CLAUDE.md", ".github/AGENTS.md"] {
