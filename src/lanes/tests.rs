@@ -72,6 +72,7 @@ impl Lane for Tests {
 
         let built = prompt::build(&PromptInputs {
             repo_policy: input.repo_policy,
+            extracted_rules: input.extracted_rules,
             reviewed_evidence: input.reviewed_evidence,
             prior_findings: input.prior_findings,
             new_evidence: &evidence,
@@ -340,6 +341,7 @@ mod lane_tests {
                 scan_findings: &[],
                 commits: &[],
                 repo_policy: None,
+                extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
             })

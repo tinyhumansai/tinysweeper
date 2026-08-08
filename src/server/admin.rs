@@ -13,11 +13,17 @@
 //! and every path under `/admin` 404s, because the alternative to fail-closed
 //! here is shipping an unauthenticated write endpoint.
 //!
-//! Contributor trust is complete. Index status and knowledge documents are
-//! declared but return `501`: the stores behind them land in another
+//! Contributor trust and knowledge documents are complete. Index status is
+//! declared but returns `501`: the store behind it lands in another
 //! workstream, and the same reasoning that declares every CLI subcommand up
 //! front applies here — a stable coordinate shape lets the caller be written
-//! now. Each stub is marked `TODO(knowledge-store)` / `TODO(index-store)`.
+//! now. That stub is marked `TODO(index-store)`.
+//!
+//! The knowledge routes are the write side of the knowledge centre. A document
+//! body reaches a review prompt, so these endpoints are the *only* trusted way
+//! into it: a repository's own `AGENTS.md` gets the sandboxed extraction pass
+//! in `crate::knowledge::extract` instead, precisely because nobody
+//! authenticated wrote it.
 
 use axum::extract::{Path, Request, State};
 use axum::http::StatusCode;
@@ -32,6 +38,9 @@ use std::sync::Arc;
 use subtle::ConstantTimeEq;
 
 use crate::error::{Error, Result};
+use crate::index::types::{KnowledgeDoc, KnowledgeScope};
+use crate::knowledge::types::{doc_id, valid_slug};
+use crate::ports::knowledge::KnowledgeStore;
 use crate::server::store::{Contributor, Store, Trust};
 
 /// Shortest admin token the server will start with.
@@ -108,7 +117,43 @@ impl AdminAuth {
 #[derive(Clone)]
 struct AdminState {
     store: Store,
+    /// The curated-document store. `None` when the deployment has no
+    /// retrieval database, in which case the knowledge routes answer `503`
+    /// rather than pretending to have written something.
+    knowledge: Option<Arc<dyn KnowledgeStore>>,
     auth: Arc<AdminAuth>,
+}
+
+impl AdminState {
+    /// The knowledge store, or the error a caller can act on.
+    fn knowledge(&self) -> std::result::Result<&dyn KnowledgeStore, ApiError> {
+        self.knowledge.as_deref().ok_or_else(|| {
+            ApiError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no knowledge store is configured on this deployment".into(),
+            )
+        })
+    }
+}
+
+/// A knowledge document as the admin API accepts it.
+///
+/// The id and the scope are not in the body: they come from the path, so a
+/// request cannot claim one scope in its URL and write another into the
+/// database.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct KnowledgeRequest {
+    /// A short human title, shown to nobody but read by the model.
+    pub title: String,
+    /// The document body, injected into review prompts.
+    pub body: String,
+    /// Whether it goes into every prompt in scope rather than waiting for
+    /// retrieval. Pinning is expensive by design — see the port's docs.
+    #[serde(default)]
+    pub pinned: bool,
+    /// Free-form tags for filtering.
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// How a trust decision arrives.
@@ -127,10 +172,15 @@ pub struct TrustRequest {
 /// Returning `None` rather than an unguarded router is the fail-closed
 /// half of the decision: a misconfigured deployment loses the admin API, it
 /// does not expose it.
-pub fn router(store: Store, auth: Option<AdminAuth>) -> Option<Router> {
+pub fn router(
+    store: Store,
+    knowledge: Option<Arc<dyn KnowledgeStore>>,
+    auth: Option<AdminAuth>,
+) -> Option<Router> {
     let auth = auth?;
     let state = AdminState {
         store,
+        knowledge,
         auth: Arc::new(auth),
     };
 
@@ -142,7 +192,7 @@ pub fn router(store: Store, auth: Option<AdminAuth>) -> Option<Router> {
         // Index status and re-index. TODO(index-store).
         .route("/admin/index/{owner}/{name}", get(index_status))
         .route("/admin/index/{owner}/{name}/reindex", post(reindex))
-        // Knowledge documents, org- and repo-scoped. TODO(knowledge-store).
+        // Knowledge documents, org- and repo-scoped.
         .route("/admin/knowledge/org/{owner}", get(list_org_knowledge))
         .route(
             "/admin/knowledge/org/{owner}/{slug}",
@@ -183,6 +233,7 @@ async fn guard(State(state): State<AdminState>, request: Request, next: Next) ->
 }
 
 /// An error shaped like the rest of the API's JSON.
+#[derive(Debug)]
 struct ApiError(StatusCode, String);
 
 impl IntoResponse for ApiError {
@@ -252,63 +303,148 @@ async fn reindex(
 }
 
 async fn list_org_knowledge(
+    State(state): State<AdminState>,
     Path(owner): Path<String>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let _ = owner;
-    Err(not_implemented(
-        "org knowledge documents",
-        "TODO(knowledge-store)",
-    ))
+    let owner = valid_login(&owner)?;
+    list_docs(state.knowledge()?, KnowledgeScope::org(owner)).await
 }
 
 async fn put_org_knowledge(
+    State(state): State<AdminState>,
     Path((owner, slug)): Path<(String, String)>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let _ = (owner, slug);
-    Err(not_implemented(
-        "org knowledge documents",
-        "TODO(knowledge-store)",
-    ))
+    Json(body): Json<KnowledgeRequest>,
+) -> std::result::Result<Json<KnowledgeDoc>, ApiError> {
+    let owner = valid_login(&owner)?;
+    write_doc(state.knowledge()?, KnowledgeScope::org(owner), &slug, body).await
 }
 
 async fn delete_org_knowledge(
+    State(state): State<AdminState>,
     Path((owner, slug)): Path<(String, String)>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let _ = (owner, slug);
-    Err(not_implemented(
-        "org knowledge documents",
-        "TODO(knowledge-store)",
-    ))
+    let owner = valid_login(&owner)?;
+    delete_doc(state.knowledge()?, KnowledgeScope::org(owner), &slug).await
 }
 
 async fn list_repo_knowledge(
+    State(state): State<AdminState>,
     Path((owner, name)): Path<(String, String)>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let _ = (owner, name);
-    Err(not_implemented(
-        "repo knowledge documents",
-        "TODO(knowledge-store)",
-    ))
+    list_docs(state.knowledge()?, repo_scope(&owner, &name)?).await
 }
 
 async fn put_repo_knowledge(
+    State(state): State<AdminState>,
     Path((owner, name, slug)): Path<(String, String, String)>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let _ = (owner, name, slug);
-    Err(not_implemented(
-        "repo knowledge documents",
-        "TODO(knowledge-store)",
-    ))
+    Json(body): Json<KnowledgeRequest>,
+) -> std::result::Result<Json<KnowledgeDoc>, ApiError> {
+    write_doc(state.knowledge()?, repo_scope(&owner, &name)?, &slug, body).await
 }
 
 async fn delete_repo_knowledge(
+    State(state): State<AdminState>,
     Path((owner, name, slug)): Path<(String, String, String)>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let _ = (owner, name, slug);
-    Err(not_implemented(
-        "repo knowledge documents",
-        "TODO(knowledge-store)",
-    ))
+    delete_doc(state.knowledge()?, repo_scope(&owner, &name)?, &slug).await
+}
+
+/// Every document visible from `scope`, pinned ones first.
+///
+/// A repository listing includes its organisation's documents, because that is
+/// what a review at that scope actually sees — a listing that hid them would
+/// have an operator hunting for a rule that is being applied.
+async fn list_docs(
+    store: &dyn KnowledgeStore,
+    scope: KnowledgeScope,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let mut documents = store.pinned(&scope).await?;
+    documents.extend(store.retrievable(&scope).await?);
+    documents.sort_by(|a, b| b.pinned.cmp(&a.pinned).then_with(|| a.id.cmp(&b.id)));
+
+    Ok(Json(json!({ "documents": documents })))
+}
+
+/// Insert or replace one document.
+async fn write_doc(
+    store: &dyn KnowledgeStore,
+    scope: KnowledgeScope,
+    slug: &str,
+    body: KnowledgeRequest,
+) -> std::result::Result<Json<KnowledgeDoc>, ApiError> {
+    let slug = checked_slug(slug)?;
+
+    let title = body.title.trim();
+    if title.is_empty() {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "a knowledge document needs a title".into(),
+        ));
+    }
+    if body.body.trim().is_empty() {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "a knowledge document needs a body".into(),
+        ));
+    }
+
+    let doc = KnowledgeDoc {
+        id: doc_id(&scope, &slug),
+        scope,
+        title: title.to_string(),
+        body: body.body,
+        pinned: body.pinned,
+        tags: body.tags,
+    };
+    store.put(&doc).await?;
+    // Logged deliberately, like a trust change: a pinned document is applied to
+    // every review in scope, and that should be reconstructable from the logs.
+    tracing::info!(id = %doc.id, pinned = doc.pinned, "admin wrote a knowledge document");
+
+    Ok(Json(doc))
+}
+
+/// Delete one document, reporting whether it was there.
+async fn delete_doc(
+    store: &dyn KnowledgeStore,
+    scope: KnowledgeScope,
+    slug: &str,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let slug = checked_slug(slug)?;
+    let id = doc_id(&scope, &slug);
+
+    // 404 rather than a silent success: an operator deleting a document by the
+    // wrong name must find out, because the document they meant to remove is
+    // still being injected into every review.
+    if !store.delete(&id).await? {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            format!("no knowledge document `{id}`"),
+        ));
+    }
+    tracing::info!(%id, "admin deleted a knowledge document");
+
+    Ok(Json(json!({ "deleted": id })))
+}
+
+/// The repository scope for an `owner`/`name` pair, both checked.
+fn repo_scope(owner: &str, name: &str) -> std::result::Result<KnowledgeScope, ApiError> {
+    let owner = valid_login(owner)?;
+    let name = valid_login(name)?;
+    Ok(KnowledgeScope::repo(format!("{owner}/{name}")))
+}
+
+/// Accept only a slug that is safe as part of a document id.
+fn checked_slug(slug: &str) -> std::result::Result<String, ApiError> {
+    let slug = slug.trim();
+    if valid_slug(slug) {
+        Ok(slug.to_string())
+    } else {
+        Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "a document slug is 1-64 characters of letters, digits, `.`, `_` or `-`".into(),
+        ))
+    }
 }
 
 /// Accept only something that could be a GitHub login.
@@ -425,5 +561,132 @@ mod tests {
             serde_json::from_str::<TrustRequest>(r#"{"trust":"vibes"}"#).is_err(),
             "an unknown trust level must not silently become Unknown"
         );
+    }
+
+    fn request(title: &str, body: &str, pinned: bool) -> KnowledgeRequest {
+        KnowledgeRequest {
+            title: title.into(),
+            body: body.into(),
+            pinned,
+            tags: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_document_round_trips_through_the_admin_shapes() {
+        let store = crate::index::MockKnowledgeStore::new();
+        let scope = KnowledgeScope::org("acme");
+
+        let written = write_doc(
+            &store,
+            scope.clone(),
+            "style",
+            request("Style", "Tabs.", true),
+        )
+        .await
+        .expect("writes")
+        .0;
+        assert_eq!(written.id, "org:acme:style");
+        assert!(written.pinned);
+
+        let listed = list_docs(&store, scope.clone()).await.expect("lists").0;
+        assert_eq!(listed["documents"].as_array().expect("array").len(), 1);
+
+        let _ = delete_doc(&store, scope.clone(), "style")
+            .await
+            .expect("deletes");
+        let listed = list_docs(&store, scope).await.expect("lists").0;
+        assert!(listed["documents"].as_array().expect("array").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_repository_listing_includes_its_organisation_documents() {
+        // What a review at that scope actually sees. A listing that hid them
+        // would have an operator hunting for a rule that is being applied.
+        let store = crate::index::MockKnowledgeStore::new();
+        let _ = write_doc(
+            &store,
+            KnowledgeScope::org("acme"),
+            "org-wide",
+            request("Org", "No unwrap.", true),
+        )
+        .await
+        .expect("writes");
+        let _ = write_doc(
+            &store,
+            KnowledgeScope::repo("acme/app"),
+            "local",
+            request("Repo", "Tabs.", false),
+        )
+        .await
+        .expect("writes");
+
+        let listed = list_docs(&store, KnowledgeScope::repo("acme/app"))
+            .await
+            .expect("lists")
+            .0;
+        let documents = listed["documents"].as_array().expect("array");
+        assert_eq!(documents.len(), 2);
+        assert_eq!(
+            documents[0]["_id"], "org:acme:org-wide",
+            "pinned documents are listed first"
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_a_document_that_is_not_there_is_a_404() {
+        // A silent success would leave the operator believing a document they
+        // meant to remove is gone while it is still in every review.
+        let store = crate::index::MockKnowledgeStore::new();
+        let err = delete_doc(&store, KnowledgeScope::org("acme"), "absent")
+            .await
+            .expect_err("404s");
+        assert_eq!(err.0, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn an_empty_title_or_body_is_refused() {
+        let store = crate::index::MockKnowledgeStore::new();
+        let scope = KnowledgeScope::org("acme");
+        for bad in [request("  ", "body", false), request("Title", " \n", false)] {
+            let err = write_doc(&store, scope.clone(), "slug", bad)
+                .await
+                .expect_err("refused");
+            assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_slug_is_checked_before_it_becomes_a_document_id() {
+        let store = crate::index::MockKnowledgeStore::new();
+        let err = write_doc(
+            &store,
+            KnowledgeScope::org("acme"),
+            "../../etc",
+            request("T", "B", false),
+        )
+        .await
+        .expect_err("refused");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn a_repository_scope_needs_two_plausible_halves() {
+        assert!(repo_scope("acme", "app").is_ok());
+        assert!(repo_scope("acme", "../etc").is_err());
+        assert!(repo_scope("", "app").is_err());
+    }
+
+    #[test]
+    fn a_knowledge_request_parses_the_documented_shape() {
+        let body: KnowledgeRequest =
+            serde_json::from_str(r#"{"title":"Style","body":"Tabs.","pinned":true}"#)
+                .expect("parses");
+        assert!(body.pinned);
+        assert!(body.tags.is_empty());
+
+        let bare: KnowledgeRequest =
+            serde_json::from_str(r#"{"title":"Style","body":"Tabs."}"#).expect("parses");
+        assert!(!bare.pinned, "pinning is opt-in: it costs every review");
     }
 }

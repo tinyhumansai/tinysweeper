@@ -21,6 +21,7 @@ use crate::error::{Error, Result};
 use crate::forge::RepoId;
 use crate::index::mongo::MongoIndex;
 use crate::index::types::EmbedSignature;
+use crate::ports::knowledge::KnowledgeStore;
 use crate::server::admin::{self, AdminAuth};
 use crate::server::auth::AppAuth;
 use crate::server::store::{Store, Trust};
@@ -57,6 +58,9 @@ pub struct ServerConfig {
 struct AppState {
     config: Arc<ServerConfig>,
     store: Store,
+    /// Curated knowledge documents. `None` when no retrieval database is
+    /// reachable: the review still runs, without pinned context.
+    knowledge: Option<Arc<dyn KnowledgeStore>>,
     auth: Arc<AppAuth>,
     permits: Arc<Semaphore>,
 }
@@ -72,6 +76,22 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
     // that into a refusal to start, which is the failure an operator can act
     // on. It must not degrade to "retrieval off": a silently unindexed reviewer
     // still posts reviews, just worse ones.
+    // The knowledge store is opened whether or not retrieval is on: curated
+    // documents are looked up by scope, not by vector, so they work on a
+    // deployment with no embedding provider at all. A database that cannot be
+    // opened costs pinned context and the admin knowledge routes; it does not
+    // stop the server, because reviews are the thing that must keep running.
+    let knowledge: Option<Arc<dyn KnowledgeStore>> = match MongoIndex::from_env().await {
+        Ok(index) => {
+            index.knowledge.prepare().await?;
+            Some(Arc::new(index.knowledge))
+        }
+        Err(err) => {
+            tracing::warn!(%err, "no knowledge store: curated documents are unavailable");
+            None
+        }
+    };
+
     if let Some(signature) = &config.embedding {
         tracing::info!(%signature, "verifying MongoDB hybrid search");
         MongoIndex::from_env().await?.prepare(signature).await?;
@@ -84,6 +104,7 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
     let state = AppState {
         config: Arc::new(config),
         store: store.clone(),
+        knowledge: knowledge.clone(),
         auth: Arc::new(auth),
         permits: Arc::new(Semaphore::new(MAX_CONCURRENT_REVIEWS)),
     };
@@ -96,7 +117,7 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
     // Mounted only when a token is configured. An admin router without a
     // credential would be an unauthenticated write endpoint on the public
     // internet, so its absence is the safe failure.
-    match admin::router(store, admin_auth) {
+    match admin::router(store, knowledge, admin_auth) {
         Some(admin) => {
             app = app.merge(admin);
             tracing::info!("the admin API is mounted under /admin");
@@ -310,13 +331,14 @@ async fn run_and_publish(
     // push replay this run's evidence verbatim and pay cache prices for it.
     // Dedupe does not depend on it — that reads the markers off the pull
     // request — so a database problem costs money, never a duplicate comment.
-    let proposal = crate::app::review::review_with_state(
+    let proposal = crate::app::review::review_with_context(
         forge,
         model,
         &state.config.config,
         repo,
         number,
         Some(&state.store),
+        state.knowledge.as_deref(),
     )
     .await?;
 

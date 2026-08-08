@@ -47,8 +47,13 @@ pub struct LaneInput<'a> {
     pub scan_findings: &'a [ScanFinding],
     /// The commits in the pull request's range, for the `commits` lane.
     pub commits: &'a [Commit],
-    /// Repository policy gathered from ancestor `AGENTS.md` files.
+    /// Curated repository policy: the pinned knowledge documents in scope,
+    /// written by operators through the admin API. Cacheable prefix material.
     pub repo_policy: Option<&'a str>,
+    /// Rules the sandboxed extraction pass read out of the repository's own
+    /// instruction files. **Untrusted** — the pull request's author wrote them
+    /// — so they land in the prompt's volatile suffix, fenced and labelled.
+    pub extracted_rules: &'a [String],
     /// The diff already reviewed at the last reviewed SHA, replayed verbatim so
     /// the prompt prefix stays cacheable. Empty on a first review.
     pub reviewed_evidence: &'a str,
