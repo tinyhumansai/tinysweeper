@@ -465,7 +465,10 @@ mod tests {
             head_sha: "abc123".into(),
             lanes: vec![],
             cost_usd: 0.0,
+            input_tokens: 0,
+            output_tokens: 0,
             cached_tokens: 0,
+            models: vec![],
         }
     }
 

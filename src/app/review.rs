@@ -698,7 +698,10 @@ mod tests {
         // comments *and* silently swallowed by the pass/fail decision, even
         // though the configuration says a medium finding must fail the lane.
         let mut config = config();
-        config.review.severity_gate = "high".into();
+        // `Option` because the strictness dial derives this when it is unset —
+        // an explicit gate here is what makes the test's point about
+        // `severity_gate` and `fail_on` being independent knobs.
+        config.review.severity_gate = Some("high".into());
         config.lanes.insert(
             "critique".into(),
             crate::config::types::Lane {
