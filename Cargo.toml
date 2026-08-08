@@ -48,6 +48,19 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "fs", "sync", "time"] }
 
+# --- always compiled: the repository graph's parsers ---
+# tree-sitter links C grammars, not a network client, so it needs no feature
+# gate and the offline invariant above still holds. The grammars are what let
+# `src/graph/` extract real symbols instead of matching identifiers with a
+# regex; `tree-sitter-typescript` ships both the TypeScript and TSX grammars,
+# which is why there is no separate JavaScript dependency.
+streaming-iterator = "0.1"
+tree-sitter = "0.26"
+tree-sitter-go = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
+
 # --- optional: the agent harness ---
 # tinyagents unconditionally links reqwest, so it is gated even though it is
 # central to the product. The `Model` port and `MockModel` compile without it;
