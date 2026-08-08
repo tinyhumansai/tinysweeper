@@ -111,13 +111,30 @@ impl Proposal {
     }
 }
 
-/// Run the review.
+/// Run the review, with no memory of earlier cycles beyond what GitHub holds.
+///
+/// Dedupe still works: the fingerprints of everything already posted are read
+/// back off the pull request itself. What is missing without a store is the
+/// verbatim replay of the last review's evidence, which costs a prompt-cache
+/// hit and nothing else.
 pub async fn review(
     forge: &dyn ForgeRead,
     model: Arc<dyn Model>,
     config: &Config,
     repo: &RepoId,
     number: u64,
+) -> Result<Proposal> {
+    review_with_state(forge, model, config, repo, number, None).await
+}
+
+/// Run the review against a durable record of the last one.
+pub async fn review_with_state(
+    forge: &dyn ForgeRead,
+    model: Arc<dyn Model>,
+    config: &Config,
+    repo: &RepoId,
+    number: u64,
+    store: Option<&dyn ReviewStateStore>,
 ) -> Result<Proposal> {
     let context = forge.pull_request_context(repo, number).await?;
     let diffs = reviewable_diffs(config, &context)?;
