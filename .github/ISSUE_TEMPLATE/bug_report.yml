@@ -1,0 +1,30 @@
+name: Bug report
+description: Something tinysweeper did wrong.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: >
+        The command or workflow, the config you were using, and — if this was a
+        bad review comment — the check run and the diff it was anchored to.
+        Redact anything sensitive.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true

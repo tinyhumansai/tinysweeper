@@ -1,0 +1,22 @@
+target/
+*.profraw
+*.profdata
+lcov.info
+
+.env
+!.env.example
+
+# Local cargo overrides (e.g. a shared target dir). Never committed: an
+# accidental target-dir override silently opts a build out of shared artifact
+# caching.
+.cargo/config.toml
+
+# Worktrees created by the `worktree` helper.
+worktrees/
+.claude/worktrees/
+
+# Editor and OS noise
+.idea/
+.vscode/
+*.swp
+.DS_Store

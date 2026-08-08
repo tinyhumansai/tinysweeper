@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # The offline build. This job exists to defend the invariant that the default
+  # feature set links no HTTP client and the test suite never touches the
+  # network — the property that makes `local-review` and hermetic CI possible.
+  # If this job starts needing credentials, something has leaked out of a
+  # feature gate.
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: true
+
+      # Cheap step whose only job is to name a stale lockfile clearly, before a
+      # confusing failure deeper in the build.
+      - name: Verify Cargo.lock is in sync
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked
+
+  # The networked features. Split from the offline job so a failure here can
+  # never be mistaken for a break in the hermetic core, and so branch protection
+  # can require them separately.
+  rust-gated:
+    name: Rust (harness, github, serve)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --locked --features harness,github,serve --all-targets
+
+      - name: Clippy
+        run: cargo clippy --locked --no-deps --features harness,github,serve --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked --features harness,github,serve --lib
+
+      # Catches feature combinations nothing else builds, including the
+      # examples that need credentials at run time but must still compile.
+      - name: Check all features
+        run: cargo check --locked --all-features --all-targets
+
+  docker:
+    name: Docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
