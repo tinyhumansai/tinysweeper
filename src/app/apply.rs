@@ -318,9 +318,14 @@ mod tests {
     #[tokio::test]
     async fn findings_become_inline_comments_carrying_a_fingerprint() {
         let forge = forge("abc123");
-        apply(&forge, &forge, &config(), &proposal("abc123", vec![finding()]))
-            .await
-            .expect("applies");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![finding()]),
+        )
+        .await
+        .expect("applies");
 
         let review = forge
             .writes()
@@ -360,9 +365,14 @@ mod tests {
     #[tokio::test]
     async fn the_review_body_reports_cost_and_cache_hits() {
         let forge = forge("abc123");
-        apply(&forge, &forge, &config(), &proposal("abc123", vec![finding()]))
-            .await
-            .expect("applies");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![finding()]),
+        )
+        .await
+        .expect("applies");
 
         let body = forge
             .writes()

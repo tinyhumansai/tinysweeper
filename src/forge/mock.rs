@@ -100,6 +100,8 @@ pub struct MockState {
     pub review_comments: BTreeMap<u64, Vec<ReviewComment>>,
     /// Issues, keyed by number.
     pub issues: BTreeMap<u64, Issue>,
+    /// tinysweeper's own last review state, keyed by pull request number.
+    pub own_reviews: BTreeMap<u64, ReviewEvent>,
 }
 
 /// An offline forge that serves canned reads and records every write.
@@ -168,6 +170,15 @@ impl MockForge {
         {
             let mut state = self.state.lock().expect("mock state lock");
             state.review_comments.insert(number, comments);
+        }
+        self
+    }
+
+    /// Pretend tinysweeper already left a review of this state.
+    pub fn with_own_review(self, number: u64, event: ReviewEvent) -> Self {
+        {
+            let mut state = self.state.lock().expect("mock state lock");
+            state.own_reviews.insert(number, event);
         }
         self
     }
@@ -247,6 +258,11 @@ impl ForgeRead for MockForge {
             .get(&number)
             .cloned()
             .unwrap_or_default())
+    }
+
+    async fn own_review_state(&self, _repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
+        let state = self.state.lock().expect("mock state lock");
+        Ok(state.own_reviews.get(&number).copied())
     }
 
     async fn issue(&self, _repo: &RepoId, number: u64) -> Result<Issue> {
@@ -334,6 +350,7 @@ impl ForgeWrite for MockForge {
                 .entry(number)
                 .or_default()
                 .extend(comments.iter().cloned());
+            state.own_reviews.insert(number, event);
         }
         self.record(Write::Review {
             number,

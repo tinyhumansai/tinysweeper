@@ -213,9 +213,10 @@ async fn run_apply(repo: &str, pr: u64, findings: &std::path::Path) -> Result<()
         )));
     }
 
+    let loaded = tinysweeper::config::load_validated(std::path::Path::new("."), None)?;
     let read = GitHubRead::from_env()?;
     let write = GitHubWrite::from_env()?;
-    tinysweeper::app::apply(&read, &write, &proposal).await?;
+    tinysweeper::app::apply(&read, &write, &loaded.config, &proposal).await?;
 
     println!("published {} check run(s)", proposal.lanes.len());
     Ok(())

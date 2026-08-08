@@ -40,8 +40,7 @@ pub trait ForgeRead: Send + Sync {
     /// `None` when it has never reviewed. Used to clear a stale
     /// changes-requested verdict, which GitHub will otherwise leave blocking
     /// the merge button forever.
-    async fn own_review_state(&self, repo: &RepoId, number: u64)
-    -> Result<Option<ReviewEvent>>;
+    async fn own_review_state(&self, repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>>;
 
     /// Fetch an issue.
     async fn issue(&self, repo: &RepoId, number: u64) -> Result<Issue>;

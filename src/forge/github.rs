@@ -203,6 +203,33 @@ impl ForgeRead for GitHubRead {
             .collect())
     }
 
+    async fn own_review_state(&self, repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
+        let route = format!(
+            "/repos/{}/{}/pulls/{number}/reviews?per_page=100",
+            repo.owner, repo.name
+        );
+        let raw: serde_json::Value = self.client.get(route, None::<&()>).await.map_err(api)?;
+
+        // Only our own reviews, latest last. GitHub keeps every review in this
+        // list, so the state that matters is the final one we left — an earlier
+        // block followed by our own approval is not a block.
+        Ok(raw.as_array().and_then(|reviews| {
+            reviews
+                .iter()
+                .filter(|r| {
+                    let login = r["user"]["login"].as_str().unwrap_or_default();
+                    login.starts_with("tinysweeper")
+                })
+                .filter_map(|r| match r["state"].as_str() {
+                    Some("CHANGES_REQUESTED") => Some(ReviewEvent::RequestChanges),
+                    Some("APPROVED") => Some(ReviewEvent::Approve),
+                    Some("COMMENTED") => Some(ReviewEvent::Comment),
+                    _ => None,
+                })
+                .next_back()
+        }))
+    }
+
     async fn issue(&self, repo: &RepoId, number: u64) -> Result<Issue> {
         let issue = self
             .client
