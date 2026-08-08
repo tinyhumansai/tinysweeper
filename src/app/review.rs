@@ -461,6 +461,18 @@ fn still_open_titles(prior_titles: &[String], lanes: &[LaneProposal]) -> Vec<Str
             }
         }
     }
+
+    // Bound the list so it does not grow monotonically across many pushes. Keep
+    // only the most recent findings, so the prompt layer 4 list stays fresh and
+    // the open-finding count remains meaningful.
+    const MAX_OPEN_TITLES: usize = 100;
+    if titles.len() > MAX_OPEN_TITLES {
+        titles = titles
+            .into_iter()
+            .skip(titles.len() - MAX_OPEN_TITLES)
+            .collect();
+    }
+
     titles
 }
 
