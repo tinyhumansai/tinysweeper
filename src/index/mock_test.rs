@@ -424,7 +424,10 @@ async fn deleting_a_repository_graph_leaves_other_repositories_alone() {
 async fn upserting_the_same_edge_twice_is_one_edge() {
     let graph = MockGraphStore::new();
     let edge = GraphEdge::new("o/r", "a", "b", EdgeKind::Calls, "src/a.rs");
-    graph.upsert_edges(&[edge.clone()]).await.expect("writes");
+    graph
+        .upsert_edges(std::slice::from_ref(&edge))
+        .await
+        .expect("writes");
     graph.upsert_edges(&[edge]).await.expect("writes");
     assert_eq!(graph.edge_count(), 1);
 }

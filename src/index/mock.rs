@@ -222,9 +222,7 @@ impl ChunkIndex for MockChunkIndex {
         }
         let mut rows = self.rows.lock().expect("index lock");
         let before = rows.len();
-        rows.retain(|_, row| {
-            !(row.chunk.repo_id == repo_id && paths.iter().any(|p| *p == row.chunk.path))
-        });
+        rows.retain(|_, row| !(row.chunk.repo_id == repo_id && paths.contains(&row.chunk.path)));
         Ok((before - rows.len()) as u64)
     }
 
@@ -319,8 +317,8 @@ impl GraphStore for MockGraphStore {
         let mut nodes = self.nodes.lock().expect("graph lock");
         let mut edges = self.edges.lock().expect("graph lock");
         let before = nodes.len() + edges.len();
-        nodes.retain(|_, n| !(n.repo_id == repo_id && paths.iter().any(|p| *p == n.path)));
-        edges.retain(|_, e| !(e.repo_id == repo_id && paths.iter().any(|p| *p == e.path)));
+        nodes.retain(|_, n| !(n.repo_id == repo_id && paths.contains(&n.path)));
+        edges.retain(|_, e| !(e.repo_id == repo_id && paths.contains(&e.path)));
         Ok((before - nodes.len() - edges.len()) as u64)
     }
 
