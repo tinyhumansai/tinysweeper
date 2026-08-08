@@ -628,8 +628,14 @@ mod tests {
                 "body": "…", "severity": "high", "confidence": 0.9
             }]
         }));
+        // Only the critique lane runs: the point here is `reviewable_diffs`,
+        // and five lanes answering the same canned response would merely
+        // multiply the number being asserted on.
+        let mut config = config();
+        config.review.lanes = vec!["critique".into()];
+
         let forge = forge_with(vec![submodule, rust_file()], vec![]);
-        let proposal = review(&forge, Arc::new(model), &config(), &repo(), 7)
+        let proposal = review(&forge, Arc::new(model), &config, &repo(), 7)
             .await
             .expect("reviews");
 
