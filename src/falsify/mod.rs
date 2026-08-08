@@ -28,7 +28,7 @@ pub mod types;
 use crate::config::types::{Config, LaneId};
 use crate::findings::types::Finding;
 use crate::harness::prompt::push_fenced;
-use crate::ports::model::{Message, Model, ModelRequest, Usage};
+use crate::ports::model::{Message, Model, ModelRequest};
 
 pub use crate::falsify::types::{FalsifyOutcome, Rejection};
 
