@@ -185,35 +185,12 @@ pub async fn review(
     // precisely the failure this code exists to prevent. The unit test agreed
     // with the code because it disabled `commits` to reach the branch, so it
     // tested the shape of the implementation rather than the requirement.
-    let unclaimed: Vec<Finding> = scan_findings
-        .iter()
-        .cloned()
-        .map(Finding::from)
-        .filter(|f| f.severity >= Severity::High)
-        .collect();
-
-    if !unclaimed.is_empty() {
-        let adjudicated = lanes
-            .iter()
-            .any(|l| l.lane == LaneId::Commits && l.conclusion != CheckConclusion::Neutral);
-
-        if !adjudicated {
-            // Replace the placeholder rather than sitting beside it, so the
-            // check run for `commits` reports the findings instead of claiming
-            // there was nothing to do.
-            lanes.retain(|l| l.lane != LaneId::Commits);
-            lanes.push(LaneProposal {
-                lane: LaneId::Commits,
-                check_name: LaneId::Commits.check_name(),
-                conclusion: CheckConclusion::Failure,
-                summary: format!(
-                    "{} finding(s) from the deterministic scanners.",
-                    unclaimed.len()
-                ),
-                findings: unclaimed,
-            });
-        }
-    }
+    //
+    // Each scanner kind has exactly one owning lane, and that lane republishes
+    // its findings itself. This is the fallback for when the owner did not run
+    // at all — disabled in config, or skipped as a draft — in which case it
+    // reported Neutral and its findings would otherwise vanish silently.
+    publish_unclaimed(&mut lanes, &scan_findings);
 
     lanes.push(gate(&lanes));
 
