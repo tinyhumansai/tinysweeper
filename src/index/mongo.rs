@@ -422,7 +422,11 @@ impl MongoChunkIndex {
             signature: signature.clone(),
             repo_id: None,
             text: "tinysweeper boot probe".to_string(),
-            vector: vec![0.0; signature.dims],
+            // A unit vector, not a zero one. Cosine similarity against the
+            // zero vector is undefined and the server rejects it outright, so
+            // a zero probe would fail on a perfectly good deployment — a boot
+            // assertion that cries wolf is worse than none.
+            vector: vec![1.0 / (signature.dims.max(1) as f32).sqrt(); signature.dims],
             limit: 1,
             dense_weight: 1.0,
             text_weight: 1.0,
