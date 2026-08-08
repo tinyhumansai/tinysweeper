@@ -258,6 +258,7 @@ fn render_diffs(diffs: &[FileDiff]) -> String {
 mod tests {
     use super::*;
     use crate::config::types::{Config, Severity};
+    use std::collections::BTreeMap;
     use crate::evidence::diff::parse_file_patch;
     use crate::forge::types::PullRequest;
     use crate::harness::mock::MockModel;
@@ -288,12 +289,22 @@ mod tests {
     }
 
     async fn run_with(model: MockModel, config: &Config, diffs: &[FileDiff]) -> LaneOutcome {
+        run_with_files(model, config, diffs, &BTreeMap::new()).await
+    }
+
+    async fn run_with_files(
+        model: MockModel,
+        config: &Config,
+        diffs: &[FileDiff],
+        file_contents: &BTreeMap<String, String>,
+    ) -> LaneOutcome {
         let pr = pull_request();
         Critique::new(Arc::new(model))
             .run(LaneInput {
                 config,
                 pull_request: &pr,
                 diffs,
+                file_contents,
                 scan_findings: &[],
                 repo_policy: None,
                 reviewed_evidence: "",
@@ -303,6 +314,21 @@ mod tests {
             .expect("lane runs")
     }
 
+    /// A finding anchored the way the schema now asks for: by quotation.
+    fn finding_quoting(snippet: &str) -> serde_json::Value {
+        json!({
+            "path": "src/main.rs",
+            "existing_code": snippet,
+            "rule": "unchecked-index",
+            "title": "Guard the index before dereferencing",
+            "body": "`i` is never bounds-checked.",
+            "severity": "high",
+            "confidence": 0.9
+        })
+    }
+
+    /// A finding in the pre-positioning shape, still accepted so a proposal
+    /// written by an older version keeps working.
     fn finding_at(line: u64) -> serde_json::Value {
         json!({
             "path": "src/main.rs",
@@ -329,18 +355,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_finding_on_an_unchanged_line_is_discarded() {
+    async fn a_finding_on_an_unchanged_line_survives_without_one() {
         // Line 1 is context, not an addition. Posting there would put a comment
-        // on code the author did not write in this pull request.
+        // on code the author did not write in this pull request — but the
+        // finding itself may well be real, so it keeps its place in the summary
+        // instead of being deleted.
         let model = MockModel::new().then(json!({
             "summary": "…",
             "findings": [finding_at(1)]
         }));
         let outcome = run_with(model, &config(), &diffs()).await;
 
-        assert!(outcome.findings.is_empty(), "{:#?}", outcome.findings);
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(outcome.findings[0].line, None, "not postable inline");
         assert!(
-            outcome.summary.contains("1 finding discarded"),
+            outcome.summary.contains("1 finding could not be anchored"),
             "{}",
             outcome.summary
         );
@@ -352,13 +381,14 @@ mod tests {
             "summary": "…",
             "findings": [{
                 "path": "src/elsewhere.rs",
-                "line": 2,
+                "existing_code": "let x = items[i];",
                 "rule": "r", "title": "t", "body": "b",
                 "severity": "high", "confidence": 0.9
             }]
         }));
         let outcome = run_with(model, &config(), &diffs()).await;
         assert!(outcome.findings.is_empty());
+        assert!(outcome.summary.contains("did not change"), "{}", outcome.summary);
     }
 
     #[tokio::test]
