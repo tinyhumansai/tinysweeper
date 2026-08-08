@@ -53,10 +53,8 @@ impl Lane for Critique {
             ));
         }
 
-        if input.pull_request.draft && !input.config.review.draft_prs {
-            return Ok(LaneOutcome::skipped(
-                "Draft pull request; set `review.draft_prs = true` to review drafts.",
-            ));
+        if let Some(skipped) = input.skip_as_draft() {
+            return Ok(skipped);
         }
 
         let new_evidence = render_diffs(input.diffs);
