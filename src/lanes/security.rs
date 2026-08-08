@@ -89,6 +89,7 @@ impl Lane for Security {
                 let model = self.model.clone();
                 let config = input.config;
                 let repo_policy = input.repo_policy;
+                let extracted_rules = input.extracted_rules;
                 let prior_findings = input.prior_findings;
                 let diffs = input.diffs;
                 let scanner = &scanner;
@@ -101,6 +102,7 @@ impl Lane for Security {
                         model.as_ref(),
                         config,
                         repo_policy,
+                        extracted_rules,
                         prior_findings,
                         diff,
                         scanner,
@@ -121,6 +123,7 @@ async fn review_file(
     model: &dyn Model,
     config: &crate::config::types::Config,
     repo_policy: Option<&str>,
+    extracted_rules: &[String],
     prior_findings: &[String],
     diff: &FileDiff,
     scanner: &[&ScanFinding],
@@ -130,6 +133,7 @@ async fn review_file(
 
     let built = prompt::build(&PromptInputs {
         repo_policy,
+        extracted_rules,
         prior_findings,
         new_evidence: &evidence,
         focus_path: Some(&diff.path),
@@ -275,6 +279,7 @@ mod tests {
                 scan_findings,
                 commits: &[],
                 repo_policy: None,
+                extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
             })
@@ -474,6 +479,7 @@ mod tests {
                 scan_findings: &[],
                 commits: &[],
                 repo_policy: None,
+                extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
             })

@@ -70,6 +70,20 @@ fallback = ["moonshotai/kimi-k2.7-code", "minimax/minimax-m2.1"]
 max_tokens = 8000
 budget_usd_per_pr = 1.0
 
+# The knowledge centre. `files` are read from the pull request's head commit
+# through the forge and are untrusted input — they are put through a sandboxed
+# extraction pass rather than injected. Plain filenames only: a name containing
+# a path separator or `..` is dropped, because this list is editable by whoever
+# opens the pull request.
+[knowledge]
+extract = true
+files = ["AGENTS.md", "CLAUDE.md", ".tinysweeper.md"]
+max_file_bytes = 65536
+# Pinned documents are paid for on every review of every pull request in scope,
+# so both caps are budgets rather than limits nobody reaches.
+pinned_doc_chars = 4000
+pinned_total_chars = 12000
+
 [lanes.critique]
 model = "deep"
 fail_on = "high"

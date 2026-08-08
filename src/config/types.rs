@@ -223,6 +223,8 @@ pub struct Config {
     pub labels: Labels,
     /// The model gateway and the tiers.
     pub models: Models,
+    /// The knowledge centre: curated documents and rule extraction.
+    pub knowledge: Knowledge,
     /// Per-lane overrides, keyed by lane id.
     pub lanes: BTreeMap<String, Lane>,
     /// Auto-merge policy.
@@ -344,6 +346,34 @@ pub struct Models {
     pub max_tokens: u32,
     /// Hard USD ceiling for a single pull request's review.
     pub budget_usd_per_pr: f64,
+}
+
+/// The knowledge centre: curated documents, and rules read out of the
+/// repository's own instruction files.
+///
+/// The caps here are budget dials. The *security* ceilings on extraction —
+/// how many rules and how long each may be — are constants in
+/// `crate::knowledge::types` and deliberately not configurable: a repository
+/// that could raise them could remove them, and they are what bounds what a
+/// hostile `AGENTS.md` can inject.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Knowledge {
+    /// Run the sandboxed extraction pass over the files below.
+    pub extract: bool,
+    /// Instruction files to read, at the repository root.
+    ///
+    /// Plain filenames only — no path separators, no `..`. Anything else is
+    /// dropped with a warning, because this list is editable by whoever opens
+    /// a pull request and must not become a way to read arbitrary paths.
+    pub files: Vec<String>,
+    /// How much of one instruction file is sent to the extractor.
+    pub max_file_bytes: usize,
+    /// How many characters of one pinned document reach the prompt.
+    pub pinned_doc_chars: usize,
+    /// How many characters all pinned documents reach the prompt with,
+    /// together. Zero disables pinned injection.
+    pub pinned_total_chars: usize,
 }
 
 /// Model work that is not a lane.

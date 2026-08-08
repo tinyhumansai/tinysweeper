@@ -25,6 +25,7 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_review(config, &mut problems);
     validate_paths(config, &mut problems);
     validate_models(config, &mut problems);
+    validate_knowledge(config, &mut problems);
     validate_lanes(config, &mut problems);
     validate_automerge(config, &mut problems);
     validate_issues(config, &mut problems);
@@ -192,6 +193,32 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
             "`models.budget_usd_per_pr = {}` must be a finite number above zero; it is the hard ceiling for one pull request",
             models.budget_usd_per_pr
         ));
+    }
+}
+
+fn validate_knowledge(config: &Config, problems: &mut Vec<String>) {
+    let knowledge = &config.knowledge;
+
+    // Reported rather than silently dropped. The *runtime* still drops a bad
+    // name — a review must not die because someone mistyped a filename — but a
+    // config that will never read the file the author meant is exactly what
+    // validation exists to say out loud.
+    for name in &knowledge.files {
+        if !crate::knowledge::types::valid_instruction_file(name.trim()) {
+            problems.push(format!(
+                "`knowledge.files` contains `{name}`, which is not a plain repository-root \
+                 filename; path separators and `..` are refused because this list is editable \
+                 by whoever opens a pull request"
+            ));
+        }
+    }
+
+    if knowledge.extract && knowledge.max_file_bytes == 0 {
+        problems.push(
+            "`knowledge.max_file_bytes = 0` with `knowledge.extract = true` would send an empty \
+             file to the extractor; set a byte limit or turn extraction off"
+                .into(),
+        );
     }
 }
 

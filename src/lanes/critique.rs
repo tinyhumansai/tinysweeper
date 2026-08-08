@@ -84,6 +84,7 @@ impl Lane for Critique {
         let changed_paths = input.changed_paths();
         let built = prompt::build(&PromptInputs {
             repo_policy: input.repo_policy,
+            extracted_rules: input.extracted_rules,
             reviewed_evidence: &reviewed_evidence,
             prior_findings: input.prior_findings,
             new_evidence: &new_evidence,
@@ -331,6 +332,7 @@ fn helper() {
                 scan_findings: &[],
                 commits: &[],
                 repo_policy: None,
+                extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
             })
@@ -651,6 +653,7 @@ fn helper() {
                 scan_findings: &[],
                 commits: &[],
                 repo_policy: None,
+                extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
             })
@@ -701,6 +704,7 @@ fn helper() {
                 scan_findings: &[],
                 commits: &[],
                 repo_policy: None,
+                extracted_rules: &[],
                 reviewed_evidence: &reviewed,
                 prior_findings: &["Close the socket on the error path".to_string()],
             })
@@ -743,6 +747,7 @@ fn helper() {
                 scan_findings: &[],
                 commits: &[],
                 repo_policy: None,
+                extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
             })

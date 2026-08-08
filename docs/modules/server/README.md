@@ -75,17 +75,29 @@ A contributor nobody has seen returns `Unknown` rather than `404`: "never seen
 this person" is an answer, and it lets trust be set ahead of a first pull
 request.
 
-### Index and knowledge
+### Index
 
-Declared, returning `501` with a `TODO` marker until their stores land in
-another workstream. They are declared rather than omitted for the same reason
-every CLI subcommand is declared up front: a caller written against the shape
-today is not written against a guess.
+Declared, returning `501` with a `TODO` marker until its store lands in another
+workstream. It is declared rather than omitted for the same reason every CLI
+subcommand is declared up front: a caller written against the shape today is not
+written against a guess.
 
 | Method | Path |
 | --- | --- |
 | `GET` | `/admin/index/{owner}/{name}` |
 | `POST` | `/admin/index/{owner}/{name}/reindex` |
+
+### Knowledge documents
+
+The write side of the knowledge centre — see `docs/modules/knowledge/README.md`.
+The scope comes from the path, never the body, so a request cannot claim one
+scope in its URL and write another into the database. A repository listing
+includes its organisation's documents, because that is what a review at that
+scope sees. `503` when no retrieval database is reachable, rather than a
+pretended success.
+
+| Method | Path |
+| --- | --- |
 | `GET` | `/admin/knowledge/org/{owner}` |
 | `PUT` / `DELETE` | `/admin/knowledge/org/{owner}/{slug}` |
 | `GET` | `/admin/knowledge/repo/{owner}/{name}` |
