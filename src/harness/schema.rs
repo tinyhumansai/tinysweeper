@@ -35,9 +35,21 @@ pub struct LaneResponse {
 pub struct RawFinding {
     /// The file, exactly as it appears in the diff.
     pub path: String,
+    /// The code the finding is about, quoted verbatim from the diff.
+    ///
+    /// This is how a finding is anchored. Models are bad at line arithmetic
+    /// and good at copying, so the model quotes and `src/position` computes
+    /// the range — see that module for why the reverse loses good findings.
+    #[serde(default)]
+    pub existing_code: Option<String>,
     /// The head-revision line it anchors to.
-    pub line: u64,
-    /// The last line, when it spans a range.
+    ///
+    /// No longer part of the schema the model answers: it is filled in by
+    /// `src/position` after the fact, and stays deserializable only so
+    /// proposals written by an older version still parse.
+    #[serde(default)]
+    pub line: Option<u64>,
+    /// The last line, when it spans a range. Also computed host-side.
     #[serde(default)]
     pub end_line: Option<u64>,
     /// A stable category id.
