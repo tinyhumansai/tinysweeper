@@ -316,13 +316,17 @@ fn emit(
         return;
     }
 
-    // A name is attached only when the chunk *is* that one definition. Naming
-    // one of three merged functions would read as a claim about the whole span.
-    let mut named = group.iter().filter_map(|segment| segment.symbol.as_ref());
-    let symbol = match (named.next(), named.next()) {
-        (Some(only), None) => Some(only.clone()),
-        _ => None,
-    };
+    // A name is attached only when one definition *dominates* the span — more
+    // than half its bytes. A chunk that merged three equal functions is not
+    // "the first one", and saying so would read as a claim about the whole
+    // span; a chunk that is one long method with a stray `use` above it is that
+    // method, and refusing to name it would throw away the best label there is.
+    let total: usize = group.iter().map(|segment| segment.len()).sum();
+    let symbol = group
+        .iter()
+        .max_by_key(|segment| segment.len())
+        .filter(|segment| segment.len() * 2 > total)
+        .and_then(|segment| segment.symbol.clone());
 
     chunks.push(SourceChunk {
         start_line,
