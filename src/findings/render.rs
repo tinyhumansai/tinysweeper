@@ -63,7 +63,7 @@ pub fn lane_summary(summary: &str, findings: &[Finding], version: &str) -> Strin
         out.push_str(&format!(
             "| {} | {} | `{}`{} |\n",
             badge(finding.severity),
-            escape_pipes(&finding.title),
+            escape_cell(&finding.title),
             finding.path,
             finding.line.map(|l| format!(":{l}")).unwrap_or_default()
         ));
@@ -115,9 +115,14 @@ fn footer(version: &str) -> String {
     format!("\n<sub>tinysweeper {version}</sub>\n")
 }
 
-/// A `|` inside a table cell ends the cell. Titles are model output.
-fn escape_pipes(text: &str) -> String {
-    text.replace('|', "\\|")
+/// Make a model-authored title safe inside a table cell.
+///
+/// Two hazards, and both are needed: a bare `|` ends the cell, and GitHub
+/// renders inline HTML in markdown tables, so a stray tag escapes into the
+/// page. Escaping only pipes here was a bug a test caught — the disclosure
+/// below was escaped and the table above it was not.
+fn escape_cell(text: &str) -> String {
+    escape_html(text).replace('|', "\\|")
 }
 
 /// A `<summary>` renders as HTML, so a stray tag in a title would break out of
