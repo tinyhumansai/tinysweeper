@@ -625,6 +625,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_credential_quoted_back_in_the_lane_summary_is_scrubbed() {
+        // `RawFinding::into_finding` scrubs a finding's title and body, but a
+        // model that quotes a secret into its free-text summary bypassed
+        // that entirely — the value would reach the proposal, the CLI log,
+        // and the published check-run summary untouched.
+        let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+        let model = MockModel::always(json!({
+            "summary": format!("Found a hardcoded key: {key}"),
+            "findings": []
+        }));
+        let forge = forge_with(vec![rust_file()], vec![]);
+        let proposal = review(&forge, Arc::new(model), &config(), &repo(), 7)
+            .await
+            .expect("reviews");
+
+        let critique = proposal
+            .lanes
+            .iter()
+            .find(|l| l.lane == LaneId::Critique)
+            .unwrap();
+        assert!(
+            !critique.summary.contains("IOSFODNN7EXAMPLE"),
+            "{}",
+            critique.summary
+        );
+        let rendered = serde_json::to_string(&proposal).unwrap();
+        assert!(!rendered.contains("IOSFODNN7EXAMPLE"), "value leaked");
+    }
+
+    #[tokio::test]
     async fn a_finding_below_the_posting_gate_can_still_fail_the_lane() {
         // A model reviewer, reviewing this repository, pointed out that
         // `severity_gate` (what gets posted) and `fail_on` (what fails the
