@@ -295,8 +295,14 @@ fn render(proposal: &tinysweeper::app::Proposal) -> String {
         }
     }
     out.push_str(&format!(
-        "\n  ${:.4} · {} cached prompt tokens\n",
-        proposal.cost_usd, proposal.cached_tokens
+        "\n  {}\n",
+        tinysweeper::findings::render::cost_line(
+            proposal.cost_usd,
+            proposal.input_tokens,
+            proposal.output_tokens,
+            proposal.cached_tokens,
+            &proposal.models,
+        )
     ));
     out
 }

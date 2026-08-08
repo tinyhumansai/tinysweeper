@@ -106,12 +106,18 @@ fn review_body(proposal: &Proposal) -> String {
         format!("tinysweeper: {blocking} lane(s) blocking.")
     };
 
-    // Cost and cache-hit rate go in the body deliberately: prompt-cache hit
-    // rate is the difference between a cheap re-review and a ruinous one, and
-    // nobody looks at a metric they cannot see.
+    // The full token breakdown goes in the body deliberately. Cache hit rate is
+    // the difference between a cheap re-review and a ruinous one, and nobody
+    // tunes a number they cannot see.
     body.push_str(&format!(
-        "\n\n<sub>${:.3} · {} cached prompt tokens</sub>",
-        proposal.cost_usd, proposal.cached_tokens
+        "\n\n<sub>{}</sub>",
+        crate::findings::render::cost_line(
+            proposal.cost_usd,
+            proposal.input_tokens,
+            proposal.output_tokens,
+            proposal.cached_tokens,
+            &proposal.models,
+        )
     ));
     body.push_str(&format!(
         "\n<!-- {MARKER_PREFIX}state v=1 sha={} -->",
@@ -131,11 +137,12 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
                 line,
                 start_line: None,
                 body: format!(
-                    "**{}**\n\n{}\n\n<sub>{} · {} · <!-- {MARKER_PREFIX}fp={} --></sub>",
+                    "{} **{}**\n\n{}\n\n<sub>{} · {} · <!-- {MARKER_PREFIX}fp={} --></sub>",
+                    crate::findings::render::badge(finding.severity),
                     finding.title,
                     finding.body,
                     finding.lane,
-                    finding.severity,
+                    crate::findings::render::confidence_badge(finding.confidence),
                     finding.fingerprint(&finding.title),
                 ),
             })
@@ -170,7 +177,10 @@ mod tests {
                 findings,
             }],
             cost_usd: 0.01,
+            input_tokens: 10_000,
+            output_tokens: 400,
             cached_tokens: 800,
+            models: vec!["moonshotai/kimi-k3".into()],
         }
     }
 
@@ -287,7 +297,10 @@ mod tests {
             })
             .expect("review posted");
 
-        assert!(body.contains("$0.010"), "{body}");
-        assert!(body.contains("800 cached prompt tokens"), "{body}");
+        assert!(body.contains("$0.0100"), "{body}");
+        assert!(body.contains("10,000 in"), "{body}");
+        assert!(body.contains("400 out"), "{body}");
+        assert!(body.contains("800 cached (8%)"), "{body}");
+        assert!(body.contains("kimi-k3"), "{body}");
     }
 }

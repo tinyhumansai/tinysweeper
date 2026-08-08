@@ -65,10 +65,7 @@ pub fn lane_summary(summary: &str, findings: &[Finding], version: &str) -> Strin
             badge(finding.severity),
             escape_pipes(&finding.title),
             finding.path,
-            finding
-                .line
-                .map(|l| format!(":{l}"))
-                .unwrap_or_default()
+            finding.line.map(|l| format!(":{l}")).unwrap_or_default()
         ));
     }
 
@@ -104,7 +101,10 @@ fn detail(finding: &Finding) -> String {
     );
 
     if let Some(suggestion) = &finding.suggestion {
-        out.push_str(&format!("\n**Suggested change**\n\n```\n{}\n```\n", suggestion.trim()));
+        out.push_str(&format!(
+            "\n**Suggested change**\n\n```\n{}\n```\n",
+            suggestion.trim()
+        ));
     }
 
     out.push_str("\n</details>\n\n");
@@ -123,7 +123,9 @@ fn escape_pipes(text: &str) -> String {
 /// A `<summary>` renders as HTML, so a stray tag in a title would break out of
 /// the disclosure and mangle the rest of the page.
 fn escape_html(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Render the cost line shown under every review.
@@ -270,7 +272,13 @@ mod tests {
 
     #[test]
     fn the_cost_line_reports_the_whole_token_breakdown() {
-        let line = cost_line(0.1615, 49_169, 1_204, 40_000, &["moonshotai/kimi-k3".into()]);
+        let line = cost_line(
+            0.1615,
+            49_169,
+            1_204,
+            40_000,
+            &["moonshotai/kimi-k3".into()],
+        );
         assert!(line.contains("$0.1615"), "{line}");
         assert!(line.contains("49,169 in"), "{line}");
         assert!(line.contains("1,204 out"), "{line}");
