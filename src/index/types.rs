@@ -48,6 +48,23 @@ impl EmbedSignature {
         format!("{}:{}:{}", self.provider, self.model, self.dims)
     }
 
+    /// The same identity, spelled the way the agent harness spells it.
+    ///
+    /// tinyagents' `EmbeddingModel::signature()` returns
+    /// `provider=…;model=…;dims=…`, and the provider-backed embedder is built
+    /// from a model that reports exactly those three values. Two independent
+    /// spellings of one identity is how a partition key quietly stops matching
+    /// the space it names, so the correspondence is a method with a test on it
+    /// rather than a convention. The format is duplicated here, not imported,
+    /// because this file is always compiled and tinyagents is not; the test in
+    /// `crate::index::provider` asserts the two strings are byte-identical.
+    pub fn harness_key(&self) -> String {
+        format!(
+            "provider={};model={};dims={}",
+            self.provider, self.model, self.dims
+        )
+    }
+
     /// The key this embedder is priced under.
     ///
     /// Dimensionality is left out: a provider charges per token for a model,
