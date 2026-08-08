@@ -193,6 +193,24 @@ fn print_prose(loaded: &Loaded) {
         );
     }
 
+    // A model with no price is billed at the ceiling, so it will not escape the
+    // budget — but it will over-report, and the fix is a one-line table entry.
+    // Saying so here is what makes a stale price table visible before a review
+    // runs rather than after it has been billed.
+    let configured: Vec<&str> = config
+        .enabled_lanes()
+        .map(|lane| config.model_for(lane))
+        .chain([config.models.scan.as_str(), config.models.deep.as_str()])
+        .chain(config.models.fallback.iter().map(String::as_str))
+        .collect();
+    let unpriced = crate::harness::pricing::unpriced(configured);
+    if !unpriced.is_empty() {
+        println!(
+            "  unpriced         {} (billed at the most expensive known rate)",
+            unpriced.join(", ")
+        );
+    }
+
     println!("\ncapabilities");
     for (name, enabled) in [
         ("automerge", config.automerge.enabled),
