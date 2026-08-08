@@ -153,6 +153,8 @@ pub async fn review_with_state(
                 conclusion: CheckConclusion::Neutral,
                 summary: format!("Skipped: `{label}` is applied."),
                 findings: vec![],
+                resolved: vec![],
+                deduped: 0,
             }],
             cost_usd: 0.0,
             input_tokens: 0,
