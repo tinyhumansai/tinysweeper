@@ -16,6 +16,11 @@ docs/
 gitbooks/
 
 .env
+# GitHub App credentials written by scripts/create-github-app.sh. Gitignored,
+# but .gitignore does not govern the Docker build context: without this line a
+# `docker build .` ships the App private key to the daemon and bakes it into a
+# builder layer via `COPY . .`.
+.tinysweeper-app.json
 .idea/
 .vscode/
 *.swp
