@@ -102,8 +102,8 @@ fn pipeline_for(query: &HybridQuery) -> Vec<Document> {
     MongoChunkIndex::new(&client.database("t"), "code_chunks").pipeline(query)
 }
 
-#[test]
-fn the_pipeline_fuses_two_arms_with_rank_fusion_rather_than_hand_rolled_rrf() {
+#[tokio::test]
+async fn the_pipeline_fuses_two_arms_with_rank_fusion_rather_than_hand_rolled_rrf() {
     let query = HybridQuery::new(signature(), "resolve range", vec![0.0; 64]);
     let pipeline = pipeline_for(&query);
 
@@ -139,8 +139,8 @@ fn the_pipeline_fuses_two_arms_with_rank_fusion_rather_than_hand_rolled_rrf() {
     );
 }
 
-#[test]
-fn every_arm_of_the_pipeline_is_partitioned_by_signature() {
+#[tokio::test]
+async fn every_arm_of_the_pipeline_is_partitioned_by_signature() {
     // If either arm forgot the signature filter, a model swap would leak old
     // vectors into new results — and score them, rather than fail.
     let query = HybridQuery::new(signature(), "anything", vec![0.0; 64]);
@@ -152,15 +152,15 @@ fn every_arm_of_the_pipeline_is_partitioned_by_signature() {
     );
 }
 
-#[test]
-fn confining_a_query_to_a_repository_filters_both_arms() {
+#[tokio::test]
+async fn confining_a_query_to_a_repository_filters_both_arms() {
     let query = HybridQuery::new(signature(), "anything", vec![0.0; 64]).in_repo("o/r");
     let rendered = format!("{:?}", pipeline_for(&query));
     assert_eq!(rendered.matches("o/r").count(), 2);
 }
 
-#[test]
-fn the_query_vector_travels_as_bindata_too() {
+#[tokio::test]
+async fn the_query_vector_travels_as_bindata_too() {
     let query = HybridQuery::new(signature(), "anything", vec![0.25; 64]);
     let dense = pipeline_for(&query)[0]
         .get_document("$rankFusion")
