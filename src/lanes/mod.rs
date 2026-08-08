@@ -121,6 +121,53 @@ impl LaneOutcome {
         }
     }
 
+    /// Turn a parsed model response into an outcome, applying `anchoring`.
+    ///
+    /// Every lane shares this so the anchoring rule cannot drift between them:
+    /// a lane that quietly kept mis-anchored findings would post comments on
+    /// code its pull request never touched, and nothing downstream re-checks.
+    pub fn from_response(
+        lane: LaneId,
+        parsed: LaneResponse,
+        diffs: &[FileDiff],
+        anchoring: Anchoring,
+        usage: Usage,
+    ) -> Self {
+        let mut findings = Vec::new();
+        let mut discarded = 0usize;
+        for raw in parsed.findings {
+            let finding = raw.into_finding(lane);
+            match anchoring {
+                Anchoring::Strict if !anchor::anchored_in_diff(&finding, diffs) => {
+                    // Not an error: models do this routinely. Dropped quietly
+                    // and counted, so the count can surface in the summary if
+                    // it ever gets large enough to mean something.
+                    discarded += 1;
+                }
+                Anchoring::Strict => findings.push(finding),
+                Anchoring::Demote => findings.push(anchor::demote_unanchored(finding, diffs)),
+            }
+        }
+
+        let summary = if discarded > 0 {
+            format!(
+                "{} ({discarded} finding{} discarded for not matching a changed line)",
+                parsed.summary.trim(),
+                if discarded == 1 { "" } else { "s" }
+            )
+        } else {
+            parsed.summary.trim().to_string()
+        };
+
+        Self {
+            summary,
+            findings,
+            resolved: parsed.resolved,
+            usage,
+            skipped: None,
+        }
+    }
+
     /// The check-run conclusion for this outcome.
     ///
     /// `fail_on` comes from the lane's config. A skipped lane is `Neutral`
