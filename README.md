@@ -139,6 +139,8 @@ MiniMax are all the same code path.
 - [ROADMAP.md](ROADMAP.md) — what has landed and what is next
 - [CONTRIBUTING.md](CONTRIBUTING.md) — local checks and pull request expectations
 - [AGENTS.md](AGENTS.md) — conventions for humans and agents working in this repo
+- [docs/triggers.md](docs/triggers.md) — what wakes tinysweeper up, and what emits no event at all
+- [docs/modules/server/README.md](docs/modules/server/README.md) — the server, its security boundary, and the admin API
 - `docs/` — module documentation and design notes
 
 ## License
