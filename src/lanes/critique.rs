@@ -100,56 +100,128 @@ impl Lane for Critique {
 
         let parsed = schema::parse(LaneId::Critique, response.value)?;
 
+        let mut usage = response.usage;
+        let positioner = Positioner::new(self.model.as_ref(), input.config);
+
         let mut findings = Vec::new();
+        let mut unanchored = 0usize;
         let mut discarded = 0usize;
+
         for raw in parsed.findings {
-            let finding = raw.into_finding(LaneId::Critique);
-            if anchored_in_diff(&finding, input.diffs) {
-                findings.push(finding);
-            } else {
-                // Not an error: models do this routinely. It is dropped
-                // quietly and counted, so the count can surface in the summary
-                // if it ever gets large enough to mean something.
+            // A file this pull request never touched is still dropped outright.
+            // There is nothing to anchor against and nothing this author did.
+            let Some(diff) = input.diffs.iter().find(|d| d.path == raw.path) else {
                 discarded += 1;
+                continue;
+            };
+
+            let comment = format!("{}\n\n{}", raw.title, raw.body);
+            let snippet = raw.existing_code.clone().unwrap_or_default();
+            let resolution = positioner
+                .resolve(
+                    PositionRequest {
+                        snippet: &snippet,
+                        diff: Some(diff),
+                        file: input.file_contents.get(&raw.path).map(String::as_str),
+                        comment: &comment,
+                        rendered_diff: &new_evidence,
+                    },
+                    &mut usage,
+                )
+                .await;
+
+            let range = postable_range(&raw, diff, resolution);
+            if range.is_none() {
+                unanchored += 1;
             }
+
+            let mut finding = raw.into_finding(LaneId::Critique);
+            finding.line = range.map(|(start, _)| start);
+            finding.end_line = range.and_then(|(start, end)| (end > start).then_some(end));
+            findings.push(finding);
         }
 
-        let summary = if discarded > 0 {
-            format!(
-                "{} ({discarded} finding{} discarded for not matching a changed line)",
-                parsed.summary.trim(),
-                if discarded == 1 { "" } else { "s" }
-            )
-        } else {
-            parsed.summary.trim().to_string()
-        };
+        // Step 5, on the findings that survived positioning. It sees only the
+        // diff, and it can only remove.
+        let filtered = Falsifier::new(self.model.as_ref(), input.config)
+            .filter(LaneId::Critique, findings, &new_evidence)
+            .await;
+        usage.add(filtered.usage);
 
         Ok(LaneOutcome {
-            summary,
-            findings,
+            summary: summarise(
+                parsed.summary.trim(),
+                unanchored,
+                discarded,
+                filtered.rejected.len(),
+            ),
+            findings: filtered.findings,
             resolved: parsed.resolved,
-            usage: response.usage,
+            usage,
             skipped: None,
         })
     }
 }
 
-/// Whether a finding points at a line this pull request actually changed.
+/// The head-revision range a finding may be posted against, if any.
 ///
-/// A finding marked `late` is exempt — it is explicitly about untouched code,
-/// and the model had to justify that separately.
-fn anchored_in_diff(finding: &Finding, diffs: &[FileDiff]) -> bool {
-    if finding.late {
-        return diffs.iter().any(|d| d.path == finding.path);
+/// Two rules, both about not putting a comment on unrelated code:
+///
+/// - A finding the resolver could not place has no range. It survives without
+///   one and is rendered into the summary.
+/// - A placed finding outside the changed lines also loses its range unless it
+///   is `late`. GitHub rejects an inline comment too far from the diff, and a
+///   finding about untouched code has to declare itself as one.
+fn postable_range(raw: &RawFinding, diff: &FileDiff, resolution: Resolution) -> Option<(u64, u64)> {
+    let (start, end) = match resolution {
+        Resolution::Anchored(anchor) => (anchor.start, anchor.end),
+        // The migration path: a model still answering with the old schema gets
+        // its line number honoured, because there is no quotation to place and
+        // its number is better than nothing.
+        Resolution::Unanchored(Unanchored::NoSnippet) => {
+            let line = raw.line?;
+            (line, raw.end_line.unwrap_or(line))
+        }
+        Resolution::Unanchored(Unanchored::NoMatch) => return None,
+    };
+
+    (raw.late || diff.touches_range(start, end)).then_some((start, end))
+}
+
+/// Fold the bookkeeping into the model's own summary.
+///
+/// Every count here is a finding that did not become an inline comment. They
+/// are stated rather than hidden: a filter nobody can see the effect of is a
+/// filter nobody can tell is broken.
+fn summarise(summary: &str, unanchored: usize, discarded: usize, rejected: usize) -> String {
+    let mut notes = Vec::new();
+    if unanchored > 0 {
+        notes.push(format!(
+            "{unanchored} finding{} could not be anchored to a line",
+            plural(unanchored)
+        ));
+    }
+    if discarded > 0 {
+        notes.push(format!(
+            "{discarded} finding{} discarded for naming a file this pull request did not change",
+            plural(discarded)
+        ));
+    }
+    if rejected > 0 {
+        notes.push(format!(
+            "{rejected} finding{} dropped as disproved by the diff",
+            plural(rejected)
+        ));
     }
 
-    let Some((start, end)) = finding.range() else {
-        return false;
-    };
-    diffs
-        .iter()
-        .find(|d| d.path == finding.path)
-        .is_some_and(|d| d.touches_range(start, end))
+    if notes.is_empty() {
+        return summary.to_string();
+    }
+    format!("{summary} ({})", notes.join("; "))
+}
+
+fn plural(count: usize) -> &'static str {
+    if count == 1 { "" } else { "s" }
 }
 
 /// Render the diffs into the text the model sees.
