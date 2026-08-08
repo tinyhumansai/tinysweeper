@@ -1,0 +1,43 @@
+version = 1
+
+# For repositories where a missed vulnerability costs more than a false
+# positive. Everything below trades noise for coverage — deliberately.
+
+[review]
+lanes = ["critique", "security", "tests", "commits", "description"]
+strictness = 3
+severity_gate = "low"
+confidence_min = 0.4
+max_comments = 40
+incremental = true
+draft_prs = true
+respect_agents_md = true
+
+[paths]
+ignore = ["**/*.lock"]
+
+[[path_instructions]]
+glob = ".github/workflows/**"
+instructions = """
+Flag any widening of `permissions`, any use of `pull_request_target` that checks
+out or executes head-ref code, any unpinned third-party action, and any step
+that interpolates untrusted context (title, body, branch name) into a shell.
+"""
+
+[[path_instructions]]
+glob = "**/{Dockerfile,*.dockerfile}"
+instructions = """
+Flag running as root, unpinned base image tags, secrets baked into layers, and
+`ADD` from a remote URL.
+"""
+
+[lanes.critique]
+model = "deep"
+
+[lanes.security]
+model = "deep"
+fail_on = "medium"
+
+[lanes.commits]
+secret_rulepack = "default"
+max_blob_bytes = 262144
