@@ -10,6 +10,7 @@
 //! what GitHub's review-comment API anchors to.
 
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 
 use crate::forge::types::ChangedFile;
 
