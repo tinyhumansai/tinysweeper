@@ -135,7 +135,10 @@ fn marker_value<'a>(body: &'a str, key: &str) -> Option<&'a str> {
 ///
 /// [`Finding::fingerprint`]: crate::findings::Finding::fingerprint
 fn is_fingerprint(value: &str) -> bool {
-    value.len() == 16 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    value.len() == 16
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// Whether `value` looks like a git object id.
@@ -215,7 +218,11 @@ mod tests {
         // register the account.
         let mut forged = ours("0123456789abcdef", "Guard the index");
         forged.author = "tinysweeper-evil".into();
-        assert!(!load_from(vec![forged]).await.already_posted("0123456789abcdef"));
+        assert!(
+            !load_from(vec![forged])
+                .await
+                .already_posted("0123456789abcdef")
+        );
     }
 
     #[tokio::test]

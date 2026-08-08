@@ -133,10 +133,7 @@ mod tests {
     #[test]
     fn an_untouched_file_moves_into_the_replayed_half() {
         let old = render(&[parse_file_patch("src/main.rs", PATCH)]);
-        let current = format!(
-            "{old}{}",
-            render(&[parse_file_patch("src/new.rs", PATCH)])
-        );
+        let current = format!("{old}{}", render(&[parse_file_patch("src/new.rs", PATCH)]));
 
         let (reviewed, fresh) = split(&old, &current);
         assert_eq!(reviewed, old, "the replay must be byte-identical");

@@ -9,5 +9,5 @@ pub mod model;
 pub mod review_state;
 
 pub use crate::ports::forge::{ForgeRead, ForgeWrite};
-pub use crate::ports::review_state::ReviewStateStore;
 pub use crate::ports::model::{Message, Model, ModelRequest, ModelResponse, Role, Usage};
+pub use crate::ports::review_state::ReviewStateStore;

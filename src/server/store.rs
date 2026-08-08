@@ -107,8 +107,7 @@ impl Contributor {
 /// that the collection does not grow forever. Expiry costs a prompt-cache hit
 /// on the next push and nothing else — the fingerprints that keep dedupe
 /// correct are on GitHub, not here.
-pub const REVIEW_STATE_TTL: std::time::Duration =
-    std::time::Duration::from_secs(30 * 24 * 60 * 60);
+pub const REVIEW_STATE_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
 
 /// The server's persistent state.
 #[derive(Clone, Debug)]
@@ -379,8 +378,7 @@ impl crate::ports::review_state::ReviewStateStore for Store {
     }
 
     async fn save_state(&self, key: &str, state: &ReviewedState) -> Result<()> {
-        let mut document =
-            bson::to_document(state).map_err(|err| Error::Forge(err.to_string()))?;
+        let mut document = bson::to_document(state).map_err(|err| Error::Forge(err.to_string()))?;
         // `updated` is what the TTL index above watches, and it is written on
         // every save so an actively-reviewed pull request never expires
         // underneath itself.

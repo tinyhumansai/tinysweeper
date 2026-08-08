@@ -365,10 +365,7 @@ async fn load_prior(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> PriorRe
 }
 
 /// Load the durable record of the last review, if there is a store at all.
-async fn load_remembered(
-    store: Option<&dyn ReviewStateStore>,
-    key: &str,
-) -> Option<ReviewedState> {
+async fn load_remembered(store: Option<&dyn ReviewStateStore>, key: &str) -> Option<ReviewedState> {
     let store = store?;
     match store.load_state(key).await {
         Ok(state) => state,

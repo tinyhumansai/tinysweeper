@@ -38,7 +38,10 @@ mod tests {
 
     #[test]
     fn the_key_names_the_repository_and_the_pull_request() {
-        assert_eq!(key("tinyhumansai/tinysweeper", 7), "tinyhumansai/tinysweeper#7");
+        assert_eq!(
+            key("tinyhumansai/tinysweeper", 7),
+            "tinyhumansai/tinysweeper#7"
+        );
     }
 
     #[test]
