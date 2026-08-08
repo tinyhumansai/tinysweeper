@@ -6,7 +6,13 @@
 //! security boundary from `AGENTS.md`, enforced by the type system rather than
 //! by discipline.
 
+pub mod anchor;
+pub mod commits;
 pub mod critique;
+pub mod description;
+pub mod fanout;
+pub mod security;
+pub mod tests;
 
 use async_trait::async_trait;
 
@@ -14,9 +20,10 @@ use crate::config::types::{Config, LaneId, Severity};
 use crate::error::Result;
 use crate::evidence::diff::FileDiff;
 use crate::findings::types::Finding;
-use crate::forge::types::{CheckConclusion, PullRequest};
+use crate::forge::types::{CheckConclusion, Commit, PullRequest};
+use crate::harness::schema::LaneResponse;
 use crate::ports::model::Usage;
-use crate::scan::types::Finding as ScanFinding;
+use crate::scan::types::{Finding as ScanFinding, ScanKind};
 
 /// Everything a lane is given.
 pub struct LaneInput<'a> {
