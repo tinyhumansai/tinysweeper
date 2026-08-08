@@ -19,9 +19,9 @@
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::config::types::Config;
+use crate::config::types::{Config, Workload};
 use crate::harness::prompt::push_fenced;
-use crate::ports::model::{Message, Model, ModelRequest, Usage};
+use crate::ports::model::{Message, Model, ModelRequest, Spend};
 
 /// What the re-location call answers with.
 #[derive(Debug, Deserialize)]
@@ -32,14 +32,15 @@ struct Relocated {
 
 /// Ask the model to quote the code `comment` is about, out of `rendered_diff`.
 ///
-/// Returns the snippet and what the call cost, or `None` when anything at all
-/// went wrong.
+/// Returns the snippet and what the call cost — attributed to the model that
+/// answered, which is not necessarily the one asked — or `None` when anything
+/// at all went wrong.
 pub async fn relocate(
     model: &dyn Model,
     config: &Config,
     comment: &str,
     rendered_diff: &str,
-) -> Option<(String, Usage)> {
+) -> Option<(String, Spend)> {
     let mut user = String::with_capacity(rendered_diff.len() + comment.len() + 512);
     user.push_str("## The review comment\n\n");
     push_fenced(&mut user, "comment", comment);
@@ -49,7 +50,7 @@ pub async fn relocate(
     let response = model
         .complete(ModelRequest {
             // The cheap tier, always. This is a copy, not a judgement.
-            model: config.models.scan.clone(),
+            model: config.model_for_workload(Workload::Relocate).to_string(),
             messages: vec![Message::system(INSTRUCTIONS), Message::user(user)],
             schema: schema(),
             schema_name: "tinysweeper_relocate".into(),
@@ -58,7 +59,7 @@ pub async fn relocate(
         .await
         .ok()?;
 
-    let usage = response.usage;
+    let spend = Spend::of(&response);
     let relocated: Relocated = serde_json::from_value(response.value).ok()?;
     let snippet = unfence(&relocated.existing_code);
 
@@ -66,9 +67,9 @@ pub async fn relocate(
     // no match. The call still spent tokens and must be accounted for in budget
     // enforcement. Return the empty string with its usage cost.
     if snippet.trim().is_empty() {
-        return Some((String::new(), usage));
+        return Some((String::new(), spend));
     }
-    Some((snippet, usage))
+    Some((snippet, spend))
 }
 
 /// Strip a Markdown fence the model wrapped its answer in.
