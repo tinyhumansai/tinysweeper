@@ -14,7 +14,6 @@ use crate::error::{Error, Result};
 use crate::forge::types::{CheckRun, RepoId, ReviewComment, ReviewEvent};
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 use crate::ports::review_state::ReviewStateStore;
-use crate::state::types::ReviewedState;
 use crate::{MARKER_PREFIX, VERSION};
 
 /// Publish a proposal.
