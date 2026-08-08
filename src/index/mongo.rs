@@ -43,8 +43,8 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
 use crate::index::types::{
-    Chunk, EdgeKind, EmbedSignature, EmbeddedChunk, GraphEdge, GraphNode, HybridQuery, KnowledgeDoc,
-    KnowledgeScope, Neighbourhood, NodeKind, ScoredChunk,
+    Chunk, EdgeKind, EmbedSignature, EmbeddedChunk, GraphEdge, GraphNode, HybridQuery,
+    KnowledgeDoc, KnowledgeScope, Neighbourhood, NodeKind, ScoredChunk,
 };
 use crate::ports::graph::GraphStore;
 use crate::ports::index::ChunkIndex;
@@ -122,7 +122,10 @@ fn vector_index_name(signature: &EmbedSignature) -> String {
 /// slice: inside an `async_trait` future the borrow cannot be proven to outlive
 /// the boxed future, and materialising the documents first is both cheaper to
 /// reason about and no more allocation than the driver does anyway.
-async fn upsert_all(collection: &Collection<Document>, writes: Vec<(Document, Document)>) -> Result<u64> {
+async fn upsert_all(
+    collection: &Collection<Document>,
+    writes: Vec<(Document, Document)>,
+) -> Result<u64> {
     let total = writes.len() as u64;
     let results = futures::stream::iter(writes.into_iter().map(|(filter, update)| {
         let collection = collection.clone();
@@ -327,7 +330,11 @@ impl MongoChunkIndex {
         // without a path in the index that delete is a full collection scan,
         // once per push, over every repository's chunks.
         self.collection
-            .create_index(IndexModel::builder().keys(doc! { "repo_id": 1, "path": 1 }).build())
+            .create_index(
+                IndexModel::builder()
+                    .keys(doc! { "repo_id": 1, "path": 1 })
+                    .build(),
+            )
             .await
             .map_err(|err| Error::Forge(format!("could not index chunks by path: {err}")))?;
         self.collection
@@ -375,17 +382,13 @@ impl MongoChunkIndex {
         // `$listSearchIndexes` is the cheapest thing that fails outright on a
         // deployment with no mongot, so it doubles as the first half of the
         // boot assertion.
-        let mut cursor = self
-            .collection
-            .list_search_indexes()
-            .await
-            .map_err(|err| {
-                if is_unsupported_stage(&err.to_string()) {
-                    unavailable(&err)
-                } else {
-                    mongo(err)
-                }
-            })?;
+        let mut cursor = self.collection.list_search_indexes().await.map_err(|err| {
+            if is_unsupported_stage(&err.to_string()) {
+                unavailable(&err)
+            } else {
+                mongo(err)
+            }
+        })?;
         let mut names = Vec::new();
         while let Some(next) = cursor.next().await {
             let document = next.map_err(mongo)?;
@@ -698,7 +701,10 @@ impl GraphStore for MongoGraphStore {
                 .map_err(|err| Error::Forge(format!("could not index graph {label}: {err}")))?;
         }
         // Traversal looks edges up by endpoint, one hop at a time.
-        for keys in [doc! { "repo_id": 1, "from": 1 }, doc! { "repo_id": 1, "to": 1 }] {
+        for keys in [
+            doc! { "repo_id": 1, "from": 1 },
+            doc! { "repo_id": 1, "to": 1 },
+        ] {
             self.edges
                 .create_index(IndexModel::builder().keys(keys).build())
                 .await

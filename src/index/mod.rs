@@ -20,8 +20,8 @@ pub mod types;
 
 pub use crate::index::mock::{MockChunkIndex, MockEmbedder, MockGraphStore, MockKnowledgeStore};
 pub use crate::index::types::{
-    Chunk, EdgeKind, EmbedSignature, EmbeddedChunk, GraphEdge, GraphNode, HybridQuery, KnowledgeDoc,
-    KnowledgeScope, Neighbourhood, NodeKind, ScoredChunk,
+    Chunk, EdgeKind, EmbedSignature, EmbeddedChunk, GraphEdge, GraphNode, HybridQuery,
+    KnowledgeDoc, KnowledgeScope, Neighbourhood, NodeKind, ScoredChunk,
 };
 
 #[cfg(feature = "serve")]

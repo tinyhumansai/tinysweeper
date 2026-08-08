@@ -466,7 +466,10 @@ mod tests {
 
     #[test]
     fn a_repo_scope_reports_the_org_it_inherits_from() {
-        assert_eq!(KnowledgeScope::repo("tinyhumansai/x").owner(), "tinyhumansai");
+        assert_eq!(
+            KnowledgeScope::repo("tinyhumansai/x").owner(),
+            "tinyhumansai"
+        );
         assert_eq!(KnowledgeScope::org("tinyhumansai").owner(), "tinyhumansai");
     }
 

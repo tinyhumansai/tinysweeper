@@ -78,7 +78,13 @@ fn the_text_definition_does_not_index_the_vector_binary() {
     let definition = MongoChunkIndex::text_definition();
     let mappings = definition.get_document("mappings").expect("mappings");
     assert!(!mappings.get_bool("dynamic").expect("dynamic"));
-    assert!(mappings.get_document("fields").expect("fields").get("vector").is_none());
+    assert!(
+        mappings
+            .get_document("fields")
+            .expect("fields")
+            .get("vector")
+            .is_none()
+    );
 }
 
 fn pipeline_for(query: &HybridQuery) -> Vec<Document> {
@@ -101,23 +107,21 @@ fn the_pipeline_fuses_two_arms_with_rank_fusion_rather_than_hand_rolled_rrf() {
     let query = HybridQuery::new(signature(), "resolve range", vec![0.0; 64]);
     let pipeline = pipeline_for(&query);
 
-    let fusion = pipeline[0].get_document("$rankFusion").expect("$rankFusion");
+    let fusion = pipeline[0]
+        .get_document("$rankFusion")
+        .expect("$rankFusion");
     let pipelines = fusion
         .get_document("input")
         .and_then(|i| i.get_document("pipelines"))
         .expect("pipelines");
     assert!(
-        pipelines
-            .get_array("dense")
-            .expect("dense")[0]
+        pipelines.get_array("dense").expect("dense")[0]
             .as_document()
             .expect("document")
             .contains_key("$vectorSearch")
     );
     assert!(
-        pipelines
-            .get_array("lexical")
-            .expect("lexical")[0]
+        pipelines.get_array("lexical").expect("lexical")[0]
             .as_document()
             .expect("document")
             .contains_key("$search"),
@@ -200,7 +204,10 @@ fn a_graph_node_round_trips_through_its_document() {
     let node = GraphNode::symbol("o/r", "src/a.rs", "alpha");
     assert_eq!(node_from_document(&node_document(&node)), node);
     let file = GraphNode::file("o/r", "src/a.rs");
-    assert_eq!(node_from_document(&node_document(&file)).kind, NodeKind::File);
+    assert_eq!(
+        node_from_document(&node_document(&file)).kind,
+        NodeKind::File
+    );
 }
 
 #[test]
@@ -229,7 +236,10 @@ fn the_boot_probe_never_searches_with_a_zero_vector() {
     let vector = probe_vector(64);
     assert_eq!(vector.len(), 64);
     let norm = vector.iter().map(|v| v * v).sum::<f32>().sqrt();
-    assert!((norm - 1.0).abs() < 1e-5, "the probe vector must be normalised");
+    assert!(
+        (norm - 1.0).abs() < 1e-5,
+        "the probe vector must be normalised"
+    );
 }
 
 #[test]
@@ -282,162 +292,177 @@ live_test!(
     }
 );
 
-live_test!(a_hybrid_query_returns_the_exact_identifier_match, |index| async move {
-    index.prepare(&signature()).await.expect("prepares");
-    let embedder = MockEmbedder::new(64);
+live_test!(
+    a_hybrid_query_returns_the_exact_identifier_match,
+    |index| async move {
+        index.prepare(&signature()).await.expect("prepares");
+        let embedder = MockEmbedder::new(64);
 
-    let chunks = [
-        ("src/a.rs", "fn resolve_git_range(spec: &str) -> Range {}"),
-        ("src/b.rs", "fn something_else_entirely() -> () {}"),
-    ];
-    let mut rows = Vec::new();
-    for (path, text) in chunks {
-        rows.push(EmbeddedChunk {
-            vector: embedder.embed_query(text).await.expect("embeds"),
-            chunk: Chunk {
-                repo_id: "o/r".into(),
-                path: path.into(),
-                start_line: 1,
-                end_line: 3,
-                text: text.into(),
-                lang: Some("rust".into()),
-                symbol: None,
-                content_hash: format!("{:x}", text.len()),
-            },
-        });
-    }
-    index.code.delete_repo("o/r").await.expect("clears");
-    index
-        .code
-        .upsert(&signature(), &rows)
-        .await
-        .expect("upserts");
-
-    // mongot indexes asynchronously; poll rather than sleep a fixed amount.
-    let mut found = Vec::new();
-    for _ in 0..30 {
-        let vector = embedder
-            .embed_query("resolve_git_range")
-            .await
-            .expect("embeds");
-        let query =
-            HybridQuery::new(signature(), "resolve_git_range", vector).in_repo("o/r");
-        found = index.code.query(&query).await.expect("queries");
-        if !found.is_empty() {
-            break;
+        let chunks = [
+            ("src/a.rs", "fn resolve_git_range(spec: &str) -> Range {}"),
+            ("src/b.rs", "fn something_else_entirely() -> () {}"),
+        ];
+        let mut rows = Vec::new();
+        for (path, text) in chunks {
+            rows.push(EmbeddedChunk {
+                vector: embedder.embed_query(text).await.expect("embeds"),
+                chunk: Chunk {
+                    repo_id: "o/r".into(),
+                    path: path.into(),
+                    start_line: 1,
+                    end_line: 3,
+                    text: text.into(),
+                    lang: Some("rust".into()),
+                    symbol: None,
+                    content_hash: format!("{:x}", text.len()),
+                },
+            });
         }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
-    assert_eq!(found[0].chunk.path, "src/a.rs");
-});
-
-live_test!(deleting_by_path_is_scoped_to_the_repository, |index| async move {
-    // Repository ids are unique per test: the live tests share one process and
-    // therefore one database, and `--test-threads` is not something a reader of
-    // this file controls.
-    index.prepare(&signature()).await.expect("prepares");
-    let rows: Vec<EmbeddedChunk> = ["o/del", "o/del-other"]
-        .iter()
-        .map(|repo| EmbeddedChunk {
-            vector: vec![0.1; 64],
-            chunk: Chunk {
-                repo_id: (*repo).into(),
-                path: "src/a.rs".into(),
-                start_line: 1,
-                end_line: 2,
-                text: "fn alpha() {}".into(),
-                lang: None,
-                symbol: None,
-                content_hash: "h".into(),
-            },
-        })
-        .collect();
-    index
-        .code
-        .upsert(&signature(), &rows)
-        .await
-        .expect("upserts");
-    assert_eq!(
+        index.code.delete_repo("o/r").await.expect("clears");
         index
             .code
-            .delete_paths("o/del", &["src/a.rs".to_string()])
+            .upsert(&signature(), &rows)
             .await
-            .expect("deletes"),
-        1
-    );
-    assert_eq!(
-        index.code.delete_repo("o/del-other").await.expect("deletes"),
-        1
-    );
-});
+            .expect("upserts");
 
-live_test!(a_two_hop_walk_reaches_the_caller_of_a_caller, |index| async move {
-    index.graph.prepare().await.expect("prepares");
-    index.graph.delete_repo("o/g").await.expect("clears");
-    index
-        .graph
-        .upsert_nodes(&[
-            GraphNode::file("o/g", "src/a.rs"),
-            GraphNode::file("o/g", "src/b.rs"),
-            GraphNode::file("o/g", "src/c.rs"),
-        ])
-        .await
-        .expect("writes");
-    index
-        .graph
-        .upsert_edges(&[
-            GraphEdge::new("o/g", "src/b.rs", "src/a.rs", EdgeKind::Imports, "src/b.rs"),
-            GraphEdge::new("o/g", "src/c.rs", "src/b.rs", EdgeKind::Imports, "src/c.rs"),
-        ])
-        .await
-        .expect("writes");
-
-    let found = index
-        .graph
-        .neighbours("o/g", &["src/a.rs".to_string()], 2, &EdgeKind::ALL)
-        .await
-        .expect("walks");
-    let paths: Vec<&str> = found.nodes.iter().map(|n| n.path.as_str()).collect();
-    assert_eq!(paths, vec!["src/a.rs", "src/b.rs", "src/c.rs"]);
-});
-
-live_test!(knowledge_documents_widen_from_repo_to_org, |index| async move {
-    index.knowledge.prepare().await.expect("prepares");
-    for id in ["k-org", "k-repo", "k-other"] {
-        index.knowledge.delete(id).await.expect("clears");
+        // mongot indexes asynchronously; poll rather than sleep a fixed amount.
+        let mut found = Vec::new();
+        for _ in 0..30 {
+            let vector = embedder
+                .embed_query("resolve_git_range")
+                .await
+                .expect("embeds");
+            let query = HybridQuery::new(signature(), "resolve_git_range", vector).in_repo("o/r");
+            found = index.code.query(&query).await.expect("queries");
+            if !found.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+        assert_eq!(found[0].chunk.path, "src/a.rs");
     }
-    index
-        .knowledge
-        .put(&KnowledgeDoc::new("k-org", KnowledgeScope::org("o"), "T", "B").pinned())
-        .await
-        .expect("writes");
-    index
-        .knowledge
-        .put(&KnowledgeDoc::new("k-repo", KnowledgeScope::repo("o/r"), "T", "B").pinned())
-        .await
-        .expect("writes");
-    index
-        .knowledge
-        .put(&KnowledgeDoc::new("k-other", KnowledgeScope::repo("o/x"), "T", "B").pinned())
-        .await
-        .expect("writes");
+);
 
-    let ids: Vec<String> = index
-        .knowledge
-        .pinned(&KnowledgeScope::repo("o/r"))
-        .await
-        .expect("reads")
-        .into_iter()
-        .map(|d| d.id)
-        .collect();
-    assert_eq!(ids, vec!["k-org".to_string(), "k-repo".to_string()]);
+live_test!(
+    deleting_by_path_is_scoped_to_the_repository,
+    |index| async move {
+        // Repository ids are unique per test: the live tests share one process and
+        // therefore one database, and `--test-threads` is not something a reader of
+        // this file controls.
+        index.prepare(&signature()).await.expect("prepares");
+        let rows: Vec<EmbeddedChunk> = ["o/del", "o/del-other"]
+            .iter()
+            .map(|repo| EmbeddedChunk {
+                vector: vec![0.1; 64],
+                chunk: Chunk {
+                    repo_id: (*repo).into(),
+                    path: "src/a.rs".into(),
+                    start_line: 1,
+                    end_line: 2,
+                    text: "fn alpha() {}".into(),
+                    lang: None,
+                    symbol: None,
+                    content_hash: "h".into(),
+                },
+            })
+            .collect();
+        index
+            .code
+            .upsert(&signature(), &rows)
+            .await
+            .expect("upserts");
+        assert_eq!(
+            index
+                .code
+                .delete_paths("o/del", &["src/a.rs".to_string()])
+                .await
+                .expect("deletes"),
+            1
+        );
+        assert_eq!(
+            index
+                .code
+                .delete_repo("o/del-other")
+                .await
+                .expect("deletes"),
+            1
+        );
+    }
+);
 
-    assert!(
+live_test!(
+    a_two_hop_walk_reaches_the_caller_of_a_caller,
+    |index| async move {
+        index.graph.prepare().await.expect("prepares");
+        index.graph.delete_repo("o/g").await.expect("clears");
+        index
+            .graph
+            .upsert_nodes(&[
+                GraphNode::file("o/g", "src/a.rs"),
+                GraphNode::file("o/g", "src/b.rs"),
+                GraphNode::file("o/g", "src/c.rs"),
+            ])
+            .await
+            .expect("writes");
+        index
+            .graph
+            .upsert_edges(&[
+                GraphEdge::new("o/g", "src/b.rs", "src/a.rs", EdgeKind::Imports, "src/b.rs"),
+                GraphEdge::new("o/g", "src/c.rs", "src/b.rs", EdgeKind::Imports, "src/c.rs"),
+            ])
+            .await
+            .expect("writes");
+
+        let found = index
+            .graph
+            .neighbours("o/g", &["src/a.rs".to_string()], 2, &EdgeKind::ALL)
+            .await
+            .expect("walks");
+        let paths: Vec<&str> = found.nodes.iter().map(|n| n.path.as_str()).collect();
+        assert_eq!(paths, vec!["src/a.rs", "src/b.rs", "src/c.rs"]);
+    }
+);
+
+live_test!(
+    knowledge_documents_widen_from_repo_to_org,
+    |index| async move {
+        index.knowledge.prepare().await.expect("prepares");
+        for id in ["k-org", "k-repo", "k-other"] {
+            index.knowledge.delete(id).await.expect("clears");
+        }
         index
             .knowledge
-            .retrievable(&KnowledgeScope::repo("o/r"))
+            .put(&KnowledgeDoc::new("k-org", KnowledgeScope::org("o"), "T", "B").pinned())
+            .await
+            .expect("writes");
+        index
+            .knowledge
+            .put(&KnowledgeDoc::new("k-repo", KnowledgeScope::repo("o/r"), "T", "B").pinned())
+            .await
+            .expect("writes");
+        index
+            .knowledge
+            .put(&KnowledgeDoc::new("k-other", KnowledgeScope::repo("o/x"), "T", "B").pinned())
+            .await
+            .expect("writes");
+
+        let ids: Vec<String> = index
+            .knowledge
+            .pinned(&KnowledgeScope::repo("o/r"))
             .await
             .expect("reads")
-            .is_empty()
-    );
-});
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
+        assert_eq!(ids, vec!["k-org".to_string(), "k-repo".to_string()]);
+
+        assert!(
+            index
+                .knowledge
+                .retrievable(&KnowledgeScope::repo("o/r"))
+                .await
+                .expect("reads")
+                .is_empty()
+        );
+    }
+);

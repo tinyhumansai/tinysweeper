@@ -35,8 +35,14 @@ async fn the_embedder_is_deterministic_across_calls() {
     // Golden retrieval tests assert on an exact ordering; that only works if
     // the same text embeds identically every run, on every platform.
     let embedder = MockEmbedder::new(32);
-    let once = embedder.embed_query("fn parse_config").await.expect("embeds");
-    let twice = embedder.embed_query("fn parse_config").await.expect("embeds");
+    let once = embedder
+        .embed_query("fn parse_config")
+        .await
+        .expect("embeds");
+    let twice = embedder
+        .embed_query("fn parse_config")
+        .await
+        .expect("embeds");
     assert_eq!(once, twice);
     assert_eq!(once.len(), 32);
 }
@@ -60,7 +66,10 @@ async fn a_signature_change_hides_previously_indexed_rows() {
     let new = MockEmbedder::with_signature(EmbedSignature::new("mock", "v2", 8));
 
     let rows = embedded(&old, vec![chunk("o/r", "src/a.rs", 1, "fn alpha() {}")]).await;
-    index.upsert(&old.signature(), &rows).await.expect("upserts");
+    index
+        .upsert(&old.signature(), &rows)
+        .await
+        .expect("upserts");
 
     let found = index
         .query(&HybridQuery::new(
@@ -87,7 +96,11 @@ async fn a_signature_change_hides_previously_indexed_rows() {
 async fn upserting_the_same_span_twice_is_one_row() {
     let index = MockChunkIndex::new();
     let embedder = MockEmbedder::new(8);
-    let rows = embedded(&embedder, vec![chunk("o/r", "src/a.rs", 1, "fn alpha() {}")]).await;
+    let rows = embedded(
+        &embedder,
+        vec![chunk("o/r", "src/a.rs", 1, "fn alpha() {}")],
+    )
+    .await;
     index
         .upsert(&embedder.signature(), &rows)
         .await
@@ -145,7 +158,11 @@ async fn deleting_by_path_leaves_the_rest_of_the_repository_alone() {
 async fn deleting_no_paths_deletes_nothing_rather_than_everything() {
     let index = MockChunkIndex::new();
     let embedder = MockEmbedder::new(8);
-    let rows = embedded(&embedder, vec![chunk("o/r", "src/a.rs", 1, "fn alpha() {}")]).await;
+    let rows = embedded(
+        &embedder,
+        vec![chunk("o/r", "src/a.rs", 1, "fn alpha() {}")],
+    )
+    .await;
     index
         .upsert(&embedder.signature(), &rows)
         .await
@@ -238,7 +255,14 @@ async fn a_query_honours_its_limit() {
     let rows = embedded(
         &embedder,
         (0..10)
-            .map(|i| chunk("o/r", "src/a.rs", i * 10 + 1, &format!("fn alpha{i}() {{}}")))
+            .map(|i| {
+                chunk(
+                    "o/r",
+                    "src/a.rs",
+                    i * 10 + 1,
+                    &format!("fn alpha{i}() {{}}"),
+                )
+            })
             .collect(),
     )
     .await;
@@ -332,12 +356,7 @@ async fn a_walk_can_be_confined_to_one_edge_kind() {
         .expect("writes");
 
     let found = graph
-        .neighbours(
-            "o/r",
-            &["src/a.rs".to_string()],
-            1,
-            &[EdgeKind::Defines],
-        )
+        .neighbours("o/r", &["src/a.rs".to_string()], 1, &[EdgeKind::Defines])
         .await
         .expect("walks");
     let ids: Vec<&str> = found.nodes.iter().map(|n| n.id.as_str()).collect();
@@ -414,7 +433,10 @@ async fn upserting_the_same_edge_twice_is_one_edge() {
 async fn a_repository_lookup_inherits_its_organisation_documents() {
     let store = MockKnowledgeStore::new();
     store
-        .put(&KnowledgeDoc::new("org-style", KnowledgeScope::org("o"), "Style", "no unwrap").pinned())
+        .put(
+            &KnowledgeDoc::new("org-style", KnowledgeScope::org("o"), "Style", "no unwrap")
+                .pinned(),
+        )
         .await
         .expect("writes");
     store
@@ -423,8 +445,13 @@ async fn a_repository_lookup_inherits_its_organisation_documents() {
         .expect("writes");
     store
         .put(
-            &KnowledgeDoc::new("other-note", KnowledgeScope::repo("o/other"), "Note", "elsewhere")
-                .pinned(),
+            &KnowledgeDoc::new(
+                "other-note",
+                KnowledgeScope::repo("o/other"),
+                "Note",
+                "elsewhere",
+            )
+            .pinned(),
         )
         .await
         .expect("writes");
