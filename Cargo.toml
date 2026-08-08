@@ -54,6 +54,21 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "fs
 # only `harness::model::TinyAgentsModel` needs it.
 tinyagents = { path = "vendor/tinyagents", optional = true }
 
+# --- optional: the webhook server ---
+# Reversed an earlier decision to go Actions-only. The arguments that changed
+# it: a contributor/whitelist database has nowhere to live in a stateless
+# workflow, 43 repositories' worth of runner minutes is real money, and
+# replying to a comment within seconds needs an event loop rather than a cold
+# runner. What did *not* change: resolving a review thread and reacting to a
+# comment still emit no webhook, so that state is polled either way.
+axum = { version = "0.8", optional = true }
+hmac = { version = "0.13", optional = true }
+sha2-hmac-compat = { package = "sha2", version = "0.10", optional = true }
+jsonwebtoken = { version = "11", optional = true }
+rusqlite = { version = "0.40", features = ["bundled"], optional = true }
+subtle = { version = "2", optional = true }
+tower-http = { version = "0.6", features = ["trace", "limit"], optional = true }
+
 # --- optional: the GitHub forge adapter ---
 octocrab = { version = "0.54", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
@@ -67,14 +82,20 @@ default = []
 harness = ["dep:tinyagents"]
 # The real GitHub adapter behind the `Forge` port.
 github = ["dep:octocrab", "dep:reqwest"]
+# The webhook server: `tinysweeper serve`.
+serve = [
+    "dep:axum",
+    "dep:hmac",
+    "dep:sha2-hmac-compat",
+    "dep:jsonwebtoken",
+    "dep:rusqlite",
+    "dep:subtle",
+    "dep:tower-http",
+    "github",
+    "harness",
+]
 # Everything a production run turns on.
-#
-# There is deliberately no webhook-server feature. tinysweeper runs entirely in
-# GitHub Actions: Actions already receives the repository events a server would
-# have subscribed to, and repositories opt in through a reusable workflow rather
-# than a hosted deployment. That removes a public HTTPS endpoint, a private key
-# at rest, and an operational surface, in exchange for one file per repository.
-all = ["harness", "github"]
+all = ["harness", "github", "serve"]
 
 [dev-dependencies]
 tempfile = "3"
