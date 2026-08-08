@@ -218,6 +218,9 @@ async fn run_apply(_repo: &str, _pr: u64, _findings: &std::path::Path) -> Result
 }
 
 /// Render a proposal for a human reading CI logs.
+///
+/// Only reachable when a review can actually run, which needs both features.
+#[cfg(all(feature = "github", feature = "harness"))]
 fn render(proposal: &tinysweeper::app::Proposal) -> String {
     let mut out = String::new();
     out.push_str(&format!(
