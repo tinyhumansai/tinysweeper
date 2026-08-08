@@ -6,12 +6,21 @@
 //!    token.
 //! 2. Build the prompt in cache-friendly layers.
 //! 3. Ask for structured output; refuse to parse prose.
-//! 4. Drop anything the model anchored outside the diff — *before* it can
-//!    become a comment.
+//! 4. Place every finding by the code it quoted, not by a number it guessed.
+//! 5. Drop the findings the diff disproves.
 //!
-//! Step 4 is not a nicety. Models reliably produce findings anchored to lines
-//! they inferred rather than read, and a comment on an unrelated line is how a
-//! review bot loses a team's trust in one shot.
+//! Steps 4 and 5 are the noise control, and they pull in opposite directions on
+//! purpose. Step 4 (`src/position`) exists because the old rule — the model
+//! emits a line number, and anything outside the diff is dropped — threw away
+//! good findings for bad arithmetic. Step 5 (`src/falsify`) exists because
+//! keeping more findings is only an improvement if the wrong ones still go, and
+//! it removes only what the diff *disproves*, never what it merely cannot
+//! confirm.
+//!
+//! A finding that cannot be placed is no longer dropped. It loses its line and
+//! is rendered into the check-run summary instead of posted inline, which is
+//! the honest outcome: the review found something and could not say exactly
+//! where.
 
 use std::sync::Arc;
 
@@ -20,11 +29,13 @@ use async_trait::async_trait;
 use crate::config::types::LaneId;
 use crate::error::Result;
 use crate::evidence::diff::FileDiff;
+use crate::falsify::Falsifier;
 use crate::findings::types::Finding;
 use crate::harness::prompt::{self, PromptInputs};
-use crate::harness::schema;
+use crate::harness::schema::{self, RawFinding};
 use crate::lanes::{Lane, LaneInput, LaneOutcome};
-use crate::ports::model::{Message, Model, ModelRequest};
+use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
+use crate::ports::model::{Message, Model, ModelRequest, Usage};
 
 /// The correctness lane.
 pub struct Critique {
