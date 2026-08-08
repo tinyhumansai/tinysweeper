@@ -297,8 +297,8 @@ async fn relocation_usage_is_accounted_for() {
         .with_usage(Usage {
             input_tokens: 900,
             output_tokens: 20,
-            cached_tokens: 0,
             cost_usd: 0.001,
+            ..Usage::default()
         });
     let config = config();
     let diff = diff();
@@ -317,8 +317,11 @@ async fn relocation_usage_is_accounted_for() {
         )
         .await;
 
-    assert_eq!(usage.input_tokens, 900);
-    assert!(usage.cost_usd > 0.0, "the call has to reach the budget");
+    assert_eq!(spend.usage.input_tokens, 900);
+    assert!(spend.cost_usd() > 0.0, "the call has to reach the budget");
+    // The relocation call is attributed to the cheap tier that ran it, not to
+    // whichever lane happened to ask for the position.
+    assert_eq!(spend.models, vec![config.models.scan.clone()]);
 }
 
 #[test]
