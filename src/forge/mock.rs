@@ -320,6 +320,17 @@ impl ForgeWrite for MockForge {
         body: &str,
         comments: Vec<ReviewComment>,
     ) -> Result<()> {
+        // Applied to state as well as recorded: fingerprint dedupe reads back
+        // the review comments already on a pull request, so a mock that only
+        // recorded them would make every dedupe test vacuously pass.
+        if !self.read_only {
+            let mut state = self.state.lock().expect("mock state lock");
+            state
+                .review_comments
+                .entry(number)
+                .or_default()
+                .extend(comments.iter().cloned());
+        }
         self.record(Write::Review {
             number,
             body: body.to_string(),
@@ -531,6 +542,28 @@ mod tests {
             "editing must not create a second comment"
         );
         assert_eq!(comments[0].body, "second");
+    }
+
+    #[tokio::test]
+    async fn posted_review_comments_become_readable_for_dedupe() {
+        let forge = MockForge::new();
+        let comment = ReviewComment {
+            path: "src/lib.rs".into(),
+            line: 42,
+            start_line: None,
+            body: "finding".into(),
+        };
+        forge
+            .create_review(&repo(), 7, "summary", vec![comment.clone()])
+            .await
+            .expect("posted");
+
+        assert_eq!(
+            forge.review_comments(&repo(), 7).await.expect("read"),
+            vec![comment],
+            "dedupe reads these back; a mock that dropped them would make every \
+             dedupe test pass for the wrong reason"
+        );
     }
 
     #[tokio::test]

@@ -473,8 +473,16 @@ impl Config {
     }
 
     /// The lane-specific overrides for `lane`, if it has any.
+    ///
+    /// Keys are matched case-insensitively and untrimmed, because that is what
+    /// validation accepts. Matching only the canonical spelling here would let
+    /// `[lanes.Critique]` validate cleanly and then be silently ignored, which
+    /// is the worst outcome available: the setting looks applied and is not.
     pub fn lane(&self, lane: LaneId) -> Option<&Lane> {
-        self.lanes.get(lane.as_str())
+        self.lanes
+            .iter()
+            .find(|(key, _)| LaneId::parse(key) == Some(lane))
+            .map(|(_, value)| value)
     }
 
     /// Resolve a lane's model to a concrete model id.
@@ -568,6 +576,22 @@ mod tests {
         );
         assert_eq!(config.model_for(LaneId::Security), "expensive-model");
         assert_eq!(config.model_for(LaneId::Tests), "vendor/some-other-model");
+    }
+
+    #[test]
+    fn a_lane_key_is_matched_the_way_validation_accepts_it() {
+        // Validation parses lane keys leniently, so lookup has to as well —
+        // otherwise `[lanes.Critique]` passes `check` and is then ignored.
+        let mut config = Config::default();
+        config.models.deep = "expensive-model".into();
+        config.lanes.insert(
+            " Critique ".into(),
+            Lane {
+                model: Some(ModelRef("deep".into())),
+                ..Lane::default()
+            },
+        );
+        assert_eq!(config.model_for(LaneId::Critique), "expensive-model");
     }
 
     #[test]
