@@ -142,6 +142,28 @@ fn line(node: Node) -> u32 {
     node.start_position().row as u32 + 1
 }
 
+/// Every named child of `node` carrying the field name `field`.
+///
+/// `Node::child_by_field_name` returns only the first, and Python's
+/// `import a, b` and `from m import x, y` both repeat the `name` field — so
+/// using the single-child accessor there would index the first name and drop
+/// the rest.
+fn fields<'t>(node: Node<'t>, field: &str) -> Vec<Node<'t>> {
+    let mut walker = node.walk();
+    let mut out = Vec::new();
+    if walker.goto_first_child() {
+        loop {
+            if walker.field_name() == Some(field) {
+                out.push(walker.node());
+            }
+            if !walker.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    out
+}
+
 /// Strip one layer of quotes from a string literal's text.
 fn unquote(raw: &str) -> String {
     let trimmed = raw.trim();
