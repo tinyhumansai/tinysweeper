@@ -401,6 +401,31 @@ mod tests {
     }
 
     #[test]
+    fn an_edited_or_deleted_comment_does_not_trigger_another_review() {
+        // Only `created` should queue a review. Without filtering on the
+        // action, editing a comment to add `@tinysweeper` — or any edit to a
+        // comment that already mentioned it — would queue a fresh paid
+        // review on every save, and a `deleted` delivery may not even carry
+        // a comment body to check.
+        let base = serde_json::json!({
+            "repository": {"full_name": "tinyhumansai/tinysweeper"},
+            "installation": {"id": 1},
+            "sender": {"login": "someone", "type": "User"},
+            "issue": {"number": 7, "pull_request": {}, "user": {"login": "author", "type": "User"}},
+            "comment": {"body": "@tinysweeper review", "user": {"login": "someone", "type": "User"}}
+        });
+
+        for action in ["edited", "deleted"] {
+            let mut delivery = base.clone();
+            delivery["action"] = serde_json::json!(action);
+            assert!(
+                matches!(route("issue_comment", &payload(delivery)), Action::Ignore(_)),
+                "action `{action}` must not queue a review"
+            );
+        }
+    }
+
+    #[test]
     fn an_event_without_an_installation_is_ignored() {
         let mut p = pr_payload("opened");
         p.installation = None;
