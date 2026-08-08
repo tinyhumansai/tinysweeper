@@ -206,7 +206,12 @@ impl Resolver {
             };
         }
 
-        let segments: Vec<&str> = specifier.split("::").filter(|s| !s.is_empty()).collect();
+        // A trailing `*` is a glob over a module's items, not a module of its
+        // own; keeping it would send the search one level too deep.
+        let segments: Vec<&str> = specifier
+            .split("::")
+            .filter(|s| !s.is_empty() && *s != "*")
+            .collect();
         let Some(first) = segments.first() else {
             return Resolution::Unresolved(UnresolvedReason::NoSuchFile);
         };
