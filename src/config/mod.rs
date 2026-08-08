@@ -137,12 +137,63 @@ pub fn load(root: &Path, explicit: Option<&Path>) -> Result<Loaded> {
         ))
     })?;
 
+    load_rule_documents(root, &mut config)?;
+
     Ok(Loaded {
         config,
         provenance,
         source: located.map(|l| l.path),
         preset_source,
     })
+}
+
+/// Inline every `path_instructions.rules` document into its instructions.
+///
+/// Resolved at load time rather than at prompt time so a missing or misnamed
+/// rule document is a configuration error a human sees once, rather than a
+/// silently weaker review every time the bot runs.
+fn load_rule_documents(root: &Path, config: &mut Config) -> Result<()> {
+    for rule in &mut config.path_instructions {
+        let Some(name) = rule.rules.clone() else {
+            continue;
+        };
+        let path = resolve_rules(root, &name)?;
+        let text = std::fs::read_to_string(&path).map_err(|err| Error::path(&path, err))?;
+
+        if rule.instructions.trim().is_empty() {
+            rule.instructions = text;
+        } else {
+            rule.instructions = format!("{}\n\n{text}", rule.instructions.trim_end());
+        }
+    }
+    Ok(())
+}
+
+/// Locate `presets/rules/<name>.md`, searched exactly like a preset.
+fn resolve_rules(root: &Path, name: &str) -> Result<PathBuf> {
+    if name.contains("..") || name.contains('/') || name.contains('\\') {
+        return Err(Error::config(format!(
+            "`rules = \"{name}\"` is not a rule document name; it must not contain a path separator"
+        )));
+    }
+
+    let mut searched = Vec::new();
+    for dir in preset_dirs(root) {
+        let candidate = dir.join("rules").join(format!("{name}.md"));
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+        searched.push(candidate);
+    }
+
+    Err(Error::config(format!(
+        "rule document `{name}` not found; looked in:\n{}",
+        searched
+            .iter()
+            .map(|p| format!("  - {}", p.display()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )))
 }
 
 /// Load and validate in one step, turning any problems into a single error
