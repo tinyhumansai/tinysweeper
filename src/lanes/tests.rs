@@ -245,8 +245,10 @@ fn adds_inline_tests(diff: &FileDiff) -> bool {
     saw_test_attribute
 }
 
+// Not `mod tests`: this file *is* the tests lane, and a `tests` module inside
+// `lanes::tests` is module inception.
 #[cfg(test)]
-mod tests {
+mod lane_tests {
     use super::*;
     use crate::config::types::{Config, Severity};
     use crate::evidence::diff::parse_file_patch;
