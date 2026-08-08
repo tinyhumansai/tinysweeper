@@ -458,9 +458,15 @@ mod tests {
         low.severity = Severity::Medium;
 
         let forge = forge("abc123");
-        apply(&forge, &forge, &config(), &proposal("abc123", vec![low]), None)
-            .await
-            .expect("applies");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![low]),
+            None,
+        )
+        .await
+        .expect("applies");
 
         assert_eq!(review_of(&forge).expect("posted").1, ReviewEvent::Comment);
     }
