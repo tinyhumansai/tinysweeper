@@ -8,6 +8,7 @@
 //! module cannot construct a `ForgeWrite`, so no amount of confusion here can
 //! result in something being posted.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -585,6 +586,8 @@ fn gate(lanes: &[LaneProposal]) -> LaneProposal {
         conclusion,
         summary,
         findings: vec![],
+        resolved: vec![],
+        deduped: 0,
     }
 }
 
