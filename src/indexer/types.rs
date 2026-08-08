@@ -46,7 +46,7 @@ impl IndexState {
     /// The state a run in progress lands in.
     pub fn after(self, settled: &Settled) -> Self {
         match settled {
-            Settled::Done => Self::Ready,
+            Settled::Done { .. } => Self::Ready,
             Settled::Failed { .. } => Self::Failed,
         }
     }
