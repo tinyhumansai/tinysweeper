@@ -10,7 +10,7 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::config::{self, Layer, Loaded};
+use crate::config::{self, Loaded};
 use crate::error::{Error, Result};
 
 /// Validate the config at `path`, printing a report.
@@ -243,6 +243,7 @@ fn split_target(path: &Path) -> (std::path::PathBuf, Option<std::path::PathBuf>)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Layer;
 
     fn repo(config: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("tempdir");
