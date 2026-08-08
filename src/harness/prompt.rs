@@ -146,9 +146,16 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
         suffix.push_str(CONTINUITY_CONTRACT);
     }
 
-    // Layer 5 — the task. Evidence is now in the prefix, so the suffix
-    // contains only the instruction on what to do with it.
-    suffix.push_str("\n## Task\n\nReview the evidence above.");
+    // Layer 5 — the new commits. Volatile by definition, so last and in the
+    // suffix, where a change costs nothing already cached.
+    if !inputs.new_evidence.trim().is_empty() {
+        if inputs.reviewed_evidence.trim().is_empty() {
+            suffix.push_str("\n## Review this\n\nComplete diff:\n\n");
+        } else {
+            suffix.push_str("\n## Review this\n\nOnly the new commits:\n\n");
+        }
+        push_fenced(&mut suffix, "diff", inputs.new_evidence);
+    }
 
     Prompt { prefix, suffix }
 }
