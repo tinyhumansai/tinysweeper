@@ -206,23 +206,7 @@ async fn run_apply(repo: &str, pr: u64, findings: &std::path::Path) -> Result<()
         .ok_or_else(|| tinysweeper::Error::config(format!("`{repo}` is not owner/name")))?;
 
     let proposal = tinysweeper::app::read_proposal(findings)?;
-    if proposal.number != pr {
-        return Err(tinysweeper::Error::config(format!(
-            "the proposal is for #{} but --pr says #{pr}",
-            proposal.number
-        )));
-    }
-    // `--repo` was only syntax-checked above and otherwise discarded, so a
-    // `findings.json` for the wrong repository — reused from a previous run,
-    // or simply the wrong file — would publish under whatever repository the
-    // proposal itself names, silently, to a token that happens to have
-    // access. Require the two to agree before touching the network.
-    if proposal.repo != repo_id.to_string() {
-        return Err(tinysweeper::Error::config(format!(
-            "the proposal is for `{}` but --repo says `{repo_id}`",
-            proposal.repo
-        )));
-    }
+    validate_apply_target(&proposal, &repo_id, pr)?;
 
     let read = GitHubRead::from_env()?;
     let write = GitHubWrite::from_env()?;
