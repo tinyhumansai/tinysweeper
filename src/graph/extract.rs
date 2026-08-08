@@ -212,6 +212,7 @@ fn rust_import(node: Node, source: &[u8]) -> Vec<ImportStmt> {
         .map(|segments| {
             let name = segments.last().cloned().unwrap_or_default();
             ImportStmt {
+                byte: node.start_byte(),
                 specifier: segments.join("::"),
                 // A `use` binds its last segment, which is exactly the name a
                 // later bare call in this file will use.
@@ -315,6 +316,7 @@ fn python_import(node: Node, source: &[u8]) -> Vec<ImportStmt> {
                         specifier: text(module, source),
                         names: Vec::new(),
                         line: at,
+                        byte: node.start_byte(),
                     });
                 }
             }
@@ -338,6 +340,7 @@ fn python_import(node: Node, source: &[u8]) -> Vec<ImportStmt> {
                 specifier: text(module, source),
                 names,
                 line: at,
+                byte: node.start_byte(),
             }]
         }
         _ => Vec::new(),
@@ -359,6 +362,7 @@ fn ts_import(node: Node, source: &[u8]) -> Vec<ImportStmt> {
         specifier: unquote(&text(source_node, source)),
         names,
         line: line(node),
+        byte: node.start_byte(),
     }]
 }
 
@@ -410,6 +414,7 @@ fn collect_go_specs(node: Node, source: &[u8], at: u32, out: &mut Vec<ImportStmt
                 specifier: unquote(&text(path, source)),
                 names: Vec::new(),
                 line: at,
+                byte: node.start_byte(),
             });
         }
         return;
