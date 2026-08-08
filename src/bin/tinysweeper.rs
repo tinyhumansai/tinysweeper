@@ -5,8 +5,8 @@
 //! GitHub item and no tokens — which is how prompt changes get iterated without
 //! burning pull requests.
 //!
-//! There is no `serve`. tinysweeper runs in Actions; see the note on the `all`
-//! feature in Cargo.toml for why.
+//! `serve` runs the webhook server, which is how tinysweeper reaches many
+//! repositories without a workflow file in each of them.
 
 use clap::{Parser, Subcommand};
 use tinysweeper::Result;
@@ -95,6 +95,17 @@ enum Command {
         path: std::path::PathBuf,
     },
 
+    /// Run the webhook server.
+    Serve {
+        /// Address to bind.
+        #[arg(long, default_value = "127.0.0.1:8080", env = "TINYSWEEPER_BIND")]
+        bind: String,
+
+        /// Path to the config file used for repositories without one.
+        #[arg(long)]
+        config: Option<std::path::PathBuf>,
+    },
+
     /// Report the effective configuration and which layer set each value.
     Doctor {
         /// The config file, or a directory to discover one in.
@@ -123,6 +134,7 @@ async fn main() -> Result<()> {
         } => run_review(&repo, pr, config, lanes, dry_run, &propose_to).await,
         Command::Apply { repo, pr, findings } => run_apply(&repo, pr, &findings).await,
         Command::LocalReview { .. } => not_yet("local-review", "M3"),
+        Command::Serve { bind, config } => run_serve(bind, config).await,
         Command::Check { path } => tinysweeper::app::check(&path),
         Command::Doctor { path, json } => tinysweeper::app::doctor(&path, json),
     }
@@ -214,6 +226,44 @@ async fn run_apply(_repo: &str, _pr: u64, _findings: &std::path::Path) -> Result
     Err(tinysweeper::Error::FeatureDisabled(
         "publishing to GitHub",
         "github",
+    ))
+}
+
+/// Run the webhook server.
+#[cfg(feature = "serve")]
+async fn run_serve(bind: String, config_path: Option<std::path::PathBuf>) -> Result<()> {
+    use tinysweeper::server::{ServerConfig, Store, auth::AppAuth, serve};
+
+    let loaded =
+        tinysweeper::config::load_validated(std::path::Path::new("."), config_path.as_deref())?;
+
+    let webhook_secret = std::env::var("TINYSWEEPER_WEBHOOK_SECRET").map_err(|_| {
+        tinysweeper::Error::config(
+            "TINYSWEEPER_WEBHOOK_SECRET is not set. Without it every delivery would be \
+             unauthenticated, so the server refuses to start rather than accept forged events.",
+        )
+    })?;
+
+    let store = Store::from_env().await?;
+    let auth = AppAuth::from_env()?;
+
+    serve(
+        ServerConfig {
+            bind,
+            webhook_secret,
+            config: loaded.config,
+        },
+        store,
+        auth,
+    )
+    .await
+}
+
+#[cfg(not(feature = "serve"))]
+async fn run_serve(_bind: String, _config: Option<std::path::PathBuf>) -> Result<()> {
+    Err(tinysweeper::Error::FeatureDisabled(
+        "running the webhook server",
+        "serve",
     ))
 }
 

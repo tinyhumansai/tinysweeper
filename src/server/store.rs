@@ -215,7 +215,10 @@ impl Store {
     /// Record that a finding was dismissed.
     pub async fn record_dismissal(&self, login: &str) -> Result<()> {
         self.contributors
-            .update_one(doc! { "_id": login }, doc! { "$inc": { "dismissed": 1_i64 } })
+            .update_one(
+                doc! { "_id": login },
+                doc! { "$inc": { "dismissed": 1_i64 } },
+            )
             .upsert(true)
             .await
             .map_err(|err| Error::Forge(err.to_string()))?;
@@ -336,11 +339,14 @@ mod tests {
         };
     }
 
-    store_test!(an_unseen_contributor_is_unknown_rather_than_missing, |store| async move {
-        let who = store.contributor("newcomer-unseen").await.expect("reads");
-        assert_eq!(who.trust, Trust::Unknown);
-        assert_eq!(who.reviews, 0);
-    });
+    store_test!(
+        an_unseen_contributor_is_unknown_rather_than_missing,
+        |store| async move {
+            let who = store.contributor("newcomer-unseen").await.expect("reads");
+            assert_eq!(who.trust, Trust::Unknown);
+            assert_eq!(who.reviews, 0);
+        }
+    );
 
     store_test!(trust_survives_and_carries_its_reason, |store| async move {
         store
@@ -352,47 +358,93 @@ mod tests {
         assert_eq!(who.note.as_deref(), Some("spam pull requests"));
     });
 
-    store_test!(review_counts_accumulate_across_pull_requests, |store| async move {
-        // The whole point of the database: a fact about a person over time,
-        // which a stateless workflow has nowhere to keep.
-        store.record_review("counter", 2).await.expect("writes");
-        store.record_review("counter", 3).await.expect("writes");
-        let who = store.contributor("counter").await.expect("reads");
-        assert_eq!(who.reviews, 2);
-        assert_eq!(who.findings, 5);
-    });
+    store_test!(
+        review_counts_accumulate_across_pull_requests,
+        |store| async move {
+            // The whole point of the database: a fact about a person over time,
+            // which a stateless workflow has nowhere to keep.
+            store.record_review("counter", 2).await.expect("writes");
+            store.record_review("counter", 3).await.expect("writes");
+            let who = store.contributor("counter").await.expect("reads");
+            assert_eq!(who.reviews, 2);
+            assert_eq!(who.findings, 5);
+        }
+    );
 
-    store_test!(recording_a_review_does_not_clobber_trust, |store| async move {
-        store
-            .set_trust("keeper", Trust::Allowed, None)
-            .await
-            .expect("writes");
-        store.record_review("keeper", 1).await.expect("writes");
-        assert_eq!(
-            store.contributor("keeper").await.expect("reads").trust,
-            Trust::Allowed
-        );
-    });
+    store_test!(
+        recording_a_review_does_not_clobber_trust,
+        |store| async move {
+            store
+                .set_trust("keeper", Trust::Allowed, None)
+                .await
+                .expect("writes");
+            store.record_review("keeper", 1).await.expect("writes");
+            assert_eq!(
+                store.contributor("keeper").await.expect("reads").trust,
+                Trust::Allowed
+            );
+        }
+    );
 
-    store_test!(a_redelivered_webhook_is_claimed_only_once, |store| async move {
-        // GitHub redelivers on timeout. A second review is duplicate comments
-        // and duplicate spend for no new information.
-        assert!(store.claim_delivery("d-1", "pull_request").await.expect("claims"));
-        assert!(!store.claim_delivery("d-1", "pull_request").await.expect("claims"));
-    });
+    store_test!(
+        a_redelivered_webhook_is_claimed_only_once,
+        |store| async move {
+            // GitHub redelivers on timeout. A second review is duplicate comments
+            // and duplicate spend for no new information.
+            assert!(
+                store
+                    .claim_delivery("d-1", "pull_request")
+                    .await
+                    .expect("claims")
+            );
+            assert!(
+                !store
+                    .claim_delivery("d-1", "pull_request")
+                    .await
+                    .expect("claims")
+            );
+        }
+    );
 
-    store_test!(a_lease_is_held_by_one_worker_and_released, |store| async move {
-        assert!(store.claim_lease("repo#7@abc", "worker-1").await.expect("claims"));
-        assert!(!store.claim_lease("repo#7@abc", "worker-2").await.expect("claims"));
-        store.release_lease("repo#7@abc").await.expect("releases");
-        assert!(store.claim_lease("repo#7@abc", "worker-2").await.expect("claims"));
-    });
+    store_test!(
+        a_lease_is_held_by_one_worker_and_released,
+        |store| async move {
+            assert!(
+                store
+                    .claim_lease("repo#7@abc", "worker-1")
+                    .await
+                    .expect("claims")
+            );
+            assert!(
+                !store
+                    .claim_lease("repo#7@abc", "worker-2")
+                    .await
+                    .expect("claims")
+            );
+            store.release_lease("repo#7@abc").await.expect("releases");
+            assert!(
+                store
+                    .claim_lease("repo#7@abc", "worker-2")
+                    .await
+                    .expect("claims")
+            );
+        }
+    );
 
-    store_test!(installations_are_recorded_idempotently, |store| async move {
-        store.record_installation(1, "tinyhumansai").await.expect("writes");
-        store.record_installation(1, "tinyhumansai").await.expect("writes");
-        assert_eq!(store.installation_count().await.expect("counts"), 1);
-    });
+    store_test!(
+        installations_are_recorded_idempotently,
+        |store| async move {
+            store
+                .record_installation(1, "tinyhumansai")
+                .await
+                .expect("writes");
+            store
+                .record_installation(1, "tinyhumansai")
+                .await
+                .expect("writes");
+            assert_eq!(store.installation_count().await.expect("counts"), 1);
+        }
+    );
 
     // Pure logic, no database needed — these always run.
 

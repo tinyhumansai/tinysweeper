@@ -236,7 +236,10 @@ mod tests {
             .as_secs();
         let iat = json["iat"].as_u64().unwrap();
         assert!(iat < now, "GitHub rejects a JWT issued in the future");
-        assert!(json["exp"].as_u64().unwrap() <= now + 600, "max lifetime is 10 minutes");
+        assert!(
+            json["exp"].as_u64().unwrap() <= now + 600,
+            "max lifetime is 10 minutes"
+        );
     }
 
     #[test]
