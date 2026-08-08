@@ -362,6 +362,11 @@ impl KnowledgeScope {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KnowledgeDoc {
     /// Stable document id, chosen by whoever wrote it.
+    ///
+    /// Renamed to `_id` on the wire, matching `server::store::Contributor`: the
+    /// id *is* the primary key, and letting MongoDB generate a second one would
+    /// make an upsert insert a duplicate instead of replacing.
+    #[serde(rename = "_id")]
     pub id: String,
     /// Who the document applies to.
     pub scope: KnowledgeScope,
