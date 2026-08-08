@@ -542,7 +542,7 @@ fn lane_proposal(
     let still_open = prior_titles
         .iter()
         .filter(|t| !outcome.resolved.contains(t))
-        .filter(|t| !findings.iter().any(|f| &&f.title == t))
+        .filter(|t| !raised.contains(t))
         .count();
     if still_open > 0 && outcome.skipped.is_none() {
         summary = format!("{summary} ({still_open} earlier finding(s) still open)");
