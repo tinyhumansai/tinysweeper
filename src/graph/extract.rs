@@ -226,6 +226,56 @@ fn walk_import(node: Node, source: &[u8], language: Language) -> Vec<ImportStmt>
 
 // --- Rust ------------------------------------------------------------------
 
+/// Whether a Rust `use` inside an inline `mod` block only names its own file.
+///
+/// `use super::*` written inside `mod tests { .. }` walks up to the module the
+/// block lives in — which is the file itself. That is not a cross-file fact
+/// and must not be resolved as one, or every test module in the repository
+/// reports a missing sibling module.
+fn names_the_enclosing_file(import: &ImportStmt, inline_mods: &[(usize, usize)]) -> bool {
+    let depth = inline_mods
+        .iter()
+        .filter(|(start, end)| *start <= import.byte && import.byte < *end)
+        .count();
+    if depth == 0 {
+        return false;
+    }
+    let mut segments = import.specifier.split("::");
+    match segments.next() {
+        Some("self") => true,
+        Some("super") => {
+            let ups = 1 + import
+                .specifier
+                .split("::")
+                .skip(1)
+                .take_while(|s| *s == "super")
+                .count();
+            ups <= depth
+        }
+        _ => false,
+    }
+}
+
+/// The value of a `#[path = "..."]` attribute preceding an item, if any.
+fn rust_path_attribute(node: Node, source: &[u8]) -> Option<String> {
+    let mut sibling = node.prev_sibling();
+    while let Some(current) = sibling {
+        if current.kind() == "attribute_item" {
+            let text = text(current, source);
+            if let Some(rest) = text.split_once("path")
+                && let Some(open) = rest.1.find('"')
+                && let Some(close) = rest.1[open + 1..].find('"')
+            {
+                return Some(rest.1[open + 1..open + 1 + close].to_string());
+            }
+        } else if current.kind() != "line_comment" && current.kind() != "block_comment" {
+            break;
+        }
+        sibling = current.prev_sibling();
+    }
+    None
+}
+
 fn rust_import(node: Node, source: &[u8]) -> Vec<ImportStmt> {
     let Some(argument) = node.child_by_field_name("argument") else {
         return Vec::new();
