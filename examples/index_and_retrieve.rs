@@ -69,9 +69,16 @@ async fn main() -> Result<()> {
 
     let repo_id = "local/checkout";
     // A synthetic revision: this example indexes a working tree, which has no
-    // commit of its own until it is committed. Changing it forces a re-index,
-    // which is what a smoke test wants.
-    let revision = format!("{:040x}", std::time::SystemTime::now().elapsed().is_ok() as u128);
+    // commit of its own until it is committed. It changes every run, which is
+    // what a smoke test wants — the freshness short-circuit would otherwise
+    // make the second run prove nothing.
+    let revision = format!(
+        "{:040x}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_nanos())
+            .unwrap_or_default()
+    );
 
     let outcome = Indexer::new(&embedder, &index.code, &manifest)?
         .with_selector(tinysweeper::chunk::Selector::new(&config.paths.ignore)?)
