@@ -279,20 +279,48 @@ pub async fn review_with_state(
             // check run for `commits` reports the findings instead of claiming
             // there was nothing to do.
             lanes.retain(|l| l.lane != LaneId::Commits);
+            let total = unclaimed.len();
+            // The conclusion is decided above from every scanner finding, not
+            // from the ones that survive dedupe: a committed key already
+            // reported on an earlier push is still a committed key, and the
+            // check must keep failing even though the comment is not repeated.
+            let posted: Vec<Finding> = unclaimed
+                .into_iter()
+                .filter(|f| !already_posted(f, &suppressed))
+                .collect();
+            let deduped = total - posted.len();
+
             lanes.push(LaneProposal {
                 lane: LaneId::Commits,
                 check_name: LaneId::Commits.check_name(),
                 conclusion: CheckConclusion::Failure,
-                summary: format!(
-                    "{} finding(s) from the deterministic scanners.",
-                    unclaimed.len()
-                ),
-                findings: unclaimed,
+                summary: format!("{total} finding(s) from the deterministic scanners."),
+                findings: posted,
+                resolved: vec![],
+                deduped,
             });
         }
     }
 
     lanes.push(gate(&lanes));
+
+    // Remember what was reviewed, so the next push can replay it and dedupe
+    // against it even if GitHub is slow to show the comments. Best effort: a
+    // store that will not write is a more expensive next review, never a wrong
+    // one, so it must not fail the run that already produced a verdict.
+    if let Some(store) = store
+        && config.review.incremental
+    {
+        let next = ReviewedState {
+            head_sha: context.pull_request.head_sha.clone(),
+            evidence: replay::render(&diffs),
+            fingerprints: accumulated_fingerprints(&suppressed, &lanes),
+            titles: still_open_titles(&prior_titles, &lanes),
+        };
+        if let Err(err) = store.save_state(&state_key, &next).await {
+            tracing::warn!(%err, "could not record the review state; the next review will cost more");
+        }
+    }
 
     Ok(Proposal {
         version: 1,
