@@ -34,7 +34,7 @@ use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
 use crate::lanes::fanout::{FileReview, per_file_with_budget};
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
-use crate::ports::model::{Message, Model, ModelRequest};
+use crate::ports::model::{Message, Model, ModelRequest, Spend};
 use crate::scan::types::{Finding as ScanFinding, ScanKind};
 
 /// The scanner findings this lane owns.
