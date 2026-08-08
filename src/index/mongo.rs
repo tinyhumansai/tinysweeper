@@ -309,7 +309,7 @@ impl MongoChunkIndex {
             .list_search_indexes()
             .await
             .map_err(|err| {
-                if is_unsupported_stage(&err) {
+                if is_unsupported_stage(&err.to_string()) {
                     unavailable(&err)
                 } else {
                     mongo(err)
@@ -360,16 +360,15 @@ impl MongoChunkIndex {
         let query = HybridQuery {
             signature: signature.clone(),
             repo_id: None,
-            text: "tinysweeper boot probe",
+            text: "tinysweeper boot probe".to_string(),
             vector: vec![0.0; signature.dims],
             limit: 1,
             dense_weight: 1.0,
             text_weight: 1.0,
-        }
-        .into();
+        };
         match self.collection.aggregate(self.pipeline(&query)).await {
             Ok(_) => Ok(()),
-            Err(err) if is_unsupported_stage(&err) => Err(unavailable(&err)),
+            Err(err) if is_unsupported_stage(&err.to_string()) => Err(unavailable(&err)),
             Err(err) => Err(mongo(err)),
         }
     }
@@ -445,31 +444,6 @@ impl MongoChunkIndex {
             doc! { "$addFields": { "score": { "$meta": "score" } } },
             doc! { "$limit": query.limit as i64 },
         ]
-    }
-}
-
-/// Borrowed-text form of [`HybridQuery`] used only to build the probe.
-struct ProbeQuery<'a> {
-    signature: EmbedSignature,
-    repo_id: Option<String>,
-    text: &'a str,
-    vector: Vec<f32>,
-    limit: usize,
-    dense_weight: f64,
-    text_weight: f64,
-}
-
-impl From<ProbeQuery<'_>> for HybridQuery {
-    fn from(probe: ProbeQuery<'_>) -> Self {
-        Self {
-            signature: probe.signature,
-            repo_id: probe.repo_id,
-            text: probe.text.to_string(),
-            vector: probe.vector,
-            limit: probe.limit,
-            dense_weight: probe.dense_weight,
-            text_weight: probe.text_weight,
-        }
     }
 }
 
@@ -571,7 +545,7 @@ impl ChunkIndex for MongoChunkIndex {
     async fn query(&self, query: &HybridQuery) -> Result<Vec<ScoredChunk>> {
         let mut cursor = match self.collection.aggregate(self.pipeline(query)).await {
             Ok(cursor) => cursor,
-            Err(err) if is_unsupported_stage(&err) => return Err(unavailable(&err)),
+            Err(err) if is_unsupported_stage(&err.to_string()) => return Err(unavailable(&err)),
             Err(err) => return Err(mongo(err)),
         };
         let mut hits = Vec::new();
@@ -793,10 +767,10 @@ impl GraphStore for MongoGraphStore {
             }
             let filter = doc! {
                 "repo_id": repo_id,
-                "kind": { "$in": &kinds },
+                "kind": { "$in": kinds.clone() },
                 "$or": [
-                    { "from": { "$in": &frontier } },
-                    { "to": { "$in": &frontier } },
+                    { "from": { "$in": frontier.clone() } },
+                    { "to": { "$in": frontier.clone() } },
                 ],
             };
             let mut cursor = self.edges.find(filter).await.map_err(mongo)?;
@@ -816,7 +790,7 @@ impl GraphStore for MongoGraphStore {
             frontier = next;
         }
 
-        let ids: Vec<&String> = reached.iter().collect();
+        let ids: Vec<String> = reached.iter().cloned().collect();
         let mut cursor = self
             .nodes
             .find(doc! { "repo_id": repo_id, "node_id": { "$in": ids } })
@@ -865,9 +839,6 @@ impl MongoKnowledgeStore {
                     { "scope.kind": "repo", "scope.repo_id": repo_id },
                     { "scope.kind": "org", "scope.org": scope.owner() },
                 ],
-                // Named so the `repo_id` binding is obviously the repository
-                // and not the owner.
-                "_": { "$exists": false },
             },
         }
     }
