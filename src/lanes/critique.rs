@@ -90,37 +90,13 @@ impl Lane for Critique {
 
         let parsed = schema::parse(LaneId::Critique, response.value)?;
 
-        let mut findings = Vec::new();
-        let mut discarded = 0usize;
-        for raw in parsed.findings {
-            let finding = raw.into_finding(LaneId::Critique);
-            if anchored_in_diff(&finding, input.diffs) {
-                findings.push(finding);
-            } else {
-                // Not an error: models do this routinely. It is dropped
-                // quietly and counted, so the count can surface in the summary
-                // if it ever gets large enough to mean something.
-                discarded += 1;
-            }
-        }
-
-        let summary = if discarded > 0 {
-            format!(
-                "{} ({discarded} finding{} discarded for not matching a changed line)",
-                parsed.summary.trim(),
-                if discarded == 1 { "" } else { "s" }
-            )
-        } else {
-            parsed.summary.trim().to_string()
-        };
-
-        Ok(LaneOutcome {
-            summary,
-            findings,
-            resolved: parsed.resolved,
-            usage: response.usage,
-            skipped: None,
-        })
+        Ok(LaneOutcome::from_response(
+            LaneId::Critique,
+            parsed,
+            input.diffs,
+            Anchoring::Strict,
+            response.usage,
+        ))
     }
 }
 
