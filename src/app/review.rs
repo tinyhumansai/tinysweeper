@@ -27,7 +27,7 @@ use crate::lanes::{
     description::Description, security::Security, tests::Tests,
 };
 use crate::ports::forge::ForgeRead;
-use crate::ports::model::{Model, Usage};
+use crate::ports::model::{Model, Spend, Usage};
 use crate::ports::review_state::ReviewStateStore;
 use crate::scan;
 use crate::scan::types::ScanKind;
@@ -108,6 +108,19 @@ pub struct LaneProposal {
     /// its still-open finding was suppressed as already posted.
     #[serde(default)]
     pub highest_severity: Option<Severity>,
+    /// What this lane spent.
+    ///
+    /// Per-lane rather than only crate-wide, because "the review cost $0.40" is
+    /// not an actionable number and "security cost $0.38 of it" is: it names
+    /// the lane to turn off, re-tier, or narrow.
+    #[serde(default)]
+    pub usage: Usage,
+    /// The models that actually answered this lane, in first-seen order.
+    ///
+    /// Recorded from the responses, never from config: a fallback that quietly
+    /// takes over is exactly what this field exists to show.
+    #[serde(default)]
+    pub models: Vec<String>,
 }
 
 impl Proposal {
@@ -176,6 +189,8 @@ pub async fn review_with_state(
                 resolved: vec![],
                 deduped: 0,
                 highest_severity: None,
+                usage: Usage::default(),
+                models: vec![],
             }],
             cost_usd: 0.0,
             input_tokens: 0,
@@ -216,8 +231,7 @@ pub async fn review_with_state(
     let file_contents = std::collections::BTreeMap::new();
 
     let mut lanes = Vec::new();
-    let mut usage = Usage::default();
-    let mut models: Vec<String> = Vec::new();
+    let mut spend = Spend::default();
 
     for lane_id in config.enabled_lanes() {
         let lane: Box<dyn Lane> = match lane_id {
@@ -246,14 +260,14 @@ pub async fn review_with_state(
             })
             .await?;
 
-        usage.add(outcome.usage);
-        let answered = config.model_for(lane_id).to_string();
-        if !models.contains(&answered) {
-            models.push(answered);
-        }
-        if usage.cost_usd > config.models.budget_usd_per_pr {
+        // From the responses, not from `config.model_for(lane_id)`. Asking the
+        // config which model was used answers which one was *requested*: a
+        // fallback that took over after a provider outage went unreported, so
+        // the cost line named a model that had answered nothing.
+        spend.merge(outcome.spend.clone());
+        if spend.cost_usd() > config.models.budget_usd_per_pr {
             return Err(Error::Budget {
-                spent: usage.cost_usd,
+                spent: spend.cost_usd(),
                 limit: config.models.budget_usd_per_pr,
             });
         }
@@ -321,11 +335,12 @@ pub async fn review_with_state(
         number,
         head_sha: context.pull_request.head_sha.clone(),
         lanes,
-        cost_usd: usage.cost_usd,
-        input_tokens: usage.input_tokens,
-        output_tokens: usage.output_tokens,
-        cached_tokens: usage.cached_tokens,
-        models,
+        cost_usd: spend.usage.cost_usd,
+        input_tokens: spend.usage.input_tokens,
+        output_tokens: spend.usage.output_tokens,
+        cached_tokens: spend.usage.cached_tokens,
+        embed_tokens: spend.usage.embed_tokens,
+        models: spend.models,
     })
 }
 
@@ -464,6 +479,7 @@ fn lane_proposal(
     // is the last stop before that text is serialized into the proposal,
     // printed to CI logs, and rendered into a check-run summary.
     let outcome_summary = scan::secrets::scrub(&outcome.summary);
+    let spend = outcome.spend;
 
     // The conclusion is decided from every confidence-qualified finding,
     // before the posting gate below hides some of them from view. A
@@ -561,6 +577,8 @@ fn lane_proposal(
         resolved,
         deduped,
         highest_severity,
+        usage: spend.usage,
+        models: spend.models,
     }
 }
 
