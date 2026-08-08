@@ -16,7 +16,7 @@ fn measure() {
     let mut by_reason = std::collections::BTreeMap::new();
     for u in &g.unresolved { *by_reason.entry(format!("{:?}", u.reason)).or_insert(0) += 1; }
     println!("{by_reason:?}");
-    for u in g.unresolved.iter().filter(|u| format!("{:?}", u.reason) != "External").take(30) {
+    for u in g.unresolved.iter().filter(|u| format!("{:?}", u.reason) != "External") {
         println!("  {} :: {} :: {:?}", u.path, u.specifier, u.reason);
     }
 }
