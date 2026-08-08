@@ -213,6 +213,35 @@ impl ChunkIndex for MockChunkIndex {
         Ok(chunks.len() as u64)
     }
 
+    async fn relocate(
+        &self,
+        signature: &EmbedSignature,
+        repo_id: &str,
+        chunks: &[(String, Chunk)],
+    ) -> Result<u64> {
+        let mut rows = self.rows.lock().expect("index lock");
+        let mut copied = Vec::with_capacity(chunks.len());
+        for (from, chunk) in chunks {
+            let Some(row) = rows.get(from) else {
+                continue;
+            };
+            if row.signature != signature.key() || row.chunk.repo_id != repo_id {
+                continue;
+            }
+            copied.push((
+                chunk.id(),
+                Row {
+                    signature: row.signature.clone(),
+                    chunk: chunk.clone(),
+                    vector: row.vector.clone(),
+                },
+            ));
+        }
+        let count = copied.len() as u64;
+        rows.extend(copied);
+        Ok(count)
+    }
+
     async fn delete_repo(&self, repo_id: &str) -> Result<u64> {
         let mut rows = self.rows.lock().expect("index lock");
         let before = rows.len();

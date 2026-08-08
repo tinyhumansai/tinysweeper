@@ -25,11 +25,11 @@
 //! the empty set — which breaks it silently.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use crate::chunk::types::{SkipReason, SkippedFile};
 use crate::chunk::{Chunker, Selector};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::index::types::{Chunk, EmbedSignature, EmbeddedChunk};
 use crate::indexer::cost::EmbedUsage;
 use crate::indexer::types::{Claim, IndexLease, IndexOutcome, IndexReport, IndexedFile, Settled};
@@ -183,11 +183,25 @@ impl<'a> Indexer<'a> {
         root: &Path,
         paths: &[String],
     ) -> Result<IndexOutcome> {
+        let signature = self.embedder.signature();
+        let state = self.manifest.state(repo_id, &signature).await?;
+        // A changed-path list cannot establish a baseline: it omits every
+        // untouched file. Fall back to a full walk until one has completed.
+        if state.revision.is_none() {
+            return self.index_repo(repo_id, revision, root).await;
+        }
         let mut sized = Vec::new();
         let mut removed = Vec::new();
         for path in paths {
-            match std::fs::metadata(root.join(path)) {
-                Ok(metadata) if metadata.is_file() => sized.push((path.clone(), metadata.len())),
+            let relative = Path::new(path);
+            let unsafe_path = relative.is_absolute()
+                || relative
+                    .components()
+                    .any(|part| matches!(part, Component::ParentDir));
+            match (!unsafe_path).then(|| std::fs::symlink_metadata(root.join(relative))) {
+                Some(Ok(metadata)) if metadata.file_type().is_file() => {
+                    sized.push((path.clone(), metadata.len()))
+                }
                 _ => removed.push(path.clone()),
             }
         }
@@ -363,6 +377,21 @@ impl<'a> Indexer<'a> {
         self.manifest.record(repo_id, signature, &intents).await?;
 
         // Step 3: embed and upsert, in batches, across files.
+        let relocations: Vec<(String, Chunk)> = work
+            .iter()
+            .flat_map(|file| file.to_relocate.iter().cloned())
+            .collect();
+        let relocated = self
+            .index
+            .relocate(signature, repo_id, &relocations)
+            .await?;
+        if relocated != relocations.len() as u64 {
+            return Err(Error::Forge(
+                "a confirmed chunk disappeared before its vector could be reused".into(),
+            ));
+        }
+        report.upserted += relocated;
+
         let queue: Vec<(usize, &Chunk)> = work
             .iter()
             .enumerate()
@@ -396,12 +425,16 @@ impl<'a> Indexer<'a> {
                 break;
             }
 
-            let vectors = self.embedder.embed(&texts).await?;
-            report.usage.add(usage);
+            let response = self.embedder.embed(&texts).await?;
+            report.usage.add(EmbedUsage {
+                calls: 1,
+                tokens: response.usage.embed_tokens,
+                cost_usd: response.usage.cost_usd,
+            });
 
             let embedded: Vec<EmbeddedChunk> = batch
                 .iter()
-                .zip(vectors)
+                .zip(response.vectors)
                 .map(|((_, chunk), vector)| EmbeddedChunk {
                     chunk: (*chunk).clone(),
                     vector,
@@ -440,6 +473,15 @@ impl<'a> Indexer<'a> {
         if !stale.is_empty() {
             report.deleted += self.index.delete_chunks(repo_id, &stale).await?;
         }
+        // Delete succeeded, so stale IDs no longer need crash-recovery
+        // protection in the manifest.
+        let finalized: Vec<IndexedFile> = work
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| finished(*index))
+            .map(|(_, file)| file.finalized())
+            .collect();
+        self.manifest.record(repo_id, signature, &finalized).await?;
         Ok(())
     }
 }
@@ -449,6 +491,7 @@ struct FileWork {
     path: String,
     ids: Vec<String>,
     to_embed: Vec<Chunk>,
+    to_relocate: Vec<(String, Chunk)>,
     stale: Vec<String>,
     previous: Vec<String>,
     reused: u64,
@@ -459,16 +502,32 @@ impl FileWork {
         let confirmed: BTreeSet<String> = previous
             .map(|file| file.chunks.iter().cloned().collect())
             .unwrap_or_default();
+        let by_hash: std::collections::BTreeMap<String, String> = confirmed
+            .iter()
+            .filter_map(|id| {
+                id.rsplit('\u{1f}')
+                    .next()
+                    .map(|hash| (hash.to_string(), id.clone()))
+            })
+            .collect();
         let ids: Vec<String> = chunks.iter().map(Chunk::id).collect();
         let fresh: BTreeSet<&String> = ids.iter().collect();
 
         // The heart of "unchanged content costs nothing": an id contains the
         // chunk's content hash, so an id already confirmed is content already
         // embedded, and it is skipped without a call.
-        let to_embed: Vec<Chunk> = chunks
-            .into_iter()
-            .filter(|chunk| !confirmed.contains(&chunk.id()))
-            .collect();
+        let mut to_embed = Vec::new();
+        let mut to_relocate = Vec::new();
+        for chunk in chunks {
+            if confirmed.contains(&chunk.id()) {
+                continue;
+            }
+            if let Some(id) = by_hash.get(&chunk.content_hash) {
+                to_relocate.push((id.clone(), chunk));
+            } else {
+                to_embed.push(chunk);
+            }
+        }
         let reused = ids.len().saturating_sub(to_embed.len()) as u64;
 
         let stale: Vec<String> = previous
@@ -483,6 +542,7 @@ impl FileWork {
             previous: confirmed.into_iter().collect(),
             ids,
             to_embed,
+            to_relocate,
             stale,
             reused,
         }
@@ -490,14 +550,26 @@ impl FileWork {
 
     /// The pending record: the old confirmed set, plus what is about to land.
     fn intent(&self) -> IndexedFile {
+        let mut pending = self.ids.clone();
+        pending.extend(self.stale.iter().cloned());
+        pending.sort();
+        pending.dedup();
         IndexedFile {
             path: self.path.clone(),
             chunks: self.previous.clone(),
-            pending: self.ids.clone(),
+            pending,
         }
     }
 
     fn confirmation(&self) -> IndexedFile {
+        IndexedFile {
+            path: self.path.clone(),
+            chunks: self.ids.clone(),
+            pending: self.stale.clone(),
+        }
+    }
+
+    fn finalized(&self) -> IndexedFile {
         IndexedFile::confirmed(self.path.clone(), self.ids.clone())
     }
 }

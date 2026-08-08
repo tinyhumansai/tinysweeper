@@ -4,6 +4,9 @@
 //! transitions between them are ordinary values, so the machine is tested
 //! offline and the MongoDB adapter only has to persist it.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use serde::{Deserialize, Serialize};
 
 use crate::chunk::types::SkippedFile;
@@ -129,6 +132,34 @@ pub struct IndexLease {
     pub signature: String,
     /// Who holds it, for the log line that explains a requeue.
     pub holder: String,
+    /// A unique fence for this particular claim acquisition.
+    ///
+    /// A holder name identifies a worker, not one lifetime of its claim. The
+    /// fence makes a worker that outlived the claim TTL unable to settle or
+    /// delete a newer claim acquired under the same name.
+    pub fence: String,
+}
+
+impl IndexLease {
+    /// Build a distinct lease for one successful claim acquisition.
+    pub fn new(
+        repo_id: impl Into<String>,
+        signature: impl Into<String>,
+        holder: impl Into<String>,
+    ) -> Self {
+        static NEXT_FENCE: AtomicU64 = AtomicU64::new(0);
+        let tick = NEXT_FENCE.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        Self {
+            repo_id: repo_id.into(),
+            signature: signature.into(),
+            holder: holder.into(),
+            fence: format!("{}-{nanos}-{tick}", std::process::id()),
+        }
+    }
 }
 
 /// The result of trying to take the claim.
@@ -301,11 +332,7 @@ mod tests {
     #[test]
     fn a_busy_claim_yields_no_lease() {
         assert!(Claim::Busy { holder: None }.lease().is_none());
-        let lease = IndexLease {
-            repo_id: "o/r".into(),
-            signature: "s".into(),
-            holder: "worker-1".into(),
-        };
+        let lease = IndexLease::new("o/r", "s", "worker-1");
         assert_eq!(Claim::Granted(lease.clone()).lease(), Some(&lease));
     }
 

@@ -98,6 +98,30 @@ fn report(outcome: IndexOutcome) -> IndexReport {
     }
 }
 
+#[test]
+fn confirmation_retains_stale_ids_until_the_delete_is_finalized() {
+    let old = format!("{REPO}\u{1f}src/a.rs\u{1f}1\u{1f}old-hash");
+    let work = FileWork::new(
+        "src/a.rs".into(),
+        vec![crate::index::Chunk {
+            repo_id: REPO.into(),
+            path: "src/a.rs".into(),
+            start_line: 1,
+            end_line: 1,
+            text: "fn current() {}".into(),
+            content_hash: "new-hash".into(),
+            ..Default::default()
+        }],
+        Some(&crate::indexer::IndexedFile::confirmed(
+            "src/a.rs",
+            vec![old.clone()],
+        )),
+    );
+
+    assert!(work.confirmation().pending.contains(&old));
+    assert!(work.finalized().pending.is_empty());
+}
+
 #[tokio::test]
 async fn re_indexing_unchanged_content_issues_zero_embedding_calls() {
     // The one number that decides whether this module was worth writing. A
@@ -198,6 +222,88 @@ async fn changing_one_file_moves_only_that_files_chunks() {
             .collect::<Vec<_>>(),
         "the edited file's chunks must have been replaced"
     );
+}
+
+#[tokio::test]
+async fn a_first_changed_path_run_builds_a_complete_baseline() {
+    let checkout = Checkout::new();
+    let rig = Rig::new();
+
+    rig.indexer()
+        .index_paths(REPO, "sha-1", &checkout.root(), &["src/alpha.rs".into()])
+        .await
+        .expect("indexes");
+
+    assert!(
+        rig.rows()
+            .await
+            .iter()
+            .any(|(path, _)| path == "src/beta.rs"),
+        "a changed-path list is not a complete repository baseline"
+    );
+    assert!(
+        rig.manifest
+            .snapshot(REPO, &rig.signature())
+            .is_fresh("sha-1")
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_incremental_symlink_is_never_read_as_repository_content() {
+    use std::os::unix::fs::symlink;
+
+    let checkout = Checkout::new();
+    let rig = Rig::new();
+    rig.indexer()
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("indexes");
+    let outside = tempfile::NamedTempFile::new().expect("outside file");
+    std::fs::write(outside.path(), "fn host_secret() {}\n").expect("writes");
+    symlink(outside.path(), checkout.root().join("src/link.rs")).expect("links");
+
+    rig.indexer()
+        .index_paths(REPO, "sha-2", &checkout.root(), &["src/link.rs".into()])
+        .await
+        .expect("indexes");
+
+    assert!(
+        !rig.rows()
+            .await
+            .iter()
+            .any(|(path, _)| path == "src/link.rs"),
+        "a symlink must not cause host data to be embedded"
+    );
+}
+
+#[test]
+fn moving_an_unchanged_definition_reuses_its_embedding() {
+    let old = crate::index::Chunk {
+        repo_id: REPO.into(),
+        path: "src/alpha.rs".into(),
+        start_line: 1,
+        end_line: 3,
+        text: "fn alpha() {}".into(),
+        content_hash: "same-content".into(),
+        ..Default::default()
+    };
+    let moved = crate::index::Chunk {
+        start_line: 2,
+        end_line: 4,
+        ..old.clone()
+    };
+    let work = FileWork::new(
+        "src/alpha.rs".into(),
+        vec![moved.clone()],
+        Some(&crate::indexer::IndexedFile::confirmed(
+            "src/alpha.rs",
+            vec![old.id()],
+        )),
+    );
+
+    assert!(work.to_embed.is_empty());
+    assert_eq!(work.to_relocate, vec![(old.id(), moved)]);
 }
 
 #[tokio::test]

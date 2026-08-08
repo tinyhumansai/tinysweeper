@@ -33,7 +33,7 @@ pub struct MockManifest {
 
 #[derive(Debug, Default)]
 struct Inner {
-    records: BTreeMap<(String, String), (RepoIndex, Option<String>)>,
+    records: BTreeMap<(String, String), (RepoIndex, Option<IndexLease>)>,
     files: BTreeMap<(String, String, String), IndexedFile>,
 }
 
@@ -78,16 +78,13 @@ impl IndexManifest for MockManifest {
 
         if !entry.0.state.claimable() {
             return Ok(Claim::Busy {
-                holder: entry.1.clone(),
+                holder: entry.1.as_ref().map(|lease| lease.holder.clone()),
             });
         }
         entry.0.state = IndexState::Indexing;
-        entry.1 = Some(holder.to_string());
-        Ok(Claim::Granted(IndexLease {
-            repo_id: repo_id.to_string(),
-            signature: signature.key(),
-            holder: holder.to_string(),
-        }))
+        let lease = IndexLease::new(repo_id, signature.key(), holder);
+        entry.1 = Some(lease.clone());
+        Ok(Claim::Granted(lease))
     }
 
     async fn release(&self, lease: &IndexLease, settled: &Settled) -> Result<()> {
@@ -98,6 +95,9 @@ impl IndexManifest for MockManifest {
         else {
             return Ok(());
         };
+        if entry.1.as_ref() != Some(lease) {
+            return Ok(());
+        }
         entry.0.state = entry.0.state.after(settled);
         entry.1 = None;
         match settled {
@@ -226,7 +226,7 @@ impl<E: Embedder> Embedder for CountingEmbedder<E> {
         self.inner.signature()
     }
 
-    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    async fn embed(&self, texts: &[String]) -> Result<crate::index::Embedded> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         self.texts.fetch_add(texts.len() as u64, Ordering::Relaxed);
         self.inner.embed(texts).await

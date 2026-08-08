@@ -590,6 +590,41 @@ impl ChunkIndex for MongoChunkIndex {
         upsert_all(&self.collection, writes).await
     }
 
+    async fn relocate(
+        &self,
+        signature: &EmbedSignature,
+        repo_id: &str,
+        chunks: &[(String, Chunk)],
+    ) -> Result<u64> {
+        let mut copied = 0;
+        for (from, chunk) in chunks {
+            let Some(mut document) = self
+                .collection
+                .find_one(doc! { "_id": from, "repo_id": repo_id, "sig": signature.key() })
+                .await
+                .map_err(mongo)?
+            else {
+                continue;
+            };
+            document.insert("_id", chunk.id());
+            document.insert("path", &chunk.path);
+            document.insert("start_line", chunk.start_line as i64);
+            document.insert("end_line", chunk.end_line as i64);
+            document.insert("text", &chunk.text);
+            document.insert("lang", chunk.lang.as_deref());
+            document.insert("symbol", chunk.symbol.as_deref());
+            document.insert("content_hash", &chunk.content_hash);
+            document.insert("chunked_by", chunk.chunked_by.as_str());
+            self.collection
+                .replace_one(doc! { "_id": chunk.id() }, document)
+                .upsert(true)
+                .await
+                .map_err(mongo)?;
+            copied += 1;
+        }
+        Ok(copied)
+    }
+
     async fn delete_repo(&self, repo_id: &str) -> Result<u64> {
         Ok(self
             .collection

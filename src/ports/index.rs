@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 
 use crate::error::Result;
-use crate::index::types::{EmbedSignature, EmbeddedChunk, HybridQuery, ScoredChunk};
+use crate::index::types::{Chunk, EmbedSignature, EmbeddedChunk, HybridQuery, ScoredChunk};
 
 /// A searchable store of embedded code chunks.
 #[async_trait]
@@ -34,6 +34,15 @@ pub trait ChunkIndex: Send + Sync {
     /// Idempotent on [`Chunk::id`](crate::index::types::Chunk::id): upserting
     /// the same span twice is one row.
     async fn upsert(&self, signature: &EmbedSignature, chunks: &[EmbeddedChunk]) -> Result<u64>;
+
+    /// Copy already-computed vectors to chunks whose content is unchanged but
+    /// whose location metadata changed, without another embedding call.
+    async fn relocate(
+        &self,
+        signature: &EmbedSignature,
+        repo_id: &str,
+        chunks: &[(String, Chunk)],
+    ) -> Result<u64>;
 
     /// Remove every chunk of a repository, returning how many went.
     async fn delete_repo(&self, repo_id: &str) -> Result<u64>;

@@ -53,10 +53,11 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "fs
 # gate and the offline invariant above still holds. The grammars are what let
 # `src/graph/` extract real symbols instead of matching identifiers with a
 # regex; `tree-sitter-typescript` ships both the TypeScript and TSX grammars,
-# which is why there is no separate JavaScript dependency.
+# which is why JavaScript has its own grammar only for plain `.js` files.
 streaming-iterator = "0.1"
 tree-sitter = "0.26"
 tree-sitter-go = "0.25"
+tree-sitter-javascript = "0.25"
 tree-sitter-python = "0.25"
 tree-sitter-rust = "0.24"
 tree-sitter-typescript = "0.23"
@@ -89,22 +90,6 @@ tower-http = { version = "0.6", features = ["trace", "limit"], optional = true }
 octocrab = { version = "0.54", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
 
-# --- optional: the tree-sitter grammars behind the symbol-aware chunker ---
-# Optional so a downstream build that only wants the line splitter can drop five
-# C grammars, but **on by default** — unlike every other optional dependency
-# here. The rule those obey is "anything that needs the network goes behind a
-# feature"; a grammar parses a string in-process and opens no socket, so it does
-# not fall under it. Leaving it off by default would instead mean the default
-# `cargo test` silently exercised only the fallback splitter, and the property
-# that matters most — a chunk never cuts a function in half — would go untested
-# in the build everyone runs.
-tree-sitter = { version = "0.26", optional = true }
-tree-sitter-rust = { version = "0.24", optional = true }
-tree-sitter-typescript = { version = "0.23", optional = true }
-tree-sitter-javascript = { version = "0.25", optional = true }
-tree-sitter-python = { version = "0.25", optional = true }
-tree-sitter-go = { version = "0.25", optional = true }
-
 [features]
 # Offline by default: mock forge, mock model, deterministic scanners. This is
 # what CI's first job builds and what `cargo test` runs against.
@@ -129,14 +114,7 @@ serve = [
 # Symbol-aware chunking. Without it `chunk` still works, on the line splitter,
 # and every chunk honestly reports itself as unparsed rather than pretending a
 # grammar named its enclosing symbol.
-treesitter = [
-    "dep:tree-sitter",
-    "dep:tree-sitter-rust",
-    "dep:tree-sitter-typescript",
-    "dep:tree-sitter-javascript",
-    "dep:tree-sitter-python",
-    "dep:tree-sitter-go",
-]
+treesitter = []
 # Everything a production run turns on.
 all = ["harness", "github", "serve", "treesitter"]
 

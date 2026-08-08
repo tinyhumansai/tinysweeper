@@ -167,11 +167,13 @@ impl IndexManifest for MongoManifest {
         holder: &str,
     ) -> Result<Claim> {
         let key = record_id(repo_id, &signature.key());
+        let lease = IndexLease::new(repo_id, signature.key(), holder);
         match self
             .claims
             .insert_one(doc! {
                 "key": &key,
                 "holder": holder,
+                "fence": &lease.fence,
                 "taken": bson::DateTime::now(),
             })
             .await
@@ -202,17 +204,14 @@ impl IndexManifest for MongoManifest {
                     "repo_id": repo_id,
                     "signature": signature.key(),
                     "state": "indexing",
+                    "fence": &lease.fence,
                 } },
             )
             .upsert(true)
             .await
             .map_err(mongo)?;
 
-        Ok(Claim::Granted(IndexLease {
-            repo_id: repo_id.to_string(),
-            signature: signature.key(),
-            holder: holder.to_string(),
-        }))
+        Ok(Claim::Granted(lease))
     }
 
     async fn release(&self, lease: &IndexLease, settled: &Settled) -> Result<()> {
@@ -243,7 +242,7 @@ impl IndexManifest for MongoManifest {
         };
 
         self.records
-            .update_one(doc! { "_id": &key }, update)
+            .update_one(doc! { "_id": &key, "fence": &lease.fence }, update)
             .upsert(true)
             .await
             .map_err(mongo)?;
@@ -252,7 +251,7 @@ impl IndexManifest for MongoManifest {
         // let the next worker read `indexing` and conclude the repository is
         // busy when nobody holds it.
         self.claims
-            .delete_one(doc! { "key": &key })
+            .delete_one(doc! { "key": &key, "fence": &lease.fence })
             .await
             .map_err(mongo)?;
         Ok(())
