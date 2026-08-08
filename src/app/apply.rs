@@ -145,16 +145,33 @@ fn render_lane_summary(lane: &crate::app::review::LaneProposal) -> String {
     out
 }
 
-fn review_body(proposal: &Proposal) -> String {
+fn review_body(proposal: &Proposal, event: ReviewEvent) -> String {
     let blocking = proposal
         .lanes
         .iter()
         .filter(|l| l.conclusion.blocks())
         .count();
-    let mut body = if blocking == 0 {
-        "tinysweeper found nothing blocking.".to_string()
-    } else {
-        format!("tinysweeper: {blocking} lane(s) blocking.")
+
+    let mut body = match event {
+        ReviewEvent::RequestChanges => {
+            let worst = proposal
+                .findings()
+                .map(|f| f.severity)
+                .max()
+                .unwrap_or(Severity::Low);
+            format!(
+                "Requesting changes: {blocking} lane(s) blocking, worst finding is **{worst}**.\n\n\
+                 Fix or reply to the findings below and push. The next review clears this \
+                 automatically once they are gone — you should not need to dismiss anything by \
+                 hand."
+            )
+        }
+        ReviewEvent::Approve => {
+            "The previously-blocking findings are resolved. Clearing the changes request."
+                .to_string()
+        }
+        ReviewEvent::Comment if blocking == 0 => "tinysweeper found nothing blocking.".to_string(),
+        ReviewEvent::Comment => format!("tinysweeper: {blocking} lane(s) blocking."),
     };
 
     // The full token breakdown goes in the body deliberately. Cache hit rate is
