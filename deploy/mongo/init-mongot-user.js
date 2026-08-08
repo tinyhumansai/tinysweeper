@@ -8,7 +8,7 @@
 //
 // `searchCoordinator` is the whole grant: mongot reads the oplog and manages
 // search indexes, and nothing else.
-const password = cat("/run/secrets/mongo/mongot-password").trim();
+const password = cat("/run/secrets/mongo/mongot-password.initdb").trim();
 
 db.getSiblingDB("admin").createUser({
   user: "mongotUser",
