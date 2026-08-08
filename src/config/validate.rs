@@ -98,6 +98,14 @@ fn validate_review(config: &Config, problems: &mut Vec<String>) {
         ));
     }
 
+    let blocking = review.request_changes_at.trim();
+    if !blocking.eq_ignore_ascii_case("off") && Severity::parse(blocking).is_none() {
+        problems.push(format!(
+            "`review.request_changes_at = \"{blocking}\"` is not a severity; expected `off` or one of {}",
+            known(&Severity::ALL.map(|s| s.as_str()))
+        ));
+    }
+
     if review.max_comments == 0 {
         problems.push(
             "`review.max_comments = 0` would suppress every comment; set it above zero, or disable the lanes you do not want"

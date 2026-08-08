@@ -261,6 +261,12 @@ pub struct Review {
     pub draft_prs: bool,
     /// Treat each changed path's ancestor `AGENTS.md` files as review policy.
     pub respect_agents_md: bool,
+    /// Block the merge button when a finding reaches this severity.
+    ///
+    /// `"off"` never blocks. Anything else names the severity floor. Blocking
+    /// is a real cost — a false positive now needs a human to clear it — which
+    /// is why the floor is high and the setting is one word to turn off.
+    pub request_changes_at: String,
 }
 
 /// Which paths are reviewed at all.
@@ -562,6 +568,15 @@ impl Config {
             Some("scan") | None => &self.models.scan,
             Some(explicit) => explicit,
         }
+    }
+
+    /// The severity at which a review blocks the merge, if it ever does.
+    pub fn request_changes_at(&self) -> Option<Severity> {
+        let setting = self.review.request_changes_at.trim();
+        if setting.eq_ignore_ascii_case("off") || setting.is_empty() {
+            return None;
+        }
+        Severity::parse(setting)
     }
 
     /// The severity at which `lane` fails its check run.
