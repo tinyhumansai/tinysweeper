@@ -121,7 +121,7 @@ fn footer(version: &str) -> String {
 /// renders inline HTML in markdown tables, so a stray tag escapes into the
 /// page. Escaping only pipes here was a bug a test caught — the disclosure
 /// below was escaped and the table above it was not.
-fn escape_cell(text: &str) -> String {
+pub fn escape_cell(text: &str) -> String {
     escape_html(text).replace('|', "\\|")
 }
 
