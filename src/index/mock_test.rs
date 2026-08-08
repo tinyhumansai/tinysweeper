@@ -22,7 +22,7 @@ fn chunk(repo: &str, path: &str, line: u32, text: &str) -> Chunk {
 
 async fn embedded(embedder: &MockEmbedder, chunks: Vec<Chunk>) -> Vec<EmbeddedChunk> {
     let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
-    let vectors = embedder.embed(&texts).await.expect("embeds");
+    let vectors = embedder.embed(&texts).await.expect("embeds").vectors;
     chunks
         .into_iter()
         .zip(vectors)
@@ -38,11 +38,15 @@ async fn the_embedder_is_deterministic_across_calls() {
     let once = embedder
         .embed_query("fn parse_config")
         .await
-        .expect("embeds");
+        .expect("embeds")
+        .into_query_vector()
+        .expect("one vector");
     let twice = embedder
         .embed_query("fn parse_config")
         .await
-        .expect("embeds");
+        .expect("embeds")
+        .into_query_vector()
+        .expect("one vector");
     assert_eq!(once, twice);
     assert_eq!(once.len(), 32);
 }
@@ -51,7 +55,7 @@ async fn the_embedder_is_deterministic_across_calls() {
 async fn embedding_a_batch_returns_one_vector_per_input_in_order() {
     let embedder = MockEmbedder::new(16);
     let texts = vec!["alpha".to_string(), "beta".to_string(), "alpha".to_string()];
-    let vectors = embedder.embed(&texts).await.expect("embeds");
+    let vectors = embedder.embed(&texts).await.expect("embeds").vectors;
     assert_eq!(vectors.len(), 3);
     assert_eq!(vectors[0], vectors[2]);
     assert_ne!(vectors[0], vectors[1]);
@@ -75,7 +79,11 @@ async fn a_signature_change_hides_previously_indexed_rows() {
         .query(&HybridQuery::new(
             new.signature(),
             "alpha",
-            new.embed_query("alpha").await.expect("embeds"),
+            new.embed_query("alpha")
+                .await
+                .expect("embeds")
+                .into_query_vector()
+                .expect("one vector"),
         ))
         .await
         .expect("queries");
@@ -85,7 +93,11 @@ async fn a_signature_change_hides_previously_indexed_rows() {
         .query(&HybridQuery::new(
             old.signature(),
             "alpha",
-            old.embed_query("alpha").await.expect("embeds"),
+            old.embed_query("alpha")
+                .await
+                .expect("embeds")
+                .into_query_vector()
+                .expect("one vector"),
         ))
         .await
         .expect("queries");
@@ -217,7 +229,9 @@ async fn the_lexical_arm_lifts_an_exact_identifier_match() {
         embedder
             .embed_query("resolve_git_range")
             .await
-            .expect("embeds"),
+            .expect("embeds")
+            .into_query_vector()
+            .expect("one vector"),
     );
     let found = index.query(&query).await.expect("queries");
     assert_eq!(found[0].chunk.path, "src/a.rs");
@@ -241,7 +255,11 @@ async fn a_query_can_be_confined_to_one_repository() {
         .await
         .expect("upserts");
 
-    let vector = embedder.embed_query("alpha").await.expect("embeds");
+    let vector = embedder.embed_query("alpha")
+                .await
+                .expect("embeds")
+                .into_query_vector()
+                .expect("one vector");
     let query = HybridQuery::new(embedder.signature(), "alpha", vector).in_repo("o/r");
     let found = index.query(&query).await.expect("queries");
     assert_eq!(found.len(), 1);
@@ -271,7 +289,11 @@ async fn a_query_honours_its_limit() {
         .await
         .expect("upserts");
 
-    let vector = embedder.embed_query("alpha").await.expect("embeds");
+    let vector = embedder.embed_query("alpha")
+                .await
+                .expect("embeds")
+                .into_query_vector()
+                .expect("one vector");
     let query = HybridQuery::new(embedder.signature(), "alpha", vector).limit(3);
     assert_eq!(index.query(&query).await.expect("queries").len(), 3);
 }
