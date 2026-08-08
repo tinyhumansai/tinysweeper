@@ -255,11 +255,12 @@ async fn a_query_can_be_confined_to_one_repository() {
         .await
         .expect("upserts");
 
-    let vector = embedder.embed_query("alpha")
-                .await
-                .expect("embeds")
-                .into_query_vector()
-                .expect("one vector");
+    let vector = embedder
+        .embed_query("alpha")
+        .await
+        .expect("embeds")
+        .into_query_vector()
+        .expect("one vector");
     let query = HybridQuery::new(embedder.signature(), "alpha", vector).in_repo("o/r");
     let found = index.query(&query).await.expect("queries");
     assert_eq!(found.len(), 1);
@@ -289,11 +290,12 @@ async fn a_query_honours_its_limit() {
         .await
         .expect("upserts");
 
-    let vector = embedder.embed_query("alpha")
-                .await
-                .expect("embeds")
-                .into_query_vector()
-                .expect("one vector");
+    let vector = embedder
+        .embed_query("alpha")
+        .await
+        .expect("embeds")
+        .into_query_vector()
+        .expect("one vector");
     let query = HybridQuery::new(embedder.signature(), "alpha", vector).limit(3);
     assert_eq!(index.query(&query).await.expect("queries").len(), 3);
 }

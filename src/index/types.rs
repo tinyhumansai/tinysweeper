@@ -473,9 +473,11 @@ mod tests {
     #[test]
     fn an_embedder_with_no_price_is_charged_rather_than_excused() {
         let unknown = EmbedSignature::new("acme", "unlisted", 8);
-        let billed = Embedded::billed(&unknown, &["some text to embed".to_string()], vec![vec![
-            0.0; 8
-        ]]);
+        let billed = Embedded::billed(
+            &unknown,
+            &["some text to embed".to_string()],
+            vec![vec![0.0; 8]],
+        );
         assert!(billed.usage.embed_tokens > 0);
         assert!(billed.usage.cost_usd > 0.0);
     }

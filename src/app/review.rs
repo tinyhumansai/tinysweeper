@@ -878,7 +878,9 @@ mod tests {
 
         assert_eq!(proposal.models, vec!["vendor/fallback".to_string()]);
         assert!(
-            !proposal.models.contains(&config.model_for(LaneId::Critique).to_string()),
+            !proposal
+                .models
+                .contains(&config.model_for(LaneId::Critique).to_string()),
             "the configured model answered nothing and must not be reported"
         );
         let critique = proposal
