@@ -75,6 +75,15 @@ jobs:
       - name: Test
         run: cargo test --locked --features harness,github --lib
 
+      # `serve` is the only production surface, and until this ran its tests
+      # were compiled but never executed: `check --all-features` below type-checks
+      # them without running them, and no other job enables the feature. Four
+      # tests covering the `$vectorSearch`/`$rankFusion` pipeline shape sat
+      # failing on main unnoticed because of exactly that gap. Tests needing a
+      # live MongoDB are `#[ignore]`d, so this stays offline.
+      - name: Test (serve)
+        run: cargo test --locked --features serve --lib
+
       # Catches feature combinations nothing else builds, including the
       # examples that need credentials at run time but must still compile.
       - name: Check all features
