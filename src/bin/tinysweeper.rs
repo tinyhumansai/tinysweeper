@@ -262,6 +262,31 @@ async fn run_serve(_bind: String, _config: Option<std::path::PathBuf>) -> Result
     ))
 }
 
+/// Refuse to start with a missing or empty webhook secret.
+///
+/// `env::var` returns `Ok("")` for a variable that is set but empty — exactly
+/// what happens when `.env.example` is copied without filling it in. An empty
+/// HMAC key is trivially forgeable, so that must be rejected the same way an
+/// unset secret is.
+#[cfg(feature = "serve")]
+fn require_webhook_secret(raw: Option<String>) -> Result<String> {
+    let secret = raw.ok_or_else(|| {
+        tinysweeper::Error::config(
+            "TINYSWEEPER_WEBHOOK_SECRET is not set. Without it every delivery would be \
+             unauthenticated, so the server refuses to start rather than accept forged events.",
+        )
+    })?;
+
+    if secret.trim().is_empty() {
+        return Err(tinysweeper::Error::config(
+            "TINYSWEEPER_WEBHOOK_SECRET is set but empty. An empty secret can be forged by \
+             anyone; set it to a real value before starting the server.",
+        ));
+    }
+
+    Ok(secret)
+}
+
 /// Render a proposal for a human reading CI logs.
 ///
 /// Only reachable when a review can actually run, which needs both features.
