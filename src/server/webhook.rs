@@ -214,10 +214,20 @@ pub fn route(event: &str, payload: &Payload) -> Action {
             if !asked {
                 return Action::Ignore("comment is not addressed to tinysweeper");
             }
+            // Attributed to whoever asked, not to whoever opened the pull
+            // request. The contributor record is a measure of the work someone
+            // caused; billing a maintainer's `@tinysweeper review` to the
+            // author would quietly distort every trust signal built on it.
+            let asker = payload
+                .comment
+                .as_ref()
+                .map(|c| c.user.login.clone())
+                .unwrap_or_else(|| issue.user.login.clone());
+
             Action::Review {
                 repo: repository.full_name.clone(),
                 number: issue.number,
-                author: issue.user.login.clone(),
+                author: asker,
                 installation: installation.id,
             }
         }
@@ -361,6 +371,25 @@ mod tests {
             route("issue_comment", &payload(addressed)),
             Action::Review { number: 7, .. }
         ));
+    }
+
+    #[test]
+    fn a_commanded_review_is_attributed_to_the_commenter() {
+        // Billing a maintainer's `@tinysweeper review` to the pull request
+        // author would distort every trust signal built on the contributor
+        // record.
+        let p = payload(serde_json::json!({
+            "action": "created",
+            "repository": {"full_name": "tinyhumansai/tinysweeper"},
+            "installation": {"id": 1},
+            "sender": {"login": "maintainer", "type": "User"},
+            "issue": {"number": 7, "pull_request": {}, "user": {"login": "author", "type": "User"}},
+            "comment": {"body": "@tinysweeper review", "user": {"login": "maintainer", "type": "User"}}
+        }));
+        match route("issue_comment", &p) {
+            Action::Review { author, .. } => assert_eq!(author, "maintainer"),
+            other => panic!("expected a review, got {other:?}"),
+        }
     }
 
     #[test]
