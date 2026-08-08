@@ -113,8 +113,19 @@ serve = [
     "github",
     "harness",
 ]
+# Symbol-aware chunking. Without it `chunk` still works, on the line splitter,
+# and every chunk honestly reports itself as unparsed rather than pretending a
+# grammar named its enclosing symbol.
+treesitter = [
+    "dep:tree-sitter",
+    "dep:tree-sitter-rust",
+    "dep:tree-sitter-typescript",
+    "dep:tree-sitter-javascript",
+    "dep:tree-sitter-python",
+    "dep:tree-sitter-go",
+]
 # Everything a production run turns on.
-all = ["harness", "github", "serve"]
+all = ["harness", "github", "serve", "treesitter"]
 
 [dev-dependencies]
 tempfile = "3"
