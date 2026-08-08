@@ -321,11 +321,14 @@ mod tests {
                 resolved: vec![],
                 deduped: 0,
                 highest_severity,
+                usage: Default::default(),
+                models: vec![],
             }],
             cost_usd: 0.01,
             input_tokens: 10_000,
             output_tokens: 400,
             cached_tokens: 800,
+            embed_tokens: 0,
             models: vec!["moonshotai/kimi-k3".into()],
         }
     }
