@@ -331,6 +331,14 @@ async fn run_and_publish(
     // push replay this run's evidence verbatim and pay cache prices for it.
     // Dedupe does not depend on it — that reads the markers off the pull
     // request — so a database problem costs money, never a duplicate comment.
+    // Retrieval is not attached here yet, and the reason is a missing adapter
+    // rather than a decision: nothing in this build implements the `Embedder`
+    // port against a real provider, so there is no way to embed a query. The
+    // indexer has the same gap — a server that cannot embed cannot fill an
+    // index either — so attaching a `Retriever` now would only ever produce the
+    // `Cold` verdict. The seam is `app::review::review_with_retrieval`; the
+    // moment a provider-backed embedder lands, this call moves to it and the
+    // stores come off `MongoIndex`.
     let proposal = crate::app::review::review_with_context(
         forge,
         model,
