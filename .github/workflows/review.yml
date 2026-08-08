@@ -1,0 +1,131 @@
+# The reusable workflow every repository calls.
+#
+# This file is how tinysweeper rolls out without a hosted server: a repository
+# references it in one line and gets the whole review, and changes to the review
+# land here rather than in 43 copies. It is the one thing a server would have
+# bought us, bought instead with `workflow_call`.
+#
+# Downstream usage:
+#
+#   name: tinysweeper
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened, ready_for_review]
+#   jobs:
+#     review:
+#       uses: tinyhumansai/tinysweeper/.github/workflows/review.yml@v1
+#       secrets:
+#         openrouter-api-key: ${{ secrets.TINYSWEEPER_OPENROUTER_KEY }}
+#         app-private-key: ${{ secrets.TINYSWEEPER_APP_PRIVATE_KEY }}
+#       with:
+#         app-id: ${{ vars.TINYSWEEPER_APP_ID }}
+#
+# Secrets are passed by name rather than with `secrets: inherit`. Inheriting
+# hands the called workflow every secret the caller has, which our own security
+# lane flags — and being flagged by your own bot is a good reason to fix the
+# example rather than the rule.
+
+name: tinysweeper review
+
+on:
+  workflow_call:
+    inputs:
+      app-id:
+        description: GitHub App id used to mint an installation token.
+        required: false
+        type: string
+      lanes:
+        description: Comma-separated lanes to run, overriding the config.
+        required: false
+        type: string
+      config:
+        description: Path to .tinysweeper.toml, if it is not in a default location.
+        required: false
+        type: string
+      dry-run:
+        description: Render what would be posted without writing anything.
+        required: false
+        type: boolean
+        default: false
+      version:
+        description: tinysweeper release to run.
+        required: false
+        type: string
+        default: v1
+    secrets:
+      openrouter-api-key:
+        description: Key for the model gateway.
+        required: true
+      app-private-key:
+        description: >
+          Private key for the tinysweeper GitHub App. Optional: without it the
+          workflow falls back to GITHUB_TOKEN, which cannot post checks on pull
+          requests from forks.
+        required: false
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  review:
+    name: review
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # An App installation token is preferred over GITHUB_TOKEN for one
+      # concrete reason: a fork pull request gives GITHUB_TOKEN read-only
+      # scope, so it cannot publish a check run. The App token can.
+      - name: Mint an installation token
+        id: app-token
+        if: inputs.app-id != '' && secrets.app-private-key != ''
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+
+      # LOAD-BEARING: the head ref is checked out for *reading* only. Nothing in
+      # this workflow builds it, installs its dependencies, or runs any script
+      # from it. That invariant is what makes reviewing fork pull requests safe;
+      # see the security boundary in AGENTS.md before adding any step here.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          # Full history: the commits lane walks the pull request's range, and a
+          # shallow clone has nothing to walk.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install tinysweeper
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$VERSION" \
+            --repo tinyhumansai/tinysweeper \
+            --pattern 'tinysweeper-x86_64-unknown-linux-gnu' \
+            --output /usr/local/bin/tinysweeper
+          chmod +x /usr/local/bin/tinysweeper
+          tinysweeper --version
+
+      - name: Review
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          OPENROUTER_API_KEY: ${{ secrets.openrouter-api-key }}
+          # Untrusted values reach the binary as environment variables, never
+          # interpolated into this shell. A pull request title is attacker
+          # controlled.
+          TS_REPO: ${{ github.repository }}
+          TS_PR: ${{ github.event.pull_request.number }}
+          TS_LANES: ${{ inputs.lanes }}
+          TS_CONFIG: ${{ inputs.config }}
+          TS_DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          args=(review --repo "$TS_REPO" --pr "$TS_PR")
+          [ -n "$TS_LANES" ] && args+=(--lanes "$TS_LANES")
+          [ -n "$TS_CONFIG" ] && args+=(--config "$TS_CONFIG")
+          [ "$TS_DRY_RUN" = "true" ] && args+=(--dry-run)
+          tinysweeper "${args[@]}"
