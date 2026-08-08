@@ -43,7 +43,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
 use crate::index::types::{
-    Chunk, EdgeKind, EmbedSignature, EmbeddedChunk, GraphEdge, GraphNode, HybridQuery,
+    Chunk, ChunkMethod, EdgeKind, EmbedSignature, EmbeddedChunk, GraphEdge, GraphNode, HybridQuery,
     KnowledgeDoc, KnowledgeScope, Neighbourhood, NodeKind, ScoredChunk,
 };
 use crate::ports::graph::GraphStore;
@@ -533,6 +533,7 @@ fn chunk_document(signature: &EmbedSignature, embedded: &EmbeddedChunk) -> Docum
         "lang": chunk.lang.as_deref(),
         "symbol": chunk.symbol.as_deref(),
         "content_hash": &chunk.content_hash,
+        "chunked_by": chunk.chunked_by.as_str(),
         "vector": encode_vector(&embedded.vector),
     }
 }
@@ -550,6 +551,12 @@ fn chunk_from_document(document: &Document) -> Chunk {
             .get_str("content_hash")
             .unwrap_or_default()
             .to_string(),
+        // A document written before the field existed reads back as the weaker
+        // claim, which is the safe direction for a missing value to resolve.
+        chunked_by: match document.get_str("chunked_by") {
+            Ok("parsed") => ChunkMethod::Parsed,
+            _ => ChunkMethod::Lines,
+        },
     }
 }
 

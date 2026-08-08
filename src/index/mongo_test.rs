@@ -363,6 +363,7 @@ live_test!(
                     lang: None,
                     symbol: None,
                     content_hash: "h".into(),
+        chunked_by: ChunkMethod::Parsed,
                 },
             })
             .collect();
