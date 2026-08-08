@@ -501,6 +501,21 @@ fn lane_proposal(
         .filter(|f| f.meets(gate, minimum))
         .collect();
 
+    // Identity is stamped here, once, over the code each finding anchors to.
+    // Everything downstream — the marker `apply` writes, the dedupe the next
+    // push does, the triage a developer's acknowledgement is keyed on — reads
+    // this one value, so none of them can disagree about what a finding is.
+    anchor::stamp(&mut findings, diffs);
+
+    // The dedupe itself, and the whole point of this workstream: a finding
+    // already sitting on the pull request from an earlier push is not posted
+    // again. It runs *after* the conclusion is decided, so a suppressed
+    // finding still fails the check — the problem has not gone away, only the
+    // repetition has.
+    let before = findings.len();
+    findings.retain(|f| !already_posted(f, suppressed));
+    let deduped = before - findings.len();
+
     // Most severe first, so the cap keeps what matters when it bites.
     findings.sort_by(|a, b| {
         b.severity
@@ -511,11 +526,23 @@ fn lane_proposal(
     let over_cap = findings.len().saturating_sub(config.review.max_comments);
     findings.truncate(config.review.max_comments);
 
-    let summary = if over_cap > 0 {
-        format!("{outcome_summary} (+{over_cap} more not shown)")
-    } else {
-        outcome_summary
-    };
+    let mut summary = outcome_summary;
+    if over_cap > 0 {
+        summary = format!("{summary} (+{over_cap} more not shown)");
+    }
+    if deduped > 0 {
+        summary = format!("{summary} ({deduped} already reported on an earlier push)");
+    }
+    // A concern raised before, neither fixed nor repeated, has to stay visible.
+    // Silence about it would read as agreement that it is gone.
+    let still_open = prior_titles
+        .iter()
+        .filter(|t| !outcome.resolved.contains(t))
+        .filter(|t| !findings.iter().any(|f| &&f.title == t))
+        .count();
+    if still_open > 0 && outcome.skipped.is_none() {
+        summary = format!("{summary} ({still_open} earlier finding(s) still open)");
+    }
 
     LaneProposal {
         lane,
@@ -523,6 +550,8 @@ fn lane_proposal(
         conclusion,
         summary,
         findings,
+        resolved: outcome.resolved,
+        deduped,
     }
 }
 
