@@ -46,6 +46,19 @@ pub struct Finding {
     /// Drip-feeding one new concern per cycle is a review defect, so a late
     /// finding has to announce itself as one.
     pub late: bool,
+    /// The fingerprint that identifies this finding across pushes.
+    ///
+    /// Computed once, during review, over the code the finding anchors to —
+    /// see [`Finding::fingerprint`] and
+    /// [`anchor_context`](crate::findings::anchor::anchor_context). It travels
+    /// in the proposal because `apply` has no diff to recompute it from, and it
+    /// is what the `tinysweeper:fp=` marker carries onto GitHub.
+    ///
+    /// `None` on a finding that never went through review — the apply path
+    /// falls back to a title-derived fingerprint so an old proposal still
+    /// publishes.
+    #[serde(default)]
+    pub identity: Option<String>,
 }
 
 impl Finding {
@@ -131,6 +144,7 @@ impl From<ScanFinding> for Finding {
             body,
             suggestion: None,
             late: false,
+            identity: None,
         }
     }
 }
@@ -153,6 +167,7 @@ mod tests {
             body: "…".into(),
             suggestion: None,
             late: false,
+            identity: None,
         }
     }
 

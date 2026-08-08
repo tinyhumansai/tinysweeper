@@ -32,6 +32,7 @@ fn finding(title: &str) -> Finding {
         body: "`i` is never bounds-checked.".into(),
         suggestion: None,
         late: false,
+        identity: None,
     }
 }
 
@@ -202,6 +203,7 @@ async fn a_finding_about_code_not_in_the_diff_survives() {
         body: "The value 1024 is used throughout but never documented.".into(),
         suggestion: None,
         late: false,
+        identity: None,
     };
 
     let outcome = filter(&model, vec![finding_about_absent_code.clone()]).await;

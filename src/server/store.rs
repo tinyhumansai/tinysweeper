@@ -4,11 +4,14 @@
 //! fact about a *person over time*, not about one pull request, and a whitelist
 //! that resets on every run is not a whitelist.
 //!
-//! What lives here is deliberately narrow — identity, trust, and delivery
-//! bookkeeping. Review state stays on GitHub in the durable comment's markers,
-//! so losing this database costs the trust decisions and nothing else. That is
-//! a design choice worth keeping: it means the database is never the thing
-//! standing between a pull request and its review.
+//! What lives here is deliberately narrow — identity, trust, delivery
+//! bookkeeping, and a *cache* of the last review of each pull request. What has
+//! already been said still lives on GitHub, in the `tinysweeper:fp=` markers on
+//! the comments themselves, so losing this database costs the trust decisions
+//! and a prompt-cache hit and nothing else. That is a design choice worth
+//! keeping: it means the database is never the thing standing between a pull
+//! request and its review, and `review_state` must never become the only place
+//! a fingerprint is recorded.
 //!
 //! Two collections carry unique indexes and are used for *claiming* rather than
 //! storing: `deliveries` makes a redelivered webhook a no-op, and `leases` stops
@@ -21,6 +24,7 @@ use mongodb::{Client, Collection, IndexModel};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::state::types::ReviewedState;
 
 /// How long a lease survives without being released.
 ///
@@ -97,6 +101,14 @@ impl Contributor {
     }
 }
 
+/// How long a remembered review survives.
+///
+/// Long enough to cover a pull request that sits open for a month, short enough
+/// that the collection does not grow forever. Expiry costs a prompt-cache hit
+/// on the next push and nothing else — the fingerprints that keep dedupe
+/// correct are on GitHub, not here.
+pub const REVIEW_STATE_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
 /// The server's persistent state.
 #[derive(Clone, Debug)]
 pub struct Store {
@@ -104,6 +116,7 @@ pub struct Store {
     deliveries: Collection<Document>,
     leases: Collection<Document>,
     installations: Collection<Document>,
+    review_state: Collection<Document>,
 }
 
 impl Store {
@@ -119,6 +132,7 @@ impl Store {
             deliveries: database.collection("deliveries"),
             leases: database.collection("leases"),
             installations: database.collection("installations"),
+            review_state: database.collection("review_state"),
         };
         store.ensure_indexes().await?;
         Ok(store)
@@ -194,6 +208,22 @@ impl Store {
             )
             .await
             .map_err(|err| Error::Forge(format!("could not set the delivery TTL: {err}")))?;
+
+        // Remembered reviews expire too. Losing one is a more expensive next
+        // review, never a wrong one, so there is no reason to keep them for a
+        // pull request nobody has touched in a month.
+        let review_ttl = IndexOptions::builder()
+            .expire_after(REVIEW_STATE_TTL)
+            .build();
+        self.review_state
+            .create_index(
+                IndexModel::builder()
+                    .keys(doc! { "updated": 1 })
+                    .options(review_ttl)
+                    .build(),
+            )
+            .await
+            .map_err(|err| Error::Forge(format!("could not set the review-state TTL: {err}")))?;
 
         Ok(())
     }
@@ -317,6 +347,49 @@ impl Store {
     /// Whether the database is reachable.
     pub async fn healthy(&self) -> bool {
         self.installations.count_documents(doc! {}).await.is_ok()
+    }
+}
+
+/// The review-state port, on the collection above.
+///
+/// Deliberately a *cache*: every method degrades to "nothing remembered" rather
+/// than propagating a decoding problem, because the authoritative record of
+/// what has already been said is the markers on the pull request. A row this
+/// server cannot read must cost a cache hit, not a review.
+#[async_trait::async_trait]
+impl crate::ports::review_state::ReviewStateStore for Store {
+    async fn load_state(&self, key: &str) -> Result<Option<ReviewedState>> {
+        let found = self
+            .review_state
+            .find_one(doc! { "_id": key })
+            .await
+            .map_err(|err| Error::Forge(err.to_string()))?;
+
+        let Some(document) = found else {
+            return Ok(None);
+        };
+        match bson::from_document::<ReviewedState>(document) {
+            Ok(state) => Ok(Some(state)),
+            Err(err) => {
+                tracing::warn!(%err, %key, "unreadable review state; reviewing from scratch");
+                Ok(None)
+            }
+        }
+    }
+
+    async fn save_state(&self, key: &str, state: &ReviewedState) -> Result<()> {
+        let mut document = bson::to_document(state).map_err(|err| Error::Forge(err.to_string()))?;
+        // `updated` is what the TTL index above watches, and it is written on
+        // every save so an actively-reviewed pull request never expires
+        // underneath itself.
+        document.insert("updated", bson::DateTime::now());
+
+        self.review_state
+            .update_one(doc! { "_id": key }, doc! { "$set": document })
+            .upsert(true)
+            .await
+            .map_err(|err| Error::Forge(err.to_string()))?;
+        Ok(())
     }
 }
 

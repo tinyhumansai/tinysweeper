@@ -210,6 +210,15 @@ pub struct ReviewComment {
     pub line: u64,
     /// The first line, when the comment spans a range.
     pub start_line: Option<u64>,
+    /// The login of whoever wrote it. Empty on a comment being *written* —
+    /// the forge assigns it.
+    ///
+    /// Load-bearing on the read path: the fingerprint markers used for dedupe
+    /// are only honoured on comments tinysweeper itself wrote, and this is the
+    /// field that says so. Without it a contributor could paste a marker into
+    /// their own comment and suppress a real finding.
+    #[serde(default)]
+    pub author: String,
     /// The markdown body, including the fingerprint marker.
     pub body: String,
 }

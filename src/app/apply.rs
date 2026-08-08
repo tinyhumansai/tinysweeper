@@ -13,14 +13,20 @@ use crate::config::types::{Config, Severity};
 use crate::error::{Error, Result};
 use crate::forge::types::{CheckRun, RepoId, ReviewComment, ReviewEvent};
 use crate::ports::forge::{ForgeRead, ForgeWrite};
+use crate::ports::review_state::ReviewStateStore;
 use crate::{MARKER_PREFIX, VERSION};
 
 /// Publish a proposal.
+///
+/// If a store is provided, extends the stored fingerprints with the identities
+/// of newly posted findings after successful publication, so the next review
+/// will dedupe them correctly.
 pub async fn apply(
     read: &dyn ForgeRead,
     write: &dyn ForgeWrite,
     config: &Config,
     proposal: &Proposal,
+    store: Option<&dyn ReviewStateStore>,
 ) -> Result<()> {
     let repo = RepoId::parse(&proposal.repo)
         .ok_or_else(|| Error::Forge(format!("`{}` is not owner/name", proposal.repo)))?;
@@ -60,6 +66,22 @@ pub async fn apply(
     let event = review_event(config, proposal, blocking_now);
     let comments = inline_comments(proposal);
 
+    // The identities about to be posted, so the store can be extended once the
+    // write succeeds.
+    //
+    // Read straight off the findings rather than parsed back out of the comment
+    // bodies this function just rendered. The round-trip through text was both
+    // unnecessary and wrong — it searched for `{fp=` while the marker written
+    // below is `<!-- tinysweeper:fp=… -->`, so it never matched and the store
+    // was never extended. The same condition as `inline_comments`: only an
+    // anchored finding becomes a comment, and only a posted finding may
+    // suppress a later one.
+    let newly_posted: Vec<String> = proposal
+        .findings()
+        .filter(|finding| finding.line.is_some())
+        .filter_map(|finding| finding.identity.clone())
+        .collect();
+
     // Submit a review if:
     // - there are inline comments to post, or
     // - the verdict is Approve (clears a previous block), or
@@ -78,6 +100,20 @@ pub async fn apply(
                 event,
             )
             .await?;
+
+        // After successful publish, extend the stored state with newly posted
+        // fingerprints so the next review dedupes them correctly.
+        if let Some(store) = store
+            && !newly_posted.is_empty()
+        {
+            let state_key = crate::state::key(&proposal.repo, proposal.number);
+            if let Ok(Some(mut current_state)) = store.load_state(&state_key).await {
+                current_state.fingerprints.extend(newly_posted.clone());
+                if let Err(err) = store.save_state(&state_key, &current_state).await {
+                    tracing::warn!(%err, "could not record newly posted fingerprints");
+                }
+            }
+        }
     }
 
     Ok(())
@@ -89,8 +125,18 @@ fn review_event(config: &Config, proposal: &Proposal, blocking_now: bool) -> Rev
         return ReviewEvent::Comment;
     };
 
-    let blocking_findings = proposal.findings().any(|f| f.severity >= threshold);
-    if blocking_findings {
+    // Blocking needs BOTH a failing lane and a finding severe enough to justify
+    // it. The lane conclusion alone is not enough: `fail_on` and
+    // `request_changes_at` are independent knobs, so a lane configured to fail
+    // on medium must still be able to fail a check without also blocking the
+    // merge when the merge gate is set to high. Reading only the conclusion
+    // here made `request_changes_at` inert.
+    //
+    // The severity is read from the lane's findings rather than the surviving
+    // comments, so a recurred problem whose comment was deduped away still
+    // blocks — being already visible is not being fixed.
+    let severe_enough = proposal.has_severity_at_or_above(threshold);
+    if proposal.blocked() && severe_enough {
         ReviewEvent::RequestChanges
     } else if blocking_now {
         // Clean now, blocked before: clear it. Anything else leaves the author
@@ -126,7 +172,35 @@ fn title_for(findings: usize, summary: &str) -> String {
 }
 
 fn render_lane_summary(lane: &crate::app::review::LaneProposal) -> String {
-    crate::findings::render::lane_summary(&lane.summary, &lane.findings, VERSION)
+    let mut out = crate::findings::render::lane_summary(&lane.summary, &lane.findings, VERSION);
+
+    // Resolved findings are reported, not discarded. An author who fixed
+    // something needs to see that it was noticed; otherwise the only signal a
+    // review ever gives is a new objection.
+    if !lane.resolved.is_empty() {
+        out.push_str("\n**Fixed since the last review**\n\n");
+        for title in &lane.resolved {
+            // Escape titles to prevent model-authored markup from breaking the page.
+            out.push_str(&format!(
+                "- {}\n",
+                crate::findings::render::escape_cell(title)
+            ));
+        }
+    }
+
+    out
+}
+
+/// The fingerprint marker to stamp on a finding's comment.
+///
+/// Falls back to a title-derived fingerprint for a proposal written before the
+/// identity was stamped during review — an old `findings.json` still publishes,
+/// it just dedupes on the weaker key it was written with.
+fn identity(finding: &crate::findings::types::Finding) -> String {
+    finding
+        .identity
+        .clone()
+        .unwrap_or_else(|| finding.fingerprint(&finding.title))
 }
 
 fn review_body(proposal: &Proposal, event: ReviewEvent) -> String {
@@ -188,6 +262,9 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
                 path: finding.path.clone(),
                 line,
                 start_line: None,
+                // The forge assigns the author on the way in; on the way out it
+                // is what tells dedupe whether a marker is ours.
+                author: String::new(),
                 body: format!(
                     "{} **{}**\n\n{}\n\n<sub>{} · {} · <!-- {MARKER_PREFIX}fp={} --></sub>",
                     crate::findings::render::badge(finding.severity),
@@ -195,7 +272,12 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
                     finding.body,
                     finding.lane,
                     crate::findings::render::confidence_badge(finding.confidence),
-                    finding.fingerprint(&finding.title),
+                    // The identity review stamped, over the code this finding
+                    // anchors to. Recomputing it here from the title — as this
+                    // once did — makes the marker depend on the model's
+                    // wording, so a rephrased sentence looks like a new finding
+                    // and gets posted again on the next push.
+                    identity(finding),
                 ),
             })
         })
@@ -220,6 +302,7 @@ mod tests {
     }
 
     fn proposal(head: &str, findings: Vec<Finding>) -> Proposal {
+        let highest_severity = findings.iter().map(|finding| finding.severity).max();
         Proposal {
             version: 1,
             repo: "tinyhumansai/tinysweeper".into(),
@@ -235,6 +318,9 @@ mod tests {
                 },
                 summary: "Reviewed.".into(),
                 findings,
+                resolved: vec![],
+                deduped: 0,
+                highest_severity,
             }],
             cost_usd: 0.01,
             input_tokens: 10_000,
@@ -257,6 +343,7 @@ mod tests {
             body: "`i` is never bounds-checked.".into(),
             suggestion: None,
             late: false,
+            identity: None,
         }
     }
 
@@ -276,7 +363,7 @@ mod tests {
     #[tokio::test]
     async fn a_check_run_is_published_per_lane() {
         let forge = forge("abc123");
-        apply(&forge, &forge, &config(), &proposal("abc123", vec![]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
             .await
             .expect("applies");
 
@@ -292,7 +379,7 @@ mod tests {
         // The review ran against a commit that has since been replaced.
         // Publishing would report on code nobody is looking at.
         let forge = forge("newer456");
-        apply(&forge, &forge, &config(), &proposal("abc123", vec![]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
             .await
             .expect("returns cleanly");
 
@@ -307,6 +394,7 @@ mod tests {
             &forge,
             &config(),
             &proposal("abc123", vec![finding()]),
+            None,
         )
         .await
         .expect("applies");
@@ -333,7 +421,7 @@ mod tests {
     #[tokio::test]
     async fn a_clean_review_posts_no_inline_comments_at_all() {
         let forge = forge("abc123");
-        apply(&forge, &forge, &config(), &proposal("abc123", vec![]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
             .await
             .expect("applies");
 
@@ -361,6 +449,7 @@ mod tests {
             &forge,
             &config(),
             &proposal("abc123", vec![finding()]),
+            None,
         )
         .await
         .expect("applies");
@@ -369,6 +458,44 @@ mod tests {
         assert_eq!(event, ReviewEvent::RequestChanges);
         assert!(body.contains("Requesting changes"), "{body}");
         assert!(body.contains("**high**"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn publishing_records_the_identities_it_posted() {
+        // The store extension used to parse the fingerprint back out of the
+        // comment body it had just rendered, looking for `{fp=` while the
+        // marker written is `<!-- tinysweeper:fp=… -->`. It never matched, so
+        // nothing was ever recorded and the next review re-posted everything.
+        // A no-op is indistinguishable from success without this test.
+        let mut posted = finding();
+        posted.identity = Some("0123456789abcdef".into());
+
+        let store = crate::state::MemoryState::default();
+        let key = crate::state::key("tinyhumansai/tinysweeper", 7);
+        store
+            .save_state(&key, &Default::default())
+            .await
+            .expect("seeds");
+
+        let forge = forge("abc123");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![posted]),
+            Some(&store),
+        )
+        .await
+        .expect("applies");
+
+        let recorded = store.load_state(&key).await.expect("loads").expect("state");
+        assert!(
+            recorded
+                .fingerprints
+                .contains(&"0123456789abcdef".to_string()),
+            "{:?}",
+            recorded.fingerprints
+        );
     }
 
     #[tokio::test]
@@ -386,6 +513,7 @@ mod tests {
             &forge,
             &config(),
             &proposal("abc123", vec![unanchored]),
+            None,
         )
         .await
         .expect("applies");
@@ -407,9 +535,15 @@ mod tests {
         low.severity = Severity::Medium;
 
         let forge = forge("abc123");
-        apply(&forge, &forge, &config(), &proposal("abc123", vec![low]))
-            .await
-            .expect("applies");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![low]),
+            None,
+        )
+        .await
+        .expect("applies");
 
         assert_eq!(review_of(&forge).expect("posted").1, ReviewEvent::Comment);
     }
@@ -420,7 +554,7 @@ mod tests {
         // reviewer, so without an explicit approval a stale objection blocks
         // the merge button until a human dismisses it by hand.
         let forge = forge("abc123").with_own_review(7, ReviewEvent::RequestChanges);
-        apply(&forge, &forge, &config(), &proposal("abc123", vec![]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
             .await
             .expect("applies");
 
@@ -430,11 +564,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_deduped_high_finding_keeps_an_existing_block() {
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::RequestChanges);
+        let mut proposal = proposal("abc123", vec![]);
+        proposal.lanes[0].conclusion = CheckConclusion::Failure;
+        proposal.lanes[0].highest_severity = Some(Severity::High);
+        proposal.lanes[0].deduped = 1;
+
+        apply(&forge, &forge, &config(), &proposal, None)
+            .await
+            .expect("applies");
+
+        assert_eq!(
+            review_of(&forge).expect("a blocking review was posted").1,
+            ReviewEvent::RequestChanges
+        );
+    }
+
+    #[tokio::test]
     async fn a_clean_pull_request_that_was_never_blocked_stays_silent() {
         // No approval to hand out: approving every green pull request would be
         // a bot rubber-stamping work it did not really vouch for.
         let forge = forge("abc123");
-        apply(&forge, &forge, &config(), &proposal("abc123", vec![]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
             .await
             .expect("applies");
 
@@ -452,6 +604,7 @@ mod tests {
             &forge,
             &config,
             &proposal("abc123", vec![finding()]),
+            None,
         )
         .await
         .expect("applies");
@@ -467,6 +620,7 @@ mod tests {
             &forge,
             &config(),
             &proposal("abc123", vec![finding()]),
+            None,
         )
         .await
         .expect("applies");

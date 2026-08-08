@@ -29,6 +29,7 @@ use async_trait::async_trait;
 use crate::config::types::LaneId;
 use crate::error::Result;
 use crate::evidence::diff::FileDiff;
+use crate::evidence::replay;
 use crate::falsify::Falsifier;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema::{self, RawFinding};
@@ -70,12 +71,21 @@ impl Lane for Critique {
             ));
         }
 
-        let new_evidence = render_diffs(input.diffs);
+        // Put the initial complete diff in the same serialized prefix where a
+        // later run replays it. Providers cache byte-identical prefixes; using
+        // the user-message position on the first run would make that first
+        // evidence miss the cache again on the next run.
+        let evidence = replay::render(input.diffs);
+        let (reviewed_evidence, new_evidence) = if input.reviewed_evidence.is_empty() {
+            (evidence.clone(), String::new())
+        } else {
+            replay::split(input.reviewed_evidence, &evidence)
+        };
         let built = prompt::build(&PromptInputs {
             lane: LaneId::Critique,
             config: input.config,
             repo_policy: input.repo_policy,
-            reviewed_evidence: input.reviewed_evidence,
+            reviewed_evidence: &reviewed_evidence,
             prior_findings: input.prior_findings,
             new_evidence: &new_evidence,
         });
@@ -133,7 +143,10 @@ impl Lane for Critique {
                         diff: Some(diff),
                         file: input.file_contents.get(&raw.path).map(String::as_str),
                         comment: &comment,
-                        rendered_diff: &new_evidence,
+                        // Relocation and falsification need the complete
+                        // current evidence even when that evidence was placed
+                        // in the cacheable prompt prefix on an initial run.
+                        rendered_diff: &evidence,
                     },
                     &mut usage,
                 )
@@ -166,7 +179,7 @@ impl Lane for Critique {
         // Step 5, on the findings that survived positioning. It sees only the
         // diff, and it can only remove.
         let filtered = Falsifier::new(self.model.as_ref(), input.config)
-            .filter(LaneId::Critique, findings, &new_evidence)
+            .filter(LaneId::Critique, findings, &evidence)
             .await;
         usage.add(filtered.usage);
 
@@ -245,37 +258,6 @@ fn summarise(summary: &str, unanchored: usize, discarded: usize, rejected: usize
 
 fn plural(count: usize) -> &'static str {
     if count == 1 { "" } else { "s" }
-}
-
-/// Render the diffs into the text the model sees.
-fn render_diffs(diffs: &[FileDiff]) -> String {
-    let mut out = String::new();
-    for diff in diffs {
-        if diff.hunks.is_empty() {
-            continue;
-        }
-        out.push_str(&format!("--- {}\n", diff.path));
-        for hunk in &diff.hunks {
-            out.push_str(&format!(
-                "@@ -{},{} +{},{} @@\n",
-                hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines
-            ));
-            for line in &hunk.lines {
-                let marker = match line.kind {
-                    crate::evidence::diff::LineKind::Added => '+',
-                    crate::evidence::diff::LineKind::Removed => '-',
-                    crate::evidence::diff::LineKind::Context => ' ',
-                };
-                // Line numbers are included so the model anchors to real ones
-                // rather than counting, which it does badly.
-                match line.new_line {
-                    Some(n) => out.push_str(&format!("{n:>5} {marker}{}\n", line.text)),
-                    None => out.push_str(&format!("      {marker}{}\n", line.text)),
-                }
-            }
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -697,7 +679,12 @@ fn helper() {
         let config = config();
         let model = MockModel::silent();
         let pr = pull_request();
-        let diffs = diffs();
+
+        // The earlier cycle reviewed `src/earlier.rs`; this push adds
+        // `src/main.rs`. The replay has to be the earlier file, byte for byte.
+        let earlier = parse_file_patch("src/earlier.rs", "@@ -1,1 +1,2 @@\n a\n+earlier\n");
+        let reviewed = replay::render(std::slice::from_ref(&earlier));
+        let diffs = vec![earlier, parse_file_patch("src/main.rs", PATCH)];
 
         Critique::new(Arc::new(model.clone()))
             .run(LaneInput {
@@ -707,7 +694,7 @@ fn helper() {
                 file_contents: &BTreeMap::new(),
                 scan_findings: &[],
                 repo_policy: None,
-                reviewed_evidence: "@@ -1 +1 @@\n+earlier\n",
+                reviewed_evidence: &reviewed,
                 prior_findings: &["Close the socket on the error path".to_string()],
             })
             .await
@@ -722,6 +709,7 @@ fn helper() {
             "replay must be in the cached half"
         );
         assert!(!user.contains("+earlier"));
+        assert!(user.contains("src/main.rs"), "the delta is the new work");
         assert!(
             user.contains("Close the socket"),
             "prior findings are volatile"
