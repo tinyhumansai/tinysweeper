@@ -348,7 +348,7 @@ mod tests {
     #[tokio::test]
     async fn a_check_run_is_published_per_lane() {
         let forge = forge("abc123");
-        apply(&forge, &forge, &config(), &proposal("abc123", vec![]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
             .await
             .expect("applies");
 
@@ -364,7 +364,7 @@ mod tests {
         // The review ran against a commit that has since been replaced.
         // Publishing would report on code nobody is looking at.
         let forge = forge("newer456");
-        apply(&forge, &forge, &config(), &proposal("abc123", vec![]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
             .await
             .expect("returns cleanly");
 
@@ -405,7 +405,7 @@ mod tests {
     #[tokio::test]
     async fn a_clean_review_posts_no_inline_comments_at_all() {
         let forge = forge("abc123");
-        apply(&forge, &forge, &config(), &proposal("abc123", vec![]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
             .await
             .expect("applies");
 
@@ -462,7 +462,7 @@ mod tests {
         // reviewer, so without an explicit approval a stale objection blocks
         // the merge button until a human dismisses it by hand.
         let forge = forge("abc123").with_own_review(7, ReviewEvent::RequestChanges);
-        apply(&forge, &forge, &config(), &proposal("abc123", vec![]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
             .await
             .expect("applies");
 
@@ -476,7 +476,7 @@ mod tests {
         // No approval to hand out: approving every green pull request would be
         // a bot rubber-stamping work it did not really vouch for.
         let forge = forge("abc123");
-        apply(&forge, &forge, &config(), &proposal("abc123", vec![]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
             .await
             .expect("applies");
 
