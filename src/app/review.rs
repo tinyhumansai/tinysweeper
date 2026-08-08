@@ -261,12 +261,13 @@ pub async fn review_with_state(
     // precisely the failure this code exists to prevent. The unit test agreed
     // with the code because it disabled `commits` to reach the branch, so it
     // tested the shape of the implementation rather than the requirement.
-    let unclaimed: Vec<Finding> = scan_findings
+    let mut unclaimed: Vec<Finding> = scan_findings
         .iter()
         .cloned()
         .map(Finding::from)
         .filter(|f| f.severity >= Severity::High)
         .collect();
+    anchor::stamp(&mut unclaimed, &diffs);
 
     if !unclaimed.is_empty() {
         let adjudicated = lanes
