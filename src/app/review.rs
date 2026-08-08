@@ -135,19 +135,14 @@ pub async fn review(
     for lane_id in config.enabled_lanes() {
         let lane: Box<dyn Lane> = match lane_id {
             LaneId::Critique => Box::new(Critique::new(model.clone())),
-            // The remaining lanes land in M4. Until then they report Neutral
-            // rather than Success: claiming a lane passed when it never ran
-            // would make requiring it in branch protection meaningless.
-            _ => {
-                lanes.push(LaneProposal {
-                    lane: lane_id,
-                    check_name: lane_id.check_name(),
-                    conclusion: CheckConclusion::Neutral,
-                    summary: "Not implemented yet.".into(),
-                    findings: vec![],
-                });
-                continue;
-            }
+            LaneId::Security => Box::new(Security::new(model.clone())),
+            LaneId::Tests => Box::new(Tests::new(model.clone())),
+            LaneId::Commits => Box::new(Commits::new(model.clone())),
+            LaneId::Description => Box::new(Description::new(model.clone())),
+            // The gate is the deterministic aggregate of the others and never
+            // runs as a lane; it is appended below, after they have all
+            // reported.
+            LaneId::Gate => continue,
         };
 
         let outcome = lane
@@ -156,6 +151,7 @@ pub async fn review(
                 pull_request: &context.pull_request,
                 diffs: &diffs,
                 scan_findings: &scan_findings,
+                commits: &context.commits,
                 repo_policy: repo_policy().as_deref(),
                 reviewed_evidence: "",
                 prior_findings: &[],
