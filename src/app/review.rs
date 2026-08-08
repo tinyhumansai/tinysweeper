@@ -546,13 +546,21 @@ fn lane_proposal(
         summary = format!("{summary} ({still_open} earlier finding(s) still open)");
     }
 
+    // Resolved titles are model-authored text; scrub them of secrets that
+    // may have been quoted back when declaring a finding fixed.
+    let resolved: Vec<String> = outcome
+        .resolved
+        .iter()
+        .map(|t| scan::secrets::scrub(t))
+        .collect();
+
     LaneProposal {
         lane,
         check_name: lane.check_name(),
         conclusion,
         summary,
         findings,
-        resolved: outcome.resolved,
+        resolved,
         deduped,
     }
 }
