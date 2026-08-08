@@ -439,3 +439,129 @@ fn file_nodes_are_the_file_layer_only() {
     let paths: Vec<&str> = file_nodes(&graph).iter().map(|n| n.id.as_str()).collect();
     assert_eq!(paths, ["src/app/page.ts", "src/lib/math.ts"]);
 }
+
+// --- a real repository ------------------------------------------------------
+
+/// Read this crate's own `src/` tree plus the root config files.
+fn this_crate() -> Vec<SourceFile> {
+    fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<SourceFile>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, root, out);
+            } else if let Ok(text) = std::fs::read_to_string(&path) {
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                out.push(SourceFile::new(relative, text));
+            }
+        }
+    }
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    walk(&root.join("src"), root, &mut files);
+    if let Ok(text) = std::fs::read_to_string(root.join("Cargo.toml")) {
+        files.push(SourceFile::new("Cargo.toml", text));
+    }
+    files
+}
+
+/// Coverage on a real codebase, not a fixture.
+///
+/// This is the honesty check on the whole resolver. A graph builder is easy to
+/// make look good on three hand-written files; the question that matters is
+/// whether it can follow the imports of a repository nobody wrote for it. Every
+/// `crate::`, `super::`, `self::`, `mod`, and `#[path]` module in this crate
+/// has to land on a file, and the assertion is exact so a regression cannot
+/// hide inside a tolerance.
+#[test]
+fn this_repository_resolves_every_internal_import() {
+    let files = this_crate();
+    assert!(files.len() > 50, "expected a real tree, got {}", files.len());
+    let graph = build(REPO, &files).expect("builds");
+
+    let internal = graph.coverage.imports_total - graph.coverage.imports_external;
+    assert!(internal > 200, "expected real imports, got {internal}");
+    assert_eq!(
+        graph.coverage.imports_resolved, internal,
+        "unresolved internal imports: {:?}",
+        graph
+            .unresolved
+            .iter()
+            .filter(|u| u.reason != UnresolvedReason::External)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(graph.coverage.import_resolution_rate(), 1.0);
+    assert!(graph.edges.len() > 1000, "{}", graph.edges.len());
+}
+
+#[test]
+fn a_path_attribute_module_resolves_to_the_file_it_names() {
+    let graph = build(
+        REPO,
+        &files(&[
+            ("Cargo.toml", "[package]\nname = \"demo\"\n"),
+            (
+                "src/lib.rs",
+                "#[cfg(test)]\n#[path = \"lib_test.rs\"]\nmod tests;\n",
+            ),
+            ("src/lib_test.rs", "fn nothing() {}\n"),
+        ]),
+    )
+    .expect("builds");
+
+    assert!(has_edge(
+        &graph,
+        "src/lib.rs",
+        "src/lib_test.rs",
+        EdgeKind::Imports
+    ));
+    assert!(graph.unresolved.is_empty(), "{:?}", graph.unresolved);
+}
+
+#[test]
+fn use_super_inside_an_inline_module_is_not_a_cross_file_import() {
+    let graph = build(
+        REPO,
+        &files(&[
+            ("Cargo.toml", "[package]\nname = \"demo\"\n"),
+            (
+                "src/lib.rs",
+                "pub fn go() {}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn works() { go(); }\n}\n",
+            ),
+        ]),
+    )
+    .expect("builds");
+
+    // The inline module *is* the file, so `super::*` names nothing new. Left
+    // as an import it would be an unresolvable module forever.
+    assert!(graph.unresolved.is_empty(), "{:?}", graph.unresolved);
+    assert_eq!(graph.coverage.imports_total, 0);
+}
+
+#[test]
+fn a_top_level_use_super_still_resolves_to_the_parent_module() {
+    let graph = build(
+        REPO,
+        &files(&[
+            ("Cargo.toml", "[package]\nname = \"demo\"\n"),
+            ("src/lib.rs", "pub mod graph;\n"),
+            ("src/graph/mod.rs", "pub mod types;\npub fn shared() {}\n"),
+            ("src/graph/types.rs", "use super::shared;\n"),
+        ]),
+    )
+    .expect("builds");
+
+    assert!(has_edge(
+        &graph,
+        "src/graph/types.rs",
+        "src/graph/mod.rs",
+        EdgeKind::Imports
+    ));
+}
