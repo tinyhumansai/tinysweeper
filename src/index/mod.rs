@@ -26,5 +26,8 @@ pub use crate::index::types::{
     HybridQuery, KnowledgeDoc, KnowledgeScope, Neighbourhood, NodeKind, ScoredChunk,
 };
 
+#[cfg(feature = "harness")]
+pub use crate::index::provider::ProviderEmbedder;
+
 #[cfg(feature = "serve")]
 pub use crate::index::mongo::{MongoIndex, VECTOR_SEARCH_UNAVAILABLE};
