@@ -156,7 +156,7 @@ async fn review_file(
         parsed,
         std::slice::from_ref(diff),
         Anchoring::Strict,
-        response.usage,
+        Spend::of(&response),
     );
 
     Ok(FileReview {

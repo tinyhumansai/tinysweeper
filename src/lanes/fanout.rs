@@ -174,7 +174,7 @@ impl FanOut {
             summary,
             findings,
             resolved,
-            usage,
+            spend,
             skipped,
         }
     }
@@ -245,9 +245,16 @@ mod tests {
         let out = per_file_with_budget(&paths, 1.0, |path| async move {
             Ok(FileReview {
                 summary: path,
-                usage: Usage {
-                    cost_usd: 1.0,
-                    ..Usage::default()
+                spend: {
+                    let mut spend = Spend::default();
+                    spend.record(
+                        "vendor/scan",
+                        crate::ports::model::Usage {
+                            cost_usd: 1.0,
+                            ..Default::default()
+                        },
+                    );
+                    spend
                 },
                 ..FileReview::default()
             })
