@@ -60,12 +60,17 @@ impl Lane for Critique {
             ));
         }
 
-        let new_evidence = render_diffs(input.diffs);
+        // The evidence is split against what the last cycle sent, so a file
+        // nobody touched since then lands in the cacheable prefix and only the
+        // delta is charged at full price. `reviewed_evidence` is empty on a
+        // first review, and then this is the whole diff as new work.
+        let evidence = replay::render(input.diffs);
+        let (reviewed_evidence, new_evidence) = replay::split(input.reviewed_evidence, &evidence);
         let built = prompt::build(&PromptInputs {
             lane: LaneId::Critique,
             config: input.config,
             repo_policy: input.repo_policy,
-            reviewed_evidence: input.reviewed_evidence,
+            reviewed_evidence: &reviewed_evidence,
             prior_findings: input.prior_findings,
             new_evidence: &new_evidence,
         });
