@@ -60,6 +60,14 @@ pub trait IndexManifest: Send + Sync {
         paths: &[String],
     ) -> Result<Vec<IndexedFile>>;
 
+    /// Every path on record for a repository.
+    ///
+    /// Only the full-index path needs this — it is how a file that was deleted
+    /// from the repository, or newly covered by an ignore glob, is noticed at
+    /// all. An incremental push already knows which paths it touched and must
+    /// not pay for a repository-wide listing.
+    async fn paths(&self, repo_id: &str, signature: &EmbedSignature) -> Result<Vec<String>>;
+
     /// Replace the record for these files.
     async fn record(
         &self,
