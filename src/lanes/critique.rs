@@ -276,6 +276,19 @@ mod tests {
     const PATCH: &str =
         "@@ -1,3 +1,5 @@\n fn main() {\n+    let x = items[i];\n+    println!(\"{x}\");\n }\n";
 
+    /// The head revision of the same file. Lines 6–8 are outside every hunk,
+    /// so only the whole-file fallback can reach them.
+    const FILE: &str = "\
+fn main() {
+    let x = items[i];
+    println!(\"{x}\");
+}
+
+fn helper() {
+    let cfg = load();
+}
+";
+
     fn diffs() -> Vec<FileDiff> {
         vec![parse_file_patch("src/main.rs", PATCH)]
     }
@@ -356,24 +369,164 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_finding_on_an_unchanged_line_survives_without_one() {
-        // Line 1 is context, not an addition. Posting there would put a comment
-        // on code the author did not write in this pull request — but the
-        // finding itself may well be real, so it keeps its place in the summary
-        // instead of being deleted.
+    async fn a_quoted_snippet_is_what_places_the_finding() {
+        // The model quotes the code with the indentation it felt like using and
+        // never names a line. Line 2 is where that code actually is.
         let model = MockModel::new().then(json!({
-            "summary": "…",
-            "findings": [finding_at(1)]
+            "summary": "Adds an unchecked index.",
+            "findings": [finding_quoting("let x = items[i];")]
         }));
         let outcome = run_with(model, &config(), &diffs()).await;
 
         assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(outcome.findings[0].line, Some(2));
+    }
+
+    #[tokio::test]
+    async fn a_leaked_diff_marker_in_the_quote_does_not_lose_the_finding() {
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [finding_quoting("+    let x = items[i];")]
+        }));
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings[0].line, Some(2));
+    }
+
+    #[tokio::test]
+    async fn a_multi_line_quote_becomes_a_range() {
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [finding_quoting("let x = items[i];\n\nprintln!(\"{x}\");")]
+        }));
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings[0].line, Some(2));
+        assert_eq!(outcome.findings[0].end_line, Some(3));
+    }
+
+    #[tokio::test]
+    async fn a_finding_that_resolves_outside_every_hunk_survives_without_a_line() {
+        // Real finding, quoted from real code, but the diff never showed that
+        // code — GitHub would reject the inline comment. It goes in the summary
+        // rather than being deleted, which is what the old line-number filter
+        // did to it.
+        let mut files = BTreeMap::new();
+        files.insert("src/main.rs".to_string(), FILE.to_string());
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [finding_quoting("    let cfg = load();")]
+        }));
+
+        let outcome = run_with_files(model, &config(), &diffs(), &files).await;
+
+        assert_eq!(outcome.findings.len(), 1, "not deleted");
         assert_eq!(outcome.findings[0].line, None, "not postable inline");
         assert!(
             outcome.summary.contains("1 finding could not be anchored"),
             "{}",
             outcome.summary
         );
+    }
+
+    #[tokio::test]
+    async fn a_quote_that_matches_nothing_leaves_the_finding_unanchored() {
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [finding_quoting("let y = somewhere_else();")]
+        }));
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(outcome.findings[0].line, None);
+    }
+
+    #[tokio::test]
+    async fn a_hopeless_quote_is_recovered_by_the_relocation_call() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_quoting("the loop that indexes without checking")]
+            }))
+            .then(json!({"existing_code": "    let x = items[i];"}))
+            .then(json!({"incorrect": []}));
+
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings[0].line, Some(2));
+    }
+
+    #[tokio::test]
+    async fn the_falsification_pass_drops_what_the_diff_disproves() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_quoting("let x = items[i];")]
+            }))
+            .then(json!({
+                "incorrect": [{"index": 1, "reason": "the diff bounds-checks `i` above"}]
+            }));
+
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert!(outcome.findings.is_empty());
+        assert!(
+            outcome.summary.contains("1 finding dropped as disproved"),
+            "{}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn a_broken_falsification_pass_never_deletes_a_review() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_quoting("let x = items[i];")]
+            }))
+            .then_error("upstream exploded");
+
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1, "failed open");
+        assert!(!outcome.summary.contains("disproved"), "{}", outcome.summary);
+    }
+
+    #[tokio::test]
+    async fn a_finding_quoting_a_line_the_model_did_not_change_is_still_postable() {
+        // Line 1 is context inside the hunk. The model quoted it, so it read
+        // it, and GitHub will take a comment there.
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [finding_quoting("fn main() {")]
+        }));
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings[0].line, Some(1));
+    }
+
+    #[tokio::test]
+    async fn a_legacy_response_with_a_line_and_no_quote_still_anchors() {
+        // Migration: a proposal or a fine-tune still answering with the old
+        // schema keeps working, because its number is better than nothing.
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [finding_at(2)]
+        }));
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings[0].line, Some(2));
+    }
+
+    #[tokio::test]
+    async fn a_legacy_line_outside_every_hunk_is_not_trusted() {
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [finding_at(99)]
+        }));
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings[0].line, None);
     }
 
     #[tokio::test]
