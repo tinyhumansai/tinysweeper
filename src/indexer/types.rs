@@ -195,12 +195,7 @@ impl IndexReport {
         if self.budget_exhausted {
             text.push_str(" (stopped at the spend ceiling; the index is partial)");
         }
-        if let Some(report) = crate::chunk::types::Selection {
-            selected: Vec::new(),
-            skipped: self.skipped.clone(),
-        }
-        .report()
-        {
+        if let Some(report) = crate::chunk::types::report_skips(&self.skipped) {
             text.push('\n');
             text.push_str(&report);
         }
