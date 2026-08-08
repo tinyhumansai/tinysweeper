@@ -19,6 +19,7 @@ use tokio::sync::Semaphore;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::forge::RepoId;
+use crate::server::admin::{self, AdminAuth};
 use crate::server::auth::AppAuth;
 use crate::server::store::{Store, Trust};
 use crate::server::webhook::{self, Action, Payload};
@@ -40,6 +41,9 @@ pub struct ServerConfig {
     pub webhook_secret: String,
     /// Review configuration used when a repository has no file of its own.
     pub config: Config,
+    /// Credential guarding `/admin`. `None` leaves the admin API unmounted —
+    /// see `crate::server::admin` for why that is the fail-closed choice.
+    pub admin_auth: Option<AdminAuth>,
 }
 
 /// Everything a handler needs.
@@ -54,17 +58,32 @@ struct AppState {
 /// Run the server until the process is stopped.
 pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<()> {
     let bind = config.bind.clone();
+    let admin_auth = config.admin_auth.clone();
     let state = AppState {
         config: Arc::new(config),
-        store,
+        store: store.clone(),
         auth: Arc::new(auth),
         permits: Arc::new(Semaphore::new(MAX_CONCURRENT_REVIEWS)),
     };
 
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/healthz", get(healthz))
         .route("/webhook", post(receive))
         .with_state(state);
+
+    // Mounted only when a token is configured. An admin router without a
+    // credential would be an unauthenticated write endpoint on the public
+    // internet, so its absence is the safe failure.
+    match admin::router(store, admin_auth) {
+        Some(admin) => {
+            app = app.merge(admin);
+            tracing::info!("the admin API is mounted under /admin");
+        }
+        None => tracing::info!(
+            "{} is not set; the admin API is not mounted",
+            admin::TOKEN_ENV
+        ),
+    }
 
     let listener = tokio::net::TcpListener::bind(&bind)
         .await

@@ -6,8 +6,9 @@
   module-local `types.rs`, and every port in `src/ports/` is one trait in one
   file.
 - `src/bin/tinysweeper.rs` — the CLI. Every subcommand is declared even when its
-  milestone has not landed, so downstream workflows can be written against a
-  stable surface.
+  milestone has not landed, so scripts and runbooks can be written against a
+  stable surface. `src/server/` is the only production surface — there is no
+  GitHub Actions distribution path.
 - `presets/` — review policy as **data**, not code. A preset is a folder with a
   `preset.toml`, a `README.md`, and optional prompt overrides. Adding a preset
   is a new folder, never a new module.
