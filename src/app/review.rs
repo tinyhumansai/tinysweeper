@@ -284,6 +284,62 @@ fn lane_proposal(config: &Config, lane: LaneId, outcome: LaneOutcome) -> LanePro
     }
 }
 
+/// Publish scanner findings whose owning lane never ran.
+///
+/// The owner is decided by kind: `security` adjudicates workflow and dependency
+/// matches, `commits` adjudicates secrets, blobs and junk. When the owner ran it
+/// has already republished them verbatim, and doing it again here would report
+/// the same committed key twice.
+fn publish_unclaimed(lanes: &mut Vec<LaneProposal>, scan_findings: &[scan::types::Finding]) {
+    let ran = |lane: LaneId| {
+        lanes
+            .iter()
+            .any(|l| l.lane == lane && l.conclusion != CheckConclusion::Neutral)
+    };
+
+    for owner in [LaneId::Security, LaneId::Commits] {
+        if ran(owner) {
+            continue;
+        }
+
+        let kinds: &[ScanKind] = match owner {
+            LaneId::Security => &lanes::security::ADJUDICATES,
+            _ => &lanes::commits::ADJUDICATES,
+        };
+
+        // Only findings that would block. A low-severity junk file is not worth
+        // failing a check nobody's lane was asked to look at.
+        let unclaimed: Vec<Finding> = scan_findings
+            .iter()
+            .filter(|f| kinds.contains(&f.kind) && f.severity >= Severity::High)
+            .cloned()
+            .map(|scan| {
+                let mut finding = Finding::from(scan);
+                finding.lane = owner;
+                finding
+            })
+            .collect();
+
+        if unclaimed.is_empty() {
+            continue;
+        }
+
+        // Replace the Neutral placeholder rather than sitting beside it: two
+        // check runs of the same name is a confusing way to fail.
+        lanes.retain(|l| l.lane != owner);
+        lanes.push(LaneProposal {
+            lane: owner,
+            check_name: owner.check_name(),
+            conclusion: CheckConclusion::Failure,
+            summary: format!(
+                "{} finding(s) from the deterministic scanners.",
+                unclaimed.len()
+            ),
+            findings: unclaimed,
+        });
+    }
+}
+
 /// The deterministic aggregate every other lane feeds.
 fn gate(lanes: &[LaneProposal]) -> LaneProposal {
     let blocking: Vec<&LaneProposal> = lanes.iter().filter(|l| l.conclusion.blocks()).collect();
