@@ -8,10 +8,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use serde_json::json;
 use tinyagents::harness::message::Message as TaMessage;
 use tinyagents::harness::model::ResponseFormat;
 use tinyagents::harness::providers::openai::OpenAiModel;
-use tinyagents::harness::providers::openai::ReasoningTagExtraction;
 use tinyagents::harness::runtime::{AgentHarness, RunPolicy};
 
 use crate::config::types::Models;
