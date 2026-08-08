@@ -120,29 +120,7 @@ fn title_for(findings: usize, summary: &str) -> String {
 }
 
 fn render_lane_summary(lane: &crate::app::review::LaneProposal) -> String {
-    let mut out = String::new();
-    out.push_str(&lane.summary);
-    out.push_str("\n\n");
-
-    if lane.findings.is_empty() {
-        out.push_str("No findings.\n");
-    } else {
-        for finding in &lane.findings {
-            out.push_str(&format!("### {}\n\n`{}`", finding.title, finding.path));
-            if let Some(line) = finding.line {
-                out.push_str(&format!(":{line}"));
-            }
-            out.push_str(&format!(
-                " · **{}** · confidence {:.0}%\n\n{}\n\n",
-                finding.severity,
-                finding.confidence * 100.0,
-                finding.body
-            ));
-        }
-    }
-
-    out.push_str(&format!("\n<sub>tinysweeper {VERSION}</sub>\n"));
-    out
+    crate::findings::render::lane_summary(&lane.summary, &lane.findings, VERSION)
 }
 
 fn review_body(proposal: &Proposal, event: ReviewEvent) -> String {
