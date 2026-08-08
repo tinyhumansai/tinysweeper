@@ -189,9 +189,11 @@ pub struct Config {
     pub lanes: BTreeMap<String, Lane>,
     /// Auto-merge policy.
     pub automerge: AutoMerge,
-    /// Issue triage. Scaffolded; not model-wired yet.
+    /// Issue triage.
     pub issues: Issues,
-    /// Sentry issue promotion. Scaffolded; not model-wired yet.
+    /// Scheduled repository automations.
+    pub automation: Automation,
+    /// Sentry issue promotion.
     pub sentry: Sentry,
 }
 
