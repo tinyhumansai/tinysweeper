@@ -1,0 +1,29 @@
+# tinysweeper reviewing tinysweeper.
+#
+# Kept deliberately close to the defaults: this file is the first example
+# anyone reads, and a config full of overrides teaches the wrong lesson.
+
+version = 1
+preset = "rust-library"
+
+[[path_instructions]]
+glob = "src/lanes/**"
+instructions = """
+Every lane must be testable offline against a canned model response. Flag a lane
+that reaches for the network directly, parses prose instead of structured
+output, or takes a `ForgeWrite` — lanes propose, `src/apply` disposes.
+"""
+
+[[path_instructions]]
+glob = "src/ports/**"
+instructions = """
+One trait per file, and every port needs an always-compiled offline mock. Flag a
+port whose signature leaks a concrete backend type.
+"""
+
+[[path_instructions]]
+glob = ".github/workflows/**"
+instructions = """
+Flag any widening of `permissions`, any unpinned third-party action, and any
+step that interpolates untrusted context into a shell.
+"""

@@ -9,7 +9,16 @@
 //!
 //! Modules land milestone by milestone; see `ROADMAP.md`.
 
+pub mod app;
+pub mod config;
 pub mod error;
+pub mod evidence;
+pub mod findings;
+pub mod forge;
+pub mod harness;
+pub mod lanes;
+pub mod ports;
+pub mod scan;
 
 pub use crate::error::{Error, Result};
 

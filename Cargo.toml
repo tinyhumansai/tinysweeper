@@ -58,11 +58,6 @@ tinyagents = { path = "vendor/tinyagents", optional = true }
 octocrab = { version = "0.54", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
 
-# --- optional: the webhook server (GitHub App deployment) ---
-axum = { version = "0.8", optional = true }
-hmac = { version = "0.13", optional = true }
-jsonwebtoken = { version = "11", optional = true }
-
 [features]
 # Offline by default: mock forge, mock model, deterministic scanners. This is
 # what CI's first job builds and what `cargo test` runs against.
@@ -72,10 +67,14 @@ default = []
 harness = ["dep:tinyagents"]
 # The real GitHub adapter behind the `Forge` port.
 github = ["dep:octocrab", "dep:reqwest"]
-# Webhook server mode (`tinysweeper serve`) for the hosted GitHub App.
-serve = ["dep:axum", "dep:hmac", "dep:jsonwebtoken", "github"]
-# Everything a production deployment turns on.
-all = ["harness", "github", "serve"]
+# Everything a production run turns on.
+#
+# There is deliberately no webhook-server feature. tinysweeper runs entirely in
+# GitHub Actions: Actions already receives the repository events a server would
+# have subscribed to, and repositories opt in through a reusable workflow rather
+# than a hosted deployment. That removes a public HTTPS endpoint, a private key
+# at rest, and an operational surface, in exchange for one file per repository.
+all = ["harness", "github"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -32,14 +32,18 @@ Engineering milestones. Each one is a shippable slice with its own verification.
 
 ## Later
 
-- **M9 — scaffolds filled in.** Issue triage, the automator, and Sentry issues
+- **M9 — the rest of the scope.** Issue triage, the automator, and Sentry issues
   promoted into GitHub issues.
-- **M10 — the hosted App.** Webhook server, GitHub App manifest, and k8s
-  manifests. Needed for fork pull requests, cross-org fleets and centralised
-  keys; everything else works from Actions alone.
 
 ## Not planned
 
+- **A webhook server.** Decided against, deliberately. Actions already receives
+  every repository event a server would have subscribed to, and the two things
+  people usually buy a server for — reacting to a resolved review thread or a 👎
+  reaction — have no webhook event at all, so a server could not do them either.
+  Repositories opt in through the reusable workflow in
+  `.github/workflows/review.yml`; rolling out to another repository is one file,
+  and the review logic stays in one place. See `docs/triggers.md`.
 - A hosted public service. tinysweeper is meant to run in your own org, on your
   own key.
 - Executing contributor code. See the security boundary in `AGENTS.md`.
