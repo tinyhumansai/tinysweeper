@@ -141,12 +141,12 @@ pub fn build(repo_id: &str, files: &[SourceFile]) -> Result<RepoGraph> {
                 EdgeKind::References
             };
 
+            // Ambiguous usages are counted, not listed. On any real repository
+            // `new`, `fmt` and `len` are defined in dozens of files, so listing
+            // each one would bury the handful of genuinely broken *imports*
+            // that `unresolved` exists to make findable. The gap is still
+            // measurable as `usages_total - usages_resolved`.
             let Some(target) = target_for(&file.path, usage, &local, &bindings, &defined_in) else {
-                unresolved.push(Unresolved {
-                    path: file.path.clone(),
-                    specifier: usage.name.clone(),
-                    reason: UnresolvedReason::Ambiguous,
-                });
                 continue;
             };
             coverage.usages_resolved += 1;
