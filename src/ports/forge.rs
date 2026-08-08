@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use crate::error::Result;
 use crate::forge::types::{
     ChangedFile, CheckRun, Commit, Issue, IssueComment, PullRequest, PullRequestContext, RepoId,
-    ReviewComment,
+    ReviewComment, ReviewEvent,
 };
 
 /// Read access to a forge. This is what lanes get.
@@ -74,12 +74,18 @@ pub trait ForgeWrite: Send + Sync {
     async fn update_comment(&self, repo: &RepoId, comment_id: u64, body: &str) -> Result<()>;
 
     /// Post inline review comments as a single review.
+    ///
+    /// `event` decides whether the review blocks the merge button. Callers are
+    /// responsible for clearing a previous block with
+    /// [`ReviewEvent::Approve`] once the findings are gone; GitHub keeps only
+    /// the latest review per reviewer, and a stale objection blocks forever.
     async fn create_review(
         &self,
         repo: &RepoId,
         number: u64,
         body: &str,
         comments: Vec<ReviewComment>,
+        event: ReviewEvent,
     ) -> Result<()>;
 
     /// Add labels to an issue or pull request.

@@ -11,7 +11,7 @@ use octocrab::Octocrab;
 use crate::error::{Error, Result};
 use crate::forge::types::{
     ChangedFile, CheckConclusion, CheckRun, Commit, FileStatus, Issue, IssueComment, PullRequest,
-    RepoId, ReviewComment,
+    RepoId, ReviewComment, ReviewEvent,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -331,14 +331,11 @@ impl ForgeWrite for GitHubWrite {
         number: u64,
         body: &str,
         comments: Vec<ReviewComment>,
+        event: ReviewEvent,
     ) -> Result<()> {
-        // Deliberately COMMENT rather than REQUEST_CHANGES. The check runs are
-        // what gate a merge; a formal changes-requested verdict from a bot also
-        // has to be dismissed by a human before anything can proceed, which
-        // turns every false positive into manual work.
         let mut review = serde_json::json!({
             "body": body,
-            "event": "COMMENT",
+            "event": event.as_api(),
             "comments": comments
                 .iter()
                 .map(|c| serde_json::json!({

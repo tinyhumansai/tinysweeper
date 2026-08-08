@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use crate::error::{Error, Result};
 use crate::forge::types::{
     ChangedFile, CheckRun, Commit, Issue, IssueComment, PullRequest, RepoId, ReviewComment,
+    ReviewEvent,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -44,6 +45,8 @@ pub enum Write {
         body: String,
         /// The inline comments.
         comments: Vec<ReviewComment>,
+        /// Whether it blocks the merge button.
+        event: ReviewEvent,
     },
     /// Labels were added.
     Labels {
@@ -319,6 +322,7 @@ impl ForgeWrite for MockForge {
         number: u64,
         body: &str,
         comments: Vec<ReviewComment>,
+        event: ReviewEvent,
     ) -> Result<()> {
         // Applied to state as well as recorded: fingerprint dedupe reads back
         // the review comments already on a pull request, so a mock that only
@@ -335,6 +339,7 @@ impl ForgeWrite for MockForge {
             number,
             body: body.to_string(),
             comments,
+            event,
         });
         Ok(())
     }
@@ -554,7 +559,13 @@ mod tests {
             body: "finding".into(),
         };
         forge
-            .create_review(&repo(), 7, "summary", vec![comment.clone()])
+            .create_review(
+                &repo(),
+                7,
+                "summary",
+                vec![comment.clone()],
+                ReviewEvent::Comment,
+            )
             .await
             .expect("posted");
 
