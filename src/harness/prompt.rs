@@ -157,7 +157,7 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
 /// not a security boundary on its own — the real defence is that a verdict is
 /// advisory and only deterministic code mutates anything — but labelling data
 /// as data is what makes the instruction to ignore injected text meaningful.
-fn push_fenced(out: &mut String, label: &str, content: &str) {
+pub fn push_fenced(out: &mut String, label: &str, content: &str) {
     // The fence has to be longer than the longest backtick run in the content,
     // or a diff containing ```` closes its own fence and everything after it
     // reads as instructions rather than data. A pull request author picks that
