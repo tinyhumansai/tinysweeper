@@ -183,6 +183,19 @@ impl MockForge {
         self
     }
 
+    /// Simulate a push: move a pull request's head and replace its files.
+    ///
+    /// Everything already posted on it — review comments, the last review state
+    /// — is deliberately kept, because that is what a real push does and what
+    /// cross-push dedupe has to survive.
+    pub fn push(&self, number: u64, head_sha: &str, files: Vec<ChangedFile>) {
+        let mut state = self.state.lock().expect("mock state lock");
+        if let Some(pull_request) = state.pull_requests.get_mut(&number) {
+            pull_request.head_sha = head_sha.to_string();
+        }
+        state.files.insert(number, files);
+    }
+
     /// Record writes but never apply them — what `--dry-run` uses.
     pub fn read_only(mut self) -> Self {
         self.read_only = true;
