@@ -153,18 +153,22 @@ pub fn parse_file_patch(path: &str, patch: &str) -> FileDiff {
             continue;
         }
 
-        let Some(hunk) = current.as_mut() else {
-            continue;
-        };
-
-        // Headers that can appear between hunks in a full `diff --git` stanza.
-        if raw.starts_with("diff --git")
-            || raw.starts_with("index ")
-            || raw.starts_with("--- ")
-            || raw.starts_with("+++ ")
+        // Headers only appear *between* hunks. Inside one, `--- foo` is a
+        // removed line whose content happens to start with `--`, and treating
+        // it as a header drops it — desynchronising every line number after it,
+        // which is the one thing this parser must never do.
+        if current.is_none()
+            && (raw.starts_with("diff --git")
+                || raw.starts_with("index ")
+                || raw.starts_with("--- ")
+                || raw.starts_with("+++ "))
         {
             continue;
         }
+
+        let Some(hunk) = current.as_mut() else {
+            continue;
+        };
 
         let (kind, text) = match raw.as_bytes().first() {
             Some(b'+') => (LineKind::Added, &raw[1..]),
@@ -378,6 +382,21 @@ index 1234567..89abcde 100644
 ";
         let diff = parse_file_patch("src/main.rs", patch);
         assert_eq!(diff.changed_lines, [2].into_iter().collect());
+    }
+
+    #[test]
+    fn a_removed_line_starting_with_dashes_is_not_mistaken_for_a_header() {
+        // `--- old text` inside a hunk is a removed line, not a file header.
+        // Dropping it would shift every line number after it.
+        let patch = "@@ -1,3 +1,3 @@\n a\n---- separator\n+=== separator\n c\n";
+        let diff = parse_file_patch("README.md", patch);
+
+        assert_eq!(diff.deletions(), 1);
+        assert_eq!(
+            diff.changed_lines,
+            [2].into_iter().collect(),
+            "the replacement line must still be line 2"
+        );
     }
 
     #[test]

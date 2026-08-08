@@ -64,7 +64,9 @@ pub fn scan_workflow<'a>(
     let mut findings = Vec::new();
 
     for (line_no, raw) in &lines {
-        let text = raw.trim();
+        // A trailing `# comment` would otherwise hide a mutable tag from the
+        // pin check, and quoting is valid YAML the rules must not care about.
+        let text = strip_comment(raw).trim();
 
         if let Some(finding) = write_all_permissions(path, *line_no, text) {
             findings.push(finding);
@@ -83,8 +85,23 @@ pub fn scan_workflow<'a>(
     findings
 }
 
+/// Drop a trailing YAML comment, leaving quoted `#` alone.
+fn strip_comment(text: &str) -> &str {
+    let mut in_single = false;
+    let mut in_double = false;
+    for (index, ch) in text.char_indices() {
+        match ch {
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            '#' if !in_single && !in_double => return &text[..index],
+            _ => {}
+        }
+    }
+    text
+}
+
 fn write_all_permissions(path: &str, line: u64, text: &str) -> Option<Finding> {
-    let normalised = text.replace(' ', "");
+    let normalised = text.replace([' ', '"', '\''], "");
     if !normalised.starts_with("permissions:write-all") {
         return None;
     }
@@ -373,6 +390,25 @@ mod tests {
         assert_eq!(findings.len(), 1, "{findings:#?}");
         assert_eq!(findings[0].rule, "workflow-write-all");
         assert_eq!(findings[0].severity, Severity::High);
+    }
+
+    #[test]
+    fn quoted_write_all_is_still_write_all() {
+        for line in ["permissions: \"write-all\"", "permissions: 'write-all'"] {
+            assert!(
+                scan(&[line]).iter().any(|f| f.rule == "workflow-write-all"),
+                "`{line}` slipped through"
+            );
+        }
+    }
+
+    #[test]
+    fn a_trailing_comment_cannot_hide_a_mutable_tag() {
+        let findings = scan(&["      - uses: some-vendor/act@v3 # pinned, honest"]);
+        assert!(
+            findings.iter().any(|f| f.rule == "unpinned-action"),
+            "{findings:#?}"
+        );
     }
 
     #[test]
