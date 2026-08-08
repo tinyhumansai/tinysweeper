@@ -24,7 +24,7 @@ use tokio::sync::Semaphore;
 use crate::error::Error;
 use crate::findings::types::Finding;
 use crate::lanes::LaneOutcome;
-use crate::ports::model::Usage;
+use crate::ports::model::Spend;
 
 /// How many files a lane reviews at once.
 ///
@@ -41,8 +41,8 @@ pub struct FileReview {
     pub findings: Vec<Finding>,
     /// Earlier findings this file's revision fixed.
     pub resolved: Vec<String>,
-    /// What the call cost.
-    pub usage: Usage,
+    /// What the call cost, and which model answered.
+    pub spend: Spend,
 }
 
 /// Review `paths` concurrently, at most [`MAX_CONCURRENT_FILES`] at a time.
@@ -104,7 +104,7 @@ where
         }
         match review(path.clone()).await {
             Ok(review) => {
-                spent += review.usage.cost_usd;
+                spent += review.spend.cost_usd();
                 out.reviews.push(review);
             }
             Err(err) => out.failures.push((path.clone(), err)),
@@ -132,11 +132,11 @@ impl FanOut {
         let reviewed = self.reviews.len();
         let mut findings = Vec::new();
         let mut resolved = Vec::new();
-        let mut usage = Usage::default();
+        let mut spend = Spend::default();
         let mut only_summary = None;
 
         for review in self.reviews {
-            usage.add(review.usage);
+            spend.merge(review.spend);
             findings.extend(review.findings);
             resolved.extend(review.resolved);
             only_summary = Some(review.summary);
@@ -174,7 +174,7 @@ impl FanOut {
             summary,
             findings,
             resolved,
-            usage,
+            spend,
             skipped,
         }
     }
@@ -245,9 +245,16 @@ mod tests {
         let out = per_file_with_budget(&paths, 1.0, |path| async move {
             Ok(FileReview {
                 summary: path,
-                usage: Usage {
-                    cost_usd: 1.0,
-                    ..Usage::default()
+                spend: {
+                    let mut spend = Spend::default();
+                    spend.record(
+                        "vendor/scan",
+                        crate::ports::model::Usage {
+                            cost_usd: 1.0,
+                            ..Default::default()
+                        },
+                    );
+                    spend
                 },
                 ..FileReview::default()
             })

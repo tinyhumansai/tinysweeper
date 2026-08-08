@@ -34,7 +34,7 @@ use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
 use crate::lanes::fanout::{FileReview, per_file_with_budget};
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
-use crate::ports::model::{Message, Model, ModelRequest};
+use crate::ports::model::{Message, Model, ModelRequest, Spend};
 use crate::scan::types::{Finding as ScanFinding, ScanKind};
 
 /// The scanner findings this lane owns.
@@ -150,20 +150,21 @@ async fn review_file(
         })
         .await?;
 
+    let spend = Spend::of(&response);
     let parsed = schema::parse(LaneId::Security, response.value)?;
     let outcome = LaneOutcome::from_response(
         LaneId::Security,
         parsed,
         std::slice::from_ref(diff),
         Anchoring::Strict,
-        response.usage,
+        spend,
     );
 
     Ok(FileReview {
         summary: outcome.summary,
         findings: outcome.findings,
         resolved: outcome.resolved,
-        usage: outcome.usage,
+        spend: outcome.spend,
     })
 }
 

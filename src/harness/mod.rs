@@ -9,6 +9,7 @@
 pub mod mock;
 #[cfg(feature = "harness")]
 pub mod openrouter;
+pub mod pricing;
 pub mod prompt;
 pub mod schema;
 

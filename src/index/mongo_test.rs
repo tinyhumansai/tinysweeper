@@ -306,7 +306,12 @@ live_test!(
         let mut rows = Vec::new();
         for (path, text) in chunks {
             rows.push(EmbeddedChunk {
-                vector: embedder.embed_query(text).await.expect("embeds"),
+                vector: embedder
+                    .embed_query(text)
+                    .await
+                    .expect("embeds")
+                    .into_query_vector()
+                    .expect("one vector"),
                 chunk: Chunk {
                     repo_id: "o/r".into(),
                     path: path.into(),
@@ -333,7 +338,9 @@ live_test!(
             let vector = embedder
                 .embed_query("resolve_git_range")
                 .await
-                .expect("embeds");
+                .expect("embeds")
+                .into_query_vector()
+                .expect("one vector");
             let query = HybridQuery::new(signature(), "resolve_git_range", vector).in_repo("o/r");
             found = index.code.query(&query).await.expect("queries");
             if !found.is_empty() {

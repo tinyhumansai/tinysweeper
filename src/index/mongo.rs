@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
 use bson::binary::Vector;
-use bson::{Binary, Bson, Document, doc};
+use bson::{Binary, Bson, Document, Regex, doc};
 use futures::StreamExt;
 use mongodb::options::IndexOptions;
 use mongodb::{Client, Collection, Database, IndexModel, SearchIndexModel, SearchIndexType};
@@ -786,16 +786,33 @@ impl GraphStore for MongoGraphStore {
         if paths.is_empty() {
             return Ok(0);
         }
-        let filter = doc! { "repo_id": repo_id, "path": { "$in": paths } };
+        let endpoint_filters: Vec<Document> = paths
+            .iter()
+            .flat_map(|path| {
+                let pattern = Regex {
+                    pattern: format!("^{}(?:#|$)", regex_escape(path)),
+                    options: String::new(),
+                };
+                [doc! { "from": pattern.clone() }, doc! { "to": pattern }]
+            })
+            .collect();
+        let edge_filter = doc! {
+            "repo_id": repo_id,
+            "$or": [
+                doc! { "path": { "$in": paths } },
+                doc! { "$or": endpoint_filters },
+            ],
+        };
+        let node_filter = doc! { "repo_id": repo_id, "path": { "$in": paths } };
         let nodes = self
             .nodes
-            .delete_many(filter.clone())
+            .delete_many(node_filter)
             .await
             .map_err(mongo)?
             .deleted_count;
         let edges = self
             .edges
-            .delete_many(filter)
+            .delete_many(edge_filter)
             .await
             .map_err(mongo)?
             .deleted_count;
@@ -870,6 +887,20 @@ impl GraphStore for MongoGraphStore {
             edges: walked.into_values().collect(),
         })
     }
+}
+
+fn regex_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if matches!(
+            character,
+            '\\' | '^' | '$' | '.' | '|' | '?' | '*' | '+' | '(' | ')' | '[' | ']' | '{' | '}'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
 
 /// A [`KnowledgeStore`] over one MongoDB collection.

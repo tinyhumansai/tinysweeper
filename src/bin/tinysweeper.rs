@@ -352,13 +352,7 @@ fn render(proposal: &tinysweeper::app::Proposal) -> String {
     }
     out.push_str(&format!(
         "\n  {}\n",
-        tinysweeper::findings::render::cost_line(
-            proposal.cost_usd,
-            proposal.input_tokens,
-            proposal.output_tokens,
-            proposal.cached_tokens,
-            &proposal.models,
-        )
+        tinysweeper::findings::render::cost_line(&proposal.usage(), &proposal.models)
     ));
     out
 }
@@ -480,6 +474,7 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             cached_tokens: 0,
+            embed_tokens: 0,
             models: vec![],
         }
     }
