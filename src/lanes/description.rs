@@ -97,6 +97,9 @@ impl Lane for Description {
             })
             .await?;
 
+        // Taken before the value is moved out: the spend belongs to the model
+        // that answered, whether or not its answer parses.
+        let spend = Spend::of(&response);
         let parsed = schema::parse(LaneId::Description, response.value)?;
 
         // `Demote`, not `Strict`: a finding about the description has no line
@@ -106,7 +109,7 @@ impl Lane for Description {
             parsed,
             input.diffs,
             Anchoring::Demote,
-            Spend::of(&response),
+            spend,
         ))
     }
 }

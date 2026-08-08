@@ -108,9 +108,12 @@ impl Lane for Critique {
             })
             .await?;
 
+        // Taken before the value is moved out: the spend belongs to the model
+        // that answered, whether or not its answer parses.
+        let spend = Spend::of(&response);
         let parsed = schema::parse(LaneId::Critique, response.value)?;
 
-        let mut spend = Spend::of(&response);
+        let mut spend = spend;
         let positioner = Positioner::new(self.model.as_ref(), input.config);
 
         let mut findings = Vec::new();

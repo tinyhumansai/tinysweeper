@@ -109,6 +109,9 @@ impl Lane for Commits {
             })
             .await?;
 
+        // Taken before the value is moved out: the spend belongs to the model
+        // that answered, whether or not its answer parses.
+        let spend = Spend::of(&response);
         let parsed = schema::parse(LaneId::Commits, response.value)?;
 
         // `Demote`: a finding about a commit message has no line to sit on, and
@@ -119,7 +122,7 @@ impl Lane for Commits {
             parsed,
             input.diffs,
             Anchoring::Demote,
-            Spend::of(&response),
+            spend,
         );
 
         merge_scanner_findings(&mut outcome, &scanner);

@@ -9,6 +9,7 @@ use super::*;
 use crate::config::types::Config;
 use crate::evidence::diff::parse_file_patch;
 use crate::harness::mock::MockModel;
+use crate::ports::model::Usage;
 use serde_json::json;
 
 /// The head revision of `src/main.rs`.

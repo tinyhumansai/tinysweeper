@@ -93,13 +93,16 @@ impl Lane for Tests {
             })
             .await?;
 
+        // Taken before the value is moved out: the spend belongs to the model
+        // that answered, whether or not its answer parses.
+        let spend = Spend::of(&response);
         let parsed = schema::parse(LaneId::Tests, response.value)?;
         Ok(LaneOutcome::from_response(
             LaneId::Tests,
             parsed,
             input.diffs,
             Anchoring::Strict,
-            Spend::of(&response),
+            spend,
         ))
     }
 }
