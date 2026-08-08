@@ -176,7 +176,9 @@ mod tests {
     fn chunking_is_deterministic() {
         // Re-indexing the same tree twice must produce byte-identical ids, or
         // the "unchanged file costs nothing" property is unprovable.
-        let source = (1..=200).map(|i| format!("fn f{i}() {{}}\n")).collect::<String>();
+        let source = (1..=200)
+            .map(|i| format!("fn f{i}() {{}}\n"))
+            .collect::<String>();
         let first = Chunker::new().chunk("o/r", "src/a.rs", &source);
         let second = Chunker::new().chunk("o/r", "src/a.rs", &source);
         assert_eq!(first, second);

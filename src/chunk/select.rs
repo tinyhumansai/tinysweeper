@@ -293,7 +293,10 @@ mod tests {
         std::fs::write(root.path().join("src/deep/a.rs"), "fn a() {}\n").expect("write");
         std::fs::write(root.path().join(".git/config"), "x").expect("write");
 
-        let selection = Selector::new(&[]).expect("globs").walk(root.path()).expect("walks");
+        let selection = Selector::new(&[])
+            .expect("globs")
+            .walk(root.path())
+            .expect("walks");
         assert_eq!(selection.selected, vec!["src/deep/a.rs".to_string()]);
     }
 }

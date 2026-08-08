@@ -230,7 +230,10 @@ fn symbol_name(node: Node<'_>, source: &str) -> Option<String> {
     // and for a trait impl the pair is what a reader would search for.
     if let Some(kind) = node.child_by_field_name("type") {
         let type_name = text(kind, source)?;
-        return match node.child_by_field_name("trait").and_then(|t| text(t, source)) {
+        return match node
+            .child_by_field_name("trait")
+            .and_then(|t| text(t, source))
+        {
             Some(trait_name) => Some(format!("{trait_name} for {type_name}")),
             None => Some(type_name),
         };
@@ -256,7 +259,11 @@ fn text(node: Node<'_>, source: &str) -> Option<String> {
 }
 
 fn segments(cuts: &BTreeMap<usize, Option<String>>, len: usize) -> Vec<Segment> {
-    let offsets: Vec<usize> = cuts.keys().copied().filter(|offset| *offset < len).collect();
+    let offsets: Vec<usize> = cuts
+        .keys()
+        .copied()
+        .filter(|offset| *offset < len)
+        .collect();
     offsets
         .iter()
         .enumerate()

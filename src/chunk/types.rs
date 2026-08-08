@@ -181,10 +181,7 @@ impl Selection {
         if surprising.is_empty() {
             return None;
         }
-        let mut lines = vec![format!(
-            "{} file(s) were not indexed:",
-            surprising.len()
-        )];
+        let mut lines = vec![format!("{} file(s) were not indexed:", surprising.len())];
         lines.extend(
             surprising
                 .iter()

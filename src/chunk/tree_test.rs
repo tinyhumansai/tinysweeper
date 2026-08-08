@@ -67,7 +67,9 @@ fn a_function_longer_than_the_target_is_never_split() {
 
     let chunk = holding[0];
     assert!(
-        chunk.text.contains("let value_120 = compute(value_119, 120);"),
+        chunk
+            .text
+            .contains("let value_120 = compute(value_119, 120);"),
         "the chunk holding the signature must hold the whole body"
     );
     assert!(chunk.text.contains("    value_120\n}"), "and its tail");
@@ -111,7 +113,9 @@ fn line_numbers_point_at_the_real_lines() {
 
 #[test]
 fn small_neighbours_are_merged_rather_than_emitted_one_per_line() {
-    let source: String = (0..40).map(|i| format!("const A{i}: usize = {i};\n")).collect();
+    let source: String = (0..40)
+        .map(|i| format!("const A{i}: usize = {i};\n"))
+        .collect();
     let chunks = split(&source, Language::Rust, &options()).expect("parses");
     assert!(
         chunks.len() < 10,
@@ -160,7 +164,12 @@ fn a_large_impl_block_is_opened_up_into_its_methods() {
             .iter()
             .filter(|c| c.text.contains(&format!("fn {name}(")))
             .collect();
-        assert_eq!(holding.len(), 1, "{name} appears in {} chunks", holding.len());
+        assert_eq!(
+            holding.len(),
+            1,
+            "{name} appears in {} chunks",
+            holding.len()
+        );
         assert!(
             holding[0].text.contains("let _x30 = 30;"),
             "the chunk holding fn {name} must hold the end of its body"
@@ -199,7 +208,8 @@ fn go_functions_and_types_are_named() {
 #[test]
 fn typescript_exports_and_arrow_consts_are_named() {
     let source = "import x from 'y';\n\nexport function build(a: number): number {\n  return a;\n}\n\nconst handler = (e: Event) => {\n  console.log(e);\n};\n";
-    let chunks = split(source, Language::TypeScript, &ChunkOptions::with_target(30)).expect("parses");
+    let chunks =
+        split(source, Language::TypeScript, &ChunkOptions::with_target(30)).expect("parses");
     let named: Vec<_> = chunks.iter().filter_map(|c| c.symbol.as_deref()).collect();
     assert!(named.contains(&"build"), "{named:?}");
     assert!(named.contains(&"handler"), "{named:?}");
@@ -215,7 +225,8 @@ fn tsx_parses_where_the_typescript_grammar_would_stumble() {
 #[test]
 fn javascript_functions_are_named() {
     let source = "function alpha() {\n  return 1;\n}\n\nclass Beta {\n  go() {}\n}\n";
-    let chunks = split(source, Language::JavaScript, &ChunkOptions::with_target(15)).expect("parses");
+    let chunks =
+        split(source, Language::JavaScript, &ChunkOptions::with_target(15)).expect("parses");
     let named: Vec<_> = chunks.iter().filter_map(|c| c.symbol.as_deref()).collect();
     assert!(named.contains(&"alpha"), "{named:?}");
     assert!(named.contains(&"Beta"), "{named:?}");

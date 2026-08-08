@@ -64,7 +64,9 @@ impl std::fmt::Display for EmbedSignature {
 /// begin halfway through a function. Retrieval that treated the two alike would
 /// present a half-function with the same confidence as a whole one, so the
 /// distinction is stored rather than inferred from the language.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum ChunkMethod {
     /// A grammar named the boundaries: the span is one or more whole
