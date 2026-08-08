@@ -116,6 +116,11 @@ pub fn parse_as(file: &SourceFile, language: Language) -> Result<ParsedFile> {
     let called: BTreeSet<usize> = calls.iter().map(|u| u.byte).collect();
     let mut usages = calls;
     usages.extend(refs.into_iter().filter(|u| !called.contains(&u.byte)));
+    usages.retain(|u| {
+        !import_spans
+            .iter()
+            .any(|(start, end)| *start <= u.byte && u.byte < *end)
+    });
     usages.sort_by_key(|u| (u.byte, u.call));
     usages.dedup_by_key(|u| u.byte);
 
