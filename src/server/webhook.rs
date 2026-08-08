@@ -200,6 +200,14 @@ pub fn route(event: &str, payload: &Payload) -> Action {
             }
         }
         "issue_comment" => {
+            // GitHub delivers `issue_comment` for `created`, `edited`, and
+            // `deleted`, unlike the `pull_request` branch above which already
+            // whitelists actions. Without this, editing a comment to add
+            // `@tinysweeper` after the fact — or any edit to a comment that
+            // already mentioned it — queues another paid review every time.
+            if payload.action != "created" {
+                return Action::Ignore("comment action is not `created`");
+            }
             let Some(issue) = &payload.issue else {
                 return Action::Ignore("no issue");
             };
