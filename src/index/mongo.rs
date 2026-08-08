@@ -604,6 +604,20 @@ impl ChunkIndex for MongoChunkIndex {
             .deleted_count)
     }
 
+    async fn delete_chunks(&self, repo_id: &str, ids: &[String]) -> Result<u64> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        // Filtered on `repo_id` as well as `_id` so a mistaken id cannot reach
+        // across repositories, exactly as the mock does.
+        Ok(self
+            .collection
+            .delete_many(doc! { "repo_id": repo_id, "_id": { "$in": ids } })
+            .await
+            .map_err(mongo)?
+            .deleted_count)
+    }
+
     async fn query(&self, query: &HybridQuery) -> Result<Vec<ScoredChunk>> {
         let mut cursor = match self.collection.aggregate(self.pipeline(query)).await {
             Ok(cursor) => cursor,
