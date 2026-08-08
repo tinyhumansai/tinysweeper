@@ -23,6 +23,7 @@ pub struct MockModel {
     responses: Arc<Mutex<Vec<Result<Value>>>>,
     requests: Arc<Mutex<Vec<ModelRequest>>>,
     usage: Usage,
+    answers_as: Option<String>,
 }
 
 impl MockModel {
@@ -37,6 +38,7 @@ impl MockModel {
             responses: Arc::new(Mutex::new(vec![])),
             requests: Arc::new(Mutex::new(vec![])),
             usage: Usage::default(),
+            answers_as: None,
         }
         .repeating(value)
     }
@@ -61,6 +63,16 @@ impl MockModel {
             .lock()
             .expect("mock model lock")
             .push(Err(Error::Model(message.to_string())));
+        self
+    }
+
+    /// Answer as `model` whatever model was asked for.
+    ///
+    /// This is what a provider fallback looks like from the port: the request
+    /// named one model and a different one came back. Tests use it to prove the
+    /// cost line reports what answered rather than what was configured.
+    pub fn answering_as(mut self, model: impl Into<String>) -> Self {
+        self.answers_as = Some(model.into());
         self
     }
 
@@ -108,7 +120,10 @@ impl MockModel {
 #[async_trait]
 impl Model for MockModel {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse> {
-        let model = request.model.clone();
+        let model = self
+            .answers_as
+            .clone()
+            .unwrap_or_else(|| request.model.clone());
         self.requests.lock().expect("mock model lock").push(request);
 
         let queued = {
@@ -197,8 +212,21 @@ mod tests {
             output_tokens: 100,
             cached_tokens: 800,
             cost_usd: 0.01,
+            ..Usage::default()
         });
         let response = model.complete(request()).await.expect("answers");
         assert_eq!(response.usage.cached_tokens, 800);
+    }
+
+    #[tokio::test]
+    async fn a_fallback_answers_under_its_own_name() {
+        let model = MockModel::silent().answering_as("vendor/fallback");
+        let response = model.complete(request()).await.expect("answers");
+        assert_eq!(response.model, "vendor/fallback");
+        assert_eq!(
+            model.requests()[0].model,
+            "mock",
+            "the request is unchanged"
+        );
     }
 }

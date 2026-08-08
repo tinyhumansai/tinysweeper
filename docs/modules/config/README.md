@@ -36,6 +36,29 @@ max_blob_bytes` that only the `commits` lane reads, an `issues.close.enabled`
 under an `issues.enabled = false`. A silently ignored setting reads as working,
 which is the worst failure mode a config file has.
 
+## Model tiering is config data, not code
+
+Two tiers — `models.scan` and `models.deep` — and two resolvers over them.
+`Config::model_for(lane)` answers for a reviewing lane, honouring a per-lane
+override that may name a tier or an explicit model id; lanes with no override
+get the cheap tier, because the expensive one should be opt-in.
+`Config::model_for_workload(Workload)` answers for the mechanical work that is
+not a lane — snippet re-location, the falsification pass, knowledge extraction —
+and always answers with the cheap tier. That `match` is exhaustive so adding a
+workload forces someone to state its tier rather than inherit one.
+
+Repositories cannot override a workload the way they override a lane. Paying
+deep-tier prices to copy a snippet out of a diff is not a trade-off worth
+exposing. (open-code-review runs one model for everything, which is why its
+cheap operations cost the same as its expensive ones.)
+
+tinyagents ships `ModelRouter`/`WorkloadRoute` for the same idea and it was
+considered. It resolves aliases inside a tinyagents harness, with capability
+gates and a `FallbackPolicy`; tinysweeper picks its tier before the `Model`
+port, in the default build, where tinyagents is not linked at all. The place it
+would pay for itself is `GatewayModel`'s hand-rolled fallback chain, on the
+feature-gated side of the port.
+
 ## Discovery
 
 `.tinysweeper.toml` at the repository root, then `.github/tinysweeper.toml`.

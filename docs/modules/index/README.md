@@ -18,6 +18,18 @@ changes", the knowledge base for "what did we already decide".
 
 The ports themselves are in `src/ports/{embed,index,graph,knowledge}.rs`.
 
+## Embedding is billed like everything else
+
+`Embedder::embed` returns `Embedded`, which is vectors *and* a `Usage`. Bare
+vectors would make indexing the one model operation with no price attached to it,
+and indexing a repository is the largest token count this program produces.
+`Embedded::billed` does the accounting for every implementation, so an embedder
+has to go out of its way to return unpriced work. Tokens are estimated from the
+text rather than read off a response, because providers disagree about whether
+they report embedding usage at all and a budget that only holds for the
+cooperative ones is not a budget. An embedder missing from the price table is
+charged the most expensive known rate.
+
 ## The embedding signature is a partition key
 
 `EmbedSignature` is provider, model and dimensionality. It is written onto every

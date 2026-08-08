@@ -10,6 +10,7 @@
 //! silently misbehaves when a model phrases something differently.
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::Result;
@@ -80,7 +81,12 @@ pub struct ModelResponse {
 }
 
 /// Token and cost accounting for one call.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+///
+/// Serializable because it is carried in the proposal `apply` publishes from,
+/// and `serde(default)` throughout so a proposal written before a counter
+/// existed still loads.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Usage {
     /// Prompt tokens.
     pub input_tokens: u64,
@@ -89,6 +95,14 @@ pub struct Usage {
     /// Prompt tokens served from the provider's cache. The difference between
     /// a cheap re-review and a ruinous one.
     pub cached_tokens: u64,
+    /// Tokens sent to an embedding model.
+    ///
+    /// Counted apart from `input_tokens` because embeddings are priced on their
+    /// own scale entirely and mixing them into the prompt total would make the
+    /// cache hit rate — computed against `input_tokens` — quietly wrong. Once a
+    /// repository is indexed this is the dominant line item, so it has to be
+    /// visible rather than folded away.
+    pub embed_tokens: u64,
     /// Cost in USD, when the provider reports it.
     pub cost_usd: f64,
 }
@@ -99,7 +113,59 @@ impl Usage {
         self.input_tokens += other.input_tokens;
         self.output_tokens += other.output_tokens;
         self.cached_tokens += other.cached_tokens;
+        self.embed_tokens += other.embed_tokens;
         self.cost_usd += other.cost_usd;
+    }
+}
+
+/// Usage, plus the models that actually produced it.
+///
+/// The two travel together because reporting one without the other is how the
+/// cost line came to lie: it named the model the config *asked* for while the
+/// usage came from whichever model answered. A fallback is exactly the case
+/// worth reporting — it is the moment the review got cheaper and worse — so the
+/// model id is recorded at the point the response arrives and never re-derived
+/// from config afterwards.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Spend {
+    /// Tokens and dollars.
+    pub usage: Usage,
+    /// Every distinct model that answered, in first-seen order.
+    pub models: Vec<String>,
+}
+
+impl Spend {
+    /// What one response cost, attributed to the model that returned it.
+    pub fn of(response: &ModelResponse) -> Self {
+        let mut spend = Self::default();
+        spend.record(&response.model, response.usage);
+        spend
+    }
+
+    /// Attribute `usage` to `model`.
+    pub fn record(&mut self, model: &str, usage: Usage) {
+        self.usage.add(usage);
+        self.note(model);
+    }
+
+    /// Note that `model` answered, without any usage of its own.
+    pub fn note(&mut self, model: &str) {
+        if !self.models.iter().any(|known| known == model) {
+            self.models.push(model.to_string());
+        }
+    }
+
+    /// Fold another spend into this one.
+    pub fn merge(&mut self, other: Spend) {
+        self.usage.add(other.usage);
+        for model in other.models {
+            self.note(&model);
+        }
+    }
+
+    /// Dollars spent.
+    pub fn cost_usd(&self) -> f64 {
+        self.usage.cost_usd
     }
 }
 
@@ -121,18 +187,77 @@ mod tests {
             input_tokens: 100,
             output_tokens: 10,
             cached_tokens: 80,
+            embed_tokens: 0,
             cost_usd: 0.01,
         });
         total.add(Usage {
             input_tokens: 50,
             output_tokens: 5,
             cached_tokens: 0,
+            embed_tokens: 400,
             cost_usd: 0.02,
         });
 
         assert_eq!(total.input_tokens, 150);
         assert_eq!(total.output_tokens, 15);
         assert_eq!(total.cached_tokens, 80);
+        assert_eq!(total.embed_tokens, 400);
         assert!((total.cost_usd - 0.03).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_spend_is_attributed_to_the_model_that_answered() {
+        let response = ModelResponse {
+            value: serde_json::Value::Null,
+            // A fallback answered; the configured model did not.
+            model: "vendor/fallback".into(),
+            usage: Usage {
+                input_tokens: 10,
+                cost_usd: 0.5,
+                ..Usage::default()
+            },
+        };
+
+        let spend = Spend::of(&response);
+        assert_eq!(spend.models, vec!["vendor/fallback".to_string()]);
+        assert!((spend.cost_usd() - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn merging_sums_the_usage_and_keeps_each_model_once() {
+        let mut spend = Spend::default();
+        spend.record(
+            "vendor/deep",
+            Usage {
+                input_tokens: 10,
+                cost_usd: 0.1,
+                ..Usage::default()
+            },
+        );
+
+        let mut other = Spend::default();
+        other.record(
+            "vendor/scan",
+            Usage {
+                input_tokens: 5,
+                cost_usd: 0.01,
+                ..Usage::default()
+            },
+        );
+        other.record(
+            "vendor/deep",
+            Usage {
+                input_tokens: 1,
+                ..Usage::default()
+            },
+        );
+
+        spend.merge(other);
+        assert_eq!(spend.usage.input_tokens, 16);
+        assert!((spend.cost_usd() - 0.11).abs() < 1e-9);
+        assert_eq!(
+            spend.models,
+            vec!["vendor/deep".to_string(), "vendor/scan".to_string()]
+        );
     }
 }
