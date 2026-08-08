@@ -449,6 +449,47 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "github")]
+    fn proposal_for(repo: &str, number: u64) -> tinysweeper::app::Proposal {
+        tinysweeper::app::Proposal {
+            version: 1,
+            repo: repo.into(),
+            number,
+            head_sha: "abc123".into(),
+            lanes: vec![],
+            cost_usd: 0.0,
+            cached_tokens: 0,
+        }
+    }
+
+    #[cfg(feature = "github")]
+    #[test]
+    fn apply_refuses_a_proposal_for_a_different_repository() {
+        let repo = tinysweeper::forge::RepoId::parse("tinyhumansai/tinysweeper").unwrap();
+        let err = validate_apply_target(&proposal_for("someone-else/other-repo", 7), &repo, 7)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("someone-else/other-repo"), "{err}");
+    }
+
+    #[cfg(feature = "github")]
+    #[test]
+    fn apply_refuses_a_proposal_for_a_different_pull_request() {
+        let repo = tinysweeper::forge::RepoId::parse("tinyhumansai/tinysweeper").unwrap();
+        let err = validate_apply_target(&proposal_for("tinyhumansai/tinysweeper", 3), &repo, 7)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("#3"), "{err}");
+    }
+
+    #[cfg(feature = "github")]
+    #[test]
+    fn apply_accepts_a_matching_proposal() {
+        let repo = tinysweeper::forge::RepoId::parse("tinyhumansai/tinysweeper").unwrap();
+        validate_apply_target(&proposal_for("tinyhumansai/tinysweeper", 7), &repo, 7)
+            .expect("matches");
+    }
+
     #[cfg(feature = "serve")]
     #[test]
     fn a_real_webhook_secret_is_accepted() {
