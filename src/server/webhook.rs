@@ -419,7 +419,10 @@ mod tests {
             let mut delivery = base.clone();
             delivery["action"] = serde_json::json!(action);
             assert!(
-                matches!(route("issue_comment", &payload(delivery)), Action::Ignore(_)),
+                matches!(
+                    route("issue_comment", &payload(delivery)),
+                    Action::Ignore(_)
+                ),
                 "action `{action}` must not queue a review"
             );
         }
