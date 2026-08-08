@@ -284,7 +284,19 @@ async fn run_and_publish(
 
     // The model runs against a read-only handle. The write token is minted
     // below, after this returns — same boundary as the workflow, same reason.
-    let proposal = crate::app::review(forge, model, &state.config.config, repo, number).await?;
+    // The store doubles as the review-state cache: it is what lets the next
+    // push replay this run's evidence verbatim and pay cache prices for it.
+    // Dedupe does not depend on it — that reads the markers off the pull
+    // request — so a database problem costs money, never a duplicate comment.
+    let proposal = crate::app::review::review_with_state(
+        forge,
+        model,
+        &state.config.config,
+        repo,
+        number,
+        Some(&state.store),
+    )
+    .await?;
 
     let write_token = state.auth.installation_token(installation).await?;
     let write = crate::forge::github::GitHubWrite::new(&write_token)?;
