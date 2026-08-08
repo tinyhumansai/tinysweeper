@@ -275,8 +275,11 @@ pub fn scan_added_lines<'a>(
         // the value has to *look* like an opaque credential (one token, no
         // spaces, base64/hex alphabet), be long enough to be one, and carry
         // more entropy than an identifier or a sentence would.
-        if !expected
-            && !too_long_for_heuristics
+        // Note there is no `expected` check here. An example file earns an
+        // exemption for *placeholders*, which `looks_like_placeholder` already
+        // grants; exempting the whole file would mean a genuine credential
+        // pasted into `.env.example` — a common accident — goes unreported.
+        if !too_long_for_heuristics
             && let Some((name, value)) = secret_assignment(text)
             && !looks_like_placeholder(value)
             && is_opaque_token(value)
@@ -301,6 +304,69 @@ pub fn scan_added_lines<'a>(
     }
 
     findings
+}
+
+/// Replace every recognised credential in `text` with a redacted hint.
+///
+/// Used on model-produced text before it becomes a comment. A lane's model sees
+/// the raw diff, so if a pull request commits a key the model can quote it back
+/// in a finding body — and scanner findings being carefully redacted counts for
+/// nothing if the critique lane prints the value two comments later.
+///
+/// Only the deterministic rulepack is applied. The entropy heuristic is far too
+/// eager to run over prose: it would mangle every hash, identifier and base64
+/// example a review legitimately needs to quote.
+pub fn scrub(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+
+    while !rest.is_empty() {
+        match next_credential(rest) {
+            Some((start, len)) => {
+                out.push_str(&rest[..start]);
+                out.push_str(&redact(&rest[start..start + len]));
+                rest = &rest[start + len..];
+            }
+            None => {
+                out.push_str(rest);
+                break;
+            }
+        }
+    }
+
+    out
+}
+
+/// Byte offset and length of the first rulepack match in `text`.
+fn next_credential(text: &str) -> Option<(usize, usize)> {
+    let mut best: Option<(usize, usize)> = None;
+
+    for rule in RULES {
+        let mut from = 0usize;
+        while let Some(found) = text[from..].find(rule.prefix) {
+            let start = from + found;
+            let end = text[start..]
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+                .map(|offset| start + offset)
+                .unwrap_or(text.len());
+
+            if end - start >= rule.min_len {
+                let candidate = (start, end - start);
+                best = Some(match best {
+                    // Earliest match wins; on a tie the longer one does, so an
+                    // `sk-or-v1-` match is not truncated by an `sk-` style rule.
+                    Some(current) if current.0 < candidate.0 => current,
+                    Some(current) if current.0 == candidate.0 && current.1 >= candidate.1 => {
+                        current
+                    }
+                    _ => candidate,
+                });
+            }
+            from = start + rule.prefix.len();
+        }
+    }
+
+    best
 }
 
 /// Whether `path` is expected to contain credential-shaped placeholders.
@@ -592,6 +658,17 @@ mod tests {
     }
 
     #[test]
+    fn a_real_looking_credential_in_an_env_example_is_still_reported() {
+        // The exemption is for placeholders, not for the file. Pasting a live
+        // key into .env.example is a common accident and the whole point of
+        // scanning it.
+        let value = token("7Fq3", "Xz9RmW2pL8vN4bY6tH0jD5sGkA1cE");
+        let findings = scan(".env.example", &format!("API_KEY={value}"));
+        assert_eq!(findings.len(), 1, "{findings:#?}");
+        assert_eq!(findings[0].rule, "high-entropy-assignment");
+    }
+
+    #[test]
     fn a_real_key_in_an_env_example_is_still_reported() {
         // The exemption covers placeholders, not a genuine leak into the file
         // people are most likely to commit carelessly.
@@ -628,6 +705,36 @@ mod tests {
 
         assert_eq!(findings.len(), 1, "{findings:#?}");
         assert_eq!(findings[0].rule, "aws-access-key-id");
+    }
+
+    #[test]
+    fn scrubbing_removes_a_credential_a_model_quoted_back() {
+        let key = token("AKIA", "IOSFODNN7EXAMPLE");
+        let quoted = format!("The key `{key}` is hardcoded on line 12.");
+        let scrubbed = scrub(&quoted);
+
+        assert!(!scrubbed.contains("IOSFODNN7EXAMPLE"), "{scrubbed}");
+        assert!(scrubbed.contains("AKIA…"), "{scrubbed}");
+        assert!(scrubbed.contains("is hardcoded on line 12."));
+    }
+
+    #[test]
+    fn scrubbing_handles_several_credentials_in_one_body() {
+        let a = token("AKIA", "IOSFODNN7EXAMPLE");
+        let b = token("ghp_", "9f8e7d6c5b4a39281706fedcba9876543210");
+        let scrubbed = scrub(&format!("{a} and also {b}"));
+
+        assert!(!scrubbed.contains("IOSFODNN7EXAMPLE"));
+        assert!(!scrubbed.contains("9f8e7d6c"));
+        assert!(scrubbed.contains(" and also "));
+    }
+
+    #[test]
+    fn scrubbing_leaves_ordinary_prose_alone() {
+        // The entropy heuristic is deliberately not applied here: it would
+        // mangle every hash and identifier a review legitimately quotes.
+        let prose = "Consider `items.get(i)` instead; the checksum d5f1c3e8a9b04c7e is fine.";
+        assert_eq!(scrub(prose), prose);
     }
 
     #[test]
