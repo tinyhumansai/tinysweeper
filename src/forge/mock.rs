@@ -579,6 +579,7 @@ mod tests {
             path: "src/lib.rs".into(),
             line: 42,
             start_line: None,
+            author: String::new(),
             body: "finding".into(),
         };
         forge

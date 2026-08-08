@@ -206,6 +206,9 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
                 path: finding.path.clone(),
                 line,
                 start_line: None,
+                // The forge assigns the author on the way in; on the way out it
+                // is what tells dedupe whether a marker is ours.
+                author: String::new(),
                 body: format!(
                     "{} **{}**\n\n{}\n\n<sub>{} · {} · <!-- {MARKER_PREFIX}fp={} --></sub>",
                     crate::findings::render::badge(finding.severity),
@@ -258,6 +261,8 @@ mod tests {
                 },
                 summary: "Reviewed.".into(),
                 findings,
+                resolved: vec![],
+                deduped: 0,
             }],
             cost_usd: 0.01,
             input_tokens: 10_000,
