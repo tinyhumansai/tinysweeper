@@ -32,7 +32,7 @@ recorded.
 
 One identity, used for both dedupe and triage inheritance:
 
-```
+```text
 sha256(lane \0 path \0 rule \0 whitespace-normalised anchored code)[..8]
 ```
 
