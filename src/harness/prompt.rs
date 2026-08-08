@@ -73,7 +73,7 @@ impl Prompt {
 }
 
 /// Everything a lane needs to build its prompt.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct PromptInputs<'a> {
     /// Which lane is asking.
     pub lane: LaneId,
@@ -90,12 +90,6 @@ pub struct PromptInputs<'a> {
     pub prior_findings: &'a [String],
     /// The evidence that is new this run.
     pub new_evidence: &'a str,
-}
-
-impl Default for LaneId {
-    fn default() -> Self {
-        LaneId::Critique
-    }
 }
 
 /// Build a lane's prompt.

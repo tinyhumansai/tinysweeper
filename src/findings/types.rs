@@ -68,7 +68,16 @@ impl Finding {
         hasher.update(self.rule.as_bytes());
         hasher.update(b"\0");
         hasher.update(normalize(context).as_bytes());
-        format!("{:x}", hasher.finalize())[..16].to_string()
+
+        // Hand-rolled hex: sha2 0.11 returns a `Array` that does not implement
+        // `LowerHex`, and pulling in a hex crate for sixteen characters is not
+        // worth a dependency in the offline default build.
+        hasher
+            .finalize()
+            .iter()
+            .take(8)
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 
     /// Whether this finding is at or above `gate`.
