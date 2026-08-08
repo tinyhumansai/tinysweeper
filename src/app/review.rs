@@ -38,8 +38,31 @@ pub struct Proposal {
     pub lanes: Vec<LaneProposal>,
     /// Total model spend for the run.
     pub cost_usd: f64,
-    /// Total tokens served from the provider's prompt cache.
+    /// Prompt tokens sent, including any served from cache.
+    #[serde(default)]
+    pub input_tokens: u64,
+    /// Tokens generated.
+    #[serde(default)]
+    pub output_tokens: u64,
+    /// Prompt tokens served from the provider's cache.
+    ///
+    /// Reported separately because it is the number that decides whether
+    /// re-reviewing a pull request is cheap or ruinous, and nobody tunes a
+    /// figure they cannot see.
     pub cached_tokens: u64,
+    /// Which model actually answered, per lane.
+    #[serde(default)]
+    pub models: Vec<String>,
+}
+
+impl Proposal {
+    /// The share of prompt tokens served from cache.
+    ///
+    /// `None` when nothing was sent, so an idle run reads as "no data" rather
+    /// than a misleading 0%.
+    pub fn cache_hit_rate(&self) -> Option<f64> {
+        (self.input_tokens > 0).then(|| self.cached_tokens as f64 / self.input_tokens as f64)
+    }
 }
 
 /// One lane's verdict.
@@ -96,7 +119,10 @@ pub async fn review(
                 findings: vec![],
             }],
             cost_usd: 0.0,
+            input_tokens: 0,
+            output_tokens: 0,
             cached_tokens: 0,
+            models: vec![],
         });
     }
 
@@ -104,6 +130,7 @@ pub async fn review(
 
     let mut lanes = Vec::new();
     let mut usage = Usage::default();
+    let mut models: Vec<String> = Vec::new();
 
     for lane_id in config.enabled_lanes() {
         let lane: Box<dyn Lane> = match lane_id {
@@ -136,6 +163,10 @@ pub async fn review(
             .await?;
 
         usage.add(outcome.usage);
+        let answered = config.model_for(lane_id).to_string();
+        if !models.contains(&answered) {
+            models.push(answered);
+        }
         if usage.cost_usd > config.models.budget_usd_per_pr {
             return Err(Error::Budget {
                 spent: usage.cost_usd,
@@ -197,7 +228,10 @@ pub async fn review(
         head_sha: context.pull_request.head_sha.clone(),
         lanes,
         cost_usd: usage.cost_usd,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
         cached_tokens: usage.cached_tokens,
+        models,
     })
 }
 
@@ -215,7 +249,7 @@ pub fn read_proposal(path: &Path) -> Result<Proposal> {
 
 fn lane_proposal(config: &Config, lane: LaneId, outcome: LaneOutcome) -> LaneProposal {
     let gate = config.severity_gate();
-    let minimum = config.review.confidence_min;
+    let minimum = config.confidence_min();
 
     // `RawFinding::into_finding` scrubs a finding's own title and body, but
     // the lane summary is free text the model wrote, and a model asked to
@@ -730,7 +764,10 @@ mod tests {
             head_sha: "abc123".into(),
             lanes: vec![],
             cost_usd: 0.02,
+            input_tokens: 10_000,
+            output_tokens: 500,
             cached_tokens: 900,
+            models: vec!["test/model".into()],
         };
 
         write_proposal(&proposal, &path).expect("writes");

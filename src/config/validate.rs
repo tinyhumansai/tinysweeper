@@ -81,18 +81,28 @@ fn validate_review(config: &Config, problems: &mut Vec<String>) {
         ));
     }
 
-    if Severity::parse(&review.severity_gate).is_none() {
+    if let Some(gate) = &review.severity_gate
+        && Severity::parse(gate).is_none()
+    {
         problems.push(format!(
-            "`review.severity_gate = \"{}\"` is not a severity; expected one of {}",
-            review.severity_gate,
+            "`review.severity_gate = \"{gate}\"` is not a severity; expected one of {}",
             known(&Severity::ALL.map(|s| s.as_str()))
         ));
     }
 
-    if !(0.0..=1.0).contains(&review.confidence_min) {
+    if let Some(confidence) = review.confidence_min
+        && !(0.0..=1.0).contains(&confidence)
+    {
         problems.push(format!(
-            "`review.confidence_min = {}` is out of range; expected 0.0 to 1.0",
-            review.confidence_min
+            "`review.confidence_min = {confidence}` is out of range; expected 0.0 to 1.0"
+        ));
+    }
+
+    let blocking = review.request_changes_at.trim();
+    if !blocking.eq_ignore_ascii_case("off") && Severity::parse(blocking).is_none() {
+        problems.push(format!(
+            "`review.request_changes_at = \"{blocking}\"` is not a severity; expected `off` or one of {}",
+            known(&Severity::ALL.map(|s| s.as_str()))
         ));
     }
 

@@ -173,6 +173,34 @@ pub struct CheckRun {
     pub summary: String,
 }
 
+/// How a review is submitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewEvent {
+    /// Advisory. Blocks nothing.
+    Comment,
+    /// Blocks the merge button until a human resolves it.
+    RequestChanges,
+    /// Clears a previous changes-requested verdict from the same reviewer.
+    ///
+    /// Needed as much as the blocking verdict itself: GitHub keeps only the
+    /// latest review per reviewer, so without this a pull request that has been
+    /// fixed stays blocked by a stale objection until someone dismisses it by
+    /// hand.
+    Approve,
+}
+
+impl ReviewEvent {
+    /// The GitHub API's name for this event.
+    pub fn as_api(self) -> &'static str {
+        match self {
+            ReviewEvent::Comment => "COMMENT",
+            ReviewEvent::RequestChanges => "REQUEST_CHANGES",
+            ReviewEvent::Approve => "APPROVE",
+        }
+    }
+}
+
 /// An inline review comment anchored to a line of the diff.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewComment {

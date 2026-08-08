@@ -152,9 +152,29 @@ fn print_prose(loaded: &Loaded) {
             .collect::<Vec<_>>()
             .join(", ")
     );
-    println!("  strictness       {}", config.review.strictness);
-    println!("  severity gate    {}", config.severity_gate());
-    println!("  confidence min   {}", config.review.confidence_min);
+    println!(
+        "  strictness       {}  ({})",
+        config.review.strictness,
+        crate::config::types::Strictness::for_level(config.review.strictness).label
+    );
+    println!(
+        "  severity gate    {}{}",
+        config.severity_gate(),
+        if config.review.severity_gate.is_some() {
+            "  (set explicitly)"
+        } else {
+            ""
+        }
+    );
+    println!(
+        "  confidence min   {}{}",
+        config.confidence_min(),
+        if config.review.confidence_min.is_some() {
+            "  (set explicitly)"
+        } else {
+            ""
+        }
+    );
     println!("  max comments     {}", config.review.max_comments);
     println!("  incremental      {}", config.review.incremental);
 
