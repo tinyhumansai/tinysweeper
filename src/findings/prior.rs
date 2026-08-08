@@ -75,10 +75,21 @@ impl PriorReview {
 /// Returns false for empty login or empty configured bot login, failing safe
 /// rather than treating an unconfigured bot as anything.
 pub fn is_own_login(login: &str) -> bool {
+    let expected = std::env::var(BOT_LOGIN_ENV).unwrap_or_else(|_| "tinysweeper".to_string());
+    login_matches(login, &expected)
+}
+
+/// The comparison itself, with the configured login passed in.
+///
+/// Split from [`is_own_login`] so the security-critical half can be tested
+/// without touching the process environment. `set_var` is unsafe in Rust 2024
+/// precisely because it races every other thread reading the environment, and
+/// this crate's tests run in parallel — a test that mutated the variable could
+/// make an unrelated test read a login that was never configured for it.
+fn login_matches(login: &str, expected: &str) -> bool {
     if login.is_empty() {
         return false;
     }
-    let expected = std::env::var(BOT_LOGIN_ENV).unwrap_or_else(|_| "tinysweeper".to_string());
     let trimmed = expected.trim();
     if trimmed.is_empty() {
         return false;
