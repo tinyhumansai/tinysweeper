@@ -82,6 +82,16 @@ const INDEX_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// vector index it does not depend on the embedding model.
 const TEXT_INDEX: &str = "tinysweeper_text";
 
+/// The vector the boot probe searches with.
+///
+/// A unit vector, not a zero one. Cosine similarity against the zero vector is
+/// undefined and the server rejects the whole aggregation for it, so a zero
+/// probe would fail against a perfectly good deployment — a boot assertion that
+/// cries wolf is worse than no boot assertion.
+fn probe_vector(dims: usize) -> Vec<f32> {
+    vec![1.0 / (dims.max(1) as f32).sqrt(); dims]
+}
+
 /// Encode a vector for storage or for a query.
 ///
 /// float32 `binData`, not an array of doubles — see the module docs.
@@ -422,11 +432,7 @@ impl MongoChunkIndex {
             signature: signature.clone(),
             repo_id: None,
             text: "tinysweeper boot probe".to_string(),
-            // A unit vector, not a zero one. Cosine similarity against the
-            // zero vector is undefined and the server rejects it outright, so
-            // a zero probe would fail on a perfectly good deployment — a boot
-            // assertion that cries wolf is worse than none.
-            vector: vec![1.0 / (signature.dims.max(1) as f32).sqrt(); signature.dims],
+            vector: probe_vector(signature.dims),
             limit: 1,
             dense_weight: 1.0,
             text_weight: 1.0,

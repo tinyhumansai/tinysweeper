@@ -222,6 +222,17 @@ fn a_repository_lookup_widens_to_its_organisation_but_not_the_reverse() {
 }
 
 #[test]
+fn the_boot_probe_never_searches_with_a_zero_vector() {
+    // Observed against a real MongoDB 8.2 + mongot: the server rejects the
+    // whole aggregation with "Cosine similarity cannot be calculated against a
+    // zero vector", so a zero probe fails on a working deployment.
+    let vector = probe_vector(64);
+    assert_eq!(vector.len(), 64);
+    let norm = vector.iter().map(|v| v * v).sum::<f32>().sqrt();
+    assert!((norm - 1.0).abs() < 1e-5, "the probe vector must be normalised");
+}
+
+#[test]
 fn a_missing_search_stage_is_reported_as_a_deployment_problem() {
     // The stock `mongo:` image fails exactly this way, and the raw message
     // reads like a bug in tinysweeper rather than in the deployment.
