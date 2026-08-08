@@ -220,8 +220,11 @@ impl ForgeRead for GitHubRead {
             reviews
                 .iter()
                 .filter(|r| {
+                    // Exact rather than `starts_with`, which would have counted
+                    // a review left by an account called `tinysweeper-anything`
+                    // as our own. See `findings::prior::is_own_login`.
                     let login = r["user"]["login"].as_str().unwrap_or_default();
-                    login.starts_with("tinysweeper")
+                    crate::findings::prior::is_own_login(login)
                 })
                 .filter_map(|r| match r["state"].as_str() {
                     Some("CHANGES_REQUESTED") => Some(ReviewEvent::RequestChanges),
