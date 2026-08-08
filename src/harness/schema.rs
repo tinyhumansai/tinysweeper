@@ -35,9 +35,21 @@ pub struct LaneResponse {
 pub struct RawFinding {
     /// The file, exactly as it appears in the diff.
     pub path: String,
+    /// The code the finding is about, quoted verbatim from the diff.
+    ///
+    /// This is how a finding is anchored. Models are bad at line arithmetic
+    /// and good at copying, so the model quotes and `src/position` computes
+    /// the range — see that module for why the reverse loses good findings.
+    #[serde(default)]
+    pub existing_code: Option<String>,
     /// The head-revision line it anchors to.
-    pub line: u64,
-    /// The last line, when it spans a range.
+    ///
+    /// No longer part of the schema the model answers: it is filled in by
+    /// `src/position` after the fact, and stays deserializable only so
+    /// proposals written by an older version still parse.
+    #[serde(default)]
+    pub line: Option<u64>,
+    /// The last line, when it spans a range. Also computed host-side.
     #[serde(default)]
     pub end_line: Option<u64>,
     /// A stable category id.
@@ -75,7 +87,7 @@ impl RawFinding {
             // rather than letting a 5.0 sail past every threshold.
             confidence: self.confidence.clamp(0.0, 1.0),
             path: self.path,
-            line: Some(self.line),
+            line: self.line,
             end_line: self.end_line,
             rule: self.rule,
             title: truncate(&scrub(&self.title), 80),
@@ -122,21 +134,15 @@ pub fn json_schema() -> Value {
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["path", "line", "rule", "title", "body", "severity", "confidence"],
+                    "required": ["path", "existing_code", "rule", "title", "body", "severity", "confidence"],
                     "properties": {
                         "path": {
                             "type": "string",
                             "description": "File path exactly as it appears in the diff."
                         },
-                        "line": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "description": "A line the diff changed. A finding you cannot anchor to a changed line is not a finding."
-                        },
-                        "end_line": {
-                            "type": ["integer", "null"],
-                            "minimum": 1,
-                            "description": "Last line, if the finding spans a range."
+                        "existing_code": {
+                            "type": "string",
+                            "description": "The code this finding is about, copied verbatim out of the diff, including its indentation. One to five lines is right; quote the smallest span that shows the problem. Do not include line numbers or the leading `+`/`-`/space marker, do not paraphrase, and do not quote code that is not in the diff. Never write a line number anywhere: this quotation is how the finding is located, and it is the only thing that has to be exact."
                         },
                         "rule": {
                             "type": "string",
@@ -238,7 +244,8 @@ mod tests {
         let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
         let raw = RawFinding {
             path: "src/lib.rs".into(),
-            line: 1,
+            existing_code: Some("let key = \"…\";".into()),
+            line: Some(1),
             end_line: None,
             rule: "hardcoded-credential".into(),
             title: format!("Remove the hardcoded key {key}"),
@@ -259,7 +266,8 @@ mod tests {
     fn confidence_outside_the_range_is_clamped() {
         let raw = RawFinding {
             path: "src/lib.rs".into(),
-            line: 1,
+            existing_code: Some("let key = \"…\";".into()),
+            line: Some(1),
             end_line: None,
             rule: "r".into(),
             title: "t".into(),
@@ -279,7 +287,8 @@ mod tests {
         let long = "x".repeat(200);
         let raw = RawFinding {
             path: "src/lib.rs".into(),
-            line: 1,
+            existing_code: Some("let key = \"…\";".into()),
+            line: Some(1),
             end_line: None,
             rule: "r".into(),
             title: long,

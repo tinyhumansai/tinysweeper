@@ -6,12 +6,21 @@
 //!    token.
 //! 2. Build the prompt in cache-friendly layers.
 //! 3. Ask for structured output; refuse to parse prose.
-//! 4. Drop anything the model anchored outside the diff — *before* it can
-//!    become a comment.
+//! 4. Place every finding by the code it quoted, not by a number it guessed.
+//! 5. Drop the findings the diff disproves.
 //!
-//! Step 4 is not a nicety. Models reliably produce findings anchored to lines
-//! they inferred rather than read, and a comment on an unrelated line is how a
-//! review bot loses a team's trust in one shot.
+//! Steps 4 and 5 are the noise control, and they pull in opposite directions on
+//! purpose. Step 4 (`src/position`) exists because the old rule — the model
+//! emits a line number, and anything outside the diff is dropped — threw away
+//! good findings for bad arithmetic. Step 5 (`src/falsify`) exists because
+//! keeping more findings is only an improvement if the wrong ones still go, and
+//! it removes only what the diff *disproves*, never what it merely cannot
+//! confirm.
+//!
+//! A finding that cannot be placed is no longer dropped. It loses its line and
+//! is rendered into the check-run summary instead of posted inline, which is
+//! the honest outcome: the review found something and could not say exactly
+//! where.
 
 use std::sync::Arc;
 
@@ -22,10 +31,12 @@ use crate::error::Result;
 use crate::evidence::diff::FileDiff;
 use crate::evidence::replay;
 use crate::findings::types::Finding;
+use crate::falsify::Falsifier;
 use crate::harness::prompt::{self, PromptInputs};
-use crate::harness::schema;
+use crate::harness::schema::{self, RawFinding};
 use crate::lanes::{Lane, LaneInput, LaneOutcome};
 use crate::ports::model::{Message, Model, ModelRequest};
+use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
 
 /// The correctness lane.
 pub struct Critique {
@@ -95,56 +106,152 @@ impl Lane for Critique {
 
         let parsed = schema::parse(LaneId::Critique, response.value)?;
 
+        let mut usage = response.usage;
+        let positioner = Positioner::new(self.model.as_ref(), input.config);
+
         let mut findings = Vec::new();
+        let mut unanchored = 0usize;
         let mut discarded = 0usize;
+
         for raw in parsed.findings {
-            let finding = raw.into_finding(LaneId::Critique);
-            if anchored_in_diff(&finding, input.diffs) {
-                findings.push(finding);
-            } else {
-                // Not an error: models do this routinely. It is dropped
-                // quietly and counted, so the count can surface in the summary
-                // if it ever gets large enough to mean something.
+            // A file this pull request never touched is still dropped outright.
+            // There is nothing to anchor against and nothing this author did.
+            let Some(diff) = input.diffs.iter().find(|d| d.path == raw.path) else {
                 discarded += 1;
+                continue;
+            };
+
+            // Budget check: relocation can make one model call per unresolvable
+            // finding, so enforce the limit inside the loop before escalating to
+            // stage 3. Do not wait until the lane finishes.
+            if usage.cost_usd > input.config.models.budget_usd_per_pr {
+                return Err(crate::error::Error::Budget {
+                    spent: usage.cost_usd,
+                    limit: input.config.models.budget_usd_per_pr,
+                });
             }
+
+            let comment = format!("{}\n\n{}", raw.title, raw.body);
+            let snippet = raw.existing_code.clone().unwrap_or_default();
+            let resolution = positioner
+                .resolve(
+                    PositionRequest {
+                        snippet: &snippet,
+                        diff: Some(diff),
+                        file: input.file_contents.get(&raw.path).map(String::as_str),
+                        comment: &comment,
+                        rendered_diff: &new_evidence,
+                    },
+                    &mut usage,
+                )
+                .await;
+
+            let range = postable_range(&raw, diff, resolution);
+            if range.is_none() {
+                unanchored += 1;
+            }
+
+            let mut finding = raw.into_finding(LaneId::Critique);
+            finding.line = range.map(|(start, _)| start);
+            finding.end_line = range.and_then(|(start, end)| (end > start).then_some(end));
+
+            // Postability is wider than the changed-line set, so a finding can
+            // now land on a context line the pull request never touched. That
+            // is a deliberate widening, but it must not be a silent one: the
+            // noise rule is "introduced by this pull request", and a reader has
+            // to be able to tell when a finding is not. Marking it `late` is
+            // what puts the pre-existing badge on it in the summary.
+            if let Some((start, end)) = range
+                && !diff.touches_range(start, end)
+            {
+                finding.late = true;
+            }
+
+            findings.push(finding);
         }
 
-        let summary = if discarded > 0 {
-            format!(
-                "{} ({discarded} finding{} discarded for not matching a changed line)",
-                parsed.summary.trim(),
-                if discarded == 1 { "" } else { "s" }
-            )
-        } else {
-            parsed.summary.trim().to_string()
-        };
+        // Step 5, on the findings that survived positioning. It sees only the
+        // diff, and it can only remove.
+        let filtered = Falsifier::new(self.model.as_ref(), input.config)
+            .filter(LaneId::Critique, findings, &new_evidence)
+            .await;
+        usage.add(filtered.usage);
 
         Ok(LaneOutcome {
-            summary,
-            findings,
+            summary: summarise(
+                parsed.summary.trim(),
+                unanchored,
+                discarded,
+                filtered.rejected.len(),
+            ),
+            findings: filtered.findings,
             resolved: parsed.resolved,
-            usage: response.usage,
+            usage,
             skipped: None,
         })
     }
 }
 
-/// Whether a finding points at a line this pull request actually changed.
+/// The head-revision range a finding may be posted against, if any.
 ///
-/// A finding marked `late` is exempt — it is explicitly about untouched code,
-/// and the model had to justify that separately.
-fn anchored_in_diff(finding: &Finding, diffs: &[FileDiff]) -> bool {
-    if finding.late {
-        return diffs.iter().any(|d| d.path == finding.path);
+/// One rule: the range has to be inside a hunk, because that is exactly what
+/// GitHub will accept an inline comment on. That is deliberately wider than
+/// *the lines this pull request changed* — a finding that quotes a context
+/// line inside the hunk is about the change too, and the quotation is evidence
+/// the model really did read that line rather than guess at it. It is also
+/// deliberately narrower than *anywhere in the file*: a finding that resolved
+/// through the whole-file fallback to code the diff never showed cannot be
+/// posted inline, so it goes in the summary rather than being thrown away.
+fn postable_range(raw: &RawFinding, diff: &FileDiff, resolution: Resolution) -> Option<(u64, u64)> {
+    let (start, end) = match resolution {
+        Resolution::Anchored(anchor) => (anchor.start, anchor.end),
+        // The migration path: a model still answering with the old schema gets
+        // its line number honoured, because there is no quotation to place and
+        // its number is better than nothing.
+        Resolution::Unanchored(Unanchored::NoSnippet) => {
+            let line = raw.line?;
+            (line, raw.end_line.unwrap_or(line))
+        }
+        Resolution::Unanchored(Unanchored::NoMatch) => return None,
+    };
+
+    diff.within_hunk(start, end).then_some((start, end))
+}
+
+/// Fold the bookkeeping into the model's own summary.
+///
+/// Every count here is a finding that did not become an inline comment. They
+/// are stated rather than hidden: a filter nobody can see the effect of is a
+/// filter nobody can tell is broken.
+fn summarise(summary: &str, unanchored: usize, discarded: usize, rejected: usize) -> String {
+    let mut notes = Vec::new();
+    if unanchored > 0 {
+        notes.push(format!(
+            "{unanchored} finding{} could not be anchored to a line",
+            plural(unanchored)
+        ));
+    }
+    if discarded > 0 {
+        notes.push(format!(
+            "{discarded} finding{} discarded for naming a file this pull request did not change",
+            plural(discarded)
+        ));
+    }
+    if rejected > 0 {
+        notes.push(format!(
+            "{rejected} finding{} dropped as disproved by the diff",
+            plural(rejected)
+        ));
     }
 
-    let Some((start, end)) = finding.range() else {
-        return false;
-    };
-    diffs
-        .iter()
-        .find(|d| d.path == finding.path)
-        .is_some_and(|d| d.touches_range(start, end))
+    if notes.is_empty() {
+        return summary.to_string();
+    }
+    format!("{summary} ({})", notes.join("; "))
+}
+
+fn plural(count: usize) -> &'static str {
+    if count == 1 { "" } else { "s" }
 }
 
 #[cfg(test)]
@@ -155,6 +262,7 @@ mod tests {
     use crate::forge::types::PullRequest;
     use crate::harness::mock::MockModel;
     use serde_json::json;
+    use std::collections::BTreeMap;
 
     fn config() -> Config {
         crate::config::DEFAULTS
@@ -166,6 +274,19 @@ mod tests {
 
     const PATCH: &str =
         "@@ -1,3 +1,5 @@\n fn main() {\n+    let x = items[i];\n+    println!(\"{x}\");\n }\n";
+
+    /// The head revision of the same file. Lines 6–8 are outside every hunk,
+    /// so only the whole-file fallback can reach them.
+    const FILE: &str = "\
+fn main() {
+    let x = items[i];
+    println!(\"{x}\");
+}
+
+fn helper() {
+    let cfg = load();
+}
+";
 
     fn diffs() -> Vec<FileDiff> {
         vec![parse_file_patch("src/main.rs", PATCH)]
@@ -181,12 +302,22 @@ mod tests {
     }
 
     async fn run_with(model: MockModel, config: &Config, diffs: &[FileDiff]) -> LaneOutcome {
+        run_with_files(model, config, diffs, &BTreeMap::new()).await
+    }
+
+    async fn run_with_files(
+        model: MockModel,
+        config: &Config,
+        diffs: &[FileDiff],
+        file_contents: &BTreeMap<String, String>,
+    ) -> LaneOutcome {
         let pr = pull_request();
         Critique::new(Arc::new(model))
             .run(LaneInput {
                 config,
                 pull_request: &pr,
                 diffs,
+                file_contents,
                 scan_findings: &[],
                 repo_policy: None,
                 reviewed_evidence: "",
@@ -196,6 +327,21 @@ mod tests {
             .expect("lane runs")
     }
 
+    /// A finding anchored the way the schema now asks for: by quotation.
+    fn finding_quoting(snippet: &str) -> serde_json::Value {
+        json!({
+            "path": "src/main.rs",
+            "existing_code": snippet,
+            "rule": "unchecked-index",
+            "title": "Guard the index before dereferencing",
+            "body": "`i` is never bounds-checked.",
+            "severity": "high",
+            "confidence": 0.9
+        })
+    }
+
+    /// A finding in the pre-positioning shape, still accepted so a proposal
+    /// written by an older version keeps working.
     fn finding_at(line: u64) -> serde_json::Value {
         json!({
             "path": "src/main.rs",
@@ -222,21 +368,168 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_finding_on_an_unchanged_line_is_discarded() {
-        // Line 1 is context, not an addition. Posting there would put a comment
-        // on code the author did not write in this pull request.
+    async fn a_quoted_snippet_is_what_places_the_finding() {
+        // The model quotes the code with the indentation it felt like using and
+        // never names a line. Line 2 is where that code actually is.
         let model = MockModel::new().then(json!({
-            "summary": "…",
-            "findings": [finding_at(1)]
+            "summary": "Adds an unchecked index.",
+            "findings": [finding_quoting("let x = items[i];")]
         }));
         let outcome = run_with(model, &config(), &diffs()).await;
 
-        assert!(outcome.findings.is_empty(), "{:#?}", outcome.findings);
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(outcome.findings[0].line, Some(2));
+    }
+
+    #[tokio::test]
+    async fn a_leaked_diff_marker_in_the_quote_does_not_lose_the_finding() {
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [finding_quoting("+    let x = items[i];")]
+        }));
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings[0].line, Some(2));
+    }
+
+    #[tokio::test]
+    async fn a_multi_line_quote_becomes_a_range() {
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [finding_quoting("let x = items[i];\n\nprintln!(\"{x}\");")]
+        }));
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings[0].line, Some(2));
+        assert_eq!(outcome.findings[0].end_line, Some(3));
+    }
+
+    #[tokio::test]
+    async fn a_finding_that_resolves_outside_every_hunk_survives_without_a_line() {
+        // Real finding, quoted from real code, but the diff never showed that
+        // code — GitHub would reject the inline comment. It goes in the summary
+        // rather than being deleted, which is what the old line-number filter
+        // did to it.
+        let mut files = BTreeMap::new();
+        files.insert("src/main.rs".to_string(), FILE.to_string());
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [finding_quoting("    let cfg = load();")]
+        }));
+
+        let outcome = run_with_files(model, &config(), &diffs(), &files).await;
+
+        assert_eq!(outcome.findings.len(), 1, "not deleted");
+        assert_eq!(outcome.findings[0].line, None, "not postable inline");
         assert!(
-            outcome.summary.contains("1 finding discarded"),
+            outcome.summary.contains("1 finding could not be anchored"),
             "{}",
             outcome.summary
         );
+    }
+
+    #[tokio::test]
+    async fn a_quote_that_matches_nothing_leaves_the_finding_unanchored() {
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [finding_quoting("let y = somewhere_else();")]
+        }));
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(outcome.findings[0].line, None);
+    }
+
+    #[tokio::test]
+    async fn a_hopeless_quote_is_recovered_by_the_relocation_call() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_quoting("the loop that indexes without checking")]
+            }))
+            .then(json!({"existing_code": "    let x = items[i];"}))
+            .then(json!({"incorrect": []}));
+
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings[0].line, Some(2));
+    }
+
+    #[tokio::test]
+    async fn the_falsification_pass_drops_what_the_diff_disproves() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_quoting("let x = items[i];")]
+            }))
+            .then(json!({
+                "incorrect": [{"index": 1, "reason": "the diff bounds-checks `i` above"}]
+            }));
+
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert!(outcome.findings.is_empty());
+        assert!(
+            outcome.summary.contains("1 finding dropped as disproved"),
+            "{}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn a_broken_falsification_pass_never_deletes_a_review() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_quoting("let x = items[i];")]
+            }))
+            .then_error("upstream exploded");
+
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1, "failed open");
+        assert!(
+            !outcome.summary.contains("disproved"),
+            "{}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn a_finding_quoting_a_line_the_model_did_not_change_is_still_postable() {
+        // Line 1 is context inside the hunk. The model quoted it, so it read
+        // it, and GitHub will take a comment there.
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [finding_quoting("fn main() {")]
+        }));
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings[0].line, Some(1));
+    }
+
+    #[tokio::test]
+    async fn a_legacy_response_with_a_line_and_no_quote_still_anchors() {
+        // Migration: a proposal or a fine-tune still answering with the old
+        // schema keeps working, because its number is better than nothing.
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [finding_at(2)]
+        }));
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings[0].line, Some(2));
+    }
+
+    #[tokio::test]
+    async fn a_legacy_line_outside_every_hunk_is_not_trusted() {
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [finding_at(99)]
+        }));
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings[0].line, None);
     }
 
     #[tokio::test]
@@ -245,13 +538,18 @@ mod tests {
             "summary": "…",
             "findings": [{
                 "path": "src/elsewhere.rs",
-                "line": 2,
+                "existing_code": "let x = items[i];",
                 "rule": "r", "title": "t", "body": "b",
                 "severity": "high", "confidence": 0.9
             }]
         }));
         let outcome = run_with(model, &config(), &diffs()).await;
         assert!(outcome.findings.is_empty());
+        assert!(
+            outcome.summary.contains("did not change"),
+            "{}",
+            outcome.summary
+        );
     }
 
     #[tokio::test]
@@ -263,6 +561,43 @@ mod tests {
         let outcome = run_with(model, &config(), &diffs()).await;
         assert_eq!(outcome.findings.len(), 1);
         assert!(outcome.findings[0].late);
+    }
+
+    #[tokio::test]
+    async fn a_finding_quoting_a_context_line_is_marked_pre_existing() {
+        // Postability is the hunk, which is wider than the lines this pull
+        // request changed. A finding that lands on a context line is therefore
+        // about code the author did not touch, and the reader has to be able to
+        // tell — the model did not say `late`, the diff did.
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [finding_quoting("fn main() {")]
+        }));
+
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(outcome.findings[0].line, Some(1), "the context line");
+        assert!(
+            outcome.findings[0].late,
+            "an untouched line must carry the pre-existing badge"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_finding_quoting_an_added_line_is_not_marked_pre_existing() {
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [finding_quoting("    let x = items[i];")]
+        }));
+
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1);
+        assert!(
+            !outcome.findings[0].late,
+            "this pull request introduced the line"
+        );
     }
 
     #[tokio::test]
@@ -301,6 +636,7 @@ mod tests {
                 config: &config,
                 pull_request: &pr,
                 diffs: &diffs,
+                file_contents: &BTreeMap::new(),
                 scan_findings: &[],
                 repo_policy: None,
                 reviewed_evidence: "",
@@ -349,6 +685,7 @@ mod tests {
                 config: &config,
                 pull_request: &pr,
                 diffs: &diffs,
+                file_contents: &BTreeMap::new(),
                 scan_findings: &[],
                 repo_policy: None,
                 reviewed_evidence: &reviewed,
@@ -389,6 +726,7 @@ mod tests {
                 config: &config,
                 pull_request: &pr,
                 diffs: &diffs,
+                file_contents: &BTreeMap::new(),
                 scan_findings: &[],
                 repo_policy: None,
                 reviewed_evidence: "",
