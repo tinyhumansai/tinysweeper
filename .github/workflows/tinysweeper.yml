@@ -1,0 +1,137 @@
+# tinysweeper reviewing tinysweeper.
+#
+# This repository does not call its own reusable workflow, because that one
+# downloads a released binary and the whole point here is to exercise the code
+# on *this* branch. Every other repository uses `review.yml`; see the README.
+#
+# The two-job split is the same, and for the same reason: the job that holds the
+# model key must not hold a write token. See AGENTS.md.
+
+name: tinysweeper
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  issue_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to review.
+        required: true
+        type: string
+
+concurrency:
+  group: tinysweeper-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: review
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Read-only: this job holds OPENROUTER_API_KEY.
+    permissions:
+      contents: read
+    if: >-
+      github.event_name != 'issue_comment' ||
+      github.event.issue.pull_request != null
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
+    steps:
+      - name: Resolve the pull request number
+        id: pr
+        env:
+          FROM_PR: ${{ github.event.pull_request.number }}
+          FROM_ISSUE: ${{ github.event.issue.number }}
+          FROM_INPUT: ${{ inputs.pr }}
+        run: echo "number=${FROM_PR:-${FROM_ISSUE:-$FROM_INPUT}}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --locked --release --features harness,github
+
+      - name: Review
+        env:
+          # Read-only on purpose. This step makes the model calls.
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENROUTER_API_KEY: ${{ secrets.TINYSWEEPER_OPENROUTER_KEY }}
+          TS_REPO: ${{ github.repository }}
+          TS_PR: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          ./target/release/tinysweeper review \
+            --repo "$TS_REPO" --pr "$TS_PR" --propose-to findings.json
+
+      - name: Fail if the review left the checkout dirty
+        run: |
+          set -euo pipefail
+          # The review reads; it never writes. A dirty tree means something ran
+          # that should not have.
+          if [ -n "$(git status --porcelain -- ':!target' ':!findings.json')" ]; then
+            echo "::error::the review modified the checkout"
+            git status --porcelain -- ':!target' ':!findings.json'
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tinysweeper-findings
+          path: findings.json
+          retention-days: 1
+
+  publish:
+    name: publish
+    needs: review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+    steps:
+      # Minted here and nowhere else, after every model call has returned.
+      # Also the only way to post a check run on a fork pull request, where
+      # GITHUB_TOKEN is read-only.
+      - name: Mint an installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.TINYSWEEPER_APP_ID }}
+          private-key: ${{ secrets.TINYSWEEPER_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --locked --release --features github
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tinysweeper-findings
+
+      # No OPENROUTER_API_KEY here: this step must not be able to call a model.
+      - name: Publish
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          TS_REPO: ${{ github.repository }}
+          TS_PR: ${{ needs.review.outputs.number }}
+        run: |
+          set -euo pipefail
+          ./target/release/tinysweeper apply \
+            --repo "$TS_REPO" --pr "$TS_PR" --findings findings.json
