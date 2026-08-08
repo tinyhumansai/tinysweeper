@@ -13,9 +13,29 @@ answer it is built around is "as rarely as possible".
 | `cost.rs` | `EmbedUsage`, the embedding price table, `estimate_tokens` |
 | `mock.rs` | `MockManifest`, `CountingEmbedder` — always compiled |
 | `run.rs` | `Indexer` — the run itself |
+| `fetch.rs` | `Checkout` — a shallow, hook-disabled fetch of one commit. Behind `serve` |
 | `mongo.rs` | `MongoManifest`. Behind `serve` |
 
-The port is `src/ports/manifest.rs`.
+The port is `src/ports/manifest.rs`. The server-side driver — which repository
+gets indexed, when, and with which permit — is `src/server/indexing.rs`.
+
+## Getting the tree without running it
+
+Indexing reads a repository's tree, so the server has to have one. `fetch.rs`
+shallow-fetches exactly one commit into a temporary directory that is deleted
+when the `Checkout` is dropped. This is the crate's only process spawn, and a
+test pins that the only program it will ever spawn is `git`.
+
+Reading a tree is not running one, and the two ways git could have run something
+are closed rather than left to defaults: `core.hooksPath` is pointed at nowhere,
+so a hook in the fetched history cannot fire, and `GIT_TERMINAL_PROMPT=0` stops
+a credential prompt turning a fetch into a hang. Nothing builds, installs or
+executes anything from the fetched tree.
+
+The installation token is not in argv. The obvious `https://x-access-token:TOKEN@…`
+remote URL puts a credential in the process table for anything on the host to
+read; git's `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` protocol carries the same
+`http.extraHeader` through the environment instead.
 
 ## Write first, delete afterwards
 

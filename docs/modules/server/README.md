@@ -10,6 +10,7 @@ composite action, reusable workflow or release binary to install.
 | `webhook.rs` | HMAC verification and event parsing |
 | `auth.rs` | App JWT and cached installation tokens |
 | `store.rs` | MongoDB: contributors, trust, delivery and lease claims |
+| `indexing.rs` | `IndexBackend`: the embedder and the retrieval stores, and the background index job |
 | `admin.rs` | The authenticated `/admin` API |
 
 ## The write-token boundary
@@ -28,6 +29,27 @@ because the enforcement was never really in the workflow:
   returned is a second token minted and wrapped in a `GitHubWrite` for
   `crate::app::apply(...)`. The write handle does not exist while a model call
   is in flight.
+
+## Indexing does not block the review
+
+A cold full index of a large repository is thousands of embedding calls and
+minutes of wall clock; a review is expected in seconds. So `handle_review`
+spawns the index job and does not await it, and the review runs against
+whatever the index holds right now. On a repository's first push that is
+nothing, and `src/retrieve` degrades through it honestly — the check-run summary
+says the index was cold rather than quietly reviewing on less context than the
+operator believes. Blocking the first review on the first index would trade a
+thin review for a late one, and a late review is the one nobody reads.
+
+A refused claim is requeued, never waited on. `IndexManifest::claim` answers
+`Busy` when another worker holds the repository; the job sleeps, retries a
+bounded number of times, and then leaves it to the holder, who is doing the same
+work anyway. A worker blocked on that claim would be a worker not indexing
+anything else, and with a bounded pool a few of those are the whole pool.
+
+`MAX_CONCURRENT_INDEXES` is lower than the review cap and for a different
+reason: a review is mostly waiting on one model, while a full index is a fetch,
+a tree in memory and thousands of embedding calls.
 
 ## Concurrency and failure
 
