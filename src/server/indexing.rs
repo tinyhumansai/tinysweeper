@@ -207,7 +207,7 @@ impl IndexBackend {
         }
 
         let graph = crate::graph::build::build(repo_id, &files)?;
-        let written = crate::graph::build::sync_all(self.index.graph_store(), repo_id, &graph).await?;
+        let written = crate::graph::build::sync_all(&self.index.graph, repo_id, &graph).await?;
         tracing::info!(repo = repo_id, nodes = written, "code graph rebuilt");
         Ok(())
     }
