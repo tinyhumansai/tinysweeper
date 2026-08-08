@@ -99,15 +99,31 @@ request.
 
 ### Index
 
-Declared, returning `501` with a `TODO` marker until its store lands in another
-workstream. It is declared rather than omitted for the same reason every CLI
-subcommand is declared up front: a caller written against the shape today is not
-written against a guess.
+| Method | Path | Answers |
+| --- | --- | --- |
+| `GET` | `/admin/index/{owner}/{name}` | State, revision, chunk count and cumulative spend |
+| `POST` | `/admin/index/{owner}/{name}/reindex` | Discards the index; the next delivery rebuilds it |
 
-| Method | Path |
-| --- | --- |
-| `GET` | `/admin/index/{owner}/{name}` |
-| `POST` | `/admin/index/{owner}/{name}/reindex` |
+Both report the embedding signature alongside, because it is the partition key:
+"absent" on a deployment that has just changed embedding model means something
+quite different from "absent" on a repository nobody has pushed to, and the two
+are indistinguishable without it. `503` when no embedding provider is
+configured — there is genuinely no index, which is a different answer from an
+empty one.
+
+`reindex` does not index inline, and that is a decision rather than a shortcut.
+Indexing needs a checkout, a checkout needs an installation token, and the admin
+credential authenticates a human rather than an app installation. Rather than
+invent a second credential path into GitHub for an operator convenience, the
+route resets the freshness record and lets the ordinary push path do the work
+with the token it already holds. It takes the same claim a worker does, so it
+cannot reset the record underneath a run in progress, and answers `409` rather
+than waiting when one holds it.
+
+The reset deletes the chunks as well as the record. Forgetting the record alone
+would leave every existing chunk with nothing pointing at it — the next run
+would neither reuse nor delete them, and stale code would sit in retrieval
+permanently.
 
 ### Knowledge documents
 
