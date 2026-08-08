@@ -1,0 +1,501 @@
+//! The `security` lane: what this pull request makes newly attackable.
+//!
+//! Two halves, and the order between them is the design:
+//!
+//! 1. The deterministic scanners have **already run**, before any token was
+//!    spent. Their findings are facts. This lane republishes them unchanged and
+//!    hands them to the model as evidence to *adjudicate* — say whether each is
+//!    real here and why — rather than asking a model to re-derive them. A
+//!    regular expression that finds a widened workflow permission is cheaper,
+//!    faster and more certain than a paragraph asking a model to look for one,
+//!    and duplicating the scanner in the prompt would produce two opinions
+//!    about one fact.
+//! 2. The model then looks for what a scanner cannot see: untrusted input
+//!    reaching a dangerous sink, an authorisation check that moved, a new
+//!    subprocess or deserialization site.
+//!
+//! A model verdict never *removes* a scanner finding. Adjudication adds
+//! context; it does not get to overrule a deterministic match, because the
+//! failure mode of a model talking itself out of a real finding is exactly the
+//! one this lane exists to prevent.
+//!
+//! It fans out one conversation per changed file — see `lanes::fanout` for why.
+
+use std::fmt::Write as _;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+
+use crate::config::types::LaneId;
+use crate::error::Result;
+use crate::evidence::diff::{FileDiff, render as render_diffs};
+use crate::findings::types::Finding;
+use crate::harness::prompt::{self, PromptInputs};
+use crate::harness::schema;
+use crate::lanes::fanout::{FileReview, per_file};
+use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
+use crate::ports::model::{Message, Model, ModelRequest};
+use crate::scan::types::{Finding as ScanFinding, ScanKind};
+
+/// The scanner findings this lane owns.
+///
+/// A partition, not an overlap: `commits` adjudicates secrets, blobs and junk,
+/// and two lanes discussing one scanner match would double-report it.
+pub const ADJUDICATES: [ScanKind; 2] = [ScanKind::Workflow, ScanKind::Dependency];
+
+/// The security lane.
+pub struct Security {
+    model: Arc<dyn Model>,
+}
+
+impl Security {
+    /// Build the lane over `model`.
+    pub fn new(model: Arc<dyn Model>) -> Self {
+        Self { model }
+    }
+}
+
+#[async_trait]
+impl Lane for Security {
+    fn id(&self) -> LaneId {
+        LaneId::Security
+    }
+
+    async fn run(&self, input: LaneInput<'_>) -> Result<LaneOutcome> {
+        let scanner = input.scanner_findings_of(&ADJUDICATES);
+
+        // A scanner finding is reason enough to run even when nothing else is
+        // reviewable: a workflow whose only change is a widened permission
+        // still has to be reported.
+        if !input.has_reviewable_content() && scanner.is_empty() {
+            return Ok(LaneOutcome::skipped("No added or modified lines to review."));
+        }
+
+        if let Some(skipped) = input.skip_as_draft() {
+            return Ok(skipped);
+        }
+
+        let reviewable: Vec<String> = input
+            .diffs
+            .iter()
+            .filter(|d| !d.changed_lines.is_empty())
+            .map(|d| d.path.clone())
+            .collect();
+
+        let outcome = per_file(&reviewable, |path| {
+            let model = self.model.clone();
+            let config = input.config;
+            let repo_policy = input.repo_policy;
+            let prior_findings = input.prior_findings;
+            let diffs = input.diffs;
+            let scanner = &scanner;
+            async move {
+                let diff = diffs
+                    .iter()
+                    .find(|d| d.path == path)
+                    .expect("the path came from the diff list");
+                review_file(
+                    model.as_ref(),
+                    config,
+                    repo_policy,
+                    prior_findings,
+                    diff,
+                    scanner,
+                )
+                .await
+            }
+        })
+        .await;
+
+        let mut outcome = outcome.into_outcome();
+        merge_scanner_findings(&mut outcome, &scanner);
+        Ok(outcome)
+    }
+}
+
+/// Review one file, in a conversation that knows about no other file.
+async fn review_file(
+    model: &dyn Model,
+    config: &crate::config::types::Config,
+    repo_policy: Option<&str>,
+    prior_findings: &[String],
+    diff: &FileDiff,
+    scanner: &[&ScanFinding],
+) -> Result<FileReview> {
+    let evidence = render_diffs(std::slice::from_ref(diff));
+    let scanner_evidence = render_scanner(scanner, Some(&diff.path));
+
+    let built = prompt::build(&PromptInputs {
+        repo_policy,
+        prior_findings,
+        new_evidence: &evidence,
+        focus_path: Some(&diff.path),
+        scanner_evidence: &scanner_evidence,
+        ..PromptInputs::new(LaneId::Security, config)
+    });
+
+    let response = model
+        .complete(ModelRequest {
+            model: config.model_for(LaneId::Security).to_string(),
+            messages: vec![
+                Message::system(built.prefix()),
+                Message::user(built.suffix()),
+            ],
+            schema: schema::json_schema(),
+            schema_name: "tinysweeper_security".into(),
+            max_tokens: config.models.max_tokens,
+        })
+        .await?;
+
+    let parsed = schema::parse(LaneId::Security, response.value)?;
+    let outcome = LaneOutcome::from_response(
+        LaneId::Security,
+        parsed,
+        std::slice::from_ref(diff),
+        Anchoring::Strict,
+        response.usage,
+    );
+
+    Ok(FileReview {
+        summary: outcome.summary,
+        findings: outcome.findings,
+        resolved: outcome.resolved,
+        usage: outcome.usage,
+    })
+}
+
+/// Render scanner findings for adjudication, by type and location only.
+///
+/// `redacted_hint` is the only thing from the match itself that is ever shown,
+/// and the scanner already guaranteed it carries no entropy. The value has no
+/// route into this string because [`ScanFinding`] has nowhere to keep it.
+pub(crate) fn render_scanner(findings: &[&ScanFinding], path: Option<&str>) -> String {
+    let mut out = String::new();
+    for finding in findings {
+        if path.is_some_and(|p| p != finding.path) {
+            continue;
+        }
+        let location = match finding.line {
+            Some(line) => format!("{}:{line}", finding.path),
+            None => finding.path.clone(),
+        };
+        let _ = writeln!(
+            out,
+            "- [{}] {location} — {} ({}): {}",
+            finding.kind.as_str(),
+            finding.rule,
+            finding.severity,
+            finding.title
+        );
+        if let Some(hint) = &finding.redacted_hint {
+            let _ = writeln!(out, "  matched: {hint}");
+        }
+    }
+    out
+}
+
+/// Republish the scanner findings this lane owns, and drop any model finding
+/// that merely restates one.
+///
+/// The scanner half is unconditional. A model that decides a deterministic
+/// match is a false positive is welcome to say so in its summary; it does not
+/// get to delete the finding, because "the model was talked out of it" is not a
+/// failure mode anyone can audit.
+pub(crate) fn merge_scanner_findings(outcome: &mut LaneOutcome, scanner: &[&ScanFinding]) {
+    let mut deterministic: Vec<Finding> = scanner
+        .iter()
+        .map(|scan| {
+            let mut finding = Finding::from((*scan).clone());
+            finding.lane = LaneId::Security;
+            finding
+        })
+        .collect();
+
+    // Same file, same rule, already reported deterministically.
+    outcome.findings.retain(|model| {
+        !deterministic
+            .iter()
+            .any(|scan| scan.path == model.path && scan.rule == model.rule)
+    });
+
+    deterministic.append(&mut outcome.findings);
+    outcome.findings = deterministic;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::types::{Config, Severity};
+    use crate::evidence::diff::parse_file_patch;
+    use crate::forge::types::PullRequest;
+    use crate::harness::mock::MockModel;
+    use serde_json::json;
+
+    fn config() -> Config {
+        crate::config::DEFAULTS
+            .parse::<toml::Table>()
+            .unwrap()
+            .try_into()
+            .unwrap()
+    }
+
+    const PATCH: &str = "@@ -1,3 +1,5 @@\n fn handler(req: Request) {\n+    let cmd = req.query(\"cmd\");\n+    Command::new(\"sh\").arg(\"-c\").arg(cmd).spawn();\n }\n";
+
+    fn diffs() -> Vec<FileDiff> {
+        vec![parse_file_patch("src/handler.rs", PATCH)]
+    }
+
+    fn pull_request() -> PullRequest {
+        PullRequest {
+            number: 7,
+            title: "feat: add a handler".into(),
+            head_sha: "abc123".into(),
+            ..PullRequest::default()
+        }
+    }
+
+    async fn run_with(
+        model: MockModel,
+        config: &Config,
+        diffs: &[FileDiff],
+        scan_findings: &[ScanFinding],
+    ) -> LaneOutcome {
+        let pr = pull_request();
+        Security::new(Arc::new(model))
+            .run(LaneInput {
+                config,
+                pull_request: &pr,
+                diffs,
+                scan_findings,
+                commits: &[],
+                repo_policy: None,
+                reviewed_evidence: "",
+                prior_findings: &[],
+            })
+            .await
+            .expect("lane runs")
+    }
+
+    fn workflow_finding() -> ScanFinding {
+        ScanFinding::new(
+            ScanKind::Workflow,
+            Severity::High,
+            ".github/workflows/ci.yml",
+            "workflow-write-all",
+            "Narrow the workflow's permissions",
+            "`permissions: write-all` grants far more than the job needs.",
+        )
+        .at_line(3)
+    }
+
+    // --- golden test -------------------------------------------------------
+
+    #[tokio::test]
+    async fn golden_a_command_injection_on_a_changed_line_survives() {
+        let model = MockModel::always(json!({
+            "summary": "Adds a shell command built from request input.",
+            "findings": [
+                {
+                    "path": "src/handler.rs", "line": 3,
+                    "rule": "command-injection",
+                    "title": "Do not build a shell command from request input",
+                    "body": "`cmd` comes straight from the query string.",
+                    "severity": "critical", "confidence": 0.95
+                },
+                {
+                    "path": "src/handler.rs", "line": 1,
+                    "rule": "unrelated",
+                    "title": "Something about an unchanged line",
+                    "body": "…", "severity": "high", "confidence": 0.9
+                }
+            ]
+        }));
+        let outcome = run_with(model, &config(), &diffs(), &[]).await;
+
+        assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
+        assert_eq!(outcome.findings[0].rule, "command-injection");
+        assert_eq!(outcome.findings[0].severity, Severity::Critical);
+        assert_eq!(outcome.findings[0].lane, LaneId::Security);
+        assert!(outcome.summary.contains("1 finding discarded"));
+    }
+
+    #[tokio::test]
+    async fn a_scanner_finding_is_republished_even_when_the_model_says_nothing() {
+        let outcome = run_with(
+            MockModel::silent(),
+            &config(),
+            &diffs(),
+            &[workflow_finding()],
+        )
+        .await;
+
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(outcome.findings[0].rule, "workflow-write-all");
+        assert_eq!(outcome.findings[0].lane, LaneId::Security);
+    }
+
+    #[tokio::test]
+    async fn a_model_finding_restating_a_scanner_match_is_dropped() {
+        // Otherwise the author gets the same permission problem twice: once
+        // from the regular expression that is certain about it, and once from
+        // the model that was shown the regular expression's output.
+        let model = MockModel::always(json!({
+            "summary": "The scanner is right.",
+            "findings": [{
+                "path": ".github/workflows/ci.yml", "line": 3,
+                "rule": "workflow-write-all",
+                "title": "Narrow the workflow permissions",
+                "body": "…", "severity": "high", "confidence": 0.9
+            }]
+        }));
+        let workflow = parse_file_patch(
+            ".github/workflows/ci.yml",
+            "@@ -1,2 +1,3 @@\n name: ci\n on: push\n+permissions: write-all\n",
+        );
+        let outcome = run_with(model, &config(), &[workflow], &[workflow_finding()]).await;
+
+        assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
+        assert_eq!(outcome.findings[0].confidence, 0.8, "the scanner's, not the model's");
+    }
+
+    #[tokio::test]
+    async fn the_model_cannot_talk_the_lane_out_of_a_scanner_finding() {
+        let model = MockModel::always(json!({
+            "summary": "That permission setting is fine, actually.",
+            "findings": []
+        }));
+        let workflow = parse_file_patch(
+            ".github/workflows/ci.yml",
+            "@@ -1,2 +1,3 @@\n name: ci\n on: push\n+permissions: write-all\n",
+        );
+        let outcome = run_with(model, &config(), &[workflow], &[workflow_finding()]).await;
+
+        assert_eq!(outcome.findings.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_scanner_findings_reach_the_prompt_as_evidence_not_instructions() {
+        let model = MockModel::silent();
+        let workflow = parse_file_patch(
+            ".github/workflows/ci.yml",
+            "@@ -1,2 +1,3 @@\n name: ci\n on: push\n+permissions: write-all\n",
+        );
+        run_with(
+            model.clone(),
+            &config(),
+            &[workflow],
+            &[workflow_finding()],
+        )
+        .await;
+
+        let prompt = model.last_prompt().expect("recorded");
+        assert!(prompt.contains("scanner-findings"), "{prompt}");
+        assert!(prompt.contains("workflow-write-all"));
+        assert!(prompt.contains("Do not repeat them and do not re-scan"));
+    }
+
+    #[tokio::test]
+    async fn each_file_gets_its_own_conversation() {
+        let model = MockModel::silent();
+        let diffs = vec![
+            parse_file_patch("src/a.rs", "@@ -1 +1,2 @@\n a\n+b\n"),
+            parse_file_patch("src/b.rs", "@@ -1 +1,2 @@\n a\n+b\n"),
+        ];
+        run_with(model.clone(), &config(), &diffs, &[]).await;
+
+        assert_eq!(model.calls(), 2);
+        let prompts: Vec<String> = model
+            .requests()
+            .iter()
+            .map(|r| r.messages[0].content.clone())
+            .collect();
+        assert!(prompts.iter().any(|p| p.contains("`src/a.rs`")));
+        assert!(prompts.iter().any(|p| p.contains("`src/b.rs`")));
+        assert!(
+            prompts.iter().all(|p| p.contains("One file only")),
+            "each conversation must be told it owns one file"
+        );
+    }
+
+    #[tokio::test]
+    async fn one_files_failure_leaves_the_other_files_reviewed() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "Fine.",
+                "findings": [{
+                    "path": "src/a.rs", "line": 2, "rule": "r",
+                    "title": "t", "body": "b",
+                    "severity": "high", "confidence": 0.9
+                }]
+            }))
+            .then_error("upstream exploded");
+        let diffs = vec![
+            parse_file_patch("src/a.rs", "@@ -1 +1,2 @@\n a\n+b\n"),
+            parse_file_patch("src/b.rs", "@@ -1 +1,2 @@\n a\n+b\n"),
+        ];
+        let outcome = run_with(model, &config(), &diffs, &[]).await;
+
+        assert_eq!(outcome.findings.len(), 1);
+        assert!(
+            outcome.summary.contains("could not be reviewed"),
+            "{}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pull_request_with_nothing_to_review_never_calls_the_model() {
+        let model = MockModel::new();
+        let outcome = run_with(model.clone(), &config(), &[], &[]).await;
+
+        assert_eq!(model.calls(), 0);
+        assert!(outcome.skipped.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_draft_is_skipped_unless_the_repository_opts_in() {
+        let config = config();
+        let model = MockModel::new();
+        let pr = PullRequest {
+            draft: true,
+            ..pull_request()
+        };
+        let diffs = diffs();
+
+        let outcome = Security::new(Arc::new(model.clone()))
+            .run(LaneInput {
+                config: &config,
+                pull_request: &pr,
+                diffs: &diffs,
+                scan_findings: &[],
+                commits: &[],
+                repo_policy: None,
+                reviewed_evidence: "",
+                prior_findings: &[],
+            })
+            .await
+            .expect("runs");
+
+        assert!(outcome.skipped.is_some());
+        assert_eq!(model.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_credential_the_model_quoted_never_reaches_a_finding() {
+        let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+        let model = MockModel::always(json!({
+            "summary": "…",
+            "findings": [{
+                "path": "src/handler.rs", "line": 2,
+                "rule": "hardcoded-credential",
+                "title": format!("Remove the key {key}"),
+                "body": format!("`{key}` is committed."),
+                "severity": "critical", "confidence": 1.0
+            }]
+        }));
+        let outcome = run_with(model, &config(), &diffs(), &[]).await;
+
+        let rendered = serde_json::to_string(&outcome.findings).unwrap();
+        assert!(!rendered.contains("IOSFODNN7EXAMPLE"), "{rendered}");
+    }
+}
