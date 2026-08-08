@@ -355,7 +355,7 @@ async fn a_completed_run_leaves_the_repository_ready_and_claimable() {
         .await
         .expect("indexes");
 
-    let record = rig.manifest.record(REPO, &rig.signature());
+    let record = rig.manifest.snapshot(REPO, &rig.signature());
     assert_eq!(record.state, IndexState::Ready);
     assert!(record.is_fresh("sha-1"));
     assert!(record.chunks > 0);
@@ -387,7 +387,7 @@ async fn a_run_that_hits_its_budget_stops_with_a_partial_index_rather_than_faili
     // And the revision is not claimed, so the next run finishes the job.
     let record = rig
         .manifest
-        .record(REPO, &crate::ports::embed::Embedder::signature(&embedder));
+        .snapshot(REPO, &crate::ports::embed::Embedder::signature(&embedder));
     assert_eq!(record.state, IndexState::Ready);
     assert!(!record.is_fresh("sha-1"));
 }
@@ -417,7 +417,7 @@ async fn embedding_spend_is_counted_rather_than_left_untracked() {
     // And it accumulates on the repository's record, not just this run's.
     let record = rig
         .manifest
-        .record(REPO, &crate::ports::embed::Embedder::signature(&embedder));
+        .snapshot(REPO, &crate::ports::embed::Embedder::signature(&embedder));
     assert_eq!(record.usage.cost_usd, report.usage.cost_usd);
 }
 

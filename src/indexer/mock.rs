@@ -44,7 +44,11 @@ impl MockManifest {
     }
 
     /// The record for a repository, as stored.
-    pub fn record(&self, repo_id: &str, signature: &EmbedSignature) -> RepoIndex {
+    ///
+    /// Named `snapshot` rather than `record` so it does not shadow the port's
+    /// `record` at a call site — a mock whose inherent method hides the trait
+    /// method it is testing is a trap.
+    pub fn snapshot(&self, repo_id: &str, signature: &EmbedSignature) -> RepoIndex {
         let inner = self.inner.lock().expect("manifest lock");
         inner
             .records
@@ -274,7 +278,7 @@ mod tests {
             .await
             .expect("releases");
 
-        let record = manifest.record("o/r", &signature());
+        let record = manifest.snapshot("o/r", &signature());
         assert_eq!(record.state, IndexState::Ready);
         assert!(record.is_fresh("abc"));
         assert_eq!(record.usage.cost_usd, 0.5);
@@ -303,7 +307,7 @@ mod tests {
             .await
             .expect("releases");
 
-        let record = manifest.record("o/r", &signature());
+        let record = manifest.snapshot("o/r", &signature());
         assert_eq!(record.state, IndexState::Failed);
         assert_eq!(record.message.as_deref(), Some("provider down"));
         assert!(record.state.claimable(), "a failure must be retryable");
@@ -330,7 +334,7 @@ mod tests {
             .expect("releases");
 
         let other = EmbedSignature::new("mock", "hash-bag", 16);
-        assert_eq!(manifest.record("o/r", &other).state, IndexState::Absent);
+        assert_eq!(manifest.snapshot("o/r", &other).state, IndexState::Absent);
     }
 
     #[tokio::test]
