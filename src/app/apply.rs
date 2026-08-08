@@ -9,8 +9,9 @@
 //! than no review — it reports on code that has already been replaced.
 
 use crate::app::review::Proposal;
+use crate::config::types::{Config, Severity};
 use crate::error::{Error, Result};
-use crate::forge::types::{CheckRun, RepoId, ReviewComment};
+use crate::forge::types::{CheckRun, RepoId, ReviewComment, ReviewEvent};
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 use crate::{MARKER_PREFIX, VERSION};
 
@@ -18,6 +19,7 @@ use crate::{MARKER_PREFIX, VERSION};
 pub async fn apply(
     read: &dyn ForgeRead,
     write: &dyn ForgeWrite,
+    config: &Config,
     proposal: &Proposal,
 ) -> Result<()> {
     let repo = RepoId::parse(&proposal.repo)
@@ -50,14 +52,63 @@ pub async fn apply(
             .await?;
     }
 
+    // Whether we are already blocking this pull request. GitHub keeps only the
+    // latest review per reviewer, so this is also how a fixed pull request gets
+    // unblocked: without an explicit clearing verdict a stale objection blocks
+    // the merge button until a human dismisses it by hand.
+    let blocking_now = previously_blocked(read, &repo, proposal.number).await;
+    let event = review_event(config, proposal, blocking_now);
     let comments = inline_comments(proposal);
-    if !comments.is_empty() {
+
+    // An Approve is submitted even with nothing to say, because its entire job
+    // is to clear the previous block.
+    if !comments.is_empty() || event == ReviewEvent::Approve {
         write
-            .create_review(&repo, proposal.number, &review_body(proposal), comments)
+            .create_review(
+                &repo,
+                proposal.number,
+                &review_body(proposal, event),
+                comments,
+                event,
+            )
             .await?;
     }
 
     Ok(())
+}
+
+/// Decide how to submit the review.
+fn review_event(config: &Config, proposal: &Proposal, blocking_now: bool) -> ReviewEvent {
+    let Some(threshold) = config.request_changes_at() else {
+        return ReviewEvent::Comment;
+    };
+
+    let blocking_findings = proposal.findings().any(|f| f.severity >= threshold);
+    if blocking_findings {
+        ReviewEvent::RequestChanges
+    } else if blocking_now {
+        // Clean now, blocked before: clear it. Anything else leaves the author
+        // stuck behind an objection that no longer applies.
+        ReviewEvent::Approve
+    } else {
+        ReviewEvent::Comment
+    }
+}
+
+/// Whether tinysweeper's own last review on this pull request requested changes.
+///
+/// Read from the forge rather than remembered, so it stays correct across a
+/// restart, a redeploy, and a human dismissing the review by hand.
+async fn previously_blocked(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> bool {
+    match read.own_review_state(repo, number).await {
+        Ok(state) => state == Some(ReviewEvent::RequestChanges),
+        Err(err) => {
+            // Failing closed here would mean never clearing a block. Failing
+            // open at worst skips a redundant approval.
+            tracing::warn!(%err, "could not read the previous review state");
+            false
+        }
+    }
 }
 
 fn title_for(findings: usize, summary: &str) -> String {
@@ -159,6 +210,14 @@ mod tests {
     use crate::forge::types::{CheckConclusion, PullRequest};
     use crate::forge::{MockForge, MockState, Write};
 
+    fn config() -> Config {
+        crate::config::DEFAULTS
+            .parse::<toml::Table>()
+            .unwrap()
+            .try_into()
+            .unwrap()
+    }
+
     fn proposal(head: &str, findings: Vec<Finding>) -> Proposal {
         Proposal {
             version: 1,
@@ -216,7 +275,7 @@ mod tests {
     #[tokio::test]
     async fn a_check_run_is_published_per_lane() {
         let forge = forge("abc123");
-        apply(&forge, &forge, &proposal("abc123", vec![]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]))
             .await
             .expect("applies");
 
@@ -232,7 +291,7 @@ mod tests {
         // The review ran against a commit that has since been replaced.
         // Publishing would report on code nobody is looking at.
         let forge = forge("newer456");
-        apply(&forge, &forge, &proposal("abc123", vec![]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]))
             .await
             .expect("returns cleanly");
 
@@ -242,7 +301,7 @@ mod tests {
     #[tokio::test]
     async fn findings_become_inline_comments_carrying_a_fingerprint() {
         let forge = forge("abc123");
-        apply(&forge, &forge, &proposal("abc123", vec![finding()]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![finding()]))
             .await
             .expect("applies");
 
@@ -268,7 +327,7 @@ mod tests {
     #[tokio::test]
     async fn a_clean_review_posts_no_inline_comments_at_all() {
         let forge = forge("abc123");
-        apply(&forge, &forge, &proposal("abc123", vec![]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]))
             .await
             .expect("applies");
 
@@ -284,7 +343,7 @@ mod tests {
     #[tokio::test]
     async fn the_review_body_reports_cost_and_cache_hits() {
         let forge = forge("abc123");
-        apply(&forge, &forge, &proposal("abc123", vec![finding()]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![finding()]))
             .await
             .expect("applies");
 

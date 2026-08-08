@@ -35,6 +35,14 @@ pub trait ForgeRead: Send + Sync {
     /// again, across pushes.
     async fn review_comments(&self, repo: &RepoId, number: u64) -> Result<Vec<ReviewComment>>;
 
+    /// The state of tinysweeper's own most recent review on a pull request.
+    ///
+    /// `None` when it has never reviewed. Used to clear a stale
+    /// changes-requested verdict, which GitHub will otherwise leave blocking
+    /// the merge button forever.
+    async fn own_review_state(&self, repo: &RepoId, number: u64)
+    -> Result<Option<ReviewEvent>>;
+
     /// Fetch an issue.
     async fn issue(&self, repo: &RepoId, number: u64) -> Result<Issue>;
 
