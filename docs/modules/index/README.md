@@ -76,6 +76,21 @@ plumb through even for the providers that send one on the wire.
 on purpose rather than absent, so plumbing one through later is a one-line
 change at the call site.
 
+## Proving it end to end
+
+`examples/index_and_retrieve.rs` indexes a checkout with the configured
+provider and runs one hybrid query against it. It is declared with
+`required-features = ["serve"]` so it never builds in CI: it needs a real
+embedding provider and a MongoDB 8.2+ deployment with `mongot`, and the default
+`cargo test` must touch neither. What the mocks cannot tell you is whether a
+provider returns vectors of the width it advertises and whether MongoDB accepts
+them into a `$rankFusion` query; that is what this is for.
+
+```sh
+docker compose up -d mongot
+cargo run --features serve --example index_and_retrieve -- . "hybrid search"
+```
+
 ## Why the ports are wider than `add`/`query`
 
 The two-method shape a vector store usually exposes only supports building an

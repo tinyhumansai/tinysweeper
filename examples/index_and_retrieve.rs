@@ -100,7 +100,10 @@ async fn main() -> Result<()> {
         )
         .await?;
 
-    println!("\n{} hit(s) for {query:?} (query cost ${spent:.6})", hits.len());
+    println!(
+        "\n{} hit(s) for {query:?} (query cost ${spent:.6})",
+        hits.len()
+    );
     for hit in &hits {
         println!(
             "  {:.4}  {}:{}-{}  {}",
