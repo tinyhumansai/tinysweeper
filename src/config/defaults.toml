@@ -79,8 +79,56 @@ method = "squash"
 allow_labels = ["automerge"]
 block_labels = ["do-not-merge", "wip"]
 
+# Issue triage. Off by default: a bot that starts labelling and closing issues
+# the moment it is installed is a bot that gets uninstalled.
 [issues]
 enabled = false
+model = "scan"
+comment = true
+apply_labels = true
+max_labels = 3
+allow_labels = []
+block_labels = ["tinysweeper:human-review", "tinysweeper:manual-only"]
+dedupe = true
+dedupe_confidence_min = 0.75
+
+# Closing someone's issue is the most expensive mistake this bot can make.
+# Every guard below is an age or authorship check that no model output can
+# override, and closing stays off until a repository explicitly asks for it.
+[issues.close]
+enabled = false
+min_age_days = 60
+quiet_days = 60
+confidence_min = 0.85
+protected_labels = ["pinned", "security", "tinysweeper:human-review"]
+protected_authors = []
+dry_run = true
+
+[automation]
+enabled = false
+merge_sweep = false
+
+[automation.stale]
+enabled = false
+days_until_stale = 90
+# `days_until_close` is deliberately absent: the safe default marks and never
+# closes. Set it explicitly to opt into closing.
+label = "stale"
+exempt_labels = ["pinned", "security", "roadmap"]
+
+[automation.labeler]
+enabled = false
+size = true
 
 [sentry]
 enabled = false
+token_env = "SENTRY_AUTH_TOKEN"
+base_url = "https://sentry.io/api/0"
+min_events = 10
+min_users = 1
+ignore_culprits = []
+labels = ["sentry", "bug"]
+max_per_run = 10
+annotate_sentry = true
+resolve_when_tracked = false
+scrub_patterns = []
