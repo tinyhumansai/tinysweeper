@@ -47,6 +47,59 @@ impl EmbedSignature {
     pub fn key(&self) -> String {
         format!("{}:{}:{}", self.provider, self.model, self.dims)
     }
+
+    /// The key this embedder is priced under.
+    ///
+    /// Dimensionality is left out: a provider charges per token for a model,
+    /// and a shorter output vector is the same call at the same price.
+    pub fn price_key(&self) -> String {
+        format!("{}/{}", self.provider, self.model)
+    }
+}
+
+/// Vectors, and what producing them cost.
+///
+/// Embedding used to return bare vectors, which made indexing the one model
+/// spend nothing accounted for it — and indexing a repository is the largest
+/// token count this program produces. Handing every embedder a constructor that
+/// bills the call ([`Embedded::billed`]) is what makes forgetting to account for
+/// it the harder option.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Embedded {
+    /// One vector per input text, in the same order.
+    pub vectors: Vec<Vec<f32>>,
+    /// What the call cost. Tokens land in `embed_tokens`, never `input_tokens`.
+    pub usage: crate::ports::model::Usage,
+}
+
+impl Embedded {
+    /// Bill `vectors` against the model that produced them.
+    ///
+    /// Tokens are estimated from the text rather than read off a response:
+    /// providers disagree about whether they report embedding usage at all, and
+    /// a budget that only works for the providers that volunteer a number is not
+    /// a budget. The estimate rounds up.
+    pub fn billed(signature: &EmbedSignature, texts: &[String], vectors: Vec<Vec<f32>>) -> Self {
+        let tokens: u64 = texts
+            .iter()
+            .map(|text| crate::harness::pricing::estimate_tokens(text))
+            .sum();
+        Self {
+            vectors,
+            usage: crate::ports::model::Usage {
+                embed_tokens: tokens,
+                cost_usd: crate::harness::pricing::embedding_cost(&signature.price_key(), tokens),
+                ..Default::default()
+            },
+        }
+    }
+
+    /// The single vector a query embedding produced.
+    pub fn into_query_vector(mut self) -> crate::error::Result<Vec<f32>> {
+        self.vectors.pop().ok_or_else(|| {
+            crate::error::Error::Model("the embedder returned no vector for the query".into())
+        })
+    }
 }
 
 impl std::fmt::Display for EmbedSignature {

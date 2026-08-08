@@ -16,7 +16,7 @@ use async_trait::async_trait;
 
 use crate::error::{Error, Result};
 use crate::index::types::{
-    Chunk, EdgeKind, EmbedSignature, EmbeddedChunk, GraphEdge, GraphNode, HybridQuery,
+    Chunk, EdgeKind, EmbedSignature, Embedded, EmbeddedChunk, GraphEdge, GraphNode, HybridQuery,
     KnowledgeDoc, KnowledgeScope, Neighbourhood, ScoredChunk,
 };
 use crate::ports::embed::Embedder;
@@ -93,8 +93,12 @@ impl Embedder for MockEmbedder {
         self.signature.clone()
     }
 
-    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        Ok(texts.iter().map(|text| self.vector(text)).collect())
+    async fn embed(&self, texts: &[String]) -> Result<Embedded> {
+        let vectors = texts.iter().map(|text| self.vector(text)).collect();
+        // Billed like a real one, at the mock's own price of zero. Going
+        // through the same constructor is what keeps the accounting path under
+        // test offline.
+        Ok(Embedded::billed(&self.signature, texts, vectors))
     }
 }
 
