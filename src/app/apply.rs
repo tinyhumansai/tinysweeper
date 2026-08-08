@@ -379,6 +379,7 @@ mod tests {
             &forge,
             &config(),
             &proposal("abc123", vec![finding()]),
+            None,
         )
         .await
         .expect("applies");
