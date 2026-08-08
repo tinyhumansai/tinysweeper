@@ -8,7 +8,13 @@
 # writes them out.
 #
 # Usage:
-#   scripts/create-github-app.sh <org> [port]
+#   scripts/create-github-app.sh <org> [port] [public-host]
+#
+# The browser that completes the flow does not have to be on this machine. Pass
+# a <public-host> reachable from wherever you are browsing — a Tailscale name,
+# for instance — and the listener binds 0.0.0.0 so it can be reached. Bind
+# address and redirect host are the same decision: GitHub redirects the
+# *browser*, so `localhost` only works when the browser is here too.
 #
 # On success it writes app credentials to .tinysweeper-app.json in the current
 # directory. That file contains a private key: it is gitignored, and you should
@@ -18,17 +24,22 @@ set -eu
 
 ORG="${1:-}"
 PORT="${2:-8901}"
+PUBLIC_HOST="${3:-localhost}"
 MANIFEST="$(dirname "$0")/../deploy/github-app-manifest.json"
 OUT=".tinysweeper-app.json"
 
 usage() {
     cat <<EOF
-Usage: $0 <org> [port]
+Usage: $0 <org> [port] [public-host]
 
-  <org>   GitHub organisation to create the app under, e.g. tinyhumansai
-  [port]  Local port for the redirect listener (default 8901)
+  <org>           GitHub organisation to create the app under, e.g. tinyhumansai
+  [port]          Port for the redirect listener (default 8901)
+  [public-host]   Host the browser will reach this listener on (default
+                  localhost). Set it to a Tailscale name or LAN address to
+                  complete the flow from another machine; the listener then
+                  binds 0.0.0.0.
 
-Requires: python3, and a browser on this machine.
+Requires: python3, and a browser that can reach <public-host>:<port>.
 EOF
 }
 
@@ -51,7 +62,7 @@ echo "Creating GitHub App 'tinysweeper' under org '$ORG'."
 echo "A browser will open. Review the permissions and click 'Create GitHub App'."
 echo
 
-ORG="$ORG" PORT="$PORT" MANIFEST="$MANIFEST" OUT="$OUT" python3 - <<'PYTHON'
+ORG="$ORG" PORT="$PORT" PUBLIC_HOST="$PUBLIC_HOST" MANIFEST="$MANIFEST" OUT="$OUT" python3 - <<'PYTHON'
 import http.server
 import json
 import os
@@ -62,14 +73,19 @@ import webbrowser
 
 org = os.environ["ORG"]
 port = int(os.environ["PORT"])
+public_host = os.environ.get("PUBLIC_HOST", "localhost")
 out = os.environ["OUT"]
+
+# Bind everywhere when the browser is elsewhere. Keeping the loopback binding
+# for the local case avoids exposing a listener that nothing needs to reach.
+bind = "127.0.0.1" if public_host in ("localhost", "127.0.0.1") else "0.0.0.0"
 
 with open(os.environ["MANIFEST"]) as handle:
     manifest = json.load(handle)
 
 # The redirect has to come back to this listener, and the webhook URL is only a
 # placeholder until the server is actually deployed.
-manifest["redirect_url"] = f"http://localhost:{port}/callback"
+manifest["redirect_url"] = f"http://{public_host}:{port}/callback"
 
 code_box = {}
 done = threading.Event()
@@ -122,13 +138,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 socketserver.TCPServer.allow_reuse_address = True
-with socketserver.TCPServer(("127.0.0.1", port), Handler) as httpd:
+with socketserver.TCPServer((bind, port), Handler) as httpd:
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
 
-    url = f"http://localhost:{port}/"
-    print(f"Open this if a browser does not appear: {url}")
-    webbrowser.open(url)
+    url = f"http://{public_host}:{port}/"
+    print(f"Open this in a browser: {url}")
+    if bind == "127.0.0.1":
+        webbrowser.open(url)
 
     if not done.wait(timeout=600):
         raise SystemExit("timed out waiting for GitHub to redirect back")
