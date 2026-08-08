@@ -32,6 +32,9 @@ use crate::ports::model::{Message, Model, ModelRequest};
 /// one-line change is fine, and the lane is not a word-count enforcer.
 const MIN_BODY_CHARS: usize = 12;
 
+/// The "path" a finding about the description itself carries.
+const DESCRIPTION_SUBJECT: &str = "(pull request description)";
+
 /// The description lane.
 pub struct Description {
     model: Arc<dyn Model>,
