@@ -1,8 +1,9 @@
 # What wakes tinysweeper up
 
-tinysweeper runs entirely in GitHub Actions. There is no webhook server, and
-this document is the reasoning behind that — chiefly, that the two things a
-server is usually bought for turn out not to be things a server can do.
+tinysweeper runs as a GitHub App. A single server receives webhook deliveries
+for every installed repository; there is no workflow file anywhere and no
+Actions path at all. This document is what the App subscribes to, what it can
+never be told about, and how it handles the difference.
 
 ## What fires reliably
 
@@ -11,25 +12,31 @@ server is usually bought for turn out not to be things a server can do.
 | A commit is pushed to the pull request | `pull_request: synchronize` | Yes, every push |
 | The pull request is opened or reopened | `pull_request: opened`, `reopened` | Yes |
 | A draft is marked ready | `pull_request: ready_for_review` | Yes |
-| The title or body is edited | `pull_request: edited` | Yes — must be listed explicitly |
-| A label is added or removed | `pull_request: labeled`, `unlabeled` | Yes — must be listed explicitly |
+| The title or body is edited | `pull_request: edited` | Yes |
+| A label is added or removed | `pull_request: labeled`, `unlabeled` | Yes |
 | Someone comments on the pull request | `issue_comment: created` | Yes |
 | Someone comments on a line of the diff | `pull_request_review_comment: created` | Yes |
 | A review is submitted | `pull_request_review: submitted` | Yes |
 | A check run finishes | `check_suite: completed` | Yes |
-| Time passes | `schedule` | Best-effort — see below |
+| The App is installed or repositories are added | `installation`, `installation_repositories` | Yes |
 
 `issue_comment` fires for issues *and* pull requests; the payload distinguishes
-them only by `github.event.issue.pull_request` being present. The reusable
-workflow filters on exactly that.
+them only by `issue.pull_request` being present. `webhook::route` filters on
+exactly that.
 
-A comment event carries no head SHA, so the workflow resolves it from the API
-rather than assuming `github.event.pull_request.head.sha` exists.
+A comment event carries no head SHA, so the server resolves it from the API
+rather than assuming `pull_request.head.sha` exists.
+
+Deliveries are acknowledged and queued, never handled inline: GitHub allows ten
+seconds and a review takes minutes, so handling one in the request would
+guarantee a timeout — and a timeout means a redelivery, which would mean a
+second review of the same event. The delivery id is claimed in the store, so a
+redelivery is a no-op rather than duplicate spend.
 
 ## What never fires — for anyone
 
-These have **no webhook event at all**. A hosted GitHub App would not receive
-them either, so they are not an argument for running a server:
+These have **no webhook event at all**. Being a hosted App does not help; the
+event does not exist:
 
 - **Resolving a review thread.** There is no event. Thread resolution state is
   only readable by querying `isResolved` on review threads through the GraphQL
@@ -41,7 +48,8 @@ This matters because two designed behaviours depend on that state: suppressing a
 finding the author resolved, and learning from a 👎. Both are therefore
 **pull-based** — each review run reads the current resolution and reaction state
 at the start and folds it into the suppression set. That is the only design that
-works, on any architecture, so the no-server decision costs nothing here.
+works on any architecture, which is why this was never an argument for or
+against a server.
 
 The practical consequence: resolving a thread does not immediately re-run
 anything. The suppression takes effect on the next run, which the next push or
@@ -49,51 +57,41 @@ comment triggers anyway.
 
 ## Fork pull requests
 
-This is the one place the trigger choice genuinely changes what is possible, and
-it is easy to get wrong.
+Under Actions this was the sharp edge: a `pull_request` run from a fork got a
+read-only token and *no secrets at all*, so nothing could be published, and the
+workaround — `pull_request_target` — put contributor code inside a privileged
+context.
 
-Under `pull_request`, a pull request from a fork gets a **read-only**
-`GITHUB_TOKEN` and **no secrets at all**. Not a reduced set — none. So the App
-private key is unreadable, no installation token can be minted, the model
-gateway key is absent, and no check run can be published. The App does not
-rescue this, because the workflow cannot reach the App's key in the first place.
+As an App, none of that applies. Credentials belong to the installation rather
+than to the run, so a fork pull request is delivered and reviewed exactly like
+any other, and the check runs publish normally.
 
-Under `pull_request_target`, the workflow runs in the **base** repository's
-context: secrets are present and the token can write. The cost is that the
-checked-out contributor code is now inside a privileged context.
+The invariant that made `pull_request_target` survivable is still in force, and
+it is a constraint rather than a mitigation: **tinysweeper never executes
+anything from the tree it reviews.** It reads the diff and reads files. It does
+not build, install dependencies, or run the repository's scripts. Nothing in the
+server relaxes that — see the security boundary in `AGENTS.md`.
 
-tinysweeper is safe there for one reason, and it is a constraint rather than a
-mitigation: **it never executes anything from the tree it reviews.** It reads
-the diff and reads files. It does not build, install dependencies, or run the
-repository's scripts. Any step that breaks that invariant turns
-`pull_request_target` into a full repository takeover for anyone who can open a
-pull request — which is why the checkout step in `review.yml` carries a
-load-bearing comment saying so.
-
-Repositories that take outside contributions should use `pull_request_target`.
-Repositories where every pull request comes from a branch in the same repository
-should use `pull_request`, which is strictly safer.
+The one fork-specific behaviour that remains is a policy choice, not a platform
+one: an unknown contributor is `Trust::Unknown`, and a blocked one is not
+reviewed at all. Trust is set through the admin API — see
+[modules/server/README.md](modules/server/README.md).
 
 ## Scheduled work
 
-`schedule` drives the auto-merge sweep, stale handling and Sentry promotion.
-Three honest caveats:
+The auto-merge sweep, stale handling and Sentry promotion are timers inside the
+server rather than `schedule` workflows. That removes three caveats that used to
+apply — cron being minutes late, being disabled after 60 days of repository
+inactivity, and running the default branch's copy of the workflow.
 
-- It is best-effort. Runs are routinely minutes late and are occasionally
-  skipped under load. Never depend on a cron firing at a specific moment.
-- It is **disabled automatically after 60 days of repository inactivity**. A
-  quiet repository silently stops sweeping.
-- It runs on the default branch's version of the workflow, not the pull
-  request's.
-
-Because of the first point, the sweep is written to be idempotent and to
-reconcile from live state rather than assuming it ran last time.
+The sweep is still written to be idempotent and to reconcile from live state
+rather than assuming it ran last time. A process restart is now the thing that
+can drop a tick, and reconciling from live state covers that just as well.
 
 ## External systems
 
-`repository_dispatch` is the supported door in: any system can `POST` to
-`/repos/{owner}/{repo}/dispatches` with a token and an `event_type`.
-
-Sentry cannot use it — its webhook integration cannot set the `Authorization`
-header GitHub requires. So Sentry promotion **polls** the Sentry API from a
-cron workflow instead. Slower, and entirely adequate for triage.
+Anything that can make an HTTP request can reach the server directly, so
+`repository_dispatch` is no longer the door in. Sentry could never use that door
+anyway — its webhook integration cannot set the `Authorization` header GitHub
+requires — so Sentry promotion **polls** the Sentry API. Slower, and entirely
+adequate for triage.
