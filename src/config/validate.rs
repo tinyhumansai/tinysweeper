@@ -258,12 +258,11 @@ fn validate_automerge(config: &Config, problems: &mut Vec<String>) {
         );
     }
 
-    let overlap: Vec<&String> = automerge
+    for label in automerge
         .allow_labels
         .iter()
         .filter(|label| automerge.block_labels.contains(label))
-        .collect();
-    for label = &overlap {
+    {
         problems.push(format!(
             "`{label}` appears in both `automerge.allow_labels` and `automerge.block_labels`; blocking wins, so the allow entry is dead"
         ));
