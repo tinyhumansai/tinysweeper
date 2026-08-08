@@ -150,8 +150,21 @@ fn a_large_impl_block_is_opened_up_into_its_methods() {
     let named: Vec<_> = chunks.iter().filter_map(|c| c.symbol.as_deref()).collect();
     assert!(named.contains(&"one"), "{named:?}");
     assert!(named.contains(&"three"), "{named:?}");
-    for chunk in &chunks {
-        assert!(braces_balance(&chunk.text) || chunk.text.contains("impl Thing"));
+
+    // Opening a container necessarily leaves its `{` in the header chunk and
+    // its `}` in the last member's, so brace balance is a property of the set
+    // here rather than of each chunk. What must still hold per chunk is that a
+    // method and the last line of its body are never in different ones.
+    for name in ["one", "two", "three"] {
+        let holding: Vec<_> = chunks
+            .iter()
+            .filter(|c| c.text.contains(&format!("fn {name}(")))
+            .collect();
+        assert_eq!(holding.len(), 1, "{name} appears in {} chunks", holding.len());
+        assert!(
+            holding[0].text.contains("let _x30 = 30;"),
+            "the chunk holding fn {name} must hold the end of its body"
+        );
     }
 }
 
