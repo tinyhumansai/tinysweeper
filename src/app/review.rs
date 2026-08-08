@@ -217,6 +217,28 @@ fn lane_proposal(config: &Config, lane: LaneId, outcome: LaneOutcome) -> LanePro
     let gate = config.severity_gate();
     let minimum = config.review.confidence_min;
 
+    // The conclusion is decided from every confidence-qualified finding,
+    // before the posting gate below hides some of them from view. A
+    // `severity_gate` configured above a lane's `fail_on` (e.g. gate=high,
+    // fail_on=medium) must still fail the lane on a medium finding even
+    // though that finding will not become a visible comment — otherwise the
+    // posting gate silently doubles as a pass/fail gate nobody asked for.
+    let confidence_qualified: Vec<&Finding> = outcome
+        .findings
+        .iter()
+        .filter(|f| f.confidence >= minimum)
+        .collect();
+    let conclusion = if outcome.skipped.is_some() {
+        CheckConclusion::Neutral
+    } else if confidence_qualified
+        .iter()
+        .any(|f| f.severity >= config.fail_on(lane))
+    {
+        CheckConclusion::Failure
+    } else {
+        CheckConclusion::Success
+    };
+
     let mut findings: Vec<Finding> = outcome
         .findings
         .into_iter()
@@ -237,14 +259,6 @@ fn lane_proposal(config: &Config, lane: LaneId, outcome: LaneOutcome) -> LanePro
         format!("{} (+{over_cap} more not shown)", outcome.summary)
     } else {
         outcome.summary
-    };
-
-    let conclusion = if outcome.skipped.is_some() {
-        CheckConclusion::Neutral
-    } else if findings.iter().any(|f| f.severity >= config.fail_on(lane)) {
-        CheckConclusion::Failure
-    } else {
-        CheckConclusion::Success
     };
 
     LaneProposal {
