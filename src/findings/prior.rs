@@ -301,6 +301,22 @@ mod tests {
     }
 
     #[test]
+    fn empty_or_whitespace_configured_bot_login_is_rejected() {
+        // If TINYSWEEPER_BOT_LOGIN is set to empty or whitespace, it should
+        // not match anything, even an empty login. This prevents a misconfigured
+        // bot from accepting forged markers.
+        std::env::set_var("TINYSWEEPER_BOT_LOGIN", "");
+        assert!(!is_own_login("tinysweeper"));
+        assert!(!is_own_login(""));
+
+        std::env::set_var("TINYSWEEPER_BOT_LOGIN", "   \n\t  ");
+        assert!(!is_own_login("tinysweeper"));
+        assert!(!is_own_login(""));
+
+        std::env::remove_var("TINYSWEEPER_BOT_LOGIN");
+    }
+
+    #[test]
     fn a_title_is_the_first_bold_run() {
         assert_eq!(
             title_in("![high](x) **Guard the index** and more").as_deref(),
