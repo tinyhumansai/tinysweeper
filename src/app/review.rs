@@ -782,18 +782,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_lane_that_has_not_been_written_is_neutral_not_successful() {
+    async fn every_enabled_lane_actually_runs() {
+        // The bug this replaces: four of the five lanes hit a `_ =>` arm that
+        // reported `Neutral` and "Not implemented yet.", so `tinysweeper/gate`
+        // aggregated one lane's opinion while presenting as five. A required
+        // check that reports on work nobody did is worse than no check.
         let forge = forge_with(vec![rust_file()], vec![]);
         let proposal = review(&forge, Arc::new(MockModel::silent()), &config(), &repo(), 7)
             .await
             .expect("reviews");
 
-        let security = proposal
+        for lane in [LaneId::Critique, LaneId::Security, LaneId::Tests] {
+            let reported = proposal
+                .lanes
+                .iter()
+                .find(|l| l.lane == lane)
+                .unwrap_or_else(|| panic!("{lane} is enabled but did not report"));
+            assert_eq!(
+                reported.conclusion,
+                CheckConclusion::Success,
+                "{lane}: {}",
+                reported.summary
+            );
+            assert!(
+                !reported.summary.contains("Not implemented"),
+                "{lane} is still a placeholder"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_lane_with_nothing_to_do_is_neutral_not_successful() {
+        // `commits` has no commits and no scanner findings on this fixture, so
+        // it skips. Claiming success for work that never happened would make
+        // requiring the check in branch protection meaningless.
+        let forge = forge_with(vec![rust_file()], vec![]);
+        let proposal = review(&forge, Arc::new(MockModel::silent()), &config(), &repo(), 7)
+            .await
+            .expect("reviews");
+
+        let commits = proposal
             .lanes
             .iter()
-            .find(|l| l.lane == LaneId::Security)
+            .find(|l| l.lane == LaneId::Commits)
             .expect("present");
-        assert_eq!(security.conclusion, CheckConclusion::Neutral);
+        assert_eq!(commits.conclusion, CheckConclusion::Neutral);
     }
 
     #[test]
