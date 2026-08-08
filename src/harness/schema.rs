@@ -243,6 +243,7 @@ mod tests {
             confidence: 1.0,
             suggestion: Some(format!("let key = std::env::var(\"KEY\")?; // was {key}")),
             late: false,
+            identity: None,
         };
 
         let finding = raw.into_finding(LaneId::Critique);
@@ -264,6 +265,7 @@ mod tests {
             confidence: 5.0,
             suggestion: None,
             late: false,
+            identity: None,
         };
         assert_eq!(raw.into_finding(LaneId::Critique).confidence, 1.0);
     }
@@ -284,6 +286,7 @@ mod tests {
             confidence: 0.5,
             suggestion: None,
             late: false,
+            identity: None,
         };
         let finding = raw.into_finding(LaneId::Critique);
         assert_eq!(finding.title.chars().count(), 80);

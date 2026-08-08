@@ -144,6 +144,7 @@ impl From<ScanFinding> for Finding {
             body,
             suggestion: None,
             late: false,
+            identity: None,
         }
     }
 }
@@ -166,6 +167,7 @@ mod tests {
             body: "…".into(),
             suggestion: None,
             late: false,
+            identity: None,
         }
     }
 

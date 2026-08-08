@@ -197,6 +197,7 @@ mod tests {
             body: "`i` is never bounds-checked.".into(),
             suggestion: None,
             late: false,
+            identity: None,
         }
     }
 
