@@ -80,10 +80,14 @@ pub fn split(source: &str, language: Language, options: &ChunkOptions) -> Option
     let tree = parser.parse(source, None)?;
     let root = tree.root_node();
 
-    // A parse that found no named node at all in non-empty source is not a
-    // parse. Returning `None` here is what makes the fallback honest rather
-    // than emitting one file-sized "parsed" chunk.
-    if root.named_child_count() == 0 && !source.trim().is_empty() {
+    // A parse that found no named node, or that is mostly error, is not a
+    // parse — a `.ts` file that is really a data dump, a template language
+    // wearing a `.py` extension. Returning `None` here is what makes the
+    // fallback honest rather than emitting one file-sized "parsed" chunk whose
+    // boundaries nothing actually chose.
+    if !source.trim().is_empty()
+        && (root.named_child_count() == 0 || error_bytes(root) * 2 > source.len())
+    {
         return None;
     }
 
