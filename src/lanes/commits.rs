@@ -277,6 +277,7 @@ mod tests {
                 extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
+                retrieved_context: "",
             })
             .await
             .expect("lane runs")
