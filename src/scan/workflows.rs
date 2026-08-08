@@ -155,15 +155,31 @@ fn script_injection(path: &str, lines: &[(u64, &str)]) -> Vec<Finding> {
     let mut findings = Vec::new();
     let mut in_run_block = false;
 
+    // Keys that unambiguously end a `run:` block scalar. Anything else inside
+    // the block is script, including lines that merely look like YAML.
+    const BLOCK_ENDING_KEYS: &[&str] = &[
+        "uses:",
+        "with:",
+        "env:",
+        "name:",
+        "if:",
+        "id:",
+        "shell:",
+        "working-directory:",
+        "continue-on-error:",
+        "timeout-minutes:",
+    ];
+
     for (line_no, raw) in lines {
         let text = raw.trim();
-        if text.starts_with("run:") {
+        // A leading `- ` marks a new list item, and a step's key can carry it:
+        // `- run: |` is the same key as `run: |`.
+        let key = text.strip_prefix("- ").unwrap_or(text);
+
+        if key.starts_with("run:") {
             in_run_block = true;
-        } else if text.starts_with("- ") || text.ends_with(':') && !text.contains("${{") {
-            // A new key or list item ends the previous block scalar. Added-line
-            // fragments make this approximate, which is why the finding is
-            // phrased as something to check rather than something proven.
-            in_run_block = text.starts_with("run:");
+        } else if BLOCK_ENDING_KEYS.iter().any(|k| key.starts_with(k)) {
+            in_run_block = false;
         }
 
         if !in_run_block || !text.contains("${{") {
