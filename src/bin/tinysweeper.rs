@@ -45,6 +45,28 @@ enum Command {
         /// Render what would be posted without writing anything to GitHub.
         #[arg(long)]
         dry_run: bool,
+
+        /// Write the proposal here instead of publishing it.
+        ///
+        /// This is the normal path: `review` proposes, `apply` disposes, and
+        /// only `apply` ever holds a write token.
+        #[arg(long, default_value = "findings.json")]
+        propose_to: std::path::PathBuf,
+    },
+
+    /// Publish a proposal produced by `review`. Makes no model calls.
+    Apply {
+        /// The repository, as `owner/name`.
+        #[arg(long, env = "GITHUB_REPOSITORY")]
+        repo: String,
+
+        /// The pull request number.
+        #[arg(long)]
+        pr: u64,
+
+        /// The proposal written by `review`.
+        #[arg(long, default_value = "findings.json")]
+        findings: std::path::PathBuf,
     },
 
     /// Run the review engine over a local git range. No GitHub, no tokens.
