@@ -453,6 +453,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn publishing_records_the_identities_it_posted() {
+        // The store extension used to parse the fingerprint back out of the
+        // comment body it had just rendered, looking for `{fp=` while the
+        // marker written is `<!-- tinysweeper:fp=… -->`. It never matched, so
+        // nothing was ever recorded and the next review re-posted everything.
+        // A no-op is indistinguishable from success without this test.
+        let mut posted = finding();
+        posted.identity = Some("0123456789abcdef".into());
+
+        let store = crate::state::MemoryState::default();
+        let key = crate::state::key("tinyhumansai/tinysweeper", 7);
+        store
+            .save_state(&key, &Default::default())
+            .await
+            .expect("seeds");
+
+        let forge = forge("abc123");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![posted]),
+            Some(&store),
+        )
+        .await
+        .expect("applies");
+
+        let recorded = store.load_state(&key).await.expect("loads").expect("state");
+        assert!(
+            recorded.fingerprints.contains(&"0123456789abcdef".to_string()),
+            "{:?}",
+            recorded.fingerprints
+        );
+    }
+
+    #[tokio::test]
     async fn a_finding_below_the_threshold_only_comments() {
         let mut low = finding();
         low.severity = Severity::Medium;
