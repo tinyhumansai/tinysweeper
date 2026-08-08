@@ -452,7 +452,7 @@ mod tests {
         low.severity = Severity::Medium;
 
         let forge = forge("abc123");
-        apply(&forge, &forge, &config(), &proposal("abc123", vec![low]))
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![low]), None)
             .await
             .expect("applies");
 

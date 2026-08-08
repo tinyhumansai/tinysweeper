@@ -1188,7 +1188,7 @@ mod tests {
         let first = review(&forge, Arc::new(insistent_model()), &config, &repo(), 7)
             .await
             .expect("reviews");
-        crate::app::apply::apply(&forge, &forge, &config, &first)
+        crate::app::apply::apply(&forge, &forge, &config, &first, None)
             .await
             .expect("applies");
 
@@ -1230,7 +1230,7 @@ mod tests {
         let first = review(&forge, Arc::new(insistent_model()), &config, &repo(), 7)
             .await
             .expect("reviews");
-        crate::app::apply::apply(&forge, &forge, &config, &first)
+        crate::app::apply::apply(&forge, &forge, &config, &first, None)
             .await
             .expect("applies");
 
