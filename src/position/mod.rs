@@ -37,7 +37,7 @@ mod test;
 
 use crate::config::types::Config;
 use crate::evidence::diff::{FileDiff, Hunk, LineKind};
-use crate::ports::model::{Model, Usage};
+use crate::ports::model::{Model, Spend};
 
 pub use crate::position::types::{Anchor, Resolution, Side, Stage, Unanchored};
 
@@ -106,12 +106,13 @@ impl<'a> Positioner<'a> {
         Self { model, config }
     }
 
-    /// Run all three stages. `usage` accumulates whatever stage 3 spent.
+    /// Run all three stages. `spend` accumulates whatever stage 3 spent, and
+    /// which model spent it.
     ///
     /// Never fails: a re-location call that errors, times out or answers with
     /// nonsense leaves the finding unanchored, which is a degraded result
     /// rather than a failed review.
-    pub async fn resolve(&self, request: PositionRequest<'_>, usage: &mut Usage) -> Resolution {
+    pub async fn resolve(&self, request: PositionRequest<'_>, spend: &mut Spend) -> Resolution {
         let first = locate(request.snippet, request.diff, request.file);
         if first.is_anchored() {
             return first;
@@ -131,7 +132,7 @@ impl<'a> Positioner<'a> {
         .await
         {
             Some((snippet, spent)) => {
-                usage.add(spent);
+                spend.merge(spent);
                 snippet
             }
             None => return first,

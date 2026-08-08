@@ -14,7 +14,7 @@
 use async_trait::async_trait;
 
 use crate::error::Result;
-use crate::index::types::EmbedSignature;
+use crate::index::types::{EmbedSignature, Embedded};
 
 /// Turns text into vectors.
 #[async_trait]
@@ -25,13 +25,19 @@ pub trait Embedder: Send + Sync {
     /// call, because it is what the index is opened with.
     fn signature(&self) -> EmbedSignature;
 
-    /// Embed a batch of documents.
+    /// Embed a batch of documents, reporting what it cost.
     ///
     /// Batched rather than one-at-a-time because indexing a repository is
     /// thousands of chunks and per-call latency dominates. The returned vectors
     /// are in the same order as `texts`, and there is exactly one per input —
     /// implementations must not silently drop a text they could not handle.
-    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
+    ///
+    /// The cost is part of the return type rather than something a caller may
+    /// ask for, because embedding is about to be the largest line on the bill
+    /// and an implementation that could return vectors without a price would be
+    /// a hole in the budget of exactly the kind this port already closed for
+    /// completions.
+    async fn embed(&self, texts: &[String]) -> Result<Embedded>;
 
     /// Embed a search query.
     ///
@@ -39,10 +45,7 @@ pub trait Embedder: Send + Sync {
     /// explicit query/document hint and score noticeably worse without it. The
     /// default forwards to the batch call, which is correct for providers that
     /// make no distinction.
-    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
-        let mut vectors = self.embed(std::slice::from_ref(&text.to_string())).await?;
-        vectors.pop().ok_or_else(|| {
-            crate::error::Error::Model("the embedder returned no vector for the query".into())
-        })
+    async fn embed_query(&self, text: &str) -> Result<Embedded> {
+        self.embed(std::slice::from_ref(&text.to_string())).await
     }
 }

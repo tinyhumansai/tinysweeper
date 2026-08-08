@@ -25,10 +25,10 @@
 
 pub mod types;
 
-use crate::config::types::{Config, LaneId};
+use crate::config::types::{Config, LaneId, Workload};
 use crate::findings::types::Finding;
 use crate::harness::prompt::push_fenced;
-use crate::ports::model::{Message, Model, ModelRequest};
+use crate::ports::model::{Message, Model, ModelRequest, Spend};
 
 pub use crate::falsify::types::{FalsifyOutcome, Rejection};
 
@@ -61,7 +61,10 @@ impl<'a> Falsifier<'a> {
 
         let request = ModelRequest {
             // Cheap tier: this is a check against one document, not a review.
-            model: self.config.models.scan.clone(),
+            model: self
+                .config
+                .model_for_workload(Workload::Falsify)
+                .to_string(),
             messages: vec![
                 Message::system(INSTRUCTIONS),
                 Message::user(user_message(&findings, rendered_diff)),
@@ -78,12 +81,14 @@ impl<'a> Falsifier<'a> {
             Err(err) => return FalsifyOutcome::failed_open(findings, err.to_string()),
         };
 
-        let usage = response.usage;
+        let spend = Spend::of(&response);
         let parsed: types::FalsifyResponse = match serde_json::from_value(response.value) {
             Ok(parsed) => parsed,
             Err(err) => {
                 let mut outcome = FalsifyOutcome::failed_open(findings, err.to_string());
-                outcome.usage = usage;
+                // The call was billed even though its answer was unusable, so
+                // the spend travels with the failed-open outcome.
+                outcome.spend = spend;
                 return outcome;
             }
         };
@@ -111,7 +116,7 @@ impl<'a> Falsifier<'a> {
         FalsifyOutcome {
             findings: kept,
             rejected,
-            usage,
+            spend,
             failed_open: None,
         }
     }

@@ -8,6 +8,7 @@
 
 use crate::config::types::Severity;
 use crate::findings::types::Finding;
+use crate::ports::model::Usage;
 
 /// Colour and label for each severity, as a shields.io badge.
 ///
@@ -138,25 +139,26 @@ fn escape_html(text: &str) -> String {
 /// Cache hit rate is here rather than buried in a log because it is the number
 /// that decides whether re-reviewing a pull request is cheap or ruinous, and it
 /// is the one figure a person tuning this will actually want.
-pub fn cost_line(
-    cost_usd: f64,
-    input_tokens: u64,
-    output_tokens: u64,
-    cached_tokens: u64,
-    models: &[String],
-) -> String {
+pub fn cost_line(usage: &Usage, models: &[String]) -> String {
     let mut line = format!(
-        "${cost_usd:.4} · {} in / {} out",
-        thousands(input_tokens),
-        thousands(output_tokens),
+        "${:.4} · {} in / {} out",
+        usage.cost_usd,
+        thousands(usage.input_tokens),
+        thousands(usage.output_tokens),
     );
 
-    if input_tokens > 0 {
-        let rate = cached_tokens as f64 / input_tokens as f64 * 100.0;
+    if usage.input_tokens > 0 {
+        let rate = usage.cached_tokens as f64 / usage.input_tokens as f64 * 100.0;
         line.push_str(&format!(
             " · {} cached ({rate:.0}%)",
-            thousands(cached_tokens)
+            thousands(usage.cached_tokens)
         ));
+    }
+
+    // Only when there is any, so a review that never touched the index reads
+    // exactly as it did before retrieval existed.
+    if usage.embed_tokens > 0 {
+        line.push_str(&format!(" · {} embedded", thousands(usage.embed_tokens)));
     }
 
     if !models.is_empty() {
@@ -164,6 +166,23 @@ pub fn cost_line(
     }
 
     line
+}
+
+/// Render the per-lane breakdown of a run's spend.
+///
+/// A single total says a review was expensive; this says which lane made it so,
+/// which is the only version of the number anyone can act on. Lanes that spent
+/// nothing — skipped, or deterministic like the scanners and the gate — are
+/// left out rather than listed as `$0.0000` noise.
+pub fn per_lane_costs(lanes: &[(String, Usage, Vec<String>)]) -> String {
+    let mut out = String::new();
+    for (name, usage, models) in lanes {
+        if usage.cost_usd <= 0.0 && usage.input_tokens == 0 && usage.embed_tokens == 0 {
+            continue;
+        }
+        out.push_str(&format!("\n{name}: {}", cost_line(usage, models)));
+    }
+    out
 }
 
 /// `12345` reads as `12,345`.
@@ -276,13 +295,20 @@ mod tests {
         assert!(out.contains("items.get(i)"));
     }
 
+    fn usage(cost_usd: f64, input: u64, output: u64, cached: u64) -> Usage {
+        Usage {
+            cost_usd,
+            input_tokens: input,
+            output_tokens: output,
+            cached_tokens: cached,
+            embed_tokens: 0,
+        }
+    }
+
     #[test]
     fn the_cost_line_reports_the_whole_token_breakdown() {
         let line = cost_line(
-            0.1615,
-            49_169,
-            1_204,
-            40_000,
+            &usage(0.1615, 49_169, 1_204, 40_000),
             &["moonshotai/kimi-k3".into()],
         );
         assert!(line.contains("$0.1615"), "{line}");
@@ -295,8 +321,35 @@ mod tests {
     #[test]
     fn a_run_that_sent_nothing_reports_no_cache_rate() {
         // 0% would read as "the cache missed" rather than "nothing was sent".
-        let line = cost_line(0.0, 0, 0, 0, &[]);
+        let line = cost_line(&Usage::default(), &[]);
         assert!(!line.contains('%'), "{line}");
+    }
+
+    #[test]
+    fn embedding_tokens_are_reported_apart_from_prompt_tokens() {
+        let line = cost_line(
+            &Usage {
+                embed_tokens: 12_000,
+                ..usage(0.05, 1_000, 10, 0)
+            },
+            &[],
+        );
+        assert!(line.contains("1,000 in"), "{line}");
+        assert!(line.contains("12,000 embedded"), "{line}");
+    }
+
+    #[test]
+    fn the_per_lane_breakdown_omits_lanes_that_spent_nothing() {
+        let rendered = per_lane_costs(&[
+            (
+                "critique".into(),
+                usage(0.30, 40_000, 900, 0),
+                vec!["vendor/deep".into()],
+            ),
+            ("gate".into(), Usage::default(), vec![]),
+        ]);
+        assert!(rendered.contains("critique: $0.3000"), "{rendered}");
+        assert!(!rendered.contains("gate"), "{rendered}");
     }
 
     #[test]

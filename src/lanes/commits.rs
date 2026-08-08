@@ -31,7 +31,7 @@ use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
 use crate::lanes::security::render_scanner;
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
-use crate::ports::model::{Message, Model, ModelRequest};
+use crate::ports::model::{Message, Model, ModelRequest, Spend};
 use crate::scan::secrets::scrub;
 use crate::scan::types::ScanKind;
 
@@ -110,6 +110,9 @@ impl Lane for Commits {
             })
             .await?;
 
+        // Taken before the value is moved out: the spend belongs to the model
+        // that answered, whether or not its answer parses.
+        let spend = Spend::of(&response);
         let parsed = schema::parse(LaneId::Commits, response.value)?;
 
         // `Demote`: a finding about a commit message has no line to sit on, and
@@ -120,7 +123,7 @@ impl Lane for Commits {
             parsed,
             input.diffs,
             Anchoring::Demote,
-            response.usage,
+            spend,
         );
 
         merge_scanner_findings(&mut outcome, &scanner);

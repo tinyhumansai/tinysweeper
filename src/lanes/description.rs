@@ -23,7 +23,7 @@ use crate::forge::types::PullRequest;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
-use crate::ports::model::{Message, Model, ModelRequest};
+use crate::ports::model::{Message, Model, ModelRequest, Spend};
 
 /// Bodies shorter than this are treated as no body at all.
 ///
@@ -98,6 +98,9 @@ impl Lane for Description {
             })
             .await?;
 
+        // Taken before the value is moved out: the spend belongs to the model
+        // that answered, whether or not its answer parses.
+        let spend = Spend::of(&response);
         let parsed = schema::parse(LaneId::Description, response.value)?;
 
         // `Demote`, not `Strict`: a finding about the description has no line
@@ -107,7 +110,7 @@ impl Lane for Description {
             parsed,
             input.diffs,
             Anchoring::Demote,
-            response.usage,
+            spend,
         ))
     }
 }
@@ -138,7 +141,7 @@ fn empty_body_outcome(pr: &PullRequest, files: usize) -> LaneOutcome {
             identity: None,
         }],
         resolved: vec![],
-        usage: Default::default(),
+        spend: Default::default(),
         skipped: None,
     }
 }

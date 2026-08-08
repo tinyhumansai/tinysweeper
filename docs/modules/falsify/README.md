@@ -47,7 +47,7 @@ Both properties are asserted directly in `src/falsify/test.rs`.
 
 ## Cost
 
-One call per lane, on the `models.scan` tier, skipped entirely when the lane
+One call per lane, on the cheap tier `Config::model_for_workload(Workload::Falsify)` resolves to, skipped entirely when the lane
 produced no findings. It sees the rendered diff and the findings, and nothing
 else of the run: no repository policy, no prior findings, no pull request
 description. Both inputs are fenced with `harness::prompt::push_fenced` — the

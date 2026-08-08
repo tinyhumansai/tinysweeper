@@ -34,7 +34,7 @@ use crate::falsify::Falsifier;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema::{self, RawFinding};
 use crate::lanes::{Lane, LaneInput, LaneOutcome};
-use crate::ports::model::{Message, Model, ModelRequest};
+use crate::ports::model::{Message, Model, ModelRequest, Spend};
 use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
 
 /// The correctness lane.
@@ -109,9 +109,12 @@ impl Lane for Critique {
             })
             .await?;
 
+        // Taken before the value is moved out: the spend belongs to the model
+        // that answered, whether or not its answer parses.
+        let spend = Spend::of(&response);
         let parsed = schema::parse(LaneId::Critique, response.value)?;
 
-        let mut usage = response.usage;
+        let mut spend = spend;
         let positioner = Positioner::new(self.model.as_ref(), input.config);
 
         let mut findings = Vec::new();
@@ -129,9 +132,9 @@ impl Lane for Critique {
             // Budget check: relocation can make one model call per unresolvable
             // finding, so enforce the limit inside the loop before escalating to
             // stage 3. Do not wait until the lane finishes.
-            if usage.cost_usd > input.config.models.budget_usd_per_pr {
+            if spend.cost_usd() > input.config.models.budget_usd_per_pr {
                 return Err(crate::error::Error::Budget {
-                    spent: usage.cost_usd,
+                    spent: spend.cost_usd(),
                     limit: input.config.models.budget_usd_per_pr,
                 });
             }
@@ -150,7 +153,7 @@ impl Lane for Critique {
                         // in the cacheable prompt prefix on an initial run.
                         rendered_diff: &evidence,
                     },
-                    &mut usage,
+                    &mut spend,
                 )
                 .await;
 
@@ -183,7 +186,7 @@ impl Lane for Critique {
         let filtered = Falsifier::new(self.model.as_ref(), input.config)
             .filter(LaneId::Critique, findings, &evidence)
             .await;
-        usage.add(filtered.usage);
+        spend.merge(filtered.spend);
 
         Ok(LaneOutcome {
             summary: summarise(
@@ -194,7 +197,7 @@ impl Lane for Critique {
             ),
             findings: filtered.findings,
             resolved: parsed.resolved,
-            usage,
+            spend,
             skipped: None,
         })
     }

@@ -30,7 +30,22 @@ silently misbehaves when a model phrases something differently, and that failure
 is invisible until it posts something wrong on someone's pull request.
 
 `Usage` carries `cached_tokens` separately because prompt-cache hit rate is the
-difference between a cheap re-review and a ruinous one.
+difference between a cheap re-review and a ruinous one, and `embed_tokens`
+separately again — embeddings are priced on their own scale, and folding them
+into the prompt total would make that hit rate quietly wrong.
+
+`Spend` pairs a `Usage` with the models that produced it. The pairing is the
+point: reporting usage without the model that answered is how the cost line came
+to name whichever model the config *asked* for, while a fallback did the work.
+The model id is recorded where the response arrives and never re-derived from
+config afterwards. Lanes report a `Spend`, and `LaneProposal` carries it through
+to the check-run summary so the breakdown says which lane cost what.
+
+Prices live in `src/harness/pricing.rs`, always compiled so budget enforcement is
+tested offline. A model with no price is billed at the most expensive rate in the
+table rather than at zero: the previous behaviour made an unpriced model free and
+therefore exempt from `models.budget_usd_per_pr`, which is the one model whose
+cost nobody had checked.
 
 ## Files
 
@@ -38,7 +53,7 @@ difference between a cheap re-review and a ruinous one.
 | --- | --- |
 | `forge.rs` | `ForgeRead`, `ForgeWrite` |
 | `model.rs` | `Model`, plus `Message`, `ModelRequest`, `ModelResponse`, `Usage` |
-| `embed.rs` | `Embedder` |
+| `embed.rs` | `Embedder` — returns `Embedded { vectors, usage }`, never bare vectors |
 | `index.rs` | `ChunkIndex` |
 | `graph.rs` | `GraphStore` |
 | `knowledge.rs` | `KnowledgeStore` |
