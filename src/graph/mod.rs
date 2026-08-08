@@ -31,6 +31,8 @@ pub mod path;
 pub mod resolve;
 pub mod traverse;
 pub mod types;
+#[cfg(test)]
+mod scratch_measure;
 
 pub use crate::graph::aliases::{AliasConfig, AliasPattern};
 pub use crate::graph::build::{build, sync_all, sync_paths};
