@@ -185,7 +185,7 @@ fn postable_range(raw: &RawFinding, diff: &FileDiff, resolution: Resolution) -> 
         Resolution::Unanchored(Unanchored::NoMatch) => return None,
     };
 
-    (raw.late || diff.touches_range(start, end)).then_some((start, end))
+    diff.within_hunk(start, end).then_some((start, end))
 }
 
 /// Fold the bookkeeping into the model's own summary.
