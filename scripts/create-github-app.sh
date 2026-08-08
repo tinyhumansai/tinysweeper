@@ -59,7 +59,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 echo "Creating GitHub App 'tinysweeper' under org '$ORG'."
-echo "A browser will open. Review the permissions and click 'Create GitHub App'."
+echo "Open the URL below, review the permissions, and click 'Create GitHub App'."
 echo
 
 ORG="$ORG" PORT="$PORT" PUBLIC_HOST="$PUBLIC_HOST" MANIFEST="$MANIFEST" OUT="$OUT" python3 - <<'PYTHON'
