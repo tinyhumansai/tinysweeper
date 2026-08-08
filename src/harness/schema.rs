@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use crate::config::types::{LaneId, Severity};
 use crate::error::{Error, Result};
 use crate::findings::types::Finding;
+use crate::scan::secrets::scrub;
 
 /// What a lane's model call returns.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -59,6 +60,12 @@ pub struct RawFinding {
 
 impl RawFinding {
     /// Promote to a canonical [`Finding`] belonging to `lane`.
+    ///
+    /// Every free-text field is scrubbed of credential shapes on the way
+    /// through. The model reads the raw diff, so a pull request that commits a
+    /// key gives the model something it can quote back — and redacting scanner
+    /// findings carefully counts for nothing if the critique lane prints the
+    /// value two comments later.
     pub fn into_finding(self, lane: LaneId) -> Finding {
         Finding {
             lane,
@@ -71,9 +78,9 @@ impl RawFinding {
             line: Some(self.line),
             end_line: self.end_line,
             rule: self.rule,
-            title: truncate(&self.title, 80),
-            body: self.body,
-            suggestion: self.suggestion,
+            title: truncate(&scrub(&self.title), 80),
+            body: scrub(&self.body),
+            suggestion: self.suggestion.as_deref().map(scrub),
             late: self.late,
         }
     }
@@ -220,6 +227,28 @@ mod tests {
             "{err}"
         );
         assert!(err.to_string().contains("critique"), "{err}");
+    }
+
+    #[test]
+    fn a_credential_the_model_quoted_never_reaches_the_finding() {
+        let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+        let raw = RawFinding {
+            path: "src/lib.rs".into(),
+            line: 1,
+            end_line: None,
+            rule: "hardcoded-credential".into(),
+            title: format!("Remove the hardcoded key {key}"),
+            body: format!("`{key}` is committed on line 1."),
+            severity: Severity::Critical,
+            confidence: 1.0,
+            suggestion: Some(format!("let key = std::env::var(\"KEY\")?; // was {key}")),
+            late: false,
+        };
+
+        let finding = raw.into_finding(LaneId::Critique);
+        let rendered = serde_json::to_string(&finding).expect("serialises");
+        assert!(!rendered.contains("IOSFODNN7EXAMPLE"), "{rendered}");
+        assert!(rendered.contains("AKIA"), "the vendor prefix survives");
     }
 
     #[test]
