@@ -189,7 +189,12 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
                     finding.body,
                     finding.lane,
                     crate::findings::render::confidence_badge(finding.confidence),
-                    finding.fingerprint(&finding.title),
+                    // The identity review stamped, over the code this finding
+                    // anchors to. Recomputing it here from the title — as this
+                    // once did — makes the marker depend on the model's
+                    // wording, so a rephrased sentence looks like a new finding
+                    // and gets posted again on the next push.
+                    identity(finding),
                 ),
             })
         })
