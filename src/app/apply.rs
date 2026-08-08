@@ -77,10 +77,7 @@ fn render_lane_summary(lane: &crate::app::review::LaneProposal) -> String {
         out.push_str("No findings.\n");
     } else {
         for finding in &lane.findings {
-            out.push_str(&format!(
-                "### {}\n\n`{}`",
-                finding.title, finding.path
-            ));
+            out.push_str(&format!("### {}\n\n`{}`", finding.title, finding.path));
             if let Some(line) = finding.line {
                 out.push_str(&format!(":{line}"));
             }
@@ -98,7 +95,11 @@ fn render_lane_summary(lane: &crate::app::review::LaneProposal) -> String {
 }
 
 fn review_body(proposal: &Proposal) -> String {
-    let blocking = proposal.lanes.iter().filter(|l| l.conclusion.blocks()).count();
+    let blocking = proposal
+        .lanes
+        .iter()
+        .filter(|l| l.conclusion.blocks())
+        .count();
     let mut body = if blocking == 0 {
         "tinysweeper found nothing blocking.".to_string()
     } else {
@@ -247,7 +248,11 @@ mod tests {
         assert_eq!(review.len(), 1);
         assert_eq!(review[0].path, "src/main.rs");
         assert_eq!(review[0].line, 2);
-        assert!(review[0].body.contains("tinysweeper:fp="), "{}", review[0].body);
+        assert!(
+            review[0].body.contains("tinysweeper:fp="),
+            "{}",
+            review[0].body
+        );
     }
 
     #[tokio::test]

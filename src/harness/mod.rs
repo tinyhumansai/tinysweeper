@@ -7,6 +7,8 @@
 //! changing how a prompt is assembled.
 
 pub mod mock;
+#[cfg(feature = "harness")]
+pub mod openrouter;
 pub mod prompt;
 pub mod schema;
 

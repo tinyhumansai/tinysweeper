@@ -238,10 +238,7 @@ fn gate(lanes: &[LaneProposal]) -> LaneProposal {
     let blocking: Vec<&LaneProposal> = lanes.iter().filter(|l| l.conclusion.blocks()).collect();
 
     let (conclusion, summary) = if blocking.is_empty() {
-        (
-            CheckConclusion::Success,
-            "All lanes passed.".to_string(),
-        )
+        (CheckConclusion::Success, "All lanes passed.".to_string())
     } else {
         (
             CheckConclusion::Failure,
@@ -386,15 +383,9 @@ mod tests {
     #[tokio::test]
     async fn a_clean_review_produces_a_passing_gate() {
         let forge = forge_with(vec![rust_file()], vec![]);
-        let proposal = review(
-            &forge,
-            Arc::new(MockModel::silent()),
-            &config(),
-            &repo(),
-            7,
-        )
-        .await
-        .expect("reviews");
+        let proposal = review(&forge, Arc::new(MockModel::silent()), &config(), &repo(), 7)
+            .await
+            .expect("reviews");
 
         let gate = proposal
             .lanes
@@ -422,7 +413,11 @@ mod tests {
             .expect("reviews");
 
         assert!(proposal.blocked());
-        let gate = proposal.lanes.iter().find(|l| l.lane == LaneId::Gate).unwrap();
+        let gate = proposal
+            .lanes
+            .iter()
+            .find(|l| l.lane == LaneId::Gate)
+            .unwrap();
         assert!(gate.summary.contains("critique"), "{}", gate.summary);
     }
 
@@ -438,7 +433,11 @@ mod tests {
             .await
             .expect("reviews");
 
-        assert_eq!(model.calls(), 0, "a kill switch must stop work, not hide output");
+        assert_eq!(
+            model.calls(),
+            0,
+            "a kill switch must stop work, not hide output"
+        );
         assert!(!proposal.blocked());
         assert!(proposal.lanes[0].summary.contains("human-review"));
     }
@@ -507,15 +506,9 @@ mod tests {
     #[tokio::test]
     async fn a_lane_that_has_not_been_written_is_neutral_not_successful() {
         let forge = forge_with(vec![rust_file()], vec![]);
-        let proposal = review(
-            &forge,
-            Arc::new(MockModel::silent()),
-            &config(),
-            &repo(),
-            7,
-        )
-        .await
-        .expect("reviews");
+        let proposal = review(&forge, Arc::new(MockModel::silent()), &config(), &repo(), 7)
+            .await
+            .expect("reviews");
 
         let security = proposal
             .lanes
@@ -548,15 +541,9 @@ mod tests {
     #[tokio::test]
     async fn the_gate_is_always_present_even_when_nothing_ran() {
         let forge = forge_with(vec![], vec![]);
-        let proposal = review(
-            &forge,
-            Arc::new(MockModel::silent()),
-            &config(),
-            &repo(),
-            7,
-        )
-        .await
-        .expect("reviews");
+        let proposal = review(&forge, Arc::new(MockModel::silent()), &config(), &repo(), 7)
+            .await
+            .expect("reviews");
 
         assert!(proposal.lanes.iter().any(|l| l.lane == LaneId::Gate));
     }

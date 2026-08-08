@@ -52,7 +52,10 @@ impl GatewayModel {
             .with_model(model)
             // Identifies us to OpenRouter, which is how per-application usage
             // shows up separately in their dashboard.
-            .with_header("HTTP-Referer", "https://github.com/tinyhumansai/tinysweeper")
+            .with_header(
+                "HTTP-Referer",
+                "https://github.com/tinyhumansai/tinysweeper",
+            )
             .with_header("X-Title", "tinysweeper");
 
         let mut harness: AgentHarness<()> = AgentHarness::new();
@@ -158,7 +161,9 @@ mod tests {
 
     #[test]
     fn a_missing_key_names_the_variable_rather_than_suggesting_a_file() {
-        let err = GatewayModel::from_config(&models()).unwrap_err().to_string();
+        let err = GatewayModel::from_config(&models())
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("TINYSWEEPER_TEST_KEY_ABSENT"), "{err}");
         assert!(err.contains("openrouter.ai"), "{err}");
     }

@@ -141,7 +141,12 @@ impl ForgeRead for GitHubRead {
             .map(|c| Commit {
                 sha: c.sha,
                 message: c.commit.message,
-                author_name: c.commit.author.as_ref().map(|a| a.name.clone()).unwrap_or_default(),
+                author_name: c
+                    .commit
+                    .author
+                    .as_ref()
+                    .map(|a| a.name.clone())
+                    .unwrap_or_default(),
                 author_email: c
                     .commit
                     .author
@@ -346,11 +351,7 @@ impl ForgeWrite for GitHubWrite {
         }
 
         let route = format!("/repos/{}/{}/pulls/{number}/reviews", repo.owner, repo.name);
-        let _: serde_json::Value = self
-            .client
-            .post(route, Some(&review))
-            .await
-            .map_err(api)?;
+        let _: serde_json::Value = self.client.post(route, Some(&review)).await.map_err(api)?;
         Ok(())
     }
 
