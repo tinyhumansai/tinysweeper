@@ -163,7 +163,44 @@ pub struct IndexedFile {
     /// Ids rather than hashes because they are what the stale-chunk delete
     /// takes, and the hash is already inside the id — storing both would let
     /// them disagree.
+    ///
+    /// **Confirmed**: every id here is in the index. This is the set the
+    /// indexer diffs against to decide what to embed, so an id that is merely
+    /// intended must never appear in it.
     pub chunks: Vec<String>,
+    /// Ids a run is *about* to write, recorded before the write.
+    ///
+    /// The crash-safety half of the two-phase write. A run that dies between
+    /// embedding and recording would otherwise leave chunks in the index that
+    /// no manifest entry mentions: the next run would neither reuse them nor
+    /// ever delete them, and stale code would sit in retrieval forever.
+    /// Writing the intent first means the next run's stale sweep still knows
+    /// about them. They are deliberately *not* counted as indexed — that would
+    /// skip embedding a chunk that was never written.
+    #[serde(default)]
+    pub pending: Vec<String>,
+}
+
+impl IndexedFile {
+    /// A confirmed record.
+    pub fn confirmed(path: impl Into<String>, chunks: Vec<String>) -> Self {
+        Self {
+            path: path.into(),
+            chunks,
+            pending: Vec::new(),
+        }
+    }
+
+    /// Every id this file has ever been associated with, confirmed or intended.
+    ///
+    /// The candidate set for the stale sweep.
+    pub fn every_id(&self) -> Vec<String> {
+        let mut ids = self.chunks.clone();
+        ids.extend(self.pending.iter().cloned());
+        ids.sort();
+        ids.dedup();
+        ids
+    }
 }
 
 /// What one indexing run did.
