@@ -174,13 +174,18 @@ fn build_model(
             Arc::new(built)
         }
         "ollama" => {
-            let mut built = OllamaEmbeddingModel::new()
-                .with_model(&signature.model)
-                .with_dimensions(signature.dims);
-            if !base_url.is_empty() {
-                built = built.with_url(base_url);
-            }
-            Arc::new(built)
+            let url = if base_url.is_empty() {
+                tinyagents::harness::embeddings::DEFAULT_OLLAMA_URL
+            } else {
+                base_url
+            };
+            // `try_new` rather than `new`: it validates the URL, and a typo in
+            // a local endpoint should be a startup error rather than a
+            // connection failure on the first push.
+            Arc::new(
+                OllamaEmbeddingModel::try_new(url, &signature.model, signature.dims)
+                    .map_err(|err| Error::config(format!("ollama embeddings: {err}")))?,
+            )
         }
         // Not a test hook: a deployment that wants the index machinery exercised
         // end to end without a provider bill has no other way to do it, and the
