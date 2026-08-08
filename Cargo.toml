@@ -75,6 +75,11 @@ tower-http = { version = "0.6", features = ["trace", "limit"], optional = true }
 # --- optional: the GitHub forge adapter ---
 octocrab = { version = "0.54", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+tree-sitter = "0.26"
+tree-sitter-rust = "0.24"
+tree-sitter-python = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.25"
 
 [features]
 # Offline by default: mock forge, mock model, deterministic scanners. This is
