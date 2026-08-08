@@ -482,7 +482,9 @@ mod tests {
 
         let recorded = store.load_state(&key).await.expect("loads").expect("state");
         assert!(
-            recorded.fingerprints.contains(&"0123456789abcdef".to_string()),
+            recorded
+                .fingerprints
+                .contains(&"0123456789abcdef".to_string()),
             "{:?}",
             recorded.fingerprints
         );
