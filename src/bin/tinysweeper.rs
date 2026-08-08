@@ -405,4 +405,33 @@ mod tests {
         let err = not_yet("review", "M3").unwrap_err();
         assert!(err.to_string().contains("scheduled for M3"), "{err}");
     }
+
+    #[cfg(feature = "serve")]
+    #[test]
+    fn a_missing_webhook_secret_is_rejected() {
+        let err = require_webhook_secret(None).unwrap_err().to_string();
+        assert!(err.contains("is not set"), "{err}");
+    }
+
+    #[cfg(feature = "serve")]
+    #[test]
+    fn an_empty_webhook_secret_is_rejected_like_a_missing_one() {
+        // `TINYSWEEPER_WEBHOOK_SECRET=` (set but empty) must fail the same
+        // way as leaving it unset — an empty HMAC key is forgeable by anyone.
+        for empty in ["", "   ", "\t\n"] {
+            let err = require_webhook_secret(Some(empty.to_string()))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("is set but empty"), "{err}");
+        }
+    }
+
+    #[cfg(feature = "serve")]
+    #[test]
+    fn a_real_webhook_secret_is_accepted() {
+        assert_eq!(
+            require_webhook_secret(Some("it's a secret to everybody".into())).unwrap(),
+            "it's a secret to everybody"
+        );
+    }
 }
