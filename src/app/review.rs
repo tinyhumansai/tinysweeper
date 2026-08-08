@@ -314,13 +314,19 @@ pub async fn review_with_state(
     // against it even if GitHub is slow to show the comments. Best effort: a
     // store that will not write is a more expensive next review, never a wrong
     // one, so it must not fail the run that already produced a verdict.
+    //
+    // Save head_sha, evidence, and titles *before* apply — these only affect
+    // prompt cost and continuity, and their availability matters even if apply
+    // fails or the head moves. Save fingerprints only after apply publishes
+    // them: identities of findings that are never shown must not suppress the
+    // only actionable inline comments for up to the state TTL.
     if let Some(store) = store
         && config.review.incremental
     {
         let next = ReviewedState {
             head_sha: context.pull_request.head_sha.clone(),
             evidence: replay::render(&diffs),
-            fingerprints: accumulated_fingerprints(&suppressed, &lanes),
+            fingerprints: suppressed.iter().cloned().collect(),
             titles: still_open_titles(&prior_titles, &lanes),
         };
         if let Err(err) = store.save_state(&state_key, &next).await {
