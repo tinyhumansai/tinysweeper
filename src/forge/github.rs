@@ -144,7 +144,10 @@ impl ForgeRead for GitHubRead {
                     .iter()
                     .map(|c| Commit {
                         sha: c["sha"].as_str().unwrap_or_default().to_string(),
-                        message: c["commit"]["message"].as_str().unwrap_or_default().to_string(),
+                        message: c["commit"]["message"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
                         author_name: c["commit"]["author"]["name"]
                             .as_str()
                             .unwrap_or_default()

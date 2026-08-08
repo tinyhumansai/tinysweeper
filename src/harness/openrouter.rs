@@ -18,10 +18,23 @@ use crate::error::{Error, Result};
 use crate::ports::model::{Model, ModelRequest, ModelResponse, Role, Usage};
 
 /// A model reached through an OpenAI-compatible gateway.
+///
+/// `Debug` is written by hand rather than derived: deriving it would print the
+/// API key in any log line, panic message or test failure that formats this.
 pub struct GatewayModel {
     api_key: String,
     base_url: String,
     fallbacks: Vec<String>,
+}
+
+impl std::fmt::Debug for GatewayModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatewayModel")
+            .field("base_url", &self.base_url)
+            .field("fallbacks", &self.fallbacks)
+            .field("api_key", &"<redacted>")
+            .finish()
+    }
 }
 
 impl GatewayModel {
@@ -195,6 +208,18 @@ mod tests {
             max_tokens: 100,
             budget_usd_per_pr: 1.0,
         }
+    }
+
+    #[test]
+    fn debug_never_prints_the_api_key() {
+        let model = GatewayModel {
+            api_key: "sk-secret-value".into(),
+            base_url: "https://openrouter.ai/api/v1".into(),
+            fallbacks: vec![],
+        };
+        let rendered = format!("{model:?}");
+        assert!(!rendered.contains("sk-secret-value"), "{rendered}");
+        assert!(rendered.contains("<redacted>"));
     }
 
     #[test]
