@@ -143,6 +143,15 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
     prefix.push_str(instructions(inputs.lane));
     prefix.push_str(SHARED_RULES);
 
+    // Layer 1b — the per-file isolation clause, for lanes that fan out one
+    // conversation per changed file. It sits in the prefix because it is
+    // constant for the whole of that file's conversation, and because it has to
+    // arrive before any evidence: without it, N reviewers each notice the same
+    // cross-file problem and the author gets it N times.
+    if let Some(path) = inputs.focus_path {
+        let _ = write!(prefix, "{ISOLATION_CLAUSE}\nThe file is `{path}`.\n");
+    }
+
     // Layer 2 — repository policy.
     if inputs.config.review.respect_agents_md
         && let Some(policy) = inputs.repo_policy
