@@ -12,6 +12,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use futures::FutureExt;
 use serde_json::json;
 use tokio::sync::Semaphore;
 
@@ -220,9 +221,26 @@ async fn review_inner(
         return Ok(());
     }
 
-    let outcome = run_and_publish(state, &repo_id, number, installation, &forge).await;
+    // `AssertUnwindSafe` + `catch_unwind` so a panic inside a lane still
+    // reaches the release below. Without it the `?` on the outcome is not the
+    // only way out — an unwind skips everything — and the lease survives the
+    // worker that took it.
+    let outcome = std::panic::AssertUnwindSafe(run_and_publish(
+        state,
+        &repo_id,
+        number,
+        installation,
+        &forge,
+    ))
+    .catch_unwind()
+    .await
+    .unwrap_or_else(|_| Err(Error::lane("review", "the review panicked")));
 
-    state.store.release_lease(&lease).await?;
+    // Released regardless of how the review went. The TTL in the store is the
+    // backstop for the cases this cannot cover — a kill, or a lost machine.
+    if let Err(err) = state.store.release_lease(&lease).await {
+        tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
+    }
     drop(permit);
 
     let proposal = outcome?;

@@ -22,6 +22,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
+/// How long a lease survives without being released.
+///
+/// Long enough that a slow review is never cut short, short enough that a
+/// crashed worker does not block that pull request for the rest of the day.
+pub const LEASE_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
 /// Environment variable naming the test database. Absent means the store tests
 /// skip, which is what keeps `cargo test` offline by default.
 pub const TEST_URI_ENV: &str = "TINYSWEEPER_TEST_MONGODB_URI";
@@ -151,6 +157,27 @@ impl Store {
             )
             .await
             .map_err(|err| Error::Forge(format!("could not index leases: {err}")))?;
+
+        // Leases expire on their own, and this is not belt-and-braces — it is
+        // the only thing that makes them safe. An explicit release cannot run
+        // if the worker panics, the process is killed, or the machine goes
+        // away, and a stranded lease is permanent: that pull request can never
+        // be reviewed again, and with a bounded worker pool a handful of them
+        // wedge the whole server. Observed in the first live run, which held
+        // four leases for ten minutes and would have held them forever.
+        //
+        // The TTL is comfortably longer than a slow review so it never cuts a
+        // live one short; it exists to clean up after death, not to bound work.
+        let lease_ttl = IndexOptions::builder().expire_after(LEASE_TTL).build();
+        self.leases
+            .create_index(
+                IndexModel::builder()
+                    .keys(doc! { "taken": 1 })
+                    .options(lease_ttl)
+                    .build(),
+            )
+            .await
+            .map_err(|err| Error::Forge(format!("could not set the lease TTL: {err}")))?;
 
         // Deliveries are bookkeeping, not history. Expiring them keeps the
         // collection from growing without bound, and a delivery old enough to
