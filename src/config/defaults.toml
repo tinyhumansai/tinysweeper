@@ -84,6 +84,36 @@ max_file_bytes = 65536
 pinned_doc_chars = 4000
 pinned_total_chars = 12000
 
+# The embedding provider behind the code index.
+#
+# Off by default: it costs money per indexed byte and needs a key, so a
+# deployment that has not opted in runs diff-only exactly as it did before.
+# `provider`, `model` and `dimensions` are the index partition key — changing
+# one invalidates every vector already written, by construction — so they are
+# filled in here as the recommendation rather than left blank.
+#
+# voyage-code-3 is the default because the corpus is code. It is trained on
+# code retrieval specifically, it is the strongest of the priced options on
+# CodeSearchNet-style benchmarks, and at $0.18/M it is within a rounding error
+# of Voyage's general model. 1024 dimensions is its native width and the one
+# the MongoDB vector index is cheapest to store: float32 binData at 1024 dims
+# is ~4 KiB per document against ~6 KiB at 1536.
+#
+# openai/text-embedding-3-small is the cheap alternative ($0.02/M, 1536 dims)
+# and is meaningfully worse at code; use it when the bill matters more than the
+# hit quality. Set `base_url` and point `provider = "openai"` at a local
+# OpenAI-compatible server to embed without leaving the network at all.
+[embeddings]
+enabled = false
+provider = "voyage"
+model = "voyage-code-3"
+dimensions = 1024
+api_key_env = "VOYAGE_API_KEY"
+base_url = ""
+batch = 64
+requests_per_minute = 60
+budget_usd_per_index = 5.0
+
 [lanes.critique]
 model = "deep"
 fail_on = "high"
