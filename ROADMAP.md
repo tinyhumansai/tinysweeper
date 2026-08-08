@@ -26,8 +26,10 @@ Engineering milestones. Each one is a shippable slice with its own verification.
   writing.
 - **M6 — the real forge.** octocrab adapter, incremental review, the three-stage
   cache with metrics and leases, and the `@tinysweeper` command router.
-- **M7 — delivery.** The composite action, example workflows, Docker image, and
-  the release and e2e workflows.
+- **M7 — delivery.** The GitHub App: the webhook server, its store, the admin
+  API, and the Docker image. The composite action and reusable workflow that
+  this milestone originally called for were built and then removed — see
+  "Removed" below.
 - **M8 — auto-merge.** Gate policy, label gating, and the merge path.
 
 ## Later
