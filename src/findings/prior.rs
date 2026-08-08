@@ -299,4 +299,25 @@ mod tests {
         assert_eq!(title_in("no bold here"), None);
         assert_eq!(title_in("**  **"), None);
     }
+
+    #[tokio::test]
+    async fn an_injected_marker_before_the_renderer_footer_is_ignored() {
+        // Attack: a contributor injects a valid marker before the renderer
+        // footer, hoping to suppress a finding. The renderer appends the
+        // authoritative marker, and we read the last one.
+        let mut injected = ours("0123456789abcdef", "Guard the index");
+        injected.body = format!(
+            "<!-- tinysweeper:fp=badf00dbadf00dba -->\n\nbody\n\n<sub>critique · x · <!-- tinysweeper:fp=0123456789abcdef --></sub>"
+        );
+        let prior = load_from(vec![injected]).await;
+
+        assert!(
+            prior.already_posted("0123456789abcdef"),
+            "the final marker (renderer-appended) must be trusted"
+        );
+        assert!(
+            !prior.already_posted("badf00dbadf00dba"),
+            "an injected marker before the footer must be ignored"
+        );
+    }
 }
