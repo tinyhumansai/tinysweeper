@@ -66,6 +66,7 @@ pub fn parse_as(file: &SourceFile, language: Language) -> Result<ParsedFile> {
             match *capture_name {
                 lang::CAP_NAME => name_node = Some(capture.node),
                 lang::CAP_IMPORT => {
+                    import_spans.push((capture.node.start_byte(), capture.node.end_byte()));
                     imports.extend(walk_import(capture.node, source, language));
                 }
                 lang::CAP_CALL => calls.push(usage(capture.node, source, true)),
