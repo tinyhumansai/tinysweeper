@@ -354,9 +354,9 @@ fn render(proposal: &tinysweeper::app::Proposal) -> String {
 
 /// Placeholder for a subcommand whose milestone has not landed yet.
 ///
-/// The CLI surface is declared in full from the start so downstream workflows
-/// and the composite action can be written against a stable interface while
-/// the internals are still being filled in.
+/// The CLI surface is declared in full from the start so scripts and operator
+/// runbooks can be written against a stable interface while the internals are
+/// still being filled in.
 fn not_yet(command: &str, milestone: &str) -> Result<()> {
     Err(tinysweeper::Error::config(format!(
         "`tinysweeper {command}` is not implemented yet (scheduled for {milestone})"
