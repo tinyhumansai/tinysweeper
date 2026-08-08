@@ -1,6 +1,6 @@
 //! The `tinysweeper` command-line entry point.
 //!
-//! One binary, two entry points that matter. `review` is what the GitHub Action
+//! One binary, three entry points that matter. `review` is what the GitHub Action
 //! runs, and `local-review` is the same engine over a local git range with no
 //! GitHub item and no tokens — which is how prompt changes get iterated without
 //! burning pull requests.
