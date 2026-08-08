@@ -55,7 +55,7 @@ impl Checkout {
         // webhook payload and are about to be command arguments; a `--`-leading
         // value would be read as an option by git even though it cannot escape
         // the argv boundary into a shell.
-        if !revision.len() == 40 || !revision.chars().all(|c| c.is_ascii_hexdigit()) {
+        if revision.len() != 40 || !revision.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(Error::config(format!(
                 "`{revision}` is not a commit sha; the indexer fetches one commit by id"
             )));
