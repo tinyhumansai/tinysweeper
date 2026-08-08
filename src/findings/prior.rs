@@ -313,18 +313,25 @@ mod tests {
 
     #[test]
     fn empty_or_whitespace_configured_bot_login_is_rejected() {
-        // If TINYSWEEPER_BOT_LOGIN is set to empty or whitespace, it should
-        // not match anything, even an empty login. This prevents a misconfigured
-        // bot from accepting forged markers.
-        std::env::set_var("TINYSWEEPER_BOT_LOGIN", "");
-        assert!(!is_own_login("tinysweeper"));
-        assert!(!is_own_login(""));
+        // A bot login configured to empty or whitespace must match nothing, so
+        // a misconfigured install recognises none of its own comments and
+        // simply repeats itself, rather than accepting anyone's marker.
+        for configured in ["", "   \n\t  "] {
+            assert!(!login_matches("tinysweeper", configured));
+            assert!(!login_matches("tinysweeper[bot]", configured));
+            assert!(!login_matches("", configured));
+        }
+    }
 
-        std::env::set_var("TINYSWEEPER_BOT_LOGIN", "   \n\t  ");
-        assert!(!is_own_login("tinysweeper"));
-        assert!(!is_own_login(""));
-
-        std::env::remove_var("TINYSWEEPER_BOT_LOGIN");
+    #[test]
+    fn a_lookalike_login_is_not_our_own() {
+        // The whole point of comparing exactly rather than by prefix: anyone
+        // can register `tinysweeper-evil`, and a prefix match would let them
+        // forge suppression markers.
+        assert!(login_matches("tinysweeper", "tinysweeper"));
+        assert!(login_matches("tinysweeper[bot]", "tinysweeper"));
+        assert!(!login_matches("tinysweeper-evil", "tinysweeper"));
+        assert!(!login_matches("tinysweeper-evil[bot]", "tinysweeper"));
     }
 
     #[test]
