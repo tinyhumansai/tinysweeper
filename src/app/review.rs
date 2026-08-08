@@ -512,6 +512,10 @@ fn lane_proposal(
     // again. It runs *after* the conclusion is decided, so a suppressed
     // finding still fails the check — the problem has not gone away, only the
     // repetition has.
+    // Recorded before dedupe: a finding that was suppressed was still *raised*
+    // this cycle, and must not then be counted as one the lane forgot about.
+    let raised: Vec<String> = findings.iter().map(|f| f.title.clone()).collect();
+
     let before = findings.len();
     findings.retain(|f| !already_posted(f, suppressed));
     let deduped = before - findings.len();
