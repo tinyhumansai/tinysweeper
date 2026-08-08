@@ -247,13 +247,78 @@ fn push_fenced(out: &mut String, label: &str, content: &str) {
     let _ = write!(out, "{fence}{label}\n{}\n{fence}\n", content.trim_end());
 }
 
+/// Select the rules that apply to this prompt's paths, **first match wins**.
+///
+/// The table is ordered and a path takes the first rule it matches, so a Rust
+/// file's reviewer never sees the workflow rules. That is a token saving, but
+/// mostly it is a precision one: every rule a reviewer is shown is another
+/// thing it can decide to have an opinion about, and rules written for another
+/// language are opinions it should never have had the chance to form.
+///
+/// An unparseable glob is skipped rather than fatal — `config::validate`
+/// reports it as a configuration problem, and losing the whole review over one
+/// bad pattern would be a worse failure than losing one rule.
 fn path_instructions(inputs: &PromptInputs<'_>) -> String {
+    let table = &inputs.config.path_instructions;
+
+    let paths: Vec<&str> = match inputs.focus_path {
+        Some(path) => vec![path],
+        None => inputs.changed_paths.iter().map(String::as_str).collect(),
+    };
+
+    // No paths means the caller did not say which files this is about, so the
+    // whole table applies: dropping every rule would be a silent regression.
+    let selected: Vec<usize> = if paths.is_empty() {
+        (0..table.len()).collect()
+    } else {
+        let matchers: Vec<Option<globset::GlobMatcher>> = table
+            .iter()
+            .map(|rule| {
+                globset::Glob::new(&rule.glob)
+                    .ok()
+                    .map(|g| g.compile_matcher())
+            })
+            .collect();
+
+        let mut selected = Vec::new();
+        for path in paths {
+            if let Some(index) = matchers
+                .iter()
+                .position(|m| m.as_ref().is_some_and(|m| m.is_match(path)))
+                && !selected.contains(&index)
+            {
+                selected.push(index);
+            }
+        }
+        // Table order, not path order, so the same set of files always renders
+        // the same prefix and stays cacheable.
+        selected.sort_unstable();
+        selected
+    };
+
     let mut out = String::new();
-    for rule in &inputs.config.path_instructions {
-        let _ = writeln!(out, "- `{}`: {}", rule.glob, rule.instructions.trim());
+    for index in selected {
+        let rule = &table[index];
+        let _ = writeln!(out, "### `{}`\n\n{}\n", rule.glob, rule.instructions.trim());
     }
     out
 }
+
+/// The clause that stops a per-file fan-out reporting the same problem N times.
+///
+/// Lifted, in substance, from open-code-review: without it every one of the N
+/// concurrent reviewers notices the same cross-file issue while gathering
+/// context and reports it, and the author gets N copies of one comment.
+const ISOLATION_CLAUSE: &str = r#"
+## One file only
+
+You are reviewing exactly one file. Other files may appear as context, and you
+should read them to understand what this one does — but findings about any other
+file must NOT become the subject of your comments. If you notice an issue
+elsewhere while gathering context, ignore it: another reviewer is looking at that
+file, and repeating its findings here is how one problem becomes several
+comments.
+"#;
 
 /// Rules every lane shares. Part of the cacheable prefix, so it must not
 /// interpolate anything.
