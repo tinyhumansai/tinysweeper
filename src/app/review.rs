@@ -16,12 +16,17 @@ use serde::{Deserialize, Serialize};
 use crate::config::types::{Config, LaneId, Severity};
 use crate::error::{Error, Result};
 use crate::evidence::diff::{FileDiff, parse_changed_files};
+use crate::evidence::replay;
+use crate::findings::anchor;
+use crate::findings::prior::{self, PriorReview};
 use crate::findings::types::Finding;
 use crate::forge::types::{CheckConclusion, PullRequestContext, RepoId};
 use crate::lanes::{Lane, LaneInput, LaneOutcome, critique::Critique};
 use crate::ports::forge::ForgeRead;
 use crate::ports::model::{Model, Usage};
+use crate::ports::review_state::ReviewStateStore;
 use crate::scan;
+use crate::state::types::ReviewedState;
 
 /// What a review run concluded, ready for `apply` to publish.
 #[derive(Debug, Clone, Serialize, Deserialize)]
