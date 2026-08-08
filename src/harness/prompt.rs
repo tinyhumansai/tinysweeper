@@ -150,9 +150,9 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
     // suffix, where a change costs nothing already cached.
     if !inputs.new_evidence.trim().is_empty() {
         if inputs.reviewed_evidence.trim().is_empty() {
-            suffix.push_str("\n## Review this\n\nComplete diff:\n\n");
+            suffix.push_str("\n## Review this\n\nThe complete diff:\n\n");
         } else {
-            suffix.push_str("\n## Review this\n\nOnly the new commits:\n\n");
+            suffix.push_str("\n## Review this\n\nOnly the commits since the last review:\n\n");
         }
         push_fenced(&mut suffix, "diff", inputs.new_evidence);
     }
