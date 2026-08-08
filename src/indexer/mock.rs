@@ -115,7 +115,7 @@ impl IndexManifest for MockManifest {
     }
 
     async fn state(&self, repo_id: &str, signature: &EmbedSignature) -> Result<RepoIndex> {
-        Ok(self.record(repo_id, signature))
+        Ok(self.snapshot(repo_id, signature))
     }
 
     async fn indexed(
@@ -341,8 +341,7 @@ mod tests {
     async fn recorded_files_come_back_and_forgotten_ones_do_not() {
         let manifest = MockManifest::new();
         let file = IndexedFile::confirmed("src/a.rs", vec!["id-1".into()]);
-        manifest
-            .record("o/r", &signature(), std::slice::from_ref(&file))
+        IndexManifest::record(&manifest, "o/r", &signature(), std::slice::from_ref(&file))
             .await
             .expect("records");
         assert_eq!(
