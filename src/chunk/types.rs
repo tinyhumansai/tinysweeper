@@ -177,18 +177,30 @@ impl Selection {
     /// Returned rather than logged so the caller can put it where it will be
     /// read — a check-run summary rather than a log nobody opens.
     pub fn report(&self) -> Option<String> {
-        let surprising = self.surprising();
-        if surprising.is_empty() {
-            return None;
-        }
-        let mut lines = vec![format!("{} file(s) were not indexed:", surprising.len())];
-        lines.extend(
-            surprising
-                .iter()
-                .map(|s| format!("- `{}` — {}", s.path, s.reason.explain())),
-        );
-        Some(lines.join("\n"))
+        report_skips(&self.skipped)
     }
+}
+
+/// A short report of the surprising skips in `skipped`, or `None` when there
+/// are none.
+///
+/// Free-standing because the indexer accumulates skips across many selections
+/// and needs the same rendering without reassembling a [`Selection`] to get it.
+pub fn report_skips(skipped: &[SkippedFile]) -> Option<String> {
+    let surprising: Vec<&SkippedFile> = skipped
+        .iter()
+        .filter(|s| s.reason.is_surprising())
+        .collect();
+    if surprising.is_empty() {
+        return None;
+    }
+    let mut lines = vec![format!("{} file(s) were not indexed:", surprising.len())];
+    lines.extend(
+        surprising
+            .iter()
+            .map(|s| format!("- `{}` — {}", s.path, s.reason.explain())),
+    );
+    Some(lines.join("\n"))
 }
 
 #[cfg(test)]
