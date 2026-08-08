@@ -1,0 +1,24 @@
+# Keep the build context small, but never strip anything the build needs.
+target/
+worktrees/
+.git/
+.github/
+docs/
+*.md
+!README.md
+
+.env
+.idea/
+.vscode/
+
+# Vendored crates must keep their manifests and sources: they are path
+# dependencies, so the build fails without them.
+!vendor/**/Cargo.toml
+!vendor/**/src/**
+vendor/**/docs/**
+vendor/**/examples/**
+vendor/**/tests/**
+vendor/**/wiki/**
+# LOAD-BEARING: tinyagents include_str!s a JSON snapshot out of its docs tree,
+# so that subtree has to survive the strip above.
+!vendor/tinyagents/docs/**
