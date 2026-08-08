@@ -58,6 +58,23 @@ struct AppState {
 /// Run the server until the process is stopped.
 pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<()> {
     let bind = config.bind.clone();
+
+    // The boot assertion. `$vectorSearch` and `$rankFusion` are stages a stock
+    // `mongo:` image does not have, and an unsupported stage fails when the
+    // query runs — which is to say on a contributor's pull request, hours after
+    // the deploy, as a red check run nobody can explain. Proving it here turns
+    // that into a refusal to start, which is the failure an operator can act
+    // on. It must not degrade to "retrieval off": a silently unindexed reviewer
+    // still posts reviews, just worse ones.
+    if let Some(signature) = &config.embedding {
+        tracing::info!(%signature, "verifying MongoDB hybrid search");
+        MongoIndex::from_env().await?.prepare(signature).await?;
+        tracing::info!("MongoDB hybrid search is available");
+    } else {
+        tracing::info!("retrieval is disabled: no embedding provider configured");
+    }
+
+
     let state = AppState {
         config: Arc::new(config),
         store,
