@@ -447,6 +447,26 @@ index 1234567..89abcde 100644
     }
 
     #[test]
+    fn a_hunks_context_lines_are_postable_even_though_they_are_unchanged() {
+        // GitHub accepts a comment anywhere in a hunk. The changed-line set is
+        // about what this pull request did; the hunk span is about what the
+        // API will take.
+        let diff = parse_file_patch("f.txt", SIMPLE);
+
+        assert!(diff.within_hunk(1, 1), "context line inside the hunk");
+        assert!(!diff.touches(1));
+        assert!(!diff.within_hunk(99, 99), "outside every hunk");
+        assert!(diff.within_hunk(3, 1), "reversed bounds are normalised");
+    }
+
+    #[test]
+    fn a_pure_deletion_hunk_is_still_postable_at_its_start() {
+        let diff = parse_file_patch("f.txt", "@@ -4,2 +3,0 @@\n-gone();\n-also();\n");
+        assert!(diff.within_hunk(3, 3));
+        assert!(!diff.within_hunk(4, 4));
+    }
+
+    #[test]
     fn an_empty_patch_yields_an_empty_anchor_set() {
         let diff = parse_file_patch("f.txt", "");
         assert!(diff.changed_lines.is_empty());
