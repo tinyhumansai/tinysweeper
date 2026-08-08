@@ -265,7 +265,8 @@ where
                     // Not an error. The holder is doing this work; the only cost
                     // of giving up is freshness, and the next push retries.
                     tracing::info!(
-                        repo, ?holder,
+                        repo,
+                        ?holder,
                         "another worker still holds the index claim; leaving it to them"
                     );
                     return Some(IndexOutcome::Requeue { holder });
@@ -320,6 +321,66 @@ mod tests {
         unsafe { std::env::set_var(GIT_HOST_ENV, "https://ghe.example.com/") };
         assert_eq!(git_host(), "ghe.example.com");
         unsafe { std::env::remove_var(GIT_HOST_ENV) };
+    }
+
+    #[tokio::test]
+    async fn a_contended_claim_is_retried_and_then_left_to_its_holder() {
+        // The convention this enforces: a refused claim is *requeued*, never
+        // waited on. A worker that blocked here would be a worker not indexing
+        // anything else, and with a bounded pool a few of those are the pool.
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let outcome = with_requeue("o/r", 3, std::time::Duration::ZERO, || {
+            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            std::future::ready(Ok(IndexOutcome::Requeue {
+                holder: Some("other-worker".into()),
+            }))
+        })
+        .await;
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 3);
+        assert!(matches!(outcome, Some(IndexOutcome::Requeue { .. })));
+    }
+
+    #[tokio::test]
+    async fn a_claim_that_frees_up_is_taken_on_the_next_round() {
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let outcome = with_requeue("o/r", 5, std::time::Duration::ZERO, || {
+            let round = calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            std::future::ready(Ok(if round < 2 {
+                IndexOutcome::Requeue { holder: None }
+            } else {
+                IndexOutcome::Indexed(crate::indexer::types::IndexReport::default())
+            }))
+        })
+        .await;
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 3);
+        assert!(matches!(outcome, Some(IndexOutcome::Indexed(_))));
+    }
+
+    #[tokio::test]
+    async fn a_fresh_index_costs_exactly_one_round() {
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        with_requeue("o/r", 3, std::time::Duration::ZERO, || {
+            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            std::future::ready(Ok(IndexOutcome::AlreadyFresh))
+        })
+        .await;
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn a_failed_index_is_not_retried_as_though_it_were_contention() {
+        // Retrying a provider outage three times would triple the failure and
+        // hold the permit for it. Contention is the only retryable answer.
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let outcome = with_requeue("o/r", 3, std::time::Duration::ZERO, || {
+            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            std::future::ready(Err(Error::Forge("the provider is down".into())))
+        })
+        .await;
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert!(outcome.is_none());
     }
 
     #[tokio::test]
