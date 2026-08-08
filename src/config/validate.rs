@@ -26,6 +26,7 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_paths(config, &mut problems);
     validate_models(config, &mut problems);
     validate_knowledge(config, &mut problems);
+    validate_embeddings(config, &mut problems);
     validate_lanes(config, &mut problems);
     validate_automerge(config, &mut problems);
     validate_issues(config, &mut problems);
