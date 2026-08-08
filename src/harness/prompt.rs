@@ -119,25 +119,20 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
         prefix.push_str(&path_rules);
     }
 
-    // Layer 3 — evidence, in consistent prefix position for cache hits.
-    // To hit prompt caching on subsequent reviews, evidence must be at the same
-    // byte position in the prefix regardless of whether it's a first review (all
-    // new), second review (some reviewed, some new), or later. Putting all
-    // evidence in the prefix — with a consistent structure — ensures the bytes
-    // match up and the cache prefix can be reused.
-    prefix.push_str("\n## Evidence\n\n");
+    // Layer 3 — the diff already reviewed on an earlier push.
+    //
+    // Only this half of the evidence belongs in the prefix, and the distinction
+    // is load-bearing: a provider caches on a byte-identical prefix, so
+    // anything that changes between pushes must stay out of it. The replayed
+    // diff is identical on every push of the same pull request and therefore
+    // caches; the new commits are different every time and go in the suffix
+    // below. Putting the new evidence here would change the prefix on every
+    // push and the cache would never hit once — which is the whole reason this
+    // layering exists.
     if !inputs.reviewed_evidence.trim().is_empty() {
-        prefix.push_str("Already reviewed (for context):\n\n");
+        prefix.push_str("\n## Already reviewed\n\n");
+        prefix.push_str("You reviewed this on an earlier push. It is here for context.\n\n");
         push_fenced(&mut prefix, "diff", inputs.reviewed_evidence);
-        prefix.push_str("\n");
-    }
-    if !inputs.new_evidence.trim().is_empty() {
-        if inputs.reviewed_evidence.trim().is_empty() {
-            prefix.push_str("Complete diff:\n\n");
-        } else {
-            prefix.push_str("Changes since last review:\n\n");
-        }
-        push_fenced(&mut prefix, "diff", inputs.new_evidence);
     }
 
     let mut suffix = String::with_capacity(2048);
