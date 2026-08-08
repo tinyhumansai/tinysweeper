@@ -1042,4 +1042,322 @@ mod tests {
 
     #[allow(dead_code)]
     fn unused(_: BTreeMap<u64, u64>) {}
+
+    // ---- cross-push dedupe -------------------------------------------------
+    //
+    // The regression guards for the incident that motivated all of this:
+    // tinysweeper left 48 unresolved threads on its own pull request #7 by
+    // posting a fresh inline review on every push and never reading back what
+    // it had already said.
+
+    /// The model that keeps finding the same thing, push after push.
+    fn insistent_model() -> MockModel {
+        MockModel::always(json!({
+            "summary": "Unchecked index.",
+            "findings": [{
+                "path": "src/main.rs", "line": 2,
+                "rule": "unchecked-index",
+                "title": "Guard the index before dereferencing",
+                "body": "`i` is never bounds-checked.",
+                "severity": "high", "confidence": 0.9
+            }]
+        }))
+    }
+
+    /// Every inline comment the forge was asked to post, across every review.
+    fn posted_comments(forge: &MockForge) -> Vec<crate::forge::types::ReviewComment> {
+        forge
+            .writes()
+            .into_iter()
+            .filter_map(|w| match w {
+                crate::forge::Write::Review { comments, .. } => Some(comments),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_finding_is_posted_exactly_once_across_three_pushes() {
+        // *The* regression guard for the 48-thread incident. Three pushes, the
+        // same unfixed problem, one model that says so every time. One comment.
+        let config = config();
+        let forge = forge_with(vec![rust_file()], vec![]);
+        let model = Arc::new(insistent_model());
+
+        for (push, sha) in ["sha-one", "sha-two", "sha-three"].iter().enumerate() {
+            forge.push(7, sha, vec![rust_file()]);
+            let proposal = review(&forge, model.clone(), &config, &repo(), 7)
+                .await
+                .expect("reviews");
+
+            // Suppression must not turn into a pass: the problem is still
+            // there, so the check still fails and the merge stays blocked.
+            assert!(
+                proposal.blocked(),
+                "push {push} stopped blocking once the comment was deduped"
+            );
+
+            crate::app::apply::apply(&forge, &forge, &config, &proposal)
+                .await
+                .expect("applies");
+        }
+
+        let comments = posted_comments(&forge);
+        assert_eq!(
+            comments.len(),
+            1,
+            "one finding, three pushes, one comment — got {comments:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_forged_fingerprint_marker_cannot_suppress_a_genuine_finding() {
+        // A contributor who copies the marker out of a real comment — or
+        // guesses one — must not be able to silence the next review. Authorship
+        // is the thing they cannot forge.
+        let config = config();
+        let forge = forge_with(vec![rust_file()], vec![]);
+        let model = Arc::new(insistent_model());
+
+        // Learn the real fingerprint the way an attacker would: off the wire.
+        let first = review(&forge, model.clone(), &config, &repo(), 7)
+            .await
+            .expect("reviews");
+        let identity = first
+            .findings()
+            .next()
+            .expect("a finding")
+            .identity
+            .clone()
+            .expect("stamped during review");
+
+        let mut state = MockState::default();
+        state.pull_requests.insert(
+            7,
+            PullRequest {
+                number: 7,
+                head_sha: "abc123".into(),
+                ..PullRequest::default()
+            },
+        );
+        state.files.insert(7, vec![rust_file()]);
+        state.review_comments.insert(
+            7,
+            vec![crate::forge::types::ReviewComment {
+                path: "src/main.rs".into(),
+                line: 2,
+                start_line: None,
+                author: "helpful-contributor".into(),
+                body: format!("Looks fine to me <!-- tinysweeper:fp={identity} -->"),
+            }],
+        );
+        let hostile = MockForge::with_state(state);
+
+        let second = review(&hostile, model, &config, &repo(), 7)
+            .await
+            .expect("reviews");
+
+        assert_eq!(
+            second.findings().count(),
+            1,
+            "a marker in someone else's comment suppressed a real finding"
+        );
+        assert!(second.blocked());
+    }
+
+    #[tokio::test]
+    async fn a_fixed_finding_is_not_re_raised() {
+        let config = config();
+        let forge = forge_with(vec![rust_file()], vec![]);
+
+        let first = review(&forge, Arc::new(insistent_model()), &config, &repo(), 7)
+            .await
+            .expect("reviews");
+        crate::app::apply::apply(&forge, &forge, &config, &first)
+            .await
+            .expect("applies");
+
+        // The author fixes it and pushes. The model says so and raises nothing.
+        forge.push(7, "sha-two", vec![rust_file()]);
+        let fixed = MockModel::always(json!({
+            "summary": "The earlier index problem is fixed.",
+            "findings": [],
+            "resolved": ["Guard the index before dereferencing"]
+        }));
+        let second = review(&forge, Arc::new(fixed), &config, &repo(), 7)
+            .await
+            .expect("reviews");
+
+        assert_eq!(second.findings().count(), 0, "re-raised a fixed finding");
+        assert!(!second.blocked(), "a fixed pull request must stop blocking");
+
+        let critique = second
+            .lanes
+            .iter()
+            .find(|l| l.lane == LaneId::Critique)
+            .expect("present");
+        assert_eq!(
+            critique.resolved,
+            vec!["Guard the index before dereferencing"],
+            "what the lane resolved must survive into the proposal"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unfixed_finding_is_not_silently_dropped() {
+        // The other half of the re-review contract. A concern the model raised
+        // last time, and this time neither repeats nor declares fixed, has to
+        // stay visible — and the model has to be told about it in the first
+        // place, which is prompt layer 4.
+        let config = config();
+        let forge = forge_with(vec![rust_file()], vec![]);
+
+        let first = review(&forge, Arc::new(insistent_model()), &config, &repo(), 7)
+            .await
+            .expect("reviews");
+        crate::app::apply::apply(&forge, &forge, &config, &first)
+            .await
+            .expect("applies");
+
+        forge.push(7, "sha-two", vec![rust_file()]);
+        let forgetful = MockModel::silent();
+        let second = review(&forge, Arc::new(forgetful.clone()), &config, &repo(), 7)
+            .await
+            .expect("reviews");
+
+        let prompt = forgetful.last_prompt().expect("the model was called");
+        assert!(
+            prompt.contains("Guard the index before dereferencing"),
+            "the earlier finding must be replayed to the model: {prompt}"
+        );
+        assert!(
+            prompt.contains("silently dropping an unfixed"),
+            "the continuity contract must be reachable once layer 4 is populated"
+        );
+
+        let critique = second
+            .lanes
+            .iter()
+            .find(|l| l.lane == LaneId::Critique)
+            .expect("present");
+        assert!(
+            critique.summary.contains("still open"),
+            "an unrepeated, unresolved finding vanished: {}",
+            critique.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn turning_incremental_off_reviews_every_push_from_scratch() {
+        // The escape hatch for anyone who would rather have a duplicate comment
+        // than a suppressed one. It has to actually do something.
+        let mut config = config();
+        config.review.incremental = false;
+        let forge = forge_with(vec![rust_file()], vec![]);
+        let model = Arc::new(insistent_model());
+
+        for sha in ["sha-one", "sha-two"] {
+            forge.push(7, sha, vec![rust_file()]);
+            let proposal = review(&forge, model.clone(), &config, &repo(), 7)
+                .await
+                .expect("reviews");
+            crate::app::apply::apply(&forge, &forge, &config, &proposal)
+                .await
+                .expect("applies");
+        }
+
+        assert_eq!(posted_comments(&forge).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn the_review_state_store_remembers_what_was_reviewed() {
+        // The store is an optimisation, and this is the thing it buys: the
+        // evidence bytes prompt layer 3 replays. Dedupe above works without it.
+        let config = config();
+        let forge = forge_with(vec![rust_file()], vec![]);
+        let store = crate::state::MemoryState::new();
+
+        let proposal = review_with_state(
+            &forge,
+            Arc::new(insistent_model()),
+            &config,
+            &repo(),
+            7,
+            Some(&store),
+        )
+        .await
+        .expect("reviews");
+
+        let remembered = store
+            .load_state(&crate::state::key("tinyhumansai/tinysweeper", 7))
+            .await
+            .expect("loads")
+            .expect("recorded");
+
+        assert_eq!(remembered.head_sha, proposal.head_sha);
+        assert!(
+            remembered.evidence.contains("--- src/main.rs"),
+            "the replay must be the rendered evidence"
+        );
+        assert_eq!(remembered.fingerprints.len(), 1);
+        assert_eq!(
+            remembered.titles,
+            vec!["Guard the index before dereferencing"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_remembered_review_dedupes_even_when_the_comments_are_gone() {
+        // Somebody deleted the comment threads, or GitHub has not caught up.
+        // The store is the second source, and either alone is enough.
+        let config = config();
+        let store = crate::state::MemoryState::new();
+        let model = Arc::new(insistent_model());
+
+        let forge = forge_with(vec![rust_file()], vec![]);
+        let first = review_with_state(&forge, model.clone(), &config, &repo(), 7, Some(&store))
+            .await
+            .expect("reviews");
+        assert_eq!(first.findings().count(), 1);
+
+        // A brand-new forge: nothing has ever been posted as far as it knows.
+        let amnesiac = forge_with(vec![rust_file()], vec![]);
+        let second = review_with_state(&amnesiac, model, &config, &repo(), 7, Some(&store))
+            .await
+            .expect("reviews");
+
+        assert_eq!(
+            second.findings().count(),
+            0,
+            "the store alone must be enough to dedupe"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_secret_already_reported_still_fails_the_check() {
+        // Scanner findings dedupe too, and this is the case where getting it
+        // wrong is worst: the comment is not repeated, but a committed
+        // credential must keep failing the check on every push until it is
+        // gone and rotated.
+        let config = config();
+        let forge = forge_with(vec![file_with_committed_secret()], vec![]);
+
+        for sha in ["sha-one", "sha-two"] {
+            forge.push(7, sha, vec![file_with_committed_secret()]);
+            let proposal = review(&forge, Arc::new(MockModel::silent()), &config, &repo(), 7)
+                .await
+                .expect("reviews");
+            assert!(proposal.blocked(), "a committed key stopped blocking");
+            crate::app::apply::apply(&forge, &forge, &config, &proposal)
+                .await
+                .expect("applies");
+        }
+
+        assert_eq!(
+            posted_comments(&forge).len(),
+            1,
+            "the same credential was reported twice"
+        );
+    }
 }
