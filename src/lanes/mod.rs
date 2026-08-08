@@ -194,8 +194,10 @@ pub trait Lane: Send + Sync {
     async fn run(&self, input: LaneInput<'_>) -> Result<LaneOutcome>;
 }
 
+// Named for what it covers rather than `tests`: `lanes::tests` is already the
+// tests *lane*, and the two module names would collide.
 #[cfg(test)]
-mod tests {
+mod outcome_tests {
     use super::*;
 
     fn finding(severity: Severity) -> Finding {
