@@ -122,15 +122,19 @@ impl<'a> Positioner<'a> {
             return first;
         }
 
-        let Some(recovered) =
-            relocate::relocate(self.model, self.config, request.comment, request.rendered_diff)
-                .await
-                .map(|(snippet, spent)| {
-                    usage.add(spent);
-                    snippet
-                })
-        else {
-            return first;
+        let recovered = match relocate::relocate(
+            self.model,
+            self.config,
+            request.comment,
+            request.rendered_diff,
+        )
+        .await
+        {
+            Some((snippet, spent)) => {
+                usage.add(spent);
+                snippet
+            }
+            None => return first,
         };
 
         match locate(&recovered, request.diff, request.file) {
