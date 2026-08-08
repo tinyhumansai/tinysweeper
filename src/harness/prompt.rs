@@ -477,12 +477,9 @@ mod tests {
 
     fn inputs<'a>(config: &'a Config, reviewed: &'a str, new: &'a str) -> PromptInputs<'a> {
         PromptInputs {
-            lane: LaneId::Critique,
-            config,
-            repo_policy: None,
             reviewed_evidence: reviewed,
-            prior_findings: &[],
             new_evidence: new,
+            ..PromptInputs::new(LaneId::Critique, config)
         }
     }
 
