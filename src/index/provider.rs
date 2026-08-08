@@ -102,7 +102,7 @@ impl ProviderEmbedder {
         // limiter exists to keep a cold full index out of the provider's own
         // 429 path, and a limit applied late has already let the burst through.
         if config.requests_per_minute > 0 {
-            set_rate_limit(config.requests_per_minute as usize);
+            set_rate_limit(config.requests_per_minute);
         }
 
         let model = build_model(config, &signature)?;
