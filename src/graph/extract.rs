@@ -50,6 +50,11 @@ pub fn parse_as(file: &SourceFile, language: Language) -> Result<ParsedFile> {
     // Rust `mod foo;` is both a declaration and a file reference. Recorded here
     // so the import walk can see it without re-querying the tree.
     let mut bodyless_mods: Vec<(String, u32)> = Vec::new();
+    // Byte ranges of import statements. The names inside an import clause are
+    // matched by the bare-identifier pattern too, and keeping them would make
+    // every import also a `references` edge — including one from a file to
+    // itself when it imports a name it re-exports.
+    let mut import_spans: Vec<(usize, usize)> = Vec::new();
 
     let mut matches = cursor.matches(&query, tree.root_node(), source);
     while let Some(m) = matches.next() {
