@@ -239,7 +239,14 @@ pub async fn review_with_state(
             });
         }
 
-        lanes.push(lane_proposal(config, lane_id, outcome));
+        lanes.push(lane_proposal(
+            config,
+            lane_id,
+            outcome,
+            &diffs,
+            &suppressed,
+            &prior_titles,
+        ));
     }
 
     // Scanner findings that no lane actually adjudicated still have to reach a
