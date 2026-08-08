@@ -153,9 +153,14 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
     {
         // Cheap heuristic that has caught the real mistake: pasting the key in
         // where the variable name goes.
+        // The whole point of this check is that the value may *be* a
+        // credential, and this message ends up in a check-run summary that
+        // anyone with read access can see. Echoing it would leak the key the
+        // check exists to catch.
         problems.push(format!(
-            "`models.api_key_env = \"{}\"` looks like a value, not an environment variable name; never put a key in the config file",
-            models.api_key_env
+            "`models.api_key_env` ({}) looks like a value, not an environment variable name; \
+             never put a key in the config file",
+            crate::scan::types::redact(&models.api_key_env)
         ));
     }
 
@@ -170,9 +175,11 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
         problems.push("`models.max_tokens = 0` would produce no output".into());
     }
 
-    if models.budget_usd_per_pr <= 0.0 {
+    // `!is_finite()` catches nan and inf, which sail straight through a
+    // `<= 0.0` comparison and would disable the spend ceiling entirely.
+    if !models.budget_usd_per_pr.is_finite() || models.budget_usd_per_pr <= 0.0 {
         problems.push(format!(
-            "`models.budget_usd_per_pr = {}` must be above zero; it is the hard ceiling for one pull request",
+            "`models.budget_usd_per_pr = {}` must be a finite number above zero; it is the hard ceiling for one pull request",
             models.budget_usd_per_pr
         ));
     }
@@ -337,6 +344,20 @@ fn validate_automation(config: &Config, problems: &mut Vec<String>) {
             "`automation.stale.days_until_close = 0` would close an item in the same run that marks it stale; omit the key to only mark, or give the author time to respond"
                 .into(),
         );
+    }
+
+    if !automation.enabled {
+        for (key, on) in [
+            ("automation.stale.enabled", stale.enabled),
+            ("automation.labeler.enabled", automation.labeler.enabled),
+            ("automation.merge_sweep", automation.merge_sweep),
+        ] {
+            if on {
+                problems.push(format!(
+                    "`{key} = true` has no effect while `automation.enabled = false`"
+                ));
+            }
+        }
     }
 
     if automation.merge_sweep && !config.automerge.enabled {

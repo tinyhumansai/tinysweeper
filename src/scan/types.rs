@@ -98,24 +98,59 @@ impl Finding {
     }
 }
 
-/// Show enough of a matched credential to be recognisable, and no more.
+/// Vendor prefixes that are safe to show, because they identify the *kind* of
+/// credential and carry none of its entropy.
 ///
-/// Keeps the first four characters — usually the vendor prefix, which is the
-/// only genuinely useful part — and reports the length. Anything shorter than
-/// eight characters is elided entirely, because at that size a prefix plus a
-/// length is close to the whole value.
+/// An allowlist rather than "the first four characters": for a short opaque
+/// secret four characters is a meaningful fraction of the value, and the point
+/// of a hint is to let a human recognise which credential leaked, not to help
+/// anyone reconstruct it.
+const SAFE_PREFIXES: &[&str] = &[
+    "AKIA",
+    "ASIA",
+    "ghp_",
+    "gho_",
+    "ghs_",
+    "ghr_",
+    "github_pat_",
+    "sk-proj-",
+    "sk-or-v1-",
+    "sk-ant-",
+    "sk_live_",
+    "xox",
+    "AIza",
+    "sntryu_",
+    "npm_",
+];
+
+/// Describe a matched credential without handing back any of it.
+///
+/// Shows a known vendor prefix when there is one, and the length. Everything
+/// else — including the first characters of an unrecognised secret — is
+/// withheld: the hint exists so a human knows *which* credential to rotate.
 pub fn redact(value: &str) -> String {
-    let chars: Vec<char> = value.chars().collect();
-    if chars.len() < 8 {
-        return format!("<redacted, {} chars>", chars.len());
+    let length = value.chars().count();
+    match SAFE_PREFIXES
+        .iter()
+        .find(|prefix| value.starts_with(**prefix))
+    {
+        Some(prefix) => format!("{prefix}… <redacted, {length} chars>"),
+        None => format!("<redacted, {length} chars>"),
     }
-    let prefix: String = chars.iter().take(4).collect();
-    format!("{prefix}… <redacted, {} chars>", chars.len())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unrecognised_secret_gives_up_nothing_at_all() {
+        // Four characters of a short opaque secret is a meaningful fraction of
+        // it. Only a known vendor prefix, which carries no entropy, is shown.
+        let hint = redact("f3Kq9zR2mW7pL4xN8vB1cY6tH0jD5sG");
+        assert_eq!(hint, "<redacted, 31 chars>");
+        assert!(!hint.contains("f3Kq"));
+    }
 
     #[test]
     fn redaction_keeps_the_vendor_prefix_and_nothing_else() {
