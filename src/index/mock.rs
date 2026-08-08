@@ -226,6 +226,19 @@ impl ChunkIndex for MockChunkIndex {
         Ok((before - rows.len()) as u64)
     }
 
+    async fn delete_chunks(&self, repo_id: &str, ids: &[String]) -> Result<u64> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let mut rows = self.rows.lock().expect("index lock");
+        let before = rows.len();
+        // The repo filter is not redundant: an id embeds its repository, but a
+        // caller that got one wrong must not be able to delete another
+        // repository's chunk through this method.
+        rows.retain(|id, row| !(row.chunk.repo_id == repo_id && ids.contains(id)));
+        Ok((before - rows.len()) as u64)
+    }
+
     async fn query(&self, query: &HybridQuery) -> Result<Vec<ScoredChunk>> {
         let signature = query.signature.key();
         let rows = self.rows.lock().expect("index lock");
