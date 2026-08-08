@@ -128,7 +128,11 @@ fn render_lane_summary(lane: &crate::app::review::LaneProposal) -> String {
     if !lane.resolved.is_empty() {
         out.push_str("\n**Fixed since the last review**\n\n");
         for title in &lane.resolved {
-            out.push_str(&format!("- {title}\n"));
+            // Escape titles to prevent model-authored markup from breaking the page.
+            out.push_str(&format!(
+                "- {}\n",
+                crate::findings::render::escape_cell(title)
+            ));
         }
     }
 
