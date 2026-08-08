@@ -291,11 +291,16 @@ pub async fn review_with_state(
                 .collect();
             let deduped = total - posted.len();
 
+            let mut summary = format!("{total} finding(s) from the deterministic scanners.");
+            if deduped > 0 {
+                summary = format!("{summary} ({deduped} already reported on an earlier push)");
+            }
+
             lanes.push(LaneProposal {
                 lane: LaneId::Commits,
                 check_name: LaneId::Commits.check_name(),
                 conclusion: CheckConclusion::Failure,
-                summary: format!("{total} finding(s) from the deterministic scanners."),
+                summary,
                 findings: posted,
                 resolved: vec![],
                 deduped,
