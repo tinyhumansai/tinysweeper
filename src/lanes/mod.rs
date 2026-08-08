@@ -8,6 +8,8 @@
 
 pub mod critique;
 
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
 
 use crate::config::types::{Config, LaneId, Severity};
