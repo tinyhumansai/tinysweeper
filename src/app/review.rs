@@ -618,6 +618,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_finding_below_the_posting_gate_can_still_fail_the_lane() {
+        // A model reviewer, reviewing this repository, pointed out that
+        // `severity_gate` (what gets posted) and `fail_on` (what fails the
+        // check) are independent knobs, but the conclusion was computed from
+        // the already-gated findings. With `severity_gate = high` and
+        // `fail_on = medium`, a medium finding was hidden from the posted
+        // comments *and* silently swallowed by the pass/fail decision, even
+        // though the configuration says a medium finding must fail the lane.
+        let mut config = config();
+        config.review.severity_gate = "high".into();
+        config.lanes.insert(
+            "critique".into(),
+            crate::config::types::Lane {
+                fail_on: Some("medium".into()),
+                ..Default::default()
+            },
+        );
+
+        let model = MockModel::always(json!({
+            "summary": "A medium issue.",
+            "findings": [{
+                "path": "src/main.rs", "line": 2,
+                "rule": "style", "title": "Worth a look", "body": "…",
+                "severity": "medium", "confidence": 0.9
+            }]
+        }));
+        let forge = forge_with(vec![rust_file()], vec![]);
+        let proposal = review(&forge, Arc::new(model), &config, &repo(), 7)
+            .await
+            .expect("reviews");
+
+        assert!(
+            proposal.blocked(),
+            "a medium finding must fail the lane when fail_on=medium, \
+             even though severity_gate=high keeps it off the posted comments"
+        );
+        let critique = proposal
+            .lanes
+            .iter()
+            .find(|l| l.lane == LaneId::Critique)
+            .unwrap();
+        assert_eq!(critique.conclusion, CheckConclusion::Failure);
+        assert!(
+            critique.findings.is_empty(),
+            "the posting gate still hides it: {:#?}",
+            critique.findings
+        );
+    }
+
+    #[tokio::test]
     async fn a_lane_that_has_not_been_written_is_neutral_not_successful() {
         let forge = forge_with(vec![rust_file()], vec![]);
         let proposal = review(&forge, Arc::new(MockModel::silent()), &config(), &repo(), 7)
