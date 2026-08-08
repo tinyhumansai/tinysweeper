@@ -130,21 +130,15 @@ pub fn json_schema() -> Value {
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["path", "line", "rule", "title", "body", "severity", "confidence"],
+                    "required": ["path", "existing_code", "rule", "title", "body", "severity", "confidence"],
                     "properties": {
                         "path": {
                             "type": "string",
                             "description": "File path exactly as it appears in the diff."
                         },
-                        "line": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "description": "A line the diff changed. A finding you cannot anchor to a changed line is not a finding."
-                        },
-                        "end_line": {
-                            "type": ["integer", "null"],
-                            "minimum": 1,
-                            "description": "Last line, if the finding spans a range."
+                        "existing_code": {
+                            "type": "string",
+                            "description": "The code this finding is about, copied verbatim out of the diff, including its indentation. One to five lines is right; quote the smallest span that shows the problem. Do not include line numbers or the leading `+`/`-`/space marker, do not paraphrase, and do not quote code that is not in the diff. Never write a line number anywhere: this quotation is how the finding is located, and it is the only thing that has to be exact."
                         },
                         "rule": {
                             "type": "string",
