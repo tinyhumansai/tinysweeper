@@ -567,6 +567,7 @@ mod tests {
         config.path_instructions = vec![PathInstruction {
             glob: "src/ports/**".into(),
             instructions: "One trait per file.".into(),
+            rules: None,
         }];
         let prompt = build(&inputs(&config, "", "@@ -1 +1 @@\n+a\n"));
 
@@ -655,14 +656,17 @@ mod tests {
             PathInstruction {
                 glob: "**/*.rs".into(),
                 instructions: "RUST RULES".into(),
+                rules: None,
             },
             PathInstruction {
                 glob: "src/**".into(),
                 instructions: "BROADER RULES".into(),
+                rules: None,
             },
             PathInstruction {
                 glob: ".github/workflows/**".into(),
                 instructions: "WORKFLOW RULES".into(),
+                rules: None,
             },
         ];
         let paths = ["src/main.rs".to_string()];
@@ -682,10 +686,12 @@ mod tests {
             PathInstruction {
                 glob: "**/*.rs".into(),
                 instructions: "RUST RULES".into(),
+                rules: None,
             },
             PathInstruction {
                 glob: ".github/workflows/**".into(),
                 instructions: "WORKFLOW RULES".into(),
+                rules: None,
             },
         ];
         let paths = ["src/main.rs".to_string(), ".github/workflows/ci.yml".into()];
