@@ -12,8 +12,10 @@
 pub mod app;
 pub mod config;
 pub mod error;
+pub mod evidence;
 pub mod forge;
 pub mod ports;
+pub mod scan;
 
 pub use crate::error::{Error, Result};
 

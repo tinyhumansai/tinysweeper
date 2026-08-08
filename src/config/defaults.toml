@@ -39,13 +39,26 @@ max_age_days = 14
 human_review = "tinysweeper:human-review"
 manual_only = "tinysweeper:manual-only"
 
+# Model tiers. Prices below are per million tokens, verified against
+# openrouter.ai/api/v1/models on 2026-08-08 — re-check before assuming they
+# still hold, the catalogue moves fast.
+#
+#   minimax/minimax-m3        1,048,576 ctx   $0.30 / $1.20
+#   moonshotai/kimi-k3        1,048,576 ctx   $3.00 / $15.00
+#   moonshotai/kimi-k2.7-code   262,144 ctx   $0.70 / $3.50
+#
+# The scan tier is m3 rather than the cheaper-looking m2.1 because they cost the
+# same and m3 carries five times the context — and context is exactly what a
+# reviewer that pulls in surrounding code runs out of first.
 [models]
 gateway = "openrouter"
 base_url = "https://openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
-scan = "minimax/minimax-m2.1"
+scan = "minimax/minimax-m3"
 deep = "moonshotai/kimi-k3"
-fallback = ["moonshotai/kimi-k2.6"]
+# Tried in order when the selected model fails. The code-tuned Kimi sits first
+# because a review that falls back should stay good at reading code.
+fallback = ["moonshotai/kimi-k2.7-code", "minimax/minimax-m2.1"]
 max_tokens = 8000
 budget_usd_per_pr = 1.0
 
