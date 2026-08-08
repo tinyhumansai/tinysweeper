@@ -116,7 +116,10 @@ fn empty_body_outcome(pr: &PullRequest, files: usize) -> LaneOutcome {
             severity: Severity::High,
             // Certain: this is a string length, not a judgement.
             confidence: 1.0,
-            path: String::new(),
+            // Not a file. The renderer prints the path verbatim, and an empty
+            // string renders as an empty code span; naming the subject is
+            // clearer than pretending the finding belongs to some file.
+            path: DESCRIPTION_SUBJECT.into(),
             line: None,
             end_line: None,
             rule: "empty-description".into(),
