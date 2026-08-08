@@ -24,6 +24,11 @@ pub struct AliasPattern {
     /// Repo-relative targets, e.g. `src/*`. Tried in order, first hit wins,
     /// matching how `tsc` treats the array.
     pub targets: Vec<String>,
+    /// Directory containing the configuration that declares this pattern.
+    ///
+    /// Kept separately from its expanded targets so identical aliases in two
+    /// packages remain distinct and can be selected from the importing file.
+    pub config_dir: String,
 }
 
 impl AliasPattern {
@@ -62,12 +67,12 @@ impl AliasPattern {
 pub struct AliasConfig {
     /// TypeScript path patterns, most specific first.
     pub ts_paths: Vec<AliasPattern>,
-    /// Repo-relative `baseUrl` directories, in discovery order.
+    /// Repo-relative `baseUrl` directories and their owning config roots.
     ///
     /// A bare `lib/math` specifier resolves against these before being written
     /// off as a package — which is the second way a naive resolver loses
     /// internal edges.
-    pub ts_base_urls: Vec<String>,
+    pub ts_base_urls: Vec<TsBaseUrl>,
     /// The module path from `go.mod`, if present.
     pub go_module: Option<String>,
     /// The directory holding that `go.mod`, repo-relative (`""` at the root).
@@ -85,9 +90,8 @@ impl AliasConfig {
             rust_src_root: "src".to_string(),
             ..Self::default()
         };
-        // Sorted so shallower config files win: a root `tsconfig.json` should
-        // be consulted before a nested one, and discovery order is otherwise
-        // whatever the caller happened to pass.
+        // Sorting makes discovery deterministic; selection later uses the
+        // importing file's nearest configuration, not discovery order.
         let mut ordered: Vec<&SourceFile> = files.iter().collect();
         ordered.sort_by_key(|f| (f.path.matches('/').count(), f.path.clone()));
 
@@ -103,11 +107,14 @@ impl AliasConfig {
         }
 
         config.ts_paths.sort_by(|a, b| {
-            b.specificity()
-                .cmp(&a.specificity())
+            a.config_dir
+                .cmp(&b.config_dir)
+                .then_with(|| b.specificity().cmp(&a.specificity()))
                 .then(a.pattern.cmp(&b.pattern))
         });
-        config.ts_paths.dedup_by(|a, b| a.pattern == b.pattern);
+        config
+            .ts_base_urls
+            .sort_by(|a, b| a.config_dir.cmp(&b.config_dir));
         config.ts_base_urls.dedup();
         config
     }
@@ -128,7 +135,10 @@ impl AliasConfig {
             None => dir.to_string(),
         };
         if base_url.is_some() {
-            self.ts_base_urls.push(base_dir.clone());
+            self.ts_base_urls.push(TsBaseUrl {
+                path: base_dir.clone(),
+                config_dir: dir.to_string(),
+            });
         }
 
         if let Some(paths) = options.get("paths").and_then(|v| v.as_object()) {
@@ -146,6 +156,7 @@ impl AliasConfig {
                     self.ts_paths.push(AliasPattern {
                         pattern: pattern.clone(),
                         targets,
+                        config_dir: dir.to_string(),
                     });
                 }
             }
@@ -191,14 +202,55 @@ impl AliasConfig {
     }
 
     /// Expand a TypeScript specifier through the alias patterns.
-    pub fn expand_ts(&self, specifier: &str) -> Vec<String> {
-        for pattern in &self.ts_paths {
+    pub fn expand_ts(&self, from: &str, specifier: &str) -> Vec<String> {
+        let config_dir = nearest_config(from, self.ts_paths.iter().map(|p| p.config_dir.as_str()));
+        for pattern in self
+            .ts_paths
+            .iter()
+            .filter(|pattern| Some(pattern.config_dir.as_str()) == config_dir)
+        {
             if let Some(expanded) = pattern.expand(specifier) {
                 return expanded;
             }
         }
         Vec::new()
     }
+
+    /// The base URLs belonging to the nearest TypeScript config for `from`.
+    pub fn ts_base_urls_for<'a>(&'a self, from: &str) -> impl Iterator<Item = &'a str> {
+        let config_dir = nearest_config(
+            from,
+            self.ts_base_urls
+                .iter()
+                .map(|base| base.config_dir.as_str()),
+        );
+        self.ts_base_urls
+            .iter()
+            .filter(move |base| Some(base.config_dir.as_str()) == config_dir)
+            .map(|base| base.path.as_str())
+    }
+}
+
+/// A `baseUrl` and the directory of the config that defined it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TsBaseUrl {
+    /// The expanded repository-relative base directory.
+    pub path: String,
+    /// The repo-relative directory containing the `tsconfig.json`.
+    pub config_dir: String,
+}
+
+fn nearest_config<'a>(from: &str, configs: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    let from_dir = parent_dir(from);
+    configs
+        .filter(|dir| {
+            dir.is_empty()
+                || from_dir == *dir
+                || from_dir
+                    .strip_prefix(dir)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
+        .max_by_key(|dir| dir.len())
 }
 
 /// The directory part of a repo-relative path, `""` at the root.

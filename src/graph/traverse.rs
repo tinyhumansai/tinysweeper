@@ -121,7 +121,15 @@ pub fn cap(neighbourhood: Neighbourhood, seeds: &[String], max_nodes: usize) -> 
     let mut distance: BTreeMap<&str, usize> = BTreeMap::new();
     let mut order: Vec<&str> = Vec::new();
     let mut queue: VecDeque<&str> = VecDeque::new();
+    let known: BTreeSet<&str> = neighbourhood
+        .nodes
+        .iter()
+        .map(|node| node.id.as_str())
+        .collect();
     for seed in seeds {
+        if !known.contains(seed.as_str()) {
+            continue;
+        }
         if distance.insert(seed.as_str(), 0).is_none() {
             order.push(seed.as_str());
             queue.push_back(seed.as_str());

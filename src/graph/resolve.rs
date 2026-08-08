@@ -137,7 +137,7 @@ impl Resolver {
 
         // The alias arm. `@/lib/math` is not a package and never was; treating
         // it as one is precisely the bug this workstream exists to not have.
-        let expanded = self.aliases.expand_ts(specifier);
+        let expanded = self.aliases.expand_ts(from, specifier);
         let aliased = !expanded.is_empty();
         for candidate in expanded {
             if let Some(path) = self.try_ts(&candidate) {
@@ -145,7 +145,7 @@ impl Resolver {
             }
         }
 
-        for base in &self.aliases.ts_base_urls {
+        for base in self.aliases.ts_base_urls_for(from) {
             if let Some(path) = self.try_ts(&join_relative(base, specifier)) {
                 return Resolution::Resolved(vec![path]);
             }
@@ -325,40 +325,41 @@ impl Resolver {
         // rather than joined onto a guessed root. That is what makes a
         // `src/`-layout package (`src/pkg/mod.py` imported as `pkg.mod`)
         // resolve without reading packaging metadata we may not have.
-        let relative = specifier.replace('.', "/");
-        for take in (1..=specifier.split('.').count()).rev() {
-            let prefix: String = specifier
-                .split('.')
-                .take(take)
-                .collect::<Vec<_>>()
-                .join("/");
-            let mut hits: Vec<String> = Vec::new();
-            for wanted in [format!("{prefix}.py"), format!("{prefix}/__init__.py")] {
-                for path in &self.files {
-                    if *path == wanted || path.ends_with(&format!("/{wanted}")) {
-                        hits.push(path.clone());
-                    }
-                }
+        let module = specifier.replace('.', "/");
+        match self.python_hits(&module).as_slice() {
+            [] if self
+                .python_hits(specifier.split('.').next().unwrap_or_default())
+                .is_empty() =>
+            {
+                Resolution::Unresolved(UnresolvedReason::External)
             }
-            hits.sort_by_key(|p| (p.matches('/').count(), p.clone()));
-            hits.dedup();
-            match hits.len() {
-                0 => continue,
-                1 => return Resolution::Resolved(vec![hits.remove(0)]),
-                _ => {
-                    // Shallowest wins only if it is strictly shallower;
-                    // otherwise two src roots genuinely both provide the
-                    // module and picking one would be a coin flip.
-                    let depth = hits[0].matches('/').count();
-                    if hits[1].matches('/').count() > depth {
-                        return Resolution::Resolved(vec![hits.remove(0)]);
-                    }
-                    return Resolution::Unresolved(UnresolvedReason::Ambiguous);
+            [] => Resolution::Unresolved(UnresolvedReason::NoSuchFile),
+            [path] => Resolution::Resolved(vec![path.clone()]),
+            hits => {
+                // Shallowest wins only if it is strictly shallower; otherwise
+                // two source roots genuinely both provide the module.
+                if hits[1].matches('/').count() > hits[0].matches('/').count() {
+                    Resolution::Resolved(vec![hits[0].clone()])
+                } else {
+                    Resolution::Unresolved(UnresolvedReason::Ambiguous)
                 }
             }
         }
-        let _ = relative;
-        Resolution::Unresolved(UnresolvedReason::External)
+    }
+
+    fn python_hits(&self, module: &str) -> Vec<String> {
+        let mut hits: Vec<String> = [format!("{module}.py"), format!("{module}/__init__.py")]
+            .into_iter()
+            .flat_map(|wanted| {
+                self.files
+                    .iter()
+                    .filter(move |path| **path == wanted || path.ends_with(&format!("/{wanted}")))
+                    .cloned()
+            })
+            .collect();
+        hits.sort_by_key(|path| (path.matches('/').count(), path.clone()));
+        hits.dedup();
+        hits
     }
 
     fn try_python(&self, candidate: &str) -> Option<String> {

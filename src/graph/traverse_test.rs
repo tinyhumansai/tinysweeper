@@ -126,6 +126,28 @@ fn capping_keeps_the_nodes_closest_to_the_seeds() {
 }
 
 #[test]
+fn capping_does_not_count_missing_seeds_against_the_limit() {
+    let nodes: Vec<GraphNode> = ["a", "b"]
+        .iter()
+        .map(|name| GraphNode::file(REPO, format!("{name}.ts")))
+        .collect();
+    let edges = vec![GraphEdge::new(
+        REPO,
+        "a.ts",
+        "b.ts",
+        EdgeKind::Calls,
+        "a.ts",
+    )];
+    let capped = cap(
+        Neighbourhood { nodes, edges },
+        &["missing.ts".to_string(), "a.ts".to_string()],
+        1,
+    );
+    assert_eq!(capped.nodes.len(), 1);
+    assert_eq!(capped.nodes[0].id, "a.ts");
+}
+
+#[test]
 fn capping_drops_edges_whose_endpoints_it_dropped() {
     let nodes: Vec<GraphNode> = ["a", "b", "c"]
         .iter()

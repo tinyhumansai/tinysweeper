@@ -30,9 +30,15 @@ fn tsconfig_paths_are_joined_onto_base_url() {
             ("~ui/*".to_string(), vec!["src/components/*".to_string()]),
         ])
     );
-    assert_eq!(config.ts_base_urls, vec![String::new()]);
     assert_eq!(
-        config.expand_ts("@/lib/math"),
+        config.ts_base_urls,
+        vec![TsBaseUrl {
+            path: String::new(),
+            config_dir: String::new()
+        }]
+    );
+    assert_eq!(
+        config.expand_ts("src/app/page.ts", "@/lib/math"),
         vec!["src/lib/math".to_string()]
     );
 }
@@ -44,7 +50,7 @@ fn tsconfig_without_base_url_resolves_targets_against_its_own_directory() {
         r#"{ "compilerOptions": { "paths": { "@/*": ["./src/*"] } } }"#,
     )]));
     assert_eq!(
-        config.expand_ts("@/lib/math"),
+        config.expand_ts("apps/web/src/page.ts", "@/lib/math"),
         vec!["apps/web/src/lib/math".to_string()]
     );
 }
@@ -67,10 +73,16 @@ fn a_jsonc_tsconfig_still_yields_its_aliases() {
 }"#,
     )]));
     assert_eq!(
-        config.expand_ts("@/lib/math"),
+        config.expand_ts("src/page.ts", "@/lib/math"),
         vec!["src/lib/math".to_string()]
     );
-    assert_eq!(config.ts_base_urls, vec!["src".to_string()]);
+    assert_eq!(
+        config.ts_base_urls,
+        vec![TsBaseUrl {
+            path: "src".to_string(),
+            config_dir: String::new()
+        }]
+    );
 }
 
 #[test]
@@ -80,7 +92,7 @@ fn a_url_inside_a_string_is_not_treated_as_a_comment() {
         r#"{"compilerOptions":{"baseUrl":".","paths":{"@//x":["https://e.com"],"@/*":["src/*"]}}}"#,
     )]));
     assert_eq!(
-        config.expand_ts("@/lib/math"),
+        config.expand_ts("src/page.ts", "@/lib/math"),
         vec!["src/lib/math".to_string()]
     );
 }
@@ -90,6 +102,7 @@ fn an_exact_pattern_matches_only_itself() {
     let pattern = AliasPattern {
         pattern: "@app".to_string(),
         targets: vec!["src/app/index.ts".to_string()],
+        config_dir: String::new(),
     };
     assert_eq!(
         pattern.expand("@app"),
@@ -107,7 +120,7 @@ fn the_most_specific_pattern_wins() {
     // Both patterns match `@/lib/math`. `tsc` prefers the longer literal
     // prefix; anything else silently sends the alias to the wrong package.
     assert_eq!(
-        config.expand_ts("@/lib/math"),
+        config.expand_ts("src/page.ts", "@/lib/math"),
         vec!["packages/lib/math".to_string()]
     );
 }

@@ -267,10 +267,22 @@ pub async fn sync_paths(
     let edges: Vec<GraphEdge> = graph
         .edges
         .iter()
-        .filter(|e| wanted.contains(&e.path))
+        .filter(|e| {
+            wanted.contains(&e.path)
+                || paths.iter().any(|path| {
+                    endpoint_belongs_to(&e.from, path) || endpoint_belongs_to(&e.to, path)
+                })
+        })
         .cloned()
         .collect();
     Ok(store.upsert_nodes(&nodes).await? + store.upsert_edges(&edges).await?)
+}
+
+fn endpoint_belongs_to(endpoint: &str, path: &str) -> bool {
+    endpoint == path
+        || endpoint
+            .strip_prefix(path)
+            .is_some_and(|suffix| suffix.starts_with('#'))
 }
 
 /// The file nodes in a graph, for callers that only want the file layer.

@@ -32,12 +32,12 @@ pub trait GraphStore: Send + Sync {
     /// Remove a repository's whole graph, returning how many rows went.
     async fn delete_repo(&self, repo_id: &str) -> Result<u64>;
 
-    /// Remove the nodes and edges belonging to the given paths.
+    /// Remove the nodes belonging to the given paths and every edge touching
+    /// one of them.
     ///
     /// The incremental counterpart to [`GraphStore::upsert_nodes`]: a re-parsed
-    /// file must not leave its previous symbols behind, or the graph slowly
-    /// fills with definitions that no longer exist. An empty `paths` deletes
-    /// nothing.
+    /// file must not leave its previous symbols or incoming relationships
+    /// behind. An empty `paths` deletes nothing.
     async fn delete_paths(&self, repo_id: &str, paths: &[String]) -> Result<u64>;
 
     /// Walk `hops` edges out from `seeds`.

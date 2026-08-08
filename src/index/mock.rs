@@ -322,7 +322,13 @@ impl GraphStore for MockGraphStore {
         let mut edges = self.edges.lock().expect("graph lock");
         let before = nodes.len() + edges.len();
         nodes.retain(|_, n| !(n.repo_id == repo_id && paths.contains(&n.path)));
-        edges.retain(|_, e| !(e.repo_id == repo_id && paths.contains(&e.path)));
+        edges.retain(|_, e| {
+            !(e.repo_id == repo_id
+                && (paths.contains(&e.path)
+                    || paths.iter().any(|path| {
+                        endpoint_belongs_to(&e.from, path) || endpoint_belongs_to(&e.to, path)
+                    })))
+        });
         Ok((before - nodes.len() - edges.len()) as u64)
     }
 
@@ -374,6 +380,13 @@ impl GraphStore for MockGraphStore {
             edges: walked.into_values().collect(),
         })
     }
+}
+
+fn endpoint_belongs_to(endpoint: &str, path: &str) -> bool {
+    endpoint == path
+        || endpoint
+            .strip_prefix(path)
+            .is_some_and(|suffix| suffix.starts_with('#'))
 }
 
 /// An in-memory knowledge store.

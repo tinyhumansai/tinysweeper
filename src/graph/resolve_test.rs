@@ -216,6 +216,41 @@ fn python_packages_resolve_to_their_init() {
 }
 
 #[test]
+fn python_missing_child_of_a_known_package_is_not_resolved_to_the_package() {
+    let r = resolver(&["pkg/__init__.py", "app/main.py"]);
+    assert_eq!(
+        r.resolve("app/main.py", Language::Python, "pkg.missing"),
+        Resolution::Unresolved(UnresolvedReason::NoSuchFile)
+    );
+}
+
+#[test]
+fn ts_aliases_use_the_importers_nearest_configuration() {
+    let r = resolver_with(&[
+        (
+            "packages/a/tsconfig.json",
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@/*":["src/*"]}}}"#,
+        ),
+        (
+            "packages/b/tsconfig.json",
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@/*":["src/*"]}}}"#,
+        ),
+        ("packages/a/src/page.ts", ""),
+        ("packages/a/src/value.ts", ""),
+        ("packages/b/src/page.ts", ""),
+        ("packages/b/src/value.ts", ""),
+    ]);
+    assert_eq!(
+        one(&r.resolve("packages/a/src/page.ts", Language::TypeScript, "@/value")),
+        "packages/a/src/value.ts"
+    );
+    assert_eq!(
+        one(&r.resolve("packages/b/src/page.ts", Language::TypeScript, "@/value")),
+        "packages/b/src/value.ts"
+    );
+}
+
+#[test]
 fn python_two_equally_shallow_candidates_are_ambiguous_not_guessed() {
     let r = resolver(&["a/util.py", "b/util.py", "app/main.py"]);
     // A wrong edge is worse than a missing one: it sends retrieval into the

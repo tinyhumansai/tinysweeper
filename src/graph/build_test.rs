@@ -426,6 +426,49 @@ async fn sync_paths_replaces_only_the_changed_files() {
 }
 
 #[tokio::test]
+async fn sync_paths_rebuilds_edges_from_unchanged_callers() {
+    let store = MockGraphStore::new();
+    let before = build(
+        REPO,
+        &files(&[
+            (
+                "src/a.ts",
+                "import { old } from './b'; export function call() { old(); }",
+            ),
+            ("src/b.ts", "export function old() {}"),
+        ]),
+    )
+    .expect("builds");
+    sync_all(&store, REPO, &before).await.expect("stored");
+
+    let after = build(
+        REPO,
+        &files(&[
+            (
+                "src/a.ts",
+                "import { renamed } from './b'; export function call() { renamed(); }",
+            ),
+            ("src/b.ts", "export function renamed() {}"),
+        ]),
+    )
+    .expect("builds");
+    sync_paths(&store, REPO, &after, &["src/b.ts".to_string()])
+        .await
+        .expect("stored");
+
+    let hood = store
+        .neighbours(REPO, &["src/b.ts".to_string()], 2, &EdgeKind::ALL)
+        .await
+        .expect("traverses");
+    assert!(hood.edges.iter().all(|edge| edge.to != "src/b.ts#old"));
+    assert!(hood.edges.iter().any(|edge| {
+        edge.from == "src/a.ts#call"
+            && edge.to == "src/b.ts#renamed"
+            && edge.kind == EdgeKind::Calls
+    }));
+}
+
+#[tokio::test]
 async fn sync_paths_with_no_paths_writes_nothing() {
     let store = MockGraphStore::new();
     let graph = build(REPO, &alias_repo()).expect("builds");

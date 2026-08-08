@@ -32,7 +32,7 @@ pub mod resolve;
 pub mod traverse;
 pub mod types;
 
-pub use crate::graph::aliases::{AliasConfig, AliasPattern};
+pub use crate::graph::aliases::{AliasConfig, AliasPattern, TsBaseUrl};
 pub use crate::graph::build::{build, sync_all, sync_paths};
 pub use crate::graph::extract::parse;
 pub use crate::graph::resolve::{Resolution, Resolver};
