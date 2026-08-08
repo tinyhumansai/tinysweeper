@@ -87,7 +87,7 @@ impl RawFinding {
             // rather than letting a 5.0 sail past every threshold.
             confidence: self.confidence.clamp(0.0, 1.0),
             path: self.path,
-            line: Some(self.line),
+            line: self.line,
             end_line: self.end_line,
             rule: self.rule,
             title: truncate(&scrub(&self.title), 80),
