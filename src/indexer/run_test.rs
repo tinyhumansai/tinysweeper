@@ -298,7 +298,11 @@ async fn an_oversized_file_is_reported_rather_than_dropped() {
 
     let indexer = Indexer::new(&rig.embedder, &rig.index, &rig.manifest)
         .expect("builds")
-        .with_selector(crate::chunk::Selector::new(&[]).expect("globs").max_bytes(500));
+        .with_selector(
+            crate::chunk::Selector::new(&[])
+                .expect("globs")
+                .max_bytes(500),
+        );
     let report = report(
         indexer
             .index_repo(REPO, "sha-1", &checkout.root())
@@ -382,7 +386,11 @@ async fn a_run_that_hits_its_budget_stops_with_a_partial_index_rather_than_faili
             .expect("indexes"),
     );
     assert!(report.budget_exhausted);
-    assert_eq!(embedder.calls(), 0, "the ceiling is checked before spending");
+    assert_eq!(
+        embedder.calls(),
+        0,
+        "the ceiling is checked before spending"
+    );
 
     // And the revision is not claimed, so the next run finishes the job.
     let record = rig
@@ -436,7 +444,9 @@ async fn an_unreadable_file_is_reported_and_does_not_abort_the_run() {
 
     checkout.write("src/gone.rs", "fn gone() {}\n");
     let sized = vec![("src/gone.rs".to_string(), 13_u64)];
-    let selection = crate::chunk::Selector::new(&[]).expect("globs").select(sized);
+    let selection = crate::chunk::Selector::new(&[])
+        .expect("globs")
+        .select(sized);
     assert_eq!(selection.selected, vec!["src/gone.rs".to_string()]);
     checkout.remove("src/gone.rs");
 

@@ -32,9 +32,7 @@ use crate::chunk::{Chunker, Selector};
 use crate::error::Result;
 use crate::index::types::{Chunk, EmbedSignature, EmbeddedChunk};
 use crate::indexer::cost::EmbedUsage;
-use crate::indexer::types::{
-    Claim, IndexLease, IndexOutcome, IndexReport, IndexedFile, Settled,
-};
+use crate::indexer::types::{Claim, IndexLease, IndexOutcome, IndexReport, IndexedFile, Settled};
 use crate::ports::embed::Embedder;
 use crate::ports::index::ChunkIndex;
 use crate::ports::manifest::IndexManifest;
@@ -162,8 +160,15 @@ impl<'a> Indexer<'a> {
             .filter(|path| !seen.contains(path))
             .collect();
 
-        self.guarded(repo_id, revision, root, selection.selected, selection.skipped, removed)
-            .await
+        self.guarded(
+            repo_id,
+            revision,
+            root,
+            selection.selected,
+            selection.skipped,
+            removed,
+        )
+        .await
     }
 
     /// Re-index only the paths a push touched.
@@ -193,8 +198,15 @@ impl<'a> Indexer<'a> {
         // or retrieval keeps quoting a file we have stopped tracking.
         removed.extend(selection.skipped.iter().map(|s| s.path.clone()));
 
-        self.guarded(repo_id, revision, root, selection.selected, selection.skipped, removed)
-            .await
+        self.guarded(
+            repo_id,
+            revision,
+            root,
+            selection.selected,
+            selection.skipped,
+            removed,
+        )
+        .await
     }
 
     /// Take the claim, run, and release it whatever happens.

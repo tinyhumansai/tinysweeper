@@ -160,7 +160,12 @@ fn record_from_document(repo_id: &str, signature: &str, document: Option<Documen
 
 #[async_trait]
 impl IndexManifest for MongoManifest {
-    async fn claim(&self, repo_id: &str, signature: &EmbedSignature, holder: &str) -> Result<Claim> {
+    async fn claim(
+        &self,
+        repo_id: &str,
+        signature: &EmbedSignature,
+        holder: &str,
+    ) -> Result<Claim> {
         let key = record_id(repo_id, &signature.key());
         match self
             .claims

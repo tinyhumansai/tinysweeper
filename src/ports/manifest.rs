@@ -31,12 +31,8 @@ pub trait IndexManifest: Send + Sync {
     ///
     /// Returns [`Claim::Busy`] rather than blocking or erroring when another
     /// holder has it: the caller requeues.
-    async fn claim(
-        &self,
-        repo_id: &str,
-        signature: &EmbedSignature,
-        holder: &str,
-    ) -> Result<Claim>;
+    async fn claim(&self, repo_id: &str, signature: &EmbedSignature, holder: &str)
+    -> Result<Claim>;
 
     /// Give the claim back, recording how the run ended.
     ///

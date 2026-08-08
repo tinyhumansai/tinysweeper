@@ -11,8 +11,8 @@
 //! counter does.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
@@ -56,7 +56,6 @@ impl MockManifest {
             .map(|(record, _)| record.clone())
             .unwrap_or_else(|| RepoIndex::absent(repo_id, signature.key()))
     }
-
 }
 
 fn key(repo_id: &str, signature: &EmbedSignature) -> (String, String) {
@@ -65,7 +64,12 @@ fn key(repo_id: &str, signature: &EmbedSignature) -> (String, String) {
 
 #[async_trait]
 impl IndexManifest for MockManifest {
-    async fn claim(&self, repo_id: &str, signature: &EmbedSignature, holder: &str) -> Result<Claim> {
+    async fn claim(
+        &self,
+        repo_id: &str,
+        signature: &EmbedSignature,
+        holder: &str,
+    ) -> Result<Claim> {
         let mut inner = self.inner.lock().expect("manifest lock");
         let entry = inner
             .records
@@ -242,10 +246,16 @@ mod tests {
     #[tokio::test]
     async fn a_second_claim_is_refused_with_the_holder_rather_than_blocking() {
         let manifest = MockManifest::new();
-        let first = manifest.claim("o/r", &signature(), "worker-1").await.expect("claims");
+        let first = manifest
+            .claim("o/r", &signature(), "worker-1")
+            .await
+            .expect("claims");
         assert!(matches!(first, Claim::Granted(_)));
 
-        let second = manifest.claim("o/r", &signature(), "worker-2").await.expect("answers");
+        let second = manifest
+            .claim("o/r", &signature(), "worker-2")
+            .await
+            .expect("answers");
         assert_eq!(
             second,
             Claim::Busy {
@@ -258,7 +268,11 @@ mod tests {
     #[tokio::test]
     async fn releasing_records_the_revision_and_adds_to_the_running_spend() {
         let manifest = MockManifest::new();
-        let lease = match manifest.claim("o/r", &signature(), "w").await.expect("claims") {
+        let lease = match manifest
+            .claim("o/r", &signature(), "w")
+            .await
+            .expect("claims")
+        {
             Claim::Granted(lease) => lease,
             other => panic!("{other:?}"),
         };
@@ -285,7 +299,10 @@ mod tests {
 
         // And the claim is free again, which is what makes the next push work.
         assert!(matches!(
-            manifest.claim("o/r", &signature(), "w2").await.expect("claims"),
+            manifest
+                .claim("o/r", &signature(), "w2")
+                .await
+                .expect("claims"),
             Claim::Granted(_)
         ));
     }
@@ -293,7 +310,10 @@ mod tests {
     #[tokio::test]
     async fn a_failed_release_keeps_the_message_and_frees_the_claim() {
         let manifest = MockManifest::new();
-        let Claim::Granted(lease) = manifest.claim("o/r", &signature(), "w").await.expect("claims")
+        let Claim::Granted(lease) = manifest
+            .claim("o/r", &signature(), "w")
+            .await
+            .expect("claims")
         else {
             panic!("not granted");
         };
@@ -317,7 +337,10 @@ mod tests {
     async fn a_different_signature_is_a_different_record() {
         // Swapping the embedding model must not make the old index look fresh.
         let manifest = MockManifest::new();
-        let Claim::Granted(lease) = manifest.claim("o/r", &signature(), "w").await.expect("claims")
+        let Claim::Granted(lease) = manifest
+            .claim("o/r", &signature(), "w")
+            .await
+            .expect("claims")
         else {
             panic!("not granted");
         };
