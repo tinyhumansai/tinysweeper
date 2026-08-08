@@ -1,0 +1,32 @@
+{
+  "name": "tinysweeper",
+  "url": "https://github.com/tinyhumansai/tinysweeper",
+  "description": "Fans a pull request out across independently-gated check runs, triages issues, and gates auto-merge.",
+  "public": false,
+  "default_events": [
+    "pull_request",
+    "pull_request_review",
+    "pull_request_review_comment",
+    "push",
+    "check_suite",
+    "check_run",
+    "issues",
+    "issue_comment",
+    "workflow_run"
+  ],
+  "default_permissions": {
+    "checks": "write",
+    "contents": "read",
+    "issues": "write",
+    "metadata": "read",
+    "pull_requests": "write",
+    "actions": "read",
+    "workflows": "read"
+  },
+  "hook_attributes": {
+    "url": "https://tinysweeper.invalid/webhook",
+    "active": false
+  },
+  "request_oauth_on_install": false,
+  "setup_on_update": false
+}
