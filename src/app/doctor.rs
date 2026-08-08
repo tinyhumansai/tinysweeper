@@ -343,6 +343,14 @@ mod tests {
         let loaded = config::load(dir.path(), None).expect("loads");
 
         let overridden: Vec<_> = loaded.provenance.overridden().collect();
-        assert_eq!(overridden, vec![("review.strictness", Layer::Repo)]);
+        // `version` is restated by every config file, so it is an override too;
+        // the interesting entry is the one the author actually changed.
+        assert!(overridden.contains(&("review.strictness", Layer::Repo)));
+        assert!(
+            !overridden
+                .iter()
+                .any(|(key, _)| *key == "review.max_comments"),
+            "untouched defaults must not be reported as overridden: {overridden:?}"
+        );
     }
 }
