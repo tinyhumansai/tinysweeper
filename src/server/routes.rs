@@ -301,6 +301,21 @@ async fn review_inner(
         forge.pull_request(&repo_id, number).await?
     };
 
+    // Indexing is kicked off here and deliberately not awaited. A cold full
+    // index takes minutes; a review is expected in seconds. The review runs
+    // against whatever the index holds right now, and `crate::retrieve` says so
+    // in the check-run summary when that is nothing. See `server::indexing`.
+    if let Some(backend) = &state.index {
+        tokio::spawn(index_in_background(
+            backend.clone(),
+            Arc::new(state.config.config.clone()),
+            state.index_permits.clone(),
+            repo_id.clone(),
+            pull_request.head_sha.clone(),
+            read_token.clone(),
+        ));
+    }
+
     let lease = format!("{repo}#{number}@{}", pull_request.head_sha);
     if !state.store.claim_lease(&lease, "server").await? {
         tracing::debug!(%lease, "another worker holds this review");
