@@ -371,6 +371,13 @@ impl<'a> Indexer<'a> {
             .flat_map(|(index, file)| file.to_embed.iter().map(move |chunk| (index, chunk)))
             .collect();
 
+        // Where each file's last queued chunk sits, so "did this file finish?"
+        // is a comparison rather than a search.
+        let mut last_position = vec![None::<usize>; work.len()];
+        for (position, (file, _)) in queue.iter().enumerate() {
+            last_position[*file] = Some(position);
+        }
+
         let mut written = 0_usize;
         for batch in queue.chunks(self.batch) {
             let texts: Vec<String> = batch.iter().map(|(_, chunk)| chunk.text.clone()).collect();
