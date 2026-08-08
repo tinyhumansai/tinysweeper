@@ -46,6 +46,20 @@ pub trait ChunkIndex: Send + Sync {
     /// one a caller meant.
     async fn delete_paths(&self, repo_id: &str, paths: &[String]) -> Result<u64>;
 
+    /// Remove specific chunks by [`Chunk::id`](crate::index::types::Chunk::id).
+    ///
+    /// This is what makes an incremental re-index survivable.
+    /// [`ChunkIndex::delete_paths`] can only run *before* the new chunks are
+    /// written, which means a failure between the delete and the embed leaves
+    /// those files with no chunks at all and retrieval quietly missing them.
+    /// Deleting by id inverts the order: the new chunks are upserted first, and
+    /// only the ids that survived from the previous pass and are no longer
+    /// produced are removed. A crash anywhere in that sequence leaves the index
+    /// with duplicates at worst, never with a hole.
+    ///
+    /// An empty `ids` deletes nothing.
+    async fn delete_chunks(&self, repo_id: &str, ids: &[String]) -> Result<u64>;
+
     /// Run a hybrid dense + lexical query, best first.
     async fn query(&self, query: &HybridQuery) -> Result<Vec<ScoredChunk>>;
 }
