@@ -413,21 +413,31 @@ impl<'a> Indexer<'a> {
             written += batch.len();
         }
 
+        // A file finished if every chunk it queued was written. A file that
+        // queued nothing — unchanged content — finished trivially, which is
+        // exactly the case that must cost nothing.
+        let finished = |index: usize| match last_position[index] {
+            Some(position) => position < written,
+            None => true,
+        };
+
         // Step 4: confirm only the files whose every chunk actually landed. A
         // file cut off by the budget keeps its old confirmed set, so the next
         // run embeds what this one did not.
         let complete: Vec<IndexedFile> = work
             .iter()
-            .filter(|file| file.finished_by(written, &queue))
-            .map(FileWork::confirmation)
+            .enumerate()
+            .filter(|(index, _)| finished(*index))
+            .map(|(_, file)| file.confirmation())
             .collect();
         self.manifest.record(repo_id, signature, &complete).await?;
 
         // Step 5: and only now is anything deleted.
         let stale: Vec<String> = work
             .iter()
-            .filter(|file| file.finished_by(written, &queue))
-            .flat_map(|file| file.stale.clone())
+            .enumerate()
+            .filter(|(index, _)| finished(*index))
+            .flat_map(|(_, file)| file.stale.clone())
             .collect();
         if !stale.is_empty() {
             report.deleted += self.index.delete_chunks(repo_id, &stale).await?;
