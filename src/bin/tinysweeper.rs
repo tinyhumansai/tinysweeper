@@ -1,9 +1,12 @@
 //! The `tinysweeper` command-line entry point.
 //!
-//! One binary, several entry points. `review` is what the GitHub Action runs,
-//! `serve` is what the hosted GitHub App runs, and `local-review` is the same
-//! engine over a local git range with no GitHub item and no tokens — which is
-//! how prompt changes get iterated without burning pull requests.
+//! One binary, two entry points that matter. `review` is what the GitHub Action
+//! runs, and `local-review` is the same engine over a local git range with no
+//! GitHub item and no tokens — which is how prompt changes get iterated without
+//! burning pull requests.
+//!
+//! There is no `serve`. tinysweeper runs in Actions; see the note on the `all`
+//! feature in Cargo.toml for why.
 
 use clap::{Parser, Subcommand};
 use tinysweeper::Result;
@@ -80,13 +83,6 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-
-    /// Run the webhook server for the hosted GitHub App deployment.
-    Serve {
-        /// Address to bind.
-        #[arg(long, default_value = "127.0.0.1:8080", env = "TINYSWEEPER_BIND")]
-        bind: String,
-    },
 }
 
 #[tokio::main]
@@ -99,7 +95,6 @@ async fn main() -> Result<()> {
         Command::LocalReview { .. } => not_yet("local-review", "M3"),
         Command::Check { path } => tinysweeper::app::check(&path),
         Command::Doctor { path, json } => tinysweeper::app::doctor(&path, json),
-        Command::Serve { .. } => not_yet("serve", "M10"),
     }
 }
 
