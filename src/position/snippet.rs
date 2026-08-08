@@ -136,4 +136,24 @@ mod tests {
         let text = "x\nx\n";
         assert_eq!(find(&haystack(text), &needle("x")), Some((1, 1)));
     }
+
+    #[test]
+    fn normalizing_both_sides_identically_is_safe_for_real_leading_operators() {
+        // Code that genuinely starts with `-` (e.g., a command-line flag or a
+        // negative sign) is safe because both the snippet and the haystack
+        // go through the same normalization. If a model quotes `--verbose`
+        // and the code is `--verbose`, both normalize to `-verbose` and match.
+        // This is the existing test case that already covers this: one_leaked_diff_marker_is_stripped_and_only_one.
+        // This test just asserts the same principle for snippet finding.
+        assert_eq!(
+            normalize("-verbose"),
+            "verbose",
+            "leading marker is stripped"
+        );
+        assert_eq!(
+            normalize("--verbose"),
+            "-verbose",
+            "only one leading marker is stripped, second is preserved"
+        );
+    }
 }

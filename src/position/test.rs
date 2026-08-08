@@ -320,3 +320,26 @@ async fn relocation_usage_is_accounted_for() {
     assert_eq!(usage.input_tokens, 900);
     assert!(usage.cost_usd > 0.0, "the call has to reach the budget");
 }
+
+#[test]
+fn a_pure_deletion_hunk_does_not_provide_a_postable_new_side_anchor() {
+    // When a hunk contains only deletions (new_lines == 0), it covers no
+    // head-revision lines at all. A comment anchored to such a hunk cannot be
+    // posted on the new side, because GitHub rejects comments on nonexistent
+    // lines. The finding must either anchor to old-side deleted code or remain
+    // unanchored.
+    let pure_deletion_patch = "\
+@@ -1,3 +0,0 @@
+-fn old_helper() {
+-    do_something();
+-}
+";
+    let diff = parse_file_patch("src/main.rs", pure_deletion_patch);
+    assert_eq!(diff.hunks.len(), 1);
+    let hunk = &diff.hunks[0];
+    assert_eq!(hunk.new_lines, 0, "hunk must be pure deletion");
+
+    // within_hunk should reject any anchor in this hunk, because no new-side
+    // lines exist to post on.
+    assert!(!diff.within_hunk(hunk.new_start, hunk.new_start));
+}

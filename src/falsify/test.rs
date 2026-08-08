@@ -183,3 +183,32 @@ async fn findings_are_numbered_from_one_in_the_prompt() {
     assert!(prompt.contains("1. [src/main.rs] first"), "{prompt}");
     assert!(prompt.contains("2. [src/main.rs] second"), "{prompt}");
 }
+
+#[tokio::test]
+async fn a_finding_about_code_not_in_the_diff_survives() {
+    // Absence of code from the diff cannot disprove a finding that depends on
+    // context the reviewer may have seen outside this diff. The falsifier fails
+    // open: anything it cannot determine from the diff alone, it keeps.
+    let model = MockModel::new().then(json!({"incorrect": []}));
+    let finding_about_absent_code = Finding {
+        lane: LaneId::Critique,
+        severity: Severity::High,
+        confidence: 0.9,
+        path: "src/main.rs".into(),
+        line: None, // No line means it was anchored to context outside the diff
+        end_line: None,
+        rule: "undocumented-magic".into(),
+        title: "The constant MAX_SIZE is never explained".into(),
+        body: "The value 1024 is used throughout but never documented.".into(),
+        suggestion: None,
+        late: false,
+    };
+
+    let outcome = filter(&model, vec![finding_about_absent_code.clone()]).await;
+
+    // The finding survives because the diff does not *disprove* it, even though
+    // the specific code it refers to is not present in the diff.
+    assert_eq!(outcome.findings.len(), 1);
+    assert_eq!(outcome.findings[0], finding_about_absent_code);
+    assert!(outcome.rejected.is_empty());
+}

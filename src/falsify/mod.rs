@@ -155,9 +155,8 @@ diff alone.
 
 Reject a finding only when the diff itself disproves it. For example: it claims
 a variable is unchecked and the diff plainly shows the check two lines above; it
-claims a function is never called and the diff shows the call; it describes code
-that is not in the diff at all; it complains about a line the diff does not
-contain.
+claims a function is never called and the diff shows the call; it complains about
+a line the diff does not contain.
 
 Anything you cannot determine from the diff, let pass. Even if it looks
 suspicious. Even if you doubt it. Even if you would not have raised it yourself.

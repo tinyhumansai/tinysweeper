@@ -114,6 +114,16 @@ impl Lane for Critique {
                 continue;
             };
 
+            // Budget check: relocation can make one model call per unresolvable
+            // finding, so enforce the limit inside the loop before escalating to
+            // stage 3. Do not wait until the lane finishes.
+            if usage.cost_usd > input.config.models.budget_usd_per_pr {
+                return Err(crate::error::Error::Budget {
+                    spent: usage.cost_usd,
+                    limit: input.config.models.budget_usd_per_pr,
+                });
+            }
+
             let comment = format!("{}\n\n{}", raw.title, raw.body);
             let snippet = raw.existing_code.clone().unwrap_or_default();
             let resolution = positioner

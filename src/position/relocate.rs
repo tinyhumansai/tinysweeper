@@ -61,8 +61,12 @@ pub async fn relocate(
     let usage = response.usage;
     let relocated: Relocated = serde_json::from_value(response.value).ok()?;
     let snippet = unfence(&relocated.existing_code);
+
+    // An empty snippet is a valid, schema-conforming answer: the model found
+    // no match. The call still spent tokens and must be accounted for in budget
+    // enforcement. Return the empty string with its usage cost.
     if snippet.trim().is_empty() {
-        return None;
+        return Some((String::new(), usage));
     }
     Some((snippet, usage))
 }
@@ -192,13 +196,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_empty_answer_is_treated_as_no_answer() {
+    async fn an_empty_answer_is_valid_and_accounts_for_usage() {
+        // An empty `existing_code` is a valid, schema-conforming answer: the
+        // model found no match in the diff. Usage must still be accounted for
+        // in budget enforcement, so this returns Some(String::new(), usage).
         let model = MockModel::new().then(json!({"existing_code": "   \n"}));
-        assert!(
-            relocate(&model, &config(), "c", "@@ -1 +1 @@\n+a\n")
-                .await
-                .is_none()
-        );
+        let result = relocate(&model, &config(), "c", "@@ -1 +1 @@\n+a\n")
+            .await
+            .expect("valid answer");
+        assert_eq!(result.0, ""); // Empty snippet
+        assert!(result.1.cost_usd == 0.0); // Default cost (no usage set in mock)
     }
 
     #[tokio::test]

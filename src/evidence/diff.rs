@@ -102,8 +102,13 @@ impl FileDiff {
             (end, start)
         };
         self.hunks.iter().any(|hunk| {
-            // A hunk of pure deletions covers no head-revision line of its own,
-            // but a comment still has to be able to land at the deletion point.
+            // A hunk of pure deletions (new_lines == 0) covers no head-revision
+            // lines at all, so no inline comment can be posted. A comment would
+            // have to land at the deletion boundary, but GitHub rejects comments
+            // on nonexistent lines.
+            if hunk.new_lines == 0 {
+                return false;
+            }
             let hunk_end = hunk.new_start + hunk.new_lines.saturating_sub(1);
             start <= hunk_end && end >= hunk.new_start
         })
@@ -460,9 +465,16 @@ index 1234567..89abcde 100644
     }
 
     #[test]
-    fn a_pure_deletion_hunk_is_still_postable_at_its_start() {
+    fn a_pure_deletion_hunk_is_not_postable_because_no_new_side_lines_exist() {
+        // A hunk with only deletions (new_lines == 0) covers no head-revision
+        // lines at all. GitHub rejects inline comments on nonexistent lines, so
+        // a finding that anchors to a pure-deletion hunk must either use an
+        // old-side anchor or remain unanchored.
         let diff = parse_file_patch("f.txt", "@@ -4,2 +3,0 @@\n-gone();\n-also();\n");
-        assert!(diff.within_hunk(3, 3));
+        assert!(
+            !diff.within_hunk(3, 3),
+            "pure-deletion hunks are not postable"
+        );
         assert!(!diff.within_hunk(4, 4));
     }
 
