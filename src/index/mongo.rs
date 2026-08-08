@@ -95,9 +95,42 @@ fn encode_vector(values: &[f32]) -> Binary {
 /// definition and cannot be shared across signatures, while index names have a
 /// restricted character set that a raw model id does not respect.
 fn vector_index_name(signature: &EmbedSignature) -> String {
-    let digest = Sha256::digest(signature.key().as_bytes());
-    let hex = format!("{digest:x}");
-    format!("tinysweeper_vec_{}", &hex[..16])
+    // Hand-rolled hex for the same reason as `Finding::fingerprint`: sha2 0.11
+    // returns an `Array` with no `LowerHex`, and a hex crate is not worth a
+    // dependency for sixteen characters.
+    let hex: String = Sha256::digest(signature.key().as_bytes())
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("tinysweeper_vec_{hex}")
+}
+
+/// Apply a batch of upserts, bounded in flight.
+///
+/// Takes owned `(filter, update)` pairs rather than borrowing the caller's
+/// slice: inside an `async_trait` future the borrow cannot be proven to outlive
+/// the boxed future, and materialising the documents first is both cheaper to
+/// reason about and no more allocation than the driver does anyway.
+async fn upsert_all(collection: &Collection<Document>, writes: Vec<(Document, Document)>) -> Result<u64> {
+    let total = writes.len() as u64;
+    let results = futures::stream::iter(writes.into_iter().map(|(filter, update)| {
+        let collection = collection.clone();
+        async move {
+            collection
+                .update_one(filter, doc! { "$set": update })
+                .upsert(true)
+                .await
+                .map_err(mongo)
+        }
+    }))
+    .buffer_unordered(UPSERT_CONCURRENCY)
+    .collect::<Vec<_>>()
+    .await;
+    for result in results {
+        result?;
+    }
+    Ok(total)
 }
 
 /// Whether a driver error is "this server does not know that stage".
@@ -497,28 +530,16 @@ impl ChunkIndex for MongoChunkIndex {
                 )));
             }
         }
-        let writes = futures::stream::iter(chunks.iter().map(|embedded| {
-            let collection = self.collection.clone();
-            let id = embedded.chunk.id();
-            let update = doc! { "$set": chunk_document(signature, embedded) };
-            async move {
-                collection
-                    .update_one(doc! { "_id": id }, update)
-                    .upsert(true)
-                    .await
-                    .map_err(mongo)
-            }
-        }))
-        .buffer_unordered(UPSERT_CONCURRENCY)
-        .collect::<Vec<_>>()
-        .await;
-
-        let mut written = 0_u64;
-        for write in writes {
-            write?;
-            written += 1;
-        }
-        Ok(written)
+        let writes = chunks
+            .iter()
+            .map(|embedded| {
+                (
+                    doc! { "_id": embedded.chunk.id() },
+                    chunk_document(signature, embedded),
+                )
+            })
+            .collect();
+        upsert_all(&self.collection, writes).await
     }
 
     async fn delete_repo(&self, repo_id: &str) -> Result<u64> {
@@ -659,47 +680,24 @@ impl GraphStore for MongoGraphStore {
     }
 
     async fn upsert_nodes(&self, nodes: &[GraphNode]) -> Result<u64> {
-        let writes = futures::stream::iter(nodes.iter().map(|node| {
-            let collection = self.nodes.clone();
-            let key = doc! { "_id": format!("{}\u{1f}{}", node.repo_id, node.id) };
-            let update = doc! { "$set": node_document(node) };
-            async move {
-                collection
-                    .update_one(key, update)
-                    .upsert(true)
-                    .await
-                    .map_err(mongo)
-            }
-        }))
-        .buffer_unordered(UPSERT_CONCURRENCY)
-        .collect::<Vec<_>>()
-        .await;
-        for write in writes {
-            write?;
-        }
-        Ok(nodes.len() as u64)
+        let writes = nodes
+            .iter()
+            .map(|node| {
+                (
+                    doc! { "_id": format!("{}\u{1f}{}", node.repo_id, node.id) },
+                    node_document(node),
+                )
+            })
+            .collect();
+        upsert_all(&self.nodes, writes).await
     }
 
     async fn upsert_edges(&self, edges: &[GraphEdge]) -> Result<u64> {
-        let writes = futures::stream::iter(edges.iter().map(|edge| {
-            let collection = self.edges.clone();
-            let key = doc! { "_id": edge.id() };
-            let update = doc! { "$set": edge_document(edge) };
-            async move {
-                collection
-                    .update_one(key, update)
-                    .upsert(true)
-                    .await
-                    .map_err(mongo)
-            }
-        }))
-        .buffer_unordered(UPSERT_CONCURRENCY)
-        .collect::<Vec<_>>()
-        .await;
-        for write in writes {
-            write?;
-        }
-        Ok(edges.len() as u64)
+        let writes = edges
+            .iter()
+            .map(|edge| (doc! { "_id": edge.id() }, edge_document(edge)))
+            .collect();
+        upsert_all(&self.edges, writes).await
     }
 
     async fn delete_repo(&self, repo_id: &str) -> Result<u64> {
