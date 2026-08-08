@@ -54,6 +54,7 @@ pub async fn gather(
     config: &Config,
     repo: &RepoId,
     head_sha: &str,
+    changed_paths: &[String],
     store: Option<&dyn KnowledgeStore>,
 ) -> (ReviewKnowledge, Usage) {
     let mut knowledge = ReviewKnowledge::default();
@@ -77,11 +78,11 @@ pub async fn gather(
     // files as review policy", so it gates the extraction too rather than
     // introducing a second switch that means almost the same thing.
     if config.knowledge.extract && config.review.respect_agents_md {
-        let files = types::selected_instruction_files(&config.knowledge.files);
+        let files = types::scoped_instruction_files(&config.knowledge.files, changed_paths);
         if !files.is_empty() {
             let extractor = Extractor::new(
                 model.as_ref(),
-                &config.models.scan,
+                config.model_for_workload(crate::config::types::Workload::KnowledgeExtraction),
                 config.knowledge.max_file_bytes,
             );
             let (rules, extract_usage) = extractor.extract(forge, repo, head_sha, &files).await;
@@ -146,6 +147,7 @@ mod tests {
             &config(),
             &repo(),
             "headsha",
+            &[],
             Some(&store as &dyn KnowledgeStore),
         )
         .await;
@@ -163,7 +165,8 @@ mod tests {
         let model: Arc<dyn Model> =
             Arc::new(MockModel::new().then(json!({"rules_markdown": "NO_RULES"})));
 
-        let (knowledge, _usage) = gather(&forge, &model, &config(), &repo(), "headsha", None).await;
+        let (knowledge, _usage) =
+            gather(&forge, &model, &config(), &repo(), "headsha", &[], None).await;
 
         assert!(knowledge.is_empty());
     }
@@ -177,7 +180,8 @@ mod tests {
         let mut config = config();
         config.review.respect_agents_md = false;
 
-        let (knowledge, usage) = gather(&forge, &model, &config, &repo(), "headsha", None).await;
+        let (knowledge, usage) =
+            gather(&forge, &model, &config, &repo(), "headsha", &[], None).await;
 
         assert!(knowledge.extracted_rules.is_empty());
         assert_eq!(usage.input_tokens, 0);

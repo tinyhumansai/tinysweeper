@@ -13,8 +13,9 @@
 //!
 //! Four layers, in order, and each one is doing work the others cannot:
 //!
-//! 1. **Filename validation.** Only plain repository-root filenames from a
-//!    strict charset, no `/`, no `..`, bounded count — see
+//! 1. **Filename validation.** Only configured plain filenames from a strict
+//!    charset are expanded over changed-file ancestors; no configured path, no
+//!    `..`, bounded count — see
 //!    [`crate::knowledge::types::valid_instruction_file`]. Without it a config
 //!    entry is a way to read arbitrary repository paths.
 //! 2. **Fetch at the pull request's head SHA, through the forge.** Not from
@@ -237,7 +238,7 @@ impl<'a> Extractor<'a> {
         self
     }
 
-    /// Extract rules from every named file at `head_sha`.
+    /// Extract rules from every scoped file at `head_sha`.
     ///
     /// Best-effort by construction: a file that cannot be fetched, a model that
     /// errors and an answer that fails validation all contribute nothing and
@@ -254,18 +255,18 @@ impl<'a> Extractor<'a> {
         let mut rules: Vec<String> = Vec::new();
         let mut usage = Usage::default();
 
-        for name in files {
-            let file = match self.fetch(forge, repo, head_sha, name).await {
+        for path in files {
+            let file = match self.fetch(forge, repo, head_sha, path).await {
                 Ok(Some(file)) => file,
                 Ok(None) => continue,
                 Err(err) => {
-                    tracing::warn!(%err, %name, "could not read an instruction file");
+                    tracing::warn!(%err, %path, "could not read an instruction file");
                     continue;
                 }
             };
 
             if let Some(cached) = self.cache.get(&file.content_hash) {
-                tracing::debug!(%name, "extraction served from the content-hash cache");
+                tracing::debug!(%path, "extraction served from the content-hash cache");
                 merge(&mut rules, cached);
                 continue;
             }
@@ -276,7 +277,7 @@ impl<'a> Extractor<'a> {
                     self.cache.put(&file.content_hash, extracted.clone());
                     merge(&mut rules, extracted);
                 }
-                Err(err) => tracing::warn!(%err, %name, "extraction failed; ignoring the file"),
+                Err(err) => tracing::warn!(%err, %path, "extraction failed; ignoring the file"),
             }
 
             if rules.len() >= MAX_RULES {
@@ -294,17 +295,17 @@ impl<'a> Extractor<'a> {
         forge: &dyn ForgeRead,
         repo: &RepoId,
         head_sha: &str,
-        name: &str,
+        path: &str,
     ) -> Result<Option<InstructionFile>> {
         // Validated again here rather than trusted from the caller: this is the
         // function that turns a name into a request, so it is the function that
         // has to be safe on its own.
-        if !crate::knowledge::types::valid_instruction_file(name) {
-            tracing::warn!(%name, "refusing to fetch an instruction file with an unsafe name");
+        if !crate::knowledge::types::valid_instruction_path(path) {
+            tracing::warn!(%path, "refusing to fetch an instruction file with an unsafe path");
             return Ok(None);
         }
 
-        let Some(content) = forge.file_at(repo, name, head_sha).await? else {
+        let Some(content) = forge.file_at(repo, path, head_sha).await? else {
             return Ok(None);
         };
         let content = truncate_bytes(&content, self.max_bytes).to_string();
@@ -314,7 +315,7 @@ impl<'a> Extractor<'a> {
 
         Ok(Some(InstructionFile {
             content_hash: content_hash(&content),
-            path: name.to_string(),
+            path: path.to_string(),
             content,
         }))
     }

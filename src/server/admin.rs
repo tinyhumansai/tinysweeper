@@ -430,8 +430,27 @@ async fn delete_doc(
 /// The repository scope for an `owner`/`name` pair, both checked.
 fn repo_scope(owner: &str, name: &str) -> std::result::Result<KnowledgeScope, ApiError> {
     let owner = valid_login(owner)?;
-    let name = valid_login(name)?;
+    let name = valid_repository_name(name)?;
     Ok(KnowledgeScope::repo(format!("{owner}/{name}")))
+}
+
+/// Accept a GitHub repository name without applying account-login limits.
+fn valid_repository_name(name: &str) -> std::result::Result<String, ApiError> {
+    let name = name.trim();
+    let plausible = !name.is_empty()
+        && name.len() <= 100
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
+
+    if plausible {
+        Ok(name.to_string())
+    } else {
+        Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "not a plausible GitHub repository name".into(),
+        ))
+    }
 }
 
 /// Accept only a slug that is safe as part of a document id.
@@ -673,7 +692,11 @@ mod tests {
     #[test]
     fn a_repository_scope_needs_two_plausible_halves() {
         assert!(repo_scope("acme", "app").is_ok());
+        assert!(repo_scope("acme", ".github").is_ok());
+        assert!(repo_scope("acme", "foo_bar").is_ok());
+        assert!(repo_scope("acme", &"a".repeat(100)).is_ok());
         assert!(repo_scope("acme", "../etc").is_err());
+        assert!(repo_scope("acme", &"a".repeat(101)).is_err());
         assert!(repo_scope("", "app").is_err());
     }
 

@@ -44,12 +44,14 @@ cacheable system prefix. Two faults, and the second is the serious one:
 
 Copied, at source, from octopus, which had already worked this out.
 
-1. **Filename validation.** A strict charset — ASCII alphanumerics, `.`, `_`,
-   `-` — no `/`, no `..`, bounded length, bounded count. This is what stops the
-   file list becoming a way to read arbitrary repository paths. An invalid name
-   is dropped at runtime with a warning (a review must not die because someone
-   mistyped a filename) and reported by `config::validate` (a config that will
-   never read the file its author meant should say so).
+1. **Filename validation and scoped discovery.** A configured name has a strict
+   charset — ASCII alphanumerics, `.`, `_`, `-` — no `/`, no `..`, bounded
+   length and bounded count. For each changed path it is then considered at the
+   repository root and every ancestor directory, so `src/AGENTS.md` applies to
+   a changed `src/bin/main.rs`. The expanded list has its own cap. Configuration
+   can therefore select *which filenames* are policy without being a way to
+   read arbitrary repository paths. An invalid name is dropped at runtime with
+   a warning and reported by `config::validate`.
 2. **Fetch at the head SHA, through the forge.** `ForgeRead::file_at` reads the
    file at the commit under review, never from disk — there is no checkout on
    the server path. Truncated to `knowledge.max_file_bytes` and content-hashed.

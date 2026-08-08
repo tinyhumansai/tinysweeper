@@ -180,8 +180,7 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
     }
 
     // Layer 2 — repository policy.
-    if inputs.config.review.respect_agents_md
-        && let Some(policy) = inputs.repo_policy
+    if let Some(policy) = inputs.repo_policy
         && !policy.trim().is_empty()
     {
         prefix.push_str(
@@ -628,13 +627,13 @@ mod tests {
     }
 
     #[test]
-    fn policy_is_omitted_when_the_repository_opts_out() {
+    fn curated_policy_is_kept_when_the_repository_opts_out() {
         let mut config = config();
         config.review.respect_agents_md = false;
         let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
         i.repo_policy = Some("Return Result<T>, never panic.");
 
-        assert!(!build(&i).prefix().contains("Return Result<T>"));
+        assert!(build(&i).prefix().contains("Return Result<T>"));
     }
 
     #[test]

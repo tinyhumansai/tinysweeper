@@ -299,13 +299,22 @@ pub async fn review_with_context(
         config,
         repo,
         &context.pull_request.head_sha,
+        &diffs
+            .iter()
+            .map(|diff| diff.path.clone())
+            .collect::<Vec<_>>(),
         knowledge,
     )
     .await;
-    spend.record(
-        config.model_for_workload(crate::config::types::Workload::KnowledgeExtraction),
-        knowledge_usage,
-    );
+    // `gather` has no response model to report when the instruction files are
+    // absent. Do not turn that zero-cost no-op into a fictitious scan-model
+    // entry in the review's model list.
+    if knowledge_usage != Usage::default() {
+        spend.record(
+            config.model_for_workload(crate::config::types::Workload::KnowledgeExtraction),
+            knowledge_usage,
+        );
+    }
     if spend.cost_usd() > config.models.budget_usd_per_pr {
         return Err(Error::Budget {
             spent: spend.cost_usd(),

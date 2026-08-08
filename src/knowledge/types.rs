@@ -25,16 +25,22 @@ pub const MAX_RULES: usize = 25;
 /// either prose that was never a rule or a payload wearing a bullet point.
 pub const MAX_RULE_CHARS: usize = 200;
 
-/// How many instruction files are read for one review, at most.
+/// How many configured instruction file names are accepted, at most.
 ///
 /// Bounds the work a repository config can ask for: without it, a config
 /// listing a thousand filenames is a thousand forge requests per pull request.
-pub const MAX_INSTRUCTION_FILES: usize = 5;
+pub const MAX_CONFIGURED_INSTRUCTION_FILES: usize = 5;
+
+/// How many scoped instruction files are read for one review, at most.
+///
+/// One configured name can apply at the repository root and at ancestors of
+/// several changed files. This separate cap keeps that expansion bounded.
+pub const MAX_INSTRUCTION_FILES: usize = 25;
 
 /// Longest instruction filename accepted.
 pub const MAX_FILENAME_LEN: usize = 64;
 
-/// Whether `name` is a filename this module will fetch.
+/// Whether `name` is a filename this module will fetch from each scope.
 ///
 /// Strict allow-list, not a deny-list of bad shapes. An instruction filename
 /// comes from configuration that a pull request author can edit, so the
@@ -55,12 +61,33 @@ pub fn valid_instruction_file(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
 }
 
+/// Whether `path` is a safe, scoped instruction-file path.
+///
+/// Configuration supplies only a plain filename. Paths are constructed here
+/// from changed-file ancestors, so accepting a slash does not let configuration
+/// name arbitrary repository files.
+pub fn valid_instruction_path(path: &str) -> bool {
+    let Some((directory, name)) = path.rsplit_once('/') else {
+        return valid_instruction_file(path);
+    };
+
+    !directory.is_empty()
+        && valid_instruction_file(name)
+        && directory.split('/').all(|component| {
+            !component.is_empty()
+                && !component.contains("..")
+                && component
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+        })
+}
+
 /// The instruction files to actually fetch, from a configured list.
 ///
 /// Invalid names are dropped rather than fatal: one bad entry in a repository's
 /// config must not cost it the whole review, and the alternative — failing —
 /// hands any contributor a way to break the bot by editing one line. Duplicates
-/// collapse, and the result is capped at [`MAX_INSTRUCTION_FILES`].
+/// collapse, and the result is capped at [`MAX_CONFIGURED_INSTRUCTION_FILES`].
 pub fn selected_instruction_files(configured: &[String]) -> Vec<String> {
     let mut selected: Vec<String> = Vec::new();
     for name in configured {
@@ -72,11 +99,47 @@ pub fn selected_instruction_files(configured: &[String]) -> Vec<String> {
         if !selected.iter().any(|existing| existing == name) {
             selected.push(name.to_string());
         }
-        if selected.len() == MAX_INSTRUCTION_FILES {
+        if selected.len() == MAX_CONFIGURED_INSTRUCTION_FILES {
             break;
         }
     }
     selected
+}
+
+/// Expand each configured filename across every changed path's ancestors.
+///
+/// The root is always included. A file such as `src/bin/main.rs` therefore
+/// considers both `AGENTS.md` and `src/AGENTS.md`; the latter is what lets a
+/// directory scope its own review policy. The final cap bounds forge reads and
+/// model work even for a pull request touching a very wide tree.
+pub fn scoped_instruction_files(configured: &[String], changed_paths: &[String]) -> Vec<String> {
+    let names = selected_instruction_files(configured);
+    let mut paths = std::collections::BTreeSet::new();
+
+    for name in &names {
+        paths.insert(name.clone());
+    }
+    for changed_path in changed_paths {
+        let components: Vec<_> = changed_path.split('/').collect();
+        if components.len() < 2
+            || components.iter().any(|component| {
+                component.is_empty()
+                    || *component == "."
+                    || *component == ".."
+                    || component.contains("..")
+            })
+        {
+            continue;
+        }
+        for depth in 1..components.len() {
+            let directory = components[..depth].join("/");
+            for name in &names {
+                paths.insert(format!("{directory}/{name}"));
+            }
+        }
+    }
+
+    paths.into_iter().take(MAX_INSTRUCTION_FILES).collect()
 }
 
 /// One instruction file as fetched, before extraction.
@@ -201,9 +264,32 @@ mod tests {
             .chain((0..10).map(|i| format!("F{i}.md")))
             .collect();
         let selected = selected_instruction_files(&configured);
-        assert_eq!(selected.len(), MAX_INSTRUCTION_FILES);
+        assert_eq!(selected.len(), MAX_CONFIGURED_INSTRUCTION_FILES);
         assert_eq!(selected[0], "AGENTS.md");
         assert_eq!(selected.iter().filter(|n| *n == "AGENTS.md").count(), 1);
+    }
+
+    #[test]
+    fn instruction_paths_include_changed_file_ancestors() {
+        let paths = scoped_instruction_files(
+            &["AGENTS.md".to_string()],
+            &["src/bin/tinysweeper.rs".to_string()],
+        );
+        assert_eq!(
+            paths,
+            vec![
+                "AGENTS.md".to_string(),
+                "src/AGENTS.md".to_string(),
+                "src/bin/AGENTS.md".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn scoped_instruction_paths_do_not_accept_unsafe_components() {
+        assert!(valid_instruction_path("src/AGENTS.md"));
+        assert!(!valid_instruction_path("src/../AGENTS.md"));
+        assert!(!valid_instruction_path("/AGENTS.md"));
     }
 
     #[test]
