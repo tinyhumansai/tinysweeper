@@ -74,25 +74,28 @@ cargo build --release --features all
 name: tinysweeper
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-permissions:
-  contents: read
-  checks: write
-  pull-requests: write
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  issue_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+concurrency:
+  group: tinysweeper-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
 jobs:
   review:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      - uses: tinyhumansai/tinysweeper@v1
-        with:
-          openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+    uses: tinyhumansai/tinysweeper/.github/workflows/review.yml@v1
+    secrets:
+      openrouter-api-key: ${{ secrets.TINYSWEEPER_OPENROUTER_KEY }}
 ```
 
-Configure it with a `.tinysweeper.toml` at the repository root. Validate your
-config with `tinysweeper check`.
+That is the whole installation. The review itself lives in the reusable
+workflow, so improvements reach every repository without editing any of them.
+
+Configure behaviour with a `.tinysweeper.toml` at the repository root, and
+validate it with `tinysweeper check`. See [docs/triggers.md](docs/triggers.md)
+for what fires when — including the things GitHub emits no event for at all,
+and how fork pull requests differ.
 
 ## Run the engine locally
 
@@ -102,6 +105,17 @@ no tokens — useful before you push, and the way prompt changes get iterated.
 ```sh
 tinysweeper local-review --base origin/main
 ```
+
+## No server
+
+tinysweeper runs entirely in GitHub Actions. There is no webhook receiver to
+host, no public endpoint, and no App private key sitting on a machine somewhere.
+
+That is a deliberate choice rather than a missing feature: Actions already
+receives every repository event a server would subscribe to, and the two things
+a server is usually wanted for — reacting to a resolved review thread, or to a
+👎 on a comment — have no webhook event at all, so a server could not do them
+either. tinysweeper reads that state when it runs instead.
 
 ## Built on
 
