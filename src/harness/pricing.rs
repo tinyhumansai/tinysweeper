@@ -179,6 +179,15 @@ pub fn completion_cost(
 /// completion model is: indexing a repository is the largest token count this
 /// program produces, and it must not be the one that escapes the budget.
 pub fn embedding_cost(signature: &str, tokens: u64) -> f64 {
+    // A locally served model is not billed by anybody, and listing every GGUF
+    // somebody might run behind Ollama is a table nobody can keep current. The
+    // rule is the provider, not the model: `ollama` means the vectors were
+    // computed on this machine, and charging the ceiling for that would make
+    // the budget stop a run that costs nothing.
+    if signature.starts_with("ollama/") {
+        return 0.0;
+    }
+
     let per_million = EMBED_PRICES
         .iter()
         .find(|(id, _)| *id == signature)
@@ -245,6 +254,14 @@ mod tests {
     fn unpriced_names_only_the_models_missing_from_the_table() {
         let missing = unpriced(["moonshotai/kimi-k3", "someone/unreleased"]);
         assert_eq!(missing, vec!["someone/unreleased".to_string()]);
+    }
+
+    #[test]
+    fn a_locally_served_model_is_free_whatever_it_is_called() {
+        // The provider is the rule, not the model id: nobody bills for vectors
+        // computed on this machine, and a table of every GGUF is unmaintainable.
+        assert_eq!(embedding_cost("ollama/nomic-embed-text", 10_000_000), 0.0);
+        assert_eq!(embedding_cost("ollama/anything-at-all", 10_000_000), 0.0);
     }
 
     #[test]

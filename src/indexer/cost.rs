@@ -72,6 +72,12 @@ pub const PRICES: &[(&str, f64)] = &[
 /// change the rate.
 pub fn cost_of(model: &str, tokens: u64) -> f64 {
     let key = strip_dims(model);
+    // Same rule as `harness::pricing::embedding_cost`: a model served locally by
+    // Ollama is not billed by anybody, and the provider is what says so — a
+    // table of every GGUF somebody might run is one nobody can keep current.
+    if key.starts_with("ollama:") {
+        return 0.0;
+    }
     let Some((_, per_million)) = PRICES.iter().find(|(id, _)| *id == key) else {
         tracing::warn!(
             model = key,
