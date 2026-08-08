@@ -98,6 +98,12 @@ pub struct LaneProposal {
     /// dedupe from an empty review.
     #[serde(default)]
     pub deduped: usize,
+    /// Highest confidence-qualified severity before dedupe and display caps.
+    ///
+    /// Retained so publishing cannot clear a blocking review merely because
+    /// its still-open finding was suppressed as already posted.
+    #[serde(default)]
+    pub highest_severity: Option<Severity>,
 }
 
 impl Proposal {
@@ -109,6 +115,15 @@ impl Proposal {
     /// Every finding across every lane.
     pub fn findings(&self) -> impl Iterator<Item = &Finding> {
         self.lanes.iter().flat_map(|l| l.findings.iter())
+    }
+
+    /// Whether any lane raised a finding at or above `threshold`, including a
+    /// finding that was suppressed because it already has an inline comment.
+    pub fn has_severity_at_or_above(&self, threshold: Severity) -> bool {
+        self.lanes.iter().any(|lane| {
+            lane.highest_severity
+                .is_some_and(|severity| severity >= threshold)
+        })
     }
 }
 
@@ -156,6 +171,7 @@ pub async fn review_with_state(
                 findings: vec![],
                 resolved: vec![],
                 deduped: 0,
+                highest_severity: None,
             }],
             cost_usd: 0.0,
             input_tokens: 0,
@@ -214,6 +230,7 @@ pub async fn review_with_state(
                     findings: vec![],
                     resolved: vec![],
                     deduped: 0,
+                    highest_severity: None,
                 });
                 continue;
             }
@@ -308,6 +325,7 @@ pub async fn review_with_state(
                 findings: posted,
                 resolved: vec![],
                 deduped,
+                highest_severity: Some(Severity::High),
             });
         }
     }
@@ -327,23 +345,13 @@ pub async fn review_with_state(
     if let Some(store) = store
         && config.review.incremental
     {
-        // What the next review must not repeat: everything already suppressed,
-        // plus the identities this review is about to publish. Recording only
-        // the former would mean a first review remembers nothing, so the second
-        // review re-posts every finding — the exact duplication this store
-        // exists to prevent.
-        let mut fingerprints: BTreeSet<String> = suppressed.iter().cloned().collect();
-        fingerprints.extend(
-            lanes
-                .iter()
-                .flat_map(|lane| lane.findings.iter())
-                .filter_map(|finding| finding.identity.clone()),
-        );
-
         let next = ReviewedState {
             head_sha: context.pull_request.head_sha.clone(),
             evidence: replay::render(&diffs),
-            fingerprints: fingerprints.into_iter().collect(),
+            // New identities are recorded by `apply` after their review has
+            // been created successfully. Retaining only known posted values
+            // here makes a stale or failed publish retryable.
+            fingerprints: suppressed.into_iter().collect(),
             titles: still_open_titles(&prior_titles, &lanes),
         };
         if let Err(err) = store.save_state(&state_key, &next).await {
@@ -439,6 +447,10 @@ fn already_posted(finding: &Finding, suppressed: &BTreeSet<String>) -> bool {
         .identity
         .as_deref()
         .is_some_and(|id| suppressed.contains(id))
+        // Before code-anchored identities, markers used the title as the
+        // fingerprint context. Accept them during the migration so existing
+        // unresolved threads are not duplicated on their next push.
+        || suppressed.contains(&finding.fingerprint(&finding.title))
 }
 
 /// The prior findings this cycle did not report as fixed, plus what it raised.
@@ -518,6 +530,10 @@ fn lane_proposal(
     } else {
         CheckConclusion::Success
     };
+    let highest_severity = confidence_qualified
+        .iter()
+        .map(|finding| finding.severity)
+        .max();
 
     let mut findings: Vec<Finding> = outcome
         .findings
@@ -588,6 +604,7 @@ fn lane_proposal(
         findings,
         resolved,
         deduped,
+        highest_severity,
     }
 }
 
@@ -619,6 +636,7 @@ fn gate(lanes: &[LaneProposal]) -> LaneProposal {
         findings: vec![],
         resolved: vec![],
         deduped: 0,
+        highest_severity: None,
     }
 }
 
@@ -1331,7 +1349,7 @@ mod tests {
             remembered.evidence.contains("--- src/main.rs"),
             "the replay must be the rendered evidence"
         );
-        assert_eq!(remembered.fingerprints.len(), 1);
+        assert!(remembered.fingerprints.is_empty());
         assert_eq!(
             remembered.titles,
             vec!["Guard the index before dereferencing"]
@@ -1351,6 +1369,9 @@ mod tests {
             .await
             .expect("reviews");
         assert_eq!(first.findings().count(), 1);
+        crate::app::apply::apply(&forge, &forge, &config, &first, Some(&store))
+            .await
+            .expect("publishes");
 
         // A brand-new forge: nothing has ever been posted as far as it knows.
         let amnesiac = forge_with(vec![rust_file()], vec![]);

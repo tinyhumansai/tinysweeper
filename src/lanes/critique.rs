@@ -30,7 +30,6 @@ use crate::config::types::LaneId;
 use crate::error::Result;
 use crate::evidence::diff::FileDiff;
 use crate::evidence::replay;
-use crate::findings::types::Finding;
 use crate::falsify::Falsifier;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema::{self, RawFinding};
@@ -72,12 +71,16 @@ impl Lane for Critique {
             ));
         }
 
-        // The evidence is split against what the last cycle sent, so a file
-        // nobody touched since then lands in the cacheable prefix and only the
-        // delta is charged at full price. `reviewed_evidence` is empty on a
-        // first review, and then this is the whole diff as new work.
+        // Put the initial complete diff in the same serialized prefix where a
+        // later run replays it. Providers cache byte-identical prefixes; using
+        // the user-message position on the first run would make that first
+        // evidence miss the cache again on the next run.
         let evidence = replay::render(input.diffs);
-        let (reviewed_evidence, new_evidence) = replay::split(input.reviewed_evidence, &evidence);
+        let (reviewed_evidence, new_evidence) = if input.reviewed_evidence.is_empty() {
+            (evidence.clone(), String::new())
+        } else {
+            replay::split(input.reviewed_evidence, &evidence)
+        };
         let built = prompt::build(&PromptInputs {
             lane: LaneId::Critique,
             config: input.config,
@@ -140,7 +143,10 @@ impl Lane for Critique {
                         diff: Some(diff),
                         file: input.file_contents.get(&raw.path).map(String::as_str),
                         comment: &comment,
-                        rendered_diff: &new_evidence,
+                        // Relocation and falsification need the complete
+                        // current evidence even when that evidence was placed
+                        // in the cacheable prompt prefix on an initial run.
+                        rendered_diff: &evidence,
                     },
                     &mut usage,
                 )
@@ -173,7 +179,7 @@ impl Lane for Critique {
         // Step 5, on the findings that survived positioning. It sees only the
         // diff, and it can only remove.
         let filtered = Falsifier::new(self.model.as_ref(), input.config)
-            .filter(LaneId::Critique, findings, &new_evidence)
+            .filter(LaneId::Critique, findings, &evidence)
             .await;
         usage.add(filtered.usage);
 

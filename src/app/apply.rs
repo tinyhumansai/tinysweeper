@@ -135,7 +135,7 @@ fn review_event(config: &Config, proposal: &Proposal, blocking_now: bool) -> Rev
     // The severity is read from the lane's findings rather than the surviving
     // comments, so a recurred problem whose comment was deduped away still
     // blocks — being already visible is not being fixed.
-    let severe_enough = proposal.findings().any(|f| f.severity >= threshold);
+    let severe_enough = proposal.has_severity_at_or_above(threshold);
     if proposal.blocked() && severe_enough {
         ReviewEvent::RequestChanges
     } else if blocking_now {
@@ -302,6 +302,7 @@ mod tests {
     }
 
     fn proposal(head: &str, findings: Vec<Finding>) -> Proposal {
+        let highest_severity = findings.iter().map(|finding| finding.severity).max();
         Proposal {
             version: 1,
             repo: "tinyhumansai/tinysweeper".into(),
@@ -319,6 +320,7 @@ mod tests {
                 findings,
                 resolved: vec![],
                 deduped: 0,
+                highest_severity,
             }],
             cost_usd: 0.01,
             input_tokens: 10_000,
@@ -511,6 +513,7 @@ mod tests {
             &forge,
             &config(),
             &proposal("abc123", vec![unanchored]),
+            None,
         )
         .await
         .expect("applies");
@@ -558,6 +561,24 @@ mod tests {
         let (body, event) = review_of(&forge).expect("an approval was posted");
         assert_eq!(event, ReviewEvent::Approve);
         assert!(body.contains("Clearing the changes request"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_deduped_high_finding_keeps_an_existing_block() {
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::RequestChanges);
+        let mut proposal = proposal("abc123", vec![]);
+        proposal.lanes[0].conclusion = CheckConclusion::Failure;
+        proposal.lanes[0].highest_severity = Some(Severity::High);
+        proposal.lanes[0].deduped = 1;
+
+        apply(&forge, &forge, &config(), &proposal, None)
+            .await
+            .expect("applies");
+
+        assert_eq!(
+            review_of(&forge).expect("a blocking review was posted").1,
+            ReviewEvent::RequestChanges
+        );
     }
 
     #[tokio::test]
