@@ -108,7 +108,10 @@ jobs:
       # GITHUB_TOKEN is read-only.
       - name: Mint an installation token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        # Pinned to a commit, not a tag: this action mints a write-scoped
+        # installation token, so a re-tagged `v2` is a supply-chain path
+        # straight to the App's write credential.
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         with:
           app-id: ${{ vars.TINYSWEEPER_APP_ID }}
           private-key: ${{ secrets.TINYSWEEPER_APP_PRIVATE_KEY }}
