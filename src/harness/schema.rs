@@ -82,6 +82,10 @@ impl RawFinding {
             body: scrub(&self.body),
             suggestion: self.suggestion.as_deref().map(scrub),
             late: self.late,
+            // Stamped later, by review, once the diff is in hand: the identity
+            // is a hash of the code the finding anchors to, and a model's
+            // structured output has no business choosing it.
+            identity: None,
         }
     }
 }
