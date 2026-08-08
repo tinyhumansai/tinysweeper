@@ -13,11 +13,9 @@
 //! and every path under `/admin` 404s, because the alternative to fail-closed
 //! here is shipping an unauthenticated write endpoint.
 //!
-//! Contributor trust and knowledge documents are complete. Index status is
-//! declared but returns `501`: the store behind it lands in another
-//! workstream, and the same reasoning that declares every CLI subcommand up
-//! front applies here — a stable coordinate shape lets the caller be written
-//! now. That stub is marked `TODO(index-store)`.
+//! Every route is implemented. The index routes answer `503` on a deployment
+//! with no embedding provider, which is not a stub: there is genuinely no index
+//! to report on, and saying so is a different answer from an empty one.
 //!
 //! The knowledge routes are the write side of the knowledge centre. A document
 //! body reaches a review prompt, so these endpoints are the *only* trusted way
