@@ -208,6 +208,8 @@ pub async fn review_with_state(
                     conclusion: CheckConclusion::Neutral,
                     summary: "Not implemented yet.".into(),
                     findings: vec![],
+                    resolved: vec![],
+                    deduped: 0,
                 });
                 continue;
             }
