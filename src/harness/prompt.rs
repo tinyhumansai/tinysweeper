@@ -119,13 +119,25 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
         prefix.push_str(&path_rules);
     }
 
-    // Layer 3 — evidence already reviewed, replayed verbatim.
+    // Layer 3 — evidence, in consistent prefix position for cache hits.
+    // To hit prompt caching on subsequent reviews, evidence must be at the same
+    // byte position in the prefix regardless of whether it's a first review (all
+    // new), second review (some reviewed, some new), or later. Putting all
+    // evidence in the prefix — with a consistent structure — ensures the bytes
+    // match up and the cache prefix can be reused.
+    prefix.push_str("\n## Evidence\n\n");
     if !inputs.reviewed_evidence.trim().is_empty() {
-        prefix.push_str(
-            "\n## Already reviewed\n\n\
-             This diff was reviewed in an earlier cycle. It is here for context.\n\n",
-        );
+        prefix.push_str("Already reviewed (for context):\n\n");
         push_fenced(&mut prefix, "diff", inputs.reviewed_evidence);
+        prefix.push_str("\n");
+    }
+    if !inputs.new_evidence.trim().is_empty() {
+        if inputs.reviewed_evidence.trim().is_empty() {
+            prefix.push_str("Complete diff:\n\n");
+        } else {
+            prefix.push_str("Changes since last review:\n\n");
+        }
+        push_fenced(&mut prefix, "diff", inputs.new_evidence);
     }
 
     let mut suffix = String::with_capacity(2048);
@@ -139,14 +151,9 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
         suffix.push_str(CONTINUITY_CONTRACT);
     }
 
-    // Layer 5 — the delta.
-    suffix.push_str("\n## Review this\n\n");
-    if inputs.reviewed_evidence.trim().is_empty() {
-        suffix.push_str("The complete diff:\n\n");
-    } else {
-        suffix.push_str("Only the commits added since the last review:\n\n");
-    }
-    push_fenced(&mut suffix, "diff", inputs.new_evidence);
+    // Layer 5 — the task. Evidence is now in the prefix, so the suffix
+    // contains only the instruction on what to do with it.
+    suffix.push_str("\n## Task\n\nReview the evidence above.");
 
     Prompt { prefix, suffix }
 }
