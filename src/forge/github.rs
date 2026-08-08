@@ -199,8 +199,9 @@ impl ForgeRead for GitHubRead {
                 line: c.line.unwrap_or(0),
                 start_line: c.start_line,
                 // Carried through because dedupe refuses to trust a marker in
-                // anyone else's comment.
-                author: c.user.login,
+                // anyone else's comment. No author means no trusted marker: an
+                // unattributed comment is treated exactly like a stranger's.
+                author: c.user.map(|u| u.login).unwrap_or_default(),
                 body: c.body,
             })
             .collect())
