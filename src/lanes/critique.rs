@@ -89,6 +89,7 @@ impl Lane for Critique {
             prior_findings: input.prior_findings,
             new_evidence: &new_evidence,
             changed_paths: &changed_paths,
+            retrieved_context: input.retrieved_context,
             ..PromptInputs::new(LaneId::Critique, input.config)
         });
 
@@ -335,6 +336,7 @@ fn helper() {
                 extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
+                retrieved_context: "",
             })
             .await
             .expect("lane runs")
@@ -656,6 +658,7 @@ fn helper() {
                 extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
+                retrieved_context: "",
             })
             .await
             .expect("runs");
@@ -707,6 +710,7 @@ fn helper() {
                 extracted_rules: &[],
                 reviewed_evidence: &reviewed,
                 prior_findings: &["Close the socket on the error path".to_string()],
+                retrieved_context: "",
             })
             .await
             .expect("runs");
@@ -750,6 +754,7 @@ fn helper() {
                 extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
+                retrieved_context: "",
             })
             .await
             .unwrap_err();

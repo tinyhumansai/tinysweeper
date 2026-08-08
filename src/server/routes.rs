@@ -370,7 +370,18 @@ async fn run_and_publish(
     // push replay this run's evidence verbatim and pay cache prices for it.
     // Dedupe does not depend on it — that reads the markers off the pull
     // request — so a database problem costs money, never a duplicate comment.
-    let proposal = crate::app::review::review_with_context(
+    // Retrieval is attached when a provider is configured, and left off when
+    // one is not. Both are supported: `crate::retrieve` never errors, it
+    // returns a status the check-run summary states, so a cold index, a stale
+    // one or an unreachable database all produce a diff-only review that says
+    // it is diff-only rather than one that quietly is.
+    let retriever = state.index.as_ref().map(|backend| {
+        crate::retrieve::Retriever::new(backend.embedder.as_ref(), &backend.index.code)
+            .with_graph(&backend.index.graph)
+            .with_manifest(backend.manifest.as_ref())
+    });
+
+    let proposal = crate::app::review::review_with_retrieval(
         forge,
         model,
         &state.config.config,
@@ -378,6 +389,7 @@ async fn run_and_publish(
         number,
         Some(&state.store),
         state.knowledge.as_deref(),
+        retriever.as_ref(),
     )
     .await?;
 

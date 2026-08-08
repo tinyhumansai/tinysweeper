@@ -25,6 +25,18 @@ pub struct Hunk {
     pub new_start: u64,
     /// How many head-revision lines it covers.
     pub new_lines: u64,
+    /// The text after the second `@@`, when the differ emitted any.
+    ///
+    /// Git puts the enclosing definition there — usually a function signature
+    /// or a type header — which is the cheapest statement available of *what*
+    /// this hunk is inside. Retrieval builds its query out of it, and seeds the
+    /// graph with the symbol it names, so it is retained rather than dropped at
+    /// parse time.
+    ///
+    /// Deliberately **not** rendered back out by [`render`]: that output is
+    /// replayed byte-for-byte on the next push to hit the prompt cache, and
+    /// widening it would invalidate every replay already on record.
+    pub heading: String,
     /// The hunk's lines, in order.
     pub lines: Vec<DiffLine>,
 }
@@ -311,6 +323,7 @@ fn parse_hunk_header(line: &str) -> Option<Hunk> {
     let body = line.strip_prefix("@@")?;
     let end = body.find("@@")?;
     let ranges = &body[..end];
+    let heading = body[end + 2..].trim().to_string();
 
     let mut old = None;
     let mut new = None;
@@ -330,6 +343,7 @@ fn parse_hunk_header(line: &str) -> Option<Hunk> {
         old_lines,
         new_start,
         new_lines,
+        heading,
         lines: Vec::new(),
     })
 }
@@ -428,10 +442,22 @@ mod tests {
     }
 
     #[test]
-    fn a_hunk_heading_after_the_second_marker_is_ignored() {
+    fn a_hunk_heading_after_the_second_marker_is_kept_but_never_rendered() {
+        // Kept because it names the enclosing definition, which is what
+        // retrieval seeds its query and its graph walk with. Never rendered,
+        // because `replay::render` output is replayed byte-for-byte for the
+        // prompt cache.
         let patch = "@@ -1,2 +1,3 @@ fn main() {\n a\n+b\n c\n";
         let diff = parse_file_patch("f.txt", patch);
         assert_eq!(diff.changed_lines, [2].into_iter().collect());
+        assert_eq!(diff.hunks[0].heading, "fn main() {");
+        assert!(!render(&[diff]).contains("fn main"));
+    }
+
+    #[test]
+    fn a_hunk_with_no_heading_reports_an_empty_one() {
+        let diff = parse_file_patch("f.txt", "@@ -1 +1 @@\n-old\n+new\n");
+        assert!(diff.hunks[0].heading.is_empty());
     }
 
     #[test]

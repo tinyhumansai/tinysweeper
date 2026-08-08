@@ -227,6 +227,8 @@ pub struct Config {
     pub knowledge: Knowledge,
     /// Which embedding provider fills and queries the code index.
     pub embeddings: Embeddings,
+    /// How much repository context a review retrieves, and what it costs.
+    pub retrieval: Retrieval,
     /// Per-lane overrides, keyed by lane id.
     pub lanes: BTreeMap<String, Lane>,
     /// Auto-merge policy.
@@ -442,6 +444,47 @@ impl Embeddings {
             )
         })
     }
+}
+
+/// What a review retrieves from the code index before it reads the diff.
+///
+/// Every dial here is a **budget**, and that is the point of the section
+/// existing at all. Retrieval with no stated ceiling is the failure mode this
+/// was written against: fifteen chunks of a few kilobytes look generous next to
+/// a small pull request and are a rounding error next to a 300 KB diff, so the
+/// retrieved context silently stops being context and becomes garnish. Stating
+/// the budget in tokens means the share retrieval gets is a decision somebody
+/// made rather than an accident of how big the diff happened to be.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Retrieval {
+    /// Whether a review retrieves anything at all.
+    ///
+    /// Turning it off is a supported deployment, not a degradation: a review
+    /// with no index behind it is exactly what tinysweeper did before this
+    /// existed.
+    pub enabled: bool,
+    /// Character ceiling on the composed retrieval query.
+    ///
+    /// The query is built from the pull request rather than *being* the pull
+    /// request, so embedding cost is constant no matter how large the diff is.
+    pub query_chars: usize,
+    /// Token ceiling on the retrieved context handed to one lane.
+    pub context_tokens: usize,
+    /// Hard cap on how many chunks reach the prompt, whatever the token budget
+    /// would allow. A hundred two-line chunks are worse context than ten whole
+    /// functions of the same size.
+    pub max_chunks: usize,
+    /// How many graph edges to walk out from the symbols the diff touches.
+    ///
+    /// Two, by default, and the count is not arbitrary: seeds are file nodes
+    /// and the symbols named in hunk headings, so one hop reaches a changed
+    /// file's own definitions and the second reaches whatever calls them —
+    /// which is the caller a change breaks, the thing similarity search cannot
+    /// find.
+    pub graph_hops: u8,
+    /// Hard ceiling on nodes returned by the walk, applied after it.
+    pub max_graph_nodes: usize,
 }
 
 /// Model work that is not a lane.

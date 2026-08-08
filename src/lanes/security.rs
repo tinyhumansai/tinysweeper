@@ -91,6 +91,7 @@ impl Lane for Security {
                 let repo_policy = input.repo_policy;
                 let extracted_rules = input.extracted_rules;
                 let prior_findings = input.prior_findings;
+                let retrieved_context = input.retrieved_context;
                 let diffs = input.diffs;
                 let scanner = &scanner;
                 async move {
@@ -104,6 +105,7 @@ impl Lane for Security {
                         repo_policy,
                         extracted_rules,
                         prior_findings,
+                        retrieved_context,
                         diff,
                         scanner,
                     )
@@ -119,12 +121,19 @@ impl Lane for Security {
 }
 
 /// Review one file, in a conversation that knows about no other file.
+///
+// Every argument is one prompt layer, and they are passed individually rather
+// than as a context struct because each has a different trust level — see
+// `harness::prompt`. Bundling them would make it easy to route the untrusted
+// ones to the wrong half of the prompt.
+#[allow(clippy::too_many_arguments)]
 async fn review_file(
     model: &dyn Model,
     config: &crate::config::types::Config,
     repo_policy: Option<&str>,
     extracted_rules: &[String],
     prior_findings: &[String],
+    retrieved_context: &str,
     diff: &FileDiff,
     scanner: &[&ScanFinding],
 ) -> Result<FileReview> {
@@ -138,6 +147,7 @@ async fn review_file(
         new_evidence: &evidence,
         focus_path: Some(&diff.path),
         scanner_evidence: &scanner_evidence,
+        retrieved_context,
         ..PromptInputs::new(LaneId::Security, config)
     });
 
@@ -282,6 +292,7 @@ mod tests {
                 extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
+                retrieved_context: "",
             })
             .await
             .expect("lane runs")
@@ -482,6 +493,7 @@ mod tests {
                 extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
+                retrieved_context: "",
             })
             .await
             .expect("runs");
