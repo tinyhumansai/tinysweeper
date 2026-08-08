@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use crate::error::Result;
 use crate::forge::types::{
     ChangedFile, CheckRun, Commit, Issue, IssueComment, PullRequest, PullRequestContext, RepoId,
-    ReviewComment,
+    ReviewComment, ReviewEvent,
 };
 
 /// Read access to a forge. This is what lanes get.
@@ -34,6 +34,13 @@ pub trait ForgeRead: Send + Sync {
     /// Used for fingerprint dedupe: a finding already posted is never posted
     /// again, across pushes.
     async fn review_comments(&self, repo: &RepoId, number: u64) -> Result<Vec<ReviewComment>>;
+
+    /// The state of tinysweeper's own most recent review on a pull request.
+    ///
+    /// `None` when it has never reviewed. Used to clear a stale
+    /// changes-requested verdict, which GitHub will otherwise leave blocking
+    /// the merge button forever.
+    async fn own_review_state(&self, repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>>;
 
     /// Fetch an issue.
     async fn issue(&self, repo: &RepoId, number: u64) -> Result<Issue>;
@@ -74,12 +81,18 @@ pub trait ForgeWrite: Send + Sync {
     async fn update_comment(&self, repo: &RepoId, comment_id: u64, body: &str) -> Result<()>;
 
     /// Post inline review comments as a single review.
+    ///
+    /// `event` decides whether the review blocks the merge button. Callers are
+    /// responsible for clearing a previous block with
+    /// [`ReviewEvent::Approve`] once the findings are gone; GitHub keeps only
+    /// the latest review per reviewer, and a stale objection blocks forever.
     async fn create_review(
         &self,
         repo: &RepoId,
         number: u64,
         body: &str,
         comments: Vec<ReviewComment>,
+        event: ReviewEvent,
     ) -> Result<()>;
 
     /// Add labels to an issue or pull request.
