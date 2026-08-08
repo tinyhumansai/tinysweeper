@@ -164,13 +164,14 @@ impl Lane for Critique {
 
 /// The head-revision range a finding may be posted against, if any.
 ///
-/// Two rules, both about not putting a comment on unrelated code:
-///
-/// - A finding the resolver could not place has no range. It survives without
-///   one and is rendered into the summary.
-/// - A placed finding outside the changed lines also loses its range unless it
-///   is `late`. GitHub rejects an inline comment too far from the diff, and a
-///   finding about untouched code has to declare itself as one.
+/// One rule: the range has to be inside a hunk, because that is exactly what
+/// GitHub will accept an inline comment on. That is deliberately wider than
+/// *the lines this pull request changed* — a finding that quotes a context
+/// line inside the hunk is about the change too, and the quotation is evidence
+/// the model really did read that line rather than guess at it. It is also
+/// deliberately narrower than *anywhere in the file*: a finding that resolved
+/// through the whole-file fallback to code the diff never showed cannot be
+/// posted inline, so it goes in the summary rather than being thrown away.
 fn postable_range(raw: &RawFinding, diff: &FileDiff, resolution: Resolution) -> Option<(u64, u64)> {
     let (start, end) = match resolution {
         Resolution::Anchored(anchor) => (anchor.start, anchor.end),
