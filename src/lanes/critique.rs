@@ -337,7 +337,12 @@ mod tests {
         let config = config();
         let model = MockModel::silent();
         let pr = pull_request();
-        let diffs = diffs();
+
+        // The earlier cycle reviewed `src/earlier.rs`; this push adds
+        // `src/main.rs`. The replay has to be the earlier file, byte for byte.
+        let earlier = parse_file_patch("src/earlier.rs", "@@ -1,1 +1,2 @@\n a\n+earlier\n");
+        let reviewed = replay::render(std::slice::from_ref(&earlier));
+        let diffs = vec![earlier, parse_file_patch("src/main.rs", PATCH)];
 
         Critique::new(Arc::new(model.clone()))
             .run(LaneInput {
@@ -346,7 +351,7 @@ mod tests {
                 diffs: &diffs,
                 scan_findings: &[],
                 repo_policy: None,
-                reviewed_evidence: "@@ -1 +1 @@\n+earlier\n",
+                reviewed_evidence: &reviewed,
                 prior_findings: &["Close the socket on the error path".to_string()],
             })
             .await
@@ -361,6 +366,7 @@ mod tests {
             "replay must be in the cached half"
         );
         assert!(!user.contains("+earlier"));
+        assert!(user.contains("src/main.rs"), "the delta is the new work");
         assert!(
             user.contains("Close the socket"),
             "prior findings are volatile"
