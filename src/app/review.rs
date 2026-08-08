@@ -1114,7 +1114,7 @@ mod tests {
                 "push {push} stopped blocking once the comment was deduped"
             );
 
-            crate::app::apply::apply(&forge, &forge, &config, &proposal)
+            crate::app::apply::apply(&forge, &forge, &config, &proposal, None)
                 .await
                 .expect("applies");
         }
@@ -1278,7 +1278,7 @@ mod tests {
             let proposal = review(&forge, model.clone(), &config, &repo(), 7)
                 .await
                 .expect("reviews");
-            crate::app::apply::apply(&forge, &forge, &config, &proposal)
+            crate::app::apply::apply(&forge, &forge, &config, &proposal, None)
                 .await
                 .expect("applies");
         }
@@ -1365,7 +1365,7 @@ mod tests {
                 .await
                 .expect("reviews");
             assert!(proposal.blocked(), "a committed key stopped blocking");
-            crate::app::apply::apply(&forge, &forge, &config, &proposal)
+            crate::app::apply::apply(&forge, &forge, &config, &proposal, None)
                 .await
                 .expect("applies");
         }
