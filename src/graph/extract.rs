@@ -110,15 +110,28 @@ pub fn parse_as(file: &SourceFile, language: Language) -> Result<ParsedFile> {
         }
     }
 
-    for (name, at) in bodyless_mods {
+    for (name, path_attribute, at, byte) in bodyless_mods {
         // `mod foo;` names a sibling file. Marked with a `mod ` prefix so the
         // resolver can tell it apart from a `use` path, which is resolved
         // against the crate root instead of the current directory.
+        //
+        // `#[path = "..."]` overrides that lookup entirely, and this repository
+        // uses it for every out-of-line test module — so honouring it is the
+        // difference between the graph seeing its own test files and not.
+        let specifier = match path_attribute {
+            Some(relative) => format!("path {relative}"),
+            None => format!("mod {name}"),
+        };
         imports.push(ImportStmt {
-            specifier: format!("mod {name}"),
+            specifier,
             names: vec![name],
             line: at,
+            byte,
         });
+    }
+
+    if language == Language::Rust {
+        imports.retain(|import| !names_the_enclosing_file(import, &inline_mods));
     }
 
     // An identifier in call position is also matched by the bare-identifier
