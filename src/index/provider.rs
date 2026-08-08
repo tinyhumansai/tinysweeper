@@ -143,13 +143,17 @@ fn build_model(
 
     let model: Arc<dyn EmbeddingModel> = match provider {
         "voyage" => {
-            let mut built = VoyageEmbeddingModel::new(key(())?)
-                .with_model(&signature.model)
-                .with_dimensions(signature.dims);
-            if !base_url.is_empty() {
-                built = built.with_base_url(base_url);
-            }
-            Arc::new(built)
+            let url = if base_url.is_empty() {
+                tinyagents::harness::embeddings::VOYAGE_API_BASE
+            } else {
+                base_url
+            };
+            Arc::new(VoyageEmbeddingModel::with_options(
+                key(())?,
+                &signature.model,
+                signature.dims,
+                url,
+            ))
         }
         "openai" => {
             let mut built = OpenAiEmbeddingModel::new(key(())?)
