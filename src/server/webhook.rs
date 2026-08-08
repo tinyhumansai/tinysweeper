@@ -7,7 +7,7 @@
 
 use hmac::{Hmac, Mac};
 use serde::Deserialize;
-use sha2_hmac_compat::Sha256;
+use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
 use crate::error::{Error, Result};
