@@ -240,6 +240,44 @@ pub fn parse_changed_files(files: &[ChangedFile]) -> Vec<FileDiff> {
         .collect()
 }
 
+/// Render parsed diffs into the text a lane shows a model.
+///
+/// Every line carries its head-revision number. Models anchor badly when asked
+/// to count lines and well when asked to read one, and an anchor that is off by
+/// two is a comment on unrelated code.
+pub fn render(diffs: &[FileDiff]) -> String {
+    let mut out = String::new();
+    for diff in diffs {
+        if diff.hunks.is_empty() {
+            continue;
+        }
+        let _ = writeln!(out, "--- {}", diff.path);
+        for hunk in &diff.hunks {
+            let _ = writeln!(
+                out,
+                "@@ -{},{} +{},{} @@",
+                hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines
+            );
+            for line in &hunk.lines {
+                let marker = match line.kind {
+                    LineKind::Added => '+',
+                    LineKind::Removed => '-',
+                    LineKind::Context => ' ',
+                };
+                match line.new_line {
+                    Some(n) => {
+                        let _ = writeln!(out, "{n:>5} {marker}{}", line.text);
+                    }
+                    None => {
+                        let _ = writeln!(out, "      {marker}{}", line.text);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 fn parse_hunk_header(line: &str) -> Option<Hunk> {
     // @@ -old_start,old_lines +new_start,new_lines @@ optional heading
     let body = line.strip_prefix("@@")?;
