@@ -348,7 +348,121 @@ pub fn read_proposal(path: &Path) -> Result<Proposal> {
     serde_json::from_str(&text).map_err(Error::from)
 }
 
-fn lane_proposal(config: &Config, lane: LaneId, outcome: LaneOutcome) -> LaneProposal {
+/// Read back what tinysweeper already posted on this pull request.
+///
+/// Degrades to "nothing known" on a forge error, deliberately in the noisy
+/// direction: a failed read then means a finding is repeated, where failing the
+/// other way would mean a real finding silently suppressed by an outage.
+async fn load_prior(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> PriorReview {
+    match prior::load(read, repo, number).await {
+        Ok(prior) => prior,
+        Err(err) => {
+            tracing::warn!(%err, "could not read earlier comments; findings may be repeated");
+            PriorReview::default()
+        }
+    }
+}
+
+/// Load the durable record of the last review, if there is a store at all.
+async fn load_remembered(
+    store: Option<&dyn ReviewStateStore>,
+    key: &str,
+) -> Option<ReviewedState> {
+    let store = store?;
+    match store.load_state(key).await {
+        Ok(state) => state,
+        Err(err) => {
+            tracing::warn!(%err, "could not read the review state; re-reviewing from scratch");
+            None
+        }
+    }
+}
+
+/// Titles for prompt layer 4, from the pull request and from the store.
+///
+/// Both sources, because either can be missing: a wiped database still leaves
+/// the comments on GitHub, and a comment a human deleted still leaves the
+/// record in the store.
+fn merge_titles(prior: &PriorReview, remembered: Option<&ReviewedState>) -> Vec<String> {
+    let mut titles = prior.titles.clone();
+    for title in remembered.map(|s| s.titles.as_slice()).unwrap_or_default() {
+        if !titles.contains(title) {
+            titles.push(title.clone());
+        }
+    }
+    titles
+}
+
+/// Every fingerprint that has already been posted, from both sources.
+fn suppressed_fingerprints(
+    prior: &PriorReview,
+    remembered: Option<&ReviewedState>,
+) -> BTreeSet<String> {
+    let mut set = prior.posted.clone();
+    set.extend(
+        remembered
+            .map(|s| s.fingerprints.clone())
+            .unwrap_or_default(),
+    );
+    set
+}
+
+/// Whether this finding is one already on the pull request.
+fn already_posted(finding: &Finding, suppressed: &BTreeSet<String>) -> bool {
+    finding
+        .identity
+        .as_deref()
+        .is_some_and(|id| suppressed.contains(id))
+}
+
+/// Everything posted before, plus everything posted now.
+///
+/// Accumulated rather than replaced: a finding raised three pushes ago is still
+/// a comment on the pull request, and forgetting it would post it again.
+fn accumulated_fingerprints(suppressed: &BTreeSet<String>, lanes: &[LaneProposal]) -> Vec<String> {
+    let mut all = suppressed.clone();
+    for lane in lanes {
+        all.extend(lane.findings.iter().filter_map(|f| f.identity.clone()));
+    }
+    all.into_iter().collect()
+}
+
+/// The prior findings this cycle did not report as fixed, plus what it raised.
+///
+/// A prior finding that the model neither re-raised nor declared resolved stays
+/// on the list. Dropping it would mean an unfixed concern quietly disappearing
+/// between two pushes, which is the failure the re-review contract in
+/// `harness::prompt` exists to prevent.
+fn still_open_titles(prior_titles: &[String], lanes: &[LaneProposal]) -> Vec<String> {
+    let resolved: BTreeSet<&str> = lanes
+        .iter()
+        .flat_map(|l| l.resolved.iter().map(String::as_str))
+        .collect();
+
+    let mut titles: Vec<String> = prior_titles
+        .iter()
+        .filter(|title| !resolved.contains(title.as_str()))
+        .cloned()
+        .collect();
+
+    for lane in lanes {
+        for finding in &lane.findings {
+            if !titles.contains(&finding.title) {
+                titles.push(finding.title.clone());
+            }
+        }
+    }
+    titles
+}
+
+fn lane_proposal(
+    config: &Config,
+    lane: LaneId,
+    outcome: LaneOutcome,
+    diffs: &[FileDiff],
+    suppressed: &BTreeSet<String>,
+    prior_titles: &[String],
+) -> LaneProposal {
     let gate = config.severity_gate();
     let minimum = config.confidence_min();
 
