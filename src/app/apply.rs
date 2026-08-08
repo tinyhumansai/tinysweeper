@@ -120,7 +120,31 @@ fn title_for(findings: usize, summary: &str) -> String {
 }
 
 fn render_lane_summary(lane: &crate::app::review::LaneProposal) -> String {
-    crate::findings::render::lane_summary(&lane.summary, &lane.findings, VERSION)
+    let mut out = crate::findings::render::lane_summary(&lane.summary, &lane.findings, VERSION);
+
+    // Resolved findings are reported, not discarded. An author who fixed
+    // something needs to see that it was noticed; otherwise the only signal a
+    // review ever gives is a new objection.
+    if !lane.resolved.is_empty() {
+        out.push_str("\n**Fixed since the last review**\n\n");
+        for title in &lane.resolved {
+            out.push_str(&format!("- {title}\n"));
+        }
+    }
+
+    out
+}
+
+/// The fingerprint marker to stamp on a finding's comment.
+///
+/// Falls back to a title-derived fingerprint for a proposal written before the
+/// identity was stamped during review — an old `findings.json` still publishes,
+/// it just dedupes on the weaker key it was written with.
+fn identity(finding: &crate::findings::types::Finding) -> String {
+    finding
+        .identity
+        .clone()
+        .unwrap_or_else(|| finding.fingerprint(&finding.title))
 }
 
 fn review_body(proposal: &Proposal, event: ReviewEvent) -> String {
