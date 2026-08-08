@@ -163,7 +163,7 @@ async fn review_file(
         summary: outcome.summary,
         findings: outcome.findings,
         resolved: outcome.resolved,
-        usage: outcome.usage,
+        spend: outcome.spend,
     })
 }
 

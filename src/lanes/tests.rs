@@ -25,7 +25,7 @@ use crate::evidence::diff::{FileDiff, render as render_diffs};
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
-use crate::ports::model::{Message, Model, ModelRequest};
+use crate::ports::model::{Message, Model, ModelRequest, Spend};
 
 /// The tests lane.
 pub struct Tests {
@@ -99,7 +99,7 @@ impl Lane for Tests {
             parsed,
             input.diffs,
             Anchoring::Strict,
-            response.usage,
+            Spend::of(&response),
         ))
     }
 }

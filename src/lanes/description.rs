@@ -23,7 +23,7 @@ use crate::forge::types::PullRequest;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
-use crate::ports::model::{Message, Model, ModelRequest};
+use crate::ports::model::{Message, Model, ModelRequest, Spend};
 
 /// Bodies shorter than this are treated as no body at all.
 ///
@@ -106,7 +106,7 @@ impl Lane for Description {
             parsed,
             input.diffs,
             Anchoring::Demote,
-            response.usage,
+            Spend::of(&response),
         ))
     }
 }
@@ -137,7 +137,7 @@ fn empty_body_outcome(pr: &PullRequest, files: usize) -> LaneOutcome {
             identity: None,
         }],
         resolved: vec![],
-        usage: Default::default(),
+        spend: Default::default(),
         skipped: None,
     }
 }
