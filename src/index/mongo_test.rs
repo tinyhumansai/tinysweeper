@@ -305,7 +305,12 @@ live_test!(
         let mut rows = Vec::new();
         for (path, text) in chunks {
             rows.push(EmbeddedChunk {
-                vector: embedder.embed_query(text).await.expect("embeds"),
+                vector: embedder
+                    .embed_query(text)
+                    .await
+                    .expect("embeds")
+                    .into_query_vector()
+                    .expect("one vector"),
                 chunk: Chunk {
                     repo_id: "o/r".into(),
                     path: path.into(),
