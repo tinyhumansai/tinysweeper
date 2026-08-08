@@ -57,6 +57,42 @@ impl LaneInput<'_> {
     pub fn has_reviewable_content(&self) -> bool {
         self.diffs.iter().any(|d| !d.changed_lines.is_empty())
     }
+
+    /// Every changed path, for selecting the path rules that apply.
+    pub fn changed_paths(&self) -> Vec<String> {
+        self.diffs.iter().map(|d| d.path.clone()).collect()
+    }
+
+    /// The scanner findings of the given kinds.
+    ///
+    /// Which lane adjudicates which kind is a partition, not an overlap: two
+    /// lanes discussing the same scanner match is the double-reporting this
+    /// whole design exists to avoid.
+    pub fn scanner_findings_of(&self, kinds: &[ScanKind]) -> Vec<&ScanFinding> {
+        self.scan_findings
+            .iter()
+            .filter(|f| kinds.contains(&f.kind))
+            .collect()
+    }
+
+    /// Whether the pull request should be skipped as an unreviewed draft.
+    pub fn skip_as_draft(&self) -> Option<LaneOutcome> {
+        (self.pull_request.draft && !self.config.review.draft_prs).then(|| {
+            LaneOutcome::skipped(
+                "Draft pull request; set `review.draft_prs = true` to review drafts.",
+            )
+        })
+    }
+}
+
+/// What a lane does with a finding it cannot anchor to a changed line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Anchoring {
+    /// Drop it. For lanes whose subject matter is the code itself.
+    Strict,
+    /// Keep it without a line. For lanes whose subject matter — a commit
+    /// message, a missing description — has no line to point at.
+    Demote,
 }
 
 /// What a lane concluded.
