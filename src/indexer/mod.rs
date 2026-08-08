@@ -23,6 +23,8 @@
 //! upstream counts it at all.
 
 pub mod cost;
+#[cfg(feature = "serve")]
+pub mod fetch;
 pub mod mock;
 #[cfg(feature = "serve")]
 pub mod mongo;
