@@ -344,6 +344,13 @@ impl ForgeWrite for GitHubWrite {
                 .map(|c| serde_json::json!({
                     "path": c.path,
                     "line": c.line,
+                    // Every finding here is anchored to a line the diff
+                    // actually touches (see `anchored_in_diff`), always on
+                    // the head revision. GitHub defaults `side` to `RIGHT`
+                    // when omitted, but naming it keeps that from being an
+                    // implicit fact one API change away from silently
+                    // failing every inline comment.
+                    "side": "RIGHT",
                     "body": c.body,
                 }))
                 .collect::<Vec<_>>(),
