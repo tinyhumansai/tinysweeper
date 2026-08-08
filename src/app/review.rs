@@ -424,18 +424,6 @@ fn already_posted(finding: &Finding, suppressed: &BTreeSet<String>) -> bool {
         .is_some_and(|id| suppressed.contains(id))
 }
 
-/// Everything posted before, plus everything posted now.
-///
-/// Accumulated rather than replaced: a finding raised three pushes ago is still
-/// a comment on the pull request, and forgetting it would post it again.
-fn accumulated_fingerprints(suppressed: &BTreeSet<String>, lanes: &[LaneProposal]) -> Vec<String> {
-    let mut all = suppressed.clone();
-    for lane in lanes {
-        all.extend(lane.findings.iter().filter_map(|f| f.identity.clone()));
-    }
-    all.into_iter().collect()
-}
-
 /// The prior findings this cycle did not report as fixed, plus what it raised.
 ///
 /// A prior finding that the model neither re-raised nor declared resolved stays
