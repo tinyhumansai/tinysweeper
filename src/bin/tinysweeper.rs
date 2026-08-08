@@ -237,23 +237,7 @@ async fn run_serve(bind: String, config_path: Option<std::path::PathBuf>) -> Res
     let loaded =
         tinysweeper::config::load_validated(std::path::Path::new("."), config_path.as_deref())?;
 
-    let webhook_secret = std::env::var("TINYSWEEPER_WEBHOOK_SECRET").map_err(|_| {
-        tinysweeper::Error::config(
-            "TINYSWEEPER_WEBHOOK_SECRET is not set. Without it every delivery would be \
-             unauthenticated, so the server refuses to start rather than accept forged events.",
-        )
-    })?;
-    if webhook_secret.trim().is_empty() {
-        // `env::var` returns `Ok("")` for a variable that is set but empty —
-        // exactly what happens when `.env.example` is copied without filling
-        // it in. An empty HMAC key is trivially forgeable, so this is the
-        // same failure as the secret being unset at all and must refuse to
-        // start the same way.
-        return Err(tinysweeper::Error::config(
-            "TINYSWEEPER_WEBHOOK_SECRET is set but empty. An empty secret can be forged by \
-             anyone; set it to a real value before starting the server.",
-        ));
-    }
+    let webhook_secret = require_webhook_secret(std::env::var("TINYSWEEPER_WEBHOOK_SECRET").ok())?;
 
     let store = Store::from_env().await?;
     let auth = AppAuth::from_env()?;
