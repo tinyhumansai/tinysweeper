@@ -28,16 +28,21 @@ and any port added without a matching offline mock.
 [[path_instructions]]
 glob = "Cargo.toml"
 instructions = """
-Flag a new non-optional dependency that pulls in an HTTP client or otherwise
-breaks the offline default build. Network dependencies belong behind a feature.
+A new non-optional dependency that pulls in an HTTP client breaks the offline
+default build. Network dependencies belong behind a feature.
 """
+rules = "dependencies"
+
+# Ordered, first match wins. Test files take the test rules; everything else
+# under src/ takes the Rust rules. Reversing these two entries would mean no
+# test file ever sees the test rules. See presets/rules/README.md.
+[[path_instructions]]
+glob = "**/*{_test,test_,.test,.spec}*"
+rules = "tests"
 
 [[path_instructions]]
 glob = "src/**/*.rs"
-instructions = """
-Flag `unwrap()`, `expect()` and `panic!` on paths reachable from library code
-rather than tests. Functions should return the crate `Result<T>`.
-"""
+rules = "rust"
 
 [lanes.tests]
 model = "scan"

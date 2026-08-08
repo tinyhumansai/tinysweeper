@@ -16,13 +16,15 @@ respect_agents_md = true
 [paths]
 ignore = ["**/*.lock"]
 
+# Ordered, first match wins: the most specific glob has to come first, or the
+# broader entry below it is dead. See presets/rules/README.md.
 [[path_instructions]]
 glob = ".github/workflows/**"
-instructions = """
-Flag any widening of `permissions`, any use of `pull_request_target` that checks
-out or executes head-ref code, any unpinned third-party action, and any step
-that interpolates untrusted context (title, body, branch name) into a shell.
-"""
+rules = "workflows"
+
+[[path_instructions]]
+glob = "**/{Cargo.toml,Cargo.lock,package.json,go.mod,requirements*.txt}"
+rules = "dependencies"
 
 [[path_instructions]]
 glob = "**/{Dockerfile,*.dockerfile}"
