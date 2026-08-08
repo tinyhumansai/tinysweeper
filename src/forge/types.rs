@@ -85,6 +85,22 @@ pub struct ChangedFile {
     /// The unified diff for this file, when the forge supplied one. Absent for
     /// binary files and for diffs the forge truncated.
     pub patch: Option<String>,
+    /// Size of the file at the head revision, when the forge reported it.
+    ///
+    /// The blob scanner needs this to distinguish "a binary file changed" from
+    /// "a four-megabyte binary entered the history", and those deserve very
+    /// different reactions.
+    pub size_bytes: Option<u64>,
+}
+
+impl ChangedFile {
+    /// Whether the forge gave no textual diff for this file.
+    ///
+    /// True for genuine binaries *and* for diffs the forge truncated, which is
+    /// why callers must not treat it as proof of binary content on its own.
+    pub fn is_opaque(&self) -> bool {
+        self.patch.is_none()
+    }
 }
 
 /// What happened to a changed file.
