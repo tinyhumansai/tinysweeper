@@ -10,6 +10,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tinyagents::harness::message::Message as TaMessage;
 use tinyagents::harness::model::ResponseFormat;
+use tinyagents::harness::providers::openai::ReasoningTagExtraction;
 use tinyagents::harness::providers::openai::OpenAiModel;
 use tinyagents::harness::runtime::{AgentHarness, RunPolicy};
 
@@ -63,6 +64,11 @@ impl GatewayModel {
         let provider = OpenAiModel::new(&self.api_key)
             .with_base_url(&self.base_url)
             .with_model(model)
+            // kimi-k3 has thinking always on, and emits it inline ahead of the
+            // JSON body. Without this the structured parse sees reasoning prose
+            // at column 1, fails, and silently falls back to a weaker model on
+            // every single request — which halves review quality invisibly.
+            .with_reasoning_tag_extraction(Some(ReasoningTagExtraction::new("think")))
             // Identifies us to OpenRouter, which is how per-application usage
             // shows up separately in their dashboard.
             .with_header(
