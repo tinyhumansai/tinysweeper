@@ -349,7 +349,13 @@ impl ForgeWrite for MockForge {
                 .review_comments
                 .entry(number)
                 .or_default()
-                .extend(comments.iter().cloned());
+                .extend(comments.iter().cloned().map(|mut comment| {
+                    // The forge assigns the author, and dedupe only trusts our
+                    // own. A mock that left it empty would make the three-push
+                    // regression test pass for the wrong reason.
+                    comment.author = "tinysweeper[bot]".into();
+                    comment
+                }));
             state.own_reviews.insert(number, event);
         }
         self.record(Write::Review {
