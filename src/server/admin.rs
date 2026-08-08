@@ -267,17 +267,6 @@ impl From<Error> for ApiError {
     }
 }
 
-/// A declared endpoint whose store has not landed.
-///
-/// `501` rather than `404`: the route exists and the shape is committed to, so
-/// a caller written against it today is not written against a guess.
-fn not_implemented(what: &str, tracking: &str) -> ApiError {
-    ApiError(
-        StatusCode::NOT_IMPLEMENTED,
-        format!("{what} is declared but not implemented yet ({tracking})"),
-    )
-}
-
 async fn get_contributor(
     State(state): State<AdminState>,
     Path(login): Path<String>,

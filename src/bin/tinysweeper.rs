@@ -272,16 +272,18 @@ async fn run_serve(bind: String, config_path: Option<std::path::PathBuf>) -> Res
 
     let store = Store::from_env().await?;
     let auth = AppAuth::from_env()?;
-    // Read before binding: a half-configured embedding provider is a mistake,
-    // and the server says so rather than quietly running without retrieval.
-    let embedding = tinysweeper::index::MongoIndex::signature_from_env()?;
 
+    // The embedding provider comes from `[embeddings]` in the config, not from
+    // the environment. It is the index partition key, so a second place to set
+    // it is a second way for the key to disagree with the vectors already
+    // written — and that disagreement is silent, not an error. `serve` opens
+    // the provider before it binds, so a half-configured one stops the process
+    // rather than quietly running without retrieval.
     serve(
         ServerConfig {
             bind,
             webhook_secret,
             config: loaded.config,
-            embedding,
             admin_auth,
         },
         store,
