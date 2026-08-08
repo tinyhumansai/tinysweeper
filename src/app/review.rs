@@ -60,6 +60,13 @@ pub struct Proposal {
     /// re-reviewing a pull request is cheap or ruinous, and nobody tunes a
     /// figure they cannot see.
     pub cached_tokens: u64,
+    /// Tokens sent to an embedding model while indexing or retrieving.
+    ///
+    /// Separate from `input_tokens` so the cache hit rate stays a statement
+    /// about prompts. Once retrieval is on, this is the largest token count the
+    /// run produces and the one most likely to surprise someone.
+    #[serde(default)]
+    pub embed_tokens: u64,
     /// Which model actually answered, per lane.
     #[serde(default)]
     pub models: Vec<String>,
@@ -196,6 +203,7 @@ pub async fn review_with_state(
             input_tokens: 0,
             output_tokens: 0,
             cached_tokens: 0,
+            embed_tokens: 0,
             models: vec![],
         });
     }
