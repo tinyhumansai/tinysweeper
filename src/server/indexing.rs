@@ -265,7 +265,12 @@ pub async fn index_in_background(
 fn git_host() -> String {
     std::env::var(GIT_HOST_ENV)
         .ok()
-        .map(|host| host.trim().trim_start_matches("https://").trim_end_matches('/').to_string())
+        .map(|host| {
+            host.trim()
+                .trim_start_matches("https://")
+                .trim_end_matches('/')
+                .to_string()
+        })
         .filter(|host| !host.is_empty())
         .unwrap_or_else(|| "github.com".to_string())
 }

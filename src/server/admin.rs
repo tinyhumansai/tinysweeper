@@ -309,10 +309,7 @@ async fn index_status(
 
     let repo_id = valid_repo(&owner, &name)?;
     let backend = state.index()?;
-    let record = backend
-        .manifest
-        .state(&repo_id, &backend.signature)
-        .await?;
+    let record = backend.manifest.state(&repo_id, &backend.signature).await?;
 
     Ok(Json(json!({
         "repo": repo_id,
@@ -357,11 +354,7 @@ async fn reindex(
     // record that no longer exists. A refused claim is `409`, not a wait — the
     // operator can retry, and a request that blocked on a two-hour index would
     // time out anyway.
-    let lease = match backend
-        .manifest
-        .claim(&repo_id, signature, "admin")
-        .await?
-    {
+    let lease = match backend.manifest.claim(&repo_id, signature, "admin").await? {
         Claim::Granted(lease) => lease,
         Claim::Busy { holder } => {
             return Err(ApiError(

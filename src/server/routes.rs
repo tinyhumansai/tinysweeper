@@ -22,8 +22,8 @@ use crate::forge::RepoId;
 use crate::index::mongo::MongoIndex;
 use crate::ports::knowledge::KnowledgeStore;
 use crate::server::admin::{self, AdminAuth};
-use crate::server::indexing::{IndexBackend, index_in_background};
 use crate::server::auth::AppAuth;
+use crate::server::indexing::{IndexBackend, index_in_background};
 use crate::server::store::{Store, Trust};
 use crate::server::webhook::{self, Action, Payload};
 

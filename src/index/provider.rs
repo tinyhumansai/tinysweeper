@@ -120,10 +120,7 @@ impl ProviderEmbedder {
 /// A `match` over a small closed set rather than a registry: every arm here is
 /// a model whose price is on file in `crate::harness::pricing`, and adding one
 /// without adding its price is how indexing escapes the budget.
-fn build_model(
-    config: &Embeddings,
-    signature: &EmbedSignature,
-) -> Result<Arc<dyn EmbeddingModel>> {
+fn build_model(config: &Embeddings, signature: &EmbedSignature) -> Result<Arc<dyn EmbeddingModel>> {
     let provider = signature.provider.as_str();
     let base_url = config.base_url.trim();
 
@@ -233,7 +230,10 @@ impl Embedder for ProviderEmbedder {
                 vectors.len()
             )));
         }
-        if let Some(wrong) = vectors.iter().find(|vector| vector.len() != self.signature.dims) {
+        if let Some(wrong) = vectors
+            .iter()
+            .find(|vector| vector.len() != self.signature.dims)
+        {
             return Err(Error::Model(format!(
                 "{}: the provider returned a {}-dimensional vector",
                 self.signature.key(),

@@ -78,10 +78,23 @@ impl Checkout {
         git(
             &root,
             token,
-            &["fetch", "--quiet", "--depth", "1", "--no-tags", &url, revision],
+            &[
+                "fetch",
+                "--quiet",
+                "--depth",
+                "1",
+                "--no-tags",
+                &url,
+                revision,
+            ],
         )
         .await?;
-        git(&root, token, &["checkout", "--quiet", "--detach", "FETCH_HEAD"]).await?;
+        git(
+            &root,
+            token,
+            &["checkout", "--quiet", "--detach", "FETCH_HEAD"],
+        )
+        .await?;
 
         Ok(Self {
             dir,
@@ -213,7 +226,9 @@ mod tests {
         let sha = "0".repeat(40);
         for repo in ["--exec=x", "notaslash", "o/../r"] {
             assert!(
-                Checkout::fetch("github.com", repo, &sha, "t").await.is_err(),
+                Checkout::fetch("github.com", repo, &sha, "t")
+                    .await
+                    .is_err(),
                 "`{repo}` must not reach git"
             );
         }
