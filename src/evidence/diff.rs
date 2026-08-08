@@ -87,6 +87,28 @@ impl FileDiff {
         self.changed_lines.range(start..=end).next().is_some()
     }
 
+    /// Whether `start..=end` falls inside a hunk of this diff.
+    ///
+    /// Wider than [`FileDiff::touches_range`] — the changed lines are a subset
+    /// of the hunk spans — and it answers a different question: *can a comment
+    /// be posted here at all?* GitHub accepts an inline comment anywhere in a
+    /// hunk, including its context lines, and rejects one outside every hunk.
+    /// A finding that resolved to code the diff never showed therefore has to
+    /// go in the summary instead, however well it resolved.
+    pub fn within_hunk(&self, start: u64, end: u64) -> bool {
+        let (start, end) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        self.hunks.iter().any(|hunk| {
+            // A hunk of pure deletions covers no head-revision line of its own,
+            // but a comment still has to be able to land at the deletion point.
+            let hunk_end = hunk.new_start + hunk.new_lines.saturating_sub(1);
+            start <= hunk_end && end >= hunk.new_start
+        })
+    }
+
     /// The added lines, as `(line number, text)`.
     ///
     /// This is what the secret scanner walks: a secret already in the base
