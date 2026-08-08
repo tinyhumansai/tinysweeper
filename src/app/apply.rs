@@ -13,14 +13,21 @@ use crate::config::types::{Config, Severity};
 use crate::error::{Error, Result};
 use crate::forge::types::{CheckRun, RepoId, ReviewComment, ReviewEvent};
 use crate::ports::forge::{ForgeRead, ForgeWrite};
+use crate::ports::review_state::ReviewStateStore;
+use crate::state::types::ReviewedState;
 use crate::{MARKER_PREFIX, VERSION};
 
 /// Publish a proposal.
+///
+/// If a store is provided, extends the stored fingerprints with the identities
+/// of newly posted findings after successful publication, so the next review
+/// will dedupe them correctly.
 pub async fn apply(
     read: &dyn ForgeRead,
     write: &dyn ForgeWrite,
     config: &Config,
     proposal: &Proposal,
+    store: Option<&dyn ReviewStateStore>,
 ) -> Result<()> {
     let repo = RepoId::parse(&proposal.repo)
         .ok_or_else(|| Error::Forge(format!("`{}` is not owner/name", proposal.repo)))?;
