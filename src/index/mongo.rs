@@ -218,34 +218,6 @@ impl MongoIndex {
         Self::connect(&uri, &name).await
     }
 
-    /// The embedding signature the server was configured with, if any.
-    ///
-    /// Retrieval is opt-in: a deployment with no embedding provider runs the
-    /// lanes exactly as before. But a *partly* configured one — a provider with
-    /// no dimension count — is a mistake rather than a choice, so it is an
-    /// error instead of a silent fall back to disabled.
-    pub fn signature_from_env() -> Result<Option<EmbedSignature>> {
-        let provider = std::env::var("TINYSWEEPER_EMBED_PROVIDER").ok();
-        let model = std::env::var("TINYSWEEPER_EMBED_MODEL").ok();
-        let dims = std::env::var("TINYSWEEPER_EMBED_DIMS").ok();
-        match (provider, model, dims) {
-            (None, None, None) => Ok(None),
-            (Some(provider), Some(model), Some(dims)) => {
-                let dims = dims.parse::<usize>().map_err(|_| {
-                    Error::config("TINYSWEEPER_EMBED_DIMS must be a positive integer")
-                })?;
-                if dims == 0 {
-                    return Err(Error::config("TINYSWEEPER_EMBED_DIMS must not be zero"));
-                }
-                Ok(Some(EmbedSignature::new(provider, model, dims)))
-            }
-            _ => Err(Error::config(
-                "retrieval needs all of TINYSWEEPER_EMBED_PROVIDER, TINYSWEEPER_EMBED_MODEL \
-                 and TINYSWEEPER_EMBED_DIMS, or none of them",
-            )),
-        }
-    }
-
     /// Create every index and **prove hybrid search works**, or fail.
     ///
     /// This is the boot assertion. It is deliberately not lazy and deliberately
