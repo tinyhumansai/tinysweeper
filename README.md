@@ -59,45 +59,65 @@ flagged.
 - **Offline by default.** The default build links no HTTP client, and the test
   suite never touches the network.
 
-## Install
+## How it runs
+
+tinysweeper is a **GitHub App**: one server, installed on as many repositories
+as you like, receiving webhooks. There is no workflow file to add to a
+repository and no Action to pin — installing the App is the whole installation,
+and improvements reach every repository at once because there is only one place
+running the code.
+
+There used to be a second path — a reusable workflow and a composite action.
+It has been removed. Two distribution paths meant two trigger models, two
+credential models and two things to keep honest, and the workflow half could
+not carry the one thing that justified the server: a contributor whitelist is a
+fact about a *person over time*, and a stateless job has nowhere to keep one.
+
+### Run the server
 
 ```sh
 git clone --recurse-submodules https://github.com/tinyhumansai/tinysweeper
 cd tinysweeper
 cargo build --release --features all
+cp .env.example .env    # fill it in
+./target/release/tinysweeper serve
 ```
 
-## Use it in a repository
+The App needs `checks:write`, `contents:read`, `issues:write`,
+`pull_requests:write` and `metadata:read`, and a webhook pointed at
+`/webhook`. `deploy/github-app-manifest.json` and `scripts/create-github-app.sh`
+create one with those settings. A Docker image is published from `Dockerfile`
+by CI.
 
-```yaml
-# .github/workflows/tinysweeper.yml
-name: tinysweeper
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, edited]
-  issue_comment:
-    types: [created]
-  pull_request_review:
-    types: [submitted]
-concurrency:
-  group: tinysweeper-${{ github.event.pull_request.number || github.event.issue.number }}
-  cancel-in-progress: true
-jobs:
-  review:
-    uses: tinyhumansai/tinysweeper/.github/workflows/review.yml@v1
-    secrets:
-      openrouter-api-key: ${{ secrets.TINYSWEEPER_OPENROUTER_KEY }}
+The server refuses to start without `TINYSWEEPER_WEBHOOK_SECRET`: an unsigned
+delivery endpoint is a way for anyone to make the bot review anything.
+
+Configure per-repository behaviour with a `.tinysweeper.toml` at the repository
+root, and validate it with `tinysweeper check`. See
+[docs/triggers.md](docs/triggers.md) for what fires when — including the things
+GitHub emits no event for at all.
+
+### Admin API
+
+Operator endpoints live under `/admin`, guarded by a bearer token in
+`TINYSWEEPER_ADMIN_TOKEN` and compared in constant time. **When that variable is
+unset the admin router is not mounted at all**, so a misconfigured deployment
+loses the API rather than exposing it.
+
+```sh
+curl -H "Authorization: Bearer $TINYSWEEPER_ADMIN_TOKEN" \
+  https://tinysweeper.example/admin/contributors/octocat
+
+curl -X PUT -H "Authorization: Bearer $TINYSWEEPER_ADMIN_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"trust":"blocked","note":"spam pull requests"}' \
+  https://tinysweeper.example/admin/contributors/octocat/trust
 ```
 
-That is the whole installation. The review itself lives in the reusable
-workflow, so improvements reach every repository without editing any of them.
+Index status (`/admin/index/…`) and knowledge documents
+(`/admin/knowledge/…`) are declared and return `501` until their stores land.
 
-Configure behaviour with a `.tinysweeper.toml` at the repository root, and
-validate it with `tinysweeper check`. See [docs/triggers.md](docs/triggers.md)
-for what fires when — including the things GitHub emits no event for at all,
-and how fork pull requests differ.
-
-## Run the engine locally
+### Run the engine locally
 
 `local-review` runs every lane over a local git range, with no GitHub item and
 no tokens — useful before you push, and the way prompt changes get iterated.
@@ -105,17 +125,6 @@ no tokens — useful before you push, and the way prompt changes get iterated.
 ```sh
 tinysweeper local-review --base origin/main
 ```
-
-## No server
-
-tinysweeper runs entirely in GitHub Actions. There is no webhook receiver to
-host, no public endpoint, and no App private key sitting on a machine somewhere.
-
-That is a deliberate choice rather than a missing feature: Actions already
-receives every repository event a server would subscribe to, and the two things
-a server is usually wanted for — reacting to a resolved review thread, or to a
-👎 on a comment — have no webhook event at all, so a server could not do them
-either. tinysweeper reads that state when it runs instead.
 
 ## Built on
 
