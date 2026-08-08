@@ -8,7 +8,11 @@
 //
 // `searchCoordinator` is the whole grant: mongot reads the oplog and manages
 // search indexes, and nothing else.
-const password = cat("/run/secrets/mongo/mongot-password.initdb").trim();
+// `fs`, not the legacy `cat()` helper: mongosh dropped it, and the failure is
+// a ReferenceError at first boot rather than anything a log would explain.
+const password = require("fs")
+  .readFileSync("/run/secrets/mongo/mongot-password.initdb", "utf8")
+  .trim();
 
 db.getSiblingDB("admin").createUser({
   user: "mongotUser",
