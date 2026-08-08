@@ -332,9 +332,11 @@ live_test!(a_hybrid_query_returns_the_exact_identifier_match, |index| async move
 });
 
 live_test!(deleting_by_path_is_scoped_to_the_repository, |index| async move {
+    // Repository ids are unique per test: the live tests share one process and
+    // therefore one database, and `--test-threads` is not something a reader of
+    // this file controls.
     index.prepare(&signature()).await.expect("prepares");
-    let embedder = MockEmbedder::new(64);
-    let rows: Vec<EmbeddedChunk> = ["o/r", "o/other"]
+    let rows: Vec<EmbeddedChunk> = ["o/del", "o/del-other"]
         .iter()
         .map(|repo| EmbeddedChunk {
             vector: vec![0.1; 64],
@@ -350,7 +352,6 @@ live_test!(deleting_by_path_is_scoped_to_the_repository, |index| async move {
             },
         })
         .collect();
-    let _ = &embedder;
     index
         .code
         .upsert(&signature(), &rows)
@@ -359,12 +360,15 @@ live_test!(deleting_by_path_is_scoped_to_the_repository, |index| async move {
     assert_eq!(
         index
             .code
-            .delete_paths("o/r", &["src/a.rs".to_string()])
+            .delete_paths("o/del", &["src/a.rs".to_string()])
             .await
             .expect("deletes"),
         1
     );
-    assert_eq!(index.code.delete_repo("o/other").await.expect("deletes"), 1);
+    assert_eq!(
+        index.code.delete_repo("o/del-other").await.expect("deletes"),
+        1
+    );
 });
 
 live_test!(a_two_hop_walk_reaches_the_caller_of_a_caller, |index| async move {
