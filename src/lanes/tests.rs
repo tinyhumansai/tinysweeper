@@ -47,7 +47,9 @@ impl Lane for Tests {
 
     async fn run(&self, input: LaneInput<'_>) -> Result<LaneOutcome> {
         if !input.has_reviewable_content() {
-            return Ok(LaneOutcome::skipped("No added or modified lines to review."));
+            return Ok(LaneOutcome::skipped(
+                "No added or modified lines to review.",
+            ));
         }
 
         if let Some(skipped) = input.skip_as_draft() {
@@ -66,11 +68,7 @@ impl Lane for Tests {
         }
 
         let changed_paths = input.changed_paths();
-        let evidence = format!(
-            "{}\n{}",
-            inventory.render(),
-            render_diffs(input.diffs)
-        );
+        let evidence = format!("{}\n{}", inventory.render(), render_diffs(input.diffs));
 
         let built = prompt::build(&PromptInputs {
             repo_policy: input.repo_policy,
@@ -192,8 +190,24 @@ fn is_test_path(path: &str) -> bool {
 /// Whether `path` cannot carry behaviour: documentation, configuration, assets.
 fn is_inert_path(path: &str) -> bool {
     const INERT_SUFFIXES: &[&str] = &[
-        ".md", ".markdown", ".txt", ".rst", ".adoc", ".png", ".jpg", ".jpeg", ".gif", ".svg",
-        ".ico", ".lock", ".toml", ".json", ".yaml", ".yml", ".cfg", ".ini",
+        ".md",
+        ".markdown",
+        ".txt",
+        ".rst",
+        ".adoc",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".svg",
+        ".ico",
+        ".lock",
+        ".toml",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".cfg",
+        ".ini",
     ];
     // A workflow file is configuration, but it is executable configuration and
     // the security lane cares about it. It is still not something a unit test

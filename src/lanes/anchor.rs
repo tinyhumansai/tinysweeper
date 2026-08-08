@@ -83,7 +83,10 @@ mod tests {
 
     #[test]
     fn a_context_line_does_not() {
-        assert!(!anchored_in_diff(&finding("src/main.rs", Some(1)), &diffs()));
+        assert!(!anchored_in_diff(
+            &finding("src/main.rs", Some(1)),
+            &diffs()
+        ));
     }
 
     #[test]

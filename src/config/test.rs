@@ -40,7 +40,12 @@ fn with_shipped_rules(dir: &TempDir) {
     for entry in std::fs::read_dir(&source).expect("read shipped rules") {
         let entry = entry.expect("dir entry");
         if entry.path().extension().is_some_and(|e| e == "md") {
-            let name = entry.path().file_stem().unwrap().to_string_lossy().into_owned();
+            let name = entry
+                .path()
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
             with_rules(
                 dir,
                 &name,

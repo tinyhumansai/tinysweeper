@@ -68,7 +68,9 @@ impl Lane for Security {
         // reviewable: a workflow whose only change is a widened permission
         // still has to be reported.
         if !input.has_reviewable_content() && scanner.is_empty() {
-            return Ok(LaneOutcome::skipped("No added or modified lines to review."));
+            return Ok(LaneOutcome::skipped(
+                "No added or modified lines to review.",
+            ));
         }
 
         if let Some(skipped) = input.skip_as_draft() {
@@ -355,7 +357,10 @@ mod tests {
         let outcome = run_with(model, &config(), &[workflow], &[workflow_finding()]).await;
 
         assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
-        assert_eq!(outcome.findings[0].confidence, 0.8, "the scanner's, not the model's");
+        assert_eq!(
+            outcome.findings[0].confidence, 0.8,
+            "the scanner's, not the model's"
+        );
     }
 
     #[tokio::test]
@@ -380,13 +385,7 @@ mod tests {
             ".github/workflows/ci.yml",
             "@@ -1,2 +1,3 @@\n name: ci\n on: push\n+permissions: write-all\n",
         );
-        run_with(
-            model.clone(),
-            &config(),
-            &[workflow],
-            &[workflow_finding()],
-        )
-        .await;
+        run_with(model.clone(), &config(), &[workflow], &[workflow_finding()]).await;
 
         let prompt = model.last_prompt().expect("recorded");
         assert!(prompt.contains("scanner-findings"), "{prompt}");

@@ -55,7 +55,9 @@ impl Lane for Description {
 
     async fn run(&self, input: LaneInput<'_>) -> Result<LaneOutcome> {
         if !input.has_reviewable_content() {
-            return Ok(LaneOutcome::skipped("No added or modified lines to review."));
+            return Ok(LaneOutcome::skipped(
+                "No added or modified lines to review.",
+            ));
         }
 
         if let Some(skipped) = input.skip_as_draft() {
@@ -247,7 +249,10 @@ mod tests {
             finding.line, None,
             "line 900 is not a changed line, so it becomes summary-only"
         );
-        assert!(finding.suggestion.is_some(), "a replacement body is offered");
+        assert!(
+            finding.suggestion.is_some(),
+            "a replacement body is offered"
+        );
     }
 
     #[tokio::test]

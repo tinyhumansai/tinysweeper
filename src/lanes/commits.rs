@@ -132,10 +132,7 @@ impl Lane for Commits {
 ///
 /// The same contract as the security lane's, for the same reason; it is
 /// separate only because the lane label differs.
-fn merge_scanner_findings(
-    outcome: &mut LaneOutcome,
-    scanner: &[&crate::scan::types::Finding],
-) {
+fn merge_scanner_findings(outcome: &mut LaneOutcome, scanner: &[&crate::scan::types::Finding]) {
     let mut deterministic: Vec<crate::findings::types::Finding> = scanner
         .iter()
         .map(|scan| crate::findings::types::Finding::from((*scan).clone()))
