@@ -1148,6 +1148,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("findings.json");
         let proposal = Proposal {
+            embed_tokens: 0,
             version: 1,
             repo: "tinyhumansai/tinysweeper".into(),
             number: 7,

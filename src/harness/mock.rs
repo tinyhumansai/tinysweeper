@@ -209,8 +209,17 @@ mod tests {
             output_tokens: 100,
             cached_tokens: 800,
             cost_usd: 0.01,
+            ..Usage::default()
         });
         let response = model.complete(request()).await.expect("answers");
         assert_eq!(response.usage.cached_tokens, 800);
+    }
+
+    #[tokio::test]
+    async fn a_fallback_answers_under_its_own_name() {
+        let model = MockModel::silent().answering_as("vendor/fallback");
+        let response = model.complete(request()).await.expect("answers");
+        assert_eq!(response.model, "vendor/fallback");
+        assert_eq!(model.requests()[0].model, "mock", "the request is unchanged");
     }
 }
