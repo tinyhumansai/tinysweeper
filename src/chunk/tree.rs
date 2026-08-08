@@ -274,15 +274,26 @@ fn assemble(source: &str, segments: &[Segment], options: &ChunkOptions) -> Vec<S
     let mut chunks = Vec::new();
     let mut group: Vec<&Segment> = Vec::new();
     let mut size = 0_usize;
+    let mut previous_stood_alone = false;
 
     for segment in segments {
-        if !group.is_empty() && size + segment.len() > options.target_chars {
+        // Only *small* segments merge. Packing two whole functions into one
+        // chunk because they happened to fit would cost the chunk its name —
+        // neither definition dominates — and blunt every hit on either of them.
+        // A quarter of the target is the line: below it a definition is a
+        // one-liner constant or an import, above it it is a thing in its own
+        // right.
+        let stands_alone = segment.len() * 4 > options.target_chars;
+        let full = size + segment.len() > options.target_chars;
+
+        if !group.is_empty() && (stands_alone || previous_stood_alone || full) {
             emit(source, &starts, &group, options, &mut chunks);
             group.clear();
             size = 0;
         }
         group.push(segment);
         size += segment.len();
+        previous_stood_alone = stands_alone;
     }
     emit(source, &starts, &group, options, &mut chunks);
     chunks
