@@ -84,7 +84,7 @@ async fn a_model_error_lets_every_finding_through() {
 
 #[tokio::test]
 async fn an_unparseable_answer_lets_every_finding_through() {
-    let model = MockModel::new().then(json!({"verdict": "all wrong"}));
+    let model = MockModel::new().then(json!({"incorrect": "all of them"}));
     let outcome = filter(&model, vec![finding("a")]).await;
 
     assert_eq!(outcome.findings.len(), 1);
@@ -154,7 +154,8 @@ async fn the_prompt_tells_the_filter_to_falsify_rather_than_verify() {
     assert!(prompt.contains("Falsify, do not verify"), "{prompt}");
     assert!(prompt.contains("Your task is NOT to verify"), "{prompt}");
     assert!(prompt.contains("let pass"), "{prompt}");
-    assert!(prompt.contains("more context than you can see"), "{prompt}");
+    assert!(prompt.contains("could gather more context"), "{prompt}");
+    assert!(prompt.contains("than you can see"), "{prompt}");
 }
 
 #[tokio::test]
