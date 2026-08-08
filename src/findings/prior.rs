@@ -71,10 +71,20 @@ impl PriorReview {
 /// comparing. The comparison is exact rather than a prefix match: `starts_with`
 /// would accept an account called `tinysweeper-evil`, which anyone can register
 /// and which would then be able to forge suppression markers.
+///
+/// Returns false for empty login or empty configured bot login, failing safe
+/// rather than treating an unconfigured bot as anything.
 pub fn is_own_login(login: &str) -> bool {
+    if login.is_empty() {
+        return false;
+    }
     let expected = std::env::var(BOT_LOGIN_ENV).unwrap_or_else(|_| "tinysweeper".to_string());
+    let trimmed = expected.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
     let bare = login.strip_suffix("[bot]").unwrap_or(login);
-    bare.eq_ignore_ascii_case(expected.trim())
+    bare.eq_ignore_ascii_case(trimmed)
 }
 
 /// Read back every marker tinysweeper left on a pull request.
