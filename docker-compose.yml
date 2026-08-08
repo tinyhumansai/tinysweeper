@@ -1,0 +1,86 @@
+# tinysweeper's webhook server and the database behind it.
+#
+# The MongoDB pair is the load-bearing part. tinysweeper's retrieval layer runs
+# `$vectorSearch`, `$search` and `$rankFusion`, and those stages live in the
+# separate `mongot` process — the database alone cannot serve them. The stock
+# `mongo:` image ships no mongot at all, so pinning it here would produce a
+# stack that starts cleanly, accepts writes, and then fails every retrieval
+# query. `tinysweeper serve` refuses to boot against such a deployment on
+# purpose; see `VECTOR_SEARCH_UNAVAILABLE` in src/index/mongo.rs.
+#
+# Both images are pinned to an exact patch version rather than a floating `8.2`
+# tag: mongod and mongot are versioned independently and are upgraded together,
+# deliberately.
+
+name: tinysweeper
+
+services:
+  # MongoDB Community Server. Must be 8.2 or newer — that is the release that
+  # brought search and vector search to self-managed deployments — and must run
+  # as a replica set even with one member, because mongot follows the oplog.
+  mongod:
+    image: mongodb/mongodb-community-server:8.2.12-ubi9
+    command: ["mongod", "--config", "/etc/mongod.conf"]
+    volumes:
+      - ./deploy/mongo/mongod.conf:/etc/mongod.conf:ro
+      - mongod-data:/data/db
+    ports:
+      - "127.0.0.1:27017:27017"
+    healthcheck:
+      # `rs.initiate()` is idempotent enough for a single-member set: it errors
+      # once the set exists, which is why the ping is what decides health.
+      test:
+        [
+          "CMD",
+          "mongosh",
+          "--quiet",
+          "--eval",
+          "try { rs.status() } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongod:27017'}]}) } ; db.adminCommand('ping')",
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+  # mongot: the search process. Without it $vectorSearch/$search do not exist.
+  mongot:
+    image: mongodb/mongodb-community-search:1.70.3
+    volumes:
+      - ./deploy/mongo/mongot.conf:/mongot-community/config.yml:ro
+      - mongot-data:/data/mongot
+    command: ["--config", "/mongot-community/config.yml"]
+    depends_on:
+      mongod:
+        condition: service_healthy
+    restart: unless-stopped
+
+  tinysweeper:
+    build:
+      context: .
+      target: runtime
+      args:
+        FEATURES: all
+    command: ["serve", "--bind", "0.0.0.0:8080"]
+    environment:
+      TINYSWEEPER_MONGODB_URI: mongodb://mongod:27017/?directConnection=true
+      TINYSWEEPER_MONGODB_DB: tinysweeper
+      # Retrieval is opt-in. Set all three or none: a half-configured provider
+      # is refused at startup rather than silently disabling retrieval.
+      TINYSWEEPER_EMBED_PROVIDER: ${TINYSWEEPER_EMBED_PROVIDER:-}
+      TINYSWEEPER_EMBED_MODEL: ${TINYSWEEPER_EMBED_MODEL:-}
+      TINYSWEEPER_EMBED_DIMS: ${TINYSWEEPER_EMBED_DIMS:-}
+      TINYSWEEPER_WEBHOOK_SECRET: ${TINYSWEEPER_WEBHOOK_SECRET:?set a webhook secret}
+      TINYSWEEPER_GITHUB_APP_ID: ${TINYSWEEPER_GITHUB_APP_ID:-}
+      TINYSWEEPER_GITHUB_PRIVATE_KEY: ${TINYSWEEPER_GITHUB_PRIVATE_KEY:-}
+      RUST_LOG: ${RUST_LOG:-tinysweeper=info}
+    ports:
+      - "8080:8080"
+    depends_on:
+      mongod:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mongod-data:
+  mongot-data:
