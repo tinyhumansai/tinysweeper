@@ -181,18 +181,77 @@ mod tests {
             input_tokens: 100,
             output_tokens: 10,
             cached_tokens: 80,
+            embed_tokens: 0,
             cost_usd: 0.01,
         });
         total.add(Usage {
             input_tokens: 50,
             output_tokens: 5,
             cached_tokens: 0,
+            embed_tokens: 400,
             cost_usd: 0.02,
         });
 
         assert_eq!(total.input_tokens, 150);
         assert_eq!(total.output_tokens, 15);
         assert_eq!(total.cached_tokens, 80);
+        assert_eq!(total.embed_tokens, 400);
         assert!((total.cost_usd - 0.03).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_spend_is_attributed_to_the_model_that_answered() {
+        let response = ModelResponse {
+            value: serde_json::Value::Null,
+            // A fallback answered; the configured model did not.
+            model: "vendor/fallback".into(),
+            usage: Usage {
+                input_tokens: 10,
+                cost_usd: 0.5,
+                ..Usage::default()
+            },
+        };
+
+        let spend = Spend::of(&response);
+        assert_eq!(spend.models, vec!["vendor/fallback".to_string()]);
+        assert!((spend.cost_usd() - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn merging_sums_the_usage_and_keeps_each_model_once() {
+        let mut spend = Spend::default();
+        spend.record(
+            "vendor/deep",
+            Usage {
+                input_tokens: 10,
+                cost_usd: 0.1,
+                ..Usage::default()
+            },
+        );
+
+        let mut other = Spend::default();
+        other.record(
+            "vendor/scan",
+            Usage {
+                input_tokens: 5,
+                cost_usd: 0.01,
+                ..Usage::default()
+            },
+        );
+        other.record(
+            "vendor/deep",
+            Usage {
+                input_tokens: 1,
+                ..Usage::default()
+            },
+        );
+
+        spend.merge(other);
+        assert_eq!(spend.usage.input_tokens, 16);
+        assert!((spend.cost_usd() - 0.11).abs() < 1e-9);
+        assert_eq!(
+            spend.models,
+            vec!["vendor/deep".to_string(), "vendor/scan".to_string()]
+        );
     }
 }
