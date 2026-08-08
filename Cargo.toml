@@ -65,7 +65,8 @@ axum = { version = "0.8", optional = true }
 hmac = { version = "0.13", optional = true }
 sha2-hmac-compat = { package = "sha2", version = "0.10", optional = true }
 jsonwebtoken = { version = "11", optional = true }
-rusqlite = { version = "0.40", features = ["bundled"], optional = true }
+mongodb = { version = "3", optional = true }
+bson = { version = "2", optional = true }
 subtle = { version = "2", optional = true }
 tower-http = { version = "0.6", features = ["trace", "limit"], optional = true }
 
@@ -88,7 +89,8 @@ serve = [
     "dep:hmac",
     "dep:sha2-hmac-compat",
     "dep:jsonwebtoken",
-    "dep:rusqlite",
+    "dep:mongodb",
+    "dep:bson",
     "dep:subtle",
     "dep:tower-http",
     "github",
