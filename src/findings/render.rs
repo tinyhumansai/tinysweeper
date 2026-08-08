@@ -69,7 +69,7 @@ pub fn lane_summary(summary: &str, findings: &[Finding], version: &str) -> Strin
         ));
     }
 
-    out.push_str("\n");
+    out.push('\n');
     for finding in &sorted {
         out.push_str(&detail(finding));
     }
