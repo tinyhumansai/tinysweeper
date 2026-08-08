@@ -520,6 +520,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_file_with_no_patch_does_not_suppress_the_others() {
+        // The critique lane claimed, reviewing this repository, that
+        // `reviewable_diffs` drops every file whenever a pull request touches a
+        // submodule or anything else with no inline patch. Verifying rather
+        // than taking a model's word for it.
+        let submodule = ChangedFile {
+            path: "vendor/something".into(),
+            status: FileStatus::Modified,
+            patch: None,
+            ..ChangedFile::default()
+        };
+        let model = MockModel::always(json!({
+            "summary": "Reviewed.",
+            "findings": [{
+                "path": "src/main.rs", "line": 2,
+                "rule": "unchecked-index", "title": "Guard the index",
+                "body": "…", "severity": "high", "confidence": 0.9
+            }]
+        }));
+        let forge = forge_with(vec![submodule, rust_file()], vec![]);
+        let proposal = review(&forge, Arc::new(model), &config(), &repo(), 7)
+            .await
+            .expect("reviews");
+
+        assert_eq!(
+            proposal.findings().count(),
+            1,
+            "the patchless file must not suppress review of the rest"
+        );
+    }
+
+    #[tokio::test]
     async fn only_one_commits_lane_is_ever_reported() {
         // The placeholder must be replaced, not accompanied: two check runs of
         // the same name is a confusing way to fail.
