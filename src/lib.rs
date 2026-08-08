@@ -13,11 +13,14 @@ pub mod app;
 pub mod config;
 pub mod error;
 pub mod evidence;
+pub mod falsify;
 pub mod findings;
 pub mod forge;
 pub mod harness;
+pub mod index;
 pub mod lanes;
 pub mod ports;
+pub mod position;
 pub mod scan;
 #[cfg(feature = "serve")]
 pub mod server;

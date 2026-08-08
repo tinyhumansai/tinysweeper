@@ -237,7 +237,7 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
 /// not a security boundary on its own — the real defence is that a verdict is
 /// advisory and only deterministic code mutates anything — but labelling data
 /// as data is what makes the instruction to ignore injected text meaningful.
-fn push_fenced(out: &mut String, label: &str, content: &str) {
+pub fn push_fenced(out: &mut String, label: &str, content: &str) {
     // The fence has to be longer than the longest backtick run in the content,
     // or a diff containing ```` closes its own fence and everything after it
     // reads as instructions rather than data. A pull request author picks that
@@ -343,8 +343,11 @@ sound, or say what you were unable to check.
 Report only problems this pull request introduces. Code that was already there
 is not this author's concern, however wrong it looks.
 
-Anchor every finding to a line the diff actually changed. If you cannot point at
-a changed line, you do not have a finding.
+Anchor every finding by quoting the code it is about in `existing_code`, copied
+character for character out of the diff. Never write a line number, anywhere:
+you are bad at counting lines and good at copying, so the quotation is your
+anchor and the host works out the rest. Quote the smallest span that shows the
+problem. If you cannot quote the code, you do not have a finding.
 
 Prefer an empty list to a padded one. An empty review is a valid and common
 outcome, and it is a better outcome than a list of style preferences. Do not

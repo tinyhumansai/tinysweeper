@@ -1,0 +1,115 @@
+# tinysweeper's webhook server and the database behind it.
+#
+# The MongoDB pair is the load-bearing part. tinysweeper's retrieval layer runs
+# `$vectorSearch`, `$search` and `$rankFusion`, and those stages live in the
+# separate `mongot` process — the database alone cannot serve them. The stock
+# `mongo:` image ships no mongot at all, so pinning it here would produce a
+# stack that starts cleanly, accepts writes, and then fails every retrieval
+# query. `tinysweeper serve` refuses to boot against such a deployment on
+# purpose; see `VECTOR_SEARCH_UNAVAILABLE` in src/index/mongo.rs.
+#
+# Both images are pinned to an exact patch version rather than a floating `8.2`
+# tag: mongod and mongot are versioned independently and must be upgraded
+# together, deliberately.
+#
+# Note the host requirement: the community-server image refuses to start on
+# Linux kernels 6.19 and newer, which is a tcmalloc incompatibility rather than
+# anything tinysweeper controls.
+
+name: tinysweeper
+
+services:
+  # Generates the keyfile and the mongot password, once, into a shared volume.
+  # Committing either would mean everyone who clones the repository holds the
+  # deployment's credentials.
+  mongo-secrets:
+    image: mongodb/mongodb-community-server:8.2.12-ubi9
+    user: "0:0"
+    entrypoint: ["/bin/sh", "/make-secrets.sh"]
+    volumes:
+      - ./deploy/mongo/make-secrets.sh:/make-secrets.sh:ro
+      - mongo-secrets:/run/secrets/mongo
+    restart: "no"
+
+  # MongoDB Community Server. Must be 8.2 or newer — that is the release that
+  # brought search and vector search to self-managed deployments — and must run
+  # as a replica set even with one member, because mongot follows the oplog.
+  mongod:
+    image: mongodb/mongodb-community-server:8.2.12-ubi9
+    command: ["--config", "/etc/mongod.conf"]
+    environment:
+      MONGODB_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-tinysweeper}
+      MONGODB_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set MONGO_ROOT_PASSWORD}
+      # The image runs `rs.initiate()` itself once mongod is up. Doing it by
+      # hand from another container does not work: with auth enabled and no
+      # users yet, only a localhost connection is exempt.
+      MONGODB_INITDB_REPL_SET_MEMBER: mongod:27017
+    volumes:
+      - ./deploy/mongo/mongod.conf:/etc/mongod.conf:ro
+      - ./deploy/mongo/init-mongot-user.js:/docker-entrypoint-initdb.d/init-mongot-user.js:ro
+      - mongo-secrets:/run/secrets/mongo:ro
+      - mongod-data:/data/db
+    ports:
+      - "127.0.0.1:27017:27017"
+    depends_on:
+      mongo-secrets:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  # mongot: the search process. Without it $vectorSearch and $search do not
+  # exist as aggregation stages.
+  mongot:
+    image: mongodb/mongodb-community-search:1.70.3
+    volumes:
+      # Mounted over `config.default.yml` because the image's entrypoint
+      # hard-codes that path; a `--config` argument is ignored.
+      - ./deploy/mongo/mongot.conf:/mongot-community/config.default.yml:ro
+      - mongo-secrets:/run/secrets/mongo:ro
+      - mongot-data:/data/mongot
+    depends_on:
+      mongod:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  tinysweeper:
+    build:
+      context: .
+      target: runtime
+      args:
+        FEATURES: all
+    command: ["serve", "--bind", "0.0.0.0:8080"]
+    environment:
+      TINYSWEEPER_MONGODB_URI: mongodb://${MONGO_ROOT_USERNAME:-tinysweeper}:${MONGO_ROOT_PASSWORD}@mongod:27017/?authSource=admin&directConnection=true
+      TINYSWEEPER_MONGODB_DB: tinysweeper
+      # Retrieval is opt-in. Set all three or none: a half-configured provider
+      # is refused at startup rather than silently disabling retrieval.
+      TINYSWEEPER_EMBED_PROVIDER: ${TINYSWEEPER_EMBED_PROVIDER:-}
+      TINYSWEEPER_EMBED_MODEL: ${TINYSWEEPER_EMBED_MODEL:-}
+      TINYSWEEPER_EMBED_DIMS: ${TINYSWEEPER_EMBED_DIMS:-}
+      TINYSWEEPER_WEBHOOK_SECRET: ${TINYSWEEPER_WEBHOOK_SECRET:?set a webhook secret}
+      TINYSWEEPER_GITHUB_APP_ID: ${TINYSWEEPER_GITHUB_APP_ID:-}
+      TINYSWEEPER_GITHUB_PRIVATE_KEY: ${TINYSWEEPER_GITHUB_PRIVATE_KEY:-}
+      RUST_LOG: ${RUST_LOG:-tinysweeper=info}
+    ports:
+      - "8080:8080"
+    depends_on:
+      mongot:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mongo-secrets:
+  mongod-data:
+  mongot-data:
