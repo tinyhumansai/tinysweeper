@@ -121,7 +121,7 @@ jobs:
       # this workflow builds it, installs its dependencies, or runs any script
       # from it. That invariant is what makes reviewing fork pull requests safe;
       # see the security boundary in AGENTS.md before adding any step here.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ steps.head.outputs.sha }}
           # Full history: the commits lane walks the pull request's range, and a
