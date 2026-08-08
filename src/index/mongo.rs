@@ -96,7 +96,8 @@ fn encode_vector(values: &[f32]) -> Binary {
 /// restricted character set that a raw model id does not respect.
 fn vector_index_name(signature: &EmbedSignature) -> String {
     let digest = Sha256::digest(signature.key().as_bytes());
-    format!("tinysweeper_vec_{:x}", digest)[..24].to_string()
+    let hex = format!("{digest:x}");
+    format!("tinysweeper_vec_{}", &hex[..16])
 }
 
 /// Whether a driver error is "this server does not know that stage".
