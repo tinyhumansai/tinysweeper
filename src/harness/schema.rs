@@ -105,7 +105,7 @@ pub fn json_schema() -> Value {
         "properties": {
             "summary": {
                 "type": "string",
-                "description": "Your final verdict in one or two sentences, written as if the review is finished — because it is. Say what the change does and whether it is safe to merge. Never describe what you are about to do or what you would need to check; there is no second turn. Do not repeat the findings."
+                "description": "Your final verdict in one or two sentences, written as if the review is finished — because it is. Say what the change does and whether it is safe to merge. Never describe what you are about to do or what you would need to check; there is no second turn. Do not repeat the findings, and do not claim a problem here that is absent from the findings list: a bug mentioned only in prose is anchored to nothing and blocks nothing."
             },
             "resolved": {
                 "type": "array",

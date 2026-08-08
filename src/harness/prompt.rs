@@ -189,6 +189,12 @@ in order to decide — decide with what is in front of you and report the result
 The summary is your verdict, written as if the review is already finished,
 because it is.
 
+The summary and the findings must agree. If you describe a problem in the
+summary it belongs in the findings list, where it can be anchored, gated and
+acted on; a problem mentioned only in prose reaches nobody and blocks nothing.
+If you have no findings, do not assert that a bug exists — say the change looks
+sound, or say what you were unable to check.
+
 Report only problems this pull request introduces. Code that was already there
 is not this author's concern, however wrong it looks.
 
