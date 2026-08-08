@@ -145,7 +145,20 @@ impl LaneOutcome {
         let mut findings = Vec::new();
         let mut discarded = 0usize;
         for raw in parsed.findings {
-            let finding = raw.into_finding(lane);
+            // Structured responses anchor with a quoted snippet, not a line
+            // number. Resolve that quote before strict anchoring so schema-
+            // conforming findings are not all discarded as line-less.
+            let range = raw.existing_code.as_deref().and_then(|snippet| {
+                diffs
+                    .iter()
+                    .find(|diff| diff.path == raw.path)
+                    .and_then(|diff| crate::position::locate(snippet, Some(diff), None).range())
+            });
+            let mut finding = raw.into_finding(lane);
+            if let Some((start, end)) = range {
+                finding.line = Some(start);
+                finding.end_line = (end > start).then_some(end);
+            }
             match anchoring {
                 Anchoring::Strict if !anchor::anchored_in_diff(&finding, diffs) => {
                     // Not an error: models do this routinely. Dropped quietly

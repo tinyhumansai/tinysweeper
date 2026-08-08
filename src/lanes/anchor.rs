@@ -73,6 +73,7 @@ mod tests {
             body: "b".into(),
             suggestion: None,
             late: false,
+            identity: None,
         }
     }
 

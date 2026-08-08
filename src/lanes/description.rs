@@ -134,6 +134,7 @@ fn empty_body_outcome(pr: &PullRequest, files: usize) -> LaneOutcome {
                 .into(),
             suggestion: Some(suggestion),
             late: false,
+            identity: None,
         }],
         resolved: vec![],
         usage: Default::default(),

@@ -613,6 +613,9 @@ fn publish_unclaimed(lanes: &mut Vec<LaneProposal>, scan_findings: &[scan::types
                 unclaimed.len()
             ),
             findings: unclaimed,
+            resolved: vec![],
+            deduped: 0,
+            highest_severity: Some(Severity::High),
         });
     }
 }
@@ -736,6 +739,12 @@ mod tests {
             .unwrap()
             .try_into()
             .unwrap()
+    }
+
+    fn critique_config() -> Config {
+        let mut config = config();
+        config.review.lanes = vec!["critique".into()];
+        config
     }
 
     fn repo() -> RepoId {
@@ -1182,7 +1191,7 @@ mod tests {
     async fn a_finding_is_posted_exactly_once_across_three_pushes() {
         // *The* regression guard for the 48-thread incident. Three pushes, the
         // same unfixed problem, one model that says so every time. One comment.
-        let config = config();
+        let config = critique_config();
         let forge = forge_with(vec![rust_file()], vec![]);
         let model = Arc::new(insistent_model());
 
@@ -1217,7 +1226,7 @@ mod tests {
         // A contributor who copies the marker out of a real comment — or
         // guesses one — must not be able to silence the next review. Authorship
         // is the thing they cannot forge.
-        let config = config();
+        let config = critique_config();
         let forge = forge_with(vec![rust_file()], vec![]);
         let model = Arc::new(insistent_model());
 
@@ -1269,7 +1278,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_fixed_finding_is_not_re_raised() {
-        let config = config();
+        let config = critique_config();
         let forge = forge_with(vec![rust_file()], vec![]);
 
         let first = review(&forge, Arc::new(insistent_model()), &config, &repo(), 7)
@@ -1353,7 +1362,7 @@ mod tests {
     async fn turning_incremental_off_reviews_every_push_from_scratch() {
         // The escape hatch for anyone who would rather have a duplicate comment
         // than a suppressed one. It has to actually do something.
-        let mut config = config();
+        let mut config = critique_config();
         config.review.incremental = false;
         let forge = forge_with(vec![rust_file()], vec![]);
         let model = Arc::new(insistent_model());
@@ -1375,7 +1384,7 @@ mod tests {
     async fn the_review_state_store_remembers_what_was_reviewed() {
         // The store is an optimisation, and this is the thing it buys: the
         // evidence bytes prompt layer 3 replays. Dedupe above works without it.
-        let config = config();
+        let config = critique_config();
         let forge = forge_with(vec![rust_file()], vec![]);
         let store = crate::state::MemoryState::new();
 
@@ -1412,7 +1421,7 @@ mod tests {
     async fn a_remembered_review_dedupes_even_when_the_comments_are_gone() {
         // Somebody deleted the comment threads, or GitHub has not caught up.
         // The store is the second source, and either alone is enough.
-        let config = config();
+        let config = critique_config();
         let store = crate::state::MemoryState::new();
         let model = Arc::new(insistent_model());
 

@@ -79,6 +79,40 @@ where
     out
 }
 
+/// Review files while enforcing a lane's share of the pull-request budget.
+///
+/// Usage is only known once a provider call returns, so calls run serially:
+/// that is what prevents queued work from starting after the hard ceiling has
+/// already been spent. The caller still gets successful earlier reviews.
+pub async fn per_file_with_budget<F, Fut>(paths: &[String], budget: f64, review: F) -> FanOut
+where
+    F: Fn(String) -> Fut,
+    Fut: Future<Output = crate::error::Result<FileReview>>,
+{
+    let mut out = FanOut::default();
+    let mut spent = 0.0;
+    for path in paths {
+        if spent >= budget {
+            out.failures.push((
+                path.clone(),
+                Error::Budget {
+                    spent,
+                    limit: budget,
+                },
+            ));
+            continue;
+        }
+        match review(path.clone()).await {
+            Ok(review) => {
+                spent += review.usage.cost_usd;
+                out.reviews.push(review);
+            }
+            Err(err) => out.failures.push((path.clone(), err)),
+        }
+    }
+    out
+}
+
 /// The results of a fan-out, successes and failures kept apart.
 #[derive(Debug, Default)]
 pub struct FanOut {
@@ -134,12 +168,14 @@ impl FanOut {
             ));
         }
 
+        let skipped = (reviewed == 0 && !self.failures.is_empty())
+            .then(|| "No files could be reviewed; see the listed provider failures.".to_string());
         LaneOutcome {
             summary,
             findings,
             resolved,
             usage,
-            skipped: None,
+            skipped,
         }
     }
 }
@@ -191,6 +227,35 @@ mod tests {
             "a partial review must say so: {}",
             outcome.summary
         );
+    }
+
+    #[tokio::test]
+    async fn every_failure_makes_the_lane_neutral() {
+        let paths = vec!["bad.rs".to_string()];
+        let outcome = per_file(&paths, |_| async { Err(Error::Model("nope".into())) })
+            .await
+            .into_outcome();
+
+        assert!(outcome.skipped.is_some());
+    }
+
+    #[tokio::test]
+    async fn budget_stops_later_file_calls() {
+        let paths = vec!["first.rs".to_string(), "second.rs".into()];
+        let out = per_file_with_budget(&paths, 1.0, |path| async move {
+            Ok(FileReview {
+                summary: path,
+                usage: Usage {
+                    cost_usd: 1.0,
+                    ..Usage::default()
+                },
+                ..FileReview::default()
+            })
+        })
+        .await;
+
+        assert_eq!(out.reviews.len(), 1);
+        assert_eq!(out.failures.len(), 1);
     }
 
     #[tokio::test]

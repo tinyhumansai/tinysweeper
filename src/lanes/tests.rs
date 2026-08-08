@@ -212,6 +212,12 @@ fn is_inert_path(path: &str) -> bool {
     // A workflow file is configuration, but it is executable configuration and
     // the security lane cares about it. It is still not something a unit test
     // covers, so it stays inert here.
+    // Presets are executable review policy represented as data: altering one
+    // changes enabled lanes and thresholds, so it must stay in the source
+    // inventory even though the file is TOML.
+    if path.starts_with("presets/") && path.ends_with(".toml") {
+        return false;
+    }
     INERT_SUFFIXES
         .iter()
         .any(|suffix| path.to_ascii_lowercase().ends_with(suffix))
@@ -300,6 +306,18 @@ mod lane_tests {
             "src/pricing.rs",
             "@@ -1,3 +1,5 @@\n fn total(items: &[Item]) -> u64 {\n+    if items.is_empty() {\n+        return 0;\n     }\n }\n",
         )
+    }
+
+    #[test]
+    fn preset_toml_is_reviewable_policy_not_inert_configuration() {
+        let diff = parse_file_patch(
+            "presets/rust-library/preset.toml",
+            "@@ -1 +1 @@\n+lanes = [\"security\"]\n",
+        );
+        assert_eq!(
+            Inventory::of(&[diff]).source,
+            ["presets/rust-library/preset.toml"]
+        );
     }
 
     fn pull_request() -> PullRequest {

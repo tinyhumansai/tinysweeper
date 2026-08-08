@@ -32,7 +32,7 @@ use crate::evidence::diff::{FileDiff, render as render_diffs};
 use crate::findings::types::Finding;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
-use crate::lanes::fanout::{FileReview, per_file};
+use crate::lanes::fanout::{FileReview, per_file_with_budget};
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
 use crate::ports::model::{Message, Model, ModelRequest};
 use crate::scan::types::{Finding as ScanFinding, ScanKind};
@@ -84,30 +84,31 @@ impl Lane for Security {
             .map(|d| d.path.clone())
             .collect();
 
-        let outcome = per_file(&reviewable, |path| {
-            let model = self.model.clone();
-            let config = input.config;
-            let repo_policy = input.repo_policy;
-            let prior_findings = input.prior_findings;
-            let diffs = input.diffs;
-            let scanner = &scanner;
-            async move {
-                let diff = diffs
-                    .iter()
-                    .find(|d| d.path == path)
-                    .expect("the path came from the diff list");
-                review_file(
-                    model.as_ref(),
-                    config,
-                    repo_policy,
-                    prior_findings,
-                    diff,
-                    scanner,
-                )
-                .await
-            }
-        })
-        .await;
+        let outcome =
+            per_file_with_budget(&reviewable, input.config.models.budget_usd_per_pr, |path| {
+                let model = self.model.clone();
+                let config = input.config;
+                let repo_policy = input.repo_policy;
+                let prior_findings = input.prior_findings;
+                let diffs = input.diffs;
+                let scanner = &scanner;
+                async move {
+                    let diff = diffs
+                        .iter()
+                        .find(|d| d.path == path)
+                        .expect("the path came from the diff list");
+                    review_file(
+                        model.as_ref(),
+                        config,
+                        repo_policy,
+                        prior_findings,
+                        diff,
+                        scanner,
+                    )
+                    .await
+                }
+            })
+            .await;
 
         let mut outcome = outcome.into_outcome();
         merge_scanner_findings(&mut outcome, &scanner);
