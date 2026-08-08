@@ -365,13 +365,16 @@ mod tests {
     #[test]
     fn prior_findings_are_volatile_and_carry_the_continuity_contract() {
         let config = config();
-        let titles = ["Guard the index before dereferencing".to_string()];
+        // A distinctive title: the static instructions use "Guard the index
+        // before dereferencing" as their example, so that phrase appears in the
+        // prefix legitimately and cannot distinguish the two halves.
+        let titles = ["Close the socket on the error path".to_string()];
         let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
         i.prior_findings = &titles;
         let prompt = build(&i);
 
-        assert!(prompt.suffix().contains("Guard the index"));
-        assert!(!prompt.prefix().contains("Guard the index"));
+        assert!(prompt.suffix().contains("Close the socket"));
+        assert!(!prompt.prefix().contains("Close the socket"));
         assert!(prompt.suffix().contains("silently dropping an unfixed"));
     }
 

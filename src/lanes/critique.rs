@@ -372,7 +372,7 @@ mod tests {
                 scan_findings: &[],
                 repo_policy: None,
                 reviewed_evidence: "@@ -1 +1 @@\n+earlier\n",
-                prior_findings: &["Guard the index before dereferencing".to_string()],
+                prior_findings: &["Close the socket on the error path".to_string()],
             })
             .await
             .expect("runs");
