@@ -101,6 +101,14 @@ pub fn split(source: &str, language: Language, options: &ChunkOptions) -> Option
     Some(assemble(source, &segments, options))
 }
 
+/// How many bytes of the top level the grammar could make nothing of.
+fn error_bytes(root: Node<'_>) -> usize {
+    root.children(&mut root.walk())
+        .filter(|child| child.is_error() || child.is_missing())
+        .map(|child| child.byte_range().len())
+        .sum()
+}
+
 fn grammar(language: Language) -> tree_sitter::Language {
     match language {
         Language::Rust => tree_sitter_rust::LANGUAGE.into(),
