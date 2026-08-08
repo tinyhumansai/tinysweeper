@@ -10,6 +10,7 @@ use std::path::Path;
 
 use serde_json::json;
 
+use crate::config::types::Config;
 use crate::config::{self, Loaded};
 use crate::error::{Error, Result};
 
@@ -83,7 +84,7 @@ fn print_json(loaded: &Loaded) -> Result<()> {
     let report = json!({
         "source": loaded.source.as_ref().map(|p| p.display().to_string()),
         "preset": loaded.preset_source.as_ref().map(|p| p.display().to_string()),
-        "config": loaded.config,
+        "config": redacted_config(&loaded.config)?,
         "provenance": provenance,
         "problems": config::validate::validate(&loaded.config),
         "credentials": credentials(loaded),
@@ -91,6 +92,38 @@ fn print_json(loaded: &Loaded) -> Result<()> {
 
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
+}
+
+/// Serialize the config with credential-bearing fields redacted.
+///
+/// `models.api_key_env` and `sentry.token_env` are supposed to hold the *name*
+/// of an environment variable. When someone pastes the key itself — the exact
+/// mistake validation warns about — serializing the config verbatim prints that
+/// key into a terminal or a CI log. `doctor --json` is often the first thing
+/// run when something is wrong, so it is precisely the wrong moment to echo a
+/// credential.
+fn redacted_config(config: &Config) -> Result<serde_json::Value> {
+    let mut value = serde_json::to_value(config)?;
+
+    for (section, field) in [("models", "api_key_env"), ("sentry", "token_env")] {
+        if let Some(current) = value
+            .get_mut(section)
+            .and_then(|s| s.get_mut(field))
+            .and_then(|f| f.as_str().map(str::to_string))
+            && looks_like_a_value(&current)
+        {
+            value[section][field] = json!(crate::scan::types::redact(&current));
+        }
+    }
+
+    Ok(value)
+}
+
+/// Whether a field that should name an environment variable holds something
+/// else. Environment variable names are conventionally SCREAMING_SNAKE_CASE, so
+/// a lowercase letter is the cheap tell that a value was pasted instead.
+fn looks_like_a_value(text: &str) -> bool {
+    text.contains(|c: char| c.is_ascii_lowercase())
 }
 
 fn print_prose(loaded: &Loaded) {
@@ -302,6 +335,29 @@ mod tests {
         std::fs::write(&config_path, "version = 1\npreset = \"house\"\n").expect("write");
 
         check(&config_path).expect("preset resolved from above .github/");
+    }
+
+    #[test]
+    fn a_key_pasted_into_the_env_var_field_is_not_echoed_by_doctor_json() {
+        // `doctor --json` is often the first thing run when something is wrong,
+        // which makes it exactly the wrong moment to print a credential.
+        let key = format!("{}{}", "sk-or-", "v1-0f1e2d3c4b5a69788796a5b4c3d2e1f0");
+        let dir = repo(&format!("version = 1\n[models]\napi_key_env = \"{key}\"\n"));
+        let loaded = config::load(dir.path(), None).expect("loads");
+
+        let rendered = serde_json::to_string(&redacted_config(&loaded.config).expect("redacts"))
+            .expect("serialises");
+        assert!(!rendered.contains("0f1e2d3c"), "{rendered}");
+        assert!(rendered.contains("redacted"), "{rendered}");
+    }
+
+    #[test]
+    fn a_genuine_variable_name_is_left_readable() {
+        let dir = repo("version = 1\n");
+        let loaded = config::load(dir.path(), None).expect("loads");
+        let rendered = serde_json::to_string(&redacted_config(&loaded.config).expect("redacts"))
+            .expect("serialises");
+        assert!(rendered.contains("OPENROUTER_API_KEY"), "{rendered}");
     }
 
     #[test]

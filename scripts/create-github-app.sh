@@ -58,6 +58,30 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 1
 fi
 
+if [ "$PUBLIC_HOST" != "localhost" ] && [ "$PUBLIC_HOST" != "127.0.0.1" ]; then
+    cat <<WARN
+WARNING: the callback will travel over plaintext HTTP to $PUBLIC_HOST:$PORT.
+
+  GitHub redirects the browser with a one-time manifest code in the URL. Anyone
+  who can observe that request can redeem the code first and receive the App's
+  private key — the redirect is the whole credential.
+
+  Only use this mode on a network where that traffic is already encrypted and
+  authenticated, such as a Tailscale tailnet or a WireGuard link. Do not use it
+  over a shared LAN, a café network, or anything you do not control.
+
+  On this machine? Use the default localhost mode instead, which never leaves
+  the loopback interface.
+
+WARN
+    printf 'Continue? [y/N] '
+    read -r reply
+    case "$reply" in
+        [yY]*) ;;
+        *) echo "aborted"; exit 1 ;;
+    esac
+fi
+
 echo "Creating GitHub App 'tinysweeper' under org '$ORG'."
 echo "Open the URL below, review the permissions, and click 'Create GitHub App'."
 echo
