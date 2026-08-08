@@ -858,6 +858,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_cost_line_names_the_model_that_answered_not_the_one_configured() {
+        // A provider outage puts a fallback on the call. Reporting the
+        // configured model would tell the reader the review ran on the deep
+        // tier when it silently ran on something cheaper.
+        let model = MockModel::silent()
+            .answering_as("vendor/fallback")
+            .with_usage(Usage {
+                input_tokens: 100,
+                cost_usd: 0.001,
+                ..Usage::default()
+            });
+        let forge = forge_with(vec![rust_file()], vec![]);
+        let config = critique_config();
+
+        let proposal = review(&forge, Arc::new(model), &config, &repo(), 7)
+            .await
+            .expect("reviews");
+
+        assert_eq!(proposal.models, vec!["vendor/fallback".to_string()]);
+        assert!(
+            !proposal.models.contains(&config.model_for(LaneId::Critique).to_string()),
+            "the configured model answered nothing and must not be reported"
+        );
+        let critique = proposal
+            .lanes
+            .iter()
+            .find(|l| l.lane == LaneId::Critique)
+            .expect("critique ran");
+        assert_eq!(critique.models, vec!["vendor/fallback".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn the_per_lane_usage_sums_to_the_run_total() {
+        let model = MockModel::silent().with_usage(Usage {
+            input_tokens: 1_000,
+            output_tokens: 50,
+            cached_tokens: 400,
+            embed_tokens: 0,
+            cost_usd: 0.002,
+        });
+        let forge = forge_with(vec![rust_file()], vec![]);
+
+        let proposal = review(&forge, Arc::new(model), &config(), &repo(), 7)
+            .await
+            .expect("reviews");
+
+        let mut total = Usage::default();
+        for lane in &proposal.lanes {
+            total.add(lane.usage);
+        }
+        assert!(total.cost_usd > 0.0, "the fixture has to spend something");
+        assert_eq!(total.input_tokens, proposal.input_tokens);
+        assert_eq!(total.output_tokens, proposal.output_tokens);
+        assert_eq!(total.cached_tokens, proposal.cached_tokens);
+        assert!(
+            (total.cost_usd - proposal.cost_usd).abs() < 1e-9,
+            "{total:?} against {}",
+            proposal.cost_usd
+        );
+    }
+
+    #[tokio::test]
     async fn a_high_severity_finding_blocks_the_gate() {
         let model = MockModel::always(json!({
             "summary": "Unchecked index.",
