@@ -188,6 +188,16 @@ impl Resolver {
         // `mod foo;` is emitted by the extractor with this marker because it
         // resolves against the *current* module directory, while a `use` path
         // resolves against the crate root. Same syntax family, opposite base.
+        // `#[path = "x.rs"] mod y;` is a literal, directory-relative filename.
+        // It is how this repository points a module at a sibling test file, so
+        // ignoring it would make the graph blind to its own tests.
+        if let Some(relative) = specifier.strip_prefix("path ") {
+            let candidate = join_relative(&dir_of(from), relative);
+            return match self.files.contains(&candidate) {
+                true => Resolution::Resolved(vec![candidate]),
+                false => Resolution::Unresolved(UnresolvedReason::NoSuchFile),
+            };
+        }
         if let Some(name) = specifier.strip_prefix("mod ") {
             let base = self.rust_module_dir(from);
             return match self.rust_module_file(&base, name) {
