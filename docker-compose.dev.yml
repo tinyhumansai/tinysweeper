@@ -1,0 +1,35 @@
+# Development overlay: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up`.
+#
+# Two differences from the production file, and only two. The application is
+# replaced by a watch-and-rebuild container over a bind mount, and MongoDB is
+# published on the host so `cargo test` can reach it.
+#
+# The MongoDB images are *not* relaxed here. Developing against a database that
+# cannot serve `$vectorSearch` would mean discovering that in production, which
+# is exactly the failure the boot assertion exists to prevent.
+
+name: tinysweeper-dev
+
+services:
+  mongod:
+    # Weaker than production on purpose: a development password does not need
+    # to be a secret, and requiring one to be invented blocks `up`.
+    environment:
+      MONGODB_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-tinysweeper-dev}
+
+  tinysweeper:
+    build:
+      target: development
+    command: ["cargo", "watch", "-x", "check --all-features --all-targets"]
+    environment:
+      TINYSWEEPER_MONGODB_URI: mongodb://${MONGO_ROOT_USERNAME:-tinysweeper}:${MONGO_ROOT_PASSWORD:-tinysweeper-dev}@mongod:27017/?authSource=admin&directConnection=true
+      TINYSWEEPER_WEBHOOK_SECRET: ${TINYSWEEPER_WEBHOOK_SECRET:-development-secret}
+      RUST_LOG: ${RUST_LOG:-tinysweeper=debug}
+    volumes:
+      - .:/workspace
+      - dev-cargo-registry:/usr/local/cargo/registry
+      - dev-target:/workspace/target
+
+volumes:
+  dev-cargo-registry:
+  dev-target:
