@@ -81,10 +81,7 @@ fn an_exact_snippet_resolves_in_the_hunk() {
 #[test]
 fn wrong_indentation_still_resolves() {
     assert_eq!(resolve("let x = items[i];").range(), Some((9, 9)));
-    assert_eq!(
-        resolve("\t\t\tlet x = items[i];   ").range(),
-        Some((9, 9))
-    );
+    assert_eq!(resolve("\t\t\tlet x = items[i];   ").range(), Some((9, 9)));
 }
 
 #[test]

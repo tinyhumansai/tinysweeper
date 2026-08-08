@@ -8,7 +8,8 @@ use crate::config::types::{Config, Severity};
 use crate::harness::mock::MockModel;
 use serde_json::json;
 
-const DIFF: &str = "@@ -1,3 +1,5 @@\n fn main() {\n+    let x = items[i];\n+    println!(\"{x}\");\n }\n";
+const DIFF: &str =
+    "@@ -1,3 +1,5 @@\n fn main() {\n+    let x = items[i];\n+    println!(\"{x}\");\n }\n";
 
 fn config() -> Config {
     crate::config::DEFAULTS

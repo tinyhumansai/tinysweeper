@@ -33,8 +33,8 @@ use crate::falsify::Falsifier;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema::{self, RawFinding};
 use crate::lanes::{Lane, LaneInput, LaneOutcome};
-use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
 use crate::ports::model::{Message, Model, ModelRequest};
+use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
 
 /// The correctness lane.
 pub struct Critique {
@@ -259,11 +259,11 @@ fn render_diffs(diffs: &[FileDiff]) -> String {
 mod tests {
     use super::*;
     use crate::config::types::{Config, Severity};
-    use std::collections::BTreeMap;
     use crate::evidence::diff::parse_file_patch;
     use crate::forge::types::PullRequest;
     use crate::harness::mock::MockModel;
     use serde_json::json;
+    use std::collections::BTreeMap;
 
     fn config() -> Config {
         crate::config::DEFAULTS
@@ -489,7 +489,11 @@ fn helper() {
         let outcome = run_with(model, &config(), &diffs()).await;
 
         assert_eq!(outcome.findings.len(), 1, "failed open");
-        assert!(!outcome.summary.contains("disproved"), "{}", outcome.summary);
+        assert!(
+            !outcome.summary.contains("disproved"),
+            "{}",
+            outcome.summary
+        );
     }
 
     #[tokio::test]
@@ -542,7 +546,11 @@ fn helper() {
         }));
         let outcome = run_with(model, &config(), &diffs()).await;
         assert!(outcome.findings.is_empty());
-        assert!(outcome.summary.contains("did not change"), "{}", outcome.summary);
+        assert!(
+            outcome.summary.contains("did not change"),
+            "{}",
+            outcome.summary
+        );
     }
 
     #[tokio::test]
