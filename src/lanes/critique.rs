@@ -387,8 +387,12 @@ mod tests {
         );
         assert!(!user.contains("+earlier"));
         assert!(
-            user.contains("Guard the index"),
+            user.contains("Close the socket"),
             "prior findings are volatile"
+        );
+        assert!(
+            !system.contains("Close the socket"),
+            "prior findings must not enter the cached prefix"
         );
     }
 
