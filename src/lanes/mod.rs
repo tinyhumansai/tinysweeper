@@ -36,6 +36,8 @@ pub struct LaneInput<'a> {
     /// Findings the deterministic scanners already produced, for the lanes that
     /// adjudicate rather than re-discover.
     pub scan_findings: &'a [ScanFinding],
+    /// The commits in the pull request's range, for the `commits` lane.
+    pub commits: &'a [Commit],
     /// Repository policy gathered from ancestor `AGENTS.md` files.
     pub repo_policy: Option<&'a str>,
     /// The diff already reviewed at the last reviewed SHA, replayed verbatim so
