@@ -97,6 +97,15 @@ impl Contributor {
     }
 }
 
+/// How long a remembered review survives.
+///
+/// Long enough to cover a pull request that sits open for a month, short enough
+/// that the collection does not grow forever. Expiry costs a prompt-cache hit
+/// on the next push and nothing else — the fingerprints that keep dedupe
+/// correct are on GitHub, not here.
+pub const REVIEW_STATE_TTL: std::time::Duration =
+    std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
 /// The server's persistent state.
 #[derive(Clone, Debug)]
 pub struct Store {
@@ -104,6 +113,7 @@ pub struct Store {
     deliveries: Collection<Document>,
     leases: Collection<Document>,
     installations: Collection<Document>,
+    review_state: Collection<Document>,
 }
 
 impl Store {
