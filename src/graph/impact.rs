@@ -181,9 +181,9 @@ impl Impact {
         for (id, relation) in strongest {
             queues.entry(relation).or_default().push(id);
         }
-        let mut out = Vec::with_capacity(max_reached.min(queues.values().map(Vec::len).sum()));
+        let mut out = Vec::with_capacity(max_reached);
         let mut taken = 0;
-        while out.len() < max_reached && taken < usize::MAX {
+        while out.len() < max_reached {
             let before = out.len();
             for (relation, ids) in queues.iter_mut() {
                 if out.len() == max_reached {
