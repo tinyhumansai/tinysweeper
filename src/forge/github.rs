@@ -1167,6 +1167,53 @@ mod tests {
         assert!(issue.body.is_empty());
     }
 
+    fn comment(
+        path: &str,
+        line: Option<u64>,
+        start_line: Option<u64>,
+        body: &str,
+    ) -> ReviewComment {
+        ReviewComment {
+            path: path.to_string(),
+            line,
+            start_line,
+            author: String::new(),
+            body: body.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_single_line_comment_carries_no_range_fields_on_the_wire() {
+        let payload = review_comment_payload(&comment("src/lib.rs", Some(4), None, "Fix it."));
+
+        assert_eq!(
+            payload,
+            json!({
+                "path": "src/lib.rs",
+                "line": 4,
+                "side": "RIGHT",
+                "body": "Fix it."
+            })
+        );
+    }
+
+    #[test]
+    fn a_multi_line_comment_carries_start_line_and_start_side_on_the_wire() {
+        let payload = review_comment_payload(&comment("src/lib.rs", Some(4), Some(2), "Fix it."));
+
+        assert_eq!(
+            payload,
+            json!({
+                "path": "src/lib.rs",
+                "line": 4,
+                "side": "RIGHT",
+                "start_line": 2,
+                "start_side": "RIGHT",
+                "body": "Fix it."
+            })
+        );
+    }
+
     #[test]
     fn the_type_names_an_owner_defines_are_read_in_the_order_returned() {
         let names = type_names_from_json(&json!([
