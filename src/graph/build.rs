@@ -220,25 +220,21 @@ pub fn build(repo_id: &str, files: &[SourceFile]) -> Result<RepoGraph> {
 /// unique. Anything else is left unresolved rather than guessed.
 fn target_for(
     path: &str,
-    usage: &crate::graph::types::Usage,
+    name: &str,
     local: &BTreeSet<&str>,
     bindings: &BTreeMap<String, Vec<String>>,
     defined_in: &BTreeMap<String, BTreeSet<String>>,
 ) -> Option<String> {
-    if local.contains(usage.name.as_str()) {
-        return Some(format!("{path}#{}", usage.name));
+    if local.contains(name) {
+        return Some(format!("{path}#{name}"));
     }
-    if let Some(targets) = bindings.get(&usage.name) {
+    if let Some(targets) = bindings.get(name) {
         let defining: Vec<&String> = targets
             .iter()
-            .filter(|t| {
-                defined_in
-                    .get(&usage.name)
-                    .is_some_and(|files| files.contains(*t))
-            })
+            .filter(|t| defined_in.get(name).is_some_and(|files| files.contains(*t)))
             .collect();
         if let Some(target) = defining.first() {
-            return Some(format!("{target}#{}", usage.name));
+            return Some(format!("{target}#{name}"));
         }
         // Imported but the target does not define the name itself: a
         // re-export, or a name we cannot see. The file edge is still true.
@@ -246,12 +242,20 @@ fn target_for(
             return Some((*target).clone());
         }
     }
-    let files = defined_in.get(&usage.name)?;
+    let files = defined_in.get(name)?;
     if files.len() == 1 {
         let target = files.iter().next()?;
-        return Some(format!("{target}#{}", usage.name));
+        return Some(format!("{target}#{name}"));
     }
     None
+}
+
+/// The file half of a node id, which is the whole id for a file node.
+fn path_of(id: &str) -> &str {
+    match id.split_once('#') {
+        Some((path, _)) => path,
+        None => id,
+    }
 }
 
 fn last_segment(specifier: &str) -> String {
