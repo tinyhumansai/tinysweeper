@@ -235,10 +235,16 @@ fn review_body(proposal: &Proposal, event: ReviewEvent) -> String {
     // The full token breakdown goes in the body deliberately. Cache hit rate is
     // the difference between a cheap re-review and a ruinous one, and nobody
     // tunes a number they cannot see.
-    body.push_str(&format!(
-        "\n\n<sub>{}{}</sub>",
-        crate::findings::render::cost_line(&proposal.usage(), &proposal.models),
-        crate::findings::render::per_lane_costs(&proposal.lane_costs()),
+    //
+    // A fenced, column-aligned block rather than a `<sub>` sentence per lane:
+    // the point of the breakdown is comparing lanes, and six numbers that land
+    // in a different place on every row cannot be compared at a glance. The
+    // fence also stops the renderer reflowing away the alignment.
+    body.push_str("\n\n");
+    body.push_str(&crate::findings::render::cost_table(
+        &proposal.usage(),
+        &proposal.models,
+        &proposal.lane_costs(),
     ));
     body.push_str(&format!(
         "\n<!-- {MARKER_PREFIX}state v=1 sha={} -->",
