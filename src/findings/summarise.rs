@@ -10,11 +10,14 @@
 /// cut mid-word reads worse than one that stops early.
 pub fn shorten(text: &str, limit: usize) -> String {
     let text = text.trim();
-    if text.len() <= limit {
+    if text.chars().count() <= limit {
         return text.to_string();
     }
 
-    let head = &text[..limit];
+    // Character boundaries, not byte offsets: `&text[..limit]` panics the
+    // moment a multibyte character straddles the cut, and model-authored text
+    // is full of them — an em dash in a title would take the process down.
+    let head: String = text.chars().take(limit).collect();
     match head.rfind(' ') {
         Some(space) => format!("{}…", &head[..space]),
         None => format!("{head}…"),
@@ -44,6 +47,17 @@ mod tests {
         let out = shorten("Guard the index before dereferencing the slice", 20);
         assert!(out.ends_with('…'), "{out}");
         assert!(out.len() <= 21, "{out}");
+    }
+
+    #[test]
+    fn a_multibyte_title_does_not_panic() {
+        // The bug this replaces: byte slicing at `limit` splits a multibyte
+        // character and panics. Every one of these is longer in bytes than in
+        // characters, so a byte-based cut lands mid-character.
+        for text in ["Guard the índex before dereferencing —— twice", "日本語のタイトルはとても長いのです", "café ".repeat(40).as_str()] {
+            let out = shorten(text, 20);
+            assert!(out.chars().count() <= 21, "{out}");
+        }
     }
 
     #[test]
