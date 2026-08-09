@@ -107,7 +107,7 @@ pub async fn apply(
             .create_review(
                 &repo,
                 proposal.number,
-                &review_body(proposal, event),
+                &review_body(proposal, event, previous),
                 comments,
                 event,
             )
