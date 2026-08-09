@@ -1,9 +1,10 @@
 # `evals/` — the labelled corpus
 
-Review quality as **data**, the way `presets/` is review policy as data. Loaded
-by `tinysweeper eval`, never by `cargo test`: a labelled pull request is not a
+Review quality as **data**, the way `presets/` is review policy as data. Live
+evaluation runs through `tinysweeper eval`: a labelled pull request is not a
 unit test — it costs money to run, its answer moves, and it is edited by
-whoever disagrees with a score.
+whoever disagrees with a score. `cargo test` does load this corpus too, but only
+to replay the committed cassettes offline for free, never to call a model.
 
 See [docs/modules/eval/README.md](../docs/modules/eval/README.md) for how the
 harness works. This file is the labelling contract.
