@@ -239,6 +239,33 @@ pub enum Action {
 /// because the failure mode of a wrong guess is spending money and posting
 /// comments on something nobody asked about.
 pub fn route(event: &str, payload: &Payload) -> Action {
+    let Some(repository) = &payload.repository else {
+        return Action::Ignore("no repository");
+    };
+    let Some(installation) = &payload.installation else {
+        return Action::Ignore("no installation");
+    };
+
+    // Auto-merge is decided before the bot guard below, and deliberately.
+    //
+    // Every event that can make a pull request mergeable is sent by a bot: the
+    // check runs are ours, and the approval that clears a previous objection is
+    // ours too. Applying the guard here would mean the trigger never fires on
+    // the events that matter, which is how a gate ends up looking implemented
+    // and never running.
+    //
+    // It is safe to exempt because the loop the guard exists to stop cannot
+    // form: auto-merge writes nothing but a merge, a merge closes the pull
+    // request, and a closed pull request is refused by the first check in the
+    // policy. A refusal writes nothing at all.
+    if let Some(numbers) = automerge_trigger(event, payload) {
+        return Action::AutoMerge {
+            repo: repository.full_name.clone(),
+            numbers,
+            installation: installation.id,
+        };
+    }
+
     // A bot's own activity must never wake it up. Without this, posting a
     // review comment triggers a delivery that triggers a review that posts a
     // comment, and the loop is only bounded by the rate limiter.
@@ -247,13 +274,6 @@ pub fn route(event: &str, payload: &Payload) -> Action {
     {
         return Action::Ignore("sender is a bot");
     }
-
-    let Some(repository) = &payload.repository else {
-        return Action::Ignore("no repository");
-    };
-    let Some(installation) = &payload.installation else {
-        return Action::Ignore("no installation");
-    };
 
     match event {
         "pull_request" => {
