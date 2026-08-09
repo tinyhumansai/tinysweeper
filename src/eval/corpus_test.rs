@@ -266,6 +266,25 @@ summary = "a defect"
 }
 
 #[test]
+fn the_digest_moves_when_a_fixture_moves_and_not_otherwise() {
+    let dir = corpus_with(&[("ts-0001", case_toml("ts-0001", ""))]);
+    let before = load_at(dir.path()).expect("loads").digest;
+    assert_eq!(before, load_at(dir.path()).expect("loads").digest);
+
+    // Edit only the fixture: the case TOML is untouched. The fixture is what
+    // gets handed to the model, so a baseline scored against the old fixture
+    // must refuse to compare against a run measured on this one — the same
+    // rule that protects the labelled expectations.
+    std::fs::write(
+        dir.path().join("fixtures/ts-0001.json"),
+        fixture_json().replace(&"a".repeat(40), &"b".repeat(40)),
+    )
+    .expect("write");
+
+    assert_ne!(before, load_at(dir.path()).expect("loads").digest);
+}
+
+#[test]
 fn selecting_an_unknown_case_lists_what_the_corpus_holds() {
     let dir = corpus_with(&[("ts-0001", case_toml("ts-0001", ""))]);
     let corpus = load_at(dir.path()).expect("loads");
