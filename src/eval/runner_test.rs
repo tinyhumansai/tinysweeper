@@ -235,54 +235,10 @@ async fn a_stale_cassette_fails_the_case_rather_than_scoring_an_old_prompt() {
     .expect("runs");
 
     // Scored as a failure, loudly, rather than silently replaying answers to a
-    // question nobody asked.
+    // question nobody asked. The lane worked around the miss and reported
+    // "could not be reviewed", so the runner must convert that into a failed
+    // case — which is what `strict_misses` on the cassette makes possible.
     let score = &outcome.scores[0];
-    if score.error.is_none() {
-        eprintln!("PROPOSAL:\n{}", std::fs::read_to_string(dir.path().join("runs/test/ts-0001/proposal.json")).unwrap_or_else(|e| format!("no proposal: {e}")));
-        // Probe why: the replay claimed success with no model calls. Dump what
-        // was recorded against what the reply asked for.
-        use crate::config::types::LaneId;
-        use crate::harness::cassette::key;
-        use crate::harness::prompt::{self, PromptInputs};
-        use crate::harness::schema;
-        use crate::ports::model::{Message, ModelRequest};
-        let build_msg = |cfg: &Config| {
-            let built = prompt::build(&PromptInputs {
-                focus_path: Some("src/lib.rs"),
-                changed_paths: &["src/lib.rs".into()],
-                ..PromptInputs::new(LaneId::Critique, cfg)
-            });
-            (
-                built.prefix().to_string(),
-                built.suffix().to_string(),
-            )
-        };
-        let (pre, suf) = build_msg(&edited);
-        let request = ModelRequest {
-            model: config().model_for(LaneId::Critique).to_string(),
-            messages: vec![Message::system(&pre), Message::user(&suf)],
-            schema: schema::json_schema(),
-            schema_name: "tinysweeper_critique".into(),
-            max_tokens: config().models.max_tokens,
-        };
-        eprintln!("EDIT KEY {}", key(&request));
-        let replay_dir = corpus
-            .cases
-            .iter()
-            .find(|c| c.case.id == "ts-0001")
-            .map(|c| c.cassette_dir(&corpus.root))
-            .expect("case");
-        let mut files: Vec<_> = std::fs::read_dir(&replay_dir)
-            .expect("read cassette")
-            .filter_map(|e| e.ok())
-            .collect();
-        files.sort_by_key(|e| e.file_name());
-        for entry in &files {
-            let path = entry.path();
-            let raw = std::fs::read_to_string(&path).expect("read take");
-            eprintln!("TAKE {}:\n{raw}", path.display());
-        }
-    }
     assert!(score.error.is_some(), "expected a cassette miss");
     assert!(
         score
