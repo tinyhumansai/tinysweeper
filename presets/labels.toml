@@ -1,0 +1,70 @@
+# The label vocabulary tinysweeper applies, as data.
+#
+# Two rules shape this list, and both are the result of getting it wrong first:
+#
+# 1. **One axis per fact.** `priority` and `severity` used to both exist, and
+#    the mapping between them was literally one-to-one — `Critical -> p0`,
+#    `High -> p1`, and so on. Two labels saying the same thing in different
+#    words is not two facts; it is one fact and an opportunity to contradict
+#    itself. There is now a single ordered axis.
+#
+# 2. **Nothing here duplicates a native GitHub field.** Bug / Feature / Task
+#    are GitHub *issue types* now, set on the issue itself, so there are no
+#    `bug` or `enhancement` labels in this vocabulary. A label that shadows a
+#    native field is a second place for the answer to live, and the two drift.
+#
+# `scripts/sync-labels.py` applies this to a repository. It never deletes a
+# label it did not find here unless asked, because a maintainer's own labels
+# are not this file's business.
+
+# The one ordered axis. Colours run cool to hot so a list of issues reads at a
+# glance without anybody learning the scheme.
+[[labels]]
+name = "priority: p0"
+color = "b60205"
+description = "Drop what you are doing. Data loss, a live break, or an exploitable hole."
+
+[[labels]]
+name = "priority: p1"
+color = "d93f0b"
+description = "Next. Wrong behaviour a user will hit, or a security weakness behind a condition."
+
+[[labels]]
+name = "priority: p2"
+color = "fbca04"
+description = "Soon. Real but survivable — a rough edge, a gap, a thing that will bite later."
+
+[[labels]]
+name = "priority: p3"
+color = "0e8a16"
+description = "Whenever. Cosmetic, a nicety, or a cleanup with no user visible effect."
+
+# Applied by triage when it is confident enough to say so, and by people.
+[[labels]]
+name = "duplicate"
+color = "cfd3d7"
+description = "Already tracked somewhere else. The comment says where."
+
+# Kill switches. These are read by the bot, so the names are load-bearing:
+# `review.labels` in the configuration must agree with them.
+[[labels]]
+name = "tinysweeper:human-review"
+color = "5319e7"
+description = "Stop the bot on this one. It will not review, label, or merge it."
+
+[[labels]]
+name = "tinysweeper:manual-only"
+color = "5319e7"
+description = "No automatic action. A human triggers anything that happens here."
+
+# Workflow labels GitHub ships with, kept because people use them and they say
+# something no other field does.
+[[labels]]
+name = "good first issue"
+color = "7057ff"
+description = "Small, self-contained, and well specified enough to pick up cold."
+
+[[labels]]
+name = "help wanted"
+color = "008672"
+description = "Not blocked, just unowned. Contributions welcome."
