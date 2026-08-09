@@ -235,7 +235,13 @@ pub fn cost_table(
             let pad = widths[column].saturating_sub(cell.chars().count());
             line.push_str(cell);
             line.push_str(&" ".repeat(pad));
-            line.push_str(if column == 0 { " " } else { " \u{b7} " });
+            // The input and output counts are one fact, so a slash joins them
+            // and the interpunct separates the groups.
+            line.push_str(match column {
+                0 => " ",
+                2 => " / ",
+                _ => " \u{b7} ",
+            });
         }
         line.push_str(&cells[5]);
         out.push_str(line.trim_end());
@@ -493,12 +499,11 @@ mod cost_table_tests {
         )
     }
 
-
     #[test]
     fn show_the_table() {
         println!("{}", sample());
     }
-    
+
     #[test]
     fn every_column_lines_up() {
         // The whole point: a reader should be able to run an eye down the cost
