@@ -573,12 +573,20 @@ pub async fn review_with_retrieval(
             }
         };
 
+    // The change map. Built last, from the findings that survived, so the
+    // diagram marks the components the review will actually comment on. It
+    // makes no model call and cannot fail the review: `change_map` returns
+    // `None` for a map nobody asked for and degrades to a graph-less picture
+    // for one the store would not answer.
+    let overview = change_map(config, retrieval, repo, &diffs, &lanes).await;
+
     Ok(Proposal {
         version: 1,
         repo: repo.to_string(),
         number,
         head_sha: context.pull_request.head_sha.clone(),
         lanes,
+        overview,
         unreviewed: uninspected,
         threads,
         cost_usd: spend.usage.cost_usd,
