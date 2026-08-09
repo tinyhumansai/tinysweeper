@@ -449,12 +449,18 @@ async fn run_eval(command: EvalCommand) -> Result<()> {
             let corpus_data = eval::load(&corpus)?;
             let scores = eval::rescore(&corpus_data, &run)?;
 
+            // Re-scoring reads proposals, not cassettes, so nothing is replayed
+            // here. `loose_replays` does not describe this command, though — it
+            // describes the run whose proposals are being scored, so carry the
+            // recorded figure over rather than erasing it from the scorecard.
+            let previous = eval::read_scorecard(&run.join("scorecard.json")).ok();
             let card = eval::Scorecard {
                 corpus_digest: corpus_data.digest.clone(),
                 config_digest: eval::runner::digest_of(&loaded.config),
-                // Re-scoring reads proposals, not cassettes, so nothing was
-                // replayed at all — loosely or otherwise.
-                loose_replays: 0,
+                loose_replays: previous
+                    .as_ref()
+                    .map(|card| card.loose_replays)
+                    .unwrap_or(0),
                 cases: scores,
             };
             let path = eval::write_scorecard(&run, &card)?;
