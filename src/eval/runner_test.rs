@@ -237,6 +237,7 @@ async fn a_stale_cassette_fails_the_case_rather_than_scoring_an_old_prompt() {
     // Scored as a failure, loudly, rather than silently replaying answers to a
     // question nobody asked.
     let score = &outcome.scores[0];
+    eprintln!("DEBUG stale outcome: {:#?}", outcome);
     assert!(score.error.is_some(), "expected a cassette miss");
     assert!(
         score
