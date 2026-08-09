@@ -85,7 +85,7 @@ impl Lane for Security {
         let triaged = triage(input.diffs, &forced);
 
         if triaged.review.is_empty() && scanner.is_empty() {
-            return Ok(LaneOutcome::skipped(&format!(
+            return Ok(LaneOutcome::skipped(format!(
                 "No changed file has any attack surface.{}",
                 skip_note(&triaged.skipped)
             )));
