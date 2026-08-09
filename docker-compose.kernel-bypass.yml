@@ -1,0 +1,28 @@
+# Opt-in overlay for Linux kernels 6.19 and newer.
+#
+# The MongoDB community-server image hard-refuses to start `mongod` on those
+# kernels — a tcmalloc/glibc interaction around restartable sequences — and
+# 8.2.12-ubi9 ships no way to override it, despite its own code documenting a
+# bypass that was never implemented. Without this overlay `docker compose up`
+# cannot bring up the database at all on a current desktop kernel.
+#
+# Use it only for local development:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.kernel-bypass.yml up -d
+#
+# `GLIBC_TUNABLES=glibc.pthread.rseq=0` is the real mitigation; the shim only
+# stops the image refusing to start. On a kernel below the cutoff, or on a
+# production host, leave this file out.
+
+services:
+  mongod:
+    entrypoint:
+      ["python3", "/usr/local/bin/kernel-bypass-entrypoint.py", "mongod"]
+    environment:
+      GLIBC_TUNABLES: glibc.pthread.rseq=0
+    volumes:
+      - ./deploy/mongo/kernel-bypass-entrypoint.py:/usr/local/bin/kernel-bypass-entrypoint.py:ro
+
+  mongo-secrets:
+    environment:
+      GLIBC_TUNABLES: glibc.pthread.rseq=0
