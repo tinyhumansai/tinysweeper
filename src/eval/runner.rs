@@ -135,10 +135,15 @@ pub async fn run(
         }
         let strict_misses = cassette.strict_misses();
         loose_replays += cassette.loose_hits();
+        // Spend is what actually left the account, not what a successful
+        // proposal reported: a case that failed after its calls has still spent
+        // them, and charges must not walk the corpus ceiling on the strength of
+        // never having produced a proposal to sum. Recorded usage replayed
+        // verbatim, so the ceil works offline too.
+        spent += cassette.cost_usd();
 
         let score = match outcome {
             Ok(proposal) => {
-                spent += proposal.cost_usd;
                 if strict_misses > 0 {
                     // The review closed, but a strict replay that could not
                     // answer a call means a lane worked around the miss and
