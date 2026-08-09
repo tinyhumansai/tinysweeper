@@ -33,6 +33,7 @@ use crate::findings::types::Finding;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
 use crate::lanes::fanout::{FileReview, per_file_with_budget};
+use crate::lanes::triage::triage;
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
 use crate::ports::model::{Message, Model, ModelRequest, Spend};
 use crate::scan::types::{Finding as ScanFinding, ScanKind};
@@ -187,6 +188,31 @@ async fn review_file(
         resolved: outcome.resolved,
         spend: outcome.spend,
     })
+}
+
+/// Say, in the summary, which files were never sent to a model and why.
+///
+/// A review that quietly skipped half the pull request reads exactly like one
+/// that found nothing wrong with it, so the skip is always stated.
+fn skip_note(skipped: &[(String, &'static str)]) -> String {
+    if skipped.is_empty() {
+        return String::new();
+    }
+    const LISTED: usize = 5;
+    let mut names: Vec<String> = skipped
+        .iter()
+        .take(LISTED)
+        .map(|(path, reason)| format!("{path} ({reason})"))
+        .collect();
+    if skipped.len() > LISTED {
+        names.push(format!("and {} more", skipped.len() - LISTED));
+    }
+    format!(
+        " {} file{} not security-reviewed: {}.",
+        skipped.len(),
+        if skipped.len() == 1 { " was" } else { "s were" },
+        names.join(", ")
+    )
 }
 
 /// Render scanner findings for adjudication, by type and location only.
