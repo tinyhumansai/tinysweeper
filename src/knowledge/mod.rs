@@ -160,6 +160,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_repository_whose_only_policy_file_is_under_dot_github_is_still_read() {
+        // The acceptance criterion of issue #37, end to end: nothing at the
+        // root, policy only at the conventional `.github/` location.
+        let mut state = MockState::default();
+        state.set_file(
+            "headsha",
+            ".github/AGENTS.md",
+            "Never unwrap in library code.",
+        );
+        let forge = MockForge::with_state(state);
+        let model: Arc<dyn Model> = Arc::new(MockModel::new().then(json!({
+            "rules_markdown": "- Never unwrap in library code."
+        })));
+
+        let (knowledge, _usage) =
+            gather(&forge, &model, &config(), &repo(), "headsha", &[], None).await;
+
+        assert_eq!(
+            knowledge.extracted_rules,
+            vec!["Never unwrap in library code.".to_string()]
+        );
+    }
+
+    #[tokio::test]
     async fn a_store_failure_costs_context_not_the_review() {
         let forge = forge_with_agents("Never unwrap.");
         let model: Arc<dyn Model> =
