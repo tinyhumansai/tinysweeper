@@ -80,9 +80,13 @@ pub fn build(
     let mut changed = changed_components(diffs, depth, limits.max_paths_per_component);
     mark_findings(&mut changed, findings, depth);
 
-    let (impacted, graph) = match neighbourhood {
-        Some(walk) => (impacted_components(walk, &changed_paths, depth), status(walk)),
-        None => (BTreeMap::new(), GraphStatus::Off),
+    let (impacted, graph) = match view {
+        GraphView::Walked(walk) => (
+            impacted_components(walk, &changed_paths, depth),
+            status(walk),
+        ),
+        GraphView::Absent => (BTreeMap::new(), GraphStatus::Off),
+        GraphView::Unavailable => (BTreeMap::new(), GraphStatus::Unavailable),
     };
 
     // Ranked before capping, and the two halves are ranked by different
