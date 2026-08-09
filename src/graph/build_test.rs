@@ -613,3 +613,142 @@ fn a_top_level_use_super_still_resolves_to_the_parent_module() {
         EdgeKind::Imports
     ));
 }
+
+// --- Inheritance and coverage edges -----------------------------------------
+
+#[test]
+fn an_implementation_is_reachable_inbound_from_the_trait_it_implements() {
+    // The blast radius a review wants: change `Store`, and the graph names
+    // every type that has to change with it — across files, which is where a
+    // similarity query has nothing to go on.
+    let graph = build(
+        REPO,
+        &files(&[
+            ("src/ports/store.rs", "pub trait Store {}\n"),
+            (
+                "src/mongo.rs",
+                "use crate::ports::store::Store;\npub struct Mongo;\nimpl Store for Mongo {}\n",
+            ),
+        ]),
+    )
+    .expect("builds");
+
+    assert!(
+        has_edge(
+            &graph,
+            "src/mongo.rs#Mongo",
+            "src/ports/store.rs#Store",
+            EdgeKind::Extends
+        ),
+        "no extends edge across the crate: {:?}",
+        graph.edges
+    );
+}
+
+#[test]
+fn a_test_that_calls_a_function_covers_it() {
+    let graph = build(
+        REPO,
+        &files(&[
+            (
+                "src/lib/math.ts",
+                "export function computeTotal(n: number[]): number { return n.length; }\n",
+            ),
+            (
+                "src/lib/math.test.ts",
+                "import { computeTotal } from './math';\n\
+                 it('adds', () => { computeTotal([]); });\n",
+            ),
+        ]),
+    )
+    .expect("builds");
+
+    assert!(
+        has_edge(
+            &graph,
+            "src/lib/math.test.ts",
+            "src/lib/math.ts#computeTotal",
+            EdgeKind::Tests
+        ),
+        "the suite covers nothing: {:?}",
+        graph.edges
+    );
+}
+
+#[test]
+fn production_code_never_claims_to_test_anything() {
+    // The failure this guards is the expensive one: a coverage edge out of
+    // non-test code would tell a reviewer a change is already exercised when
+    // nothing exercises it.
+    let graph = build(
+        REPO,
+        &files(&[
+            ("src/lib/math.ts", "export function total(): number { return 1; }\n"),
+            (
+                "src/app/page.ts",
+                "import { total } from '../lib/math';\nexport function render() { return total(); }\n",
+            ),
+        ]),
+    )
+    .expect("builds");
+
+    assert!(
+        !graph.edges.iter().any(|e| e.kind == EdgeKind::Tests),
+        "{:?}",
+        graph.edges
+    );
+}
+
+#[test]
+fn a_test_helper_called_by_a_test_is_not_reported_as_covered_code() {
+    // Both ends are test code. Recording that would make a test file look like
+    // the thing under test, and put test helpers in the blast radius of a
+    // production change.
+    let graph = build(
+        REPO,
+        &files(&[
+            (
+                "src/lib/support.test.ts",
+                "export function fixture(): number { return 1; }\n",
+            ),
+            (
+                "src/lib/math.test.ts",
+                "import { fixture } from './support.test';\nit('adds', () => { fixture(); });\n",
+            ),
+        ]),
+    )
+    .expect("builds");
+
+    assert!(
+        !graph.edges.iter().any(|e| e.kind == EdgeKind::Tests),
+        "{:?}",
+        graph.edges
+    );
+}
+
+#[test]
+fn this_repositorys_own_tests_cover_its_own_code() {
+    // Measured on the real tree rather than a fixture, for the same reason
+    // `this_repository_resolves_every_internal_import` is: the conventions
+    // being detected are this codebase's, and a fixture cannot fail when they
+    // drift.
+    let files = crate::graph::build_test::repo_files();
+    let graph = build(REPO, &files).expect("builds");
+
+    let covered: std::collections::BTreeSet<&str> = graph
+        .edges
+        .iter()
+        .filter(|e| e.kind == EdgeKind::Tests)
+        .map(|e| e.to.as_str())
+        .collect();
+
+    assert!(
+        covered.len() > 100,
+        "only {} symbols have a coverage edge; the in-crate test convention is not being seen",
+        covered.len()
+    );
+    assert!(
+        graph.edges.iter().any(|e| e.kind == EdgeKind::Extends),
+        "no inheritance edges at all on a codebase built out of ports and impls"
+    );
+}
