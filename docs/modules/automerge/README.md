@@ -49,12 +49,26 @@ shown is the most useful one.
    whether a concern stands unaddressed, not who raised it.
 7. At least `require_approvals` *human* approvals, counted from the review
    history rather than GitHub's tally — a bot approving is not a second opinion.
-8. Every check on the head SHA green: nothing failing, nothing pending, and
-   nothing in `require_checks` missing. This is stricter than "the required
-   checks passed" on purpose. A repository's own CI does not have to be listed
-   for tinysweeper to respect it, and a required check that never ran is not a
-   check that passed — that is the case that would otherwise let a deleted
-   workflow silently retire the whole gate.
+8. The checks on the head SHA, asked two different questions:
+   - **Nothing anywhere is red or still running.** Every check, not only the
+     required ones — a repository's own CI does not have to be listed for
+     tinysweeper to respect it. `action_required` counts as red, and so does a
+     conclusion GitHub introduces after this was written, because
+     `CheckStatus::from_api` maps anything it does not recognise to `Failure`.
+   - **Every name in `require_checks` produced a verdict.** Missing refuses —
+     a required check that never ran is not a check that passed, and that is
+     the case that would otherwise let a deleted workflow silently retire the
+     whole gate. `Skipped` refuses too, with a reason of its own: the check
+     could not run, so the gate it was named for has nothing behind it.
+
+   `Neutral` and `Skipped` sit between the two questions, and keeping them
+   apart is load-bearing. This used to read "not green blocks", which is not
+   the conservative choice it looks like: a workflow job behind
+   `if: github.event_name == 'push'` concludes `skipped` on *every* pull
+   request, for ever, so nothing in such a repository could ever merge. A gate
+   that never opens is not safe — it teaches operators to widen it until it
+   does. `Neutral` from a *required* check is accepted, and only there: it is a
+   lane reporting that it did not apply, which is an answer, not an absence.
 9. At least one changed file. Nothing measured is no gate at all.
 10. `files <= max_files`.
 11. No path matching `sensitive_paths` — unless this is a dependency bump.
