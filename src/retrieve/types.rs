@@ -138,6 +138,12 @@ pub struct RetrievedContext {
     pub tokens: usize,
     /// Graph nodes the walk reached, before chunks were fetched for them.
     pub graph_nodes: usize,
+    /// What existing code depends on the change, and what no test reaches.
+    ///
+    /// Not chunks, and deliberately not budgeted like them: this is a list of
+    /// names, a line each, and it is the one part of retrieval that stays
+    /// useful when the index holds no chunk for any of them.
+    pub impact: crate::graph::impact::Impact,
 }
 
 impl Default for RetrievedContext {
