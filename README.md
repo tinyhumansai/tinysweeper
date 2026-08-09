@@ -148,6 +148,7 @@ MiniMax are all the same code path.
 - [AGENTS.md](AGENTS.md) — conventions for humans and agents working in this repo
 - [docs/triggers.md](docs/triggers.md) — what wakes tinysweeper up, and what emits no event at all
 - [docs/modules/server/README.md](docs/modules/server/README.md) — the server, its security boundary, and the admin API
+- [docs/modules/overview/README.md](docs/modules/overview/README.md) — the change map: what gets drawn, and why nothing in it comes from a model
 - `docs/` — module documentation and design notes
 
 ## License
