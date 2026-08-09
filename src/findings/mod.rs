@@ -3,6 +3,7 @@
 pub mod anchor;
 pub mod prior;
 pub mod render;
+pub mod summarise;
 pub mod types;
 
 pub use crate::findings::anchor::anchor_context;
