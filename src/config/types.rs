@@ -231,6 +231,8 @@ pub struct Config {
     pub automerge: AutoMerge,
     /// Review-thread resolution.
     pub threads: Threads,
+    /// The change-map comment.
+    pub overview: Overview,
     /// Issue triage.
     pub issues: Issues,
     /// Scheduled repository automations.
