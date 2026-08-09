@@ -361,3 +361,136 @@ mod tests {
         assert_eq!(thousands(1_234_567), "1,234,567");
     }
 }
+
+#[cfg(test)]
+mod cost_table_tests {
+    use super::*;
+
+    fn usage(cost: f64, input: u64, output: u64, cached: u64) -> Usage {
+        Usage {
+            cost_usd: cost,
+            input_tokens: input,
+            output_tokens: output,
+            cached_tokens: cached,
+            ..Default::default()
+        }
+    }
+
+    fn sample() -> String {
+        cost_table(
+            &usage(0.2672, 139_215, 6_896, 13_824),
+            &["minimax/minimax-m3".into(), "moonshotai/kimi-k3".into()],
+            &[
+                (
+                    "critique".into(),
+                    usage(0.0618, 19_733, 173, 0),
+                    vec!["moonshotai/kimi-k3".into()],
+                ),
+                (
+                    "security".into(),
+                    usage(0.1827, 59_392, 2_375, 11_520),
+                    vec!["moonshotai/kimi-k3".into()],
+                ),
+                (
+                    "commits".into(),
+                    usage(0.0010, 2_866, 132, 128),
+                    vec!["minimax/minimax-m3".into()],
+                ),
+            ],
+        )
+    }
+
+    #[test]
+    fn every_column_lines_up() {
+        // The whole point: a reader should be able to run an eye down the cost
+        // column. If the separators drift, they cannot.
+        let table = sample();
+        let body: Vec<&str> = table
+            .lines()
+            .filter(|l| !l.starts_with("```") && !l.is_empty())
+            .collect();
+
+        let first = body[0].find('$').expect("a cost");
+        for line in &body {
+            assert_eq!(line.find('$'), Some(first), "{table}");
+        }
+
+        // And the separator after the cost column, which is what actually
+        // proves the padding is per-column rather than accidental.
+        let sep = body[0].find(" · ").expect("a separator");
+        for line in &body {
+            assert_eq!(line.find(" · "), Some(sep), "{table}");
+        }
+    }
+
+    #[test]
+    fn the_total_is_first_and_unlabelled() {
+        let table = sample();
+        let body: Vec<&str> = table.lines().filter(|l| !l.starts_with("```")).collect();
+        assert!(body[0].trim_start().starts_with('$'), "{table}");
+        assert!(body[1].starts_with("critique:"), "{table}");
+    }
+
+    #[test]
+    fn it_is_fenced_so_the_renderer_cannot_reflow_it() {
+        let table = sample();
+        assert!(table.starts_with("```\n"), "{table}");
+        assert!(table.ends_with("```"), "{table}");
+    }
+
+    #[test]
+    fn no_row_carries_trailing_whitespace() {
+        // Padding the last column would widen the block for nothing and show up
+        // as ragged whitespace in a diff.
+        for line in sample().lines() {
+            assert_eq!(line, line.trim_end(), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn a_lane_that_spent_nothing_is_left_out() {
+        let table = cost_table(
+            &usage(0.0618, 19_733, 173, 0),
+            &["moonshotai/kimi-k3".into()],
+            &[
+                (
+                    "critique".into(),
+                    usage(0.0618, 19_733, 173, 0),
+                    vec!["moonshotai/kimi-k3".into()],
+                ),
+                ("gate".into(), usage(0.0, 0, 0, 0), vec![]),
+            ],
+        );
+        assert!(!table.contains("gate"), "{table}");
+    }
+
+    #[test]
+    fn a_run_that_sent_nothing_reports_no_cache_rate() {
+        // 0% would read as "the cache missed" rather than "nothing was sent".
+        let table = cost_table(&usage(0.0, 0, 0, 0), &[], &[]);
+        assert!(!table.contains('%'), "{table}");
+    }
+
+    #[test]
+    fn a_single_lane_falls_back_to_one_line() {
+        // A table of one row is worse than the sentence it replaced.
+        let single = usage(0.01, 100, 10, 0);
+        let table = cost_table(&single, &["m".into()], &[]);
+        assert_eq!(table.lines().count(), 3, "{table}");
+    }
+
+    #[test]
+    fn embedding_spend_appears_without_a_column_of_its_own() {
+        let mut with_embed = usage(0.02, 100, 10, 0);
+        with_embed.embed_tokens = 377_153;
+        let table = cost_table(
+            &with_embed,
+            &["m".into()],
+            &[
+                ("critique".into(), usage(0.01, 50, 5, 0), vec!["m".into()]),
+                ("security".into(), with_embed.clone(), vec!["m".into()]),
+            ],
+        );
+        assert!(table.contains("377,153 embedded"), "{table}");
+    }
+}
