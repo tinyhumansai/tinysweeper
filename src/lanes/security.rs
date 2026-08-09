@@ -462,6 +462,79 @@ mod tests {
         );
     }
 
+    // --- triage -------------------------------------------------------------
+
+    #[tokio::test]
+    async fn a_lockfile_change_costs_no_model_call() {
+        let model = MockModel::silent();
+        let diffs = vec![
+            parse_file_patch("Cargo.lock", "@@ -1 +1,2 @@\n a\n+serde = \"1\"\n"),
+            parse_file_patch("src/handler.rs", "@@ -1 +1,2 @@\n a\n+let x = 1;\n"),
+        ];
+        let outcome = run_with(model.clone(), &config(), &diffs, &[]).await;
+
+        assert_eq!(model.calls(), 1, "only the source file is worth a call");
+        let prompt = model.last_prompt().expect("recorded");
+        assert!(prompt.contains("`src/handler.rs`"), "{prompt}");
+        assert!(
+            outcome.summary.contains("Cargo.lock"),
+            "the skip has to be visible: {}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn the_riskiest_file_is_reviewed_first() {
+        let model = MockModel::silent();
+        let diffs = vec![
+            parse_file_patch("src/render.rs", "@@ -1 +1,2 @@\n a\n+let x = 1;\n"),
+            parse_file_patch(
+                "src/auth/session.rs",
+                "@@ -1 +1,2 @@\n a\n+Command::new(\"sh\").arg(cmd).spawn();\n",
+            ),
+        ];
+        run_with(model.clone(), &config(), &diffs, &[]).await;
+
+        let first = &model.requests()[0].messages[0].content;
+        assert!(
+            first.contains("`src/auth/session.rs`"),
+            "the budget must buy the riskiest file first: {first}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_scanner_finding_pulls_a_skippable_file_back_into_the_review() {
+        let model = MockModel::silent();
+        let diffs = vec![parse_file_patch(
+            "Cargo.lock",
+            "@@ -1 +1,2 @@\n a\n+left-pad = \"1\"\n",
+        )];
+        let dependency = ScanFinding::new(
+            ScanKind::Dependency,
+            Severity::High,
+            "Cargo.lock",
+            "dependency-yanked",
+            "A yanked crate was added",
+            "…",
+        );
+        run_with(model.clone(), &config(), &diffs, &[dependency]).await;
+
+        assert_eq!(model.calls(), 1, "a scanner match is worth adjudicating");
+    }
+
+    #[tokio::test]
+    async fn a_pull_request_of_only_generated_files_never_calls_the_model() {
+        let model = MockModel::silent();
+        let diffs = vec![parse_file_patch(
+            "web/dist/app.min.js",
+            "@@ -1 +1,2 @@\n a\n+var a=1\n",
+        )];
+        let outcome = run_with(model.clone(), &config(), &diffs, &[]).await;
+
+        assert_eq!(model.calls(), 0);
+        assert!(outcome.skipped.is_some(), "{:?}", outcome.skipped);
+    }
+
     #[tokio::test]
     async fn a_pull_request_with_nothing_to_review_never_calls_the_model() {
         let model = MockModel::new();
