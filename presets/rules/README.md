@@ -16,6 +16,21 @@ appended to that entry's `instructions`. A missing document is a configuration
 error, reported once by `tinysweeper check`, rather than a silently weaker
 review on every run.
 
+## Scope a document to the lane it was written for
+
+```toml
+[[path_instructions]]
+glob = "**/*"
+rules = "security"
+lanes = ["security"]
+```
+
+`lanes` defaults to every lane. A document written for one lane is precision
+there and pure cost elsewhere: more prefix tokens on every call, and one more
+subject each of the other reviewers can form an opinion about. The filter runs
+*before* first-match selection, so an entry scoped to another lane never
+consumes a path's one match.
+
 ## The table is ordered and first match wins
 
 A changed path takes the rules of the **first** entry it matches and no other,
