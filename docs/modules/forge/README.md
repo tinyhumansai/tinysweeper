@@ -118,3 +118,11 @@ the review reported success over a change nobody had seen. The paths now reach
 approve while any remain. Deliberately not a *blocking* verdict: we do not know
 there is a problem, only that we did not look, and blocking a merge on our own
 blind spot punishes the contributor for the forge's truncation.
+
+## Review threads
+
+`ForgeRead::review_threads` and `ForgeWrite::resolve_review_thread` are GraphQL,
+not REST: REST has no notion of a thread and cannot say whether one is resolved.
+Both are used only by `src/threads`, which decides deterministically which of
+tinysweeper's own conversations can be closed. `MockForge` serves canned threads
+and records every resolve as `Write::ThreadResolved`.

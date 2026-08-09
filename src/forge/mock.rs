@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use crate::error::{Error, Result};
 use crate::forge::types::{
     ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, Issue, IssueComment, PullRequest,
-    RepoId, ReviewComment, ReviewEvent, ReviewVerdict,
+    RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -76,6 +76,11 @@ pub enum Write {
         /// The labels applied at creation.
         labels: Vec<String>,
     },
+    /// A review conversation was resolved.
+    ThreadResolved {
+        /// The GraphQL node id of the thread.
+        thread_id: String,
+    },
     /// A pull request was merged.
     Merged {
         /// The pull request.
@@ -109,6 +114,8 @@ pub struct MockState {
     pub checks: BTreeMap<String, BTreeMap<String, CheckStatus>>,
     /// Reviews, oldest first, keyed by pull request number.
     pub reviews: BTreeMap<u64, Vec<ReviewVerdict>>,
+    /// Review conversations, keyed by pull request number.
+    pub review_threads: BTreeMap<u64, Vec<ReviewThread>>,
     /// Repository file contents, keyed by [`file_key`].
     ///
     /// Keyed by commit as well as path because that is the distinction the
@@ -368,6 +375,15 @@ impl ForgeRead for MockForge {
         Ok(state.reviews.get(&number).cloned().unwrap_or_default())
     }
 
+    async fn review_threads(&self, _repo: &RepoId, number: u64) -> Result<Vec<ReviewThread>> {
+        let state = self.state.lock().expect("mock state lock");
+        Ok(state
+            .review_threads
+            .get(&number)
+            .cloned()
+            .unwrap_or_default())
+    }
+
     async fn own_review_state(&self, _repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
         let state = self.state.lock().expect("mock state lock");
         Ok(state.own_reviews.get(&number).copied())
@@ -564,6 +580,26 @@ impl ForgeWrite for MockForge {
         Ok(number)
     }
 
+    async fn resolve_review_thread(&self, _repo: &RepoId, thread_id: &str) -> Result<()> {
+        self.record(Write::ThreadResolved {
+            thread_id: thread_id.to_string(),
+        });
+        // Applied to state as well as recorded: the policy skips threads that
+        // are already resolved, and a mock that only recorded the call would
+        // hide a run that resolved the same thread twice.
+        if !self.read_only {
+            let mut state = self.state.lock().expect("mock state lock");
+            for threads in state.review_threads.values_mut() {
+                for thread in threads.iter_mut() {
+                    if thread.id == thread_id {
+                        thread.is_resolved = true;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn merge(&self, _repo: &RepoId, number: u64, method: &str) -> Result<()> {
         self.record(Write::Merged {
             number,
@@ -577,6 +613,7 @@ impl ForgeWrite for MockForge {
 mod tests {
     use super::*;
     use crate::forge::types::CheckConclusion;
+    use crate::forge::types::ThreadComment;
 
     fn repo() -> RepoId {
         RepoId::parse("tinyhumansai/tinysweeper").expect("parses")
@@ -885,6 +922,71 @@ mod tests {
         assert_eq!(reviews.len(), 2);
         assert_eq!(reviews[0].state, ReviewEvent::RequestChanges);
         assert_eq!(reviews[1].state, ReviewEvent::Approve);
+    }
+
+    #[tokio::test]
+    async fn review_threads_are_served_with_their_resolved_state() {
+        // REST cannot say whether a thread is resolved, so the port carries the
+        // GraphQL answer: without `is_resolved` every already-settled thread
+        // would be re-evaluated, and re-resolved, forever.
+        let mut state = MockState::default();
+        state.review_threads.insert(
+            7,
+            vec![ReviewThread {
+                id: "PRRT_open".into(),
+                is_resolved: false,
+                is_outdated: true,
+                comments: vec![ThreadComment {
+                    author: "tinysweeper[bot]".into(),
+                    body: "<!-- tinysweeper:fp=0123456789abcdef -->".into(),
+                    bot: true,
+                }],
+            }],
+        );
+        let forge = MockForge::with_state(state);
+
+        let threads = forge.review_threads(&repo(), 7).await.expect("read");
+        assert_eq!(threads.len(), 1);
+        assert!(!threads[0].is_resolved);
+        assert!(
+            forge
+                .review_threads(&repo(), 9)
+                .await
+                .expect("read")
+                .is_empty(),
+            "a pull request with no threads is not an error"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolving_a_thread_is_recorded_and_reflected_in_state() {
+        let mut state = MockState::default();
+        state.review_threads.insert(
+            7,
+            vec![ReviewThread {
+                id: "PRRT_open".into(),
+                is_resolved: false,
+                is_outdated: true,
+                comments: Vec::new(),
+            }],
+        );
+        let forge = MockForge::with_state(state);
+
+        forge
+            .resolve_review_thread(&repo(), "PRRT_open")
+            .await
+            .expect("resolves");
+
+        assert_eq!(
+            forge.writes(),
+            vec![Write::ThreadResolved {
+                thread_id: "PRRT_open".into()
+            }]
+        );
+        assert!(
+            forge.review_threads(&repo(), 7).await.expect("read")[0].is_resolved,
+            "a resolved thread must read back as resolved, or a second run resolves it again"
+        );
     }
 
     #[tokio::test]

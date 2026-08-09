@@ -14,7 +14,7 @@ use crate::error::{Error, Result};
 use crate::evidence::diff::truncate_patch;
 use crate::forge::types::{
     ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, FileStatus, Issue, IssueComment,
-    PullRequest, RepoId, ReviewComment, ReviewEvent, ReviewVerdict,
+    PullRequest, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict, ThreadComment,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -54,6 +54,110 @@ const MAX_CHECK_PAGES: usize = 10;
 /// pull request is merely unusual — so a shared constant would silently move
 /// one bound whenever somebody tuned the other.
 const MAX_REVIEW_PAGES: usize = 20;
+
+/// How many pages of review threads are read before giving up.
+const MAX_THREAD_PAGES: usize = 20;
+
+/// How many threads, and comments per thread, one GraphQL page asks for.
+///
+/// Below GitHub's 100 because the node budget is multiplicative: threads times
+/// comments. A page that asks for too much is rejected outright, which would
+/// make thread resolution fail on exactly the busy pull requests it is for.
+const GRAPHQL_PAGE: usize = 50;
+
+/// The review threads on a pull request, with the state REST does not expose.
+const REVIEW_THREADS_QUERY: &str = r#"
+query($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: $first, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          isResolved
+          isOutdated
+          comments(first: $first) {
+            nodes { body author { login __typename } }
+          }
+        }
+      }
+    }
+  }
+}
+"#;
+
+/// The mutation that resolves one thread.
+const RESOLVE_THREAD_MUTATION: &str = r#"
+mutation($id: ID!) {
+  resolveReviewThread(input: {threadId: $id}) {
+    thread { id isResolved }
+  }
+}
+"#;
+
+/// The `reviewThreads` connection, wherever the client left it.
+///
+/// Accepts both the raw GraphQL envelope (`data.repository…`) and an already
+/// unwrapped `data`, because which of the two a client hands back is a detail
+/// of the client and not something worth a runtime surprise.
+fn threads_connection(raw: &serde_json::Value) -> &serde_json::Value {
+    let unwrapped = &raw["repository"]["pullRequest"]["reviewThreads"];
+    if unwrapped.is_object() {
+        return unwrapped;
+    }
+    &raw["data"]["repository"]["pullRequest"]["reviewThreads"]
+}
+
+/// Map one page of review threads.
+///
+/// A comment whose author is gone — a deleted account — keeps its place with an
+/// empty login rather than being dropped: the login is only ever compared for
+/// equality against our own, and an empty one matches nothing, while a dropped
+/// comment would change which comment looks like the thread's opener.
+fn threads_from_graphql(raw: &serde_json::Value) -> Vec<ReviewThread> {
+    let Some(nodes) = threads_connection(raw)["nodes"].as_array() else {
+        return Vec::new();
+    };
+    nodes
+        .iter()
+        .map(|node| ReviewThread {
+            id: node["id"].as_str().unwrap_or_default().to_string(),
+            is_resolved: node["isResolved"].as_bool().unwrap_or(false),
+            is_outdated: node["isOutdated"].as_bool().unwrap_or(false),
+            comments: node["comments"]["nodes"]
+                .as_array()
+                .map(|comments| {
+                    comments
+                        .iter()
+                        .map(|comment| ThreadComment {
+                            author: comment["author"]["login"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_string(),
+                            body: comment["body"].as_str().unwrap_or_default().to_string(),
+                            bot: comment["author"]["__typename"].as_str() == Some("Bot"),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// Fail on a GraphQL response that carried errors.
+///
+/// GraphQL answers HTTP 200 with an `errors` array, so a caller that only
+/// checks the status reads a refused query as an empty result — which for
+/// review threads means "nothing to resolve" and looks exactly like success.
+fn graphql_errors(raw: &serde_json::Value, what: &str) -> Result<()> {
+    match raw["errors"].as_array() {
+        Some(errors) if !errors.is_empty() => Err(Error::Forge(format!(
+            "GitHub refused {what}: {}",
+            serde_json::to_string(errors).unwrap_or_default()
+        ))),
+        _ => Ok(()),
+    }
+}
 
 /// Read every page of a paged endpoint, or fail loudly.
 ///
@@ -581,6 +685,44 @@ impl ForgeRead for GitHubRead {
         .await
     }
 
+    async fn review_threads(&self, repo: &RepoId, number: u64) -> Result<Vec<ReviewThread>> {
+        let mut threads = Vec::new();
+        let mut after: Option<String> = None;
+
+        for _ in 0..MAX_THREAD_PAGES {
+            let raw: serde_json::Value = self
+                .client
+                .graphql(&serde_json::json!({
+                    "query": REVIEW_THREADS_QUERY.replace("$first", &GRAPHQL_PAGE.to_string()),
+                    "variables": {
+                        "owner": repo.owner,
+                        "name": repo.name,
+                        "number": number,
+                        "after": after,
+                    },
+                }))
+                .await
+                .map_err(api)?;
+            graphql_errors(&raw, "the review threads query")?;
+            threads.extend(threads_from_graphql(&raw));
+
+            let page = &threads_connection(&raw)["pageInfo"];
+            if !page["hasNextPage"].as_bool().unwrap_or(false) {
+                return Ok(threads);
+            }
+            // A missing cursor with more pages claimed would loop forever on
+            // the same page; stopping is the honest answer.
+            match page["endCursor"].as_str() {
+                Some(cursor) => after = Some(cursor.to_string()),
+                None => return Ok(threads),
+            }
+        }
+
+        Err(Error::Forge(
+            "a pull request with more review threads than the page bound allows".into(),
+        ))
+    }
+
     async fn own_review_state(&self, repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
         let route = format!(
             "/repos/{}/{}/pulls/{number}/reviews?per_page=100",
@@ -851,6 +993,18 @@ impl ForgeWrite for GitHubWrite {
         Ok(issue.number)
     }
 
+    async fn resolve_review_thread(&self, _repo: &RepoId, thread_id: &str) -> Result<()> {
+        let raw: serde_json::Value = self
+            .client
+            .graphql(&serde_json::json!({
+                "query": RESOLVE_THREAD_MUTATION,
+                "variables": {"id": thread_id},
+            }))
+            .await
+            .map_err(api)?;
+        graphql_errors(&raw, "the resolve-thread mutation")
+    }
+
     async fn merge(&self, repo: &RepoId, number: u64, method: &str) -> Result<()> {
         use octocrab::params::pulls::MergeMethod;
 
@@ -951,6 +1105,50 @@ mod tests {
         let reviews = verdicts_from_page(page.as_array().expect("an array"));
 
         assert_eq!(approvals_of(&reviews), 1);
+    }
+
+    #[test]
+    fn review_threads_map_their_resolved_state_and_bot_authors() {
+        let raw = json!({
+            "data": {"repository": {"pullRequest": {"reviewThreads": {
+                "pageInfo": {"hasNextPage": false, "endCursor": null},
+                "nodes": [
+                    {
+                        "id": "PRRT_1",
+                        "isResolved": false,
+                        "isOutdated": true,
+                        "comments": {"nodes": [
+                            {"author": {"login": "tinysweeper", "__typename": "Bot"},
+                             "body": "finding"},
+                            {"author": {"login": "author", "__typename": "User"},
+                             "body": "fixed"}
+                        ]}
+                    },
+                    {
+                        "id": "PRRT_2",
+                        "isResolved": true,
+                        "isOutdated": false,
+                        "comments": {"nodes": [
+                            // A deleted account has no author at all; the
+                            // comment must still map rather than drop the
+                            // whole thread.
+                            {"author": null, "body": "gone"}
+                        ]}
+                    }
+                ]
+            }}}}
+        });
+
+        let threads = threads_from_graphql(&raw);
+
+        assert_eq!(threads.len(), 2);
+        assert_eq!(threads[0].id, "PRRT_1");
+        assert!(!threads[0].is_resolved);
+        assert!(threads[0].is_outdated);
+        assert!(threads[0].comments[0].bot, "a Bot author is a bot");
+        assert!(!threads[0].comments[1].bot);
+        assert!(threads[1].is_resolved);
+        assert_eq!(threads[1].comments[0].author, "");
     }
 
     #[test]

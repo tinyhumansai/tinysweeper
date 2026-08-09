@@ -637,6 +637,7 @@ mod tests {
             cached_tokens: 0,
             embed_tokens: 0,
             models: vec![],
+            threads: Default::default(),
         }
     }
 

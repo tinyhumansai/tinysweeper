@@ -60,6 +60,16 @@ pub struct Prompt {
 }
 
 impl Prompt {
+    /// Assemble a prompt from an already-built prefix and suffix.
+    ///
+    /// For the callers that are not lanes and have no evidence layers to lay
+    /// out — thread resolution is one — but that still owe the same discipline:
+    /// constant instructions in the prefix, everything that varies per call in
+    /// the suffix.
+    pub fn new(prefix: String, suffix: String) -> Self {
+        Self { prefix, suffix }
+    }
+
     /// The stable, cacheable half.
     pub fn prefix(&self) -> &str {
         &self.prefix

@@ -123,6 +123,12 @@ pub struct CommentRef {
     pub body: String,
     /// Its author.
     pub user: UserRef,
+    /// The comment this one replies to, on an inline review comment.
+    ///
+    /// Present only on a reply, which is how a reply to one of tinysweeper's
+    /// findings is told from somebody starting a thread of their own.
+    #[serde(default)]
+    pub in_reply_to_id: Option<u64>,
 }
 
 /// A user reference.
@@ -277,6 +283,38 @@ pub fn route(event: &str, payload: &Payload) -> Action {
                     installation: installation.id,
                 },
                 _ => Action::Ignore("uninteresting issue action"),
+            }
+        }
+
+        "pull_request_review_comment" => {
+            // Only `created`, for the same reason `issue_comment` filters:
+            // GitHub delivers `edited` and `deleted` here too, and reacting to
+            // them would queue a paid run every time somebody fixed a typo in
+            // their own reply.
+            if payload.action != "created" {
+                return Action::Ignore("review comment action is not `created`");
+            }
+            let Some(pr) = &payload.pull_request else {
+                return Action::Ignore("no pull request");
+            };
+            let Some(comment) = &payload.comment else {
+                return Action::Ignore("no comment");
+            };
+            // A reply, not a new thread. A fresh inline comment starts somebody
+            // else's conversation, which thread resolution never touches, and
+            // reacting to one would mean a run per commented line.
+            if comment.in_reply_to_id.is_none() {
+                return Action::Ignore("review comment is not a reply to a thread");
+            }
+
+            // Attributed to whoever replied: the same reasoning as a commanded
+            // review, which is that the contributor record measures the work
+            // somebody caused.
+            Action::Review {
+                repo: repository.full_name.clone(),
+                number: pr.number,
+                author: comment.user.login.clone(),
+                installation: installation.id,
             }
         }
         _ => Action::Ignore("uninteresting event"),
@@ -528,6 +566,91 @@ mod tests {
                 "action `{action}` must not queue a review"
             );
         }
+    }
+
+    fn review_comment_payload(action: &str, reply: bool) -> serde_json::Value {
+        let mut delivery = serde_json::json!({
+            "action": action,
+            "repository": {"full_name": "tinyhumansai/tinysweeper"},
+            "installation": {"id": 1},
+            "sender": {"login": "author", "type": "User"},
+            "pull_request": {
+                "number": 7,
+                "draft": false,
+                "head": {"sha": "abc123"},
+                "user": {"login": "author", "type": "User"}
+            },
+            "comment": {"body": "fixed in the last push", "user": {"login": "author", "type": "User"}}
+        });
+        if reply {
+            delivery["comment"]["in_reply_to_id"] = serde_json::json!(4242);
+        }
+        delivery
+    }
+
+    #[test]
+    fn a_human_reply_on_a_review_thread_queues_a_run() {
+        // The trigger for thread resolution: somebody answered one of our
+        // review comments, so the threads on this pull request are worth
+        // re-evaluating.
+        assert_eq!(
+            route(
+                "pull_request_review_comment",
+                &payload(review_comment_payload("created", true))
+            ),
+            Action::Review {
+                repo: "tinyhumansai/tinysweeper".into(),
+                number: 7,
+                author: "author".into(),
+                installation: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn a_review_comment_that_is_not_a_reply_is_ignored() {
+        // A brand-new inline comment starts a thread of somebody else's, which
+        // this path never touches — and reacting to it would queue a paid run
+        // for every line a reviewer comments on.
+        assert!(matches!(
+            route(
+                "pull_request_review_comment",
+                &payload(review_comment_payload("created", false))
+            ),
+            Action::Ignore(_)
+        ));
+    }
+
+    #[test]
+    fn an_edited_or_deleted_review_comment_does_not_queue_a_run() {
+        // Same reasoning as `issue_comment`: reacting to the wrong action
+        // queues a paid run on every save.
+        for action in ["edited", "deleted"] {
+            assert!(
+                matches!(
+                    route(
+                        "pull_request_review_comment",
+                        &payload(review_comment_payload(action, true))
+                    ),
+                    Action::Ignore(_)
+                ),
+                "action `{action}` must not queue a run"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bots_reply_on_a_review_thread_never_queues_a_run() {
+        // Two bots replying to each other is a loop bounded only by the rate
+        // limiter, and it would resolve threads on each other's say-so.
+        let mut delivery = review_comment_payload("created", true);
+        delivery["sender"] = serde_json::json!({"login": "dependabot[bot]", "type": "Bot"});
+        delivery["comment"]["user"] =
+            serde_json::json!({"login": "dependabot[bot]", "type": "Bot"});
+        assert!(matches!(
+            route("pull_request_review_comment", &payload(delivery)),
+            Action::Ignore(_)
+        ));
     }
 
     #[test]

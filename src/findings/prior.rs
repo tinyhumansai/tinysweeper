@@ -137,7 +137,12 @@ pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<Pr
 }
 
 /// The fingerprint marker in a comment body, if it carries a well-formed one.
-fn fingerprint_in(body: &str) -> Option<String> {
+///
+/// Public because thread resolution reads the same marker back out of the
+/// comment that opened a thread. It answers only "is there a well-formed
+/// fingerprint here"; whether the body is one of *ours* is a separate question,
+/// asked with [`is_own_login`], and both have to hold before anything acts.
+pub fn fingerprint_in(body: &str) -> Option<String> {
     let value = marker_value(body, FINGERPRINT_KEY)?;
     is_fingerprint(value).then(|| value.to_string())
 }

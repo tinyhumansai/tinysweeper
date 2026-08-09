@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use crate::error::Result;
 use crate::forge::types::{
     ChangedFile, CheckRun, CheckStatus, Commit, Issue, IssueComment, PullRequest,
-    PullRequestContext, RepoId, ReviewComment, ReviewEvent, ReviewVerdict,
+    PullRequestContext, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict,
 };
 
 /// How many commits of a range get their patch fetched.
@@ -72,6 +72,13 @@ pub trait ForgeRead: Send + Sync {
     /// here would bury that rule in an adapter no offline test can reach.
     /// Dismissed reviews are omitted — they no longer block anything.
     async fn reviews(&self, repo: &RepoId, number: u64) -> Result<Vec<ReviewVerdict>>;
+
+    /// The review conversations on a pull request, with their resolved state.
+    ///
+    /// No default implementation, for the same reason `check_runs` has none: an
+    /// adapter that forgot to answer would report "no threads", and thread
+    /// resolution would silently become a no-op nobody noticed.
+    async fn review_threads(&self, repo: &RepoId, number: u64) -> Result<Vec<ReviewThread>>;
 
     /// The state of tinysweeper's own most recent review on a pull request.
     ///
@@ -172,6 +179,13 @@ pub trait ForgeWrite: Send + Sync {
         body: &str,
         labels: &[String],
     ) -> Result<u64>;
+
+    /// Resolve one review conversation, by GraphQL node id.
+    ///
+    /// A mutation, so it lives here and never on the read half a lane holds: a
+    /// model verdict about a thread is advisory, and the decision to call this
+    /// is taken by deterministic policy in `crate::threads`.
+    async fn resolve_review_thread(&self, repo: &RepoId, thread_id: &str) -> Result<()>;
 
     /// Merge a pull request.
     ///

@@ -43,6 +43,13 @@ pub async fn apply(
         return Ok(());
     }
 
+    // Housekeeping first: threads this run decided are settled. Deterministic
+    // policy chose them (`crate::threads`), this only executes the list, and a
+    // failure here is logged rather than allowed to cost the verdict.
+    if let Err(err) = crate::threads::apply_plan(write, &repo, &proposal.threads).await {
+        tracing::warn!(%err, "could not resolve review threads");
+    }
+
     for lane in &proposal.lanes {
         write
             .publish_check(
@@ -65,7 +72,7 @@ pub async fn apply(
     // it by hand — and it is how an approval that already stands avoids being
     // restated on every push.
     let previous = own_review_state(read, &repo, proposal.number).await;
-    let event = review_event(config, proposal, previous);
+    let event = review_event(config, proposal, previous, live.draft);
     let comments = inline_comments(proposal);
 
     // The identities about to be posted, so the store can be extended once the
@@ -152,6 +159,7 @@ fn review_event(
     config: &Config,
     proposal: &Proposal,
     previous: Option<ReviewEvent>,
+    draft: bool,
 ) -> ReviewEvent {
     // Blocking needs BOTH a failing lane and a finding severe enough to justify
     // it. The lane conclusion alone is not enough: `fail_on` and
@@ -181,13 +189,26 @@ fn review_event(
     // what that check carried: a file the forge never showed us is not a file we
     // can vouch for. Nothing blocks, so there is nothing to object to — and
     // nothing to endorse either, which is a `Comment`.
-    if !proposal.blocked() && proposal.complete() && config.review.approve_when_clean {
+    // `!draft` is the third condition, and it is not a preference. With
+    // `review.draft_prs = false` every lane *skips* a draft, so the proposal
+    // comes back with nothing blocking and nothing unreviewed — which reads as
+    // "clean" to both conditions above. The bot would then endorse a pull
+    // request it had deliberately declined to look at, and on a repository
+    // requiring a review that endorsement is what lets it merge.
+    //
+    // Read from live state rather than from the proposal, because the author
+    // may have marked it draft in the minutes since the review ran.
+    if !draft && !proposal.blocked() && proposal.complete() && config.review.approve_when_clean {
         return ReviewEvent::Approve;
     }
 
-    // Clean now, blocked before: clear it even when approving is off. Anything
-    // else leaves the author stuck behind an objection that no longer applies,
-    // needing a human to dismiss a review by hand.
+    // Clean now, blocked before: clear it even when approving is off, and even
+    // on a draft. Anything else leaves the author stuck behind an objection
+    // that no longer applies, needing a human to dismiss a review by hand.
+    //
+    // Deliberately not gated on `draft`. Refusing to *endorse* a draft is not
+    // the same as refusing to *unblock* one, and conflating them would strand
+    // every draft that was ever blocked.
     if previous == Some(ReviewEvent::RequestChanges) {
         return ReviewEvent::Approve;
     }
@@ -402,6 +423,7 @@ mod tests {
             cached_tokens: 800,
             embed_tokens: 0,
             models: vec!["moonshotai/kimi-k3".into()],
+            threads: Default::default(),
         }
     }
 
@@ -423,12 +445,17 @@ mod tests {
     }
 
     fn forge(head: &str) -> MockForge {
+        forge_draft(head, false)
+    }
+
+    fn forge_draft(head: &str, draft: bool) -> MockForge {
         let mut state = MockState::default();
         state.pull_requests.insert(
             7,
             PullRequest {
                 number: 7,
                 head_sha: head.into(),
+                draft,
                 ..PullRequest::default()
             },
         );
@@ -769,6 +796,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_draft_pull_request_is_never_approved() {
+        // The trap: with `review.draft_prs = false` every lane *skips* a draft,
+        // so the proposal has nothing blocking and nothing unreviewed — which
+        // reads as "clean" to both approval conditions. The bot would approve a
+        // pull request it had deliberately declined to look at, and on a
+        // repository requiring a review that approval is what lets it merge.
+        let forge = forge_draft("abc123", true);
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
+            .await
+            .expect("applies");
+
+        if let Some((body, event)) = review_of(&forge) {
+            assert_ne!(
+                event,
+                ReviewEvent::Approve,
+                "a lane that skipped a draft vouched for nothing: {body}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_draft_that_was_blocked_before_is_still_cleared() {
+        // Refusing to approve a draft must not strand an author behind an
+        // objection that no longer applies. Clearing a block is not an
+        // endorsement, and it is the one case where a draft still gets one.
+        let forge = forge_draft("abc123", true).with_own_review(7, ReviewEvent::RequestChanges);
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
+            .await
+            .expect("applies");
+
+        let (body, event) = review_of(&forge).expect("a clearing review was posted");
+        assert_eq!(event, ReviewEvent::Approve, "{body}");
+    }
+
+    #[tokio::test]
     async fn a_pull_request_with_unread_files_is_not_approved() {
         // The reason the aggregate check run could be removed. It used to carry
         // this by degrading itself to `Neutral`; the approval carries it now, so
@@ -917,5 +979,54 @@ mod tests {
         assert!(body.contains("400 out"), "{body}");
         assert!(body.contains("800 cached (8%)"), "{body}");
         assert!(body.contains("kimi-k3"), "{body}");
+    }
+    #[tokio::test]
+    async fn a_planned_thread_is_resolved_when_the_verdict_is_published() {
+        // The mutation half of thread resolution. The decision was taken during
+        // review, deterministically; apply only executes it, and only for the
+        // threads the plan names.
+        let forge = forge("abc123");
+        let mut proposal = proposal("abc123", vec![]);
+        proposal.threads = crate::threads::ThreadPlan {
+            resolve: vec![crate::threads::PlannedResolve {
+                id: "PRRT_1".into(),
+                reason: "the finding no longer reproduces on the new code".into(),
+            }],
+        };
+
+        apply(&forge, &forge, &config(), &proposal, None)
+            .await
+            .expect("applies");
+
+        assert!(
+            forge
+                .writes()
+                .contains(&crate::forge::mock::Write::ThreadResolved {
+                    thread_id: "PRRT_1".into()
+                }),
+            "{:?}",
+            forge.writes()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stale_verdict_resolves_nothing() {
+        // The head moved, so the whole verdict is withheld — including the
+        // thread plan, which was computed against findings from a commit that
+        // is no longer what the pull request proposes.
+        let forge = forge("def456");
+        let mut proposal = proposal("abc123", vec![]);
+        proposal.threads = crate::threads::ThreadPlan {
+            resolve: vec![crate::threads::PlannedResolve {
+                id: "PRRT_1".into(),
+                reason: "stale".into(),
+            }],
+        };
+
+        apply(&forge, &forge, &config(), &proposal, None)
+            .await
+            .expect("applies");
+
+        assert!(forge.writes().is_empty(), "{:?}", forge.writes());
     }
 }

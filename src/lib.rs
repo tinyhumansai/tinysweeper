@@ -32,6 +32,7 @@ pub mod scan;
 #[cfg(feature = "serve")]
 pub mod server;
 pub mod state;
+pub mod threads;
 
 pub use crate::error::{Error, Result};
 

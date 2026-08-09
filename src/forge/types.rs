@@ -369,6 +369,45 @@ pub struct ReviewComment {
     pub body: String,
 }
 
+/// One conversation on a pull request's diff, as GraphQL reports it.
+///
+/// REST has no notion of a *thread*: it serves flat review comments and says
+/// nothing about whether the conversation they belong to has been resolved.
+/// That state only exists in GraphQL, and reading it back is what stops an
+/// already-settled thread being evaluated — and resolved — on every delivery.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewThread {
+    /// The GraphQL node id, which is what `resolveReviewThread` takes.
+    pub id: String,
+    /// Whether the conversation is already resolved.
+    pub is_resolved: bool,
+    /// Whether the code the thread anchors to has changed since it was written.
+    ///
+    /// GitHub sets this when the thread's lines no longer appear in the current
+    /// diff, which is the cheapest honest evidence that somebody touched the
+    /// code the objection was about. The deterministic resolve rule requires
+    /// it: a finding that stopped reproducing without the code moving may just
+    /// be a model that changed its mind.
+    pub is_outdated: bool,
+    /// Its comments, oldest first. The first one is whoever opened the thread.
+    pub comments: Vec<ThreadComment>,
+}
+
+/// One comment inside a [`ReviewThread`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadComment {
+    /// The login of whoever wrote it.
+    pub author: String,
+    /// The markdown body. Untrusted: anyone who can reply writes this.
+    pub body: String,
+    /// Whether the author is a bot account.
+    ///
+    /// Recorded from the forge rather than guessed from the login, because it
+    /// decides whether a reply counts as a human asking for another look. Two
+    /// bots replying to each other is the failure mode this field prevents.
+    pub bot: bool,
+}
+
 /// An issue comment, either a new one or an edit of an existing one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IssueComment {

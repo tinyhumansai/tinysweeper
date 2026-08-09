@@ -166,6 +166,7 @@ mod tests {
 
     fn proposal(highest: Option<Severity>) -> Proposal {
         Proposal {
+            threads: Default::default(),
             version: 1,
             repo: "tinyhumansai/tinysweeper".into(),
             number: 7,

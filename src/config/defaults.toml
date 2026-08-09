@@ -304,3 +304,11 @@ max_per_run = 10
 annotate_sentry = true
 resolve_when_tracked = false
 scrub_patterns = []
+
+[threads]
+# Close a conversation whose finding no longer reproduces on changed code.
+# Deterministic: the fingerprint is either in this run's findings or it is not.
+resolve_fixed = true
+# Ask a model whether a reply settled a finding the code did not change. Off:
+# the only evidence in that case is a comment, and comments are untrusted input.
+ask_model = false
