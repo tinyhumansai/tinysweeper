@@ -598,6 +598,62 @@ pub async fn review_with_retrieval(
     })
 }
 
+/// Build the change map for this review, or `None` when it is switched off.
+///
+/// The walk is its own bounded query rather than a by-product of retrieval: the
+/// two want different things out of the graph — retrieval wants the *chunks* of
+/// what a change reaches so a lane can read them, the map wants the *shape* —
+/// and a review with retrieval disabled should still get a picture.
+///
+/// It cannot fail the review. A graph that will not answer costs the arrows and
+/// says so in the comment; it never costs the verdict, which was reached before
+/// this ran and does not depend on it.
+async fn change_map(
+    config: &Config,
+    retrieval: Option<&Retriever<'_>>,
+    repo: &RepoId,
+    diffs: &[FileDiff],
+    lanes: &[LaneProposal],
+) -> Option<crate::overview::ChangeMap> {
+    if !config.overview.enabled {
+        return None;
+    }
+
+    let findings: Vec<Finding> = lanes
+        .iter()
+        .flat_map(|lane| lane.findings.iter().cloned())
+        .collect();
+
+    let walk = match retrieval.and_then(|retriever| retriever.graph) {
+        None => None,
+        Some(graph) => {
+            let query = crate::graph::NeighbourQuery::new(crate::retrieve::seeds(diffs))
+                .hops(config.retrieval.graph_hops)
+                .max_nodes(config.retrieval.max_graph_nodes);
+            match crate::graph::neighbours(graph, &repo.to_string(), &query).await {
+                Ok(neighbourhood) => Some(Ok(neighbourhood)),
+                Err(err) => {
+                    tracing::warn!(%err, "could not walk the graph for the change map");
+                    Some(Err(()))
+                }
+            }
+        }
+    };
+
+    let view = match &walk {
+        None => crate::overview::GraphView::Absent,
+        Some(Err(())) => crate::overview::GraphView::Unavailable,
+        Some(Ok(neighbourhood)) => crate::overview::GraphView::Walked(neighbourhood),
+    };
+
+    Some(crate::overview::build(
+        diffs,
+        &findings,
+        view,
+        &config.overview,
+    ))
+}
+
 /// Write a proposal to disk for `apply` to pick up.
 pub fn write_proposal(proposal: &Proposal, path: &Path) -> Result<()> {
     let json = serde_json::to_string_pretty(proposal)?;
