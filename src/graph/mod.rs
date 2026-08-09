@@ -39,6 +39,7 @@ pub mod types;
 pub use crate::graph::aliases::{AliasConfig, AliasPattern, TsBaseUrl};
 pub use crate::graph::build::{build, sync_all, sync_paths};
 pub use crate::graph::extract::parse;
+pub use crate::graph::impact::{DEFAULT_MAX_REACHED, Impact, Impacted, Relation};
 pub use crate::graph::resolve::{Resolution, Resolver};
 pub use crate::graph::traverse::{DEFAULT_HOPS, DEFAULT_MAX_NODES, NeighbourQuery, neighbours};
 pub use crate::graph::types::{
