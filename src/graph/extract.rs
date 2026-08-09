@@ -270,10 +270,8 @@ fn standalone_heritage(node: Node, source: &[u8], language: Language) -> Vec<Her
     ) else {
         return Vec::new();
     };
-    let (Some(parent), Some(child)) = (
-        type_name(trait_node, source),
-        type_name(type_node, source),
-    ) else {
+    let (Some(parent), Some(child)) = (type_name(trait_node, source), type_name(type_node, source))
+    else {
         return Vec::new();
     };
     if parent == child {
@@ -296,8 +294,12 @@ fn standalone_heritage(node: Node, source: &[u8], language: Language) -> Vec<Her
 fn type_name(node: Node, source: &[u8]) -> Option<String> {
     match node.kind() {
         "type_identifier" | "identifier" | "primitive_type" => Some(text(node, source)),
-        "generic_type" | "qualified_type" | "scoped_type_identifier" | "nested_type_identifier"
-        | "member_expression" | "attribute" => node
+        "generic_type"
+        | "qualified_type"
+        | "scoped_type_identifier"
+        | "nested_type_identifier"
+        | "member_expression"
+        | "attribute" => node
             .child_by_field_name("name")
             .or_else(|| node.child_by_field_name("type"))
             .or_else(|| node.child_by_field_name("property"))
@@ -376,7 +378,8 @@ fn go_parents(decl: Node, source: &[u8]) -> Vec<String> {
             };
             let mut walker = fields.walk();
             for field in fields.named_children(&mut walker) {
-                if field.kind() != "field_declaration" || field.child_by_field_name("name").is_some()
+                if field.kind() != "field_declaration"
+                    || field.child_by_field_name("name").is_some()
                 {
                     continue;
                 }

@@ -140,8 +140,7 @@ pub fn build(repo_id: &str, files: &[SourceFile]) -> Result<RepoGraph> {
             // each one would bury the handful of genuinely broken *imports*
             // that `unresolved` exists to make findable. The gap is still
             // measurable as `usages_total - usages_resolved`.
-            let Some(target) =
-                target_for(&file.path, &usage.name, &local, &bindings, &defined_in)
+            let Some(target) = target_for(&file.path, &usage.name, &local, &bindings, &defined_in)
             else {
                 continue;
             };

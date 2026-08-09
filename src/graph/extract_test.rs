@@ -338,7 +338,9 @@ fn go_embedding_is_heritage_and_a_named_field_is_not() {
     assert!(heritage(&file).contains(&("Store", "Mutex")));
     assert!(heritage(&file).contains(&("Store", "Reader")));
     assert!(
-        !heritage(&file).iter().any(|(_, parent)| *parent == "string"),
+        !heritage(&file)
+            .iter()
+            .any(|(_, parent)| *parent == "string"),
         "a named field promotes nothing: {:?}",
         file.heritage
     );
@@ -374,7 +376,10 @@ fn go_and_python_test_names_follow_their_runners_rules() {
     );
     assert!(scope_of(&go, "TestStore"));
     assert!(scope_of(&go, "BenchmarkStore"));
-    assert!(!scope_of(&go, "Testing"), "`go test` does not run it either");
+    assert!(
+        !scope_of(&go, "Testing"),
+        "`go test` does not run it either"
+    );
 
     let python = parsed(
         "app/ledger.py",
