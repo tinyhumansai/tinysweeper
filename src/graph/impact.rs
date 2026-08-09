@@ -122,14 +122,22 @@ impl Impact {
         let mut covered: BTreeSet<&str> = BTreeSet::new();
 
         for edge in &neighbourhood.edges {
-            if !seeded.contains(edge.to.as_str()) || seeded.contains(edge.from.as_str()) {
+            if !seeded.contains(edge.to.as_str()) {
                 continue;
             }
             let Some(relation) = Relation::of(edge.kind) else {
                 continue;
             };
+            // Coverage is recorded before the seed-skip: a test changed in the
+            // same push as the function it exercises still covers it, even
+            // though both are already in front of the reviewer and the edge
+            // earns no `reached` row. Reporting that target as untested would
+            // be wrong, which is what recording it here prevents.
             if relation == Relation::Test {
                 covered.insert(edge.to.as_str());
+            }
+            if seeded.contains(edge.from.as_str()) {
+                continue;
             }
             strongest
                 .entry(edge.from.as_str())
