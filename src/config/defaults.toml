@@ -279,6 +279,9 @@ model = "scan"
 comment = true
 apply_labels = true
 max_labels = 3
+# Set GitHub's native issue type, but only where the issue has none: replacing
+# a type a human chose destroys it, where a label merely joins the others.
+apply_issue_type = true
 allow_labels = []
 block_labels = ["tinysweeper:human-review", "tinysweeper:manual-only"]
 dedupe = true

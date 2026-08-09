@@ -441,6 +441,11 @@ pub struct Issue {
     pub quiet_days: u32,
     /// How many comments it has.
     pub comments: u32,
+    /// GitHub's native issue type, by name, when the issue carries one.
+    ///
+    /// A single field rather than a set, which is why triage never overwrites
+    /// it: unlike a label, writing one destroys whatever a human chose.
+    pub issue_type: Option<String>,
 }
 
 /// Everything a lane needs about one pull request, fetched once.

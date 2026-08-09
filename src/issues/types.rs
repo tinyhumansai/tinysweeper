@@ -94,6 +94,35 @@ impl IssueSeverity {
     }
 }
 
+/// What kind of work an issue is: the classification behind GitHub's native
+/// issue type.
+///
+/// Three variants and no `Other`, because the mapping in
+/// [`crate::issues::kind`] must be total in one direction and empty in the
+/// other: a classification outside these three sets no type at all rather than
+/// the nearest one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IssueKind {
+    /// Something is broken.
+    Bug,
+    /// A request, an idea, or new functionality.
+    Feature,
+    /// A specific piece of work that is neither.
+    Task,
+}
+
+impl IssueKind {
+    /// The classification word, which is also the issue type name matched on.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IssueKind::Bug => "bug",
+            IssueKind::Feature => "feature",
+            IssueKind::Task => "task",
+        }
+    }
+}
+
 /// A model's claim that this issue is already answered somewhere else.
 ///
 /// Every field is a *suggestion*. `number` in particular is checked against the
@@ -123,6 +152,8 @@ pub enum ClaimKind {
 /// Everything a model returned about one issue. Advisory in full.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct IssueVerdict {
+    /// What kind of work it says this is, if it committed to one.
+    pub kind: Option<IssueKind>,
     /// Suggested priority, if it committed to one.
     pub priority: Option<Priority>,
     /// Suggested severity, if it committed to one.
@@ -152,6 +183,14 @@ pub struct TriagePlan {
     pub remove_labels: Vec<String>,
     /// Labels that were suggested and refused, with why. For the log.
     pub declined_labels: Vec<(String, &'static str)>,
+    /// The native issue type to set, by name, when one is to be set at all.
+    ///
+    /// Only ever `Some` for an issue that carries no type yet: the field is
+    /// singular, so writing it destroys a human's choice rather than adding to
+    /// it, and [`crate::issues::kind::plan`] refuses on that ground first.
+    pub set_issue_type: Option<String>,
+    /// Why no type was set, when none was. For the log.
+    pub declined_issue_type: Option<&'static str>,
     /// The triage comment body, when one is to be posted.
     pub comment: Option<String>,
     /// Whether to actually close, and on what evidence.
