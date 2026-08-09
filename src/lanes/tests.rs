@@ -68,12 +68,21 @@ impl Lane for Tests {
         }
 
         let changed_paths = input.changed_paths();
-        let evidence = format!("{}\n{}", inventory.render(), render_diffs(input.diffs));
+
+        // Split, rather than sending the whole diff alongside a replay of it.
+        // Passing both — which this did — puts every previously reviewed line
+        // in the prompt twice, so a re-review cost *more* than the first
+        // review rather than less. The inventory rides with the delta because
+        // it is a summary of the current state, not evidence that was reviewed.
+        let rendered = render_diffs(input.diffs);
+        let (reviewed_evidence, fresh) =
+            crate::evidence::replay::split(input.reviewed_evidence, &rendered);
+        let evidence = format!("{}\n{}", inventory.render(), fresh);
 
         let built = prompt::build(&PromptInputs {
             repo_policy: input.repo_policy,
             extracted_rules: input.extracted_rules,
-            reviewed_evidence: input.reviewed_evidence,
+            reviewed_evidence: &reviewed_evidence,
             prior_findings: input.prior_findings,
             new_evidence: &evidence,
             changed_paths: &changed_paths,

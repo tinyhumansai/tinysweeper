@@ -14,7 +14,7 @@
 //! than per commit because a pull request diff is what the forge gives us —
 //! there is no local checkout to compute a commit range against.
 
-use crate::evidence::diff::{FileDiff, LineKind};
+use crate::evidence::diff::FileDiff;
 
 /// The marker that opens a file's block in rendered evidence.
 const FILE_PREFIX: &str = "--- ";
@@ -25,31 +25,12 @@ const FILE_PREFIX: &str = "--- ";
 /// and a finding anchored to the wrong line is a comment on somebody else's
 /// code.
 pub fn render(diffs: &[FileDiff]) -> String {
-    let mut out = String::new();
-    for diff in diffs {
-        if diff.hunks.is_empty() {
-            continue;
-        }
-        out.push_str(&format!("{FILE_PREFIX}{}\n", diff.path));
-        for hunk in &diff.hunks {
-            out.push_str(&format!(
-                "@@ -{},{} +{},{} @@\n",
-                hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines
-            ));
-            for line in &hunk.lines {
-                let marker = match line.kind {
-                    LineKind::Added => '+',
-                    LineKind::Removed => '-',
-                    LineKind::Context => ' ',
-                };
-                match line.new_line {
-                    Some(n) => out.push_str(&format!("{n:>5} {marker}{}\n", line.text)),
-                    None => out.push_str(&format!("      {marker}{}\n", line.text)),
-                }
-            }
-        }
-    }
-    out
+    // Delegates rather than duplicates. This was a second, byte-identical copy
+    // of `diff::render`, which is precisely the drift this module's own doc
+    // comment warns about: the moment the two disagreed by one space, every
+    // replay would stop matching and every re-review would silently pay full
+    // input price with nothing to show for it.
+    crate::evidence::diff::render(diffs)
 }
 
 /// Split `current` into the part `previous` already contained, and the rest.
@@ -83,6 +64,48 @@ pub fn split(previous: &str, current: &str) -> (String, String) {
     }
 
     (reviewed, fresh)
+}
+
+/// Which of `diffs` a previous review has already seen, byte for byte.
+///
+/// The same rule as [`split`], asked per file instead of over one string: a
+/// file whose rendered block is identical to one in `previous` was reviewed and
+/// has not changed since.
+///
+/// This is what lets a per-file lane skip work rather than merely cache it.
+/// `split` moves already-reviewed bytes into the cacheable prefix, which only
+/// pays when the provider honours the cache; skipping the file entirely pays
+/// always, because the cheapest call is the one not made.
+///
+/// Returns everything as unreviewed when `previous` is empty — the first-review
+/// case — so a caller can use this unconditionally.
+pub fn unreviewed<'a>(previous: &str, diffs: &'a [FileDiff]) -> Vec<&'a FileDiff> {
+    if previous.trim().is_empty() {
+        return diffs.iter().collect();
+    }
+
+    let seen = blocks(previous);
+
+    let fresh: Vec<&FileDiff> = diffs
+        .iter()
+        .filter(|diff| {
+            // Rendered one file at a time, through the same function that
+            // produced `previous`. Comparing anything other than the exact
+            // bytes both sides emit would drift on the first formatting change
+            // and silently start re-reviewing everything.
+            let block = render(std::slice::from_ref(*diff));
+            !block.is_empty() && !seen.contains(&block.as_str())
+        })
+        .collect();
+
+    // Nothing new: this is a re-run of the same commit rather than an
+    // increment, and returning an empty list would make the lane report that a
+    // pull request has no attack surface. Same reasoning as `split`.
+    if fresh.is_empty() {
+        return diffs.iter().collect();
+    }
+
+    fresh
 }
 
 /// Split rendered evidence into one slice per file, each keeping its trailing
@@ -173,5 +196,65 @@ mod tests {
         );
         let (reviewed, fresh) = split(&old, &current);
         assert_eq!(reviewed.len() + fresh.len(), current.len());
+    }
+
+    #[test]
+    fn an_unchanged_file_is_not_offered_for_review_again() {
+        // The single largest avoidable cost in a review: the security lane
+        // spends one model call per file, so a push touching one file used to
+        // pay for every file in the pull request, every time.
+        let old = parse_file_patch("src/old.rs", "@@ -1,1 +1,2 @@\n a\n+b\n");
+        let new = parse_file_patch("src/new.rs", "@@ -1,1 +1,2 @@\n x\n+y\n");
+        let previous = render(std::slice::from_ref(&old));
+
+        let both = [old.clone(), new.clone()];
+        let fresh = unreviewed(&previous, &both);
+
+        let paths: Vec<&str> = fresh.iter().map(|d| d.path.as_str()).collect();
+        assert_eq!(paths, ["src/new.rs"], "{paths:?}");
+    }
+
+    #[test]
+    fn a_file_that_gained_a_line_is_reviewed_again_in_full() {
+        // Byte-for-byte or not at all. A model cannot be shown half a hunk, so
+        // a file that changed at all is new work in its entirety.
+        let before = parse_file_patch("src/a.rs", "@@ -1,1 +1,2 @@\n a\n+b\n");
+        let after = parse_file_patch("src/a.rs", "@@ -1,1 +1,3 @@\n a\n+b\n+c\n");
+        let previous = render(std::slice::from_ref(&before));
+
+        let fresh = unreviewed(&previous, std::slice::from_ref(&after));
+
+        assert_eq!(fresh.len(), 1, "{fresh:?}");
+    }
+
+    #[test]
+    fn a_rerun_of_the_same_commit_reviews_everything_rather_than_nothing() {
+        // Nothing new is a re-run, not an increment. Returning an empty list
+        // would make the lane report that a pull request has no attack surface,
+        // which is a far worse answer than doing the work twice.
+        let file = parse_file_patch("src/a.rs", "@@ -1,1 +1,2 @@\n a\n+b\n");
+        let previous = render(std::slice::from_ref(&file));
+
+        let fresh = unreviewed(&previous, std::slice::from_ref(&file));
+
+        assert_eq!(fresh.len(), 1, "{fresh:?}");
+    }
+
+    #[test]
+    fn a_first_review_offers_every_file() {
+        let file = parse_file_patch("src/a.rs", "@@ -1,1 +1,2 @@\n a\n+b\n");
+        assert_eq!(unreviewed("", std::slice::from_ref(&file)).len(), 1);
+    }
+
+    #[test]
+    fn the_two_renderers_agree_byte_for_byte() {
+        // They were separate copies of the same code. The replay only pays if
+        // the bytes match exactly, so a divergence here would not fail loudly —
+        // it would quietly make every re-review cost full price.
+        let file = parse_file_patch("src/a.rs", "@@ -1,2 +1,3 @@\n a\n+b\n c\n");
+        assert_eq!(
+            render(std::slice::from_ref(&file)),
+            crate::evidence::diff::render(std::slice::from_ref(&file))
+        );
     }
 }
