@@ -93,6 +93,8 @@ impl RawFinding {
             title: truncate(&scrub(&self.title), 80),
             body: scrub(&self.body),
             suggestion: self.suggestion.as_deref().map(scrub),
+            // Stamped later, by `findings::suggest`, which has the diff.
+            applicable: None,
             late: self.late,
             // Stamped later, by review, once the diff is in hand: the identity
             // is a hash of the code the finding anchors to, and a model's
