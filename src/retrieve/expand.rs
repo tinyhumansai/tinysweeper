@@ -20,6 +20,7 @@ use std::collections::BTreeSet;
 use crate::config::types::Retrieval;
 use crate::error::Result;
 use crate::evidence::diff::FileDiff;
+use crate::graph::impact::Impact;
 use crate::graph::traverse::{self, NeighbourQuery};
 use crate::index::types::{Chunk, EdgeKind, EmbedSignature};
 use crate::ports::graph::GraphStore;
