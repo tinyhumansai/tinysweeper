@@ -37,7 +37,7 @@ MongoDB adapter and the always-compiled `MockGraphStore` that backs the tests.
 ## Nodes and edges
 
 Two node kinds: `File` (id is the repo-relative path) and `Symbol` (id is
-`path#name`). Four edge kinds:
+`path#name`). Six edge kinds:
 
 | Kind | From | To |
 | --- | --- | --- |
@@ -45,9 +45,33 @@ Two node kinds: `File` (id is the repo-relative path) and `Symbol` (id is
 | `defines` | file | symbol |
 | `calls` | symbol (or file) | symbol |
 | `references` | symbol (or file) | symbol |
+| `extends` | symbol | symbol |
+| `tests` | symbol (or file) | symbol |
 
 A usage is attributed to the *innermost* definition containing it, so a call
 inside a method is an edge out of the method rather than out of the class.
+
+`extends` is one kind for what four languages spell four ways — TypeScript
+`extends`/`implements`, Python base classes, Rust `impl Trait for Type` and
+supertrait bounds, Go struct and interface embedding. The question a review
+asks of all of them is the same one, so splitting them would make every
+consumer enumerate the variants to ask it. Generic arguments are deliberately
+not followed: `extends Repository<User>` inherits from `Repository`, and
+recording `User` would put every class that merely mentions it one hop away.
+
+`tests` is **derived, never asserted**. It is emitted for a resolved *call*
+out of a test scope into code that is not itself test code — so a file claims
+to cover exactly what it actually reaches, and `foo_test.rs` claims nothing
+about `foo.rs` on the strength of its name. A test scope is a whole file whose
+path matches a convention a real runner enforces (`_test.go`, `test_*.py`,
+`.test.`/`.spec.`, a `tests/` directory), or a declaration the language's own
+runner would collect: a `#[test]`/`#[cfg(test)]` item, a Go `TestX`, a pytest
+`test*`. References are excluded — a test that names a type does not exercise
+it.
+
+The direction of `extends` is child to parent, so walking *inbound* from a
+changed base class lists what implements it. That is the direction a review
+asks in, and it is the direction `impact.rs` reads.
 
 ## Resolution is the whole value
 
