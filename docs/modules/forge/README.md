@@ -113,7 +113,8 @@ binary content.
 
 This mattered because the second case used to read as "no reviewable content".
 The lane skipped the file, the blob scanner only inspects added files, and
-`tinysweeper/gate` reported success over a change nobody had seen. The gate now
-degrades a pass to `Neutral` and names the files. Deliberately not `Failure`: we
-do not know there is a problem, only that we did not look, and blocking a merge
-on our own blind spot punishes the contributor for the forge's truncation.
+the review reported success over a change nobody had seen. The paths now reach
+`Proposal::unreviewed`, every lane's summary names them, and `apply` refuses to
+approve while any remain. Deliberately not a *blocking* verdict: we do not know
+there is a problem, only that we did not look, and blocking a merge on our own
+blind spot punishes the contributor for the forge's truncation.

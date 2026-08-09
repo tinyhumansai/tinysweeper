@@ -25,19 +25,16 @@ pub enum LaneId {
     Commits,
     /// Whether the pull request body matches what the diff does.
     Description,
-    /// The deterministic aggregate of every other lane.
-    Gate,
 }
 
 impl LaneId {
     /// Every lane, in the order they are reported.
-    pub const ALL: [LaneId; 6] = [
+    pub const ALL: [LaneId; 5] = [
         LaneId::Critique,
         LaneId::Security,
         LaneId::Tests,
         LaneId::Commits,
         LaneId::Description,
-        LaneId::Gate,
     ];
 
     /// The lane's stable id, as written in config and in check-run names.
@@ -48,7 +45,6 @@ impl LaneId {
             LaneId::Tests => "tests",
             LaneId::Commits => "commits",
             LaneId::Description => "description",
-            LaneId::Gate => "gate",
         }
     }
 
@@ -828,7 +824,7 @@ mod tests {
 
     #[test]
     fn check_names_are_namespaced() {
-        assert_eq!(LaneId::Gate.check_name(), "tinysweeper/gate");
+        assert_eq!(LaneId::Security.check_name(), "tinysweeper/security");
     }
 
     #[test]

@@ -40,16 +40,25 @@ order:
    `review.request_changes_at`. Both are required: `fail_on` and
    `request_changes_at` are independent knobs, so a lane may fail its check
    without blocking the merge.
-2. **Approve** — every lane passed and `review.approve_when_clean` is on. This
-   is what lets a pull request satisfy a "review required" rule, and it is also
-   what retires an earlier objection: GitHub keeps one review per reviewer, so
-   the approval supersedes it and nobody has to dismiss anything by hand.
+2. **Approve** — every lane passed, the review was **complete**, and
+   `review.approve_when_clean` is on. This is what lets a pull request satisfy a
+   "review required" rule, and it is also what retires an earlier objection:
+   GitHub keeps one review per reviewer, so the approval supersedes it and
+   nobody has to dismiss anything by hand.
 3. **Approve** — every lane passed and tinysweeper was blocking before, even
    with `approve_when_clean` off. A block it will not clear is a block that
    needs a human.
 4. **Comment** — everything else.
 
-Two bounds on approving, both deliberate. It reads the *gate*, not the blocking
+**Complete** means `Proposal::unreviewed` is empty — no file changed that the
+forge declined to show us. This is the job the aggregate `tinysweeper/gate`
+check run used to do by degrading itself to `Neutral`. That check is gone, and
+the approval is the whole verdict now, so it has to carry what the check
+carried: a file nobody saw is not a file anyone can vouch for. Nothing blocks,
+so there is nothing to object to — and nothing to endorse either, which is a
+`Comment`.
+
+Three bounds on approving, all deliberate. It reads the *gate*, not the blocking
 threshold, so `request_changes_at = "off"` stops tinysweeper objecting without
 starting it endorsing a red pull request. And an approval that already stands is
 not restated, or every push to a clean pull request would add a review that
