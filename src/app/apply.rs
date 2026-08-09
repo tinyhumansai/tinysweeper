@@ -62,8 +62,8 @@ pub async fn apply(
     // latest review per reviewer, so this is also how a fixed pull request gets
     // unblocked: without an explicit clearing verdict a stale objection blocks
     // the merge button until a human dismisses it by hand.
-    let blocking_now = previously_blocked(read, &repo, proposal.number).await;
-    let event = review_event(config, proposal, blocking_now);
+    let previous = own_review_state(read, &repo, proposal.number).await;
+    let event = review_event(config, proposal, previous);
     let comments = inline_comments(proposal);
 
     // The identities about to be posted, so the store can be extended once the
