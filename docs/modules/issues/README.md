@@ -132,3 +132,10 @@ review already has:
 - **Manual** — `tinysweeper triage --repo <owner/name> --pr <n>` relabels from a
   proposal already on disk, making no model calls and costing nothing. A manual
   full review publishes through `app::apply` too, so it needs no separate route.
+
+## Labels
+
+The vocabulary lives in `presets/labels.toml` and is applied with
+`scripts/sync-labels.py`. See [LABELS.md](LABELS.md) for why there is one
+ordered axis rather than a priority and a severity, and why nothing in it
+shadows a native GitHub field.
