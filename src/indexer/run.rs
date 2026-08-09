@@ -372,6 +372,13 @@ impl<'a> Indexer<'a> {
         }
         report.files += work.len() as u64;
         report.reused += work.iter().map(|file| file.reused).sum::<u64>();
+        // Recorded before the writes rather than after them. A run that hits
+        // the spend ceiling mid-group still re-parsed nothing it should not
+        // have, and a graph rebuilt over a superset of what changed is correct
+        // — where one rebuilt over a subset silently keeps stale edges.
+        report
+            .changed
+            .extend(work.iter().filter(|file| file.changed()).map(|file| file.path.clone()));
 
         // Step 2: say what is about to be written, before writing it.
         let intents: Vec<IndexedFile> = work.iter().map(FileWork::intent).collect();
