@@ -213,13 +213,16 @@ pub fn markdown(card: &Scorecard, baseline: Option<&Scorecard>, allow_drift: boo
         for case in noisy {
             let _ = writeln!(out, "**`{}`**", case.id);
             for judged in &case.judged {
+                // A finding demoted to the check-run summary has no line; print
+                // the path alone rather than a `:0` that reads as a real anchor.
+                let anchor = match judged.line {
+                    Some(line) => format!("{}:{line}", judged.path),
+                    None => judged.path.clone(),
+                };
                 let _ = writeln!(
                     out,
-                    "- `{}:{}` {} — {}",
-                    judged.path,
-                    judged.line.unwrap_or(0),
-                    judged.title,
-                    judged.reason
+                    "- `{anchor}` {} — {}",
+                    judged.title, judged.reason
                 );
             }
             out.push('\n');
