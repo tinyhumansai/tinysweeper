@@ -1016,16 +1016,19 @@ mod tests {
                 glob: "**/*.rs".into(),
                 instructions: "RUST RULES".into(),
                 rules: None,
+                lanes: Vec::new(),
             },
             PathInstruction {
                 glob: "src/**".into(),
                 instructions: "BROADER RULES".into(),
                 rules: None,
+                lanes: Vec::new(),
             },
             PathInstruction {
                 glob: ".github/workflows/**".into(),
                 instructions: "WORKFLOW RULES".into(),
                 rules: None,
+                lanes: Vec::new(),
             },
         ];
         let paths = ["src/main.rs".to_string()];
@@ -1046,11 +1049,13 @@ mod tests {
                 glob: "**/*.rs".into(),
                 instructions: "RUST RULES".into(),
                 rules: None,
+                lanes: Vec::new(),
             },
             PathInstruction {
                 glob: ".github/workflows/**".into(),
                 instructions: "WORKFLOW RULES".into(),
                 rules: None,
+                lanes: Vec::new(),
             },
         ];
         let paths = ["src/main.rs".to_string(), ".github/workflows/ci.yml".into()];
