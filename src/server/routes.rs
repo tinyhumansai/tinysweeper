@@ -618,7 +618,15 @@ impl Merges for MergeDispatch {
             // merge would be evaluating a snapshot that no longer exists.
             let outcome = automerge_inner_reporting(&self.state, repo, number, installation).await;
             reports.push(match outcome {
-                Ok(Outcome::Merged { .. }) => MergeReport {
+                // Busy is not a refusal: the policy did not decide anything,
+                // another worker is deciding it. Reporting it as one would put
+                // a reason in front of the operator that no threshold produced.
+                Ok(None) => MergeReport {
+                    number,
+                    outcome: "busy",
+                    detail: Some("a webhook delivery is already evaluating this one".into()),
+                },
+                Ok(Some(Outcome::Merged { .. })) => MergeReport {
                     number,
                     outcome: "merged",
                     detail: None,
