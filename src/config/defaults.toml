@@ -120,8 +120,9 @@ max_tokens = 16000
 # reasoning like this:
 #
 # `max_tokens` below is the ceiling each *run* was given, not the shipped
-# value; the shipped budget is 16000, which is why the $max_tokens$ this file
-# sets clears the floor this change validates.
+# budget. The shipped value — 16000, set at the bottom of this block — clears
+# the 12000 floor this change validates against; the 8000 rows show the budget
+# that fails, the 32000 rows the one that clears.
 #
 #   model               effort  max_tokens  reasoning  content
 #   z-ai/glm-5.2        high      8000        8000     empty, finish=length
