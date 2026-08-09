@@ -120,6 +120,12 @@ would bury the handful of broken imports the list exists to surface.
 
 ## Traversal is bounded twice
 
+`traverse::walk` is the raw walk and `traverse::neighbours` is `walk` plus the
+cap. They are separate because the blast radius is a list of *names* costing a
+line each: deriving it from the capped neighbourhood would drop dependents to
+make room for chunks nobody asked to see, and the count of what was dropped
+would be wrong too.
+
 `traverse::neighbours` takes a hop count *and* a hard node cap, and the two are
 not redundant. Hops bound the shape of the walk; the cap bounds its size. Two
 hops out of a widely imported module is most of the repository, and a prompt
