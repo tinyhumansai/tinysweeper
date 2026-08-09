@@ -46,6 +46,7 @@ fn finding(path: &str, severity: Severity) -> Finding {
         applicable: None,
         late: false,
         identity: None,
+        corroboration: 1,
     }
 }
 

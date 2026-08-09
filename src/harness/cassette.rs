@@ -287,6 +287,15 @@ impl Model for Cassette {
 
         if self.mode == Mode::Strict {
             state.misses += 1;
+            // Named at warn level as well as returned, because the error is
+            // aggregated by the time a human reads it and "which call" is the
+            // first thing they need in order to re-record the right thing.
+            tracing::warn!(
+                schema = %request.schema_name,
+                model = %request.model,
+                %key,
+                "cassette miss"
+            );
             return Err(Error::Model(format!(
                 "cassette miss in {}: no recorded answer for a `{}` call to `{}` (key {key}). \
                  The prompt changed since this was recorded — re-record the corpus, or replay \

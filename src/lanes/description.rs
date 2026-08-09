@@ -158,6 +158,7 @@ fn empty_body_outcome(pr: &PullRequest, files: usize) -> LaneOutcome {
             applicable: None,
             late: false,
             identity: None,
+            corroboration: 1,
         }],
         resolved: vec![],
         spend: Default::default(),

@@ -119,6 +119,22 @@ max_tokens = 16000
 reasoning_effort = "high"
 budget_usd_per_pr = 1.0
 
+# Several reviewers on one lane's evidence, folded into one review.
+#
+# Off, and off is the honest default: a second reviewer doubles the calls for
+# that lane, and whether it is worth the money is a question `tinysweeper eval`
+# answers rather than one anybody should guess. `[council]` is also on the *not
+# overridable* list in `src/config/remote` — every key here spends the
+# operator's money, which is the same line drawn around `[models]`.
+#
+# `corroboration` is a separate switch on purpose. With one agent the merge is
+# a provable no-op, so it can be turned on and measured before a second agent
+# is what is being judged.
+[council]
+enabled = false
+corroboration = true
+agents = []
+
 # The knowledge centre. `files` are read from the pull request's head commit
 # through the forge and are untrusted input — they are put through a sandboxed
 # extraction pass rather than injected. Plain filenames only: a name containing

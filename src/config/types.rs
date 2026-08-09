@@ -227,6 +227,8 @@ pub struct Config {
     pub retrieval: Retrieval,
     /// Per-lane overrides, keyed by lane id.
     pub lanes: BTreeMap<String, Lane>,
+    /// Several reviewers on one lane's evidence.
+    pub council: Council,
     /// Auto-merge policy.
     pub automerge: AutoMerge,
     /// Review-thread resolution.
@@ -604,6 +606,45 @@ pub enum Workload {
     ThreadReview,
 }
 
+/// Several reviewers on one lane's evidence.
+///
+/// Off by default and **not overridable by a reviewed repository** — every key
+/// here spends the operator's money or decides what a model is told, which is
+/// the same line `config::remote` draws around `[models]`. See
+/// `docs/modules/council/README.md`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Council {
+    /// Whether more than one reviewer runs at all.
+    pub enabled: bool,
+    /// Merge corroborating findings and raise their confidence.
+    ///
+    /// Separate from `enabled` so the merge can be measured on its own before
+    /// a second agent is what is being judged.
+    pub corroboration: bool,
+    /// The reviewers, in the order they run.
+    pub agents: Vec<CouncilAgent>,
+}
+
+/// One reviewer in the council.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CouncilAgent {
+    /// Stable id, used in the cost line and the check-run summary.
+    pub id: String,
+    /// Which lanes this agent reviews. Empty means every enabled lane.
+    pub lanes: Vec<LaneId>,
+    /// A tier name (`scan`, `deep`) or an explicit model id. Absent inherits
+    /// the lane's own model.
+    pub model: Option<ModelRef>,
+    /// A persona name from `council::persona::NAMES`. Absent is the lane's own
+    /// prompt, unchanged.
+    ///
+    /// A **name**, never the text: repository prose reaches a prompt through
+    /// exactly one door, and this is not it.
+    pub persona: Option<String>,
+}
+
 /// Per-lane overrides.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -884,6 +925,26 @@ impl Config {
             Some("deep") => &self.models.deep,
             Some("scan") | None => &self.models.scan,
             Some(explicit) => explicit,
+        }
+    }
+
+    /// Resolve a council agent to a concrete model id.
+    ///
+    /// The same three-way rule as [`Config::model_for`] — a tier name, an
+    /// explicit id, or nothing — so there is one resolution rule in the
+    /// codebase rather than three shapes of it. An agent that names no model
+    /// inherits its lane's, which is what makes a one-agent council identical
+    /// to no council.
+    ///
+    /// Deliberately **not** routed through [`Config::model_for_workload`]: that
+    /// match is exhaustive over *mechanical* work and pins everything to the
+    /// cheap tier, and a council agent is a reviewer.
+    pub fn model_for_agent<'a>(&'a self, agent: &'a CouncilAgent, lane: LaneId) -> &'a str {
+        match agent.model.as_ref().map(|r| r.0.as_str()) {
+            Some("deep") => &self.models.deep,
+            Some("scan") => &self.models.scan,
+            Some(explicit) => explicit,
+            None => self.model_for(lane),
         }
     }
 
