@@ -87,6 +87,15 @@ pub enum GraphStatus {
     /// No graph store was attached — a forge-only deployment, or an install
     /// with no index. The map is the diff's own shape and nothing more.
     Off,
+    /// A graph is attached, but the walk could not be run — the store was
+    /// unreachable, or it refused the query.
+    ///
+    /// Distinct from [`GraphStatus::Cold`] and from [`GraphStatus::Off`]
+    /// because it is the only one of the three that is a *fault*: the other two
+    /// are deployments working as configured, and folding an outage into either
+    /// would make the one case somebody has to fix the one case nobody is told
+    /// about.
+    Unavailable,
     /// A graph was attached but knew nothing about the changed files. Normal
     /// for a pull request that only adds files, and a symptom of a cold index
     /// otherwise.
