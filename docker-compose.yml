@@ -98,10 +98,19 @@ services:
       # second place to set them is a second way for the key to disagree with
       # the vectors already written. Only the API key lives in the environment,
       # under whatever name `embeddings.api_key_env` gives.
+      # `openrouter` is the default provider, so this is the key the index
+      # needs. The others are forwarded for a deployment that overrides
+      # `embeddings.provider`.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
       TINYSWEEPER_WEBHOOK_SECRET: ${TINYSWEEPER_WEBHOOK_SECRET:?set a webhook secret}
-      TINYSWEEPER_GITHUB_APP_ID: ${TINYSWEEPER_GITHUB_APP_ID:-}
-      TINYSWEEPER_GITHUB_PRIVATE_KEY: ${TINYSWEEPER_GITHUB_PRIVATE_KEY:-}
+      # These two names are read verbatim by `server::auth::AppAuth::from_env`.
+      # They were previously spelled `TINYSWEEPER_GITHUB_*` here, which the
+      # binary never reads, so the container could not authenticate as the App
+      # however the environment was set.
+      TINYSWEEPER_APP_ID: ${TINYSWEEPER_APP_ID:?set the GitHub App id}
+      TINYSWEEPER_APP_PRIVATE_KEY: ${TINYSWEEPER_APP_PRIVATE_KEY:?set the GitHub App private key}
       RUST_LOG: ${RUST_LOG:-tinysweeper=info}
     ports:
       - "8080:8080"
