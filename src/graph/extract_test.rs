@@ -346,6 +346,42 @@ fn go_embedding_is_heritage_and_a_named_field_is_not() {
     );
 }
 
+#[test]
+fn go_an_embedded_interface_is_heritage_and_a_method_signature_is_not() {
+    let file = parsed(
+        "pkg/io/reader.go",
+        "type Reader interface {\n\tio.Closer\n\tRead(p []byte) (n int, err error)\n}\n",
+    );
+    assert!(heritage(&file).contains(&("Reader", "Closer")));
+    assert!(
+        !heritage(&file)
+            .iter()
+            .any(|(_, parent)| *parent == "Read"),
+        "a method signature declares behaviour; it embeds nothing: {:?}",
+        file.heritage
+    );
+}
+
+#[test]
+fn rust_a_lifetime_bound_is_not_a_supertrait() {
+    // `'static` constrains how long the trait can be stored, it is not a
+    // parent. Every trait gets the bound family or none of them; recording it
+    // as heritage would relate each trait to nothing local.
+    let file = parsed(
+        "src/cache.rs",
+        "pub trait Cache: IntoIterator + Send + 'static {}\n",
+    );
+    assert!(heritage(&file).contains(&("Cache", "IntoIterator")));
+    assert!(heritage(&file).contains(&("Cache", "Send")));
+    assert!(
+        !heritage(&file)
+            .iter()
+            .any(|(_, parent)| *parent == "'static"),
+        "{:?}",
+        file.heritage
+    );
+}
+
 // --- Test scopes ------------------------------------------------------------
 
 fn scope_of(file: &ParsedFile, name: &str) -> bool {
