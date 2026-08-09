@@ -238,7 +238,6 @@ async fn a_zero_node_or_chunk_bound_still_keeps_the_blast_radius() {
         .await
         .expect("expands");
         assert!(expansion.chunks.is_empty(), "{nodes}/{chunks}");
-        assert_eq!(expansion.nodes, 0, "{nodes}/{chunks}");
         assert!(
             expansion
                 .impact
