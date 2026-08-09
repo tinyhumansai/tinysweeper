@@ -208,10 +208,14 @@ impl RetrievedContext {
     /// pull request, so putting it in the cacheable prefix would destroy every
     /// cache hit while looking correct — see `crate::harness::prompt`.
     pub fn render(&self) -> String {
-        if self.chunks.is_empty() {
+        if self.renders_nothing() {
             return String::new();
         }
         let mut out = String::with_capacity(self.tokens * 4 + 256);
+        // The blast radius leads. It is the shortest part and the part that
+        // says what to look for; a reviewer that reads only the first lines of
+        // the block should get the warning, not the first quoted chunk.
+        out.push_str(&self.impact.render());
         for chunk in &self.chunks {
             out.push_str(&chunk.render());
             out.push('\n');
