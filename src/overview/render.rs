@@ -16,7 +16,7 @@ use std::fmt::Write as _;
 use crate::findings::render::escape_cell;
 use crate::overview::mermaid;
 use crate::overview::types::{ChangeMap, Component, GraphStatus, Role};
-use crate::{MARKER_PREFIX, VERSION};
+use crate::VERSION;
 
 /// The marker that identifies tinysweeper's own change-map comment.
 ///
