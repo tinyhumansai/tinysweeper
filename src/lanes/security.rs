@@ -121,6 +121,7 @@ impl Lane for Security {
             .await;
 
         let mut outcome = outcome.into_outcome();
+        outcome.summary.push_str(&skip_note(&triaged.skipped));
         merge_scanner_findings(&mut outcome, &scanner);
         Ok(outcome)
     }
