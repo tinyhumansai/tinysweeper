@@ -93,12 +93,29 @@ impl GatewayModel {
             // with `reasoning: {max_tokens: N}` did not hold; that model
             // ignored the cap and ran to 37k characters.
             //
-            // It is on again because the model changed, and the new one was
-            // measured rather than assumed. `deepseek-v4-pro` at effort `high`,
-            // same shape of prompt and the same 8000-token ceiling: 416
-            // reasoning tokens, 522 completion tokens, `finish_reason` `stop`,
-            // valid structured output. Two orders of magnitude away from the
-            // budget rather than over it.
+            // It was turned on again on the strength of a measurement — 416
+            // reasoning tokens on `deepseek-v4-pro` at `high` — and that
+            // measurement was taken on a toy prompt. Re-measured against a
+            // 23k-token diff, the same model at the same setting and the same
+            // 8000-token ceiling spends **8000** reasoning tokens and returns
+            // empty content. So this is not a hazard that belonged to `kimi-k3`
+            // and went away; it is a property of reasoning sharing the budget,
+            // and every thinking model has it.
+            //
+            // Two findings from that re-measurement are load-bearing here:
+            //
+            // - **`low` is not a smaller `high`.** Both configured models burn
+            //   the entire allowance at either setting. This key selects a
+            //   *style* of thinking, never an amount, so it cannot be used to
+            //   bound spend. Only `"off"` bounds it.
+            // - **The failure is bimodal.** There is no setting at which the
+            //   model thinks a little and answers a little: either reasoning
+            //   fits and the answer is whole, or reasoning takes everything and
+            //   `finish_reason` is `length` with nothing to parse.
+            //
+            // What keeps it working today is `models.max_tokens`, raised to
+            // 16000, not this key. Anyone lowering that number should read the
+            // table in `config/defaults.toml` first.
             //
             // `models.reasoning_effort = "off"` restores the old behaviour for
             // a deployment that puts a thinking-heavy model back.
