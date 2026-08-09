@@ -141,7 +141,8 @@ pub async fn expand(
     diffs: &[FileDiff],
     bounds: &Retrieval,
 ) -> Result<Expansion> {
-    let hops = bounds.graph_hops;
+    let (hops, max_nodes, max_chunks) =
+        (bounds.graph_hops, bounds.max_graph_nodes, bounds.max_chunks);
     // Only `graph_hops == 0` makes the walk itself pointless. `max_graph_nodes`
     // and `max_chunks` bound the *code* a lane is shown; the blast radius is a
     // list of names that costs a line each and is enabled separately by
