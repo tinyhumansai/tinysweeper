@@ -150,8 +150,10 @@ fail_on = "high"
 model = "scan"
 fail_on = "high"
 
+# No `model` key: this lane makes no model call. It republishes what the
+# deterministic scanners found in the commit range and forms no opinion of its
+# own, so its verdict is a regular expression's, not a model's.
 [lanes.commits]
-model = "scan"
 fail_on = "high"
 secret_rulepack = "default"
 max_blob_bytes = 1048576
