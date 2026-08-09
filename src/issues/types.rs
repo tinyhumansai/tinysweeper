@@ -31,6 +31,18 @@ impl Priority {
         }
     }
 
+    /// One step less urgent, saturating at the bottom.
+    ///
+    /// Saturating rather than wrapping on purpose: a demotion must never turn
+    /// the least urgent item into the most urgent one.
+    pub fn demoted(self) -> Priority {
+        match self {
+            Priority::P0 => Priority::P1,
+            Priority::P1 => Priority::P2,
+            Priority::P2 | Priority::P3 => Priority::P3,
+        }
+    }
+
     /// Every priority label, so the label vocabulary has one definition.
     pub fn labels() -> [&'static str; 4] {
         [
@@ -132,6 +144,12 @@ pub struct TriagePlan {
     pub number: u64,
     /// Labels to add, in order, already capped and filtered.
     pub add_labels: Vec<String>,
+    /// Labels superseded by one being added, in the same facet.
+    ///
+    /// Never a label outside the `priority:`/`severity:` facets this bot owns:
+    /// two severities on one item are a contradiction, not two opinions, but a
+    /// human's own labels are not ours to retire.
+    pub remove_labels: Vec<String>,
     /// Labels that were suggested and refused, with why. For the log.
     pub declined_labels: Vec<(String, &'static str)>,
     /// The triage comment body, when one is to be posted.
@@ -151,4 +169,15 @@ pub struct ClosePlan {
     pub reference: u64,
     /// Whether to stop short of the actual close.
     pub dry_run: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn demotion_saturates_rather_than_wrapping() {
+        assert_eq!(Priority::P0.demoted(), Priority::P1);
+        assert_eq!(Priority::P3.demoted(), Priority::P3);
+    }
 }

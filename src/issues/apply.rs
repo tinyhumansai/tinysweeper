@@ -18,6 +18,13 @@ pub async fn apply_plan(forge: &dyn ForgeWrite, repo: &RepoId, plan: &TriagePlan
             .await?;
     }
 
+    // After the add, never before. If the process dies between the two, an item
+    // carrying both labels is confusing; one carrying neither is a triage that
+    // silently did nothing, and the first is easier to notice and to fix.
+    for label in &plan.remove_labels {
+        forge.remove_label(repo, plan.number, label).await?;
+    }
+
     if let Some(body) = &plan.comment {
         forge.create_comment(repo, plan.number, body).await?;
     }
@@ -150,9 +157,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_label_is_ever_removed() {
-        // `TriagePlan` cannot express a removal, so this asserts the property
-        // end to end: whatever a plan says, `remove_label` is not called.
+    async fn a_plan_that_supersedes_nothing_removes_nothing() {
+        // The default and by far the common case. Removal happens only when a
+        // label in an owned facet replaces another in that same facet.
         let forge = MockForge::new();
         apply_plan(&forge, &repo(), &plan()).await.expect("applies");
         assert!(
@@ -161,5 +168,34 @@ mod tests {
                 .iter()
                 .any(|write| matches!(write, Write::LabelRemoved { .. }))
         );
+    }
+
+    #[tokio::test]
+    async fn a_superseded_label_is_removed_after_its_replacement_is_added() {
+        // Ordering is the point. Crashing between the two writes leaves an item
+        // with both labels, which a human notices; the other order leaves it
+        // with neither, which reads as a triage that did nothing.
+        let superseding = TriagePlan {
+            remove_labels: vec!["severity: high".into()],
+            add_labels: vec!["severity: low".into()],
+            comment: None,
+            ..plan()
+        };
+
+        let forge = MockForge::new();
+        apply_plan(&forge, &repo(), &superseding)
+            .await
+            .expect("applies");
+
+        let writes = forge.writes();
+        let added = writes
+            .iter()
+            .position(|w| matches!(w, Write::Labels { .. }))
+            .expect("the new label was added");
+        let removed = writes
+            .iter()
+            .position(|w| matches!(w, Write::LabelRemoved { .. }))
+            .expect("the stale label was removed");
+        assert!(added < removed, "{writes:?}");
     }
 }

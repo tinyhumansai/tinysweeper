@@ -72,6 +72,26 @@ enum Command {
         findings: std::path::PathBuf,
     },
 
+    /// Label a pull request from a proposal `review` already produced.
+    ///
+    /// The manual half of triage: `apply` does this automatically, so this is
+    /// for re-labelling a pull request whose review was published before triage
+    /// existed, or whose labels a maintainer cleared. Makes no model calls and
+    /// costs nothing — every input is evidence the proposal already holds.
+    Triage {
+        /// The repository, as `owner/name`.
+        #[arg(long, env = "GITHUB_REPOSITORY")]
+        repo: String,
+
+        /// The pull request number.
+        #[arg(long)]
+        pr: u64,
+
+        /// The proposal written by `review`.
+        #[arg(long, default_value = "findings.json")]
+        findings: std::path::PathBuf,
+    },
+
     /// Merge a pull request if it qualifies under `[automerge]`.
     ///
     /// Deterministic and off unless the repository opts in. Makes no model
@@ -155,6 +175,7 @@ async fn main() -> Result<()> {
             propose_to,
         } => run_review(&repo, pr, config, lanes, dry_run, &propose_to).await,
         Command::Apply { repo, pr, findings } => run_apply(&repo, pr, &findings).await,
+        Command::Triage { repo, pr, findings } => run_triage(&repo, pr, &findings).await,
         Command::Automerge { repo, pr, dry_run } => run_automerge(&repo, pr, dry_run).await,
         Command::LocalReview { .. } => not_yet("local-review", "M3"),
         Command::Serve { bind, config } => run_serve(bind, config).await,
@@ -238,6 +259,56 @@ async fn run_apply(repo: &str, pr: u64, findings: &std::path::Path) -> Result<()
 
     println!("published {} check run(s)", proposal.lanes.len());
     Ok(())
+}
+
+/// Label a pull request from a proposal already on disk. No model calls.
+///
+/// The manual trigger. `app::apply` already triages on every review, so this
+/// exists for the pull request whose labels a maintainer cleared, or whose
+/// review predates triage.
+#[cfg(feature = "github")]
+async fn run_triage(repo: &str, pr: u64, findings: &std::path::Path) -> Result<()> {
+    use tinysweeper::forge::RepoId;
+    use tinysweeper::forge::github::{GitHubRead, GitHubWrite};
+    use tinysweeper::ports::forge::ForgeRead;
+
+    let repo_id = RepoId::parse(repo)
+        .ok_or_else(|| tinysweeper::Error::config(format!("`{repo}` is not owner/name")))?;
+
+    let proposal = tinysweeper::app::read_proposal(findings)?;
+    validate_apply_target(&proposal, &repo_id, pr)?;
+
+    let loaded = tinysweeper::config::load_validated(std::path::Path::new("."), None)?;
+
+    // The live pull request, not the proposal's copy: `draft` and the labels
+    // already applied are exactly the two things that move between the review
+    // and this call, and both change the answer.
+    let read = GitHubRead::from_env()?;
+    let live = read.pull_request(&repo_id, pr).await?;
+
+    let write = GitHubWrite::from_env()?;
+    let added = tinysweeper::issues::pull_request::apply_triage(
+        &write,
+        &repo_id,
+        &live,
+        &proposal,
+        &loaded.config.issues,
+    )
+    .await?;
+
+    match added.as_slice() {
+        [] => println!("already labelled; nothing to add"),
+        labels => println!("added {}", labels.join(", ")),
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "github"))]
+async fn run_triage(_repo: &str, _pr: u64, _findings: &std::path::Path) -> Result<()> {
+    Err(tinysweeper::Error::FeatureDisabled(
+        "publishing to GitHub",
+        "github",
+    ))
 }
 
 /// Evaluate the auto-merge policy, and merge if it qualifies.
@@ -483,6 +554,27 @@ mod tests {
                 assert!(dry_run);
             }
             other => panic!("expected review, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn triage_parses_repo_pr_and_a_default_proposal() {
+        let cli = Cli::try_parse_from([
+            "tinysweeper",
+            "triage",
+            "--repo",
+            "tinyhumansai/tinysweeper",
+            "--pr",
+            "7",
+        ])
+        .expect("parses");
+        match cli.command {
+            Command::Triage { repo, pr, findings } => {
+                assert_eq!(repo, "tinyhumansai/tinysweeper");
+                assert_eq!(pr, 7);
+                assert_eq!(findings, std::path::PathBuf::from("findings.json"));
+            }
+            other => panic!("expected triage, got {other:?}"),
         }
     }
 

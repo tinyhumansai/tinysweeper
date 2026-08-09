@@ -14,6 +14,10 @@ use crate::issues::types::{IssueSeverity, Priority};
 pub struct LabelPlan {
     /// Labels to add, in order, already filtered and capped.
     pub add: Vec<String>,
+    /// Labels to remove, because a newer label supersedes them.
+    ///
+    /// Only ever labels from **this bot's own facets** — see `supersede`.
+    pub remove: Vec<String>,
     /// Suggestions that were refused, with the reason. For the log.
     pub declined: Vec<(String, &'static str)>,
 }
@@ -58,12 +62,43 @@ pub fn plan(existing: &[String], suggested: &[String], policy: &Issues) -> Label
                 .push((label.clone(), "issues.max_labels reached"));
             continue;
         }
+        // A facet is exclusive by nature: `severity: high` beside
+        // `severity: low` is not two opinions, it is a contradiction, and a
+        // maintainer scanning the list cannot tell which one is current. So
+        // adding a label in a facet retires the others in that same facet.
+        //
+        // Bounded to the two facets this bot owns and to labels in its own
+        // vocabulary. Anything a human applied outside `priority:`/`severity:`
+        // is untouched, and an operator who wants to pin one of these by hand
+        // uses `issues.block_labels`, which refuses the whole plan.
+        plan.remove.extend(supersede(label, existing));
+
         chose_priority |= is_priority(label);
         chose_severity |= is_severity(label);
         plan.add.push(label.clone());
     }
 
     plan
+}
+
+/// Existing labels in the same facet as `label`, which it replaces.
+///
+/// Returns nothing for a label outside the owned facets, so this can be called
+/// unconditionally.
+fn supersede(label: &str, existing: &[String]) -> Vec<String> {
+    let facet: fn(&str) -> bool = if is_priority(label) {
+        is_priority
+    } else if is_severity(label) {
+        is_severity
+    } else {
+        return Vec::new();
+    };
+
+    existing
+        .iter()
+        .filter(|have| facet(have) && !same(have, label))
+        .cloned()
+        .collect()
 }
 
 /// Why one suggestion is refused, or `None` if it survives.
@@ -255,5 +290,48 @@ mod tests {
         let plan = plan(&owned(&["human-applied"]), &[], &policy());
         assert!(plan.add.is_empty());
         assert!(plan.declined.is_empty());
+    }
+
+    #[test]
+    fn a_new_severity_supersedes_the_stale_one() {
+        // The defect this exists to stop: a pull request whose finding was
+        // fixed keeps `severity: high` beside the new `severity: low`. That is
+        // not two opinions, it is a contradiction, and it says the opposite of
+        // the truth right next to the truth.
+        let plan = plan(
+            &["severity: high".into()],
+            &["severity: low".into()],
+            &policy(),
+        );
+
+        assert_eq!(plan.add, ["severity: low"]);
+        assert_eq!(plan.remove, ["severity: high"]);
+    }
+
+    #[test]
+    fn a_label_outside_the_owned_facets_is_never_superseded() {
+        // The bound on the rule. `needs-design` is a human's, in no facet
+        // triage owns, and not ours to retire.
+        let plan = plan(
+            &["needs-design".into(), "severity: high".into()],
+            &["severity: low".into()],
+            &policy(),
+        );
+
+        assert_eq!(plan.remove, ["severity: high"]);
+    }
+
+    #[test]
+    fn re_applying_the_same_label_removes_nothing() {
+        // A no-op run must be a no-op. Removing and re-adding the same label
+        // would churn the timeline on every push for no change at all.
+        let plan = plan(
+            &["severity: low".into()],
+            &["severity: low".into()],
+            &policy(),
+        );
+
+        assert!(plan.add.is_empty(), "{plan:?}");
+        assert!(plan.remove.is_empty(), "{plan:?}");
     }
 }

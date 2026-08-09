@@ -131,6 +131,17 @@ pub async fn apply(
         }
     }
 
+    // Triage last, and against `live` rather than a second fetch: the labels
+    // restate a verdict whose evidence is now on the pull request, so they can
+    // never point at a review that failed to publish. Add-only, so a
+    // maintainer's own triage survives every re-run.
+    let added =
+        crate::issues::pull_request::apply_triage(write, &repo, &live, proposal, &config.issues)
+            .await?;
+    if !added.is_empty() {
+        tracing::info!(number = proposal.number, ?added, "triaged");
+    }
+
     Ok(())
 }
 
@@ -436,6 +447,34 @@ mod tests {
             checks["tinysweeper/critique"].conclusion,
             CheckConclusion::Success
         );
+    }
+
+    #[tokio::test]
+    async fn publishing_also_triages_the_pull_request() {
+        // Triage rides on `apply` rather than on a job of its own so it reaches
+        // every trigger the review already has, and so a labelled severity can
+        // never disagree with the check run published beside it.
+        let forge = forge("abc123");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![finding()]),
+            None,
+        )
+        .await
+        .expect("applies");
+
+        let labels = forge
+            .writes()
+            .into_iter()
+            .find_map(|w| match w {
+                Write::Labels { labels, .. } => Some(labels),
+                _ => None,
+            })
+            .expect("the pull request was labelled");
+
+        assert_eq!(labels, vec!["priority: p1", "severity: high"]);
     }
 
     #[tokio::test]
