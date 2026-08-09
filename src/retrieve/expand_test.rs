@@ -24,6 +24,7 @@ fn bounds(graph_hops: u8, max_graph_nodes: usize, max_chunks: usize) -> Retrieva
         max_chunks,
         graph_hops,
         max_graph_nodes,
+        max_impact: crate::graph::impact::DEFAULT_MAX_REACHED,
     }
 }
 
