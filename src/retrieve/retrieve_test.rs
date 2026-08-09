@@ -596,19 +596,34 @@ async fn the_blast_radius_of_a_real_change_names_its_dependents_and_its_coverage
     let embedder = embedder();
     let index = MockChunkIndex::new();
 
-    // `graph::path::normalise` is called from other modules and exercised by
-    // its own module's tests, so both halves of the answer should be
-    // non-empty. It is also named only once in the crate — a symbol defined in
-    // two files is deliberately left ambiguous by the builder, and picking one
-    // would have tested the resolver's refusal to guess rather than this.
+    // The symbol under test is *found*, not hard-coded: pick one this crate
+    // both calls from production code and reaches from a test. Naming a
+    // function here instead would make the test a hostage to whoever next
+    // renames it, and — worse — would quietly start passing for the wrong
+    // reason if the coverage half stopped working and the name happened to be
+    // ambiguous, which is exactly how a symbol-level assertion fails silently.
+    let called: BTreeSet<&str> = built
+        .edges
+        .iter()
+        .filter(|e| e.kind == EdgeKind::Calls && !e.path.contains("_test."))
+        .map(|e| e.to.as_str())
+        .collect();
+    let (path, symbol) = built
+        .edges
+        .iter()
+        .filter(|e| e.kind == EdgeKind::Tests && called.contains(e.to.as_str()))
+        .filter_map(|e| e.to.split_once('#'))
+        .min()
+        .expect("this crate calls and tests at least one of its own functions");
+
     let diffs = vec![parse_file_patch(
-        "src/graph/path.rs",
-        "@@ -14,4 +14,4 @@ pub fn normalise(path: &str) -> String\n-    let mut segments: Vec<&str> = Vec::new();\n+    let mut segments: Vec<&str> = Vec::with_capacity(8);\n",
+        path,
+        &format!("@@ -1,3 +1,3 @@ fn {symbol}()\n-    let old = 1;\n+    let new = 2;\n"),
     )];
 
     let context = Retriever::new(&embedder, &index)
         .with_graph(&graph_store)
-        .retrieve(&config(), REPO, "Preallocate the segment buffer", HEAD, &diffs)
+        .retrieve(&config(), REPO, "Adjust a helper", HEAD, &diffs)
         .await
         .0;
 
