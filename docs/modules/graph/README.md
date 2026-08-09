@@ -134,6 +134,30 @@ Edges are walked in both directions. Whoever calls a changed function is at
 least as much of the blast radius as whatever it calls — and for a leaf that
 nothing calls, the inbound direction is the only useful one.
 
+## Blast radius
+
+`traverse` walks in both directions because a callee is context worth reading.
+`impact::Impact` reads that same walk **inbound only**, for a narrower question:
+what breaks if this change is wrong. Whatever the diff calls did not change
+because the diff changed; whatever calls *it* might.
+
+Each inbound edge becomes a relation — `tests` → exercised by, `extends` →
+implemented by, `calls`/`references` → called by, `imports` → imported by — and
+each node keeps only its strongest, because a coverage edge always accompanies a
+call edge and listing the node twice would spend the cap saying one thing.
+
+The cap fills **round-robin across relations**, not in priority order. Strict
+priority looks right and fails on the commonest shape there is: a well-tested
+function with twenty-six test callers spends the whole block naming tests and
+never mentions the production code that would break.
+
+`Impact::untested` names changed symbols nothing reaches from a test, and it is
+emitted **only** for symbols the graph actually holds. "No test covers this" and
+"this symbol is new, or in a language we do not parse" are different sentences,
+and reporting the second as the first tells a reviewer we looked when we did
+not. It is rendered above the retrieved chunks in the lane's prompt, because it
+is the shortest part and the part that says what to look for.
+
 ## Incremental writes
 
 `sync_paths` deletes by path and then upserts, in that order, mirroring how the
@@ -141,7 +165,43 @@ chunk index re-indexes. Without the delete, a renamed function stays in the
 graph under both names forever and traversal keeps offering reviewers a
 definition that no longer exists.
 
+A push re-parses what changed, not the tree. Two things make that possible and
+neither is optional:
+
+* **`build_paths` takes the stored symbol table.** Resolving a call in a
+  re-parsed file needs to know which file defines the name it calls, and that is
+  a repository-wide fact. `GraphStore::symbols` returns it in one query of small
+  rows, against the many-thousand-file parse it replaces. Stored symbols are
+  seeded *before* freshly parsed ones and yield to them, so a renamed function
+  does not survive under both names.
+* **`rebuild_set` re-parses the changed files' graph neighbours too.**
+  `delete_paths` removes every edge *touching* a path, including the inbound
+  ones written by files that did not change — which are exactly the edges a
+  blast radius is made of. Re-parsing one hop out puts them back.
+  `an_incremental_rebuild_lands_the_same_graph_as_a_full_one` asserts the two
+  paths agree, node for node and edge for edge, and it is the test that fails
+  against the obvious implementation.
+
+`src/server/indexing.rs` decides which path to take **from the store**, not from
+a flag: a repository whose graph is empty is built whole. A flag can be wrong
+about what is stored, and being wrong means a graph with edges only among the
+files that push happened to touch.
+
 ## Known limits
+
+* **Calls inside Rust macros are invisible.** tree-sitter parses a macro's
+  arguments as a token tree, not as expressions, so `assert_eq!(normalise(x),
+  y)` produces no `calls` edge and therefore no coverage edge. A test module
+  that only ever asserts through macros covers nothing as far as the graph is
+  concerned.
+* **Incremental sync misses a newly-resolvable call from an untouched file.**
+  A file that did not change and had no edge to the changed file gets no new
+  edge, so a call that only now resolves — because this push added the symbol it
+  names — waits until either file is touched again. Catching it would mean
+  parsing every file on every push, which is the cost the incremental path
+  exists to avoid.
+* `Coverage` on a `build_paths` result describes the parsed subset, not the
+  repository. A partial run's resolution rate is not the repository's.
 
 * One crate root per repository: the shallowest `Cargo.toml` wins, so a Cargo
   workspace resolves `crate::` against the wrong `src/` for its non-primary
