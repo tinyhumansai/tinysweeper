@@ -65,6 +65,12 @@ const TOLERANCE: f64 = 1e-9;
 ///
 /// * [`EdgeKind::Calls`] is the strongest evidence that changing one node
 ///   breaks the other, so it anchors the scale at 1.
+/// * [`EdgeKind::Extends`] is structural: a changed base declaration forces
+///   every implementor to change, but only if the shape actually changes, so
+///   it sits just under a direct call.
+/// * [`EdgeKind::Tests`] is worth reading *because* it exercises the change —
+///   it is where the change is verified, or by its absence where it is not —
+///   but it does not break, so it ranks below the edges that do.
 /// * [`EdgeKind::References`] is a real dependency but a weaker one: a mention
 ///   survives many changes a call site would not.
 /// * [`EdgeKind::Imports`] is file-level and therefore coarse — it says the
@@ -77,6 +83,8 @@ const TOLERANCE: f64 = 1e-9;
 fn weight(kind: EdgeKind) -> f64 {
     match kind {
         EdgeKind::Calls => 1.0,
+        EdgeKind::Extends => 0.9,
+        EdgeKind::Tests => 0.8,
         EdgeKind::References => 0.6,
         EdgeKind::Imports => 0.5,
         EdgeKind::Defines => 0.3,
