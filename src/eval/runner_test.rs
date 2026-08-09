@@ -314,6 +314,100 @@ async fn incremental_review_is_forced_off_however_the_config_arrived() {
 }
 
 #[tokio::test]
+async fn rescore_covers_the_three_things_a_proposal_can_be() {
+    // Three cases sharing one fixture: one with a valid proposal, one whose
+    // proposal is garbage, one that never ran. `rescore` is the loop people
+    // iterate in, so each of the three must fail loudly — a corpus that
+    // silently scored fewer cases than it holds reports the wrong recall in
+    // the flattering direction.
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("cases")).expect("mkdir");
+    std::fs::create_dir_all(dir.path().join("fixtures")).expect("mkdir");
+    std::fs::write(
+        dir.path().join("fixtures/ts-0001.json"),
+        serde_json::to_string_pretty(&fixture()).expect("serializes"),
+    )
+    .expect("write");
+    for id in ["ts-ok", "ts-garbage", "ts-missing"] {
+        std::fs::write(
+            dir.path().join(format!("cases/{id}.toml")),
+            format!(
+                r#"
+schema = 1
+id = "{id}"
+fixture = "../fixtures/ts-0001.json"
+lanes = ["critique"]
+
+[provenance]
+repo = "tinyhumansai/tinysweeper"
+pr = 7
+evidence = "https://github.com/tinyhumansai/tinysweeper/pull/8"
+labelled_by = "tester"
+{EXPECTATION}
+"#
+            ),
+        )
+        .expect("write");
+    }
+
+    let corpus = load(dir.path()).expect("loads");
+    let out = dir.path().join("runs/test");
+
+    // Record once so every case has a real proposal on disk…
+    run(
+        &corpus,
+        &config(),
+        Some(finder()),
+        &RunOptions {
+            out: out.clone(),
+            record: true,
+            ..RunOptions::default()
+        },
+    )
+    .await
+    .expect("records");
+
+    // …then make two of them lie about the run.
+    std::fs::write(out.join("ts-garbage/proposal.json"), "not a proposal at all")
+        .expect("write");
+    std::fs::remove_file(out.join("ts-missing/proposal.json")).expect("remove");
+
+    let scores = rescore(&corpus, &out).expect("rescoring is free");
+    assert_eq!(scores.len(), 3);
+    let by_id: std::collections::HashMap<_, _> =
+        scores.iter().map(|score| (score.id.clone(), score)).collect();
+
+    // The valid one scores exactly as it did live.
+    let ok = by_id["ts-ok"];
+    assert_eq!(ok.true_positives, 1, "{:?}", ok.judged);
+    assert!(ok.error.is_none(), "{:?}", ok.error);
+
+    // The garbage one is a loud failure naming the file, not a silent skip.
+    let garbage = by_id["ts-garbage"];
+    assert!(
+        garbage
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("not a proposal"),
+        "{:?}",
+        garbage.error
+    );
+
+    // The one that never ran says how to make it run.
+    let missing = by_id["ts-missing"];
+    assert!(
+        missing
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("eval run"),
+        "{:?}",
+        missing.error
+    );
+}
+
+#[tokio::test]
 async fn the_corpus_ceiling_stops_the_run_rather_than_the_bill() {
     let dir = corpus_dir(EXPECTATION);
     let corpus = load(dir.path()).expect("loads");
