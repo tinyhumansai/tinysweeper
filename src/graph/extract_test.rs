@@ -369,6 +369,36 @@ fn a_rust_cfg_test_module_makes_everything_inside_it_a_test_scope() {
 }
 
 #[test]
+fn an_attribute_whose_text_mentions_test_does_not_make_a_test_scope() {
+    // The word matching `test` inside string literals is configuration, not a
+    // test marker: `cfg(feature = "test")` gates a feature and `serde(rename)`
+    // names a serialised field. Only the attribute path — or a bare `test`
+    // argument to `cfg` — counts.
+    let file = parsed(
+        "src/ledger.rs",
+        "pub fn settle() {}\n\
+         #[cfg(feature = \"test\")]\nfn only_in_test_feature() {}\n\
+         #[serde(rename = \"test\")]\npub struct Renamed {}\n\
+         #[test]\nfn always_a_test() {}\n\
+         #[tokio::test]\nasync fn also_a_test() {}\n",
+    );
+    assert!(!scope_of(&file, "settle"), "production code is not a test");
+    assert!(
+        !scope_of(&file, "only_in_test_feature"),
+        "a feature flag named test is not a test scope"
+    );
+    assert!(
+        !scope_of(&file, "Renamed"),
+        "a serde rename mentioning test is not a test scope"
+    );
+    assert!(scope_of(&file, "always_a_test"));
+    assert!(
+        scope_of(&file, "also_a_test"),
+        "`tokio::test` is still a test scope"
+    );
+}
+
+#[test]
 fn go_and_python_test_names_follow_their_runners_rules() {
     let go = parsed(
         "pkg/store/store.go",
