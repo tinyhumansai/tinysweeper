@@ -141,9 +141,14 @@ pub async fn expand(
     diffs: &[FileDiff],
     bounds: &Retrieval,
 ) -> Result<Expansion> {
-    let (hops, max_nodes, max_chunks) =
-        (bounds.graph_hops, bounds.max_graph_nodes, bounds.max_chunks);
-    if hops == 0 || max_nodes == 0 || max_chunks == 0 {
+    let hops = bounds.graph_hops;
+    // Only `graph_hops == 0` makes the walk itself pointless. `max_graph_nodes`
+    // and `max_chunks` bound the *code* a lane is shown; the blast radius is a
+    // list of names that costs a line each and is enabled separately by
+    // `max_impact`, so a config that turns node or chunk context off should
+    // still get the warning. The cap below turns such a walk into an
+    // impact-only retrieval rather than nothing at all.
+    if hops == 0 {
         return Ok(Expansion::default());
     }
 
