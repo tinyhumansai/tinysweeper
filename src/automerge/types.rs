@@ -157,7 +157,10 @@ impl fmt::Display for Refusal {
                 write!(f, "the required check `{name}` has not reported")
             }
             Refusal::RequiredCheckInconclusive { name } => {
-                write!(f, "the required check `{name}` was skipped, so it is not evidence of a pass")
+                write!(
+                    f,
+                    "the required check `{name}` was skipped, so it is not evidence of a pass"
+                )
             }
             Refusal::NoChangedFiles => write!(f, "it changes no files"),
             Refusal::TooManyFiles { files, max } => {

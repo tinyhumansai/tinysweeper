@@ -513,7 +513,10 @@ mod tests {
     /// A `check_run` or `check_suite` delivery, sent — as the real ones always
     /// are — by a bot.
     fn check_payload(event: &str, action: &str, numbers: &[u64]) -> Payload {
-        let pulls: Vec<_> = numbers.iter().map(|n| serde_json::json!({"number": n})).collect();
+        let pulls: Vec<_> = numbers
+            .iter()
+            .map(|n| serde_json::json!({"number": n}))
+            .collect();
         payload(serde_json::json!({
             "action": action,
             "repository": {"full_name": "tinyhumansai/tinysweeper"},
@@ -574,7 +577,10 @@ mod tests {
         // GitHub sends these for commits on branches with no open pull
         // request, and for forks. An empty list must not become a job.
         assert!(matches!(
-            route("check_suite", &check_payload("check_suite", "completed", &[])),
+            route(
+                "check_suite",
+                &check_payload("check_suite", "completed", &[])
+            ),
             Action::Ignore(_)
         ));
     }

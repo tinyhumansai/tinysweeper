@@ -365,7 +365,11 @@ mod tests {
     async fn a_merge_sweep_outside_the_organisation_is_refused() {
         let merges = Arc::new(MergeRecorder::default());
         let response = app_with(Arc::new(Recorder::default()), merges.clone())
-            .oneshot(post("/admin/merges/someone-else/their-repo", Some(TOKEN), "{}"))
+            .oneshot(post(
+                "/admin/merges/someone-else/their-repo",
+                Some(TOKEN),
+                "{}",
+            ))
             .await
             .expect("a response");
 
@@ -380,7 +384,11 @@ mod tests {
     async fn a_merge_sweep_reports_the_refusals_as_well_as_the_merges() {
         let merges = Arc::new(MergeRecorder::default());
         let response = app_with(Arc::new(Recorder::default()), merges.clone())
-            .oneshot(post("/admin/merges/tinyhumansai/tinysweeper", Some(TOKEN), "{}"))
+            .oneshot(post(
+                "/admin/merges/tinyhumansai/tinysweeper",
+                Some(TOKEN),
+                "{}",
+            ))
             .await
             .expect("a response");
 
