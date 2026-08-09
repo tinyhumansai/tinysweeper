@@ -580,3 +580,80 @@ async fn graph_expansion_adds_context_on_this_repositorys_own_code() {
     assert!(with.tokens <= config.retrieval.context_tokens);
     assert!(with.graph_nodes > 0);
 }
+
+#[tokio::test]
+async fn the_blast_radius_of_a_real_change_names_its_dependents_and_its_coverage() {
+    // The acceptance test for the impact step, and deliberately on this
+    // repository rather than a fixture: a fixture built to make the blast
+    // radius non-empty proves only that the fixture was built that way.
+    let files = this_crate();
+    let graph_store = MockGraphStore::new();
+    let built = crate::graph::build(REPO, &files).expect("builds");
+    crate::graph::sync_all(&graph_store, REPO, &built)
+        .await
+        .expect("writes the graph");
+
+    let embedder = embedder();
+    let index = MockChunkIndex::new();
+
+    // `estimate_tokens` is called from all over the crate and covered by its
+    // own module's tests, so both halves of the answer should be non-empty.
+    let diffs = vec![parse_file_patch(
+        "src/harness/pricing.rs",
+        "@@ -1,4 +1,4 @@ pub fn estimate_tokens(text: &str) -> u64\n-    (text.len() / 4) as u64\n+    text.len().div_ceil(4) as u64\n",
+    )];
+
+    let context = Retriever::new(&embedder, &index)
+        .with_graph(&graph_store)
+        .retrieve(&config(), REPO, "Round token estimates up", HEAD, &diffs)
+        .await
+        .0;
+
+    let callers: Vec<&str> = context
+        .impact
+        .reached
+        .iter()
+        .filter(|entry| entry.relation == crate::graph::Relation::Caller)
+        .map(|entry| entry.id.as_str())
+        .collect();
+    assert!(
+        !callers.is_empty(),
+        "nothing calls a function the whole crate calls: {:?}",
+        context.impact
+    );
+    assert!(
+        context
+            .impact
+            .reached
+            .iter()
+            .any(|entry| entry.relation == crate::graph::Relation::Test),
+        "no test covers a function its own module tests: {:?}",
+        context.impact
+    );
+
+    // And it has to reach the prompt, not merely the struct: this whole step
+    // is worthless if a lane never sees it.
+    let rendered = context.render();
+    assert!(rendered.contains("blast radius"), "{rendered}");
+    assert!(rendered.contains(callers[0]), "{rendered}");
+}
+
+#[tokio::test]
+async fn a_review_with_no_graph_claims_no_blast_radius() {
+    // Retrieval without a graph must produce an *empty* impact rather than an
+    // empty-looking one: "nothing depends on this change" and "we did not
+    // look" are different sentences, and only one of them is safe to render.
+    let index = index_with(&[("src/lib/math.ts", 1, 3, "export function total() {}")]).await;
+    let diffs = vec![parse_file_patch(
+        "src/lib/math.ts",
+        "@@ -1,2 +1,2 @@ export function total()\n-  return 1;\n+  return 2;\n",
+    )];
+
+    let context = Retriever::new(&embedder(), &index)
+        .retrieve(&config(), REPO, "Change the total", HEAD, &diffs)
+        .await
+        .0;
+
+    assert!(context.impact.is_empty());
+    assert!(!context.render().contains("blast radius"));
+}
