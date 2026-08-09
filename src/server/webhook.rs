@@ -430,12 +430,12 @@ fn automerge_trigger(event: &str, payload: &Payload) -> Option<Vec<u64>> {
         // Labels are the human opt-in and the human veto: `allow_labels` and
         // `block_labels` are both evaluated from them, so adding or removing
         // one is a direct instruction to reconsider.
-        "pull_request"
-            if matches!(
-                payload.action.as_str(),
-                "labeled" | "unlabeled" | "ready_for_review"
-            ) =>
-        {
+        //
+        // `ready_for_review` is deliberately absent even though it clears the
+        // `Draft` refusal: it is already a review trigger, and lanes skip a
+        // draft, so a pull request leaving draft needs reviewing before it
+        // needs merging. The approval that review produces brings it back here.
+        "pull_request" if matches!(payload.action.as_str(), "labeled" | "unlabeled") => {
             vec![payload.pull_request.as_ref()?.number]
         }
         _ => return None,
