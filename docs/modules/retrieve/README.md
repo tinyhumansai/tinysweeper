@@ -84,6 +84,17 @@ Three bounds, none redundant. Hops bound the shape of the walk, the node cap
 bounds its size, the chunk cap bounds what is fetched. Chunks of the pull
 request's own files are excluded: the lane is already reading their diff.
 
+The same walk answers a second, narrower question. `graph::impact` reads it
+**inbound only** — what existing code depends on the change — and produces the
+blast-radius block that leads the rendered context: which callers, implementors
+and tests reach the changed symbols, and which changed symbols no test reaches
+at all. It is derived before the node cap is applied, so a bound on how much
+*code* a lane is shown never silently shortens the list of what breaks, and it
+is bounded separately by `retrieval.max_impact`. It survives an index holding no
+chunk for any dependent, which is why `RetrievedContext::renders_nothing` exists
+alongside `is_empty`: knowing a function has fourteen callers and no test is
+worth saying even when none of the fourteen can be quoted.
+
 ### 4. A stated token budget
 
 Retrieval with no ceiling gets a share of the prompt decided by whatever the

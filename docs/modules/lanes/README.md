@@ -80,12 +80,31 @@ does not take it back out.
 
 ## Per-file fan-out
 
-`security` runs one conversation per changed file (`lanes::fanout`), capped at
-`MAX_CONCURRENT_FILES`. Each conversation is told it owns exactly one file and
-must not report on any other — without that clause, every one of the N reviewers
-notices the same cross-file problem and the author gets it N times. One file's
-failure is collected, not propagated: the rest are still reviewed and the
-summary says which were not.
+`security` and `critique` run one conversation per changed file
+(`lanes::fanout`), capped at `MAX_CONCURRENT_FILES`. Each conversation is told
+it owns exactly one file and must not report on any other — without that clause,
+every one of the N reviewers notices the same cross-file problem and the author
+gets it N times. One file's failure is collected, not propagated: the rest are
+still reviewed and the summary says which were not.
+
+`critique` reviewed the whole pull request in one call until a 31-file change
+landed carrying two real correctness bugs, and the lane answered with a single
+hallucination — the exact failure `lanes::fanout`'s module doc predicts, where
+the first few files are read closely and the rest are an afterthought. An
+external reviewer found both. The subject of a `critique` conversation is one
+file's correctness, so nothing is lost by splitting it.
+
+**`tests` deliberately does not fan out.** Its subject is the relationship
+between two *sets* of files — whether the tests in this pull request cover the
+behaviour it changed — and a reviewer shown one file in isolation cannot see it.
+Fanning it out would not make it more thorough, it would make the question
+unanswerable.
+
+A per-file lane also skips a file it reviewed before and that has not changed
+since (`replay::unreviewed`), rather than replaying it into the cacheable
+prompt prefix the way a whole-diff lane does. Both are sound; skipping is
+strictly better, because it pays always and a cache prefix only pays when the
+provider honours it.
 
 Before the fan-out, `lanes::triage` decides deterministically — for free, with
 no model call — which changed files are worth one and in what order:

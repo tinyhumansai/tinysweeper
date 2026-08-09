@@ -34,6 +34,11 @@ pub enum Language {
     Tsx,
     /// Go: package paths rooted at the `go.mod` module path.
     Go,
+    /// Java: dotted package names against the source root that holds them.
+    Java,
+    /// Ruby: `require_relative` against the file's own directory, `require`
+    /// against the load path.
+    Ruby,
 }
 
 impl Language {
@@ -51,6 +56,8 @@ impl Language {
             "ts" | "mts" | "cts" => Some(Self::TypeScript),
             "tsx" | "jsx" | "js" | "mjs" | "cjs" => Some(Self::Tsx),
             "go" => Some(Self::Go),
+            "java" => Some(Self::Java),
+            "rb" | "rake" | "gemspec" => Some(Self::Ruby),
             _ => None,
         }
     }
@@ -66,6 +73,8 @@ impl Language {
             Self::Python => "python",
             Self::TypeScript | Self::Tsx => "typescript",
             Self::Go => "go",
+            Self::Java => "java",
+            Self::Ruby => "ruby",
         }
     }
 }
@@ -134,6 +143,15 @@ pub struct Definition {
     pub start_byte: usize,
     /// Exclusive end of the declaration.
     pub end_byte: usize,
+    /// Whether this declaration is a test.
+    ///
+    /// What makes a resolved call out of it a
+    /// [`Tests`](crate::index::types::EdgeKind::Tests) edge rather than only a
+    /// `calls` edge. Decided by the extractor because the evidence is
+    /// syntactic and per-language — a `#[test]` attribute, a `Test` prefix Go
+    /// requires, a `test_` prefix pytest collects on — and none of it survives
+    /// into the graph types.
+    pub test: bool,
 }
 
 /// An import as written, before resolution.
@@ -172,6 +190,27 @@ pub struct Usage {
     pub byte: usize,
 }
 
+/// One declaration inheriting from another, as written.
+///
+/// Names, not resolved ids: `class Ledger extends Base` says nothing about
+/// which file `Base` lives in, and deciding that is the resolver's job — the
+/// same two-pass split that keeps a `calls` edge from being guessed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Heritage {
+    /// The declaration doing the inheriting, unqualified.
+    ///
+    /// Usually defined in this file, but not always: Rust writes
+    /// `impl Display for Ledger` in whatever file is convenient, so the child
+    /// is resolved rather than assumed local.
+    pub child: String,
+    /// The base class, interface, trait or embedded type, unqualified.
+    pub parent: String,
+    /// 1-based line of the declaration.
+    pub line: u32,
+    /// Byte offset, for attribution to an enclosing definition.
+    pub byte: usize,
+}
+
 /// Everything extraction found in one file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedFile {
@@ -185,9 +224,33 @@ pub struct ParsedFile {
     pub imports: Vec<ImportStmt>,
     /// Identifier usages, in source order.
     pub usages: Vec<Usage>,
+    /// Inheritance as written, unresolved.
+    pub heritage: Vec<Heritage>,
+    /// Whether the file itself is a test file by path convention.
+    ///
+    /// Separate from [`Definition::test`] because the two carry different
+    /// languages' evidence. A Rust test is a function with an attribute; a
+    /// Jest test is an anonymous callback inside `it(...)` that no query will
+    /// ever give a name to, so for TypeScript the *file* is the only test
+    /// scope there is.
+    pub test_file: bool,
 }
 
 impl ParsedFile {
+    /// Whether the byte offset sits inside a test scope.
+    ///
+    /// A whole test file is one scope; otherwise it is any enclosing
+    /// definition that declared itself a test. Used to decide whether a
+    /// resolved call also earns a [`Tests`](crate::index::types::EdgeKind::Tests)
+    /// edge.
+    pub fn in_test_scope(&self, byte: usize) -> bool {
+        self.test_file
+            || self
+                .defs
+                .iter()
+                .any(|d| d.test && d.start_byte <= byte && byte < d.end_byte)
+    }
+
     /// The innermost definition containing `byte`, if any.
     ///
     /// Innermost rather than outermost so a call inside a method is attributed

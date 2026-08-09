@@ -115,7 +115,125 @@ impl Resolver {
             Language::Rust => self.resolve_rust(from, specifier),
             Language::Python => self.resolve_python(from, specifier),
             Language::Go => self.resolve_go(specifier),
+            Language::Java => self.resolve_java(specifier),
+            Language::Ruby => self.resolve_ruby(from, specifier),
         }
+    }
+
+    // --- Java ---------------------------------------------------------------
+
+    /// `com.example.Thing` names the file `com/example/Thing.java`, under some
+    /// source root.
+    ///
+    /// Matched by **suffix** against the file set rather than joined onto a
+    /// guessed root, for the same reason Python is: the root is a build-tool
+    /// convention — `src/main/java`, `src/test/java`, `app/src/main/java` in a
+    /// Gradle multi-module tree — and reading a `pom.xml` or a `build.gradle`
+    /// to learn it would be a parser for a build language in order to answer a
+    /// question suffix matching already answers.
+    ///
+    /// A `static` import names a *member*, so `a.b.C.method` has one segment
+    /// too many. The trailing segment is dropped and retried, which also covers
+    /// a nested type written `a.b.Outer.Inner`.
+    fn resolve_java(&self, specifier: &str) -> Resolution {
+        let path = specifier.replace('.', "/");
+        if let Some(hit) = self.java_hit(&path) {
+            return Resolution::Resolved(vec![hit]);
+        }
+        if let Some((outer, _)) = path.rsplit_once('/')
+            && let Some(hit) = self.java_hit(outer)
+        {
+            return Resolution::Resolved(vec![hit]);
+        }
+
+        // Every unmatched Java specifier is external, never missing: the class
+        // is either the standard library (`java.*`, `javax.*`, `jdk.*` —
+        // external by specification) or a third-party jar (external by
+        // convention). The two are not told apart because neither is a broken
+        // reference this repository could have resolved.
+        Resolution::Unresolved(UnresolvedReason::External)
+    }
+
+    /// The shallowest `*.java` file whose path ends in `module`.
+    fn java_hit(&self, module: &str) -> Option<String> {
+        if module.is_empty() {
+            return None;
+        }
+        let wanted = format!("{module}.java");
+        self.files
+            .iter()
+            .filter(|path| *path == &wanted || path.ends_with(&format!("/{wanted}")))
+            // `files` is a `BTreeSet`, so this is a deterministic scan. Ties on
+            // depth break on the sort order, which is what makes the graph
+            // reproducible when two source roots really do both provide a type.
+            .min_by_key(|path| (path.matches('/').count(), path.len()))
+            .cloned()
+    }
+
+    // --- Ruby ---------------------------------------------------------------
+
+    /// `require_relative "x"` resolves against the requiring file's directory;
+    /// `require "x"` resolves against the load path.
+    ///
+    /// The callee arrives on the front of the specifier because the two are the
+    /// same syntax with different meanings — see `extract::ruby_import`.
+    ///
+    /// There is no load path to read. `$LOAD_PATH` is assembled at runtime by
+    /// the gem tooling, so `require "myapp/thing"` is matched by suffix, which
+    /// covers the `lib/` layout every gem uses and the `app/` layout Rails uses
+    /// without hard-coding either.
+    fn resolve_ruby(&self, from: &str, specifier: &str) -> Resolution {
+        let Some((form, target)) = specifier.split_once(' ') else {
+            return Resolution::Unresolved(UnresolvedReason::External);
+        };
+        if target.is_empty() {
+            return Resolution::Unresolved(UnresolvedReason::NoSuchFile);
+        }
+
+        if form == "require_relative" {
+            let candidate = join_relative(&dir_of(from), target);
+            return match self.ruby_file(&candidate) {
+                Some(path) => Resolution::Resolved(vec![path]),
+                None => Resolution::Unresolved(UnresolvedReason::NoSuchFile),
+            };
+        }
+
+        // An absolute-looking require of a path we hold is still ours.
+        if let Some(path) = self.ruby_file(&normalise(target)) {
+            return Resolution::Resolved(vec![path]);
+        }
+        match self.ruby_suffix_hit(target) {
+            Some(path) => Resolution::Resolved(vec![path]),
+            // A bare `require "json"` is a gem or the standard library. There
+            // is no way to tell those apart from a typo without a Gemfile
+            // resolver, and calling a gem "missing" would fill the coverage
+            // report with noise on every Ruby repository.
+            None => Resolution::Unresolved(UnresolvedReason::External),
+        }
+    }
+
+    /// `candidate` as a Ruby file, with or without the extension already on it.
+    fn ruby_file(&self, candidate: &str) -> Option<String> {
+        if candidate.is_empty() {
+            return None;
+        }
+        if candidate.ends_with(".rb") && self.files.contains(candidate) {
+            return Some(candidate.to_string());
+        }
+        let with_extension = format!("{candidate}.rb");
+        self.files
+            .contains(&with_extension)
+            .then_some(with_extension)
+    }
+
+    /// The shallowest `.rb` file whose path ends in `module`.
+    fn ruby_suffix_hit(&self, module: &str) -> Option<String> {
+        let wanted = format!("{}.rb", module.trim_end_matches(".rb"));
+        self.files
+            .iter()
+            .filter(|path| *path == &wanted || path.ends_with(&format!("/{wanted}")))
+            .min_by_key(|path| (path.matches('/').count(), path.len()))
+            .cloned()
     }
 
     // --- TypeScript / JavaScript -------------------------------------------

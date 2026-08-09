@@ -111,13 +111,25 @@ impl Lane for Description {
 
         // `Demote`, not `Strict`: a finding about the description has no line
         // to sit on, and dropping every unanchored one would silence the lane.
-        Ok(LaneOutcome::from_response(
+        let mut outcome = LaneOutcome::from_response(
             LaneId::Description,
             parsed,
             input.diffs,
             Anchoring::Demote,
             spend,
-        ))
+        );
+
+        // A description mismatch is about the pull request text, never the
+        // implementation. A model may quote a diff line as evidence, but
+        // retaining that accidental match would post the complaint inline on
+        // unrelated code instead of in the description lane's summary.
+        for finding in &mut outcome.findings {
+            finding.path = DESCRIPTION_SUBJECT.into();
+            finding.line = None;
+            finding.end_line = None;
+        }
+
+        Ok(outcome)
     }
 }
 
@@ -143,6 +155,7 @@ fn empty_body_outcome(pr: &PullRequest, files: usize) -> LaneOutcome {
                    Say what changed, why, and how it was verified."
                 .into(),
             suggestion: Some(suggestion),
+            applicable: None,
             late: false,
             identity: None,
         }],
@@ -315,11 +328,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_anchored_finding_keeps_its_line() {
+    async fn a_matched_code_quote_stays_summary_only() {
         let model = MockModel::always(json!({
             "summary": "…",
             "findings": [{
-                "path": "src/main.rs", "line": 2,
+                "path": "src/main.rs", "existing_code": "    let x = 1;",
                 "rule": "description-mismatch",
                 "title": "Mention the new local",
                 "body": "…", "severity": "medium", "confidence": 0.7
@@ -328,7 +341,9 @@ mod tests {
         let pr = pull_request("A reasonable description of the change.");
         let outcome = run_with(model, &pr, &diffs()).await;
 
-        assert_eq!(outcome.findings[0].line, Some(2));
+        assert_eq!(outcome.findings[0].path, DESCRIPTION_SUBJECT);
+        assert_eq!(outcome.findings[0].line, None);
+        assert_eq!(outcome.findings[0].end_line, None);
     }
 
     #[tokio::test]

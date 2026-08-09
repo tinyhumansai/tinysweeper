@@ -44,6 +44,13 @@ Deterministic scanners run **before** any model call, so a committed private key
 fails for free and the model is only asked to adjudicate what a scanner already
 flagged.
 
+Alongside the lanes, a pull request gets a **change map**: one comment, edited in
+place, with a diagram of the components the change touches and the untouched ones
+it reaches through an import or a call. It is drawn from the diff and the
+repository graph — no model call, so it is reproducible and free — and it says
+which parts it could not see rather than drawing an empty picture. See
+[docs/modules/overview/README.md](docs/modules/overview/README.md).
+
 ## Design commitments
 
 - **The model never holds a write token.** Lanes take a `ForgeRead` and only the
@@ -153,6 +160,7 @@ MiniMax are all the same code path.
 - [AGENTS.md](AGENTS.md) — conventions for humans and agents working in this repo
 - [docs/triggers.md](docs/triggers.md) — what wakes tinysweeper up, and what emits no event at all
 - [docs/modules/server/README.md](docs/modules/server/README.md) — the server, its security boundary, and the admin API
+- [docs/modules/overview/README.md](docs/modules/overview/README.md) — the change map: what gets drawn, and why nothing in it comes from a model
 - `docs/` — module documentation and design notes
 
 ## License

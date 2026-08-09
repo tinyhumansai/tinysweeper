@@ -44,3 +44,42 @@ api_key_env = "OPENROUTER_API_KEY"
 # useful half, and closing someone else's issue is the expensive mistake.
 [issues]
 enabled = true
+
+# Auto-merge, turned on for this repository.
+#
+# Note where this takes effect. `[automerge]` is on the *not overridable* list
+# in `src/config/remote`, so a repository cannot switch this on about itself —
+# a pull request that could enable its own merging would be no gate at all.
+# This file counts because it is the deployment's own configuration, read from
+# the server's working directory, not because it sits in the reviewed
+# repository.
+#
+# The two settings below are the whole policy decision; everything else is
+# inherited from `src/config/defaults.toml`.
+[automerge]
+enabled = true
+
+# The human act is the label, not an approval.
+#
+# `require_approvals` counts *human* approvals deliberately — a bot approving
+# its own policy is not a second opinion — so leaving it at 1 on a repository
+# whose pull requests are opened by its only maintainer means nothing ever
+# merges, and a gate that never opens teaches people to widen it until it
+# does. Applying `automerge` needs write access, so it is a real authorisation
+# signal from a real person; it is just given once, up front, instead of after
+# the wait for CI.
+#
+# Setting `allow_labels = []` here would make every green pull request from
+# anybody merge itself. Do not, on a repository that takes outside
+# contributions: `sensitive_paths` and the complexity caps would then be the
+# only thing between a stranger and the default branch.
+require_approvals = 0
+allow_labels = ["automerge"]
+block_labels = ["do-not-merge", "wip", "tinysweeper:human-review"]
+
+# `merge`, not the `squash` default, because this repository has squash and
+# rebase both disabled. The forge would answer a squash request with a 405 and
+# the policy would report `Outcome::Rejected` — correct, safe, and completely
+# invisible unless somebody reads the log, which is the shape of bug that makes
+# a working feature look broken.
+method = "merge"

@@ -9,9 +9,9 @@ never be told about, and how it handles the difference.
 
 | Something happens | Event | Fires? |
 | --- | --- | --- |
-| A commit is pushed to the pull request | `pull_request: synchronize` | Yes, every push |
-| The pull request is opened or reopened | `pull_request: opened`, `reopened` | Yes |
-| A draft is marked ready | `pull_request: ready_for_review` | Yes |
+| A commit is pushed to the pull request | `pull_request: synchronize` | Yes, every push after it is ready for review; drafts are tracked only |
+| The pull request is opened or reopened | `pull_request: opened`, `reopened` | Yes when it is not a draft; drafts are tracked only |
+| A draft is marked ready | `pull_request: ready_for_review` | Yes, this starts its first review workflow |
 | The title or body is edited | `pull_request: edited` | Yes |
 | A label is added or removed | `pull_request: labeled`, `unlabeled` | Yes |
 | Someone comments on the pull request | `issue_comment: created` | Yes |

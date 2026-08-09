@@ -106,6 +106,27 @@ Four decisions are worth knowing before reading its output:
   the lane can be exercised against something real rather than grading an
   invention.
 
+## Suggestions are anchored, or they are not offered
+
+A finding may carry a `suggestion`. Where `findings::suggest` could verify one,
+`apply` posts it as a GitHub ` ```suggestion ` block — a diff with a **Commit
+suggestion** button — instead of an inert fence the maintainer retypes.
+
+Carrying one **changes the comment's anchor**: GitHub replaces exactly the lines
+the comment is attached to, so the comment widens from a single-line pin to the
+span the replacement covers. Without a suggestion it stays a pin, because a
+multi-line highlight for a one-sentence remark is noise.
+
+The verification happens during `review`, not here, for the same reason a
+finding's identity does: it needs the parsed diff, and this module holds a
+proposal and no diff. A range GitHub would reject or a replaced line that only
+exists in the base revision comes back as `None`, and the inert fence is what
+gets rendered. An indentation shortfall it cannot infer is different: the
+replacement is simply left as the model wrote it, because there is no uniform
+prefix to restore, and the suggestion is still offered. A wrong applicable
+suggestion is a button that breaks the build; a wrong inert one is a typo in a
+comment.
+
 ## Files
 
 | File | Role |

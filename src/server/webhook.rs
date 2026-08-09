@@ -73,6 +73,41 @@ pub struct Payload {
     /// The sender.
     #[serde(default)]
     pub sender: Option<UserRef>,
+    /// The check run, on `check_run` events.
+    #[serde(default)]
+    pub check_run: Option<CheckRef>,
+    /// The check suite, on `check_suite` events.
+    #[serde(default)]
+    pub check_suite: Option<CheckRef>,
+}
+
+/// A check run or check suite, reduced to the pull requests it reports on.
+///
+/// Only `pull_requests` is read. The conclusion carried alongside it is
+/// deliberately ignored: auto-merge re-reads every check on the head SHA
+/// through the forge anyway, and a decision made from the one check that
+/// happened to arrive last would be a decision made from a fifth of the
+/// evidence.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CheckRef {
+    /// The pull requests this check reports on.
+    ///
+    /// Empty on a check for a commit that belongs to no open pull request, and
+    /// — a real GitHub quirk — on a check for a pull request from a fork,
+    /// which is why an empty list is ignored rather than treated as an error.
+    #[serde(default)]
+    pub pull_requests: Vec<PullRequestNumberRef>,
+}
+
+/// A pull request reduced to its number.
+///
+/// Separate from [`PullRequestRef`] because the objects GitHub nests inside a
+/// check payload carry no `user` and no `draft`, so deserialising them as a
+/// `PullRequestRef` would fail on every check event.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PullRequestNumberRef {
+    /// Its number.
+    pub number: u64,
 }
 
 /// A repository reference.
@@ -151,6 +186,12 @@ pub struct InstallationRef {
 /// What the server decided to do about a delivery.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
+    /// Record this draft delivery without starting a review.
+    ///
+    /// Claiming the delivery before routing keeps the pull request visible to
+    /// the server and makes a redelivery idempotent. The first non-draft
+    /// delivery, normally `ready_for_review`, starts the workflow.
+    TrackDraft,
     /// Review this pull request.
     Review {
         /// `owner/name`.
@@ -177,6 +218,23 @@ pub enum Action {
         /// The installation that can act on it.
         installation: u64,
     },
+    /// Re-evaluate this pull request against the auto-merge policy.
+    ///
+    /// Carries no author. Auto-merge reads no model, spends no money and
+    /// attributes nothing to anybody — it is arithmetic over state the forge
+    /// already holds — so the contributor record has nothing to record.
+    AutoMerge {
+        /// `owner/name`.
+        repo: String,
+        /// The pull requests to re-evaluate.
+        ///
+        /// A list rather than a number because one commit can be the head of
+        /// several open pull requests, and a check payload names all of them.
+        /// Taking the first would silently strand the rest.
+        numbers: Vec<u64>,
+        /// The installation that can act on it.
+        installation: u64,
+    },
     /// Nothing to do, with a reason for the log.
     Ignore(&'static str),
 }
@@ -187,6 +245,33 @@ pub enum Action {
 /// because the failure mode of a wrong guess is spending money and posting
 /// comments on something nobody asked about.
 pub fn route(event: &str, payload: &Payload) -> Action {
+    let Some(repository) = &payload.repository else {
+        return Action::Ignore("no repository");
+    };
+    let Some(installation) = &payload.installation else {
+        return Action::Ignore("no installation");
+    };
+
+    // Auto-merge is decided before the bot guard below, and deliberately.
+    //
+    // Every event that can make a pull request mergeable is sent by a bot: the
+    // check runs are ours, and the approval that clears a previous objection is
+    // ours too. Applying the guard here would mean the trigger never fires on
+    // the events that matter, which is how a gate ends up looking implemented
+    // and never running.
+    //
+    // It is safe to exempt because the loop the guard exists to stop cannot
+    // form: auto-merge writes nothing but a merge, a merge closes the pull
+    // request, and a closed pull request is refused by the first check in the
+    // policy. A refusal writes nothing at all.
+    if let Some(numbers) = automerge_trigger(event, payload) {
+        return Action::AutoMerge {
+            repo: repository.full_name.clone(),
+            numbers,
+            installation: installation.id,
+        };
+    }
+
     // A bot's own activity must never wake it up. Without this, posting a
     // review comment triggers a delivery that triggers a review that posts a
     // comment, and the loop is only bounded by the rate limiter.
@@ -196,13 +281,6 @@ pub fn route(event: &str, payload: &Payload) -> Action {
         return Action::Ignore("sender is a bot");
     }
 
-    let Some(repository) = &payload.repository else {
-        return Action::Ignore("no repository");
-    };
-    let Some(installation) = &payload.installation else {
-        return Action::Ignore("no installation");
-    };
-
     match event {
         "pull_request" => {
             let Some(pr) = &payload.pull_request else {
@@ -210,11 +288,15 @@ pub fn route(event: &str, payload: &Payload) -> Action {
             };
             match payload.action.as_str() {
                 "opened" | "synchronize" | "reopened" | "ready_for_review" | "edited" => {
-                    Action::Review {
-                        repo: repository.full_name.clone(),
-                        number: pr.number,
-                        author: pr.user.login.clone(),
-                        installation: installation.id,
+                    if pr.draft {
+                        Action::TrackDraft
+                    } else {
+                        Action::Review {
+                            repo: repository.full_name.clone(),
+                            number: pr.number,
+                            author: pr.user.login.clone(),
+                            installation: installation.id,
+                        }
                     }
                 }
                 _ => Action::Ignore("uninteresting pull request action"),
@@ -321,6 +403,57 @@ pub fn route(event: &str, payload: &Payload) -> Action {
     }
 }
 
+/// The pull requests a delivery invites auto-merge to reconsider, if any.
+///
+/// Every arm is a moment at which a refusal the policy made earlier might have
+/// stopped being true, and nothing else. There is no arm for `opened` or
+/// `synchronize`: a pull request that has just appeared or just moved has no
+/// checks on its new head yet, so evaluating it can only produce
+/// `CheckPending`, and the `check_suite` that follows a moment later is the
+/// same trigger with the evidence attached.
+///
+/// `None` means "not an auto-merge trigger" and leaves the delivery to the
+/// rest of [`route`]. An empty list is never returned, so a check event naming
+/// no pull request falls through to the ordinary path rather than queueing a
+/// job with nothing to do.
+fn automerge_trigger(event: &str, payload: &Payload) -> Option<Vec<u64>> {
+    let numbers = match event {
+        // A check finishing is the commonest reason a `CheckPending` or
+        // `CheckFailing` refusal has just expired.
+        "check_run" | "check_suite" if payload.action == "completed" => {
+            let check = match event {
+                "check_run" => payload.check_run.as_ref(),
+                _ => payload.check_suite.as_ref(),
+            }?;
+            check
+                .pull_requests
+                .iter()
+                .map(|pr| pr.number)
+                .collect::<Vec<_>>()
+        }
+        // An approval arriving, or a changes-request being dismissed or
+        // superseded. This is the event tinysweeper's own approving review
+        // produces, which is what makes the bot-guard exemption above matter.
+        "pull_request_review" if matches!(payload.action.as_str(), "submitted" | "dismissed") => {
+            vec![payload.pull_request.as_ref()?.number]
+        }
+        // Labels are the human opt-in and the human veto: `allow_labels` and
+        // `block_labels` are both evaluated from them, so adding or removing
+        // one is a direct instruction to reconsider.
+        //
+        // `ready_for_review` is deliberately absent even though it clears the
+        // `Draft` refusal: it is already a review trigger, and lanes skip a
+        // draft, so a pull request leaving draft needs reviewing before it
+        // needs merging. The approval that review produces brings it back here.
+        "pull_request" if matches!(payload.action.as_str(), "labeled" | "unlabeled") => {
+            vec![payload.pull_request.as_ref()?.number]
+        }
+        _ => return None,
+    };
+
+    (!numbers.is_empty()).then_some(numbers)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,6 +518,150 @@ mod tests {
                 "user": {"login": "someone", "type": "User"}
             }
         }))
+    }
+
+    /// A `check_run` or `check_suite` delivery, sent — as the real ones always
+    /// are — by a bot.
+    fn check_payload(event: &str, action: &str, numbers: &[u64]) -> Payload {
+        let pulls: Vec<_> = numbers
+            .iter()
+            .map(|n| serde_json::json!({"number": n}))
+            .collect();
+        payload(serde_json::json!({
+            "action": action,
+            "repository": {"full_name": "tinyhumansai/tinysweeper"},
+            "installation": {"id": 152184043},
+            "sender": {"login": "github-actions[bot]", "type": "Bot"},
+            event: {"pull_requests": pulls},
+        }))
+    }
+
+    #[test]
+    fn a_finished_check_asks_auto_merge_to_look_again() {
+        for event in ["check_run", "check_suite"] {
+            assert_eq!(
+                route(event, &check_payload(event, "completed", &[7])),
+                Action::AutoMerge {
+                    repo: "tinyhumansai/tinysweeper".into(),
+                    numbers: vec![7],
+                    installation: 152184043,
+                },
+                "{event} did not trigger auto-merge"
+            );
+        }
+    }
+
+    #[test]
+    fn the_bot_guard_does_not_apply_to_auto_merge() {
+        // The whole reason auto-merge is decided before the guard. Every event
+        // that can make a pull request mergeable is sent by a bot — the checks
+        // are ours and so is the approval that clears a previous objection — so
+        // a guard applied here would mean the trigger never fires at all.
+        let delivery = check_payload("check_suite", "completed", &[7]);
+        assert_eq!(
+            delivery.sender.as_ref().map(|s| s.kind.as_str()),
+            Some("Bot"),
+            "the fixture has to be sent by a bot or it proves nothing"
+        );
+        assert!(matches!(
+            route("check_suite", &delivery),
+            Action::AutoMerge { .. }
+        ));
+    }
+
+    #[test]
+    fn a_check_that_has_not_finished_is_not_a_trigger() {
+        for action in ["created", "requested", "rerequested"] {
+            assert!(
+                matches!(
+                    route("check_run", &check_payload("check_run", action, &[7])),
+                    Action::Ignore(_)
+                ),
+                "`{action}` queued an evaluation with nothing to evaluate"
+            );
+        }
+    }
+
+    #[test]
+    fn a_check_naming_no_pull_request_is_ignored_rather_than_queued() {
+        // GitHub sends these for commits on branches with no open pull
+        // request, and for forks. An empty list must not become a job.
+        assert!(matches!(
+            route(
+                "check_suite",
+                &check_payload("check_suite", "completed", &[])
+            ),
+            Action::Ignore(_)
+        ));
+    }
+
+    #[test]
+    fn a_check_on_a_commit_heading_several_pull_requests_names_all_of_them() {
+        // One commit can be the head of more than one open pull request.
+        // Taking the first would silently strand the rest.
+        assert_eq!(
+            route(
+                "check_suite",
+                &check_payload("check_suite", "completed", &[7, 9, 11])
+            ),
+            Action::AutoMerge {
+                repo: "tinyhumansai/tinysweeper".into(),
+                numbers: vec![7, 9, 11],
+                installation: 152184043,
+            }
+        );
+    }
+
+    #[test]
+    fn an_approval_asks_auto_merge_to_look_again() {
+        for action in ["submitted", "dismissed"] {
+            let mut delivery = pr_payload(action);
+            delivery.action = action.into();
+            assert!(
+                matches!(
+                    route("pull_request_review", &delivery),
+                    Action::AutoMerge { numbers, .. } if numbers == vec![7]
+                ),
+                "`{action}` did not trigger auto-merge"
+            );
+        }
+    }
+
+    #[test]
+    fn labelling_a_pull_request_asks_auto_merge_to_look_again() {
+        // `allow_labels` and `block_labels` are both read off the labels, so
+        // adding or removing one is a direct instruction to reconsider.
+        for action in ["labeled", "unlabeled"] {
+            assert!(
+                matches!(
+                    route("pull_request", &pr_payload(action)),
+                    Action::AutoMerge { .. }
+                ),
+                "`{action}` did not trigger auto-merge"
+            );
+        }
+    }
+
+    #[test]
+    fn leaving_draft_is_still_a_review_and_not_a_merge() {
+        // It clears the `Draft` refusal, but lanes skip a draft, so a pull
+        // request leaving draft needs reviewing before it needs merging. The
+        // approval that review produces brings it back to auto-merge.
+        assert!(matches!(
+            route("pull_request", &pr_payload("ready_for_review")),
+            Action::Review { .. }
+        ));
+    }
+
+    #[test]
+    fn a_push_is_not_an_auto_merge_trigger() {
+        // Evaluating a pull request whose head has just moved can only produce
+        // `CheckPending`: the checks on the new head have not started. The
+        // `check_suite` that follows is the same trigger with evidence.
+        assert!(matches!(
+            route("pull_request", &pr_payload("synchronize")),
+            Action::Review { .. }
+        ));
     }
 
     fn issue_payload(action: &str) -> Payload {
@@ -463,11 +740,32 @@ mod tests {
     }
 
     #[test]
-    fn closing_a_pull_request_does_nothing() {
+    fn a_draft_pull_request_is_tracked_without_starting_a_review() {
+        let mut payload = pr_payload("opened");
+        payload.pull_request.as_mut().expect("pull request").draft = true;
+
+        assert_eq!(route("pull_request", &payload), Action::TrackDraft);
+    }
+
+    #[test]
+    fn a_ready_draft_starts_the_review_workflow() {
+        let mut payload = pr_payload("ready_for_review");
+        payload.pull_request.as_mut().expect("pull request").draft = false;
+
         assert!(matches!(
-            route("pull_request", &pr_payload("closed")),
-            Action::Ignore(_)
+            route("pull_request", &payload),
+            Action::Review { number: 7, .. }
         ));
+    }
+
+    #[test]
+    fn closing_a_pull_request_does_nothing() {
+        let mut payload = pr_payload("closed");
+        payload.pull_request.as_mut().expect("pull request").draft = true;
+        assert_eq!(
+            route("pull_request", &payload),
+            Action::Ignore("uninteresting pull request action")
+        );
     }
 
     #[test]

@@ -148,31 +148,53 @@ fn review_refusal(config: &AutoMerge, reviews: &[ReviewVerdict]) -> Option<Refus
     None
 }
 
-/// Everything green, nothing pending, every required check present.
+/// Nothing red, nothing pending, and every required check actually reported.
+///
+/// The two loops ask deliberately different questions, and the difference is
+/// where this used to be wrong. The sweep asks "is anything actively broken?"
+/// — a repository's own CI is not listed in `require_checks` for tinysweeper
+/// to respect it. The required-check loop asks "did the checks we named
+/// produce evidence?", which is a stronger question and is asked only of the
+/// names in the config.
+///
+/// `Neutral` and `Skipped` sit between the two. Reading them as failures, as
+/// this did, makes auto-merge unreachable rather than conservative: a
+/// `Docker (publish)` job gated behind `if: github.event_name == 'push'`
+/// concludes `skipped` on *every* pull request, so "not green blocks" means
+/// nothing in such a repository ever merges. That is not a safe default, it is
+/// a broken one — and a broken gate teaches operators to widen it.
 fn check_refusal(config: &AutoMerge, checks: &[CheckStatus]) -> Option<Refusal> {
-    // Not "every required check is green" but "no check anywhere is red or
-    // still running". A repository's own CI is not listed in `require_checks`
-    // for tinysweeper to respect it, and a check still running is a verdict
-    // that has not arrived yet.
     for check in checks {
         if check.is_pending() {
             return Some(Refusal::CheckPending {
                 name: check.name.clone(),
             });
         }
-        if !check.is_green() {
+        if check.is_failing() {
             return Some(Refusal::CheckFailing {
                 name: check.name.clone(),
             });
         }
     }
 
-    // And then the named ones must actually have reported. A check that never
-    // ran is not a check that passed — this is the case that would otherwise
-    // let a deleted or renamed workflow silently retire the whole gate.
+    // The named ones must have reported. A check that never ran is not a check
+    // that passed — this is the case that would otherwise let a deleted or
+    // renamed workflow silently retire the whole gate.
     for required in &config.require_checks {
-        if !checks.iter().any(|check| &check.name == required) {
+        let Some(check) = checks.iter().find(|check| &check.name == required) else {
             return Some(Refusal::RequiredCheckMissing {
+                name: required.clone(),
+            });
+        };
+
+        // `Success` is a pass. `Neutral` is too, and only here: a lane
+        // concluding `Neutral` ran and reported that it had nothing to say —
+        // the `commits` lane on a range with no secrets in it — which is a
+        // verdict, not an absence. `Skipped` is neither, and is refused with a
+        // reason of its own so the operator is not left reading
+        // "has not reported" about a check that plainly appears in the list.
+        if !check.is_green() && !check.is_inapplicable() {
+            return Some(Refusal::RequiredCheckInconclusive {
                 name: required.clone(),
             });
         }

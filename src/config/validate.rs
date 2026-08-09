@@ -28,6 +28,7 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_knowledge(config, &mut problems);
     validate_embeddings(config, &mut problems);
     validate_retrieval(config, &mut problems);
+    validate_overview(config, &mut problems);
     validate_lanes(config, &mut problems);
     validate_automerge(config, &mut problems);
     validate_issues(config, &mut problems);
@@ -345,6 +346,28 @@ fn validate_retrieval(config: &Config, problems: &mut Vec<String>) {
              back, so this costs query time and returns no more context. Use 1 or 2",
             retrieval.graph_hops
         ));
+    }
+}
+
+fn validate_overview(config: &Config, problems: &mut Vec<String>) {
+    let overview = &config.overview;
+    if !overview.enabled {
+        return;
+    }
+
+    // A zero here does not disable the feature, it produces a comment with an
+    // empty diagram in it — which reads as "this change touches nothing".
+    // Turning the map off is one key, and it is not this one.
+    for (name, value) in [
+        ("max_components", overview.max_components),
+        ("max_paths_per_component", overview.max_paths_per_component),
+    ] {
+        if value == 0 {
+            problems.push(format!(
+                "`overview.{name} = 0` with `overview.enabled = true` would post an empty \
+                 diagram; set it above zero or set `overview.enabled = false`"
+            ));
+        }
     }
 }
 

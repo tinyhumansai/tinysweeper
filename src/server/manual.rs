@@ -104,12 +104,44 @@ pub trait FullReviews: Send + Sync {
     async fn enqueue(&self, repo: &RepoId, number: Option<u64>) -> Result<Vec<u64>>;
 }
 
-/// What the manual route needs.
+/// How the route reaches the auto-merge policy.
+///
+/// A second trait rather than a method on [`FullReviews`] because the two jobs
+/// have nothing in common but a repository: a review spends money and posts
+/// comments, an evaluation is arithmetic over state GitHub already holds.
+#[async_trait]
+pub trait Merges: Send + Sync {
+    /// Evaluate pull requests against `[automerge]`, merging those that
+    /// qualify, and report what happened to each.
+    ///
+    /// `number` is `None` for every open pull request in the repository, which
+    /// is the sweep an operator runs after changing the policy. Unlike
+    /// [`FullReviews::enqueue`] this waits for the answer: there is no model in
+    /// this path, so it is fast enough to report, and "which ones did it refuse
+    /// and why" is the entire reason to press the button by hand.
+    async fn evaluate(&self, repo: &RepoId, number: Option<u64>) -> Result<Vec<MergeReport>>;
+}
+
+/// What the policy decided about one pull request.
+#[derive(Debug, Clone, Serialize)]
+pub struct MergeReport {
+    /// The pull request.
+    pub number: u64,
+    /// `merged`, `refused` or `rejected`.
+    pub outcome: &'static str,
+    /// The refusal or the forge's complaint, rendered for a human. `None` on a
+    /// merge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// What the manual routes need.
 #[derive(Clone)]
 struct ManualState {
     /// The one organisation this deployment will review on request.
     allowed_org: Arc<str>,
     reviews: Arc<dyn FullReviews>,
+    merges: Arc<dyn Merges>,
 }
 
 /// Build the manual review router, or nothing when no token is configured.
@@ -121,16 +153,19 @@ pub fn router(
     auth: Option<AdminAuth>,
     allowed_org: String,
     reviews: Arc<dyn FullReviews>,
+    merges: Arc<dyn Merges>,
 ) -> Option<Router> {
     let auth = Arc::new(auth?);
     let state = ManualState {
         allowed_org: allowed_org.into(),
         reviews,
+        merges,
     };
 
     Some(
         Router::new()
             .route("/admin/reviews/{owner}/{name}", post(full_review))
+            .route("/admin/merges/{owner}/{name}", post(auto_merge))
             // `route_layer`, so the token is checked before the `Json`
             // extractor parses anything an anonymous caller sent.
             .route_layer(axum::middleware::from_fn_with_state(
@@ -184,6 +219,49 @@ async fn full_review(
         .into_response())
 }
 
+/// Evaluate pull requests against `[automerge]` and merge those that qualify.
+///
+/// Behind the same credential and the same organisation check as the review
+/// button above, and for a stronger reason: this one can put code on the
+/// default branch. It adds no authority of its own — the deterministic policy
+/// in `crate::automerge` decides, exactly as it does on a webhook — so the
+/// button is a way to ask *now* rather than a way to ask for more.
+async fn auto_merge(
+    State(state): State<ManualState>,
+    Path((owner, name)): Path<(String, String)>,
+    Json(body): Json<ManualReviewRequest>,
+) -> std::result::Result<Response, ApiError> {
+    let repo = checked_target(&owner, &name, &state.allowed_org)
+        .map_err(|message| ApiError(StatusCode::FORBIDDEN, message))?;
+
+    let reports = state
+        .merges
+        .evaluate(&repo, body.number)
+        .await
+        .map_err(|err| ApiError(StatusCode::BAD_GATEWAY, err.to_string()))?;
+
+    let merged: Vec<u64> = reports
+        .iter()
+        .filter(|report| report.outcome == "merged")
+        .map(|report| report.number)
+        .collect();
+
+    // Logged at info even when nothing merged. An operator pressing this is
+    // an action on the default branch, and the refusals are the useful half of
+    // the record — "why did it not merge" is the question that gets asked.
+    tracing::info!(%repo, ?merged, considered = reports.len(), "evaluated auto-merge on request");
+
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "repo": repo.to_string(),
+            "merged": merged,
+            "results": reports,
+        })),
+    )
+        .into_response())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,13 +295,138 @@ mod tests {
         }
     }
 
+    /// Records which pull requests the merge route asked about, and answers
+    /// with a refusal — the outcome that matters, since a route that reports
+    /// only successes hides the half operators press the button for.
+    #[derive(Default)]
+    struct MergeRecorder {
+        asked: Mutex<Vec<(String, Option<u64>)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Merges for MergeRecorder {
+        async fn evaluate(
+            &self,
+            repo: &RepoId,
+            number: Option<u64>,
+        ) -> crate::error::Result<Vec<MergeReport>> {
+            self.asked
+                .lock()
+                .expect("not poisoned")
+                .push((repo.to_string(), number));
+            Ok(vec![
+                MergeReport {
+                    number: 7,
+                    outcome: "merged",
+                    detail: None,
+                },
+                MergeReport {
+                    number: 9,
+                    outcome: "refused",
+                    detail: Some("it is a draft".into()),
+                },
+            ])
+        }
+    }
+
     fn app(reviews: Arc<Recorder>) -> axum::Router {
+        app_with(reviews, Arc::new(MergeRecorder::default()))
+    }
+
+    fn app_with(reviews: Arc<Recorder>, merges: Arc<MergeRecorder>) -> axum::Router {
         router(
             Some(AdminAuth::new(TOKEN).expect("a long enough token")),
             "tinyhumansai".into(),
             reviews,
+            merges,
         )
         .expect("a token mounts the router")
+    }
+
+    #[tokio::test]
+    async fn an_unauthenticated_merge_sweep_is_refused() {
+        // The route that can put code on the default branch gets the same
+        // guard as the one that only spends money, checked the same way.
+        let merges = Arc::new(MergeRecorder::default());
+        let response = app_with(Arc::new(Recorder::default()), merges.clone())
+            .oneshot(post(
+                "/admin/merges/tinyhumansai/tinysweeper",
+                None,
+                "{ this is not json",
+            ))
+            .await
+            .expect("a response");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(merges.asked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_merge_sweep_outside_the_organisation_is_refused() {
+        let merges = Arc::new(MergeRecorder::default());
+        let response = app_with(Arc::new(Recorder::default()), merges.clone())
+            .oneshot(post(
+                "/admin/merges/someone-else/their-repo",
+                Some(TOKEN),
+                "{}",
+            ))
+            .await
+            .expect("a response");
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(
+            merges.asked.lock().unwrap().is_empty(),
+            "nothing outside the organisation may be merged"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_merge_sweep_reports_the_refusals_as_well_as_the_merges() {
+        let merges = Arc::new(MergeRecorder::default());
+        let response = app_with(Arc::new(Recorder::default()), merges.clone())
+            .oneshot(post(
+                "/admin/merges/tinyhumansai/tinysweeper",
+                Some(TOKEN),
+                "{}",
+            ))
+            .await
+            .expect("a response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            *merges.asked.lock().unwrap(),
+            vec![("tinyhumansai/tinysweeper".to_string(), None)]
+        );
+
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("a body");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(json["merged"], serde_json::json!([7]));
+        // The refusal and its reason survive to the operator. A sweep that
+        // reported only what it merged would leave "why not the other one?"
+        // answerable solely from the server's log.
+        assert_eq!(json["results"][1]["outcome"], "refused");
+        assert_eq!(json["results"][1]["detail"], "it is a draft");
+    }
+
+    #[tokio::test]
+    async fn a_merge_sweep_may_name_one_pull_request() {
+        let merges = Arc::new(MergeRecorder::default());
+        let response = app_with(Arc::new(Recorder::default()), merges.clone())
+            .oneshot(post(
+                "/admin/merges/tinyhumansai/tinysweeper",
+                Some(TOKEN),
+                "{\"number\":42}",
+            ))
+            .await
+            .expect("a response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            *merges.asked.lock().unwrap(),
+            vec![("tinyhumansai/tinysweeper".to_string(), Some(42))]
+        );
     }
 
     fn post(path: &str, token: Option<&str>, body: &'static str) -> Request<Body> {
@@ -242,7 +445,13 @@ mod tests {
     #[tokio::test]
     async fn no_token_configured_means_no_manual_review_route_at_all() {
         assert!(
-            router(None, "tinyhumansai".into(), Arc::new(Recorder::default())).is_none(),
+            router(
+                None,
+                "tinyhumansai".into(),
+                Arc::new(Recorder::default()),
+                Arc::new(MergeRecorder::default())
+            )
+            .is_none(),
             "an unauthenticated way to spend money on reviews is not a supported deployment"
         );
     }

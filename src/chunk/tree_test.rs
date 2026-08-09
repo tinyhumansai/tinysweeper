@@ -278,3 +278,69 @@ fn every_grammar_loads() {
             .unwrap_or_else(|err| panic!("{language:?}: {err}"));
     }
 }
+
+/// A Java method longer than the target size must come out whole, and be
+/// labelled — the same invariant the module opens with, restated for a grammar
+/// whose declarations fall out of the generic `_declaration` suffix rule rather
+/// than an explicit list.
+#[test]
+fn a_long_java_method_survives_as_one_named_chunk() {
+    let body: String = (1..=120)
+        .map(|i| format!("        int value{i} = compute(value{}, {i});\n", i - 1))
+        .collect();
+    let source = format!(
+        "package com.example;\n\
+         \n\
+         public class Cart {{\n\
+         \x20   public int total(int value0) {{\n{body}        return value120;\n    }}\n\
+         \n\
+         \x20   public boolean isEmpty() {{\n        return false;\n    }}\n\
+         }}\n"
+    );
+
+    let chunks = split(&source, Language::Java, &options()).expect("the grammar parses Java");
+    let total = chunks
+        .iter()
+        .find(|c| c.text.contains("int value60 ="))
+        .expect("a chunk holding the long method");
+    assert!(total.text.contains("public int total"), "{}", total.text);
+    assert!(total.text.contains("return value120;"), "{}", total.text);
+    // The class's own braces land in different chunks once its members are cut
+    // apart, so balance is asserted over the whole reassembled file rather than
+    // per chunk — the invariant is "no cut inside a body", not "every chunk is
+    // a closed brace tree".
+    let rejoined: String = chunks.iter().map(|c| c.text.as_str()).collect();
+    assert!(braces_balance(&rejoined));
+    assert!(braces_balance(&total.text), "{}", total.text);
+}
+
+/// Ruby's declarations are bare words — `method`, `class`, `module` — so they
+/// are the one grammar here that the suffix rule cannot reach. Without the
+/// explicit entries this falls back to the line splitter and cuts mid-method.
+#[test]
+fn ruby_methods_are_split_on_their_own_boundaries() {
+    let body: String = (1..=120)
+        .map(|i| format!("      value{i} = compute(value{}, {i})\n", i - 1))
+        .collect();
+    let source = format!(
+        "module Shop\n\
+         \x20 class Cart\n\
+         \x20   def total(value0)\n{body}      value120\n    end\n\
+         \n\
+         \x20   def empty?\n      false\n    end\n\
+         \x20 end\n\
+         end\n"
+    );
+
+    let chunks = split(&source, Language::Ruby, &options()).expect("the grammar parses Ruby");
+    let named: Vec<&str> = chunks.iter().filter_map(|c| c.symbol.as_deref()).collect();
+    assert!(
+        named.contains(&"total"),
+        "the long method was not its own chunk: {named:?}"
+    );
+    let total = chunks
+        .iter()
+        .find(|c| c.symbol.as_deref() == Some("total"))
+        .expect("the total chunk");
+    assert!(total.text.contains("value120"), "{}", total.text);
+}

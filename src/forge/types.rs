@@ -249,6 +249,29 @@ impl CheckStatus {
     pub fn is_pending(&self) -> bool {
         self.conclusion.is_none()
     }
+
+    /// Whether this check is affirmative evidence that something is wrong.
+    ///
+    /// The complement of [`CheckStatus::is_green`] is *not* this: between the
+    /// two sit `Neutral` and `Skipped`, which say "this did not apply" and
+    /// "this could not run". Treating either as a failure is what would make
+    /// auto-merge unreachable in practice — a workflow job with an `if:` that
+    /// is false on pull requests concludes `skipped` on every pull request
+    /// forever, so "not green" as a merge blocker means never merging.
+    pub fn is_failing(&self) -> bool {
+        self.conclusion.is_some_and(CheckConclusion::blocks)
+    }
+
+    /// Whether this check ran and found nothing to say.
+    ///
+    /// Only `Neutral`, which is a lane reporting that it did not apply — the
+    /// `commits` lane on a pull request whose commit range holds no secret,
+    /// say. `Skipped` is excluded deliberately: a check that *could not run*
+    /// has produced no evidence at all, and a required check with no evidence
+    /// behind it is the case the gate exists for.
+    pub fn is_inapplicable(&self) -> bool {
+        self.conclusion == Some(CheckConclusion::Neutral)
+    }
 }
 
 /// A check run to publish.
