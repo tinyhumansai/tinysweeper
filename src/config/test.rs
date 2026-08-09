@@ -454,6 +454,32 @@ fn the_shipped_presets_load_and_validate() {
 }
 
 #[test]
+fn the_shipped_security_taxonomy_is_scoped_to_the_security_lane() {
+    // Unscoped, the document would be added to the cacheable prefix of every
+    // lane on every file — a large, permanent bill for rules only one reviewer
+    // can act on.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = repo(
+        Some("version = 1\npreset = \"security-strict\"\n"),
+        &[(
+            "security-strict",
+            &std::fs::read_to_string(root.join("presets/security-strict/preset.toml"))
+                .expect("read shipped preset"),
+        )],
+    );
+    with_shipped_rules(&dir);
+    let config = load(dir.path(), None).expect("loads").config;
+
+    let entry = config
+        .path_instructions
+        .iter()
+        .find(|rule| rule.rules.as_deref() == Some("security"))
+        .expect("the preset wires the security taxonomy");
+    assert_eq!(entry.lanes, vec![LaneId::Security]);
+    assert!(entry.instructions.contains("Do NOT report"));
+}
+
+#[test]
 fn a_rule_document_is_inlined_into_its_path_instruction() {
     // Rule documents are data under presets/. Adding one is a file and a line
     // of TOML, never a module.

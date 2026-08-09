@@ -33,6 +33,7 @@ use crate::findings::types::Finding;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
 use crate::lanes::fanout::{FileReview, per_file_with_budget};
+use crate::lanes::triage::triage;
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
 use crate::ports::model::{Message, Model, ModelRequest, Spend};
 use crate::scan::types::{Finding as ScanFinding, ScanKind};
@@ -77,15 +78,23 @@ impl Lane for Security {
             return Ok(skipped);
         }
 
-        let reviewable: Vec<String> = input
-            .diffs
-            .iter()
-            .filter(|d| !d.changed_lines.is_empty())
-            .map(|d| d.path.clone())
-            .collect();
+        // Deterministic triage before any token is spent: drop the files that
+        // cannot carry a vulnerability, and review what is left riskiest first
+        // so an exhausted budget was spent on the files that mattered.
+        let forced: Vec<&str> = scanner.iter().map(|f| f.path.as_str()).collect();
+        let triaged = triage(input.diffs, &forced);
 
-        let outcome =
-            per_file_with_budget(&reviewable, input.config.models.budget_usd_per_pr, |path| {
+        if triaged.review.is_empty() && scanner.is_empty() {
+            return Ok(LaneOutcome::skipped(format!(
+                "No changed file has any attack surface.{}",
+                skip_note(&triaged.skipped)
+            )));
+        }
+
+        let outcome = per_file_with_budget(
+            &triaged.review,
+            input.config.models.budget_usd_per_pr,
+            |path| {
                 let model = self.model.clone();
                 let config = input.config;
                 let repo_policy = input.repo_policy;
@@ -111,10 +120,12 @@ impl Lane for Security {
                     )
                     .await
                 }
-            })
-            .await;
+            },
+        )
+        .await;
 
         let mut outcome = outcome.into_outcome();
+        outcome.summary.push_str(&skip_note(&triaged.skipped));
         merge_scanner_findings(&mut outcome, &scanner);
         Ok(outcome)
     }
@@ -180,6 +191,31 @@ async fn review_file(
         resolved: outcome.resolved,
         spend: outcome.spend,
     })
+}
+
+/// Say, in the summary, which files were never sent to a model and why.
+///
+/// A review that quietly skipped half the pull request reads exactly like one
+/// that found nothing wrong with it, so the skip is always stated.
+fn skip_note(skipped: &[(String, &'static str)]) -> String {
+    if skipped.is_empty() {
+        return String::new();
+    }
+    const LISTED: usize = 5;
+    let mut names: Vec<String> = skipped
+        .iter()
+        .take(LISTED)
+        .map(|(path, reason)| format!("{path} ({reason})"))
+        .collect();
+    if skipped.len() > LISTED {
+        names.push(format!("and {} more", skipped.len() - LISTED));
+    }
+    format!(
+        " {} file{} not security-reviewed: {}.",
+        skipped.len(),
+        if skipped.len() == 1 { " was" } else { "s were" },
+        names.join(", ")
+    )
 }
 
 /// Render scanner findings for adjudication, by type and location only.
@@ -460,6 +496,79 @@ mod tests {
             "{}",
             outcome.summary
         );
+    }
+
+    // --- triage -------------------------------------------------------------
+
+    #[tokio::test]
+    async fn a_lockfile_change_costs_no_model_call() {
+        let model = MockModel::silent();
+        let diffs = vec![
+            parse_file_patch("Cargo.lock", "@@ -1 +1,2 @@\n a\n+serde = \"1\"\n"),
+            parse_file_patch("src/handler.rs", "@@ -1 +1,2 @@\n a\n+let x = 1;\n"),
+        ];
+        let outcome = run_with(model.clone(), &config(), &diffs, &[]).await;
+
+        assert_eq!(model.calls(), 1, "only the source file is worth a call");
+        let prompt = model.last_prompt().expect("recorded");
+        assert!(prompt.contains("`src/handler.rs`"), "{prompt}");
+        assert!(
+            outcome.summary.contains("Cargo.lock"),
+            "the skip has to be visible: {}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn the_riskiest_file_is_reviewed_first() {
+        let model = MockModel::silent();
+        let diffs = vec![
+            parse_file_patch("src/render.rs", "@@ -1 +1,2 @@\n a\n+let x = 1;\n"),
+            parse_file_patch(
+                "src/auth/session.rs",
+                "@@ -1 +1,2 @@\n a\n+Command::new(\"sh\").arg(cmd).spawn();\n",
+            ),
+        ];
+        run_with(model.clone(), &config(), &diffs, &[]).await;
+
+        let first = &model.requests()[0].messages[0].content;
+        assert!(
+            first.contains("`src/auth/session.rs`"),
+            "the budget must buy the riskiest file first: {first}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_scanner_finding_pulls_a_skippable_file_back_into_the_review() {
+        let model = MockModel::silent();
+        let diffs = vec![parse_file_patch(
+            "Cargo.lock",
+            "@@ -1 +1,2 @@\n a\n+left-pad = \"1\"\n",
+        )];
+        let dependency = ScanFinding::new(
+            ScanKind::Dependency,
+            Severity::High,
+            "Cargo.lock",
+            "dependency-yanked",
+            "A yanked crate was added",
+            "…",
+        );
+        run_with(model.clone(), &config(), &diffs, &[dependency]).await;
+
+        assert_eq!(model.calls(), 1, "a scanner match is worth adjudicating");
+    }
+
+    #[tokio::test]
+    async fn a_pull_request_of_only_generated_files_never_calls_the_model() {
+        let model = MockModel::silent();
+        let diffs = vec![parse_file_patch(
+            "web/dist/app.min.js",
+            "@@ -1 +1,2 @@\n a\n+var a=1\n",
+        )];
+        let outcome = run_with(model.clone(), &config(), &diffs, &[]).await;
+
+        assert_eq!(model.calls(), 0);
+        assert!(outcome.skipped.is_some(), "{:?}", outcome.skipped);
     }
 
     #[tokio::test]
