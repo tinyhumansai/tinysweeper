@@ -16,6 +16,7 @@ use futures::FutureExt;
 use serde_json::json;
 use tokio::sync::Semaphore;
 
+use crate::automerge::types::Outcome;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::forge::RepoId;
@@ -24,7 +25,7 @@ use crate::ports::knowledge::KnowledgeStore;
 use crate::server::admin::{self, AdminAuth};
 use crate::server::auth::AppAuth;
 use crate::server::indexing::{IndexBackend, index_in_background};
-use crate::server::manual::{self, FullReviews};
+use crate::server::manual::{self, FullReviews, MergeReport, Merges};
 use crate::server::store::{Store, Trust};
 use crate::server::webhook::{self, Action, Payload};
 
@@ -144,6 +145,11 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
 
     let manual_state = state.clone();
     let manual_auth = admin_auth.clone();
+    // Logged once at boot rather than discovered from behaviour. "Auto-merge
+    // is configured and nothing acts on it" was a real bug in this repository;
+    // a line at startup saying which way the switch is set is the cheapest
+    // thing that would have caught it.
+    let enabled_automerge = state.config.config.automerge.enabled;
 
     let mut app = Router::new()
         .route("/healthz", get(healthz))
@@ -168,13 +174,18 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
     // the same reason when there is none. It is mounted separately from the
     // admin router because it needs the worker, not the trust database.
     let dispatch: Arc<dyn FullReviews> = Arc::new(ManualDispatch {
+        state: manual_state.clone(),
+    });
+    let merges: Arc<dyn Merges> = Arc::new(MergeDispatch {
         state: manual_state,
     });
-    if let Some(routes) = manual::router(manual_auth, manual::allowed_org(), dispatch) {
+    if let Some(routes) = manual::router(manual_auth, manual::allowed_org(), dispatch, merges) {
         app = app.merge(routes);
         tracing::info!(
             organisation = %manual::allowed_org(),
-            "manual full reviews are available under /admin/reviews"
+            automerge = enabled_automerge,
+            "manual full reviews are available under /admin/reviews, \
+             and auto-merge sweeps under /admin/merges"
         );
     }
 
@@ -295,7 +306,116 @@ async fn receive(
             tokio::spawn(handle_triage(state, repo, number, author, installation));
             (StatusCode::ACCEPTED, "queued").into_response()
         }
+        Action::AutoMerge {
+            repo,
+            numbers,
+            installation,
+        } => {
+            for number in numbers {
+                tokio::spawn(handle_automerge(
+                    state.clone(),
+                    repo.clone(),
+                    number,
+                    installation,
+                ));
+            }
+            (StatusCode::ACCEPTED, "queued").into_response()
+        }
     }
+}
+
+/// Re-evaluate one pull request against the auto-merge policy, off the request
+/// path.
+///
+/// Errors are logged and dropped. Auto-merge failing is the safe direction by
+/// construction — the pull request stays exactly where it was — so a forge
+/// hiccup here is a log line, never a failed delivery that GitHub retries.
+async fn handle_automerge(state: AppState, repo: String, number: u64, installation: u64) {
+    if let Err(err) = automerge_inner(&state, &repo, number, installation).await {
+        tracing::error!(%err, %repo, number, "auto-merge evaluation failed");
+    }
+}
+
+async fn automerge_inner(
+    state: &AppState,
+    repo: &str,
+    number: u64,
+    installation: u64,
+) -> Result<()> {
+    // Checked before anything is read. With the feature off this path fires on
+    // every check run in every repository the app is installed on, and an
+    // API call per delivery to prove a disabled feature is disabled is a rate
+    // limit spent on nothing.
+    if !state.config.config.automerge.enabled {
+        tracing::debug!(%repo, number, "auto-merge is off");
+        return Ok(());
+    }
+
+    let repo_id =
+        RepoId::parse(repo).ok_or_else(|| Error::Forge(format!("`{repo}` is not owner/name")))?;
+
+    // Not held against `permits`: that semaphore bounds concurrent *reviews*,
+    // which are minutes of model calls. This is four reads and possibly one
+    // merge, and queueing it behind a review would mean a merge waiting on
+    // work it has nothing to do with.
+    //
+    // The lease is what keeps it honest instead. Several checks finishing at
+    // once is the normal case, and every one of them is a delivery: without
+    // this, five deliveries would evaluate the same pull request concurrently
+    // and race to merge it.
+    let lease = format!("{repo}#automerge-{number}");
+    if !state.store.claim_lease(&lease, "server").await? {
+        tracing::debug!(%lease, "another worker is already evaluating this merge");
+        return Ok(());
+    }
+
+    let outcome = evaluate_and_merge(state, &repo_id, number, installation).await;
+
+    if let Err(err) = state.store.release_lease(&lease).await {
+        tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
+    }
+
+    match outcome? {
+        Outcome::Merged { method } => {
+            tracing::info!(%repo, number, %method, "auto-merged");
+        }
+        // Logged at debug, not info. Every check run on every open pull request
+        // reaches this line, and the overwhelmingly common refusal is "another
+        // check is still running" — at info that is the only thing in the log.
+        Outcome::Refused(refusal) => {
+            tracing::debug!(%repo, number, reason = %refusal, "not auto-merging");
+        }
+        Outcome::Rejected { method, reason } => {
+            tracing::warn!(%repo, number, %method, %reason, "the forge refused the merge");
+        }
+    }
+    Ok(())
+}
+
+/// Mint the credentials and run the policy.
+///
+/// The read handle and the write handle are minted separately from the same
+/// installation token, and the split is the point: `merge_if_qualified` takes
+/// them as two arguments so that the half of the code which decides is
+/// statically unable to write. There is no model in this path at all.
+async fn evaluate_and_merge(
+    state: &AppState,
+    repo: &RepoId,
+    number: u64,
+    installation: u64,
+) -> Result<Outcome> {
+    let token = state.auth.installation_token(installation).await?;
+    let read = crate::forge::github::GitHubRead::new(&token)?;
+    let write = crate::forge::github::GitHubWrite::new(&token)?;
+
+    crate::automerge::merge_if_qualified(
+        &read,
+        &write,
+        &state.config.config.automerge,
+        repo,
+        number,
+    )
+    .await
 }
 
 /// Triage one issue, off the request path.
@@ -469,6 +589,111 @@ impl FullReviews for ManualDispatch {
     }
 }
 
+/// The manual auto-merge button's way into the policy.
+///
+/// Unlike the review button this answers synchronously. There is no model in
+/// the path — four reads and possibly a merge — so the operator gets the
+/// refusals back rather than having to go and read the log for them, and the
+/// refusals are the point of pressing it.
+struct MergeDispatch {
+    state: AppState,
+}
+
+#[async_trait::async_trait]
+impl Merges for MergeDispatch {
+    async fn evaluate(&self, repo: &RepoId, number: Option<u64>) -> Result<Vec<MergeReport>> {
+        // Refused up front rather than reported per pull request. An operator
+        // who has not turned the feature on wants to be told that once, not
+        // twenty times with a number attached.
+        if !self.state.config.config.automerge.enabled {
+            return Err(Error::Forge(
+                "`[automerge] enabled` is false in the deployment's configuration".into(),
+            ));
+        }
+
+        let installation = self
+            .state
+            .auth
+            .installation_for_repo(&repo.owner, &repo.name)
+            .await?;
+        let token = self.state.auth.installation_token(installation).await?;
+        let read = crate::forge::github::GitHubRead::new(&token)?;
+
+        let numbers = match number {
+            Some(number) => vec![number],
+            None => read.open_pull_requests(repo, MAX_MANUAL_REVIEWS).await?,
+        };
+
+        let mut reports = Vec::new();
+        for number in numbers {
+            // Sequential, not concurrent. Each merge changes the default
+            // branch, which can make the *next* pull request unmergeable;
+            // evaluating them all against the state that held before the first
+            // merge would be evaluating a snapshot that no longer exists.
+            let outcome = automerge_inner_reporting(&self.state, repo, number, installation).await;
+            reports.push(match outcome {
+                // Busy is not a refusal: the policy did not decide anything,
+                // another worker is deciding it. Reporting it as one would put
+                // a reason in front of the operator that no threshold produced.
+                Ok(None) => MergeReport {
+                    number,
+                    outcome: "busy",
+                    detail: Some("a webhook delivery is already evaluating this one".into()),
+                },
+                Ok(Some(Outcome::Merged { .. })) => MergeReport {
+                    number,
+                    outcome: "merged",
+                    detail: None,
+                },
+                Ok(Some(Outcome::Refused(refusal))) => MergeReport {
+                    number,
+                    outcome: "refused",
+                    detail: Some(refusal.to_string()),
+                },
+                Ok(Some(Outcome::Rejected { method, reason })) => MergeReport {
+                    number,
+                    outcome: "rejected",
+                    detail: Some(format!("the forge refused a `{method}` merge: {reason}")),
+                },
+                // One pull request failing to evaluate must not abandon the
+                // rest of the sweep, which is the operator's whole request.
+                Err(err) => MergeReport {
+                    number,
+                    outcome: "error",
+                    detail: Some(err.to_string()),
+                },
+            });
+        }
+
+        Ok(reports)
+    }
+}
+
+/// Evaluate one pull request and hand back the outcome rather than logging it.
+///
+/// `None` means another worker holds the lease. Shared with the webhook path
+/// deliberately: a sweep running while a delivery is being handled must not
+/// evaluate the same pull request twice and race to merge it.
+async fn automerge_inner_reporting(
+    state: &AppState,
+    repo: &RepoId,
+    number: u64,
+    installation: u64,
+) -> Result<Option<Outcome>> {
+    let lease = format!("{repo}#automerge-{number}");
+    if !state.store.claim_lease(&lease, "server").await? {
+        return Ok(None);
+    }
+
+    let outcome = evaluate_and_merge(state, repo, number, installation).await;
+
+    if let Err(err) = state.store.release_lease(&lease).await {
+        tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
+    }
+
+    outcome.map(Some)
+}
+
 /// Whether a review may use what earlier cycles remembered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -634,6 +859,26 @@ async fn review_inner(
         .store
         .record_review(author, proposal.findings().count() as u64)
         .await?;
+
+    // The review has just published its check runs and, when everything passed,
+    // its approving review — which is to say it has just changed the two things
+    // the auto-merge policy reads most often. Asking now closes the loop in
+    // process rather than waiting for GitHub to deliver our own writes back to
+    // us, which it only does for the events the App is subscribed to.
+    //
+    // Spawned rather than awaited: the review is finished, and a merge that
+    // fails must not turn a successful review into a logged error.
+    //
+    // Not a second write path. It goes through the same `merge_if_qualified` a
+    // delivery does, so the policy — and the live re-validation inside it —
+    // decides here exactly as it does there. The overlaid config is not used:
+    // `[automerge]` is not a key a reviewed repository may set about itself.
+    tokio::spawn(handle_automerge(
+        state.clone(),
+        repo.to_string(),
+        number,
+        installation,
+    ));
 
     Ok(())
 }

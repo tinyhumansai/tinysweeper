@@ -81,6 +81,19 @@ pub enum Refusal {
         /// The check run's name.
         name: String,
     },
+    /// A check named in `require_checks` reported, but not a verdict.
+    ///
+    /// `Skipped` is the case: the check could not run, so the gate it was
+    /// named for has no evidence behind it. Distinct from
+    /// [`Refusal::RequiredCheckMissing`] because the two need different
+    /// fixes — one is a check that vanished, the other is a check that ran
+    /// and declined — and telling an operator "has not reported" about a
+    /// check sitting in front of them on the page is worse than saying
+    /// nothing.
+    RequiredCheckInconclusive {
+        /// The check run's name.
+        name: String,
+    },
     /// The pull request changed no files, so there is nothing to judge.
     NoChangedFiles,
     /// More files than `max_files`.
@@ -142,6 +155,12 @@ impl fmt::Display for Refusal {
             Refusal::CheckPending { name } => write!(f, "the check `{name}` is still running"),
             Refusal::RequiredCheckMissing { name } => {
                 write!(f, "the required check `{name}` has not reported")
+            }
+            Refusal::RequiredCheckInconclusive { name } => {
+                write!(
+                    f,
+                    "the required check `{name}` was skipped, so it is not evidence of a pass"
+                )
             }
             Refusal::NoChangedFiles => write!(f, "it changes no files"),
             Refusal::TooManyFiles { files, max } => {

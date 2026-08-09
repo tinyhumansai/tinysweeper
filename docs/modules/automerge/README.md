@@ -27,7 +27,9 @@ for a person. Every ambiguity resolves towards waiting:
 | --- | --- |
 | `mergeable: None` — GitHub still computing | not mergeable |
 | A required check that never reported | not passed |
+| A required check that was **skipped** | not passed — it could not run |
 | A check still running | not passed |
+| An unrecognised conclusion | read as a failure |
 | A glob in the policy that will not compile | refuse, and say which |
 | A file the forge gave no patch for | unmeasurable, refuse |
 | `max_files = 0` | refuses everything; a zero cap is not "unlimited" |
@@ -47,12 +49,26 @@ shown is the most useful one.
    whether a concern stands unaddressed, not who raised it.
 7. At least `require_approvals` *human* approvals, counted from the review
    history rather than GitHub's tally — a bot approving is not a second opinion.
-8. Every check on the head SHA green: nothing failing, nothing pending, and
-   nothing in `require_checks` missing. This is stricter than "the required
-   checks passed" on purpose. A repository's own CI does not have to be listed
-   for tinysweeper to respect it, and a required check that never ran is not a
-   check that passed — that is the case that would otherwise let a deleted
-   workflow silently retire the whole gate.
+8. The checks on the head SHA, asked two different questions:
+   - **Nothing anywhere is red or still running.** Every check, not only the
+     required ones — a repository's own CI does not have to be listed for
+     tinysweeper to respect it. `action_required` counts as red, and so does a
+     conclusion GitHub introduces after this was written, because
+     `CheckStatus::from_api` maps anything it does not recognise to `Failure`.
+   - **Every name in `require_checks` produced a verdict.** Missing refuses —
+     a required check that never ran is not a check that passed, and that is
+     the case that would otherwise let a deleted workflow silently retire the
+     whole gate. `Skipped` refuses too, with a reason of its own: the check
+     could not run, so the gate it was named for has nothing behind it.
+
+   `Neutral` and `Skipped` sit between the two questions, and keeping them
+   apart is load-bearing. This used to read "not green blocks", which is not
+   the conservative choice it looks like: a workflow job behind
+   `if: github.event_name == 'push'` concludes `skipped` on *every* pull
+   request, for ever, so nothing in such a repository could ever merge. A gate
+   that never opens is not safe — it teaches operators to widen it until it
+   does. `Neutral` from a *required* check is accepted, and only there: it is a
+   lane reporting that it did not apply, which is an answer, not an absence.
 9. At least one changed file. Nothing measured is no gate at all.
 10. `files <= max_files`.
 11. No path matching `sensitive_paths` — unless this is a dependency bump.
@@ -125,6 +141,42 @@ merge methods — squash is disabled on this one. The forge refusing the method 
 reported as `Outcome::Rejected` rather than raised as an error: the pull request
 is exactly where it was, which is the safe state, and the next run tries again.
 
+## What runs it
+
+The policy is reached three ways, all of them through the same
+`merge_if_qualified`, so there is one decision procedure and no second write
+path:
+
+| Trigger | Where |
+| --- | --- |
+| A webhook delivery | `server::webhook::automerge_trigger` → `routes::handle_automerge` |
+| The end of a review | `routes::review_inner`, spawned after the check runs and the approval are published |
+| An operator, by hand | `POST /admin/merges/{owner}/{name}`, optionally `{"number": N}` |
+| The CLI | `tinysweeper automerge --repo … --pr …`, with `--dry-run` |
+
+The delivery triggers are `check_run`/`check_suite` on `completed`,
+`pull_request_review` on `submitted` or `dismissed`, and `pull_request` on
+`labeled` or `unlabeled`. Each is a moment at which a refusal made earlier
+might have stopped being true. There is no trigger on `opened` or
+`synchronize`: a pull request whose head has just moved has no checks on it
+yet, so evaluating it can only produce `CheckPending`, and the `check_suite`
+that follows is the same trigger with the evidence attached.
+
+**These triggers are exempt from the bot-sender guard**, which every other
+route obeys. They have to be: the check runs are ours and so is the approval
+that clears a previous objection, so a guard applied here would mean the
+trigger never fires on the events that matter. It is safe because the loop the
+guard exists to stop cannot form — auto-merge writes nothing but a merge, a
+merge closes the pull request, and a closed pull request is refused by the
+first check in the policy. A refusal writes nothing at all.
+
+Concurrency is handled with a `{repo}#automerge-{number}` lease shared by every
+trigger. Several checks finishing at once is the normal case and each one is a
+delivery; without the lease they would evaluate the same pull request
+concurrently and race to merge it. The lease is deliberately *not* the review
+semaphore: that one bounds minutes of model calls, and a merge has no business
+queueing behind work it has nothing to do with.
+
 ## Testing
 
 `src/automerge/test.rs`, weighted deliberately towards the refusals. Merging is
@@ -140,3 +192,25 @@ test, and each asserts that `MockForge` recorded no merge at all.
 | `complexity.rs` | The measured signals. |
 | `paths.rs` | Glob compilation and exact login comparison. Both fail closed. |
 | `types.rs` | `Decision`, `Refusal`, `Outcome`. |
+
+## A note on `require_approvals`
+
+It counts **human** approvals, and there is a trap in that worth stating.
+
+On a repository whose pull requests are opened by its only maintainer, nobody
+else is going to approve, so `require_approvals = 1` means nothing ever merges.
+The fix is not to make bot approvals count — a bot approving its own policy is
+not a second opinion, and that property is why the field is worth having. It is
+to move the human act somewhere it actually happens: set
+`require_approvals = 0` and keep `allow_labels = ["automerge"]`, so a person
+with write access says "merge this once it is green" once, up front, instead of
+after the wait for CI.
+
+`allow_labels = []` *and* `require_approvals = 0` together mean every green
+pull request from anybody merges itself. That is a defensible setting for a
+private repository and a bad one for anything taking outside contributions,
+where `sensitive_paths` and the complexity caps would be the only thing between
+a stranger and the default branch. The `automerge` label is in
+`presets/labels.toml` but is never applied by triage — nothing in the label
+vocabulary can produce that name — precisely so the bot cannot authorise
+itself.
