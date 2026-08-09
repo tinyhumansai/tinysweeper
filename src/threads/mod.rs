@@ -1,15 +1,14 @@
 //! Review-thread resolution: deciding which of tinysweeper's own conversations
 //! have been dealt with, so nobody has to close each one by hand.
 //!
-//! ## A model does not decide this
+//! ## A model advises; policy applies
 //!
 //! Resolving a thread is a mutation, and `AGENTS.md` is explicit that a model
-//! verdict is advisory. So the decision is deterministic and costs nothing: a
-//! finding carries a fingerprint, `apply` writes it into the comment that opens
-//! the thread, and a fingerprint absent from the current run's findings is a
-//! finding that stopped reproducing. Paired with GitHub's own `isOutdated` —
-//! the code the thread anchors to has changed — that is enough to close the
-//! conversation without asking anybody anything.
+//! verdict is advisory. The review agent sees the prior finding alongside the
+//! newly pushed diff and explicitly reports which findings the new code fixed.
+//! Paired with GitHub's `isOutdated` signal, that advisory result is enough to
+//! plan a close; [`apply_plan`] performs the eventual mutation without giving
+//! the model a write handle.
 //!
 //! The model is reached for in one case only: the code did not change and a
 //! human replied, which is the "you have misunderstood, this is fine" case no
@@ -23,8 +22,8 @@
 //!   by exact login via [`crate::findings::prior::is_own_login`] — a prefix
 //!   match would count `tinysweeper-anything` as ourselves.
 //! - A thread whose finding still reproduces.
-//! - A thread whose only replies come from bots: two bots replying to each
-//!   other is a loop nobody is watching.
+//! - An unchanged-code thread whose only replies come from bots: two bots
+//!   replying to each other is a loop nobody is watching.
 //! - An already-resolved thread, which would otherwise be resolved forever.
 
 pub mod advise;
@@ -34,7 +33,7 @@ use std::collections::BTreeSet;
 
 use crate::config::types::Config;
 use crate::error::Result;
-use crate::findings::prior::{fingerprint_in, is_own_login};
+use crate::findings::prior::{is_own_login, title_in};
 use crate::forge::types::{RepoId, ReviewThread};
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 use crate::ports::model::{Model, Spend};
@@ -43,10 +42,10 @@ pub use crate::threads::types::{Decision, PlannedResolve, ThreadPlan};
 
 /// Decide what to do with one thread, from what is already known.
 ///
-/// `current` is the set of fingerprints this run's findings produced. No forge
-/// call, no model call, no clock: the decision is a pure function of the thread
-/// and the findings, which is what makes it auditable.
-pub fn decide(thread: &ReviewThread, current: &BTreeSet<String>) -> Decision {
+/// `resolved` is the set of prior titles that the review agents explicitly
+/// found fixed in the new diff. No forge call, no model call, no clock: this is
+/// a pure policy check over that advisory evidence and the thread.
+pub fn decide(thread: &ReviewThread, resolved: &BTreeSet<String>) -> Decision {
     if thread.is_resolved {
         return Decision::Leave("already resolved");
     }
@@ -58,30 +57,32 @@ pub fn decide(thread: &ReviewThread, current: &BTreeSet<String>) -> Decision {
         return Decision::Leave("a thread tinysweeper did not open");
     }
 
-    let Some(fingerprint) = fingerprint_in(&opener.body) else {
-        return Decision::Leave("no fingerprint to check against");
+    let Some(title) = title_in(&opener.body) else {
+        return Decision::Leave("no finding title to check against");
     };
 
-    // Somebody has to have replied, and it has to be a person. The trigger for
-    // re-evaluating a thread is a human comment; without this, a bot's reply —
-    // or tinysweeper's own follow-up — starts the cycle again.
-    let human_replied = thread
-        .comments
-        .iter()
-        .skip(1)
-        .any(|comment| !comment.bot && !is_own_login(&comment.author));
-    if !human_replied {
-        return Decision::Leave("no human has replied");
-    }
-
-    match (thread.is_outdated, current.contains(&fingerprint)) {
-        // The code under the comment changed and the finding is gone. That is
-        // the entire deterministic rule.
-        (true, false) => Decision::Resolve("the finding no longer reproduces on the new code"),
-        (true, true) => Decision::Leave("the finding still reproduces"),
+    match (thread.is_outdated, resolved.contains(&title)) {
+        // The review agent received this earlier finding and the new diff, then
+        // explicitly declared it fixed. A `synchronize` delivery caused that
+        // review, while GitHub's outdated flag proves this thread's code moved.
+        (true, true) => {
+            Decision::Resolve("the review agent found this finding fixed in the new code")
+        }
+        (true, false) => Decision::Leave("the review agent did not confirm the finding is fixed"),
         // The code did not change, so nothing deterministic settles it: only
         // the reply itself could, and reading a reply is a model's job.
-        (false, _) => Decision::Ask,
+        (false, _) => {
+            let human_replied = thread
+                .comments
+                .iter()
+                .skip(1)
+                .any(|comment| !comment.bot && !is_own_login(&comment.author));
+            if human_replied {
+                Decision::Ask
+            } else {
+                Decision::Leave("no human has replied")
+            }
+        }
     }
 }
 
@@ -98,7 +99,7 @@ pub async fn plan(
     config: &Config,
     repo: &RepoId,
     number: u64,
-    current: &BTreeSet<String>,
+    resolved: &BTreeSet<String>,
 ) -> Result<(ThreadPlan, Spend)> {
     let mut plan = ThreadPlan::default();
     let mut spend = Spend::default();
@@ -108,7 +109,7 @@ pub async fn plan(
     }
 
     for thread in read.review_threads(repo, number).await? {
-        match decide(&thread, current) {
+        match decide(&thread, resolved) {
             Decision::Resolve(reason) => plan.resolve.push(PlannedResolve {
                 id: thread.id.clone(),
                 reason: reason.to_string(),
