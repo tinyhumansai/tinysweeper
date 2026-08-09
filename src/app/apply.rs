@@ -481,8 +481,15 @@ mod tests {
         .await
         .expect("applies");
 
-        let (_, _) = review_of(&forge).expect("posted");
-        let body = forge.state().reviews[0].comments[0].body.clone();
+        let body = forge
+            .writes()
+            .into_iter()
+            .find_map(|w| match w {
+                Write::Review { comments, .. } => comments.into_iter().next(),
+                _ => None,
+            })
+            .expect("an inline comment")
+            .body;
         let mut lines = body.lines();
 
         let first = lines.next().expect("a first line");
