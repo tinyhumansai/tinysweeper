@@ -24,6 +24,14 @@ pub(crate) const CAP_IMPORT: &str = "import.stmt";
 pub(crate) const CAP_CALL: &str = "use.call";
 /// Capture name for an identifier in any other position.
 pub(crate) const CAP_REF: &str = "use.ref";
+/// Capture name for a standalone inheritance construct, walked by the
+/// extractor.
+///
+/// Only needed where inheritance is *not* written on the declaration itself.
+/// A TypeScript class carries its own `extends` clause, so the `def.class`
+/// capture already reaches it; a Rust `impl Display for Ledger` is a separate
+/// item that names two types and declares neither, so nothing else would.
+pub(crate) const CAP_HERITAGE: &str = "heritage.stmt";
 
 /// Map the `def.<kind>` capture suffix onto a [`SymbolKind`].
 pub(crate) fn symbol_kind(capture: &str) -> Option<SymbolKind> {
