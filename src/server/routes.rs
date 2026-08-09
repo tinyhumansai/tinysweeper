@@ -730,6 +730,26 @@ async fn review_inner(
         .record_review(author, proposal.findings().count() as u64)
         .await?;
 
+    // The review has just published its check runs and, when everything passed,
+    // its approving review — which is to say it has just changed the two things
+    // the auto-merge policy reads most often. Asking now closes the loop in
+    // process rather than waiting for GitHub to deliver our own writes back to
+    // us, which it only does for the events the App is subscribed to.
+    //
+    // Spawned rather than awaited: the review is finished, and a merge that
+    // fails must not turn a successful review into a logged error.
+    //
+    // Not a second write path. It goes through the same `merge_if_qualified` a
+    // delivery does, so the policy — and the live re-validation inside it —
+    // decides here exactly as it does there. The overlaid config is not used:
+    // `[automerge]` is not a key a reviewed repository may set about itself.
+    tokio::spawn(handle_automerge(
+        state.clone(),
+        repo.to_string(),
+        number,
+        installation,
+    ));
+
     Ok(())
 }
 
