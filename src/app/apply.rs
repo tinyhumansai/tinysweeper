@@ -138,6 +138,18 @@ pub async fn apply(
         }
     }
 
+    // The change map, as one comment edited in place forever. Deliberately
+    // *not* folded into the review body: a review is submitted only when there
+    // is a verdict to give, and the pull request that most needs a picture of
+    // itself is often the clean one that gets no inline comments at all.
+    //
+    // Best effort, and last-but-one on purpose. It is the only thing published
+    // here that nobody is gated on, so a failure to draw it must not cost the
+    // verdict that was already posted above.
+    if let Err(err) = publish_overview(read, write, config, proposal).await {
+        tracing::warn!(%err, "could not publish the change map");
+    }
+
     // Triage last, and against `live` rather than a second fetch: the labels
     // restate a verdict whose evidence is now on the pull request, so they can
     // never point at a review that failed to publish. Add-only, so a
