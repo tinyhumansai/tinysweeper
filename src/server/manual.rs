@@ -219,6 +219,49 @@ async fn full_review(
         .into_response())
 }
 
+/// Evaluate pull requests against `[automerge]` and merge those that qualify.
+///
+/// Behind the same credential and the same organisation check as the review
+/// button above, and for a stronger reason: this one can put code on the
+/// default branch. It adds no authority of its own — the deterministic policy
+/// in `crate::automerge` decides, exactly as it does on a webhook — so the
+/// button is a way to ask *now* rather than a way to ask for more.
+async fn auto_merge(
+    State(state): State<ManualState>,
+    Path((owner, name)): Path<(String, String)>,
+    Json(body): Json<ManualReviewRequest>,
+) -> std::result::Result<Response, ApiError> {
+    let repo = checked_target(&owner, &name, &state.allowed_org)
+        .map_err(|message| ApiError(StatusCode::FORBIDDEN, message))?;
+
+    let reports = state
+        .merges
+        .evaluate(&repo, body.number)
+        .await
+        .map_err(|err| ApiError(StatusCode::BAD_GATEWAY, err.to_string()))?;
+
+    let merged: Vec<u64> = reports
+        .iter()
+        .filter(|report| report.outcome == "merged")
+        .map(|report| report.number)
+        .collect();
+
+    // Logged at info even when nothing merged. An operator pressing this is
+    // an action on the default branch, and the refusals are the useful half of
+    // the record — "why did it not merge" is the question that gets asked.
+    tracing::info!(%repo, ?merged, considered = reports.len(), "evaluated auto-merge on request");
+
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "repo": repo.to_string(),
+            "merged": merged,
+            "results": reports,
+        })),
+    )
+        .into_response())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
