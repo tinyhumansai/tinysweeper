@@ -787,6 +787,19 @@ impl Config {
         }
     }
 
+    /// Resolve the model issue triage runs on.
+    ///
+    /// Same three-way resolution as [`Config::model_for`] — a tier name, or an
+    /// explicit id passed through untouched — but read from `[issues]`, which
+    /// is not a lane and so has no entry in `review.lanes`.
+    pub fn model_for_issues(&self) -> &str {
+        match self.issues.model.as_ref().map(|r| r.0.as_str()) {
+            Some("deep") => &self.models.deep,
+            Some("scan") | None => &self.models.scan,
+            Some(explicit) => explicit,
+        }
+    }
+
     /// The severity at which a review blocks the merge, if it ever does.
     pub fn request_changes_at(&self) -> Option<Severity> {
         let setting = self.review.request_changes_at.trim();

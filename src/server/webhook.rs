@@ -156,6 +156,21 @@ pub enum Action {
         /// The installation that can act on it.
         installation: u64,
     },
+    /// Triage this issue: label it, and consider closing it.
+    ///
+    /// Separate from [`Action::Review`] because it is a different job on a
+    /// different subject, and folding the two would mean a pull request review
+    /// and an issue triage sharing a lease key.
+    TriageIssue {
+        /// `owner/name`.
+        repo: String,
+        /// Issue number.
+        number: u64,
+        /// Who opened it. The close gate needs it to protect maintainers.
+        author: String,
+        /// The installation that can act on it.
+        installation: u64,
+    },
     /// Nothing to do, with a reason for the log.
     Ignore(&'static str),
 }
@@ -239,6 +254,31 @@ pub fn route(event: &str, payload: &Payload) -> Action {
                 installation: installation.id,
             }
         }
+        "issues" => {
+            let Some(issue) = &payload.issue else {
+                return Action::Ignore("no issue");
+            };
+            // GitHub sends `issues` for a pull request too on some app
+            // configurations. Triaging one as an issue would label it from the
+            // wrong vocabulary and, worse, offer it to the close gate.
+            if issue.pull_request.is_some() {
+                return Action::Ignore("the issue is a pull request");
+            }
+            match payload.action.as_str() {
+                // `opened` and `reopened` are the moments triage is useful.
+                // `edited` is included because a report is often only
+                // classifiable after the author fills in the template — and
+                // deliberately not `labeled`, which tinysweeper's own labelling
+                // would otherwise trigger in a loop.
+                "opened" | "reopened" | "edited" => Action::TriageIssue {
+                    repo: repository.full_name.clone(),
+                    number: issue.number,
+                    author: issue.user.login.clone(),
+                    installation: installation.id,
+                },
+                _ => Action::Ignore("uninteresting issue action"),
+            }
+        }
         _ => Action::Ignore("uninteresting event"),
     }
 }
@@ -307,6 +347,68 @@ mod tests {
                 "user": {"login": "someone", "type": "User"}
             }
         }))
+    }
+
+    fn issue_payload(action: &str) -> Payload {
+        payload(serde_json::json!({
+            "action": action,
+            "repository": {"full_name": "tinyhumansai/tinysweeper"},
+            "installation": {"id": 152184043},
+            "sender": {"login": "reporter", "type": "User"},
+            "issue": {
+                "number": 42,
+                "user": {"login": "reporter", "type": "User"}
+            }
+        }))
+    }
+
+    #[test]
+    fn a_new_issue_is_triaged() {
+        assert_eq!(
+            route("issues", &issue_payload("opened")),
+            Action::TriageIssue {
+                repo: "tinyhumansai/tinysweeper".into(),
+                number: 42,
+                author: "reporter".into(),
+                installation: 152184043,
+            }
+        );
+    }
+
+    #[test]
+    fn an_edited_issue_is_triaged_again() {
+        assert!(matches!(
+            route("issues", &issue_payload("edited")),
+            Action::TriageIssue { .. }
+        ));
+    }
+
+    #[test]
+    fn labelling_an_issue_does_not_trigger_triage() {
+        // tinysweeper's own labelling delivers `labeled`. Acting on it would be
+        // a loop bounded only by the rate limiter.
+        assert_eq!(
+            route("issues", &issue_payload("labeled")),
+            Action::Ignore("uninteresting issue action")
+        );
+    }
+
+    #[test]
+    fn a_pull_request_delivered_as_an_issue_is_not_triaged() {
+        let mut payload = issue_payload("opened");
+        payload.issue.as_mut().expect("an issue").pull_request =
+            Some(serde_json::json!({"url": "https://example.invalid/pulls/42"}));
+        assert_eq!(
+            route("issues", &payload),
+            Action::Ignore("the issue is a pull request")
+        );
+    }
+
+    #[test]
+    fn a_bot_never_triggers_triage_on_its_own_labelling() {
+        let mut payload = issue_payload("opened");
+        payload.sender.as_mut().expect("a sender").kind = "Bot".into();
+        assert_eq!(route("issues", &payload), Action::Ignore("sender is a bot"));
     }
 
     #[test]

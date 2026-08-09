@@ -249,7 +249,134 @@ async fn receive(
             tokio::spawn(handle_review(state, repo, number, author, installation));
             (StatusCode::ACCEPTED, "queued").into_response()
         }
+        Action::TriageIssue {
+            repo,
+            number,
+            author,
+            installation,
+        } => {
+            tokio::spawn(handle_triage(state, repo, number, author, installation));
+            (StatusCode::ACCEPTED, "queued").into_response()
+        }
     }
+}
+
+/// Triage one issue, off the request path.
+///
+/// The manual seam: anything that can name a repository, an issue number and an
+/// installation can call [`triage_inner`] directly — an endpoint, a CLI
+/// subcommand, a cron sweep — without going through a webhook payload.
+async fn handle_triage(
+    state: AppState,
+    repo: String,
+    number: u64,
+    author: String,
+    installation: u64,
+) {
+    if let Err(err) = triage_inner(&state, &repo, number, &author, installation).await {
+        // One issue going wrong is a log line, not an outage.
+        tracing::error!(%err, %repo, number, "issue triage failed");
+    }
+}
+
+async fn triage_inner(
+    state: &AppState,
+    repo: &str,
+    number: u64,
+    author: &str,
+    installation: u64,
+) -> Result<()> {
+    if !state.config.config.issues.enabled {
+        tracing::debug!(%repo, number, "issue triage is off");
+        return Ok(());
+    }
+
+    let who = state.store.contributor(author).await?;
+    if who.trust == Trust::Blocked {
+        tracing::info!(%author, "blocked contributor; not triaging");
+        return Ok(());
+    }
+
+    let repo_id =
+        RepoId::parse(repo).ok_or_else(|| Error::Forge(format!("`{repo}` is not owner/name")))?;
+
+    let permit = state
+        .permits
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|err| Error::Forge(err.to_string()))?;
+
+    // Keyed on the issue rather than a SHA — an issue has no head commit — so
+    // two deliveries for the same edit cannot both pay for a triage.
+    let lease = format!("{repo}#issue-{number}");
+    if !state.store.claim_lease(&lease, "server").await? {
+        tracing::debug!(%lease, "another worker holds this triage");
+        return Ok(());
+    }
+
+    let outcome = triage_and_apply(state, &repo_id, number, installation).await;
+
+    if let Err(err) = state.store.release_lease(&lease).await {
+        tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
+    }
+    drop(permit);
+
+    let plan = outcome?;
+    tracing::info!(
+        %repo,
+        number,
+        labels = plan.add_labels.len(),
+        closed = plan.close.is_some(),
+        refusal = plan.close_refusal.unwrap_or("-"),
+        "issue triaged"
+    );
+    Ok(())
+}
+
+/// Read the issue, decide, then publish with a token minted afterwards.
+///
+/// The deployment's own configuration is used, not the repository's: the
+/// `[issues]` overlay is read at a commit, and an issue has no commit to read
+/// it at. Wiring that up needs a default-branch lookup the forge port does not
+/// have yet, so it is deliberately absent rather than half-present.
+async fn triage_and_apply(
+    state: &AppState,
+    repo: &RepoId,
+    number: u64,
+    installation: u64,
+) -> Result<crate::issues::TriagePlan> {
+    let read_token = state.auth.installation_token(installation).await?;
+    let forge = crate::forge::github::GitHubRead::new(&read_token)?;
+    let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
+        &state.config.config.models,
+    )?);
+
+    // The model runs against a read-only handle; the write token below is
+    // minted only after it has answered. Same boundary as a review.
+    let outcome = crate::issues::triage(
+        &forge,
+        model,
+        &state.config.config,
+        repo,
+        number,
+        // Maintainer protection is expressed as `issues.close.protected_authors`
+        // until the forge port can report a repository's collaborators. An
+        // invented list would be worse than an empty one: it would look like
+        // the guard was doing something.
+        &[],
+    )
+    .await?;
+
+    if outcome.skipped.is_some() {
+        return Ok(outcome.plan);
+    }
+
+    let write_token = state.auth.installation_token(installation).await?;
+    let write = crate::forge::github::GitHubWrite::new(&write_token)?;
+    crate::issues::apply_plan(&write, repo, &outcome.plan).await?;
+
+    Ok(outcome.plan)
 }
 
 /// Review one pull request, off the request path.
