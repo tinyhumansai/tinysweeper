@@ -321,6 +321,7 @@ mod tests {
             dropped: 0,
             tokens: 0,
             graph_nodes: 1,
+            impact: Default::default(),
         };
         let rendered = context.render();
 
