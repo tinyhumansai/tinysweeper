@@ -197,7 +197,7 @@ mod tests {
     fn ours(fingerprint: &str, title: &str) -> ReviewComment {
         ReviewComment {
             path: "src/main.rs".into(),
-            line: 2,
+            line: Some(2),
             start_line: None,
             author: "tinysweeper[bot]".into(),
             body: format!(

@@ -5,6 +5,8 @@
 //! separate structs rather than one struct implementing both traits, so a
 //! read-only caller cannot upcast its way into write access.
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use octocrab::Octocrab;
 
@@ -54,6 +56,115 @@ impl GitHubRead {
             .map_err(|_| Error::Forge("GITHUB_TOKEN is not set".into()))?;
         Self::new(&token)
     }
+
+    /// Blob sizes at one revision, keyed by path.
+    ///
+    /// One recursive tree request for the whole revision rather than a blob
+    /// request per file. The per-file shape looks cheaper on a small pull
+    /// request and is not: it costs a round trip each against a rate limit
+    /// shared with everything else the installation does, and the file that
+    /// most needs a size — a large one — is the one whose blob is most
+    /// expensive to serve.
+    ///
+    /// Best-effort by design. GitHub truncates the tree for very large
+    /// repositories, and a size we could not learn must read as unknown rather
+    /// than as zero: `scan::blobs` treats `None` as "unknown", where a zero
+    /// would silently mean "safely small".
+    async fn blob_sizes(&self, repo: &RepoId, sha: &str) -> HashMap<String, u64> {
+        let route = format!(
+            "/repos/{}/{}/git/trees/{}?recursive=1",
+            repo.owner, repo.name, sha
+        );
+
+        // Raw route and `serde_json::Value`, matching `commits` above:
+        // octocrab has no typed model for the git-tree response, and the three
+        // fields wanted here are stable.
+        let raw: serde_json::Value = match self.client.get(&route, None::<&()>).await {
+            Ok(raw) => raw,
+            Err(err) => {
+                // Not fatal to the review. Sizes are an enrichment, and failing
+                // the whole review because one optional field could not be
+                // filled trades a small blind spot for a total one.
+                tracing::warn!(%err, "could not read blob sizes; large-blob detection is off");
+                return HashMap::new();
+            }
+        };
+
+        if raw["truncated"].as_bool().unwrap_or(false) {
+            tracing::warn!(
+                repo = %format!("{}/{}", repo.owner, repo.name),
+                "the git tree was truncated; some files will have no known size"
+            );
+        }
+
+        Self::sizes_from_tree(&raw)
+    }
+
+    /// The size map, split out from the request so it can be tested offline.
+    fn sizes_from_tree(raw: &serde_json::Value) -> HashMap<String, u64> {
+        raw["tree"]
+            .as_array()
+            .map(|entries| {
+                entries
+                    .iter()
+                    // `size` is absent on tree and commit entries and present
+                    // only on blobs, so this filter also excludes directories
+                    // without needing to read `type`.
+                    .filter_map(|entry| {
+                        Some((entry["path"].as_str()?.to_string(), entry["size"].as_u64()?))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// How many distinct reviewers currently approve.
+    ///
+    /// GitHub returns every review ever left, so a plain count of `APPROVED`
+    /// double-counts a reviewer who approved twice and, worse, keeps counting
+    /// one who later requested changes. Only each reviewer's *latest* verdict
+    /// says anything about the present state.
+    ///
+    /// Best-effort: an unreadable reviews list yields zero, which is the
+    /// conservative direction for every caller — nothing gates *on* having
+    /// fewer approvals than really exist.
+    async fn approvals(&self, repo: &RepoId, number: u64) -> u32 {
+        let route = format!(
+            "/repos/{}/{}/pulls/{number}/reviews?per_page=100",
+            repo.owner, repo.name
+        );
+
+        match self.client.get(&route, None::<&()>).await {
+            Ok(raw) => Self::approvals_from_reviews(&raw),
+            Err(err) => {
+                tracing::warn!(%err, "could not read reviews; reporting zero approvals");
+                0
+            }
+        }
+    }
+
+    /// The latest-verdict-per-reviewer count, split out for offline tests.
+    fn approvals_from_reviews(raw: &serde_json::Value) -> u32 {
+        let Some(reviews) = raw.as_array() else {
+            return 0;
+        };
+
+        let mut latest: HashMap<&str, &str> = HashMap::new();
+        for review in reviews {
+            let (Some(login), Some(state)) =
+                (review["user"]["login"].as_str(), review["state"].as_str())
+            else {
+                continue;
+            };
+            // `COMMENTED` is not a verdict — GitHub lets a reviewer comment
+            // without withdrawing an approval, so it must not overwrite one.
+            if matches!(state, "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED") {
+                latest.insert(login, state);
+            }
+        }
+
+        latest.values().filter(|s| **s == "APPROVED").count() as u32
+    }
 }
 
 #[async_trait]
@@ -94,7 +205,7 @@ impl ForgeRead for GitHubRead {
                 .map(|l| l.name)
                 .collect(),
             mergeable: pr.mergeable,
-            approvals: 0,
+            approvals: self.approvals(repo, number).await,
         })
     }
 
@@ -105,6 +216,18 @@ impl ForgeRead for GitHubRead {
             .list_files(number)
             .await
             .map_err(api)?;
+
+        // Sizes come from the head revision's tree, because the files endpoint
+        // does not report them. A removed file is absent from that tree and so
+        // keeps `None`, which is correct: it has no size at the head, and the
+        // blob scanner is asking about what the change *introduces*.
+        let sizes = match self.pull_request(repo, number).await {
+            Ok(pr) => self.blob_sizes(repo, &pr.head_sha).await,
+            Err(err) => {
+                tracing::warn!(%err, "could not resolve the head sha; sizes unavailable");
+                HashMap::new()
+            }
+        };
 
         let mut files = Vec::new();
         loop {
@@ -121,10 +244,10 @@ impl ForgeRead for GitHubRead {
                     additions: file.additions,
                     deletions: file.deletions,
                     patch: file.patch.clone(),
-                    // The files endpoint does not report size; the blob scanner
-                    // treats `None` as "unknown" rather than "small", so this
-                    // is honest rather than a silent zero.
-                    size_bytes: None,
+                    // Still `None` when the tree was truncated or unreadable.
+                    // `scan::blobs` reads that as "unknown" rather than
+                    // "small", which is the honest answer and the safe one.
+                    size_bytes: sizes.get(&file.filename).copied(),
                 });
             }
             match self.client.get_page(&page.next).await.map_err(api)? {
@@ -248,7 +371,7 @@ impl ForgeRead for GitHubRead {
             for c in &page.items {
                 comments.push(ReviewComment {
                     path: c.path.clone(),
-                    line: c.line.unwrap_or(0),
+                    line: c.line,
                     start_line: c.start_line,
                     // Carried through because dedupe refuses to trust a marker in
                     // anyone else's comment. No author means no trusted marker: an
@@ -553,5 +676,81 @@ impl ForgeWrite for GitHubWrite {
             .await
             .map_err(api)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_tree_reports_blob_sizes_and_skips_directories() {
+        // Directories carry no `size`, so they must not enter the map at all —
+        // a directory with a zero size would read as an empty file.
+        let tree = json!({
+            "truncated": false,
+            "tree": [
+                {"path": "src", "type": "tree"},
+                {"path": "src/main.rs", "type": "blob", "size": 1234},
+                {"path": "assets/logo.png", "type": "blob", "size": 4_000_000},
+            ]
+        });
+
+        let sizes = GitHubRead::sizes_from_tree(&tree);
+
+        assert_eq!(sizes.get("src/main.rs"), Some(&1234));
+        assert_eq!(sizes.get("assets/logo.png"), Some(&4_000_000));
+        assert_eq!(sizes.get("src"), None);
+    }
+
+    #[test]
+    fn a_truncated_tree_yields_no_size_rather_than_a_zero() {
+        // The dangerous failure is a size of zero, which reads as "safely
+        // small" to the blob scanner. Absence reads as unknown, which is true.
+        let sizes = GitHubRead::sizes_from_tree(&json!({"truncated": true, "tree": []}));
+        assert!(sizes.is_empty());
+        assert_eq!(sizes.get("src/main.rs"), None);
+    }
+
+    #[test]
+    fn only_a_reviewers_latest_verdict_counts_towards_approvals() {
+        // The bug this exists to stop: someone approves, then finds a problem
+        // and requests changes, and a naive count still reports an approval.
+        let reviews = json!([
+            {"user": {"login": "ana"}, "state": "APPROVED"},
+            {"user": {"login": "ana"}, "state": "CHANGES_REQUESTED"},
+            {"user": {"login": "bo"}, "state": "APPROVED"},
+        ]);
+
+        assert_eq!(GitHubRead::approvals_from_reviews(&reviews), 1);
+    }
+
+    #[test]
+    fn approving_twice_counts_once() {
+        let reviews = json!([
+            {"user": {"login": "ana"}, "state": "APPROVED"},
+            {"user": {"login": "ana"}, "state": "APPROVED"},
+        ]);
+
+        assert_eq!(GitHubRead::approvals_from_reviews(&reviews), 1);
+    }
+
+    #[test]
+    fn a_later_comment_does_not_withdraw_an_approval() {
+        // GitHub lets a reviewer comment without changing their verdict, so
+        // `COMMENTED` must not overwrite the approval that still stands.
+        let reviews = json!([
+            {"user": {"login": "ana"}, "state": "APPROVED"},
+            {"user": {"login": "ana"}, "state": "COMMENTED"},
+        ]);
+
+        assert_eq!(GitHubRead::approvals_from_reviews(&reviews), 1);
+    }
+
+    #[test]
+    fn an_unreadable_reviews_payload_reports_no_approvals() {
+        // Conservative direction: nothing gates on having *fewer* approvals.
+        assert_eq!(GitHubRead::approvals_from_reviews(&json!({})), 0);
     }
 }
