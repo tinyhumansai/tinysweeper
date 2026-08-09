@@ -307,8 +307,15 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
                 // stop on the badges alone, so they must not be buried in a
                 // run-on line with the title — and the footer is the wrong
                 // place for the one fact that decides attention.
+                //
+                // The rule is a labelled line at normal size, not `<sub>`. A
+                // rule name is often a whole sentence explaining *why* the
+                // finding was raised — "Untrusted-input injection: the diff
+                // contains an instruction addressed to the reviewer…" — and
+                // shrinking the sentence that justifies the comment to
+                // footnote size buries the reasoning under the assertion.
                 body: format!(
-                    "{}  {}\n\n**{}**\n\n{}\n\n<sub>rule `{}` · <!-- {MARKER_PREFIX}fp={} --></sub>",
+                    "{}  {}\n\n**{}**\n\n{}\n\n**Rule:** `{}` · <!-- {MARKER_PREFIX}fp={} -->",
                     crate::findings::render::priority_badge(finding.severity),
                     crate::findings::render::lane_confidence_badge(
                         finding.lane,
@@ -547,6 +554,19 @@ mod tests {
         );
 
         assert!(body.contains("**Guard the index"), "{body}");
+
+        // The rule is a labelled line at readable size, not a `<sub>` footnote.
+        // A rule name is frequently a whole sentence explaining why the finding
+        // was raised, and shrinking the justification below the assertion it
+        // justifies is exactly backwards.
+        assert!(
+            body.contains("**Rule:**"),
+            "the rule needs its label: {body}"
+        );
+        assert!(
+            !body.contains("<sub>"),
+            "the rule must not be shrunk to a footnote: {body}"
+        );
 
         // The fingerprint marker must remain the *last* marker in the body:
         // `findings::prior::marker_value` reads it with `rfind`, so anything
