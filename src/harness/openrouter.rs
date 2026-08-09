@@ -28,6 +28,7 @@ pub struct GatewayModel {
     api_key: String,
     base_url: String,
     fallbacks: Vec<String>,
+    reasoning_effort: String,
 }
 
 impl std::fmt::Debug for GatewayModel {
@@ -37,6 +38,18 @@ impl std::fmt::Debug for GatewayModel {
             .field("fallbacks", &self.fallbacks)
             .field("api_key", &"<redacted>")
             .finish()
+    }
+}
+
+/// The `reasoning` block sent with every request.
+///
+/// `"off"` disables it outright rather than asking for the lowest effort: a
+/// model that must think is better served by a deployment that says so, and
+/// "off" is the setting that rescues one whose reasoning eats the answer.
+fn reasoning_options(effort: &str) -> serde_json::Value {
+    match effort.trim() {
+        "off" | "" => json!({ "reasoning": { "enabled": false } }),
+        effort => json!({ "reasoning": { "effort": effort } }),
     }
 }
 
@@ -59,6 +72,7 @@ impl GatewayModel {
             api_key,
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
+            reasoning_effort: models.reasoning_effort.clone(),
         })
     }
 
@@ -66,20 +80,29 @@ impl GatewayModel {
         let provider = OpenAiModel::new(&self.api_key)
             .with_base_url(&self.base_url)
             .with_model(model)
-            // Reasoning off, and this is load-bearing rather than a
-            // preference. `kimi-k3` thinks by default and its reasoning is
-            // billed against the same `max_tokens` as the answer, so on a large
-            // diff it spends the entire budget thinking and returns *empty*
-            // content — measured on a 49k-token prompt: finish_reason `length`,
-            // all 8000 completion tokens consumed, 17k characters of reasoning,
-            // nothing left to answer with. Every review then fell back to a
-            // weaker model, silently.
+            // Reasoning, at the configured effort.
             //
-            // OpenRouter's `reasoning: {max_tokens: N}` does not help: this
-            // model ignores it, and reasoning ran past a 4096 cap to 37k
-            // characters. Disabling it outright is the only setting that holds,
-            // and it is also four times faster (34s against 110s).
-            .with_default_provider_options(json!({ "reasoning": { "enabled": false } }))
+            // This was hard-disabled, and the reason is worth keeping because
+            // it is a real hazard rather than a preference: reasoning is billed
+            // against the same `max_tokens` as the answer, so a model that
+            // thinks too much spends the whole budget and returns **empty**
+            // content. Measured on `kimi-k3` with a 49k-token prompt:
+            // finish_reason `length`, all 8000 completion tokens consumed, 17k
+            // characters of reasoning, nothing left to answer with — and every
+            // review then fell back to a weaker model, silently. Capping it
+            // with `reasoning: {max_tokens: N}` did not hold; that model
+            // ignored the cap and ran to 37k characters.
+            //
+            // It is on again because the model changed, and the new one was
+            // measured rather than assumed. `deepseek-v4-pro` at effort `high`,
+            // same shape of prompt and the same 8000-token ceiling: 416
+            // reasoning tokens, 522 completion tokens, `finish_reason` `stop`,
+            // valid structured output. Two orders of magnitude away from the
+            // budget rather than over it.
+            //
+            // `models.reasoning_effort = "off"` restores the old behaviour for
+            // a deployment that puts a thinking-heavy model back.
+            .with_default_provider_options(reasoning_options(&self.reasoning_effort))
             // Identifies us to OpenRouter, which is how per-application usage
             // shows up separately in their dashboard.
             .with_header(
@@ -210,6 +233,7 @@ mod tests {
 
     fn models() -> Models {
         Models {
+            reasoning_effort: "high".into(),
             gateway: "openrouter".into(),
             base_url: "https://openrouter.ai/api/v1".into(),
             api_key_env: "TINYSWEEPER_TEST_KEY_ABSENT".into(),
@@ -253,6 +277,7 @@ mod tests {
     #[test]
     fn debug_never_prints_the_api_key() {
         let model = GatewayModel {
+            reasoning_effort: "high".into(),
             api_key: "sk-secret-value".into(),
             base_url: "https://openrouter.ai/api/v1".into(),
             fallbacks: vec![],
@@ -269,5 +294,53 @@ mod tests {
             .to_string();
         assert!(err.contains("TINYSWEEPER_TEST_KEY_ABSENT"), "{err}");
         assert!(err.contains("openrouter.ai"), "{err}");
+    }
+
+    #[test]
+    fn off_disables_reasoning_rather_than_asking_for_a_little() {
+        // The escape hatch. A model whose reasoning eats the answer is not
+        // fixed by asking it to think less — `kimi-k3` ignored a 4096-token cap
+        // and ran to 37k characters — so "off" has to mean off.
+        assert_eq!(
+            reasoning_options("off"),
+            json!({ "reasoning": { "enabled": false } })
+        );
+        assert_eq!(
+            reasoning_options(""),
+            json!({ "reasoning": { "enabled": false } })
+        );
+    }
+
+    #[test]
+    fn an_effort_is_passed_through_as_an_effort() {
+        assert_eq!(
+            reasoning_options("high"),
+            json!({ "reasoning": { "effort": "high" } })
+        );
+    }
+
+    #[test]
+    fn the_configured_effort_reaches_the_gateway() {
+        // `reasoning_options` is tested in isolation above; this asserts the
+        // wire between config and gateway, which is the half that would leave
+        // the setting inert — the same failure `max_tokens` had, where the
+        // value was read, validated, documented, and then never forwarded.
+        let mut models = models();
+        models.reasoning_effort = "off".into();
+
+        // SAFETY-adjacent: no env mutation. The key is read from a variable the
+        // config names, so the test names one it sets nowhere and asserts the
+        // error, then builds the gateway directly for the positive case.
+        let gateway = GatewayModel {
+            api_key: "unused".into(),
+            base_url: models.base_url.clone(),
+            fallbacks: models.fallback.clone(),
+            reasoning_effort: models.reasoning_effort.clone(),
+        };
+
+        assert_eq!(
+            reasoning_options(&gateway.reasoning_effort),
+            json!({ "reasoning": { "enabled": false } })
+        );
     }
 }

@@ -41,11 +41,52 @@ pub struct Price {
     pub cached: f64,
 }
 
-/// Per-million-token prices, verified against openrouter.ai on 2026-08-08.
+/// Per-million-token prices, verified against openrouter.ai on 2026-08-09.
 ///
 /// tinyagents reports tokens but not cost, and the budget ceiling is
 /// denominated in dollars, so the conversion happens here.
+/// Entries exist for models this deployment does not currently select. That is
+/// deliberate: `completion_cost` fails closed on an unpriced model, so a
+/// one-line change to `models.deep` would otherwise take the budget ceiling
+/// with it. Every model here was measured before being priced.
 const MODEL_PRICES: &[(&str, Price)] = &[
+    (
+        // Not selected. Evaluated as a deep tier and rejected: cheaper per
+        // token than kimi-k3 but it reasons 3-6x more, which spends the
+        // difference — $0.00598 a call against $0.00556.
+        "qwen/qwen3.8-max",
+        Price {
+            input: 2.00,
+            output: 6.00,
+            cached: 0.25,
+        },
+    ),
+    (
+        "z-ai/glm-5.2",
+        Price {
+            input: 0.07,
+            output: 0.22,
+            cached: 0.013,
+        },
+    ),
+    (
+        "deepseek/deepseek-v4-pro",
+        Price {
+            input: 0.435,
+            output: 0.87,
+            // Cache reads are a *hundredth* of the input price here, against a
+            // tenth on kimi-k3. On a re-review that is most of the bill.
+            cached: 0.003625,
+        },
+    ),
+    (
+        "deepseek/deepseek-v4-flash",
+        Price {
+            input: 0.14,
+            output: 0.28,
+            cached: 0.028,
+        },
+    ),
     (
         "moonshotai/kimi-k3",
         Price {
@@ -295,5 +336,72 @@ mod tests {
         assert_eq!(estimate_tokens("abc"), 1);
         assert_eq!(estimate_tokens("abcd"), 1);
         assert_eq!(estimate_tokens("abcde"), 2);
+    }
+
+    #[test]
+    fn every_model_the_defaults_select_has_a_price() {
+        // The test that matters more than any individual row. `completion_cost`
+        // fails closed on an unpriced model, so shipping a `defaults.toml` that
+        // names one turns the budget ceiling into a hard error on the first
+        // review — and the failure would land in production, not here.
+        let config: crate::config::types::Config = crate::config::DEFAULTS
+            .parse::<toml::Table>()
+            .expect("defaults parse")
+            .try_into()
+            .expect("defaults deserialize");
+
+        let mut named = vec![config.models.scan.clone(), config.models.deep.clone()];
+        named.extend(config.models.fallback.iter().cloned());
+
+        let missing = unpriced(named.iter().map(String::as_str));
+        assert!(
+            missing.is_empty(),
+            "unpriced models in defaults: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn the_new_deep_tier_costs_what_the_table_says() {
+        // Anchored on the real figure this change was made against: PR #62's
+        // security lane sent 82,914 input and 842 output tokens and cost
+        // $0.2614 on the outgoing model. The same call on this one is the whole
+        // argument for the switch, so it is pinned rather than asserted vaguely.
+        // Note the argument order: input, **cached**, output. Getting it wrong
+        // is silent — every argument is a `u64` — and I did exactly that while
+        // writing this test, which is why the ordering is now pinned below.
+        let cost = completion_cost("z-ai/glm-5.2", 82_914, 0, 842);
+
+        assert!(
+            (0.005..0.007).contains(&cost),
+            "expected roughly $0.006 for the 83k-token security call, got {cost:.5}"
+        );
+    }
+
+    #[test]
+    fn a_cached_read_is_charged_at_the_cache_rate() {
+        // GLM 5.2 reads cache at a fifth of its input price, and a re-review is
+        // mostly cache. Charging cached tokens at full price would misreport
+        // exactly the number this change exists to move.
+        let cold = completion_cost("z-ai/glm-5.2", 100_000, 0, 1_000);
+        let warm = completion_cost("z-ai/glm-5.2", 100_000, 90_000, 1_000);
+
+        assert!(
+            warm < cold,
+            "cached tokens must cost less: {warm} vs {cold}"
+        );
+    }
+
+    #[test]
+    fn the_middle_argument_is_cached_tokens_not_output() {
+        // Every parameter is a `u64`, so swapping two of them compiles and
+        // silently misreports the bill. Output is priced far above cache reads,
+        // so the two orderings are distinguishable — which is what this asserts.
+        let correct = completion_cost("z-ai/glm-5.2", 1_000_000, 0, 1_000_000);
+        let swapped = completion_cost("z-ai/glm-5.2", 1_000_000, 1_000_000, 0);
+
+        assert!(
+            correct > swapped,
+            "input+output must cost more than input-all-cached: {correct} vs {swapped}"
+        );
     }
 }
