@@ -631,12 +631,12 @@ impl Merges for MergeDispatch {
                     outcome: "merged",
                     detail: None,
                 },
-                Ok(Outcome::Refused(refusal)) => MergeReport {
+                Ok(Some(Outcome::Refused(refusal))) => MergeReport {
                     number,
                     outcome: "refused",
                     detail: Some(refusal.to_string()),
                 },
-                Ok(Outcome::Rejected { method, reason }) => MergeReport {
+                Ok(Some(Outcome::Rejected { method, reason })) => MergeReport {
                     number,
                     outcome: "rejected",
                     detail: Some(format!("the forge refused a `{method}` merge: {reason}")),
