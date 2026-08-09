@@ -162,6 +162,7 @@ impl RetrievedContext {
             dropped: 0,
             tokens: 0,
             graph_nodes: 0,
+            impact: Default::default(),
         }
     }
 
