@@ -16,13 +16,51 @@ use crate::ports::model::Usage;
 /// they carry the word as well as the colour — which matters for anyone who
 /// cannot distinguish red from amber — and they line up in a table.
 pub fn badge(severity: Severity) -> String {
-    let (label, colour) = match severity {
+    let (label, colour) = severity_parts(severity);
+    format!("![{label}](https://img.shields.io/badge/{label}-{colour}?style=flat-square)")
+}
+
+/// The severity badge, labelled, for the head of an inline comment.
+///
+/// `label=priority` puts the word "priority" in the grey half and the level in
+/// the coloured half, so the badge reads as a sentence rather than a bare word
+/// whose meaning depends on knowing our colour scheme. The unlabelled
+/// [`badge`] stays for the summary table, where a column heading already says
+/// what the colour means and repeating it on every row is noise.
+pub fn priority_badge(severity: Severity) -> String {
+    let (label, colour) = severity_parts(severity);
+    format!(
+        "![priority {label}](https://img.shields.io/badge/{label}-{colour}?label=priority)"
+    )
+}
+
+/// The lane and how sure it is, as one badge.
+///
+/// Two facts that are only useful together: "tests" alone does not say whether
+/// to act, and "likely" alone does not say who is talking. Pairing them costs
+/// one badge instead of two and reads as `tests | likely`.
+pub fn lane_confidence_badge(lane: LaneId, confidence: f64) -> String {
+    let (word, colour) = confidence_parts(confidence);
+    format!("![{lane} {word}](https://img.shields.io/badge/{lane}-{word}-{colour})")
+}
+
+/// Colour and word for a severity.
+fn severity_parts(severity: Severity) -> (&'static str, &'static str) {
+    match severity {
         Severity::Critical => ("critical", "b60205"),
         Severity::High => ("high", "d93f0b"),
         Severity::Medium => ("medium", "fbca04"),
         Severity::Low => ("low", "0e8a16"),
-    };
-    format!("![{label}](https://img.shields.io/badge/{label}-{colour}?style=flat-square)")
+    }
+}
+
+/// Colour and word for a confidence, bucketed.
+fn confidence_parts(confidence: f64) -> (&'static str, &'static str) {
+    match confidence {
+        c if c >= 0.9 => ("confident", "1f6feb"),
+        c if c >= 0.7 => ("likely", "6f42c1"),
+        _ => ("uncertain", "8b949e"),
+    }
 }
 
 /// A confidence badge, bucketed rather than exact.
@@ -30,11 +68,7 @@ pub fn badge(severity: Severity) -> String {
 /// A model's 0.83 is not meaningfully different from its 0.79, and printing two
 /// decimal places implies a precision that is not there.
 pub fn confidence_badge(confidence: f64) -> String {
-    let (label, colour) = match confidence {
-        c if c >= 0.9 => ("confident", "1f6feb"),
-        c if c >= 0.7 => ("likely", "6f42c1"),
-        _ => ("uncertain", "8b949e"),
-    };
+    let (label, colour) = confidence_parts(confidence);
     format!("![{label}](https://img.shields.io/badge/{label}-{colour}?style=flat-square)")
 }
 
