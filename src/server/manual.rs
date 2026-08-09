@@ -104,12 +104,44 @@ pub trait FullReviews: Send + Sync {
     async fn enqueue(&self, repo: &RepoId, number: Option<u64>) -> Result<Vec<u64>>;
 }
 
-/// What the manual route needs.
+/// How the route reaches the auto-merge policy.
+///
+/// A second trait rather than a method on [`FullReviews`] because the two jobs
+/// have nothing in common but a repository: a review spends money and posts
+/// comments, an evaluation is arithmetic over state GitHub already holds.
+#[async_trait]
+pub trait Merges: Send + Sync {
+    /// Evaluate pull requests against `[automerge]`, merging those that
+    /// qualify, and report what happened to each.
+    ///
+    /// `number` is `None` for every open pull request in the repository, which
+    /// is the sweep an operator runs after changing the policy. Unlike
+    /// [`FullReviews::enqueue`] this waits for the answer: there is no model in
+    /// this path, so it is fast enough to report, and "which ones did it refuse
+    /// and why" is the entire reason to press the button by hand.
+    async fn evaluate(&self, repo: &RepoId, number: Option<u64>) -> Result<Vec<MergeReport>>;
+}
+
+/// What the policy decided about one pull request.
+#[derive(Debug, Clone, Serialize)]
+pub struct MergeReport {
+    /// The pull request.
+    pub number: u64,
+    /// `merged`, `refused` or `rejected`.
+    pub outcome: &'static str,
+    /// The refusal or the forge's complaint, rendered for a human. `None` on a
+    /// merge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// What the manual routes need.
 #[derive(Clone)]
 struct ManualState {
     /// The one organisation this deployment will review on request.
     allowed_org: Arc<str>,
     reviews: Arc<dyn FullReviews>,
+    merges: Arc<dyn Merges>,
 }
 
 /// Build the manual review router, or nothing when no token is configured.
