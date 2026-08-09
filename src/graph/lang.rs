@@ -209,7 +209,7 @@ mod tests {
                     );
                 } else {
                     assert!(
-                        [CAP_NAME, CAP_IMPORT, CAP_CALL, CAP_REF].contains(capture),
+                        [CAP_NAME, CAP_IMPORT, CAP_CALL, CAP_REF, CAP_HERITAGE].contains(capture),
                         "{}: stray capture {capture}",
                         lang.tag()
                     );
