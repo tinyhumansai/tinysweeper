@@ -94,6 +94,8 @@ const RUST_QUERY: &str = r#"
 
 (use_declaration) @import.stmt
 
+(impl_item) @heritage.stmt
+
 (call_expression function: (identifier) @use.call)
 (call_expression function: (scoped_identifier name: (identifier) @use.call))
 (call_expression function: (field_expression field: (field_identifier) @use.call))
