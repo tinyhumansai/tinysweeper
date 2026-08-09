@@ -16,7 +16,10 @@ use tree_sitter::{Node, Parser, QueryCursor};
 
 use crate::error::{Error, Result};
 use crate::graph::lang;
-use crate::graph::types::{Definition, ImportStmt, Language, ParsedFile, SourceFile, Usage};
+use crate::graph::path;
+use crate::graph::types::{
+    Definition, Heritage, ImportStmt, Language, ParsedFile, SourceFile, Usage,
+};
 
 /// Parse one file into definitions, imports and usages.
 ///
