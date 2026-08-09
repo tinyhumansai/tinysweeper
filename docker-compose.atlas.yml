@@ -1,0 +1,30 @@
+# Run tinysweeper against an external MongoDB instead of the bundled pair.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.atlas.yml up -d tinysweeper
+#
+# The base compose file ships mongod and mongot because self-hosting the search
+# process is the part that is easy to get wrong. A managed deployment — Atlas,
+# or anything else exposing an SRV URI — already has both, so this overlay
+# points the server at it and detaches it from the local pair.
+#
+# Requirements on the target deployment, all three checked at boot by
+# `VECTOR_SEARCH_UNAVAILABLE` in src/index/mongo.rs rather than assumed:
+# `$vectorSearch`, `$search` and `$rankFusion`. A cluster without the search
+# process serves none of them, and the failure would otherwise arrive as an
+# empty retrieval on somebody's pull request rather than as a boot error.
+#
+# Note what this overlay does NOT do: it leaves the mongod and mongot service
+# definitions in place, so `docker compose up mongod` still brings the local
+# database up for the integration tests. It only detaches the server from them.
+
+services:
+  tinysweeper:
+    # Nothing local left to wait for. Without this the server would sit behind a
+    # healthcheck on a database it is not going to use.
+    depends_on: !reset null
+    environment:
+      # Required, and deliberately `:?` rather than `:-`. Naming this overlay is
+      # an explicit request to use an external database; falling back to the
+      # local URI there would start a server that looks healthy and quietly
+      # indexes into the wrong place.
+      TINYSWEEPER_MONGODB_URI: ${TINYSWEEPER_MONGODB_URI:?set TINYSWEEPER_MONGODB_URI to the external deployment}
