@@ -657,22 +657,18 @@ impl Merges for MergeDispatch {
 
 /// Evaluate one pull request and hand back the outcome rather than logging it.
 ///
-/// Shares the lease with the webhook path deliberately: a sweep running while
-/// a delivery is being handled must not evaluate the same pull request twice
-/// and race to merge it.
+/// `None` means another worker holds the lease. Shared with the webhook path
+/// deliberately: a sweep running while a delivery is being handled must not
+/// evaluate the same pull request twice and race to merge it.
 async fn automerge_inner_reporting(
     state: &AppState,
     repo: &RepoId,
     number: u64,
     installation: u64,
-) -> Result<Outcome> {
+) -> Result<Option<Outcome>> {
     let lease = format!("{repo}#automerge-{number}");
     if !state.store.claim_lease(&lease, "server").await? {
-        return Ok(Outcome::Refused(
-            crate::automerge::types::Refusal::UnreadablePolicy(
-                "another worker is already evaluating this pull request".into(),
-            ),
-        ));
+        return Ok(None);
     }
 
     let outcome = evaluate_and_merge(state, repo, number, installation).await;
