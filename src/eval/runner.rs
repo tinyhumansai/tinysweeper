@@ -279,21 +279,41 @@ fn write_proposal(out: &Path, id: &str, proposal: &Proposal) -> Result<()> {
 /// improvement is the mistake this makes impossible.
 pub fn digest_of(config: &Config) -> String {
     let mut hasher = Sha256::new();
+    // A label per field, and a `\0` after every value. Without both, two
+    // different configurations can hash as one byte stream — `scan: "ab",
+    // deep: "c"` versus `scan: "a", deep: "bc"` — and the report would call a
+    // differently-configured run comparable.
+    let mut field = |label: &[u8], value: &[u8]| {
+        hasher.update(label);
+        hasher.update(value);
+        hasher.update(b"\0");
+    };
     let review = &config.review;
-    hasher.update(review.lanes.join(",").as_bytes());
-    hasher.update(review.strictness.to_le_bytes());
-    hasher.update(format!("{:?}", review.severity_gate).as_bytes());
-    hasher.update(format!("{:?}", review.confidence_min).as_bytes());
-    hasher.update(review.max_comments.to_le_bytes());
+    field(b"lanes\0", review.lanes.join(",").as_bytes());
+    field(b"strictness\0", &review.strictness.to_le_bytes());
+    field(b"severity_gate\0", format!("{:?}", review.severity_gate).as_bytes());
+    field(b"confidence_min\0", format!("{:?}", review.confidence_min).as_bytes());
+    field(b"max_comments\0", &review.max_comments.to_le_bytes());
     let models = &config.models;
-    hasher.update(models.scan.as_bytes());
-    hasher.update(models.deep.as_bytes());
-    hasher.update(models.fallback.join(",").as_bytes());
-    hasher.update(models.max_tokens.to_le_bytes());
-    hasher.update(models.reasoning_effort.as_bytes());
+    field(b"scan\0", models.scan.as_bytes());
+    field(b"deep\0", models.deep.as_bytes());
+    field(b"fallback\0", models.fallback.join(",").as_bytes());
+    field(b"max_tokens\0", &models.max_tokens.to_le_bytes());
+    field(b"reasoning_effort\0", models.reasoning_effort.as_bytes());
+    // Per-lane overrides move `Config::model_for` — a lane pinned to a cheaper
+    // or stronger model answers differently — so a score made with them is not
+    // the same run as one without. `BTreeMap` iterates in id order, keeping
+    // the hash stable.
+    for (id, lane) in &config.lanes {
+        field(b"lane\0", id.as_bytes());
+        field(b"lane_model\0", format!("{:?}", lane.model).as_bytes());
+        field(b"lane_fail_on\0", format!("{:?}", lane.fail_on).as_bytes());
+        field(b"lane_rulepack\0", format!("{:?}", lane.secret_rulepack).as_bytes());
+        field(b"lane_max_blob\0", format!("{:?}", lane.max_blob_bytes).as_bytes());
+    }
     for instruction in &config.path_instructions {
-        hasher.update(instruction.glob.as_bytes());
-        hasher.update(instruction.instructions.as_bytes());
+        field(b"glob\0", instruction.glob.as_bytes());
+        field(b"instructions\0", instruction.instructions.as_bytes());
     }
     hasher
         .finalize()
