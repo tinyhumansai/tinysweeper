@@ -766,7 +766,9 @@ mod tests {
             LaneId::Commits,
         ] {
             let config = config();
-            let prefix = build(&PromptInputs::new(lane, &config)).prefix().to_string();
+            let prefix = build(&PromptInputs::new(lane, &config))
+                .prefix()
+                .to_string();
             assert!(prefix.contains("test fixture"), "{lane:?}");
             assert!(prefix.contains("asserts that it is contained"), "{lane:?}");
         }
