@@ -12,7 +12,7 @@ That boundary is enforced by the type system rather than by discipline.
 | `critique` | `tinysweeper/critique` | Correctness of the diff | — |
 | `security` | `tinysweeper/security` | What the change makes attackable | `workflow`, `dependency` |
 | `tests` | `tinysweeper/tests` | Whether changed behaviour is covered | — |
-| `commits` | `tinysweeper/commits` | The commit range and what it committed | `secret`, `blob`, `junk` |
+| `commits` | `tinysweeper/commits` | What entered the history — **no model call** | `secret`, `blob`, `junk` |
 | `description` | `tinysweeper/description` | Title and body against the diff | — |
 | `gate` | `tinysweeper/gate` | Deterministic aggregate of the others | — |
 
@@ -37,31 +37,35 @@ regular expression first is that it cannot be argued with. What a model *can*
 do is add what a scanner cannot see, and its findings are dropped when they
 merely restate a scanner match on the same path and rule.
 
-## What the `commits` lane is shown
+## The `commits` lane makes no model call
 
-`git log -p` over the range: each commit's message *and* the patch it
-introduced, fetched per commit by `ForgeRead::commit_patch` and assembled by
-`pull_request_context`. Without the patches the lane could only read subject
-lines, and it built a confident security finding out of the phrase "kernel
-bypass" in one (issue #47).
+It republishes what the deterministic scanners found in the commit range —
+secrets, oversized blobs, committed build output — and does nothing else. No
+prompt is built, no tokens are spent, and its verdict is a regular expression's
+rather than a model's.
 
-Two bounds, both stated in the evidence rather than applied silently:
+It used to also judge the range itself: messages that describe nothing, merge
+noise, unrelated work bundled together, an author identity that looks
+accidental. That job is gone. Recorded here because the temptation to restore it
+is obvious and the reason not to is not.
 
-| Bound | Value | What happens past it |
-|---|---|---|
-| Commits rendered | 50 | Listed as "… and N more commits, not shown." |
-| Commits fetched | `ports::forge::MAX_PATCHED_COMMITS` (50) | `patch: None`, rendered as "no patch was fetched" |
-| Patch bytes per range | 48 KiB | Message still shown, patch omitted, count reported |
-| Patch bytes per commit | 12 KiB | Cut on a line boundary with the dropped byte count |
+A model asked "is anything wrong with these commits?" will always find
+something. Commit prose is infinitely criticisable and the question presumes a
+defect, so the lane produced a steady stream of style objections — on a
+repository whose commits are frequently written by an automated checkpointing
+hook, attached to a check that could block a merge. One of them arrived carrying
+the rule `Commit message style only — not flagged` and flagged it anyway.
 
-A commit with no patch is never rendered as an empty diff. The instructions let
-the lane judge such a commit's message as a message and forbid it from inferring
-what the commit did — a distinction it can only make if the evidence draws it.
+The judgement was also the part nobody could audit, and the scan is the part
+anybody can. Removing it makes the lane's verdict deterministic — it fails when
+a scanner matched and for no other reason — which is a stronger security
+property than it had before, and it costs nothing rather than one model call per
+review.
 
-The lane's findings then go through `src/falsify` before the scanner findings
-are merged in. That order is the invariant: a model's claim about the range is
-exactly what a falsifier can prove wrong from the patches, and a scanner's match
-is never up for a model's opinion.
+**It is the one lane that still runs on a draft.** Every other lane defers,
+because its opinion can wait. A committed credential cannot: it is in the
+history the moment it is pushed, and marking the pull request draft afterwards
+does not take it back out.
 
 ## Anchoring
 

@@ -384,7 +384,7 @@ pub async fn review_with_retrieval(
             LaneId::Critique => Box::new(Critique::new(model.clone())),
             LaneId::Security => Box::new(Security::new(model.clone())),
             LaneId::Tests => Box::new(Tests::new(model.clone())),
-            LaneId::Commits => Box::new(Commits::new(model.clone())),
+            LaneId::Commits => Box::new(Commits::new()),
             LaneId::Description => Box::new(Description::new(model.clone())),
             // The gate is the deterministic aggregate of the others and never
             // runs as a lane; it is appended below, after they have all
