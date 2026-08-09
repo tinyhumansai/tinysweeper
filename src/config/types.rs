@@ -532,6 +532,15 @@ pub struct Retrieval {
     pub graph_hops: u8,
     /// Hard ceiling on nodes returned by the walk, applied after it.
     pub max_graph_nodes: usize,
+    /// How many dependents the blast-radius block may name.
+    ///
+    /// Separate from [`Retrieval::max_graph_nodes`] because it bounds a
+    /// different thing: that cap is on the code a lane is *shown*, this one is
+    /// on the list of names it is told depends on the change. A widely-imported
+    /// file has more dependents than any reviewer can act on, and a hundred
+    /// paths above a diff read as noise rather than as a warning. `0` turns the
+    /// block off.
+    pub max_impact: usize,
 }
 
 /// Model work that is not a lane.
