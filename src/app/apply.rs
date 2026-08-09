@@ -58,10 +58,12 @@ pub async fn apply(
             .await?;
     }
 
-    // Whether we are already blocking this pull request. GitHub keeps only the
-    // latest review per reviewer, so this is also how a fixed pull request gets
-    // unblocked: without an explicit clearing verdict a stale objection blocks
-    // the merge button until a human dismisses it by hand.
+    // What tinysweeper already said about this pull request. GitHub keeps only
+    // the latest review per reviewer, which makes this load-bearing twice: it
+    // is how a fixed pull request gets unblocked — without an explicit clearing
+    // verdict a stale objection blocks the merge button until a human dismisses
+    // it by hand — and it is how an approval that already stands avoids being
+    // restated on every push.
     let previous = own_review_state(read, &repo, proposal.number).await;
     let event = review_event(config, proposal, previous);
     let comments = inline_comments(proposal);
