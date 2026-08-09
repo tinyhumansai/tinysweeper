@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use crate::error::{Error, Result};
 use crate::index::types::{
     Chunk, EdgeKind, EmbedSignature, Embedded, EmbeddedChunk, GraphEdge, GraphNode, HybridQuery,
-    KnowledgeDoc, KnowledgeScope, Neighbourhood, ScoredChunk,
+    KnowledgeDoc, KnowledgeScope, Neighbourhood, NodeKind, ScoredChunk,
 };
 use crate::ports::embed::Embedder;
 use crate::ports::graph::GraphStore;
