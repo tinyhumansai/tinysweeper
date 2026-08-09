@@ -140,6 +140,38 @@ fn another_changed_file_is_not_its_own_blast_radius() {
 }
 
 #[test]
+fn a_test_changed_in_the_same_push_still_counts_as_coverage() {
+    // The function and the test that exercises it changed together, so both are
+    // seeds. The test earns no `reached` row — it is already in front of the
+    // reviewer — but it still covers the function, and reporting that function
+    // as untested because of a shared push would be wrong.
+    let seeds = vec![
+        "src/lib/math.test.ts".to_string(),
+        "src/lib/math.ts#total".to_string(),
+    ];
+    let neighbourhood = hood(
+        &[symbol("src/lib/math.ts#total")],
+        &[edge(
+            "src/lib/math.test.ts",
+            "src/lib/math.ts#total",
+            EdgeKind::Tests,
+        )],
+    );
+
+    let impact = Impact::of(&neighbourhood, &seeds, DEFAULT_MAX_REACHED);
+    assert!(
+        impact.reached.is_empty(),
+        "seeds are excluded from reached: {:?}",
+        impact.reached
+    );
+    assert!(
+        impact.untested.is_empty(),
+        "a same-diff test covers it: {:?}",
+        impact.untested
+    );
+}
+
+#[test]
 fn the_cap_drops_importers_before_it_drops_a_test() {
     let seeds = vec!["src/ledger.rs#settle".to_string()];
     let mut edges = vec![edge(
