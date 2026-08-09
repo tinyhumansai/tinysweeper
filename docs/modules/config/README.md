@@ -94,3 +94,42 @@ rejected rather than resolved.
 | `validate.rs` | Every check, collected |
 | `mod.rs` | Discovery and the loader |
 | `test.rs` | Tests, split out because they span three modules |
+
+## The reviewed repository's own config, under `serve`
+
+`load()` above reads from a local filesystem. Under `serve` there is no
+checkout of the repository being reviewed, so that path reads the *server's*
+`.tinysweeper.toml` for every repository — tinysweeper's own policy applied to
+everyone else's code. `config::remote` fixes that by fetching the reviewed
+repository's file through `ForgeRead::file_at`, in the same `CONFIG_NAMES`
+order, and laying it over the deployment's effective config.
+
+It is **not** a wholesale merge. A `.tinysweeper.toml` in a reviewed repository
+is written by whoever opened the pull request, and unlike `AGENTS.md` — prose a
+sandboxed extractor turns into fenced advice — a config key is acted on
+deterministically. Only `remote::OVERRIDABLE_KEYS` are applied; everything else
+is dropped and logged.
+
+| Class | Keys | Why |
+| --- | --- | --- |
+| Overridable | `review.strictness`, `review.severity_gate`, `review.confidence_min`, `review.max_comments`, `review.lanes`, `review.incremental`, `review.draft_prs`, `review.respect_agents_md`, `paths.ignore`, `labels.*`, `knowledge.extract`, `knowledge.files`, `lanes.*.fail_on` | How loud this repository's own review is. The worst a repository can do with these is get a quieter review of itself. |
+| Not overridable | `[models]`, `[embeddings]` | Model choice, `base_url` and `api_key_env` spend the operator's money and name the operator's secrets. Provider/model/dimensions are the index partition key: one repository changing them invalidates every other repository's vectors. |
+| Not overridable | `[automerge]`, `[issues]`, `[automation]`, `[sentry]` | Write actions against the operator's installation. A repository that could enable auto-merge from a branch could merge that branch. |
+| Not overridable | `review.request_changes_at`, `review.approve_when_clean` | The verdict controls: whether a finding blocks the merge button, and whether the bot's approval can satisfy a branch protection rule. |
+| Not overridable | `path_instructions` | Free text injected unfenced into a lane's instructions. Repository prose reaches a prompt through exactly one door — the sandboxed extraction in `crate::knowledge` — and this must not become a second. |
+| Not overridable | `preset`, `version` | A preset is read from the *server's* filesystem and may set any key at all, so honouring one named by the reviewed repository would make every exclusion above reachable in one line. |
+
+Read at the **base branch's tip**, not the pull request's head. Instruction
+files are read at the head because they are sandboxed advice about the tree
+under review; a config is policy that is acted on, and reading it from the
+branch under review would let a pull request grade its own exam — disable the
+`security` lane in the same commit that needs it. The cost is that a pull
+request which adds or fixes a config is reviewed under the old one until it
+merges, the same trade every forge makes for workflow files on fork pull
+requests.
+
+Best-effort throughout: an unreachable forge, a file that is not TOML, and a
+result that fails validation all cost the repository its own settings and none
+of them cost it the review. Failing would hand any contributor a way to break
+the bot by committing one broken line. Validation is all-or-nothing — a
+half-applied override is a configuration no layer ever wrote.

@@ -124,9 +124,14 @@ services:
     # else — so without this mount the server runs entirely on built-in
     # defaults. That is not a smaller version of the intended behaviour: it
     # means `[embeddings]` is off, so the index never builds and every review is
-    # diff-only, silently. Mounting the file is the interim answer; the real one
-    # is #12, fetching each reviewed repository's own config through the forge
-    # rather than reading one from the server's filesystem.
+    # diff-only, silently.
+    #
+    # This file is now the *deployment's* half of the configuration and stays
+    # mounted: it is where the model tiers, the credentials by name, the budget
+    # and the embedding provider live, and none of those are things a reviewed
+    # repository may set. Each reviewed repository's own `.tinysweeper.toml` is
+    # fetched through the forge and laid over this one, allow-listed to the
+    # noise controls — see `docs/modules/config/README.md`.
     volumes:
       - ./.tinysweeper.toml:/home/tinysweeper/.tinysweeper.toml:ro
     ports:
