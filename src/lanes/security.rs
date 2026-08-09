@@ -78,11 +78,39 @@ impl Lane for Security {
             return Ok(skipped);
         }
 
+        // Files this lane has already seen, unchanged since. Dropped before
+        // triage, not after: the cheapest call is the one not made, and this
+        // lane spends one call per file, so re-reviewing an untouched file on
+        // every push is the single largest avoidable cost in a review.
+        //
+        // Distinct from replaying evidence into the cacheable prefix, which is
+        // what `critique` does. That only pays when the provider honours the
+        // cache; this pays always.
+        let fresh: Vec<crate::evidence::diff::FileDiff> =
+            crate::evidence::replay::unreviewed(input.reviewed_evidence, input.diffs)
+                .into_iter()
+                .cloned()
+                .collect();
+
         // Deterministic triage before any token is spent: drop the files that
         // cannot carry a vulnerability, and review what is left riskiest first
         // so an exhausted budget was spent on the files that mattered.
+        //
+        // A scanner match forces its file back in even when unchanged: a
+        // committed key is reported every time until it is gone, and "we
+        // mentioned it last push" is not a reason to stop.
         let forced: Vec<&str> = scanner.iter().map(|f| f.path.as_str()).collect();
-        let triaged = triage(input.diffs, &forced);
+        let forced_back: Vec<crate::evidence::diff::FileDiff> = input
+            .diffs
+            .iter()
+            .filter(|d| forced.contains(&d.path.as_str()))
+            .filter(|d| !fresh.iter().any(|f| f.path == d.path))
+            .cloned()
+            .collect();
+        let mut considered = fresh;
+        considered.extend(forced_back);
+
+        let triaged = triage(&considered, &forced);
 
         if triaged.review.is_empty() && scanner.is_empty() {
             return Ok(LaneOutcome::skipped(format!(
@@ -315,6 +343,16 @@ mod tests {
         diffs: &[FileDiff],
         scan_findings: &[ScanFinding],
     ) -> LaneOutcome {
+        run_with_reviewed(model, config, diffs, scan_findings, "").await
+    }
+
+    async fn run_with_reviewed(
+        model: MockModel,
+        config: &Config,
+        diffs: &[FileDiff],
+        scan_findings: &[ScanFinding],
+        reviewed_evidence: &str,
+    ) -> LaneOutcome {
         let pr = pull_request();
         Security::new(Arc::new(model))
             .run(LaneInput {
@@ -326,7 +364,7 @@ mod tests {
                 commits: &[],
                 repo_policy: None,
                 extracted_rules: &[],
-                reviewed_evidence: "",
+                reviewed_evidence,
                 prior_findings: &[],
                 retrieved_context: "",
             })
@@ -628,5 +666,60 @@ mod tests {
 
         let rendered = serde_json::to_string(&outcome.findings).unwrap();
         assert!(!rendered.contains("IOSFODNN7EXAMPLE"), "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn a_file_reviewed_last_push_and_unchanged_costs_nothing_this_push() {
+        // The largest avoidable cost in a review. This lane spends one model
+        // call per file, so before this a push touching one file still paid for
+        // every file in the pull request — and the bill grew with the branch
+        // rather than with the change.
+        let unchanged = parse_file_patch("src/handler.rs", PATCH);
+        let touched = parse_file_patch(
+            "src/other.rs",
+            "@@ -1,1 +1,2 @@\n fn other() {\n+    let _ = std::process::Command::new(\"sh\");\n",
+        );
+        let previous = crate::evidence::replay::render(std::slice::from_ref(&unchanged));
+
+        let model = MockModel::silent();
+        let both = vec![unchanged, touched];
+        run_with_reviewed(model.clone(), &config(), &both, &[], &previous).await;
+
+        let paths: Vec<String> = model
+            .requests()
+            .into_iter()
+            .map(|r| r.messages[1].content.clone())
+            .collect();
+        assert_eq!(paths.len(), 1, "one call, for the file that changed");
+        assert!(
+            paths[0].contains("src/other.rs") && !paths[0].contains("src/handler.rs"),
+            "{paths:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_scanner_match_is_re_reported_even_on_an_unchanged_file() {
+        // A committed key is reported every push until it is gone. "We
+        // mentioned it last time" is not a reason to stop, so a scanner match
+        // forces its file back past the incremental skip.
+        let unchanged = parse_file_patch(".github/workflows/ci.yml", PATCH);
+        let previous = crate::evidence::replay::render(std::slice::from_ref(&unchanged));
+
+        let outcome = run_with_reviewed(
+            MockModel::silent(),
+            &config(),
+            std::slice::from_ref(&unchanged),
+            &[workflow_finding()],
+            &previous,
+        )
+        .await;
+
+        assert!(
+            outcome
+                .findings
+                .iter()
+                .any(|f| f.rule == "workflow-write-all"),
+            "{outcome:?}"
+        );
     }
 }
