@@ -727,6 +727,7 @@ mod tests {
             glob: "src/ports/**".into(),
             instructions: "One trait per file.".into(),
             rules: None,
+            lanes: Vec::new(),
         }];
         let prompt = build(&inputs(&config, "", "@@ -1 +1 @@\n+a\n"));
 

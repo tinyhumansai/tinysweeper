@@ -318,6 +318,13 @@ pub struct PathInstruction {
     /// a rule's negative list — the "do NOT report" half that does most of the
     /// precision work — practical to write and to review.
     pub rules: Option<String>,
+    /// The lanes this entry applies to. Empty means every lane.
+    ///
+    /// A rule document is only precision for the lane it was written for. Shown
+    /// to the others it is pure cost: more prefix tokens on every call, and one
+    /// more subject each of those reviewers can form an opinion about. Scoping
+    /// is what makes a long document — a security taxonomy, say — affordable.
+    pub lanes: Vec<LaneId>,
 }
 
 /// Review-cache behaviour. See `docs/modules/cache/README.md`.
