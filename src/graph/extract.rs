@@ -107,7 +107,9 @@ pub fn parse_as(file: &SourceFile, language: Language) -> Result<ParsedFile> {
                     inline_mods.push((decl_node.start_byte(), decl_node.end_byte()));
                 }
             }
+            heritage.extend(declared_heritage(decl_node, &name, source, language));
             defs.push(Definition {
+                test: is_test_definition(decl_node, &name, kind, source, language),
                 name,
                 kind,
                 line: line(name_node),
