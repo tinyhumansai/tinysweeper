@@ -84,6 +84,22 @@ notices the same cross-file problem and the author gets it N times. One file's
 failure is collected, not propagated: the rest are still reviewed and the
 summary says which were not.
 
+Before the fan-out, `lanes::triage` decides deterministically — for free, with
+no model call — which changed files are worth one and in what order:
+
+- **Skipping** is narrow. Only lockfiles, vendored and build output, prose,
+  binary assets, snapshots and generated code are dropped, and never a path a
+  scanner already flagged. Agent instruction files (`AGENTS.md` and friends) are
+  explicitly *not* prose here: a tool reads them back as instructions, so a
+  change to one is attack surface. Every skip is named in the lane summary,
+  because a review that quietly skipped half a pull request reads exactly like
+  one that found nothing wrong with it.
+- **Ordering** is aggressive, because it can only change *when* a file is
+  reviewed, never *whether*. Added lines that reach a dangerous sink, and paths
+  naming an authorisation or credential boundary, go first; tests go last. That
+  matters because `per_file_with_budget` spends in order, so an exhausted budget
+  has bought the riskiest files rather than the alphabetically luckiest ones.
+
 `tests`, `commits` and `description` are pull-request-scoped. Their subject is a
 relationship between files, and a reviewer shown one file cannot see it.
 
