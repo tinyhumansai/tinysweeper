@@ -88,6 +88,33 @@ fn lowering_the_effort_does_not_satisfy_the_budget_floor() {
 }
 
 #[test]
+fn reasoning_is_accepted_at_exactly_the_floor() {
+    // The boundary the other three tests bracket. A regression from
+    // `< REASONING_FLOOR` to `<= REASONING_FLOOR` would reject the floor itself,
+    // and no test today would notice — 12000 is the largest budget never
+    // checked. It is also the smallest budget the validation accepts, so it is
+    // the value a traced regression would land on.
+    let config = parse("version = 1\n[models]\nmax_tokens = 12000\nreasoning_effort = \"high\"\n");
+    let problems = validate::validate(&config);
+    assert!(
+        !problems.iter().any(|p| p.contains("reasoning_effort")),
+        "12000 is the floor and must be accepted: {problems:#?}"
+    );
+}
+
+#[test]
+fn one_token_below_the_floor_is_rejected() {
+    // A hair under the boundary is still under it; this pins the cut to the
+    // exact value rather than a range.
+    let config = parse("version = 1\n[models]\nmax_tokens = 11999\nreasoning_effort = \"high\"\n");
+    let joined = validate::validate(&config).join("\n");
+    assert!(
+        joined.contains("reasoning_effort"),
+        "11999 is below the floor and must be rejected: {joined}"
+    );
+}
+
+#[test]
 fn turning_reasoning_off_makes_a_small_budget_fine() {
     // The escape hatch has to actually work, or the floor is just a wall: with
     // no reasoning the whole allowance goes to the answer, and 8000 was
