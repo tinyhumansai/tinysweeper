@@ -14,7 +14,6 @@ That boundary is enforced by the type system rather than by discipline.
 | `tests` | `tinysweeper/tests` | Whether changed behaviour is covered | — |
 | `commits` | `tinysweeper/commits` | What entered the history — **no model call** | `secret`, `blob`, `junk` |
 | `description` | `tinysweeper/description` | Title and body against the diff | — |
-| `gate` | `tinysweeper/gate` | Deterministic aggregate of the others | — |
 
 The scanner-kind column is a **partition, not an overlap**. Each deterministic
 finding has exactly one owning lane, because two lanes discussing one match

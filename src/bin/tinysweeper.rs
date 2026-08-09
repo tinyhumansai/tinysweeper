@@ -467,6 +467,7 @@ mod tests {
     #[cfg(feature = "github")]
     fn proposal_for(repo: &str, number: u64) -> tinysweeper::app::Proposal {
         tinysweeper::app::Proposal {
+            unreviewed: vec![],
             version: 1,
             repo: repo.into(),
             number,

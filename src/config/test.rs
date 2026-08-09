@@ -283,14 +283,22 @@ fn an_api_key_pasted_where_the_variable_name_goes_is_caught() {
 }
 
 #[test]
-fn listing_the_gate_as_a_lane_is_rejected() {
+fn listing_the_gate_as_a_lane_says_what_replaced_it() {
+    // A config written before the aggregate check run was removed. Telling
+    // someone in that position that `gate` is an unknown lane would be true and
+    // useless; they need to know where the verdict went.
     let config = parse("version = 1\n[review]\nlanes = [\"critique\", \"gate\"]\n");
     let problems = validate::validate(&config);
+
     assert!(
         problems
             .iter()
-            .any(|p| p.contains("the gate is deterministic")),
+            .any(|p| p.contains("the bot's approving review carries that verdict now")),
         "{problems:#?}"
+    );
+    assert!(
+        !problems.iter().any(|p| p.contains("unknown lane `gate`")),
+        "one message, not two: {problems:#?}"
     );
 }
 

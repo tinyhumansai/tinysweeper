@@ -164,7 +164,17 @@ fail_on = "high"
 
 [automerge]
 enabled = false
-require_checks = ["tinysweeper/gate"]
+# The lane checks, named individually. There used to be one aggregate
+# `tinysweeper/gate` to require instead; it is gone, and the verdict it carried
+# now arrives as the bot's own approving review. Listing the lanes here is the
+# closer equivalent — requiring the review would mean auto-merge gated on the
+# bot's own approval, which is circular.
+require_checks = [
+    "tinysweeper/critique",
+    "tinysweeper/security",
+    "tinysweeper/tests",
+    "tinysweeper/commits",
+]
 require_approvals = 1
 method = "squash"
 allow_labels = ["automerge"]

@@ -55,24 +55,26 @@ fn validate_review(config: &Config, problems: &mut Vec<String>) {
         problems.push("`review.lanes` is empty; nothing would run".into());
     }
     for name in &review.lanes {
-        if LaneId::parse(name).is_none() {
+        // `gate` gets its own message below. Falling through to "unknown lane"
+        // as well would tell someone whose config predates the change that they
+        // made a typo, and then separately that they did not.
+        if LaneId::parse(name).is_none() && name.trim() != "gate" {
             problems.push(format!(
                 "`review.lanes` contains unknown lane `{name}`; expected one of {}",
                 known(&LaneId::ALL.map(|l| l.as_str()))
             ));
         }
     }
-    // The gate is deterministic and always publishes; listing it is a sign
-    // someone thinks it is optional, which would be a nasty surprise when they
-    // remove it and branch protection keeps waiting for a check that never
-    // arrives.
-    if review
-        .lanes
-        .iter()
-        .any(|l| LaneId::parse(l) == Some(LaneId::Gate))
-    {
+    // `gate` was a lane once. It published `tinysweeper/gate`, an aggregate of
+    // every other lane, and it is gone: the same verdict now arrives as the
+    // bot's own review, which is what branch protection should require.
+    // Named explicitly rather than falling through to "unknown lane", because
+    // a configuration carried over from before the change deserves to be told
+    // what replaced it rather than that it made a typo.
+    if review.lanes.iter().any(|l| l.trim() == "gate") {
         problems.push(
-            "`review.lanes` lists `gate`; the gate is deterministic and always runs, so remove it"
+            "`review.lanes` lists `gate`; the aggregate check run no longer exists — \
+             the bot's approving review carries that verdict now, so remove it"
                 .into(),
         );
     }
@@ -356,13 +358,6 @@ fn validate_lanes(config: &Config, problems: &mut Vec<String>) {
             continue;
         };
 
-        if lane_id == LaneId::Gate {
-            problems.push(
-                "`lanes.gate` cannot be configured; the gate is deterministic and takes no model"
-                    .into(),
-            );
-        }
-
         if let Some(model) = &lane.model
             && model.0.trim().is_empty()
         {
@@ -424,7 +419,7 @@ fn validate_automerge(config: &Config, problems: &mut Vec<String>) {
 
     if automerge.require_checks.is_empty() {
         problems.push(
-            "`automerge.enabled = true` with an empty `automerge.require_checks` would merge on no evidence at all; require at least `tinysweeper/gate`"
+            "`automerge.enabled = true` with an empty `automerge.require_checks` would merge on no evidence at all; name the checks that must pass, e.g. `tinysweeper/security`"
                 .into(),
         );
     }

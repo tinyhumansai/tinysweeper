@@ -160,11 +160,17 @@ fn review_event(
         return ReviewEvent::RequestChanges;
     }
 
-    // Approving is gated on the whole gate being green, not on the weaker
-    // `blocks` above. Those two differ exactly when `request_changes_at` is
-    // `"off"`, and in that case a failing lane must not be approved — turning
-    // blocking off asks tinysweeper to stop objecting, not to start endorsing.
-    if !proposal.blocked() && config.review.approve_when_clean {
+    // Approving is gated on every lane passing, not on the weaker `blocks`
+    // above. Those two differ exactly when `request_changes_at` is `"off"`, and
+    // in that case a failing lane must not be approved — turning blocking off
+    // asks tinysweeper to stop objecting, not to start endorsing.
+    //
+    // `complete` is the second condition, and it is why the aggregate check run
+    // could be removed. An approval is now the whole verdict, so it has to carry
+    // what that check carried: a file the forge never showed us is not a file we
+    // can vouch for. Nothing blocks, so there is nothing to object to — and
+    // nothing to endorse either, which is a `Comment`.
+    if !proposal.blocked() && proposal.complete() && config.review.approve_when_clean {
         return ReviewEvent::Approve;
     }
 
@@ -358,6 +364,7 @@ mod tests {
     fn proposal(head: &str, findings: Vec<Finding>) -> Proposal {
         let highest_severity = findings.iter().map(|finding| finding.severity).max();
         Proposal {
+            unreviewed: vec![],
             version: 1,
             repo: "tinyhumansai/tinysweeper".into(),
             number: 7,
@@ -720,6 +727,48 @@ mod tests {
             !body.contains("Clearing the changes request"),
             "nothing was blocking, so there is nothing to clear: {body}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_pull_request_with_unread_files_is_not_approved() {
+        // The reason the aggregate check run could be removed. It used to carry
+        // this by degrading itself to `Neutral`; the approval carries it now, so
+        // if this regresses the bot endorses a change it never saw — and does it
+        // silently, because nothing else reports the gap as a verdict.
+        let mut incomplete = proposal("abc123", vec![]);
+        incomplete.unreviewed = vec!["src/generated_huge.rs".into()];
+
+        let forge = forge("abc123");
+        apply(&forge, &forge, &config(), &incomplete, None)
+            .await
+            .expect("applies");
+
+        match review_of(&forge) {
+            None => {}
+            Some((body, event)) => assert_ne!(
+                event,
+                ReviewEvent::Approve,
+                "nothing blocks, but nothing is vouched for either: {body}"
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn unread_files_do_not_block_either() {
+        // The other half. Refusing to approve is not the same as objecting: we
+        // do not know there is a problem, only that we did not look, and
+        // blocking would punish the contributor for the forge's truncation.
+        let mut incomplete = proposal("abc123", vec![]);
+        incomplete.unreviewed = vec!["src/generated_huge.rs".into()];
+
+        let forge = forge("abc123");
+        apply(&forge, &forge, &config(), &incomplete, None)
+            .await
+            .expect("applies");
+
+        if let Some((body, event)) = review_of(&forge) {
+            assert_ne!(event, ReviewEvent::RequestChanges, "{body}");
+        }
     }
 
     #[tokio::test]

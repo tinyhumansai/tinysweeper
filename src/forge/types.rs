@@ -192,7 +192,7 @@ impl CheckConclusion {
 /// is exactly the mistake the gate exists to avoid.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckStatus {
-    /// The check name, e.g. `tinysweeper/gate`.
+    /// The check name, e.g. `tinysweeper/security`.
     pub name: String,
     /// The outcome, or `None` while it is still running.
     pub conclusion: Option<CheckConclusion>,

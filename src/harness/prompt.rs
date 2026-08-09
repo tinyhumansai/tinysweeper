@@ -632,10 +632,6 @@ accuracy is.
 If the description needs work, propose a replacement body in your suggestion,
 written as the author would write it."#
         }
-        LaneId::Gate => {
-            "The gate is deterministic and does not use a model. \
-             If you are reading this, something is wired wrong."
-        }
     }
 }
 
