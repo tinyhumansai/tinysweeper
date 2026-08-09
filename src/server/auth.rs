@@ -117,6 +117,41 @@ impl AppAuth {
             .map_err(|err| Error::Forge(format!("could not sign the app JWT: {err}")))
     }
 
+    /// Which installation covers a repository.
+    ///
+    /// A webhook delivery names its installation; an operator pressing a button
+    /// does not, so the manual review path asks GitHub. The app JWT is the right
+    /// credential here — this is a question about the app, and answering it with
+    /// an installation token would need the answer first.
+    pub async fn installation_for_repo(&self, owner: &str, name: &str) -> Result<u64> {
+        let response = self
+            .http
+            .get(format!(
+                "https://api.github.com/repos/{owner}/{name}/installation"
+            ))
+            .bearer_auth(self.app_jwt()?)
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await
+            .map_err(|err| Error::Forge(format!("installation lookup failed: {err}")))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            // A 404 here is the ordinary case of an app that is not installed
+            // on the repository, so say that rather than echoing GitHub's body.
+            return Err(Error::Forge(format!(
+                "no installation for `{owner}/{name}` (GitHub answered {status}); \
+                 is tinysweeper installed on it?"
+            )));
+        }
+
+        let body = response
+            .bytes()
+            .await
+            .map_err(|err| Error::Forge(format!("installation lookup failed: {err}")))?;
+        parse_installation(&body)
+    }
+
     /// An installation token, from cache when one is still good.
     pub async fn installation_token(&self, installation: u64) -> Result<String> {
         if let Some(cached) = self.cache.lock().await.get(&installation)
@@ -164,6 +199,26 @@ impl AppAuth {
 
         Ok(minted.token)
     }
+}
+
+/// The id GitHub reports for the installation covering a repository.
+#[derive(Debug, Deserialize)]
+struct InstallationRef {
+    id: u64,
+}
+
+/// Read an installation id out of GitHub's answer.
+///
+/// Split from the request so the parsing is testable offline: the network half
+/// is three lines and the same as every other call here.
+fn parse_installation(body: &[u8]) -> Result<u64> {
+    serde_json::from_slice::<InstallationRef>(body)
+        .map(|found| found.id)
+        .map_err(|err| {
+            Error::Forge(format!(
+                "could not read the installation from GitHub: {err}"
+            ))
+        })
 }
 
 /// Parse GitHub's RFC 3339 expiry into a `SystemTime`.
@@ -268,6 +323,20 @@ mod tests {
             leap.duration_since(UNIX_EPOCH).unwrap().as_secs(),
             1_709_164_800
         );
+    }
+
+    #[test]
+    fn an_installation_lookup_reads_the_id_out_of_githubs_answer() {
+        // The manual review route has no webhook to tell it which installation
+        // covers a repository, so it asks GitHub. This is the parsing half.
+        let body = br#"{"id": 98765, "account": {"login": "tinyhumansai"}}"#;
+        assert_eq!(parse_installation(body).expect("parses"), 98765);
+    }
+
+    #[test]
+    fn an_installation_lookup_that_answers_junk_fails_loudly() {
+        let err = parse_installation(b"<html>not json</html>").unwrap_err();
+        assert!(err.to_string().contains("installation"), "{err}");
     }
 
     #[test]

@@ -26,6 +26,7 @@
 pub mod admin;
 pub mod auth;
 pub mod indexing;
+pub mod manual;
 pub mod routes;
 pub mod store;
 #[cfg(test)]

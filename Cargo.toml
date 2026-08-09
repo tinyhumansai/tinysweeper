@@ -125,6 +125,10 @@ all = ["harness", "github", "serve", "treesitter"]
 
 [dev-dependencies]
 tempfile = "3"
+# Only for `ServiceExt::oneshot`, which is how an axum router is driven in a
+# test: the point of the manual-review tests is that the auth layer runs before
+# the handler, and calling the handler directly would skip exactly that.
+tower = { version = "0.5", features = ["util"] }
 
 # Declared explicitly (`autoexamples = false`) so a credential-needing smoke
 # test never builds in CI. This one needs an embedding provider and a MongoDB

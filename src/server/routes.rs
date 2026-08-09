@@ -24,6 +24,7 @@ use crate::ports::knowledge::KnowledgeStore;
 use crate::server::admin::{self, AdminAuth};
 use crate::server::auth::AppAuth;
 use crate::server::indexing::{IndexBackend, index_in_background};
+use crate::server::manual::{self, FullReviews};
 use crate::server::store::{Store, Trust};
 use crate::server::webhook::{self, Action, Payload};
 
@@ -42,6 +43,14 @@ const MAX_CONCURRENT_REVIEWS: usize = 4;
 /// thousands of embedding calls, so two of them concurrently is already the
 /// provider's rate limit and a good deal of the machine.
 const MAX_CONCURRENT_INDEXES: usize = 2;
+
+/// How many pull requests one manual, repository-wide review may queue.
+///
+/// The button is an escape hatch, not a way to spend an afternoon's budget in
+/// one request: a repository with sixty open pull requests would otherwise be
+/// sixty full reviews, each of them deliberately ignoring the dedupe that keeps
+/// the second review of a pull request cheap.
+const MAX_MANUAL_REVIEWS: usize = 20;
 
 /// How the server was configured.
 #[derive(Debug, Clone)]
@@ -133,6 +142,9 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
         index_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_INDEXES)),
     };
 
+    let manual_state = state.clone();
+    let manual_auth = admin_auth.clone();
+
     let mut app = Router::new()
         .route("/healthz", get(healthz))
         .route("/webhook", post(receive))
@@ -150,6 +162,20 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
             "{} is not set; the admin API is not mounted",
             admin::TOKEN_ENV
         ),
+    }
+
+    // The manual full-review button, behind the same credential and absent for
+    // the same reason when there is none. It is mounted separately from the
+    // admin router because it needs the worker, not the trust database.
+    let dispatch: Arc<dyn FullReviews> = Arc::new(ManualDispatch {
+        state: manual_state,
+    });
+    if let Some(routes) = manual::router(manual_auth, manual::allowed_org(), dispatch) {
+        app = app.merge(routes);
+        tracing::info!(
+            organisation = %manual::allowed_org(),
+            "manual full reviews are available under /admin/reviews"
+        );
     }
 
     let listener = tokio::net::TcpListener::bind(&bind)
@@ -246,7 +272,14 @@ async fn receive(
             author,
             installation,
         } => {
-            tokio::spawn(handle_review(state, repo, number, author, installation));
+            tokio::spawn(handle_review(
+                state,
+                repo,
+                number,
+                author,
+                installation,
+                Mode::Incremental,
+            ));
             (StatusCode::ACCEPTED, "queued").into_response()
         }
         Action::TriageIssue {
@@ -379,6 +412,89 @@ async fn triage_and_apply(
     Ok(outcome.plan)
 }
 
+/// The manual review path's way into the worker.
+///
+/// Everything a webhook delivery supplies and an operator cannot — the
+/// installation, and which pull requests are open — is resolved here, on the
+/// request, so the operator gets a real answer rather than a log line.
+struct ManualDispatch {
+    state: AppState,
+}
+
+#[async_trait::async_trait]
+impl FullReviews for ManualDispatch {
+    async fn enqueue(&self, repo: &RepoId, number: Option<u64>) -> Result<Vec<u64>> {
+        // A webhook names its installation. A button does not, so ask GitHub
+        // which installation covers the repository; the app JWT can answer that
+        // and nothing else.
+        let installation = self
+            .state
+            .auth
+            .installation_for_repo(&repo.owner, &repo.name)
+            .await?;
+        let read_token = self.state.auth.installation_token(installation).await?;
+        let forge = crate::forge::github::GitHubRead::new(&read_token)?;
+
+        let numbers = match number {
+            Some(number) => vec![number],
+            None => forge.open_pull_requests(repo, MAX_MANUAL_REVIEWS).await?,
+        };
+
+        let mut queued = Vec::new();
+        for number in numbers {
+            // The author is what the trust check is about, and only the pull
+            // request knows it. One extra read per queued review, on a path
+            // used a few times a year.
+            let author = {
+                use crate::ports::forge::ForgeRead;
+                forge.pull_request(repo, number).await?.author
+            };
+
+            tokio::spawn(handle_review(
+                self.state.clone(),
+                repo.to_string(),
+                number,
+                author,
+                installation,
+                Mode::Full,
+            ));
+            queued.push(number);
+        }
+
+        Ok(queued)
+    }
+}
+
+/// Whether a review may use what earlier cycles remembered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// The webhook path: replay the last cycle's evidence, dedupe against what
+    /// was already said, and record this cycle for the next one.
+    Incremental,
+    /// The manual path: review as though this pull request had never been seen.
+    Full,
+}
+
+/// The configuration a review in `mode` runs under.
+///
+/// `Mode::Full` is exactly `review.incremental = false` for this one run. That
+/// single flag is what `crate::app::review` gates all three halves of the
+/// memory on — the prior findings read off the pull request, the remembered
+/// state in the store, and the write-back at the end — so turning it off both
+/// ignores the stored state and leaves it intact for the webhook path. Nothing
+/// is deleted: a manual review is an extra opinion, not a reset, and destroying
+/// the record would make the *next* webhook review duplicate its comments too.
+fn config_for(base: &Config, mode: Mode) -> std::borrow::Cow<'_, Config> {
+    match mode {
+        Mode::Incremental => std::borrow::Cow::Borrowed(base),
+        Mode::Full => {
+            let mut full = base.clone();
+            full.review.incremental = false;
+            std::borrow::Cow::Owned(full)
+        }
+    }
+}
+
 /// Review one pull request, off the request path.
 async fn handle_review(
     state: AppState,
@@ -386,8 +502,9 @@ async fn handle_review(
     number: u64,
     author: String,
     installation: u64,
+    mode: Mode,
 ) {
-    if let Err(err) = review_inner(&state, &repo, number, &author, installation).await {
+    if let Err(err) = review_inner(&state, &repo, number, &author, installation, mode).await {
         // A failed review must not take the server with it. One pull request
         // going wrong is a log line, not an outage.
         tracing::error!(%err, %repo, number, "review failed");
@@ -400,6 +517,7 @@ async fn review_inner(
     number: u64,
     author: &str,
     installation: u64,
+    mode: Mode,
 ) -> Result<()> {
     let who = state.store.contributor(author).await?;
     if who.trust == Trust::Blocked {
@@ -443,7 +561,13 @@ async fn review_inner(
         ));
     }
 
-    let lease = format!("{repo}#{number}@{}", pull_request.head_sha);
+    // A manual review deliberately takes a lease of its own: the operator asked
+    // for this run *because* the ordinary one already happened, so sharing the
+    // webhook path's key would make the button a silent no-op.
+    let lease = match mode {
+        Mode::Incremental => format!("{repo}#{number}@{}", pull_request.head_sha),
+        Mode::Full => format!("{repo}#{number}@{}!full", pull_request.head_sha),
+    };
     if !state.store.claim_lease(&lease, "server").await? {
         tracing::debug!(%lease, "another worker holds this review");
         return Ok(());
@@ -477,6 +601,7 @@ async fn review_inner(
         number,
         installation,
         &forge,
+        mode,
     ))
     .catch_unwind()
     .await
@@ -512,6 +637,7 @@ async fn run_and_publish(
     number: u64,
     installation: u64,
     forge: &crate::forge::github::GitHubRead,
+    mode: Mode,
 ) -> Result<crate::app::Proposal> {
     let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
         &state.config.config.models,
@@ -534,10 +660,14 @@ async fn run_and_publish(
             .with_manifest(backend.manifest.as_ref())
     });
 
+    // The mode is layered on top of the *effective* config, so a repository's
+    // own `.tinysweeper.toml` still governs a manual review — a full run is the
+    // same policy with no memory, not the deployment's policy instead.
+    let config = config_for(config, mode);
     let proposal = crate::app::review::review_with_retrieval(
         forge,
         model,
-        config,
+        &config,
         repo,
         number,
         Some(&state.store),
@@ -548,7 +678,7 @@ async fn run_and_publish(
 
     let write_token = state.auth.installation_token(installation).await?;
     let write = crate::forge::github::GitHubWrite::new(&write_token)?;
-    crate::app::apply(forge, &write, config, &proposal, Some(&state.store)).await?;
+    crate::app::apply(forge, &write, &config, &proposal, Some(&state.store)).await?;
 
     Ok(proposal)
 }
@@ -578,6 +708,31 @@ mod tests {
         assert!(
             permits.try_acquire_owned().is_ok(),
             "a freed slot is reusable"
+        );
+    }
+
+    #[test]
+    fn a_full_review_turns_the_incremental_path_off_and_changes_nothing_else() {
+        // This is the whole of what "full" means. `review.incremental` gates
+        // both halves of the memory in `crate::app::review`: the prior findings
+        // read off the pull request, and the remembered state in the store —
+        // and it also gates the write-back, so a manual run does not overwrite
+        // what the webhook path remembers.
+        let mut base = Config::default();
+        base.review.incremental = true;
+        base.models.budget_usd_per_pr = 4.25;
+
+        let full = config_for(&base, Mode::Full);
+        assert!(!full.review.incremental);
+        assert_eq!(
+            full.models.budget_usd_per_pr, base.models.budget_usd_per_pr,
+            "a full review is the same review with no memory, not a different policy"
+        );
+
+        let incremental = config_for(&base, Mode::Incremental);
+        assert!(
+            incremental.review.incremental,
+            "the webhook path must be untouched"
         );
     }
 }

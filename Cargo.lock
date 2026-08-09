@@ -3323,6 +3323,7 @@ dependencies = [
  "tinyagents",
  "tokio",
  "toml",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",

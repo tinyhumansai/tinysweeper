@@ -79,6 +79,44 @@ Two decisions worth knowing:
   will not start, because a weak token is brute-forceable over the same public
   endpoint it protects.
 
+### Manual full review
+
+| Method | Path | Answers |
+| --- | --- | --- |
+| `POST` | `/admin/reviews/{owner}/{name}` | `202` with the pull request numbers queued |
+
+The escape hatch for when a review has to be redone wholesale. The body is
+`{"number": 12}` for one pull request, or `{}` for every open one — capped at 20
+per request, because each queued review is model spend. Reviews run off the
+request path; the response says which were queued, not what they found.
+
+**What "full" means.** The run sets `review.incremental = false` for itself and
+changes nothing else. That single flag gates all three halves of the incremental
+path in `src/app/review.rs`: the prior findings read back off the pull request,
+the remembered evidence and fingerprints in the review-state store, and the
+write-back at the end. So a full review dedupes against nothing and will repeat
+comments that are already there — that is what was asked for — and, because the
+write-back is off too, it does **not** overwrite what the webhook path
+remembers. Nothing is deleted: destroying the stored state would make the next
+ordinary review duplicate its comments as well, which is a side effect an
+operator did not ask for.
+
+The manual run takes its own lease (`…@{sha}!full`) rather than the webhook
+path's, since the ordinary review of that head has usually already happened and
+sharing the key would make the button a silent no-op.
+
+**Installation.** A webhook delivery names the installation; an operator does
+not. The route asks GitHub which installation covers the repository, using the
+app JWT — the only credential that can answer before an installation token
+exists. A repository the app is not installed on fails with a message saying so.
+
+**Organisation.** The owner must be the one organisation this deployment
+allows (`TINYSWEEPER_ALLOWED_ORG`, defaulting to `tinyhumansai`); anything else
+is `403`. The check lives in the route because the caller's own check protects
+nobody — see `.github/workflows/manual-review.yml`, which is a button that POSTs
+here and is the one deliberate exception to tinysweeper shipping no Actions
+path.
+
 ### Contributor trust
 
 `Trust::Blocked` is checked before every review. These are how it gets set.
