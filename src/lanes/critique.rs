@@ -21,18 +21,28 @@
 //! is rendered into the check-run summary instead of posted inline, which is
 //! the honest outcome: the review found something and could not say exactly
 //! where.
+//!
+//! The lane fans out **one conversation per changed file**, like `security`.
+//! It reviewed the whole pull request in a single call until a 31-file change
+//! landed with two real correctness bugs in it and this lane reported one
+//! hallucination: the failure `fanout`'s own module doc predicts, where the
+//! first few files are read closely and the rest are an afterthought. The
+//! subject here is one file's correctness, so nothing is lost by the split —
+//! unlike `tests`, whose subject is the relationship *between* files and which
+//! is deliberately still one conversation.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::config::types::LaneId;
+use crate::config::types::{Config, LaneId};
 use crate::error::Result;
 use crate::evidence::diff::FileDiff;
 use crate::evidence::replay;
-use crate::falsify::Falsifier;
+use crate::falsify::{Falsifier, Rejection};
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema::{self, RawFinding};
+use crate::lanes::fanout::{FileReview, per_file_with_budget};
 use crate::lanes::{Lane, LaneInput, LaneOutcome};
 use crate::ports::model::{Message, Model, ModelRequest, Spend};
 use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
@@ -71,137 +81,176 @@ impl Lane for Critique {
             ));
         }
 
-        // Put the initial complete diff in the same serialized prefix where a
-        // later run replays it. Providers cache byte-identical prefixes; using
-        // the user-message position on the first run would make that first
-        // evidence miss the cache again on the next run.
-        let evidence = replay::render(input.diffs);
-        let (reviewed_evidence, new_evidence) = if input.reviewed_evidence.is_empty() {
-            (evidence.clone(), String::new())
-        } else {
-            replay::split(input.reviewed_evidence, &evidence)
-        };
+        // Files this lane has already reviewed, unchanged since, are skipped
+        // outright rather than replayed into a cacheable prefix. Both are
+        // sound, but a per-file lane can take the stronger one: skipping pays
+        // always, where a cache prefix only pays when the provider honours it.
+        // This is what `security` does, and for the same reason.
+        let fresh: Vec<&FileDiff> = replay::unreviewed(input.reviewed_evidence, input.diffs)
+            .into_iter()
+            .filter(|diff| !diff.changed_lines.is_empty())
+            .collect();
+        let paths: Vec<String> = fresh.iter().map(|diff| diff.path.clone()).collect();
+
         let changed_paths = input.changed_paths();
-        let built = prompt::build(&PromptInputs {
-            repo_policy: input.repo_policy,
-            extracted_rules: input.extracted_rules,
-            reviewed_evidence: &reviewed_evidence,
-            prior_findings: input.prior_findings,
-            new_evidence: &new_evidence,
-            changed_paths: &changed_paths,
-            retrieved_context: input.retrieved_context,
-            ..PromptInputs::new(LaneId::Critique, input.config)
-        });
-
-        // The prefix goes in the system message and the suffix in the user
-        // message. Providers cache on the serialised prefix, and a system
-        // message is the one part guaranteed to be sent first.
-        let response = self
-            .model
-            .complete(ModelRequest {
-                model: input.config.model_for(LaneId::Critique).to_string(),
-                messages: vec![
-                    Message::system(built.prefix()),
-                    Message::user(built.suffix()),
-                ],
-                schema: schema::json_schema(),
-                schema_name: "tinysweeper_critique".into(),
-                max_tokens: input.config.models.max_tokens,
-            })
-            .await?;
-
-        // Taken before the value is moved out: the spend belongs to the model
-        // that answered, whether or not its answer parses.
-        let spend = Spend::of(&response);
-        let parsed = schema::parse(LaneId::Critique, response.value)?;
-
-        let mut spend = spend;
-        let positioner = Positioner::new(self.model.as_ref(), input.config);
-
-        let mut findings = Vec::new();
-        let mut unanchored = 0usize;
-        let mut discarded = 0usize;
-
-        for raw in parsed.findings {
-            // A file this pull request never touched is still dropped outright.
-            // There is nothing to anchor against and nothing this author did.
-            let Some(diff) = input.diffs.iter().find(|d| d.path == raw.path) else {
-                discarded += 1;
-                continue;
-            };
-
-            // Budget check: relocation can make one model call per unresolvable
-            // finding, so enforce the limit inside the loop before escalating to
-            // stage 3. Do not wait until the lane finishes.
-            if spend.cost_usd() > input.config.models.budget_usd_per_pr {
-                return Err(crate::error::Error::Budget {
-                    spent: spend.cost_usd(),
-                    limit: input.config.models.budget_usd_per_pr,
-                });
+        let outcome = per_file_with_budget(&paths, input.config.models.budget_usd_per_pr, |path| {
+            let model = self.model.clone();
+            let input = &input;
+            let changed_paths = &changed_paths;
+            async move {
+                let diff = input
+                    .diffs
+                    .iter()
+                    .find(|d| d.path == path)
+                    .expect("the path came from the diff list");
+                review_file(model.as_ref(), input, changed_paths, diff).await
             }
+        })
+        .await;
 
-            let comment = format!("{}\n\n{}", raw.title, raw.body);
-            let snippet = raw.existing_code.clone().unwrap_or_default();
-            let resolution = positioner
-                .resolve(
-                    PositionRequest {
-                        snippet: &snippet,
-                        diff: Some(diff),
-                        file: input.file_contents.get(&raw.path).map(String::as_str),
-                        comment: &comment,
-                        // Relocation and falsification need the complete
-                        // current evidence even when that evidence was placed
-                        // in the cacheable prompt prefix on an initial run.
-                        rendered_diff: &evidence,
-                    },
-                    &mut spend,
-                )
-                .await;
+        Ok(outcome.into_outcome())
+    }
+}
 
-            let range = postable_range(&raw, diff, resolution);
-            if range.is_none() {
-                unanchored += 1;
-            }
+/// Review one file, in a conversation that knows about no other file.
+///
+/// Positioning (step 4) and falsification (step 5) both run here rather than
+/// once over the folded result, because both want *the evidence this
+/// conversation was shown* and that is now one file's diff. Falsification is
+/// also free for the common file: `Falsifier::filter` makes no call when there
+/// is nothing to filter, so the number of falsify calls is the number of files
+/// that actually produced a finding.
+async fn review_file(
+    model: &dyn Model,
+    input: &LaneInput<'_>,
+    changed_paths: &[String],
+    diff: &FileDiff,
+) -> Result<FileReview> {
+    let config: &Config = input.config;
+    let evidence = replay::render(std::slice::from_ref(diff));
 
-            let mut finding = raw.into_finding(LaneId::Critique);
-            finding.line = range.map(|(start, _)| start);
-            finding.end_line = range.and_then(|(start, end)| (end > start).then_some(end));
+    let built = prompt::build(&PromptInputs {
+        repo_policy: input.repo_policy,
+        extracted_rules: input.extracted_rules,
+        prior_findings: input.prior_findings,
+        new_evidence: &evidence,
+        // Every path the pull request touched, not just this one. This selects
+        // which `path_instructions` are injected, and narrowing it to the focus
+        // file would silently drop the rules for every other changed path from
+        // a prefix all N conversations otherwise share — losing the cache as
+        // well as the rules.
+        changed_paths,
+        focus_path: Some(&diff.path),
+        retrieved_context: input.retrieved_context,
+        ..PromptInputs::new(LaneId::Critique, config)
+    });
 
-            // Postability is wider than the changed-line set, so a finding can
-            // now land on a context line the pull request never touched. That
-            // is a deliberate widening, but it must not be a silent one: the
-            // noise rule is "introduced by this pull request", and a reader has
-            // to be able to tell when a finding is not. Marking it `late` is
-            // what puts the pre-existing badge on it in the summary.
-            if let Some((start, end)) = range
-                && !diff.touches_range(start, end)
-            {
-                finding.late = true;
-            }
+    // The prefix goes in the system message and the suffix in the user
+    // message. Providers cache on the serialised prefix, and a system
+    // message is the one part guaranteed to be sent first.
+    let response = model
+        .complete(ModelRequest {
+            model: config.model_for(LaneId::Critique).to_string(),
+            messages: vec![
+                Message::system(built.prefix()),
+                Message::user(built.suffix()),
+            ],
+            schema: schema::json_schema(),
+            schema_name: "tinysweeper_critique".into(),
+            max_tokens: config.models.max_tokens,
+        })
+        .await?;
 
-            findings.push(finding);
+    // Taken before the value is moved out: the spend belongs to the model
+    // that answered, whether or not its answer parses.
+    let mut spend = Spend::of(&response);
+    let parsed = schema::parse(LaneId::Critique, response.value)?;
+
+    let positioner = Positioner::new(model, config);
+    let mut findings = Vec::new();
+    let mut unanchored = 0usize;
+    let mut discarded = 0usize;
+
+    for raw in parsed.findings {
+        // Any file but this conversation's own is dropped. That is stricter
+        // than the whole-diff lane's rule — which only required the pull
+        // request to have touched the file — and it has to be: N reviewers
+        // each reporting the same cross-file problem is what `focus_path`
+        // exists to prevent, and honouring an off-file finding here would
+        // undo it.
+        if raw.path != diff.path {
+            discarded += 1;
+            continue;
         }
 
-        // Step 5, on the findings that survived positioning. It sees only the
-        // diff, and it can only remove.
-        let filtered = Falsifier::new(self.model.as_ref(), input.config)
-            .filter(LaneId::Critique, findings, &evidence)
-            .await;
-        spend.merge(filtered.spend);
+        // Budget check: relocation can make one model call per unresolvable
+        // finding, so enforce the limit inside the loop before escalating to
+        // stage 3. Do not wait until the lane finishes.
+        if spend.cost_usd() > config.models.budget_usd_per_pr {
+            return Err(crate::error::Error::Budget {
+                spent: spend.cost_usd(),
+                limit: config.models.budget_usd_per_pr,
+            });
+        }
 
-        Ok(LaneOutcome {
-            summary: summarise(
-                parsed.summary.trim(),
-                unanchored,
-                discarded,
-                filtered.rejected.len(),
-            ),
-            findings: filtered.findings,
-            resolved: parsed.resolved,
-            spend,
-            skipped: None,
-        })
+        let comment = format!("{}\n\n{}", raw.title, raw.body);
+        let snippet = raw.existing_code.clone().unwrap_or_default();
+        let resolution = positioner
+            .resolve(
+                PositionRequest {
+                    snippet: &snippet,
+                    diff: Some(diff),
+                    file: input.file_contents.get(&raw.path).map(String::as_str),
+                    comment: &comment,
+                    rendered_diff: &evidence,
+                },
+                &mut spend,
+            )
+            .await;
+
+        let range = postable_range(&raw, diff, resolution);
+        if range.is_none() {
+            unanchored += 1;
+        }
+
+        let mut finding = raw.into_finding(LaneId::Critique);
+        finding.line = range.map(|(start, _)| start);
+        finding.end_line = range.and_then(|(start, end)| (end > start).then_some(end));
+
+        // Postability is wider than the changed-line set, so a finding can
+        // now land on a context line the pull request never touched. That
+        // is a deliberate widening, but it must not be a silent one: the
+        // noise rule is "introduced by this pull request", and a reader has
+        // to be able to tell when a finding is not. Marking it `late` is
+        // what puts the pre-existing badge on it in the summary.
+        if let Some((start, end)) = range
+            && !diff.touches_range(start, end)
+        {
+            finding.late = true;
+        }
+
+        findings.push(finding);
     }
+
+    // Step 5, on the findings that survived positioning. It sees only the
+    // diff, and it can only remove.
+    let filtered = Falsifier::new(model, config)
+        .filter(LaneId::Critique, findings, &evidence)
+        .await;
+    spend.merge(filtered.spend);
+
+    Ok(FileReview {
+        summary: summarise(
+            parsed.summary.trim(),
+            unanchored,
+            discarded,
+            &filtered.rejected,
+            filtered.findings.len(),
+        ),
+        findings: filtered.findings,
+        resolved: parsed.resolved,
+        spend,
+    })
 }
 
 /// The head-revision range a finding may be posted against, if any.
@@ -235,7 +284,37 @@ fn postable_range(raw: &RawFinding, diff: &FileDiff, resolution: Resolution) -> 
 /// Every count here is a finding that did not become an inline comment. They
 /// are stated rather than hidden: a filter nobody can see the effect of is a
 /// filter nobody can tell is broken.
-fn summarise(summary: &str, unanchored: usize, discarded: usize, rejected: usize) -> String {
+///
+/// The model's own prose is **dropped entirely** when falsification left
+/// nothing standing, and that is the important case. The prose is written
+/// before the filter runs, so it describes findings that no longer exist:
+/// a review once opened "One real bug: the coverage edge is never stored",
+/// reported no findings, concluded success, and approved the pull request in
+/// the same breath — the bug was a hallucination the falsifier correctly
+/// removed, and only the summary still claimed it. A lane that reports nothing
+/// must not narrate something. What replaces it is the rejection reasons,
+/// which say more than the discarded prose did.
+fn summarise(
+    summary: &str,
+    unanchored: usize,
+    discarded: usize,
+    rejected: &[Rejection],
+    kept: usize,
+) -> String {
+    if kept == 0 && !rejected.is_empty() {
+        let reasons: Vec<String> = rejected
+            .iter()
+            .map(|item| format!("{} — {}", item.title.trim(), item.reason.trim()))
+            .collect();
+        return format!(
+            "Nothing to report. {} finding{} raised and dropped as disproved by the diff: {}.",
+            rejected.len(),
+            plural(rejected.len()),
+            reasons.join("; ")
+        );
+    }
+
+    let rejected = rejected.len();
     let mut notes = Vec::new();
     if unanchored > 0 {
         notes.push(format!(
@@ -271,6 +350,7 @@ mod tests {
     use super::*;
     use crate::config::types::{Config, Severity};
     use crate::evidence::diff::parse_file_patch;
+    use crate::forge::types::CheckConclusion;
     use crate::forge::types::PullRequest;
     use crate::harness::mock::MockModel;
     use serde_json::json;
@@ -485,9 +565,46 @@ fn helper() {
 
         assert!(outcome.findings.is_empty());
         assert!(
-            outcome.summary.contains("1 finding dropped as disproved"),
+            outcome
+                .summary
+                .contains("1 finding raised and dropped as disproved"),
             "{}",
             outcome.summary
+        );
+        assert!(
+            outcome.summary.contains("the diff bounds-checks `i` above"),
+            "the rejection reason replaces the prose it disproved: {}",
+            outcome.summary
+        );
+    }
+
+    /// The bug this lane shipped: a check run whose summary asserted a bug,
+    /// reported no findings, concluded success and approved the pull request.
+    /// The model's prose is written before falsification runs, so once the
+    /// filter empties the finding list the prose is describing nothing.
+    #[tokio::test]
+    async fn a_summary_never_asserts_a_bug_the_falsifier_removed() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "One real bug: the coverage edge is never stored.",
+                "findings": [finding_quoting("let x = items[i];")]
+            }))
+            .then(json!({
+                "incorrect": [{"index": 1, "reason": "the diff stores it two lines above"}]
+            }));
+
+        let outcome = run_with(model, &config(), &diffs()).await;
+
+        assert!(outcome.findings.is_empty());
+        assert!(
+            !outcome.summary.contains("One real bug"),
+            "a lane reporting nothing must not narrate something: {}",
+            outcome.summary
+        );
+        assert_eq!(
+            outcome.conclusion(Severity::High),
+            CheckConclusion::Success,
+            "the verdict was already clean; it is the summary that had to agree with it"
         );
     }
 
@@ -686,14 +803,18 @@ fn helper() {
         assert_eq!(model.requests()[0].model, "some/deep-model");
     }
 
+    /// A per-file lane can do better than replaying an already-reviewed file
+    /// into a cacheable prefix: it can not send it at all. The cheapest call is
+    /// the one not made, and a cache prefix only pays when the provider honours
+    /// it.
     #[tokio::test]
-    async fn a_re_review_replays_the_earlier_diff_into_the_cacheable_system_message() {
+    async fn a_file_reviewed_before_and_unchanged_since_is_not_reviewed_again() {
         let config = config();
         let model = MockModel::silent();
         let pr = pull_request();
 
         // The earlier cycle reviewed `src/earlier.rs`; this push adds
-        // `src/main.rs`. The replay has to be the earlier file, byte for byte.
+        // `src/main.rs`. Only the new file is worth a call.
         let earlier = parse_file_patch("src/earlier.rs", "@@ -1,1 +1,2 @@\n a\n+earlier\n");
         let reviewed = replay::render(std::slice::from_ref(&earlier));
         let diffs = vec![earlier, parse_file_patch("src/main.rs", PATCH)];
@@ -715,16 +836,21 @@ fn helper() {
             .await
             .expect("runs");
 
-        let request = &model.requests()[0];
-        let system = &request.messages[0].content;
-        let user = &request.messages[1].content;
+        let requests = model.requests();
+        assert_eq!(requests.len(), 1, "one call, for the one unreviewed file");
+
+        let system = &requests[0].messages[0].content;
+        let user = &requests[0].messages[1].content;
 
         assert!(
-            system.contains("+earlier"),
-            "replay must be in the cached half"
+            !system.contains("+earlier") && !user.contains("+earlier"),
+            "the unchanged file is not sent at all"
         );
-        assert!(!user.contains("+earlier"));
         assert!(user.contains("src/main.rs"), "the delta is the new work");
+        assert!(
+            system.contains("The file is `src/main.rs`"),
+            "each conversation owns exactly one file: {system}"
+        );
         assert!(
             user.contains("Close the socket"),
             "prior findings are volatile"
@@ -735,14 +861,20 @@ fn helper() {
         );
     }
 
+    /// One file per conversation, so a forty-file pull request is forty close
+    /// readings rather than one that fades after the first few files.
     #[tokio::test]
-    async fn malformed_model_output_fails_the_lane_rather_than_posting_nonsense() {
-        let model = MockModel::new().then(json!({"summary": "…", "findings": [{"path": "x"}]}));
-        let pr = pull_request();
+    async fn every_changed_file_gets_its_own_conversation() {
         let config = config();
-        let diffs = diffs();
+        let model = MockModel::silent();
+        let pr = pull_request();
+        let diffs = vec![
+            parse_file_patch("src/main.rs", PATCH),
+            parse_file_patch("src/other.rs", PATCH),
+            parse_file_patch("src/third.rs", PATCH),
+        ];
 
-        let err = Critique::new(Arc::new(model))
+        Critique::new(Arc::new(model.clone()))
             .run(LaneInput {
                 config: &config,
                 pull_request: &pr,
@@ -757,11 +889,122 @@ fn helper() {
                 retrieved_context: "",
             })
             .await
-            .unwrap_err();
+            .expect("runs");
 
+        let requests = model.requests();
+        assert_eq!(requests.len(), 3, "one conversation per changed file");
+
+        for (request, path) in requests
+            .iter()
+            .zip(["src/main.rs", "src/other.rs", "src/third.rs"])
+        {
+            let system = &request.messages[0].content;
+            assert!(
+                system.contains(&format!("The file is `{path}`")),
+                "each conversation is scoped to its own file: {system}"
+            );
+        }
+    }
+
+    /// Malformed output still never becomes a comment. What changed with the
+    /// fan-out is where the failure lands: it is isolated to its own file
+    /// rather than failing the lane, so one bad response cannot delete the
+    /// review of every other file. A lane where *nothing* could be reviewed
+    /// must still not report success — that is the part branch protection
+    /// depends on.
+    #[tokio::test]
+    async fn malformed_model_output_is_reported_rather_than_posted_as_nonsense() {
+        let model = MockModel::new().then(json!({"summary": "…", "findings": [{"path": "x"}]}));
+        let pr = pull_request();
+        let config = config();
+        let diffs = diffs();
+
+        let outcome = Critique::new(Arc::new(model))
+            .run(LaneInput {
+                config: &config,
+                pull_request: &pr,
+                diffs: &diffs,
+                file_contents: &BTreeMap::new(),
+                scan_findings: &[],
+                commits: &[],
+                repo_policy: None,
+                extracted_rules: &[],
+                reviewed_evidence: "",
+                prior_findings: &[],
+                retrieved_context: "",
+            })
+            .await
+            .expect("the failure is isolated, not propagated");
+
+        assert!(outcome.findings.is_empty(), "nothing nonsensical is posted");
         assert!(
-            err.to_string().contains("did not match the schema"),
-            "{err}"
+            outcome.summary.contains("src/main.rs"),
+            "the file that could not be reviewed is named: {}",
+            outcome.summary
+        );
+        assert_eq!(
+            outcome.conclusion(Severity::High),
+            CheckConclusion::Neutral,
+            "a lane that reviewed nothing must not claim success"
+        );
+    }
+
+    /// The other half of the isolation rule: one file's failure must leave the
+    /// rest of the review standing.
+    #[tokio::test]
+    async fn one_files_failure_does_not_delete_the_other_files_review() {
+        let config = config();
+        let diffs = vec![
+            parse_file_patch("src/main.rs", PATCH),
+            parse_file_patch("src/other.rs", PATCH),
+        ];
+        let pr = pull_request();
+
+        let model = MockModel::new()
+            // src/main.rs: unparseable.
+            .then(json!({"summary": "…", "findings": [{"path": "x"}]}))
+            // src/other.rs: a real finding, and a falsifier that keeps it.
+            .then(json!({
+                "summary": "…",
+                "findings": [{
+                    "path": "src/other.rs",
+                    "severity": "high",
+                    "confidence": 0.9,
+                    "rule": "bounds",
+                    "title": "Unchecked index",
+                    "body": "…",
+                    "existing_code": "    let x = items[i];"
+                }]
+            }))
+            .then(json!({"incorrect": []}));
+
+        let outcome = Critique::new(Arc::new(model))
+            .run(LaneInput {
+                config: &config,
+                pull_request: &pr,
+                diffs: &diffs,
+                file_contents: &BTreeMap::new(),
+                scan_findings: &[],
+                commits: &[],
+                repo_policy: None,
+                extracted_rules: &[],
+                reviewed_evidence: "",
+                prior_findings: &[],
+                retrieved_context: "",
+            })
+            .await
+            .expect("runs");
+
+        assert_eq!(
+            outcome.findings.len(),
+            1,
+            "the good file was still reviewed"
+        );
+        assert_eq!(outcome.findings[0].path, "src/other.rs");
+        assert!(
+            outcome.summary.contains("src/main.rs"),
+            "and the failure is not hidden: {}",
+            outcome.summary
         );
     }
 
