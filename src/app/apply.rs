@@ -467,6 +467,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_inline_comment_leads_with_its_badges() {
+        // A reader scanning a page of comments decides whether to stop on the
+        // badges, so they go first, on their own line, before the title.
+        let forge = forge("abc123");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![finding()]),
+            None,
+        )
+        .await
+        .expect("applies");
+
+        let (_, _) = review_of(&forge).expect("posted");
+        let body = forge.state().reviews[0].comments[0].body.clone();
+        let mut lines = body.lines();
+
+        let first = lines.next().expect("a first line");
+        assert!(first.starts_with("![priority"), "{body}");
+        assert!(first.contains("label=priority"), "{body}");
+        assert!(first.contains("critique-"), "lane and confidence: {body}");
+        assert!(
+            !first.contains("**"),
+            "the title must not share the badge line: {body}"
+        );
+
+        assert!(body.contains("**Guard the index"), "{body}");
+
+        // The fingerprint marker must remain the *last* marker in the body:
+        // `findings::prior::marker_value` reads it with `rfind`, so anything
+        // appended after it would silently break cross-push dedupe.
+        let marker = body.rfind("tinysweeper:fp=").expect("a marker");
+        assert!(
+            body[marker..].find("-->").is_some(),
+            "the marker must close: {body}"
+        );
+        assert!(
+            !body[marker..].contains("![") ,
+            "nothing may follow the fingerprint marker: {body}"
+        );
+    }
+
+    #[tokio::test]
     async fn publishing_records_the_identities_it_posted() {
         // The store extension used to parse the fingerprint back out of the
         // comment body it had just rendered, looking for `{fp=` while the
