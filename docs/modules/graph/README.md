@@ -7,7 +7,7 @@ caller three files away that the diff breaks, because that caller shares no
 vocabulary with it. The graph is the other half: seed it with the symbols a pull
 request touched and walk outwards.
 
-**This graph exists to be traversed during a review, not to be drawn.** That is
+**This graph exists to be traversed during a review, not to be browsed.** That is
 the whole design constraint, and it is worth stating because the obvious version
 of this feature fails it. The obvious version is a dashboard endpoint —
 `buildRepoGraph`, called from exactly one HTTP route, never from a review — whose
@@ -15,6 +15,11 @@ structural edges come from a regex that gives up on any specifier that does not
 begin with `.` or `..`. Applied to its own codebase, which writes almost every
 internal import as `@/lib/…`, it produces a graph with essentially no edges. It
 looks like a feature and answers no question.
+
+The one picture drawn out of it — the change map in
+[`overview`](../overview/README.md) — is the same bounded walk, seeded the same
+way, rendered for the reviewer of one pull request instead of for a prompt.
+There is still no query anybody can point at the graph for its own sake.
 
 ## Files
 
