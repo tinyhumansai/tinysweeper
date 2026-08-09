@@ -63,9 +63,17 @@ fn parse(text: &str) -> Config {
 #[test]
 fn reasoning_with_too_small_a_budget_is_rejected() {
     // The production failure this exists to stop: reasoning and the answer are
-    // drawn from one allowance, and at 8000 both configured models spent the
-    // whole of it thinking and returned empty content. Every review then failed
-    // over to the last model in the fallback chain, silently.
+    // drawn from one allowance, and at 8000 both configured models — the
+    // z-ai/glm-5.2 deep tier and the deepseek-v4-pro fallback — spent the whole
+    // of it thinking and returned empty content, `finish_reason = "length"`.
+    // Every review then failed over to the last model in the fallback chain,
+    // silently. The measured rows live in `config/defaults.toml`.
+    //
+    // 8000 here is deliberately a failing budget, not the shipped one. The
+    // defaults ship `max_tokens = 16000`, above the 12000 floor, and
+    // `the_built_in_defaults_are_valid` below asserts DEFAULTS runs clean
+    // through `validate::validate` — so the floor and the shipped defaults
+    // cannot disagree.
     let config = parse("version = 1\n[models]\nmax_tokens = 8000\nreasoning_effort = \"high\"\n");
     let joined = validate::validate(&config).join("\n");
     assert!(joined.contains("models.max_tokens = 8000"), "{joined}");
