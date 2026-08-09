@@ -238,6 +238,7 @@ async fn a_stale_cassette_fails_the_case_rather_than_scoring_an_old_prompt() {
     // question nobody asked.
     let score = &outcome.scores[0];
     if score.error.is_none() {
+        eprintln!("PROPOSAL:\n{}", std::fs::read_to_string(out.join("ts-0001/proposal.json")).unwrap_or_else(|e| format!("no proposal: {e}")));
         // Probe why: the replay claimed success with no model calls. Dump what
         // was recorded against what the reply asked for.
         use crate::config::types::LaneId;
