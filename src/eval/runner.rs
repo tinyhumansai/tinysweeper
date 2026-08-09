@@ -375,6 +375,13 @@ pub fn digest_of(config: &Config) -> String {
     field(b"fallback\0", models.fallback.join(",").as_bytes());
     field(b"max_tokens\0", &models.max_tokens.to_le_bytes());
     field(b"reasoning_effort\0", models.reasoning_effort.as_bytes());
+    // The per-PR ceiling moves a score too: exceeding it is `Error::Budget`,
+    // which the runner scores as a failed case. A run configured with a $0.50
+    // ceiling and one with a $50.00 ceiling are not the same run.
+    field(
+        b"budget_usd_per_pr\0",
+        &models.budget_usd_per_pr.to_le_bytes(),
+    );
     // Per-lane overrides move `Config::model_for` — a lane pinned to a cheaper
     // or stronger model answers differently — so a score made with them is not
     // the same run as one without. `BTreeMap` iterates in id order, keeping
