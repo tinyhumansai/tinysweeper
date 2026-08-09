@@ -5,7 +5,7 @@
 //! grammars and parsing one with the other fails on the first JSX element.
 //!
 //! The allowlist is separate from the grammar list on purpose. Plenty of files
-//! are worth retrieving — Markdown, TOML, SQL, Java — that we cannot parse. They
+//! are worth retrieving — Markdown, TOML, SQL, Kotlin — that we cannot parse. They
 //! are indexed through the line splitter and say so in their metadata, which is
 //! strictly better than being invisible.
 
@@ -26,6 +26,10 @@ pub enum Language {
     Python,
     /// Go.
     Go,
+    /// Java.
+    Java,
+    /// Ruby.
+    Ruby,
 }
 
 impl Language {
@@ -41,6 +45,8 @@ impl Language {
             "js" | "mjs" | "cjs" | "jsx" => Some(Self::JavaScript),
             "py" | "pyi" => Some(Self::Python),
             "go" => Some(Self::Go),
+            "java" => Some(Self::Java),
+            "rb" | "rake" | "gemspec" => Some(Self::Ruby),
             _ => None,
         }
     }
@@ -54,17 +60,21 @@ impl Language {
             Self::JavaScript => "javascript",
             Self::Python => "python",
             Self::Go => "go",
+            Self::Java => "java",
+            Self::Ruby => "ruby",
         }
     }
 
     /// Every language with a grammar, for tests and for `--help` text.
-    pub const ALL: [Language; 6] = [
+    pub const ALL: [Language; 8] = [
         Language::Rust,
         Language::TypeScript,
         Language::Tsx,
         Language::JavaScript,
         Language::Python,
         Language::Go,
+        Language::Java,
+        Language::Ruby,
     ];
 }
 
@@ -93,10 +103,10 @@ pub fn fallback_label(path: &str) -> Option<String> {
 /// expensive direction: minified bundles, lockfiles and generated clients are
 /// enormous, embed for real money, and are never the answer to a review query.
 pub const EXTRA_EXTENSIONS: &[&str] = &[
-    "c", "cc", "cpp", "cs", "h", "hpp", "java", "kt", "kts", "swift", "rb", "php", "scala", "sh",
-    "bash", "zsh", "sql", "proto", "graphql", "gql", "tf", "md", "mdx", "rst", "toml", "yaml",
-    "yml", "json", "css", "scss", "html", "vue", "svelte", "lua", "ex", "exs", "erl", "hs", "ml",
-    "r", "pl", "dart", "zig",
+    "c", "cc", "cpp", "cs", "h", "hpp", "kt", "kts", "swift", "php", "scala", "sh", "bash", "zsh",
+    "sql", "proto", "graphql", "gql", "tf", "md", "mdx", "rst", "toml", "yaml", "yml", "json",
+    "css", "scss", "html", "vue", "svelte", "lua", "ex", "exs", "erl", "hs", "ml", "r", "pl",
+    "dart", "zig",
 ];
 
 /// Whether a path's extension is on the allowlist.
@@ -123,7 +133,7 @@ mod tests {
     #[test]
     fn every_language_maps_back_from_at_least_one_extension() {
         for language in Language::ALL {
-            let found = ["rs", "ts", "tsx", "js", "py", "go"]
+            let found = ["rs", "ts", "tsx", "js", "py", "go", "java", "rb"]
                 .iter()
                 .filter_map(|e| Language::from_path(&format!("f.{e}")))
                 .any(|l| l == language);

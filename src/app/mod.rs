@@ -5,8 +5,10 @@
 
 pub mod apply;
 pub mod doctor;
+pub mod local;
 pub mod review;
 
 pub use crate::app::apply::apply;
 pub use crate::app::doctor::{check, doctor};
+pub use crate::app::local::{LocalContext, LocalInput, local_review};
 pub use crate::app::review::{Proposal, read_proposal, review, write_proposal};

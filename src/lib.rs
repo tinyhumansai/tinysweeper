@@ -26,6 +26,7 @@ pub mod indexer;
 pub mod issues;
 pub mod knowledge;
 pub mod lanes;
+pub mod overview;
 pub mod ports;
 pub mod position;
 pub mod retrieve;

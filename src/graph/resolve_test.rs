@@ -319,3 +319,131 @@ fn a_known_file_is_reported_as_present() {
     assert!(r.has("src/a.ts"));
     assert!(!r.has("src/b.ts"));
 }
+
+// --- Java --------------------------------------------------------------------
+
+/// The Maven/Gradle source root is a build-tool convention, so the package is
+/// matched by suffix rather than joined onto a root read out of a `pom.xml`.
+#[test]
+fn a_java_import_finds_its_type_under_any_source_root() {
+    let r = resolver(&[
+        "app/src/main/java/com/example/pricing/Money.java",
+        "app/src/main/java/com/example/Cart.java",
+    ]);
+    assert_eq!(
+        one(&r.resolve(
+            "app/src/main/java/com/example/Cart.java",
+            Language::Java,
+            "com.example.pricing.Money",
+        )),
+        "app/src/main/java/com/example/pricing/Money.java"
+    );
+}
+
+/// A static import names a member, so it has one segment too many. Dropping the
+/// last segment also covers a nested type written `Outer.Inner`.
+#[test]
+fn a_static_java_import_resolves_to_the_type_holding_the_member() {
+    let r = resolver(&["src/main/java/com/example/Rates.java"]);
+    assert_eq!(
+        one(&r.resolve(
+            "src/main/java/App.java",
+            Language::Java,
+            "com.example.Rates.VAT"
+        )),
+        "src/main/java/com/example/Rates.java"
+    );
+}
+
+#[test]
+fn the_java_standard_library_is_external_rather_than_missing() {
+    let r = resolver(&["src/main/java/App.java"]);
+    assert!(
+        r.resolve("src/main/java/App.java", Language::Java, "java.util.List")
+            .is_external()
+    );
+}
+
+/// Two source roots providing the same type is normal in a multi-module build
+/// — `src/main` and `src/test` — and the shallower one is the main tree.
+#[test]
+fn the_shallowest_java_candidate_wins_so_the_graph_is_reproducible() {
+    let r = resolver(&[
+        "src/test/java/com/example/Cart.java",
+        "src/main/java/com/example/Cart.java",
+    ]);
+    let first = r.resolve("src/main/java/App.java", Language::Java, "com.example.Cart");
+    let second = r.resolve("src/main/java/App.java", Language::Java, "com.example.Cart");
+    assert_eq!(first.targets(), second.targets());
+    assert_eq!(one(&first).matches('/').count(), 5);
+}
+
+// --- Ruby --------------------------------------------------------------------
+
+#[test]
+fn require_relative_resolves_against_the_requiring_files_directory() {
+    let r = resolver(&["lib/shop/cart.rb", "lib/shop/money.rb"]);
+    assert_eq!(
+        one(&r.resolve("lib/shop/cart.rb", Language::Ruby, "require_relative money")),
+        "lib/shop/money.rb"
+    );
+}
+
+#[test]
+fn require_relative_walks_up_out_of_its_own_directory() {
+    let r = resolver(&["lib/shop/cart.rb", "lib/pricing.rb"]);
+    assert_eq!(
+        one(&r.resolve(
+            "lib/shop/cart.rb",
+            Language::Ruby,
+            "require_relative ../pricing"
+        )),
+        "lib/pricing.rb"
+    );
+}
+
+/// There is no load path to read — `$LOAD_PATH` is assembled at runtime by the
+/// gem tooling — so a plain `require` is matched by suffix, which covers the
+/// `lib/` layout every gem uses without hard-coding it.
+#[test]
+fn a_plain_require_finds_a_file_on_the_conventional_load_path() {
+    let r = resolver(&["lib/shop/pricing.rb", "app/main.rb"]);
+    assert_eq!(
+        one(&r.resolve("app/main.rb", Language::Ruby, "require shop/pricing")),
+        "lib/shop/pricing.rb"
+    );
+}
+
+/// A gem and a typo are indistinguishable without resolving a Gemfile, and
+/// reporting every gem as missing would bury the genuine breakages.
+#[test]
+fn a_require_of_a_gem_is_external_rather_than_missing() {
+    let r = resolver(&["app/main.rb"]);
+    assert!(
+        r.resolve("app/main.rb", Language::Ruby, "require json")
+            .is_external()
+    );
+}
+
+/// A relative require that names nothing is a real breakage, not a gem, and
+/// must be reported as such.
+#[test]
+fn a_broken_require_relative_is_reported_as_missing() {
+    let r = resolver(&["lib/shop/cart.rb"]);
+    let resolution = r.resolve("lib/shop/cart.rb", Language::Ruby, "require_relative gone");
+    assert!(!resolution.is_external());
+    assert!(resolution.targets().is_empty());
+}
+
+#[test]
+fn a_require_that_already_carries_its_extension_still_resolves() {
+    let r = resolver(&["lib/shop/cart.rb", "lib/shop/money.rb"]);
+    assert_eq!(
+        one(&r.resolve(
+            "lib/shop/cart.rb",
+            Language::Ruby,
+            "require_relative money.rb"
+        )),
+        "lib/shop/money.rb"
+    );
+}

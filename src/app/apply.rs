@@ -138,6 +138,18 @@ pub async fn apply(
         }
     }
 
+    // The change map, as one comment edited in place forever. Deliberately
+    // *not* folded into the review body: a review is submitted only when there
+    // is a verdict to give, and the pull request that most needs a picture of
+    // itself is often the clean one that gets no inline comments at all.
+    //
+    // Best effort, and last-but-one on purpose. It is the only thing published
+    // here that nobody is gated on, so a failure to draw it must not cost the
+    // verdict that was already posted above.
+    if let Err(err) = publish_overview(read, write, config, proposal).await {
+        tracing::warn!(%err, "could not publish the change map");
+    }
+
     // Triage last, and against `live` rather than a second fetch: the labels
     // restate a verdict whose evidence is now on the pull request, so they can
     // never point at a review that failed to publish. Add-only, so a
@@ -150,6 +162,64 @@ pub async fn apply(
     }
 
     Ok(())
+}
+
+/// Post or update the change-map comment.
+///
+/// One comment per pull request, found by its marker and edited in place. The
+/// alternative — a fresh comment per push — turns a diagram into a scroll bar,
+/// and the diagram of a two-push-old head is not a diagram of the pull request.
+///
+/// Writes nothing at all when the map says nothing worth saying: a single
+/// component with nothing reaching out of it is a box, and a comment containing
+/// one box is noise with a picture in it.
+async fn publish_overview(
+    read: &dyn ForgeRead,
+    write: &dyn ForgeWrite,
+    config: &Config,
+    proposal: &Proposal,
+) -> Result<()> {
+    if !config.overview.enabled {
+        return Ok(());
+    }
+    let Some(map) = &proposal.overview else {
+        return Ok(());
+    };
+    let Some(body) = crate::overview::comment(map) else {
+        return Ok(());
+    };
+
+    let repo = RepoId::parse(&proposal.repo)
+        .ok_or_else(|| Error::Forge(format!("`{}` is not owner/name", proposal.repo)))?;
+
+    // Ours by author *and* by marker, in that order. The marker alone is not
+    // enough: anyone can copy it into their own comment, and editing a
+    // contributor's comment because it quotes one of our markers is a write we
+    // were tricked into making. `is_own_login` is the same exact-login check
+    // dedupe already trusts — a prefix match would accept `tinysweeper-evil`,
+    // an account anybody can register.
+    //
+    // A comment with no id cannot be edited, so it falls through to posting a
+    // new one. That is the harmless direction to be wrong in: a duplicate
+    // comment is noise, whereas editing the wrong comment destroys someone's
+    // words.
+    let existing = read
+        .comments(&repo, proposal.number)
+        .await?
+        .into_iter()
+        .find(|comment| {
+            crate::findings::prior::is_own_login(&comment.author)
+                && comment.body.contains(crate::overview::MARKER)
+        })
+        .and_then(|comment| comment.id);
+
+    match existing {
+        Some(id) => write.update_comment(&repo, id, &body).await,
+        None => write
+            .create_comment(&repo, proposal.number, &body)
+            .await
+            .map(|_| ()),
+    }
 }
 
 /// Decide how to submit the review.
@@ -333,10 +403,27 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
         .findings()
         .filter_map(|finding| {
             let line = finding.line?;
+            // A suggestion block replaces exactly the lines the comment is
+            // anchored to, so carrying one *changes the anchor*: it widens to
+            // the span the replacement covers. Without a suggestion the comment
+            // stays a single-line pin, which is what a reader wants — a
+            // multi-line highlight for a one-sentence remark is noise.
+            let (start_line, line) = match &finding.applicable {
+                Some(suggestion) if suggestion.start_line < suggestion.end_line => {
+                    (Some(suggestion.start_line), suggestion.end_line)
+                }
+                Some(suggestion) => (None, suggestion.end_line),
+                None => (None, line),
+            };
+            let suggestion = finding
+                .applicable
+                .as_ref()
+                .map(|s| format!("\n\n```suggestion\n{}\n```", s.replacement))
+                .unwrap_or_default();
             Some(ReviewComment {
                 path: finding.path.clone(),
                 line: Some(line),
-                start_line: None,
+                start_line,
                 // The forge assigns the author on the way in; on the way out it
                 // is what tells dedupe whether a marker is ours.
                 author: String::new(),
@@ -354,8 +441,13 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
                 // footnote size buries the reasoning under the assertion.
                 // `rule_line` splits the class from the explanation so the
                 // first is scannable and the second still reads as prose.
+                //
+                // The suggestion block sits after the prose and before the
+                // footer: GitHub renders it as a diff with a commit button, and
+                // a reader has to have been told why before being offered the
+                // button.
                 body: format!(
-                    "{}  {}\n\n**{}**\n\n{}\n\n{} · <!-- {MARKER_PREFIX}fp={} -->",
+                    "{}  {}\n\n**{}**\n\n{}{}\n\n{} · <!-- {MARKER_PREFIX}fp={} -->",
                     crate::findings::render::priority_badge(finding.severity),
                     crate::findings::render::lane_confidence_badge(
                         finding.lane,
@@ -363,6 +455,7 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
                     ),
                     finding.title,
                     finding.body,
+                    suggestion,
                     crate::findings::render::rule_line(&finding.rule),
                     // The identity review stamped, over the code this finding
                     // anchors to. Recomputing it here from the title — as this
@@ -382,7 +475,7 @@ mod tests {
     use crate::app::review::LaneProposal;
     use crate::config::types::{LaneId, Severity};
     use crate::findings::types::Finding;
-    use crate::forge::types::{CheckConclusion, PullRequest};
+    use crate::forge::types::{CheckConclusion, IssueComment, PullRequest};
     use crate::forge::{MockForge, MockState, Write};
 
     fn config() -> Config {
@@ -396,6 +489,7 @@ mod tests {
     fn proposal(head: &str, findings: Vec<Finding>) -> Proposal {
         let highest_severity = findings.iter().map(|finding| finding.severity).max();
         Proposal {
+            overview: None,
             unreviewed: vec![],
             version: 1,
             repo: "tinyhumansai/tinysweeper".into(),
@@ -439,6 +533,7 @@ mod tests {
             title: "Guard the index before dereferencing".into(),
             body: "`i` is never bounds-checked.".into(),
             suggestion: None,
+            applicable: None,
             late: false,
             identity: None,
         }
@@ -593,6 +688,82 @@ mod tests {
         assert_eq!(event, ReviewEvent::RequestChanges);
         assert!(body.contains("Requesting changes"), "{body}");
         assert!(body.contains("**high**"), "{body}");
+    }
+
+    /// A stamped suggestion becomes a one-click block, and the comment widens
+    /// to the span it replaces — GitHub substitutes exactly the anchored lines,
+    /// so a narrower anchor would delete the rest of the block.
+    #[tokio::test]
+    async fn an_applicable_suggestion_becomes_a_commit_button_over_its_own_span() {
+        let mut f = finding();
+        f.applicable = Some(crate::findings::types::Suggestion {
+            start_line: 2,
+            end_line: 4,
+            replacement: "    if let Some(x) = items.get(i) {\n        use_it(x);\n    }".into(),
+        });
+
+        let forge = forge("abc123");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![f]),
+            None,
+        )
+        .await
+        .expect("applies");
+
+        let comment = forge
+            .writes()
+            .into_iter()
+            .find_map(|w| match w {
+                Write::Review { comments, .. } => comments.into_iter().next(),
+                _ => None,
+            })
+            .expect("an inline comment");
+
+        assert_eq!(comment.start_line, Some(2));
+        assert_eq!(comment.line, Some(4));
+        assert!(
+            comment
+                .body
+                .contains("```suggestion\n    if let Some(x) = items.get(i) {"),
+            "{}",
+            comment.body
+        );
+        // Before the footer, so the reader has the reason before the button.
+        let block = comment.body.find("```suggestion").expect("a block");
+        let footer = comment.body.find("**[RULE]").expect("a footer");
+        assert!(block < footer, "{}", comment.body);
+    }
+
+    /// Without a suggestion the comment stays a single-line pin. Widening it
+    /// unconditionally would highlight a whole block for a one-line remark.
+    #[tokio::test]
+    async fn a_finding_with_no_applicable_suggestion_stays_a_single_line_pin() {
+        let forge = forge("abc123");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![finding()]),
+            None,
+        )
+        .await
+        .expect("applies");
+
+        let comment = forge
+            .writes()
+            .into_iter()
+            .find_map(|w| match w {
+                Write::Review { comments, .. } => comments.into_iter().next(),
+                _ => None,
+            })
+            .expect("an inline comment");
+
+        assert_eq!(comment.start_line, None);
+        assert_eq!(comment.line, Some(2));
+        assert!(!comment.body.contains("```suggestion"), "{}", comment.body);
     }
 
     #[tokio::test]
@@ -982,6 +1153,204 @@ mod tests {
         assert!(body.contains("800 cached (8%)"), "{body}");
         assert!(body.contains("kimi-k3"), "{body}");
     }
+    // --- the change map ----------------------------------------------------
+
+    /// A proposal carrying a two-component map, which is the smallest one
+    /// worth drawing.
+    fn proposal_with_map(head: &str) -> Proposal {
+        use crate::evidence::diff::parse_file_patch;
+
+        let diffs = [
+            parse_file_patch("src/lanes/critique.rs", "@@ -1,1 +1,2 @@\n x\n+y\n"),
+            parse_file_patch("docs/readme.md", "@@ -1,1 +1,2 @@\n x\n+y\n"),
+        ];
+        Proposal {
+            overview: Some(crate::overview::build(
+                &diffs,
+                &[],
+                crate::overview::GraphView::Absent,
+                &config().overview,
+            )),
+            ..proposal(head, vec![])
+        }
+    }
+
+    fn overview_comments(forge: &MockForge) -> Vec<Write> {
+        forge
+            .writes()
+            .into_iter()
+            .filter(|write| match write {
+                Write::Comment { body, .. } | Write::CommentUpdate { body, .. } => {
+                    body.contains(crate::overview::MARKER)
+                }
+                _ => false,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_pull_request_gets_one_change_map_comment() {
+        let forge = forge("abc123");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal_with_map("abc123"),
+            None,
+        )
+        .await
+        .expect("applies");
+
+        let posted = overview_comments(&forge);
+        assert_eq!(posted.len(), 1, "{posted:#?}");
+        assert!(
+            matches!(&posted[0], Write::Comment { body, .. } if body.contains("```mermaid")),
+            "{posted:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_push_edits_the_same_comment_rather_than_adding_one() {
+        // The whole reason the map carries a marker. A fresh diagram per push
+        // turns a pull request into a scroll bar, and the older diagrams are
+        // all wrong by then.
+        let forge = forge("abc123").with_comments(
+            7,
+            vec![IssueComment {
+                id: Some(4242),
+                author: "tinysweeper[bot]".into(),
+                body: format!("{}\n\nan earlier diagram", crate::overview::MARKER),
+            }],
+        );
+
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal_with_map("abc123"),
+            None,
+        )
+        .await
+        .expect("applies");
+
+        let posted = overview_comments(&forge);
+        assert_eq!(posted.len(), 1, "{posted:#?}");
+        assert!(
+            matches!(&posted[0], Write::CommentUpdate { comment_id, .. } if *comment_id == 4242),
+            "{posted:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_contributor_who_copies_the_marker_does_not_get_their_comment_edited() {
+        // Anyone can paste a marker into their own comment. Editing it because
+        // of that would be a write we were tricked into making, and it would
+        // destroy somebody's words.
+        let forge = forge("abc123").with_comments(
+            7,
+            vec![IssueComment {
+                id: Some(4242),
+                author: "helpful-contributor".into(),
+                body: format!("{} nice bot", crate::overview::MARKER),
+            }],
+        );
+
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal_with_map("abc123"),
+            None,
+        )
+        .await
+        .expect("applies");
+
+        let posted = overview_comments(&forge);
+        assert_eq!(posted.len(), 1, "{posted:#?}");
+        assert!(
+            matches!(&posted[0], Write::Comment { .. }),
+            "a new comment, not an edit of theirs: {posted:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn turning_the_map_off_posts_no_comment() {
+        let forge = forge("abc123");
+        let mut config = config();
+        config.overview.enabled = false;
+
+        apply(&forge, &forge, &config, &proposal_with_map("abc123"), None)
+            .await
+            .expect("applies");
+
+        assert!(
+            overview_comments(&forge).is_empty(),
+            "{:#?}",
+            forge.writes()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stale_head_draws_nothing_either() {
+        let forge = forge("def456");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal_with_map("abc123"),
+            None,
+        )
+        .await
+        .expect("applies");
+
+        assert!(
+            overview_comments(&forge).is_empty(),
+            "{:#?}",
+            forge.writes()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_proposal_written_before_the_map_existed_still_publishes() {
+        // `overview: None` is what an old `findings.json` deserialises to, and
+        // it must mean "no map was built", never "the change touches nothing".
+        let forge = forge("abc123");
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
+            .await
+            .expect("applies");
+
+        assert!(overview_comments(&forge).is_empty());
+        assert!(!forge.checks().is_empty(), "the verdict still went out");
+    }
+
+    #[tokio::test]
+    async fn a_pull_request_with_no_review_to_submit_still_gets_its_map() {
+        // The reason the map is its own comment rather than a paragraph in the
+        // review body. This pull request is clean and already approved, so no
+        // review is submitted at all — and it is exactly the pull request whose
+        // reviewer has nothing but the files tab to go on.
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::Approve);
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal_with_map("abc123"),
+            None,
+        )
+        .await
+        .expect("applies");
+
+        assert!(
+            !forge
+                .writes()
+                .iter()
+                .any(|write| matches!(write, Write::Review { .. })),
+            "{:#?}",
+            forge.writes()
+        );
+        assert_eq!(overview_comments(&forge).len(), 1);
+    }
+
     #[tokio::test]
     async fn a_planned_thread_is_resolved_when_the_verdict_is_published() {
         // The mutation half of thread resolution. The decision was taken during

@@ -580,3 +580,115 @@ async fn graph_expansion_adds_context_on_this_repositorys_own_code() {
     assert!(with.tokens <= config.retrieval.context_tokens);
     assert!(with.graph_nodes > 0);
 }
+
+#[tokio::test]
+async fn the_blast_radius_of_a_real_change_names_its_dependents_and_its_coverage() {
+    // The acceptance test for the impact step, and deliberately on this
+    // repository rather than a fixture: a fixture built to make the blast
+    // radius non-empty proves only that the fixture was built that way.
+    let files = this_crate();
+    let graph_store = MockGraphStore::new();
+    let built = crate::graph::build(REPO, &files).expect("builds");
+    crate::graph::sync_all(&graph_store, REPO, &built)
+        .await
+        .expect("writes the graph");
+
+    let embedder = embedder();
+    let index = MockChunkIndex::new();
+
+    // The symbol under test is *found*, not hard-coded: pick one this crate
+    // both calls from production code and reaches from a test. Naming a
+    // function here instead would make the test a hostage to whoever next
+    // renames it, and — worse — would quietly start passing for the wrong
+    // reason if the coverage half stopped working and the name happened to be
+    // ambiguous, which is exactly how a symbol-level assertion fails silently.
+    // A caller is a `calls` edge whose source is not also a *test* of the same
+    // target. Filtering by path instead would have missed the trap this crate
+    // is full of: an inline `#[cfg(test)] mod tests` lives in the file it
+    // tests, so "the caller is in another file" is not the same question.
+    let covering: BTreeSet<(&str, &str)> = built
+        .edges
+        .iter()
+        .filter(|e| e.kind == EdgeKind::Tests)
+        .map(|e| (e.from.as_str(), e.to.as_str()))
+        .collect();
+    let called: BTreeSet<&str> = built
+        .edges
+        .iter()
+        .filter(|e| {
+            e.kind == EdgeKind::Calls && !covering.contains(&(e.from.as_str(), e.to.as_str()))
+        })
+        .map(|e| e.to.as_str())
+        .collect();
+    let (path, symbol) = covering
+        .iter()
+        .map(|(_, to)| *to)
+        .filter(|to| called.contains(to))
+        .filter_map(|to| to.split_once('#'))
+        .min()
+        .expect("this crate calls and tests at least one of its own functions");
+
+    let diffs = vec![parse_file_patch(
+        path,
+        &format!("@@ -1,3 +1,3 @@ fn {symbol}()\n-    let old = 1;\n+    let new = 2;\n"),
+    )];
+
+    let context = Retriever::new(&embedder, &index)
+        .with_graph(&graph_store)
+        .retrieve(&config(), REPO, "Adjust a helper", HEAD, &diffs)
+        .await
+        .0;
+
+    let callers: Vec<&str> = context
+        .impact
+        .reached
+        .iter()
+        .filter(|entry| entry.relation == crate::graph::Relation::Caller)
+        .map(|entry| entry.id.as_str())
+        .collect();
+    assert!(
+        !callers.is_empty(),
+        "no caller for {path}#{symbol}, which production code calls: {:?}",
+        context.impact
+    );
+    assert!(
+        context
+            .impact
+            .reached
+            .iter()
+            .any(|entry| entry.relation == crate::graph::Relation::Test),
+        "no coverage for {path}#{symbol}, which a test reaches: {:?}",
+        context.impact
+    );
+    assert!(
+        context.impact.untested.is_empty(),
+        "a symbol a test reaches must not also be reported as untested: {:?}",
+        context.impact
+    );
+
+    // And it has to reach the prompt, not merely the struct: this whole step
+    // is worthless if a lane never sees it.
+    let rendered = context.render();
+    assert!(rendered.contains("blast radius"), "{rendered}");
+    assert!(rendered.contains(callers[0]), "{rendered}");
+}
+
+#[tokio::test]
+async fn a_review_with_no_graph_claims_no_blast_radius() {
+    // Retrieval without a graph must produce an *empty* impact rather than an
+    // empty-looking one: "nothing depends on this change" and "we did not
+    // look" are different sentences, and only one of them is safe to render.
+    let index = index_with(&[("src/lib/math.ts", 1, 3, "export function total() {}")]).await;
+    let diffs = vec![parse_file_patch(
+        "src/lib/math.ts",
+        "@@ -1,2 +1,2 @@ export function total()\n-  return 1;\n+  return 2;\n",
+    )];
+
+    let context = Retriever::new(&embedder(), &index)
+        .retrieve(&config(), REPO, "Change the total", HEAD, &diffs)
+        .await
+        .0;
+
+    assert!(context.impact.is_empty());
+    assert!(!context.render().contains("blast radius"));
+}

@@ -44,6 +44,13 @@ Deterministic scanners run **before** any model call, so a committed private key
 fails for free and the model is only asked to adjudicate what a scanner already
 flagged.
 
+Alongside the lanes, a pull request gets a **change map**: one comment, edited in
+place, with a diagram of the components the change touches and the untouched ones
+it reaches through an import or a call. It is drawn from the diff and the
+repository graph — no model call, so it is reproducible and free — and it says
+which parts it could not see rather than drawing an empty picture. See
+[docs/modules/overview/README.md](docs/modules/overview/README.md).
+
 ## Design commitments
 
 - **The model never holds a write token.** Lanes take a `ForgeRead` and only the
@@ -121,11 +128,23 @@ Index status (`/admin/index/…`) and knowledge documents
 ### Run the engine locally
 
 `local-review` runs every lane over a local git range, with no GitHub item and
-no tokens — useful before you push, and the way prompt changes get iterated.
+no tokens — useful before you push, and the way prompt changes get iterated. It
+needs a model key and the `harness` feature; it needs nothing else.
 
 ```sh
+# The working tree against origin/main, uncommitted and untracked files included.
 tinysweeper local-review --base origin/main
+
+# A committed branch, with the description you are about to open the PR with.
+tinysweeper local-review --base main --head HEAD \
+  --title 'feat: add the council' --body 'Why it exists.'
 ```
+
+The range is `base...head`, taken from the merge base the way GitHub shows a
+pull request, so commits that landed on the base branch meanwhile are not
+reviewed as your work. Nothing is written anywhere — there is no `ForgeWrite` on
+this path at all. See [docs/modules/app/README.md](docs/modules/app/README.md)
+for the rest of its behaviour.
 
 ### Measure whether a change helped
 
@@ -158,6 +177,7 @@ MiniMax are all the same code path.
 - [AGENTS.md](AGENTS.md) — conventions for humans and agents working in this repo
 - [docs/triggers.md](docs/triggers.md) — what wakes tinysweeper up, and what emits no event at all
 - [docs/modules/server/README.md](docs/modules/server/README.md) — the server, its security boundary, and the admin API
+- [docs/modules/overview/README.md](docs/modules/overview/README.md) — the change map: what gets drawn, and why nothing in it comes from a model
 - `docs/` — module documentation and design notes
 
 ## License

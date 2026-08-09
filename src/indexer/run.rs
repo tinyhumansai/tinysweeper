@@ -330,6 +330,7 @@ impl<'a> Indexer<'a> {
         if !removed.is_empty() {
             report.deleted += self.index.delete_paths(repo_id, &removed).await?;
             self.manifest.forget(repo_id, signature, &removed).await?;
+            report.removed = removed;
         }
 
         Ok(report)
@@ -371,6 +372,15 @@ impl<'a> Indexer<'a> {
         }
         report.files += work.len() as u64;
         report.reused += work.iter().map(|file| file.reused).sum::<u64>();
+        // Recorded before the writes rather than after them. A run that hits
+        // the spend ceiling mid-group still re-parsed nothing it should not
+        // have, and a graph rebuilt over a superset of what changed is correct
+        // — where one rebuilt over a subset silently keeps stale edges.
+        report.changed.extend(
+            work.iter()
+                .filter(|file| file.changed())
+                .map(|file| file.path.clone()),
+        );
 
         // Step 2: say what is about to be written, before writing it.
         let intents: Vec<IndexedFile> = work.iter().map(FileWork::intent).collect();
@@ -546,6 +556,16 @@ impl FileWork {
             stale,
             reused,
         }
+    }
+
+    /// Whether this file's content differs from what the manifest confirmed.
+    ///
+    /// A set comparison, not a length one: a file can gain and lose a chunk in
+    /// the same edit and keep its count.
+    fn changed(&self) -> bool {
+        let fresh: BTreeSet<&String> = self.ids.iter().collect();
+        let confirmed: BTreeSet<&String> = self.previous.iter().collect();
+        fresh != confirmed
     }
 
     /// The pending record: the old confirmed set, plus what is about to land.

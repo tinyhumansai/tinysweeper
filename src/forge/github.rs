@@ -979,18 +979,7 @@ impl ForgeWrite for GitHubWrite {
             "event": event.as_api(),
             "comments": comments
                 .iter()
-                .map(|c| serde_json::json!({
-                    "path": c.path,
-                    "line": c.line,
-                    // Every finding here is anchored to a line the diff
-                    // actually touches (see `anchored_in_diff`), always on
-                    // the head revision. GitHub defaults `side` to `RIGHT`
-                    // when omitted, but naming it keeps that from being an
-                    // implicit fact one API change away from silently
-                    // failing every inline comment.
-                    "side": "RIGHT",
-                    "body": c.body,
-                }))
+                .map(review_comment_payload)
                 .collect::<Vec<_>>(),
         });
         if comments.is_empty() {
@@ -1103,6 +1092,35 @@ impl ForgeWrite for GitHubWrite {
     }
 }
 
+/// The REST payload for one inline review comment.
+///
+/// Split out of `create_review` so the wire format is a pure, testable
+/// function — the HTTP call itself can't run the offline suite.
+fn review_comment_payload(c: &ReviewComment) -> serde_json::Value {
+    // Every finding here is anchored to a line the diff actually touches (see
+    // `anchored_in_diff`), always on the head revision. GitHub defaults `side`
+    // to `RIGHT` when omitted, but naming it keeps that from being an implicit
+    // fact one API change away from silently failing every inline comment.
+    let mut comment = serde_json::json!({
+        "path": c.path,
+        "line": c.line,
+        "side": "RIGHT",
+        "body": c.body,
+    });
+    // A suggestion that spans more than one line anchors a *range*. The range
+    // needs `start_line` and `start_side` on the wire together, or GitHub
+    // treats the comment as pinned to `line` alone and a multi-line "Commit
+    // suggestion" would replace just that one line, deleting the rest of the
+    // block. `apply::inline_comments` refuses to build a range for a
+    // single-line replacement, so a `Some` start always means a real range —
+    // and `start_side` is `RIGHT` for the same reason `side` is.
+    if let Some(start_line) = c.start_line {
+        comment["start_line"] = serde_json::json!(start_line);
+        comment["start_side"] = serde_json::json!("RIGHT");
+    }
+    comment
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1147,6 +1165,53 @@ mod tests {
         assert_eq!(issue.issue_type, None);
         assert!(!issue.open);
         assert!(issue.body.is_empty());
+    }
+
+    fn comment(
+        path: &str,
+        line: Option<u64>,
+        start_line: Option<u64>,
+        body: &str,
+    ) -> ReviewComment {
+        ReviewComment {
+            path: path.to_string(),
+            line,
+            start_line,
+            author: String::new(),
+            body: body.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_single_line_comment_carries_no_range_fields_on_the_wire() {
+        let payload = review_comment_payload(&comment("src/lib.rs", Some(4), None, "Fix it."));
+
+        assert_eq!(
+            payload,
+            json!({
+                "path": "src/lib.rs",
+                "line": 4,
+                "side": "RIGHT",
+                "body": "Fix it."
+            })
+        );
+    }
+
+    #[test]
+    fn a_multi_line_comment_carries_start_line_and_start_side_on_the_wire() {
+        let payload = review_comment_payload(&comment("src/lib.rs", Some(4), Some(2), "Fix it."));
+
+        assert_eq!(
+            payload,
+            json!({
+                "path": "src/lib.rs",
+                "line": 4,
+                "side": "RIGHT",
+                "start_line": 2,
+                "start_side": "RIGHT",
+                "body": "Fix it."
+            })
+        );
     }
 
     #[test]

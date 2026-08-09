@@ -106,6 +106,28 @@ async fn a_zero_cap_returns_nothing() {
     );
 }
 
+/// At equal distance the cap must keep the node the seed reaches by more
+/// paths. Under the previous breadth-first truncation this kept `a_far.ts`,
+/// because `a` sorts before `h` — see `graph::rank`.
+#[test]
+fn capping_prefers_the_more_implicated_of_two_equally_distant_nodes() {
+    let nodes: Vec<GraphNode> = ["seed", "one", "two", "hub", "a_far"]
+        .iter()
+        .map(|n| GraphNode::file(REPO, format!("{n}.ts")))
+        .collect();
+    let edges = vec![
+        GraphEdge::new(REPO, "one.ts", "seed.ts", EdgeKind::Calls, "one.ts"),
+        GraphEdge::new(REPO, "two.ts", "seed.ts", EdgeKind::Calls, "two.ts"),
+        GraphEdge::new(REPO, "one.ts", "hub.ts", EdgeKind::Calls, "one.ts"),
+        GraphEdge::new(REPO, "two.ts", "hub.ts", EdgeKind::Calls, "two.ts"),
+        GraphEdge::new(REPO, "one.ts", "a_far.ts", EdgeKind::Calls, "one.ts"),
+    ];
+    let capped = cap(Neighbourhood { nodes, edges }, &["seed.ts".to_string()], 4);
+    let ids: Vec<&str> = capped.nodes.iter().map(|n| n.id.as_str()).collect();
+    assert!(ids.contains(&"hub.ts"), "kept {ids:?}");
+    assert!(!ids.contains(&"a_far.ts"), "kept {ids:?}");
+}
+
 #[test]
 fn capping_keeps_the_nodes_closest_to_the_seeds() {
     let nodes: Vec<GraphNode> = ["a", "b", "c", "d"]
@@ -121,7 +143,8 @@ fn capping_keeps_the_nodes_closest_to_the_seeds() {
 
     let capped = cap(hood, &["a.ts".to_string()], 2);
     let ids: Vec<&str> = capped.nodes.iter().map(|n| n.id.as_str()).collect();
-    // Breadth-first from the seed: the far end of the chain is what goes.
+    // Rank decays with distance from the seed, so the far end of the chain is
+    // still what goes.
     assert_eq!(ids, ["a.ts", "b.ts"]);
 }
 

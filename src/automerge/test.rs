@@ -243,6 +243,97 @@ fn a_required_check_that_never_reported_refuses() {
 }
 
 #[test]
+fn a_skipped_check_nobody_required_does_not_block() {
+    // The regression that made auto-merge unreachable rather than
+    // conservative. A workflow job behind `if: github.event_name == 'push'`
+    // concludes `skipped` on every pull request, for ever; reading that as a
+    // failure means no pull request in such a repository can ever merge, and
+    // this repository has two of them.
+    let mut snapshot = snapshot_of();
+    for conclusion in [CheckConclusion::Skipped, CheckConclusion::Neutral] {
+        snapshot.checks.push(CheckStatus {
+            name: "Docker (publish)".into(),
+            conclusion: Some(conclusion),
+        });
+        assert_eq!(
+            evaluate(&policy(), &snapshot),
+            Decision::Merge,
+            "{conclusion:?} on an unrequired check blocked the merge"
+        );
+        snapshot.checks.pop();
+    }
+}
+
+#[test]
+fn a_required_check_that_reports_neutral_is_a_verdict_and_passes() {
+    // `Neutral` is a lane saying it did not apply — the `commits` lane on a
+    // range with no secrets in it. That is an answer, and requiring the lane
+    // means requiring it to answer, not requiring it to find something.
+    let mut snapshot = snapshot_of();
+    for check in &mut snapshot.checks {
+        if check.name == "ci/build" {
+            check.conclusion = Some(CheckConclusion::Neutral);
+        }
+    }
+    assert_eq!(evaluate(&policy(), &snapshot), Decision::Merge);
+}
+
+#[test]
+fn a_required_check_that_was_skipped_refuses_and_says_which() {
+    // The other half, and the reason `Neutral` and `Skipped` are not folded
+    // together: a required check that *could not run* leaves the gate it was
+    // named for with no evidence behind it.
+    let mut snapshot = snapshot_of();
+    for check in &mut snapshot.checks {
+        if check.name == "ci/build" {
+            check.conclusion = Some(CheckConclusion::Skipped);
+        }
+    }
+    assert_eq!(
+        refusal(&policy(), &snapshot),
+        Refusal::RequiredCheckInconclusive {
+            name: "ci/build".into()
+        }
+    );
+}
+
+#[test]
+fn a_check_that_needs_a_human_still_blocks_everything() {
+    // `action_required` is the conclusion that is neither green nor red at a
+    // glance, and it is the one that must not slip through the widened gate
+    // above: it means a person has to do something.
+    let mut snapshot = snapshot_of();
+    snapshot.checks.push(CheckStatus {
+        name: "ci/deploy".into(),
+        conclusion: Some(CheckConclusion::ActionRequired),
+    });
+    assert_eq!(
+        refusal(&policy(), &snapshot),
+        Refusal::CheckFailing {
+            name: "ci/deploy".into()
+        }
+    );
+}
+
+#[test]
+fn an_unrecognised_conclusion_is_still_read_as_a_failure() {
+    // `CheckStatus::from_api` maps anything it does not know to `Failure` so a
+    // conclusion GitHub adds later cannot be read as a pass. Asserted here as
+    // well as in `forge::types` because this is the module where being wrong
+    // about it merges code.
+    let mut snapshot = snapshot_of();
+    snapshot
+        .checks
+        .push(CheckStatus::from_api("ci/new", Some("something_new")));
+    assert_eq!(
+        refusal(&policy(), &snapshot),
+        Refusal::CheckFailing {
+            name: "ci/new".into()
+        }
+    );
+}
+
+#[test]
 fn a_pull_request_changing_nothing_refuses() {
     let mut snapshot = snapshot_of();
     snapshot.files.clear();

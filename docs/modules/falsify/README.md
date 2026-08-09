@@ -58,9 +58,25 @@ The pass runs on the lane's **model** findings only. Scanner findings are merged
 in afterwards and are never shown to the filter: a committed key found by a
 regular expression is not up for a model's opinion.
 
+## The summary has to agree with the verdict
+
+A lane's model writes its prose summary *before* this pass runs, so once the
+filter empties the finding list that prose is describing findings that no
+longer exist. The lane must therefore drop it rather than print it.
+
+This is not hypothetical. A `critique` check run once opened with "One real bug:
+the coverage edge is never stored", reported no findings, concluded `success`,
+and approved the pull request in the same breath. The bug was a hallucination
+and the filter was right to remove it; only the summary still claimed it, which
+made the review assert and deny the same thing in one check run. `summarise` now
+replaces the prose with the rejection reasons whenever nothing survived —
+they say more than the discarded prose did, and they cannot contradict the
+verdict. Covered by `a_summary_never_asserts_a_bug_the_falsifier_removed`.
+
 ## Cost
 
-One call per lane, on the cheap tier `Config::model_for_workload(Workload::Falsify)` resolves to, skipped entirely when the lane
+One call per file for a lane that fans out, otherwise one call per lane, on the
+cheap tier `Config::model_for_workload(Workload::Falsify)` resolves to, skipped entirely when the lane
 produced no findings. It sees the rendered diff and the findings, and nothing
 else of the run: no repository policy, no prior findings, no pull request
 description. Both inputs are fenced with `harness::prompt::push_fenced` — the

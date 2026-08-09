@@ -395,6 +395,7 @@ mod tests {
             title: title.into(),
             body: "`i` is never bounds-checked.".into(),
             suggestion: None,
+            applicable: None,
             late: false,
             identity: None,
         }

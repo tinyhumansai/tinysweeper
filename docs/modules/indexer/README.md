@@ -79,6 +79,14 @@ produced chunks demonstrates it.
 At the coarser grain, a run whose revision the manifest already records returns
 `IndexOutcome::AlreadyFresh` without walking anything.
 
+The same finding is reported, not just acted on. `IndexReport::changed` names
+the files whose chunk ids differ from the manifest's and `IndexReport::removed`
+names the ones whose chunks went, so the code graph can re-parse the same subset
+instead of the whole tree — see `docs/modules/graph/README.md`. `changed` is a
+set comparison rather than a count, because a file can gain and lose a chunk in
+one edit and keep its length. On a first index every file is changed, which is
+the right answer: nothing about it was known before.
+
 ## A claim, not a lock
 
 Two workers indexing one repository corrupt nothing but pay twice and race on

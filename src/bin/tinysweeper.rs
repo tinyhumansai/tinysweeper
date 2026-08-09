@@ -128,6 +128,22 @@ enum Command {
         /// Only run these lanes, overriding the config.
         #[arg(long, value_delimiter = ',')]
         lanes: Vec<String>,
+
+        /// The checkout to review. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        dir: std::path::PathBuf,
+
+        /// Title shown to the `description` lane.
+        ///
+        /// A git range has none, so it defaults to the newest commit's subject.
+        /// Set this to review a real pull request description before opening
+        /// one.
+        #[arg(long)]
+        title: Option<String>,
+
+        /// Body shown to the `description` lane. Defaults to empty.
+        #[arg(long)]
+        body: Option<String>,
     },
 
     /// Measure review quality against the labelled corpus in `evals/`.
@@ -298,8 +314,16 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Apply { repo, pr, findings } => run_apply(&repo, pr, &findings).await,
         Command::Triage { repo, pr, findings } => run_triage(&repo, pr, &findings).await,
         Command::Automerge { repo, pr, dry_run } => run_automerge(&repo, pr, dry_run).await,
-        Command::LocalReview { .. } => not_yet("local-review", "M3"),
         Command::Eval(command) => run_eval(command).await,
+        Command::LocalReview {
+            base,
+            head,
+            config,
+            lanes,
+            dir,
+            title,
+            body,
+        } => run_local_review(base, head, config, lanes, &dir, title, body).await,
         Command::Serve { bind, config } => run_serve(bind, config).await,
         Command::Check { path } => tinysweeper::app::check(&path),
         Command::Doctor { path, json } => tinysweeper::app::doctor(&path, json),
@@ -503,6 +527,73 @@ fn live_model(
     ))
 }
 
+/// Run the engine over a local git range. No token, no forge, no writes.
+///
+/// Needs `harness` and nothing else: the evidence comes from `git`, so the
+/// GitHub adapter is not linked on this path at all.
+#[cfg(feature = "harness")]
+#[allow(clippy::too_many_arguments)]
+async fn run_local_review(
+    base: String,
+    head: Option<String>,
+    config_path: Option<std::path::PathBuf>,
+    lanes: Vec<String>,
+    dir: &std::path::Path,
+    title: Option<String>,
+    body: Option<String>,
+) -> Result<()> {
+    use std::sync::Arc;
+    use tinysweeper::app::{LocalInput, local_review};
+    use tinysweeper::evidence::git::Range;
+    use tinysweeper::harness::openrouter::GatewayModel;
+
+    let mut loaded = tinysweeper::config::load_validated(dir, config_path.as_deref())?;
+    if !lanes.is_empty() {
+        loaded.config.review.lanes = lanes;
+    }
+
+    let model = Arc::new(GatewayModel::from_config(&loaded.config.models)?);
+    let input = LocalInput {
+        range: Range { base, head },
+        title,
+        body,
+    };
+
+    let (proposal, context) = local_review(dir, &input, model, &loaded.config).await?;
+
+    println!(
+        "{} {}..{}{}\n",
+        context.repo,
+        short(&context.range.base_sha),
+        short(&context.range.head_sha),
+        if context.range.dirty {
+            " + working tree"
+        } else {
+            ""
+        }
+    );
+    println!("{}", render(&proposal));
+    println!("(local review — nothing was written anywhere)");
+    Ok(())
+}
+
+#[cfg(not(feature = "harness"))]
+#[allow(clippy::too_many_arguments)]
+async fn run_local_review(
+    _base: String,
+    _head: Option<String>,
+    _config: Option<std::path::PathBuf>,
+    _lanes: Vec<String>,
+    _dir: &std::path::Path,
+    _title: Option<String>,
+    _body: Option<String>,
+) -> Result<()> {
+    Err(tinysweeper::Error::FeatureDisabled(
+        "reviewing a local range",
+        "harness",
+    ))
+}
+
 /// Freeze a live pull request into a fixture and a case stub.
 ///
 /// The case stub is written with the expectations left empty and the provenance
@@ -620,6 +711,12 @@ labelled_by = ""
 "#,
         title.replace('"', "'"),
     )
+}
+
+/// The first eight characters of a sha, for a human reading a terminal.
+#[cfg(feature = "harness")]
+fn short(sha: &str) -> &str {
+    &sha[..sha.len().min(8)]
 }
 
 /// Publish a proposal. No model key reaches this path.
@@ -846,8 +943,9 @@ fn require_webhook_secret(raw: Option<String>) -> Result<String> {
 
 /// Render a proposal for a human reading CI logs.
 ///
-/// Only reachable when a review can actually run, which needs both features.
-#[cfg(all(feature = "github", feature = "harness"))]
+/// Gated on `harness` rather than on both features: `local-review` reaches it
+/// without the GitHub adapter linked at all.
+#[cfg(feature = "harness")]
 fn render(proposal: &tinysweeper::app::Proposal) -> String {
     let mut out = String::new();
     out.push_str(&format!(
@@ -876,17 +974,6 @@ fn render(proposal: &tinysweeper::app::Proposal) -> String {
         tinysweeper::findings::render::cost_line(&proposal.usage(), &proposal.models)
     ));
     out
-}
-
-/// Placeholder for a subcommand whose milestone has not landed yet.
-///
-/// The CLI surface is declared in full from the start so scripts and operator
-/// runbooks can be written against a stable interface while the internals are
-/// still being filled in.
-fn not_yet(command: &str, milestone: &str) -> Result<()> {
-    Err(tinysweeper::Error::config(format!(
-        "`tinysweeper {command}` is not implemented yet (scheduled for {milestone})"
-    )))
 }
 
 /// Wire up `tracing` at a level chosen by `-v` flags, unless `RUST_LOG` says
@@ -979,9 +1066,51 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_commands_name_their_milestone() {
-        let err = not_yet("review", "M3").unwrap_err();
-        assert!(err.to_string().contains("scheduled for M3"), "{err}");
+    fn local_review_defaults_to_the_working_tree_of_the_current_directory() {
+        let cli = Cli::try_parse_from(["tinysweeper", "local-review"]).expect("parses");
+        match cli.command {
+            Command::LocalReview {
+                head,
+                dir,
+                title,
+                body,
+                ..
+            } => {
+                // `None` is the working tree, uncommitted changes included.
+                // That is the default because the change being iterated on has
+                // usually not been committed yet.
+                assert_eq!(head, None);
+                assert_eq!(dir, std::path::PathBuf::from("."));
+                assert_eq!(title, None);
+                assert_eq!(body, None);
+            }
+            other => panic!("expected local-review, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn local_review_takes_a_description_for_the_description_lane() {
+        let cli = Cli::try_parse_from([
+            "tinysweeper",
+            "local-review",
+            "--head",
+            "HEAD",
+            "--title",
+            "feat: add a lane",
+            "--body",
+            "Why it exists.",
+        ])
+        .expect("parses");
+        match cli.command {
+            Command::LocalReview {
+                head, title, body, ..
+            } => {
+                assert_eq!(head.as_deref(), Some("HEAD"));
+                assert_eq!(title.as_deref(), Some("feat: add a lane"));
+                assert_eq!(body.as_deref(), Some("Why it exists."));
+            }
+            other => panic!("expected local-review, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -1018,6 +1147,7 @@ mod tests {
     #[cfg(feature = "github")]
     fn proposal_for(repo: &str, number: u64) -> tinysweeper::app::Proposal {
         tinysweeper::app::Proposal {
+            overview: None,
             unreviewed: vec![],
             version: 1,
             repo: repo.into(),
