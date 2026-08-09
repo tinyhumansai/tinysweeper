@@ -1225,6 +1225,31 @@ mod tests {
             .expect("matches");
     }
 
+    #[cfg(feature = "github")]
+    #[test]
+    fn case_stub_escapes_id_like_the_title() {
+        // `id` is operator input with no validation upstream (unlike `repo`),
+        // and it lands in two `"..."` TOML lines. A quote or backslash must
+        // stay safely inside the strings, the same way `title` is escaped, or
+        // `eval add` writes a case file nobody can parse.
+        let stub = case_stub("ts-\"x\"", "tinyhumansai/tinysweeper", 7, "title");
+        assert!(
+            stub.contains("id = \"ts-\\\"x\\\"\""),
+            "id line not escaped: {stub}"
+        );
+        assert!(
+            stub.contains("fixture = \"../fixtures/ts-\\\"x\\\".json\""),
+            "fixture line not escaped: {stub}"
+        );
+        // And the escaped stub must still be parseable TOML.
+        let table: toml::Table = stub.parse().expect("the stub stays parseable");
+        assert_eq!(
+            table["id"].as_str(),
+            Some("ts-\"x\""),
+            "escaping must not change the value"
+        );
+    }
+
     #[cfg(feature = "serve")]
     #[test]
     fn a_real_webhook_secret_is_accepted() {
