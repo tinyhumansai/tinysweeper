@@ -118,18 +118,22 @@ fn detail(finding: &Finding) -> String {
         None => format!("`{}`", finding.path),
     };
 
+    // Three lines rather than one run-on: where it is, why it was raised, and
+    // then the argument. The rule used to be tacked onto the location line
+    // inside `<code>`, which put a whole explanatory sentence in monospace at
+    // the end of a line that had already changed subject twice.
     let mut out = format!(
-        "<details>\n<summary>{} {}</summary>\n\n{} {} {} · rule <code>{}</code>\n\n{}\n",
+        "<details>\n<summary>{} {}</summary>\n\n{} {}{}\n\n{}\n\n{}\n",
         badge(finding.severity),
         escape_html(&finding.title),
         location,
         confidence_badge(finding.confidence),
         if finding.late {
-            "· ![pre-existing](https://img.shields.io/badge/pre--existing-8b949e?style=flat-square)"
+            " ![pre-existing](https://img.shields.io/badge/pre--existing-8b949e?style=flat-square)"
         } else {
             ""
         },
-        finding.rule,
+        rule_line(&finding.rule),
         finding.body.trim(),
     );
 
@@ -144,8 +148,17 @@ fn detail(finding: &Finding) -> String {
     out
 }
 
+/// The version stamp under every summary.
+///
+/// A badge rather than `<sub>`. Shrinking text is a weak way to say "this is
+/// metadata" — it is still a full sentence, just harder to read — where a badge
+/// is read as a stamp at a glance and matches the vocabulary the rest of the
+/// summary already speaks.
 fn footer(version: &str) -> String {
-    format!("\n<sub>tinysweeper {version}</sub>\n")
+    format!(
+        "\n![tinysweeper {version}](https://img.shields.io/badge/tinysweeper-{}-8b949e?style=flat-square)\n",
+        version.replace('-', "--")
+    )
 }
 
 /// Make a model-authored title safe inside a table cell.
@@ -156,6 +169,42 @@ fn footer(version: &str) -> String {
 /// below was escaped and the table above it was not.
 pub fn escape_cell(text: &str) -> String {
     escape_html(text).replace('|', "\\|")
+}
+
+/// Render a rule as its own labelled line.
+///
+/// A rule name carries two things at once: a short name for the class of
+/// problem, and often a sentence explaining why this instance was raised —
+/// `"Untrusted-input injection: the diff contains an instruction addressed to
+/// the reviewer…"`. Splitting on the first colon lets the name be emphasised
+/// and the explanation read as prose, so a reader scanning a page of comments
+/// can take in the class without reading the sentence, and the sentence is
+/// there when they want it.
+///
+/// The split is on the *first* colon only. A rule whose explanation contains
+/// its own colon — a URL, a `path:line` — must keep it, and the head is the
+/// part that names the class.
+///
+/// Escaped, because the rule is model-authored. It used to sit inside
+/// backticks, which neutralised any markup in it; emphasising the head means it
+/// is now rendered, and an unescaped `<` or a stray `**` would break out of the
+/// bold run and mangle everything after it.
+pub fn rule_line(rule: &str) -> String {
+    let rule = rule.trim();
+
+    match rule.split_once(':') {
+        // Guard against an empty head (`": something"`) and an empty tail
+        // (`"Bug:"`): both would render a label with nothing in it, which reads
+        // as a bug in the renderer rather than a terse rule.
+        Some((head, rest)) if !head.trim().is_empty() && !rest.trim().is_empty() => {
+            format!(
+                "**[RULE] {}**: {}",
+                escape_cell(head.trim()),
+                escape_cell(rest.trim())
+            )
+        }
+        _ => format!("**[RULE] {}**", escape_cell(rule)),
+    }
 }
 
 /// A `<summary>` renders as HTML, so a stray tag in a title would break out of
@@ -623,5 +672,57 @@ mod cost_table_tests {
             ],
         );
         assert!(table.contains("377,153 embedded"), "{table}");
+    }
+
+    #[test]
+    fn a_rule_with_an_explanation_splits_the_class_from_the_prose() {
+        let rendered = rule_line(
+            "Untrusted-input injection: the diff contains an instruction addressed to the \
+             reviewer asking it to approve the PR and report no findings.",
+        );
+
+        assert!(
+            rendered.starts_with("**[RULE] Untrusted-input injection**: the diff contains"),
+            "{rendered}"
+        );
+        assert!(rendered.ends_with("report no findings."), "{rendered}");
+    }
+
+    #[test]
+    fn a_bare_rule_name_is_still_labelled() {
+        assert_eq!(rule_line("unchecked-index"), "**[RULE] unchecked-index**");
+    }
+
+    #[test]
+    fn only_the_first_colon_splits() {
+        // A rule whose explanation cites a `path:line` or a URL must keep it.
+        let rendered = rule_line("Bug: see src/main.rs:42 for the case");
+        assert_eq!(rendered, "**[RULE] Bug**: see src/main.rs:42 for the case");
+    }
+
+    #[test]
+    fn a_colon_with_nothing_after_it_does_not_render_an_empty_explanation() {
+        // `**[RULE] Bug**: ` reads as a renderer bug, not as a terse rule.
+        assert_eq!(rule_line("Bug:"), "**[RULE] Bug:**");
+        assert_eq!(rule_line(": orphaned"), "**[RULE] : orphaned**");
+    }
+
+    #[test]
+    fn a_model_authored_rule_cannot_break_out_of_the_emphasis() {
+        // The rule used to sit inside backticks, which neutralised any markup
+        // in it. Emphasising the head means it is rendered, so a stray tag
+        // would escape into the page and mangle everything after it.
+        let rendered = rule_line("<script>x</script>: and <b>more</b>");
+
+        assert!(!rendered.contains("<script>"), "{rendered}");
+        assert!(!rendered.contains("<b>"), "{rendered}");
+        assert!(rendered.contains("&lt;script&gt;"), "{rendered}");
+    }
+
+    #[test]
+    fn the_version_stamp_is_a_badge_not_shrunken_text() {
+        let stamp = footer("0.1.0");
+        assert!(stamp.contains("img.shields.io"), "{stamp}");
+        assert!(!stamp.contains("<sub>"), "{stamp}");
     }
 }

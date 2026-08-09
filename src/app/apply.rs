@@ -314,8 +314,10 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
                 // contains an instruction addressed to the reviewer…" — and
                 // shrinking the sentence that justifies the comment to
                 // footnote size buries the reasoning under the assertion.
+                // `rule_line` splits the class from the explanation so the
+                // first is scannable and the second still reads as prose.
                 body: format!(
-                    "{}  {}\n\n**{}**\n\n{}\n\n**Rule:** `{}` · <!-- {MARKER_PREFIX}fp={} -->",
+                    "{}  {}\n\n**{}**\n\n{}\n\n{} · <!-- {MARKER_PREFIX}fp={} -->",
                     crate::findings::render::priority_badge(finding.severity),
                     crate::findings::render::lane_confidence_badge(
                         finding.lane,
@@ -323,7 +325,7 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
                     ),
                     finding.title,
                     finding.body,
-                    finding.rule,
+                    crate::findings::render::rule_line(&finding.rule),
                     // The identity review stamped, over the code this finding
                     // anchors to. Recomputing it here from the title — as this
                     // once did — makes the marker depend on the model's
@@ -560,7 +562,7 @@ mod tests {
         // was raised, and shrinking the justification below the assertion it
         // justifies is exactly backwards.
         assert!(
-            body.contains("**Rule:**"),
+            body.contains("**[RULE] "),
             "the rule needs its label: {body}"
         );
         assert!(
