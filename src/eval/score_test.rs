@@ -222,7 +222,10 @@ fn a_finding_three_lines_off_still_matches_and_four_does_not() {
     let near = scored(&case, vec![finding("src/a.rs", 13, "t", "b")]);
     assert_eq!(near.true_positives, 1);
 
-    let far = scored(&case, vec![finding("src/a.rs", 20, "t", "b")]);
+    // Exactly past the tolerance: 14 is the first line that does not match a
+    // finding anchored at 10 with `LINE_TOLERANCE` = 3. Pinning the edge means
+    // the test still fails if the constant drifts.
+    let far = scored(&case, vec![finding("src/a.rs", 14, "t", "b")]);
     assert_eq!(far.true_positives, 0);
     assert!(
         far.judged[0].reason.contains("none within"),
