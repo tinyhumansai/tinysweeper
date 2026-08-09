@@ -252,9 +252,8 @@ pub fn rescore(corpus: &Corpus, out: &Path) -> Result<Vec<CaseScore>> {
         // normal scorecard entry.
         let score = match std::fs::read_to_string(dir.join("failure.json")) {
             Ok(raw) => {
-                let reason = serde_json::from_str::<String>(&raw).unwrap_or_else(|_| {
-                    format!("the run failed for an unreadable reason: {raw}")
-                });
+                let reason = serde_json::from_str::<String>(&raw)
+                    .unwrap_or_else(|_| format!("the run failed for an unreadable reason: {raw}"));
                 crate::eval::score::failed(&case.case, reason, std::time::Duration::default())
             }
             Err(_) => {

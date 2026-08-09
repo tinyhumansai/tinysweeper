@@ -281,18 +281,15 @@ async fn the_config_digest_moves_when_the_prompt_inputs_move() {
     // the instruction text is identical: `lanes` gates which lanes get the
     // injected instructions at all, and `rules` names the document inside them.
     let mut with_instruction = base.clone();
-    with_instruction.path_instructions.push(
-        crate::config::types::PathInstruction {
+    with_instruction
+        .path_instructions
+        .push(crate::config::types::PathInstruction {
             glob: "**/*.rs".into(),
             instructions: "Flag unchecked index operations.".into(),
             rules: None,
             lanes: vec![],
-        },
-    );
-    assert_eq!(
-        digest_of(&with_instruction),
-        digest_of(&with_instruction)
-    );
+        });
+    assert_eq!(digest_of(&with_instruction), digest_of(&with_instruction));
     let mut lanes_gated = with_instruction.clone();
     lanes_gated.path_instructions[0].lanes = vec![crate::config::types::LaneId::Security];
     assert_ne!(digest_of(&with_instruction), digest_of(&lanes_gated));
