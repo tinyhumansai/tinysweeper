@@ -762,15 +762,25 @@ async fn stored(store: &MockGraphStore) -> (Vec<String>, Vec<(String, String, Ed
         REPO,
         // Every node, reached from every node: the mock walks from seeds, so
         // seeding with all of them is how a test reads the whole store back.
-        &NeighbourQuery::new(store.symbols(REPO).await.expect("symbols").into_iter().map(|n| n.id))
-            .hops(2)
-            .max_nodes(10_000),
+        &NeighbourQuery::new(
+            store
+                .symbols(REPO)
+                .await
+                .expect("symbols")
+                .into_iter()
+                .map(|n| n.id),
+        )
+        .hops(2)
+        .max_nodes(10_000),
     )
     .await
     .expect("walks");
     let mut nodes: Vec<String> = hood.nodes.into_iter().map(|n| n.id).collect();
-    let mut edges: Vec<(String, String, EdgeKind)> =
-        hood.edges.into_iter().map(|e| (e.from, e.to, e.kind)).collect();
+    let mut edges: Vec<(String, String, EdgeKind)> = hood
+        .edges
+        .into_iter()
+        .map(|e| (e.from, e.to, e.kind))
+        .collect();
     nodes.sort();
     nodes.dedup();
     edges.sort();
@@ -856,13 +866,7 @@ fn a_re_parsed_file_resolves_into_one_that_was_not() {
         "computeTotal",
     )];
 
-    let graph = build_paths(
-        REPO,
-        &tree,
-        &["src/app/page.ts".to_string()],
-        &known,
-    )
-    .expect("builds");
+    let graph = build_paths(REPO, &tree, &["src/app/page.ts".to_string()], &known).expect("builds");
 
     assert!(
         has_edge(

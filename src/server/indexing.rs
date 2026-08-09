@@ -232,9 +232,7 @@ impl IndexBackend {
         for path in &selection.selected {
             let needs_text = match &parse {
                 None => true,
-                Some(parse) => {
-                    parse.contains(path) || crate::graph::aliases::is_alias_config(path)
-                }
+                Some(parse) => parse.contains(path) || crate::graph::aliases::is_alias_config(path),
             };
             if !needs_text {
                 files.push(SourceFile::new(path.clone(), String::new()));
@@ -287,7 +285,6 @@ impl IndexBackend {
         );
         Ok(())
     }
-
 }
 
 /// Index `repo` in the background, requeueing rather than waiting on a claim.
