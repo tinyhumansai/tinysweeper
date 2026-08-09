@@ -90,4 +90,3 @@ The lane skipped the file, the blob scanner only inspects added files, and
 degrades a pass to `Neutral` and names the files. Deliberately not `Failure`: we
 do not know there is a problem, only that we did not look, and blocking a merge
 on our own blind spot punishes the contributor for the forge's truncation.
-
