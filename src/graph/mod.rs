@@ -16,7 +16,7 @@
 //! 4. [`build`] assembles nodes and edges and writes them; [`traverse`] walks
 //!    them back out, bounded by hops and by a hard node cap.
 //!
-//! **This graph exists to be traversed during a review**, not to be drawn. The
+//! **This graph exists to be traversed during a review**, not to be browsed. The
 //! obvious version of this feature is a dashboard endpoint whose only caller is
 //! an HTTP route — and whose specifier matching gives up on anything that is
 //! not a relative path, so it cannot follow the very aliases its own codebase
