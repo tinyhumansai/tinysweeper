@@ -391,6 +391,24 @@ pub fn digest_of(config: &Config) -> String {
     for instruction in &config.path_instructions {
         field(b"glob\0", instruction.glob.as_bytes());
         field(b"instructions\0", instruction.instructions.as_bytes());
+        // The selectors decide which prompt is actually built, so they move a
+        // score: `rules` names the rule document whose text is inlined into
+        // `instructions`, and `lanes` decides which lanes are handed those
+        // injected instructions at all. Two runs that differ only in a
+        // selector are configured differently and must not silently compare.
+        if let Some(rules) = &instruction.rules {
+            field(b"rules\0", rules.as_bytes());
+        }
+        field(
+            b"lanes\0",
+            instruction
+                .lanes
+                .iter()
+                .map(|lane| lane.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+                .as_bytes(),
+        );
     }
     hasher
         .finalize()
