@@ -40,8 +40,8 @@ order:
    `review.request_changes_at`. Both are required: `fail_on` and
    `request_changes_at` are independent knobs, so a lane may fail its check
    without blocking the merge.
-2. **Approve** — every lane passed, the review was **complete**, and
-   `review.approve_when_clean` is on. This is what lets a pull request satisfy a
+2. **Approve** — every lane passed, the review was **complete**, the pull
+   request is **not a draft**, and `review.approve_when_clean` is on. This is what lets a pull request satisfy a
    "review required" rule, and it is also what retires an earlier objection:
    GitHub keeps one review per reviewer, so the approval supersedes it and
    nobody has to dismiss anything by hand.
@@ -58,7 +58,16 @@ carried: a file nobody saw is not a file anyone can vouch for. Nothing blocks,
 so there is nothing to object to — and nothing to endorse either, which is a
 `Comment`.
 
-Three bounds on approving, all deliberate. It reads the *gate*, not the blocking
+**Not a draft** closes a trap. With `review.draft_prs = false` every lane skips
+a draft, so the proposal comes back with nothing blocking and nothing
+unreviewed — which reads as "clean" to both conditions above. Without this the
+bot would endorse a pull request it had deliberately declined to look at, and on
+a repository requiring a review that endorsement is what lets it merge. Note
+rung 3 is *not* gated on it: refusing to endorse a draft is not the same as
+refusing to unblock one, and conflating them would strand every draft that was
+ever blocked.
+
+Four bounds on approving, all deliberate. It reads the *gate*, not the blocking
 threshold, so `request_changes_at = "off"` stops tinysweeper objecting without
 starting it endorsing a red pull request. And an approval that already stands is
 not restated, or every push to a clean pull request would add a review that

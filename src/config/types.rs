@@ -229,6 +229,8 @@ pub struct Config {
     pub lanes: BTreeMap<String, Lane>,
     /// Auto-merge policy.
     pub automerge: AutoMerge,
+    /// Review-thread resolution.
+    pub threads: Threads,
     /// Issue triage.
     pub issues: Issues,
     /// Scheduled repository automations.
@@ -282,6 +284,25 @@ pub struct Review {
     /// and a second approval is not submitted while the previous one still
     /// stands — otherwise every push would add a review nobody asked for.
     pub approve_when_clean: bool,
+}
+
+/// When tinysweeper closes its own review conversations.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Threads {
+    /// Resolve a thread whose finding no longer reproduces on changed code.
+    ///
+    /// Deterministic and free: the fingerprint in the comment either appears in
+    /// this run's findings or it does not. Nothing is asked of a model.
+    pub resolve_fixed: bool,
+    /// Ask a model whether a reply settled a finding the code did not change.
+    ///
+    /// **Off by default, and deliberately.** This is the one case no
+    /// fingerprint can decide, so the only evidence is a comment somebody wrote
+    /// — and a comment is untrusted input. The verdict stays advisory even when
+    /// this is on: it feeds a plan that deterministic code executes, and it can
+    /// only ever close a thread tinysweeper itself opened.
+    pub ask_model: bool,
 }
 
 /// Which paths are reviewed at all.
@@ -531,6 +552,8 @@ pub enum Workload {
     Falsify,
     /// Extracting facts from a curated knowledge document.
     KnowledgeExtraction,
+    /// Judging whether a reply settled a review thread (`src/threads`).
+    ThreadReview,
 }
 
 /// Per-lane overrides.
@@ -820,9 +843,10 @@ impl Config {
     /// trade-off worth exposing.
     pub fn model_for_workload(&self, workload: Workload) -> &str {
         match workload {
-            Workload::Relocate | Workload::Falsify | Workload::KnowledgeExtraction => {
-                &self.models.scan
-            }
+            Workload::Relocate
+            | Workload::Falsify
+            | Workload::KnowledgeExtraction
+            | Workload::ThreadReview => &self.models.scan,
         }
     }
 

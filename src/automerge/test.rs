@@ -683,6 +683,9 @@ impl crate::ports::forge::ForgeWrite for RefusingForge {
     ) -> crate::Result<u64> {
         unreachable!("auto-merge opens no issues")
     }
+    async fn resolve_review_thread(&self, _repo: &RepoId, _thread_id: &str) -> crate::Result<()> {
+        unreachable!("auto-merge resolves no threads")
+    }
     async fn merge(&self, _repo: &RepoId, _number: u64, method: &str) -> crate::Result<()> {
         Err(crate::Error::Forge(format!(
             "{method} merges are not allowed on this repository"
