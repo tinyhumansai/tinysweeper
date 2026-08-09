@@ -264,7 +264,11 @@ enum EvalCommand {
         allow_config_drift: bool,
 
         /// Exit non-zero when the comparison fails. For CI.
-        #[arg(long)]
+        ///
+        /// The comparison is against `--baseline`, so gating without one would
+        /// silently print a report and exit zero. Clap rejects the combination
+        /// rather than leaving that footgun.
+        #[arg(long, requires = "baseline")]
         gate: bool,
     },
 
