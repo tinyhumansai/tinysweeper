@@ -72,6 +72,25 @@ enum Command {
         findings: std::path::PathBuf,
     },
 
+    /// Merge a pull request if it qualifies under `[automerge]`.
+    ///
+    /// Deterministic and off unless the repository opts in. Makes no model
+    /// calls: every criterion is arithmetic over check conclusions, review
+    /// states, paths and SHAs.
+    Automerge {
+        /// The repository, as `owner/name`.
+        #[arg(long, env = "GITHUB_REPOSITORY")]
+        repo: String,
+
+        /// The pull request number.
+        #[arg(long)]
+        pr: u64,
+
+        /// Report the decision without merging anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Run the review engine over a local git range. No GitHub, no tokens.
     LocalReview {
         /// The base revision to diff against.
@@ -136,6 +155,7 @@ async fn main() -> Result<()> {
             propose_to,
         } => run_review(&repo, pr, config, lanes, dry_run, &propose_to).await,
         Command::Apply { repo, pr, findings } => run_apply(&repo, pr, &findings).await,
+        Command::Automerge { repo, pr, dry_run } => run_automerge(&repo, pr, dry_run).await,
         Command::LocalReview { .. } => not_yet("local-review", "M3"),
         Command::Serve { bind, config } => run_serve(bind, config).await,
         Command::Check { path } => tinysweeper::app::check(&path),
@@ -218,6 +238,52 @@ async fn run_apply(repo: &str, pr: u64, findings: &std::path::Path) -> Result<()
 
     println!("published {} check run(s)", proposal.lanes.len());
     Ok(())
+}
+
+/// Evaluate the auto-merge policy, and merge if it qualifies.
+///
+/// `--dry-run` reads and decides but is handed no write token at all, rather
+/// than being handed one and asked not to use it.
+#[cfg(feature = "github")]
+async fn run_automerge(repo: &str, pr: u64, dry_run: bool) -> Result<()> {
+    use tinysweeper::automerge::types::{Decision, Outcome};
+    use tinysweeper::automerge::{evaluate, merge_if_qualified, snapshot};
+    use tinysweeper::forge::RepoId;
+    use tinysweeper::forge::github::{GitHubRead, GitHubWrite};
+
+    let repo_id = RepoId::parse(repo)
+        .ok_or_else(|| tinysweeper::Error::config(format!("`{repo}` is not owner/name")))?;
+
+    let loaded = tinysweeper::config::load_validated(std::path::Path::new("."), None)?;
+    let config = &loaded.config.automerge;
+    let read = GitHubRead::from_env()?;
+
+    if dry_run {
+        let taken = snapshot(&read, &repo_id, pr).await?;
+        match evaluate(config, &taken) {
+            Decision::Merge => println!("#{pr} qualifies; would merge with `{}`", config.method),
+            Decision::Refuse(refusal) => println!("#{pr} not merged: {refusal}"),
+        }
+        return Ok(());
+    }
+
+    let write = GitHubWrite::from_env()?;
+    match merge_if_qualified(&read, &write, config, &repo_id, pr).await? {
+        Outcome::Merged { method } => println!("#{pr} merged with `{method}`"),
+        Outcome::Refused(refusal) => println!("#{pr} not merged: {refusal}"),
+        Outcome::Rejected { method, reason } => {
+            println!("#{pr} qualified but GitHub refused a `{method}` merge: {reason}")
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "github"))]
+async fn run_automerge(_repo: &str, _pr: u64, _dry_run: bool) -> Result<()> {
+    Err(tinysweeper::Error::FeatureDisabled(
+        "merging on GitHub",
+        "github",
+    ))
 }
 
 /// A `findings.json` must actually describe the pull request the caller

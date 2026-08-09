@@ -424,6 +424,50 @@ fn validate_automerge(config: &Config, problems: &mut Vec<String>) {
         );
     }
 
+    // The policy fails closed on a glob it cannot compile, which is safe but
+    // silent: the operator sees a pull request that never merges and no reason
+    // why. Saying so here turns a bug report into a typo.
+    for (field, patterns) in [
+        ("sensitive_paths", &automerge.sensitive_paths),
+        ("dependency_paths", &automerge.dependency_paths),
+    ] {
+        for pattern in patterns {
+            if let Err(err) = Glob::new(pattern) {
+                problems.push(format!(
+                    "`automerge.{field}` contains `{pattern}`, which is not a valid glob: {err}"
+                ));
+            }
+        }
+    }
+
+    // A zero cap refuses everything. That is the correct reading of a
+    // misconfigured threshold — never "unlimited" — but it is almost certainly
+    // not what was meant, so it is said out loud.
+    if automerge.max_files == 0 {
+        problems.push(
+            "`automerge.max_files = 0` refuses every pull request; a cap of zero is not `unlimited`"
+                .into(),
+        );
+    }
+    for (field, value) in [
+        ("max_changed_lines", automerge.max_changed_lines),
+        ("max_hunks", automerge.max_hunks as u64),
+        ("max_directories", automerge.max_directories as u64),
+    ] {
+        if value == 0 {
+            problems.push(format!(
+                "`automerge.{field} = 0` refuses every pull request; a cap of zero is not `unlimited`"
+            ));
+        }
+    }
+
+    if automerge.allow_dependency_bumps && automerge.dependency_bots.is_empty() {
+        problems.push(
+            "`automerge.allow_dependency_bumps = true` with no `automerge.dependency_bots` exempts nothing; name the bot logins or turn the exemption off"
+                .into(),
+        );
+    }
+
     for label in automerge
         .allow_labels
         .iter()

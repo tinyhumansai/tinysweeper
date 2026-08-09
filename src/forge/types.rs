@@ -48,6 +48,14 @@ pub struct PullRequest {
     pub body: String,
     /// The login of whoever opened it.
     pub author: String,
+    /// Whether GitHub reports the author as `type: "Bot"`.
+    ///
+    /// Carried separately from the login because auto-merge's dependency-bump
+    /// exemption needs both: anyone may register an account called
+    /// `dependabot-ish`, but only GitHub can say an account is a bot. Defaults
+    /// to `false`, so an adapter that does not know says "human", which merely
+    /// costs a dependency bump its exemption.
+    pub author_is_bot: bool,
     /// Whether it is a draft.
     pub draft: bool,
     /// The branch being merged into.
