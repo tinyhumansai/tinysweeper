@@ -212,7 +212,15 @@ impl IndexBackend {
         let known = self.index.graph.symbols(repo_id).await?;
         let parse = match known.is_empty() {
             true => None,
-            false => Some(self.rebuild_set(repo_id, report).await?),
+            false => Some(
+                crate::graph::build::rebuild_set(
+                    &self.index.graph,
+                    repo_id,
+                    &report.changed,
+                    &report.removed,
+                )
+                .await?,
+            ),
         };
 
         // Whole-tree text for a full build; for an incremental one, text only
