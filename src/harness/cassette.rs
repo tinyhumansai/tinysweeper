@@ -327,7 +327,16 @@ pub fn key(request: &ModelRequest) -> String {
         for (i, m) in request.messages.iter().enumerate() {
             dbg.push_str(&format!("msg[{i}] {}: {:?}\n", role_name(m), m.content));
         }
-        std::fs::write("/tmp/ts-key-dump.txt", dbg).ok();
+        let log = "/tmp/ts-key-dump.txt";
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+            .and_then(|mut f| {
+                use std::io::Write;
+                f.write_all(dbg.as_bytes())
+            })
+            .ok();
     }
     let mut hasher = Sha256::new();
     hasher.update(request.model.as_bytes());
