@@ -42,6 +42,13 @@ fn the_key_covers_everything_that_can_change_an_answer() {
     other_schema.schema_name = "tinysweeper_falsify".into();
     assert_ne!(key(&base), key(&other_schema), "and the schema");
 
+    // The same name with a different body is a different output contract: a
+    // provider that answers against `properties: {summary: string}` does not
+    // answer like one against `properties: {findings: []}`.
+    let mut other_schema = base.clone();
+    other_schema.schema = json!({"type": "object", "properties": {"findings": {"type": "array"}}});
+    assert_ne!(key(&base), key(&other_schema), "and the schema body");
+
     let mut other_ceiling = base.clone();
     other_ceiling.max_tokens = 4000;
     assert_ne!(
