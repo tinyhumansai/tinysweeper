@@ -107,9 +107,9 @@ pub fn build(
     let mut components = changed;
     components.extend(impacted);
 
-    let links = match neighbourhood {
-        Some(walk) => links(walk, &components, depth, limits.max_links),
-        None => Vec::new(),
+    let links = match view {
+        GraphView::Walked(walk) => links(walk, &components, depth, limits.max_links),
+        GraphView::Absent | GraphView::Unavailable => Vec::new(),
     };
 
     ChangeMap {
