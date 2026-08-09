@@ -22,6 +22,12 @@
 //! not a relative path, so it cannot follow the very aliases its own codebase
 //! is written in. Retrieval seeds [`traverse::neighbours`] with the symbols a
 //! diff touches; that is the whole reason the resolver is as careful as it is.
+//!
+//! [`crate::overview`] does draw one picture, and it is the same bounded walk
+//! seeded the same way — a review output about one pull request, not a browsing
+//! surface over the repository. The distinction is the one this module cares
+//! about: every drawing is of a change, and there is no query anybody can point
+//! at the graph for its own sake.
 
 pub mod aliases;
 pub mod build;
