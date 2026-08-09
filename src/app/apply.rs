@@ -132,11 +132,13 @@ pub async fn apply(
 }
 
 /// Decide how to submit the review.
-fn review_event(config: &Config, proposal: &Proposal, blocking_now: bool) -> ReviewEvent {
-    let Some(threshold) = config.request_changes_at() else {
-        return ReviewEvent::Comment;
-    };
-
+///
+/// `previous` is tinysweeper's own last verdict on this pull request, if any.
+fn review_event(
+    config: &Config,
+    proposal: &Proposal,
+    previous: Option<ReviewEvent>,
+) -> ReviewEvent {
     // Blocking needs BOTH a failing lane and a finding severe enough to justify
     // it. The lane conclusion alone is not enough: `fail_on` and
     // `request_changes_at` are independent knobs, so a lane configured to fail
@@ -147,30 +149,48 @@ fn review_event(config: &Config, proposal: &Proposal, blocking_now: bool) -> Rev
     // The severity is read from the lane's findings rather than the surviving
     // comments, so a recurred problem whose comment was deduped away still
     // blocks — being already visible is not being fixed.
-    let severe_enough = proposal.has_severity_at_or_above(threshold);
-    if proposal.blocked() && severe_enough {
-        ReviewEvent::RequestChanges
-    } else if blocking_now {
-        // Clean now, blocked before: clear it. Anything else leaves the author
-        // stuck behind an objection that no longer applies.
-        ReviewEvent::Approve
-    } else {
-        ReviewEvent::Comment
+    let blocks = match config.request_changes_at() {
+        Some(threshold) => proposal.blocked() && proposal.has_severity_at_or_above(threshold),
+        None => false,
+    };
+    if blocks {
+        return ReviewEvent::RequestChanges;
     }
+
+    // Approving is gated on the whole gate being green, not on the weaker
+    // `blocks` above. Those two differ exactly when `request_changes_at` is
+    // `"off"`, and in that case a failing lane must not be approved — turning
+    // blocking off asks tinysweeper to stop objecting, not to start endorsing.
+    if !proposal.blocked() && config.review.approve_when_clean {
+        return ReviewEvent::Approve;
+    }
+
+    // Clean now, blocked before: clear it even when approving is off. Anything
+    // else leaves the author stuck behind an objection that no longer applies,
+    // needing a human to dismiss a review by hand.
+    if previous == Some(ReviewEvent::RequestChanges) {
+        return ReviewEvent::Approve;
+    }
+
+    ReviewEvent::Comment
 }
 
-/// Whether tinysweeper's own last review on this pull request requested changes.
+/// tinysweeper's own last review verdict on this pull request.
 ///
 /// Read from the forge rather than remembered, so it stays correct across a
 /// restart, a redeploy, and a human dismissing the review by hand.
-async fn previously_blocked(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> bool {
+async fn own_review_state(
+    read: &dyn ForgeRead,
+    repo: &RepoId,
+    number: u64,
+) -> Option<ReviewEvent> {
     match read.own_review_state(repo, number).await {
-        Ok(state) => state == Some(ReviewEvent::RequestChanges),
+        Ok(state) => state,
         Err(err) => {
             // Failing closed here would mean never clearing a block. Failing
-            // open at worst skips a redundant approval.
+            // open at worst re-states a verdict that already stands.
             tracing::warn!(%err, "could not read the previous review state");
-            false
+            None
         }
     }
 }
