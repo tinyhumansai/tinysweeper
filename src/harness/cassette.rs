@@ -359,6 +359,30 @@ fn role_name(message: &Message) -> &'static str {
     }
 }
 
+/// A schema with its object keys sorted at every depth.
+///
+/// `serde_json`'s key ordering is a library feature (`preserve_order`), not a
+/// property of the value — the `serve` build enables it via `bson`, and the
+/// same schema then stringifies differently. The cassette key hashes the
+/// schema, so it must hash the *contract*, which canonical sorting makes
+/// independent of which serde_json is linked.
+fn canonical_schema(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let sorted = keys
+                .into_iter()
+                .map(|key| (key.clone(), canonical_schema(&map[key])));
+            serde_json::Value::Object(sorted.collect())
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(canonical_schema).collect())
+        }
+        other => other.clone(),
+    }
+}
+
 /// Read every take in `dir`, in filename order.
 fn load(dir: &Path) -> Result<Vec<Take>> {
     let entries = std::fs::read_dir(dir).map_err(|err| {
