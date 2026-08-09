@@ -161,12 +161,17 @@ pub fn parse_as(file: &SourceFile, language: Language) -> Result<ParsedFile> {
     defs.sort_by_key(|d| (d.start_byte, d.end_byte));
     defs.dedup_by(|a, b| a.name == b.name && a.start_byte == b.start_byte);
 
+    heritage.sort_by(|a, b| (a.byte, &a.child, &a.parent).cmp(&(b.byte, &b.child, &b.parent)));
+    heritage.dedup_by(|a, b| a.child == b.child && a.parent == b.parent && a.byte == b.byte);
+
     Ok(ParsedFile {
         path: file.path.clone(),
         lang: language,
         defs,
         imports,
         usages,
+        heritage,
+        test_file: path::is_test_path(&file.path),
     })
 }
 
