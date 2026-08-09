@@ -1189,14 +1189,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_change_map_that_cannot_be_posted_does_not_cost_the_verdict() {
-        // Nobody is gated on a picture. A read-only forge fails every write;
-        // the check runs above it must still have been published, and `apply`
-        // must still report success for the parts that landed.
-        let forge = forge("abc123").read_only();
-        let result = apply(&forge, &forge, &config(), &proposal_with_map("abc123"), None).await;
+    async fn a_pull_request_with_no_review_to_submit_still_gets_its_map() {
+        // The reason the map is its own comment rather than a paragraph in the
+        // review body. This pull request is clean and already approved, so no
+        // review is submitted at all — and it is exactly the pull request whose
+        // reviewer has nothing but the files tab to go on.
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::Approve);
+        apply(&forge, &forge, &config(), &proposal_with_map("abc123"), None)
+            .await
+            .expect("applies");
 
-        assert!(result.is_err() || overview_comments(&forge).is_empty());
+        assert!(
+            !forge
+                .writes()
+                .iter()
+                .any(|write| matches!(write, Write::Review { .. })),
+            "{:#?}",
+            forge.writes()
+        );
+        assert_eq!(overview_comments(&forge).len(), 1);
     }
 
     #[tokio::test]
