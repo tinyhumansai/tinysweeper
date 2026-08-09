@@ -82,10 +82,11 @@ fn reasoning_with_too_small_a_budget_is_rejected() {
 
 #[test]
 fn lowering_the_effort_does_not_satisfy_the_budget_floor() {
-    // Measured: both models burn the entire allowance at `low` exactly as they
-    // do at `high`. This key picks a style of thinking, never an amount, so
-    // treating `low` as a smaller `high` would reintroduce the failure while
-    // looking like a fix for it.
+    // Measured at both settings: the table in `config/defaults.toml` lists
+    // `low` rows for each configured model and they burn the entire allowance
+    // exactly as the `high` rows do. This key picks a style of thinking, never
+    // an amount, so treating `low` as a smaller `high` would reintroduce the
+    // failure while looking like a fix for it.
     let config = parse("version = 1\n[models]\nmax_tokens = 8000\nreasoning_effort = \"low\"\n");
     assert!(
         validate::validate(&config)
