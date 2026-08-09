@@ -272,6 +272,7 @@ impl Model for Cassette {
         state.served += 1;
 
         if let Some(take) = self.takes.get(&key) {
+            state.cost_usd += take.usage.cost_usd;
             return Ok(replayed(take));
         }
 
