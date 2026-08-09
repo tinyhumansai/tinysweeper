@@ -91,6 +91,15 @@ pub async fn run(
     let config = prepare(config);
     let config_digest = digest_of(&config);
 
+    // A `record` run without a live model is a configuration error that would
+    // fail every case identically; a per-case score would bury it as N `failed`
+    // cases and hide *why*. Fail the run once, before any case is touched.
+    if options.record && model.is_none() {
+        return Err(crate::error::Error::config(
+            "recording needs a live model; build with --features harness",
+        ));
+    }
+
     let mut scores = Vec::with_capacity(corpus.cases.len());
     let mut skipped = Vec::new();
     let mut loose_replays = 0usize;
@@ -124,13 +133,33 @@ pub async fn run(
         if options.record {
             cassette.flush()?;
         }
+        let strict_misses = cassette.strict_misses();
         loose_replays += cassette.loose_hits();
 
         let score = match outcome {
             Ok(proposal) => {
                 spent += proposal.cost_usd;
                 write_proposal(&options.out, &case.case.id, &proposal)?;
-                crate::eval::score::score(&case.case, &proposal, wall)
+                if strict_misses > 0 {
+                    // The review closed, but a strict replay that could not
+                    // answer a call means a lane worked around the miss and
+                    // reported "could not be reviewed". Scoring that proposal as
+                    // if the answers were real would measure a prompt nobody
+                    // asked — this is the staleness the corpus exists to make
+                    // loud, so the case is failed instead.
+                    crate::eval::score::failed(
+                        &case.case,
+                        format!(
+                            "{} call(s) had no recorded answer; re-record the corpus with \
+                             `eval run --record`, or replay loosely and accept the numbers \
+                             describe the old prompt",
+                            strict_misses
+                        ),
+                        wall,
+                    )
+                } else {
+                    crate::eval::score::score(&case.case, &proposal, wall)
+                }
             }
             // A case that fails is scored, not dropped: see `score::failed`.
             Err(err) => crate::eval::score::failed(&case.case, err.to_string(), wall),
