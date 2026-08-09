@@ -13,6 +13,7 @@ pub mod description;
 pub mod fanout;
 pub mod security;
 pub mod tests;
+pub mod triage;
 
 use std::collections::BTreeMap;
 
