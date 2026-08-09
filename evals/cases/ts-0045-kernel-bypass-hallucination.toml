@@ -1,0 +1,60 @@
+schema = 1
+id = "ts-0045-kernel-bypass-hallucination"
+title = "A loaded phrase in a commit subject must not become a security finding"
+fixture = "../fixtures/ts-0045-kernel-bypass-hallucination.json"
+labels = ["regression", "hallucination", "commits"]
+
+# The failure this guards is not a missed finding — it is a confident, invented
+# one. There is nothing here a reviewer *should* report, so the case scores as
+# noise measurement and the forbidden entries are the whole point. Noise only
+# counts when the case is `exhaustive` — that is the flag that asserts every
+# finding on this pull request is a false positive.
+exhaustive = true
+
+[provenance]
+repo = "tinyhumansai/tinysweeper"
+pr = 45
+# Issue #47, filed against the live review of this exact pull request. The lane
+# read "kernel bypass" in a commit subject and reported that a MongoDB container
+# had been granted direct hardware access to bypass the host kernel's network
+# stack. The change is a Python shim that no-ops one function so `mongod` starts
+# on Linux 6.19+; it has nothing to do with networking. The issue's own
+# acceptance criteria ask for exactly this test.
+evidence = "https://github.com/tinyhumansai/tinysweeper/issues/47"
+labelled_by = "enamakel"
+labelled_on = "2026-08-09"
+
+[[forbidden]]
+id = "F1"
+path = "*"
+reason = """
+The commit subject says "kernel bypass". The patch is a Python shim that no-ops
+`_check_kernel_version` in the image entrypoint. No privilege is granted, no
+device is mapped, and no networking is touched. A finding that claims otherwise
+was constructed from the subject line, which is the failure mode that makes a
+reviewer untrustworthy — worse than a missed finding, because it is confident.
+"""
+matches = [
+    "hardware access",
+    "bypass the host|bypasses the host|host kernel",
+    "network stack",
+    "privilege escalation|extreme privilege|elevated privilege",
+    "dpdk",
+]
+
+[[forbidden]]
+id = "F2"
+path = "*"
+lanes = ["commits"]
+reason = """
+The `commits` lane makes no model call at all any more: it republishes what the
+deterministic scanners found in the range and does nothing else. Any finding it
+produces that is not a scanner match is the judgement half coming back — see
+docs/modules/lanes/README.md, which records that removing it was deliberate and
+that the temptation to restore it is obvious.
+"""
+matches = [
+    "commit message|commit subject",
+    "describes nothing|wip|unclear message",
+    "merge noise|should be squashed|squash",
+]

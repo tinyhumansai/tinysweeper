@@ -6,6 +6,7 @@
 //! unchanged. [`prompt`] exists to guarantee that; see its module docs before
 //! changing how a prompt is assembled.
 
+pub mod cassette;
 pub mod mock;
 #[cfg(feature = "harness")]
 pub mod openrouter;
@@ -13,6 +14,7 @@ pub mod pricing;
 pub mod prompt;
 pub mod schema;
 
+pub use crate::harness::cassette::Cassette;
 pub use crate::harness::mock::MockModel;
 pub use crate::harness::prompt::{Prompt, PromptInputs};
 pub use crate::harness::schema::{LaneResponse, RawFinding};

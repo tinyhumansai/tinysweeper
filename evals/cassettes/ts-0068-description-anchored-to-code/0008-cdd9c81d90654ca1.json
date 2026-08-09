@@ -1,0 +1,18 @@
+{
+  "key": "cdd9c81d90654ca1",
+  "model_requested": "z-ai/glm-5.2",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2276,
+    "output_tokens": 246,
+    "cached_tokens": 1934,
+    "embed_tokens": 0,
+    "cost_usd": 0.00010320199999999999
+  },
+  "value": {
+    "findings": [],
+    "resolved": [],
+    "summary": "The change swaps default model tiers and fallbacks in `defaults.toml` and adds a `reasoning_effort` setting. All values are static config data; no secrets are committed (the key still comes from `OPENROUTER_API_KEY`), and no code, network, subprocess, or auth surface changes. Nothing to report."
+  }
+}

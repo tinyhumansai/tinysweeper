@@ -146,6 +146,10 @@ enum Command {
         body: Option<String>,
     },
 
+    /// Measure review quality against the labelled corpus in `evals/`.
+    #[command(subcommand)]
+    Eval(EvalCommand),
+
     /// Validate a `.tinysweeper.toml`, reporting every problem at once.
     Check {
         /// The config file, or a directory to discover one in.
@@ -176,6 +180,118 @@ enum Command {
     },
 }
 
+/// The corpus commands.
+///
+/// Split into run / score / report because the first costs money and the other
+/// two do not. A scoring rule is rewritten many times before it is right, and
+/// welding it to the run would price every rewrite at another live corpus.
+#[derive(Debug, Subcommand)]
+enum EvalCommand {
+    /// Review every case and score what came back.
+    Run {
+        /// The corpus directory.
+        #[arg(long, default_value = "evals")]
+        corpus: std::path::PathBuf,
+
+        /// Where to write proposals and the scorecard.
+        #[arg(long, default_value = "evals/runs/latest")]
+        out: std::path::PathBuf,
+
+        /// Only these cases. Repeatable.
+        #[arg(long = "case")]
+        cases: Vec<String>,
+
+        /// Path to the config file. Defaults to discovery from the repo root.
+        #[arg(long)]
+        config: Option<std::path::PathBuf>,
+
+        /// Call the real model and record every answer. Needs `harness`.
+        #[arg(long)]
+        record: bool,
+
+        /// Also store prompts in the cassette.
+        ///
+        /// Off by default: a prompt embeds the reviewed repository's diff, and
+        /// a cassette committed from a private repository would carry it into
+        /// git.
+        #[arg(long)]
+        record_prompts: bool,
+
+        /// On a cassette miss, fall back to call order instead of failing.
+        ///
+        /// Survives a cosmetic prompt edit without a re-record. Stamped into
+        /// the report, because a loose run's numbers describe the prompt that
+        /// was recorded rather than the one in the tree.
+        #[arg(long)]
+        loose: bool,
+
+        /// Stop the whole run at this many dollars.
+        #[arg(long, default_value_t = 5.0)]
+        max_cost_usd: f64,
+    },
+
+    /// Re-score proposals already on disk. Free, offline, no model.
+    Score {
+        /// The run directory written by `eval run`.
+        #[arg(long, default_value = "evals/runs/latest")]
+        run: std::path::PathBuf,
+
+        /// The corpus directory.
+        #[arg(long, default_value = "evals")]
+        corpus: std::path::PathBuf,
+
+        /// Path to the config file, for the digest stamped into the scorecard.
+        #[arg(long)]
+        config: Option<std::path::PathBuf>,
+    },
+
+    /// Render a scorecard, optionally against a baseline.
+    Report {
+        /// The run directory holding `scorecard.json`.
+        #[arg(long, default_value = "evals/runs/latest")]
+        run: std::path::PathBuf,
+
+        /// A scorecard to compare against.
+        #[arg(long)]
+        baseline: Option<std::path::PathBuf>,
+
+        /// `md` or `json`.
+        #[arg(long, default_value = "md")]
+        format: String,
+
+        /// Compare even when the corpus or configuration moved.
+        #[arg(long)]
+        allow_config_drift: bool,
+
+        /// Exit non-zero when the comparison fails. For CI.
+        ///
+        /// The comparison is against `--baseline`, so gating without one would
+        /// silently print a report and exit zero. Clap rejects the combination
+        /// rather than leaving that footgun.
+        #[arg(long, requires = "baseline")]
+        gate: bool,
+    },
+
+    /// Freeze a live pull request into a corpus fixture. Needs `github`.
+    Add {
+        /// The repository, as `owner/name`.
+        #[arg(long, env = "GITHUB_REPOSITORY")]
+        repo: String,
+
+        /// The pull request number.
+        #[arg(long)]
+        pr: u64,
+
+        /// The case id, which is also the fixture and cassette name.
+        #[arg(long)]
+        id: String,
+
+        /// The corpus directory.
+        #[arg(long, default_value = "evals")]
+        corpus: std::path::PathBuf,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -202,6 +318,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Apply { repo, pr, findings } => run_apply(&repo, pr, &findings).await,
         Command::Triage { repo, pr, findings } => run_triage(&repo, pr, &findings).await,
         Command::Automerge { repo, pr, dry_run } => run_automerge(&repo, pr, dry_run).await,
+        Command::Eval(command) => run_eval(command).await,
         Command::LocalReview {
             base,
             head,
@@ -273,6 +390,156 @@ async fn run_review(
     ))
 }
 
+/// The corpus commands. Only `run --record` and `add` need a network.
+async fn run_eval(command: EvalCommand) -> Result<()> {
+    use tinysweeper::eval;
+
+    match command {
+        EvalCommand::Run {
+            corpus,
+            out,
+            cases,
+            config,
+            record,
+            record_prompts,
+            loose,
+            max_cost_usd,
+        } => {
+            let loaded =
+                tinysweeper::config::load_validated(std::path::Path::new("."), config.as_deref())?;
+            let corpus_data = eval::load(&corpus)?.select(&cases)?;
+            let model = if record {
+                Some(live_model(&loaded.config)?)
+            } else {
+                None
+            };
+
+            let options = eval::RunOptions {
+                out: out.clone(),
+                record,
+                loose,
+                record_prompts,
+                max_cost_usd,
+            };
+            let outcome = eval::run(&corpus_data, &loaded.config, model, &options).await?;
+
+            let card = eval::Scorecard {
+                corpus_digest: corpus_data.digest.clone(),
+                config_digest: outcome.config_digest.clone(),
+                loose_replays: outcome.loose_replays,
+                cases: outcome.scores,
+            };
+            let path = eval::write_scorecard(&out, &card)?;
+
+            for id in &outcome.skipped {
+                println!("skipped `{id}`: the run hit --max-cost-usd");
+            }
+            println!("{}", eval::markdown(&card, None, false));
+            println!("scorecard written to {}", path.display());
+            Ok(())
+        }
+
+        EvalCommand::Score {
+            run,
+            corpus,
+            config,
+        } => {
+            let loaded =
+                tinysweeper::config::load_validated(std::path::Path::new("."), config.as_deref())?;
+            let corpus_data = eval::load(&corpus)?;
+            let scores = eval::rescore(&corpus_data, &run)?;
+
+            // Re-scoring reads proposals, not cassettes, so nothing is replayed
+            // here. `loose_replays` does not describe this command, though — it
+            // describes the run whose proposals are being scored, so carry the
+            // recorded figure over rather than erasing it from the scorecard.
+            let previous = eval::read_scorecard(&run.join("scorecard.json")).ok();
+            let card = eval::Scorecard {
+                corpus_digest: corpus_data.digest.clone(),
+                config_digest: eval::runner::digest_of(&loaded.config),
+                loose_replays: previous
+                    .as_ref()
+                    .map(|card| card.loose_replays)
+                    .unwrap_or(0),
+                cases: scores,
+            };
+            let path = eval::write_scorecard(&run, &card)?;
+            println!("{}", eval::markdown(&card, None, false));
+            println!("scorecard written to {}", path.display());
+            Ok(())
+        }
+
+        EvalCommand::Report {
+            run,
+            baseline,
+            format,
+            allow_config_drift,
+            gate,
+        } => {
+            let card = eval::read_scorecard(&run.join("scorecard.json"))?;
+            let baseline = baseline.as_deref().map(eval::read_scorecard).transpose()?;
+
+            match format.as_str() {
+                "json" => println!("{}", serde_json::to_string_pretty(&card)?),
+                "md" => println!(
+                    "{}",
+                    eval::markdown(&card, baseline.as_ref(), allow_config_drift)
+                ),
+                other => {
+                    return Err(tinysweeper::Error::config(format!(
+                        "`{other}` is not a format; use `md` or `json`"
+                    )));
+                }
+            }
+
+            // Non-zero only when asked for, so a report can be read without
+            // failing a shell.
+            if gate && let Some(baseline) = baseline.as_ref() {
+                match eval::compare(&card, baseline, allow_config_drift) {
+                    eval::Comparison::Pass => {}
+                    eval::Comparison::Fail(reasons) => {
+                        return Err(tinysweeper::Error::config(format!(
+                            "review quality regressed:\n  - {}",
+                            reasons.join("\n  - ")
+                        )));
+                    }
+                    eval::Comparison::Incomparable(why) => {
+                        return Err(tinysweeper::Error::config(why));
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        EvalCommand::Add {
+            repo,
+            pr,
+            id,
+            corpus,
+        } => add_case(&repo, pr, &id, &corpus).await,
+    }
+}
+
+/// The live provider, when the build has one.
+#[cfg(feature = "harness")]
+fn live_model(
+    config: &tinysweeper::config::types::Config,
+) -> Result<std::sync::Arc<dyn tinysweeper::ports::model::Model>> {
+    Ok(std::sync::Arc::new(
+        tinysweeper::harness::openrouter::GatewayModel::from_config(&config.models)?,
+    ))
+}
+
+#[cfg(not(feature = "harness"))]
+fn live_model(
+    _config: &tinysweeper::config::types::Config,
+) -> Result<std::sync::Arc<dyn tinysweeper::ports::model::Model>> {
+    Err(tinysweeper::Error::FeatureDisabled(
+        "recording a corpus",
+        "harness",
+    ))
+}
+
 /// Run the engine over a local git range. No token, no forge, no writes.
 ///
 /// Needs `harness` and nothing else: the evidence comes from `git`, so the
@@ -338,6 +605,145 @@ async fn run_local_review(
         "reviewing a local range",
         "harness",
     ))
+}
+
+/// Freeze a live pull request into a fixture and a case stub.
+///
+/// The case stub is written with the expectations left empty and the provenance
+/// half-filled, because the one thing this cannot do is label it. An
+/// expectation written from the bot's own output measures whether the bot still
+/// agrees with itself — so `evidence` is left blank and the corpus loader
+/// refuses the case until a human puts something real there.
+#[cfg(feature = "github")]
+async fn add_case(repo: &str, pr: u64, id: &str, corpus: &std::path::Path) -> Result<()> {
+    use tinysweeper::forge::RepoId;
+    use tinysweeper::forge::github::GitHubRead;
+    use tinysweeper::ports::forge::ForgeRead;
+
+    let repo_id = RepoId::parse(repo)
+        .ok_or_else(|| tinysweeper::Error::config(format!("`{repo}` is not owner/name")))?;
+    let loaded = tinysweeper::config::load_validated(std::path::Path::new("."), None)?;
+
+    let forge = GitHubRead::from_env()?;
+    let context = forge.pull_request_context(&repo_id, pr).await?;
+
+    // Only the instruction files, not the tree: a fixture carrying a whole
+    // repository is unreviewable in a diff.
+    let mut blobs = std::collections::BTreeMap::new();
+    for name in &loaded.config.knowledge.files {
+        if let Some(content) = forge
+            .file_at(&repo_id, name, &context.pull_request.head_sha)
+            .await?
+        {
+            blobs.insert(name.clone(), content);
+        }
+    }
+
+    let fixture = tinysweeper::eval::Fixture {
+        pull_request: context.pull_request.clone(),
+        files: context.files,
+        commits: context.commits,
+        comments: context.comments,
+        blobs,
+    };
+
+    let fixtures = corpus.join("fixtures");
+    let cases = corpus.join("cases");
+    std::fs::create_dir_all(&fixtures)?;
+    std::fs::create_dir_all(&cases)?;
+
+    let fixture_path = fixtures.join(format!("{id}.json"));
+    std::fs::write(&fixture_path, serde_json::to_string_pretty(&fixture)?)?;
+
+    let case_path = cases.join(format!("{id}.toml"));
+    if case_path.exists() {
+        println!("fixture refreshed: {}", fixture_path.display());
+        println!("case left alone: {}", case_path.display());
+        return Ok(());
+    }
+    std::fs::write(
+        &case_path,
+        case_stub(id, repo, pr, &context.pull_request.title),
+    )?;
+
+    println!("fixture written to {}", fixture_path.display());
+    println!("case stub written to {}", case_path.display());
+    println!(
+        "\nIt will not load yet. Fill in `provenance.evidence` with something outside this bot \
+         — the follow-up fix, an acted-on review comment, a revert — and then write the \
+         expectations."
+    );
+    Ok(())
+}
+
+#[cfg(not(feature = "github"))]
+async fn add_case(_repo: &str, _pr: u64, _id: &str, _corpus: &std::path::Path) -> Result<()> {
+    Err(tinysweeper::Error::FeatureDisabled(
+        "freezing a pull request into a fixture",
+        "github",
+    ))
+}
+
+/// The case file `eval add` leaves for a human to finish.
+#[cfg(feature = "github")]
+fn case_stub(id: &str, repo: &str, pr: u64, title: &str) -> String {
+    format!(
+        r#"schema = 1
+id = "{0}"
+title = "{1}"
+fixture = "../fixtures/{0}.json"
+labels = []
+
+[provenance]
+repo = "{repo}"
+pr = {pr}
+# REQUIRED, and the loader refuses the case without it. Cite something this bot
+# did not produce: the follow-up commit that fixed it, a human review comment
+# somebody acted on, a revert. An expectation written from the bot's own output
+# measures whether the bot still agrees with itself.
+evidence = ""
+labelled_by = ""
+
+# What a good reviewer should find. Delete the block for a clean case — a
+# pull request with nothing wrong with it is how noise gets measured.
+# [[expected]]
+# id = "E1"
+# path = "src/some/file.rs"
+# lines = [10, 14]
+# severity_min = "medium"
+# summary = "One sentence a human can check the label against."
+# must_mention = ["keyword", "either|or"]
+
+# What it must not say. Every entry needs a reason, because the next person to
+# read it will otherwise assume it is a mistake and delete it.
+# [[forbidden]]
+# id = "F1"
+# path = "src/some/file.rs"
+# reason = "Three earlier runs called this dead code. It is not."
+# matches = ["dead code", "unused"]
+"#,
+        toml_escape(id),
+        toml_escape(title),
+    )
+}
+
+/// Escape one value for a `"..."` line of a case stub.
+///
+/// A pull request title is a single line, but it can still carry a quote, a
+/// backslash, or a tab — each of which would silently corrupt the TOML the
+/// stub guards. `id` gets the same treatment for the same reason: it is
+/// operator input with no upstream validation. Escaping all of them keeps the
+/// file parseable whatever the value is; the crate's own `toml` module is not
+/// used because the stub is comment-rich and hand-shaped, and only these two
+/// values are interpolated.
+#[cfg(feature = "github")]
+fn toml_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 /// The first eight characters of a sha, for a human reading a terminal.
@@ -817,6 +1223,31 @@ mod tests {
         let repo = tinysweeper::forge::RepoId::parse("tinyhumansai/tinysweeper").unwrap();
         validate_apply_target(&proposal_for("tinyhumansai/tinysweeper", 7), &repo, 7)
             .expect("matches");
+    }
+
+    #[cfg(feature = "github")]
+    #[test]
+    fn case_stub_escapes_id_like_the_title() {
+        // `id` is operator input with no validation upstream (unlike `repo`),
+        // and it lands in two `"..."` TOML lines. A quote or backslash must
+        // stay safely inside the strings, the same way `title` is escaped, or
+        // `eval add` writes a case file nobody can parse.
+        let stub = case_stub("ts-\"x\"", "tinyhumansai/tinysweeper", 7, "title");
+        assert!(
+            stub.contains("id = \"ts-\\\"x\\\"\""),
+            "id line not escaped: {stub}"
+        );
+        assert!(
+            stub.contains("fixture = \"../fixtures/ts-\\\"x\\\".json\""),
+            "fixture line not escaped: {stub}"
+        );
+        // And the escaped stub must still be parseable TOML.
+        let table: toml::Table = stub.parse().expect("the stub stays parseable");
+        assert_eq!(
+            table["id"].as_str(),
+            Some("ts-\"x\""),
+            "escaping must not change the value"
+        );
     }
 
     #[cfg(feature = "serve")]
