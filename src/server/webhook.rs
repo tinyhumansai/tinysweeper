@@ -212,6 +212,19 @@ pub enum Action {
         /// The installation that can act on it.
         installation: u64,
     },
+    /// Re-evaluate this pull request against the auto-merge policy.
+    ///
+    /// Carries no author. Auto-merge reads no model, spends no money and
+    /// attributes nothing to anybody — it is arithmetic over state the forge
+    /// already holds — so the contributor record has nothing to record.
+    AutoMerge {
+        /// `owner/name`.
+        repo: String,
+        /// Pull request number.
+        number: u64,
+        /// The installation that can act on it.
+        installation: u64,
+    },
     /// Nothing to do, with a reason for the log.
     Ignore(&'static str),
 }
