@@ -1,0 +1,88 @@
+# The operator console for a full re-review.
+#
+# This is a narrow, deliberate exception to "the server is the only production
+# surface": the job is a *button*, in this repository only. It never builds or
+# runs tinysweeper, needs no model credentials, and holds no write token — it
+# POSTs to the deployed server, which does every check again on its own. A
+# workflow input is editable by anyone who can dispatch this, so the owner check
+# below is a courtesy that fails fast, not the control.
+name: Manual full review
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "Repository to re-review from scratch, as owner/name"
+        required: true
+        type: string
+      pull_request:
+        description: "Pull request number. Leave empty for every open pull request"
+        required: false
+        type: string
+
+# Nothing in this job touches the GitHub API, so it is given nothing.
+permissions: {}
+
+concurrency:
+  group: manual-review-${{ inputs.repository }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the inputs
+        env:
+          TARGET: ${{ inputs.repository }}
+          NUMBER: ${{ inputs.pull_request }}
+          ALLOWED_ORG: tinyhumansai
+        run: |
+          set -euo pipefail
+
+          owner="${TARGET%%/*}"
+          name="${TARGET#*/}"
+          if [ "$owner" != "$ALLOWED_ORG" ] || [ -z "$name" ] || [ "$name" = "$TARGET" ]; then
+            echo "::error::'$TARGET' is not an $ALLOWED_ORG/<name> repository. Manual reviews are restricted to the $ALLOWED_ORG organisation, and the server refuses anything else regardless of what is typed here."
+            exit 1
+          fi
+
+          if [ -n "$NUMBER" ] && ! printf '%s' "$NUMBER" | grep -Eq '^[0-9]+$'; then
+            echo "::error::'$NUMBER' is not a pull request number. Leave it empty to review every open pull request."
+            exit 1
+          fi
+
+      - name: Ask the server for a full review
+        env:
+          # The deployment to talk to, e.g. https://tinysweeper.example.org
+          SERVER: ${{ vars.TINYSWEEPER_SERVER_URL }}
+          ADMIN_TOKEN: ${{ secrets.TINYSWEEPER_ADMIN_TOKEN }}
+          TARGET: ${{ inputs.repository }}
+          NUMBER: ${{ inputs.pull_request }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SERVER:-}" ]; then
+            echo "::error::The TINYSWEEPER_SERVER_URL repository variable is not set, so there is no server to ask."
+            exit 1
+          fi
+          if [ -z "${ADMIN_TOKEN:-}" ]; then
+            echo "::error::The TINYSWEEPER_ADMIN_TOKEN secret is not set. The server refuses an unauthenticated request, and mounts nothing at all when it has no token of its own."
+            exit 1
+          fi
+
+          if [ -n "$NUMBER" ]; then
+            body="{\"number\": $NUMBER}"
+          else
+            body='{}'
+          fi
+
+          # The token goes in on stdin, never on the command line: an argument
+          # is visible in the process table and in any shell trace, and this
+          # secret is the whole door to the admin API.
+          printf 'header = "Authorization: Bearer %s"\n' "$ADMIN_TOKEN" |
+            curl --config - \
+              --fail-with-body --silent --show-error \
+              --request POST "${SERVER%/}/admin/reviews/${TARGET}" \
+              --header 'Content-Type: application/json' \
+              --data "$body"
+          echo

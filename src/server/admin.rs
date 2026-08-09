@@ -226,20 +226,31 @@ pub fn router(
         // `route_layer` rather than `layer`: it applies only to routes this
         // router matched, and it runs before the handlers' extractors, so an
         // unauthenticated request never gets its body parsed.
-        .route_layer(axum::middleware::from_fn_with_state(state.clone(), guard))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.auth.clone(),
+            guard,
+        ))
         .with_state(state);
 
     Some(routes)
 }
 
 /// Reject anything without the admin token, before the body is touched.
-async fn guard(State(state): State<AdminState>, request: Request, next: Next) -> Response {
+///
+/// Takes the credential alone rather than the whole admin state so the manual
+/// review router in `crate::server::manual` can be guarded by the same code
+/// path: one door, checked one way.
+pub(crate) async fn guard(
+    State(auth): State<Arc<AdminAuth>>,
+    request: Request,
+    next: Next,
+) -> Response {
     let offered = request
         .headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok());
 
-    if !state.auth.permits(offered) {
+    if !auth.permits(offered) {
         // No detail: distinguishing "no header" from "wrong token" tells a
         // prober which half to work on.
         tracing::warn!("rejected an admin request");
