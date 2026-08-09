@@ -201,6 +201,15 @@ impl Cassette {
         self.state.lock().expect("cassette lock").served
     }
 
+    /// How much the answers served this run cost, recorded or replayed.
+    ///
+    /// Counted per served answer, so the figure covers cases that failed after
+    /// their calls — the ones a proposal never exists for. The corpus ceiling
+    /// keys off this so a run of failing cases cannot walk its budget.
+    pub fn cost_usd(&self) -> f64 {
+        self.state.lock().expect("cassette lock").cost_usd
+    }
+
     /// Write everything recorded this run to disk, oldest call first.
     ///
     /// Called explicitly rather than on `Drop`: writing files from a destructor
