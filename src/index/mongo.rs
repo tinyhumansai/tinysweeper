@@ -899,7 +899,7 @@ impl GraphStore for MongoGraphStore {
     }
 
     async fn symbols(&self, repo_id: &str) -> Result<Vec<GraphNode>> {
-        // Projected down to the four fields the symbol table needs. The whole
+        // Projected down to the five fields the symbol table needs. The whole
         // point of this call is that it is cheaper than re-parsing the tree,
         // and shipping every node's `lang` back for a monorepo is a cost with
         // no reader.
