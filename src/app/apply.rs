@@ -260,13 +260,21 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
                 // The forge assigns the author on the way in; on the way out it
                 // is what tells dedupe whether a marker is ours.
                 author: String::new(),
+                // Badges first, on their own line, then the title, then the
+                // body. A reader scanning a page of comments decides whether to
+                // stop on the badges alone, so they must not be buried in a
+                // run-on line with the title — and the footer is the wrong
+                // place for the one fact that decides attention.
                 body: format!(
-                    "{} **{}**\n\n{}\n\n<sub>{} · {} · <!-- {MARKER_PREFIX}fp={} --></sub>",
-                    crate::findings::render::badge(finding.severity),
+                    "{}  {}\n\n**{}**\n\n{}\n\n<sub>rule `{}` · <!-- {MARKER_PREFIX}fp={} --></sub>",
+                    crate::findings::render::priority_badge(finding.severity),
+                    crate::findings::render::lane_confidence_badge(
+                        finding.lane,
+                        finding.confidence
+                    ),
                     finding.title,
                     finding.body,
-                    finding.lane,
-                    crate::findings::render::confidence_badge(finding.confidence),
+                    finding.rule,
                     // The identity review stamped, over the code this finding
                     // anchors to. Recomputing it here from the title — as this
                     // once did — makes the marker depend on the model's

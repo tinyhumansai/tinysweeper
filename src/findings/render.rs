@@ -6,7 +6,7 @@
 //! the worst are met first, and the detail sits in a `<details>` block that
 //! costs nothing to leave folded.
 
-use crate::config::types::Severity;
+use crate::config::types::{LaneId, Severity};
 use crate::findings::types::Finding;
 use crate::ports::model::Usage;
 
@@ -29,9 +29,7 @@ pub fn badge(severity: Severity) -> String {
 /// what the colour means and repeating it on every row is noise.
 pub fn priority_badge(severity: Severity) -> String {
     let (label, colour) = severity_parts(severity);
-    format!(
-        "![priority {label}](https://img.shields.io/badge/{label}-{colour}?label=priority)"
-    )
+    format!("![priority {label}](https://img.shields.io/badge/{label}-{colour}?label=priority)")
 }
 
 /// The lane and how sure it is, as one badge.
