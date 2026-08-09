@@ -273,6 +273,19 @@ pub struct Review {
     /// is a real cost — a false positive now needs a human to clear it — which
     /// is why the floor is high and the setting is one word to turn off.
     pub request_changes_at: String,
+    /// Submit an approving review when no lane blocks.
+    ///
+    /// This is what lets a pull request satisfy a "review required" branch
+    /// protection rule without a human, and it is also what retires a previous
+    /// changes-request: GitHub keeps one review per reviewer, so an approval
+    /// supersedes the objection rather than leaving it for someone to dismiss
+    /// by hand.
+    ///
+    /// Approving is a stronger act than staying quiet, so it is bounded twice
+    /// over: the verdict is only ever `Approve` when every lane passed the gate,
+    /// and a second approval is not submitted while the previous one still
+    /// stands — otherwise every push would add a review nobody asked for.
+    pub approve_when_clean: bool,
 }
 
 /// Which paths are reviewed at all.

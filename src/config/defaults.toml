@@ -28,6 +28,13 @@ respect_agents_md = true
 # clears it automatically, so the usual case needs nobody.
 request_changes_at = "high"
 
+# Approve when every lane passed. This is the other half of the blocking
+# verdict: a review that can only ever object leaves a pull request it has
+# nothing against sitting behind a "review required" rule forever, and leaves a
+# previous objection standing after the fix. One approval per clean head — a
+# second is not submitted while the first still stands.
+approve_when_clean = true
+
 [paths]
 ignore = [
     "**/*.lock",

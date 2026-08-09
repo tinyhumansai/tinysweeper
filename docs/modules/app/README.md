@@ -30,8 +30,35 @@ Only *presence* is reported, never a value, and the list is derived from the
 config — `SENTRY_AUTH_TOKEN` appears only when Sentry promotion is enabled, so
 the report never nags about a credential this repository does not need.
 
+## `apply` — the verdict ladder
+
+`apply` publishes a proposal without changing it. The one decision it does make
+is which of GitHub's three review verdicts to submit, and it is taken in this
+order:
+
+1. **Request changes** — a lane failed the gate *and* a finding reached
+   `review.request_changes_at`. Both are required: `fail_on` and
+   `request_changes_at` are independent knobs, so a lane may fail its check
+   without blocking the merge.
+2. **Approve** — every lane passed and `review.approve_when_clean` is on. This
+   is what lets a pull request satisfy a "review required" rule, and it is also
+   what retires an earlier objection: GitHub keeps one review per reviewer, so
+   the approval supersedes it and nobody has to dismiss anything by hand.
+3. **Approve** — every lane passed and tinysweeper was blocking before, even
+   with `approve_when_clean` off. A block it will not clear is a block that
+   needs a human.
+4. **Comment** — everything else.
+
+Two bounds on approving, both deliberate. It reads the *gate*, not the blocking
+threshold, so `request_changes_at = "off"` stops tinysweeper objecting without
+starting it endorsing a red pull request. And an approval that already stands is
+not restated, or every push to a clean pull request would add a review that
+changes nothing.
+
 ## Files
 
 | File | Role |
 | --- | --- |
 | `doctor.rs` | `check` and `doctor` |
+| `review.rs` | the read half — runs the lanes, writes a proposal |
+| `apply.rs` | the write half — publishes a proposal, decides the verdict |

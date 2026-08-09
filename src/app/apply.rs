@@ -58,12 +58,14 @@ pub async fn apply(
             .await?;
     }
 
-    // Whether we are already blocking this pull request. GitHub keeps only the
-    // latest review per reviewer, so this is also how a fixed pull request gets
-    // unblocked: without an explicit clearing verdict a stale objection blocks
-    // the merge button until a human dismisses it by hand.
-    let blocking_now = previously_blocked(read, &repo, proposal.number).await;
-    let event = review_event(config, proposal, blocking_now);
+    // What tinysweeper already said about this pull request. GitHub keeps only
+    // the latest review per reviewer, which makes this load-bearing twice: it
+    // is how a fixed pull request gets unblocked — without an explicit clearing
+    // verdict a stale objection blocks the merge button until a human dismisses
+    // it by hand — and it is how an approval that already stands avoids being
+    // restated on every push.
+    let previous = own_review_state(read, &repo, proposal.number).await;
+    let event = review_event(config, proposal, previous);
     let comments = inline_comments(proposal);
 
     // The identities about to be posted, so the store can be extended once the
@@ -84,18 +86,31 @@ pub async fn apply(
 
     // Submit a review if:
     // - there are inline comments to post, or
-    // - the verdict is Approve (clears a previous block), or
+    // - the verdict is Approve (clears a previous block, or satisfies a
+    //   "review required" rule), or
     // - the verdict is RequestChanges (blocks the merge, even if only in the summary).
     // Blocking verdicts must be submitted even without inline comments, because
     // findings that could not be anchored to lines still appear in the summary
     // and need the blocking verdict on GitHub to enforce the gate.
-    if !comments.is_empty() || event == ReviewEvent::Approve || event == ReviewEvent::RequestChanges
+    //
+    // The one thing not worth saying twice is an approval that already stands.
+    // GitHub keeps the latest review per reviewer, so re-approving changes
+    // nothing on the merge button and only adds a timeline entry — on every
+    // push, for the whole life of a clean pull request.
+    let redundant_approval = event == ReviewEvent::Approve
+        && previous == Some(ReviewEvent::Approve)
+        && comments.is_empty();
+
+    if !redundant_approval
+        && (!comments.is_empty()
+            || event == ReviewEvent::Approve
+            || event == ReviewEvent::RequestChanges)
     {
         write
             .create_review(
                 &repo,
                 proposal.number,
-                &review_body(proposal, event),
+                &review_body(proposal, event, previous),
                 comments,
                 event,
             )
@@ -120,11 +135,13 @@ pub async fn apply(
 }
 
 /// Decide how to submit the review.
-fn review_event(config: &Config, proposal: &Proposal, blocking_now: bool) -> ReviewEvent {
-    let Some(threshold) = config.request_changes_at() else {
-        return ReviewEvent::Comment;
-    };
-
+///
+/// `previous` is tinysweeper's own last verdict on this pull request, if any.
+fn review_event(
+    config: &Config,
+    proposal: &Proposal,
+    previous: Option<ReviewEvent>,
+) -> ReviewEvent {
     // Blocking needs BOTH a failing lane and a finding severe enough to justify
     // it. The lane conclusion alone is not enough: `fail_on` and
     // `request_changes_at` are independent knobs, so a lane configured to fail
@@ -135,30 +152,44 @@ fn review_event(config: &Config, proposal: &Proposal, blocking_now: bool) -> Rev
     // The severity is read from the lane's findings rather than the surviving
     // comments, so a recurred problem whose comment was deduped away still
     // blocks — being already visible is not being fixed.
-    let severe_enough = proposal.has_severity_at_or_above(threshold);
-    if proposal.blocked() && severe_enough {
-        ReviewEvent::RequestChanges
-    } else if blocking_now {
-        // Clean now, blocked before: clear it. Anything else leaves the author
-        // stuck behind an objection that no longer applies.
-        ReviewEvent::Approve
-    } else {
-        ReviewEvent::Comment
+    let blocks = match config.request_changes_at() {
+        Some(threshold) => proposal.blocked() && proposal.has_severity_at_or_above(threshold),
+        None => false,
+    };
+    if blocks {
+        return ReviewEvent::RequestChanges;
     }
+
+    // Approving is gated on the whole gate being green, not on the weaker
+    // `blocks` above. Those two differ exactly when `request_changes_at` is
+    // `"off"`, and in that case a failing lane must not be approved — turning
+    // blocking off asks tinysweeper to stop objecting, not to start endorsing.
+    if !proposal.blocked() && config.review.approve_when_clean {
+        return ReviewEvent::Approve;
+    }
+
+    // Clean now, blocked before: clear it even when approving is off. Anything
+    // else leaves the author stuck behind an objection that no longer applies,
+    // needing a human to dismiss a review by hand.
+    if previous == Some(ReviewEvent::RequestChanges) {
+        return ReviewEvent::Approve;
+    }
+
+    ReviewEvent::Comment
 }
 
-/// Whether tinysweeper's own last review on this pull request requested changes.
+/// tinysweeper's own last review verdict on this pull request.
 ///
 /// Read from the forge rather than remembered, so it stays correct across a
 /// restart, a redeploy, and a human dismissing the review by hand.
-async fn previously_blocked(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> bool {
+async fn own_review_state(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Option<ReviewEvent> {
     match read.own_review_state(repo, number).await {
-        Ok(state) => state == Some(ReviewEvent::RequestChanges),
+        Ok(state) => state,
         Err(err) => {
             // Failing closed here would mean never clearing a block. Failing
-            // open at worst skips a redundant approval.
+            // open at worst re-states a verdict that already stands.
             tracing::warn!(%err, "could not read the previous review state");
-            false
+            None
         }
     }
 }
@@ -203,7 +234,7 @@ fn identity(finding: &crate::findings::types::Finding) -> String {
         .unwrap_or_else(|| finding.fingerprint(&finding.title))
 }
 
-fn review_body(proposal: &Proposal, event: ReviewEvent) -> String {
+fn review_body(proposal: &Proposal, event: ReviewEvent, previous: Option<ReviewEvent>) -> String {
     let blocking = proposal
         .lanes
         .iter()
@@ -224,10 +255,15 @@ fn review_body(proposal: &Proposal, event: ReviewEvent) -> String {
                  hand."
             )
         }
-        ReviewEvent::Approve => {
+        // An approval means two different things depending on what stood
+        // before it, and saying the wrong one is worse than saying nothing: a
+        // first-time approval that claims to be "clearing the changes request"
+        // invents an objection that was never made.
+        ReviewEvent::Approve if previous == Some(ReviewEvent::RequestChanges) => {
             "The previously-blocking findings are resolved. Clearing the changes request."
                 .to_string()
         }
+        ReviewEvent::Approve => "tinysweeper found nothing blocking. Approving.".to_string(),
         ReviewEvent::Comment if blocking == 0 => "tinysweeper found nothing blocking.".to_string(),
         ReviewEvent::Comment => format!("tinysweeper: {blocking} lane(s) blocking."),
     };
@@ -437,12 +473,15 @@ mod tests {
             .await
             .expect("applies");
 
+        // The review itself is an approval; what it must not carry is a single
+        // inline comment, because there was nothing to say about a line.
         assert!(
-            !forge
-                .writes()
-                .iter()
-                .any(|w| matches!(w, Write::Review { .. })),
-            "silence should be silent"
+            forge.writes().iter().all(|w| match w {
+                Write::Review { comments, .. } => comments.is_empty(),
+                _ => true,
+            }),
+            "{:#?}",
+            forge.writes()
         );
     }
 
@@ -645,15 +684,81 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_clean_pull_request_that_was_never_blocked_stays_silent() {
-        // No approval to hand out: approving every green pull request would be
-        // a bot rubber-stamping work it did not really vouch for.
+    async fn a_clean_pull_request_is_approved() {
         let forge = forge("abc123");
         apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
             .await
             .expect("applies");
 
+        let (body, event) = review_of(&forge).expect("an approval was posted");
+        assert_eq!(event, ReviewEvent::Approve);
+        // A first approval must not claim to be clearing an objection that was
+        // never made.
+        assert!(
+            !body.contains("Clearing the changes request"),
+            "nothing was blocking, so there is nothing to clear: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn approving_can_be_turned_off_without_turning_blocking_off() {
+        let mut config = config();
+        config.review.approve_when_clean = false;
+
+        let forge = forge("abc123");
+        apply(&forge, &forge, &config, &proposal("abc123", vec![]), None)
+            .await
+            .expect("applies");
+
         assert!(review_of(&forge).is_none(), "{:#?}", forge.writes());
+    }
+
+    #[tokio::test]
+    async fn an_approval_that_already_stands_is_not_restated() {
+        // Otherwise every push to a clean pull request adds a review that
+        // changes nothing on the merge button.
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::Approve);
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
+            .await
+            .expect("applies");
+
+        assert!(review_of(&forge).is_none(), "{:#?}", forge.writes());
+    }
+
+    #[tokio::test]
+    async fn a_previous_block_is_cleared_by_an_approval_naming_it() {
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::RequestChanges);
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
+            .await
+            .expect("applies");
+
+        let (body, event) = review_of(&forge).expect("a clearing review was posted");
+        assert_eq!(event, ReviewEvent::Approve);
+        assert!(
+            body.contains("Clearing the changes request"),
+            "the author needs to be told the block is gone: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_lane_is_never_approved_just_because_blocking_is_off() {
+        // `request_changes_at = "off"` asks tinysweeper to stop objecting. It
+        // does not ask it to start endorsing a pull request whose gate is red.
+        let mut config = config();
+        config.review.request_changes_at = "off".into();
+
+        let forge = forge("abc123");
+        apply(
+            &forge,
+            &forge,
+            &config,
+            &proposal("abc123", vec![finding()]),
+            None,
+        )
+        .await
+        .expect("applies");
+
+        assert_eq!(review_of(&forge).expect("posted").1, ReviewEvent::Comment);
     }
 
     #[tokio::test]
