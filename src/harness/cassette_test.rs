@@ -59,6 +59,53 @@ fn the_key_covers_everything_that_can_change_an_answer() {
 }
 
 #[test]
+fn the_key_is_the_schema_not_its_key_order() {
+    // `serde_json`'s map order is a feature flag. The `serve` build enables
+    // `preserve_order` (via `bson`), so the same contract can stringify with
+    // its keys in either order depending on which serde_json is linked. The
+    // key must hash the contract, not this build's serialization quirk. This
+    // test replays identically in every CI job and catches a regression exactly
+    // in the `serve` job, where the two schemas below stringify differently.
+    let mut a = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {"summary": {"type": "string"}},
+        "required": ["summary"]
+    });
+    let b = json!({
+        "properties": {"summary": {"type": "string"}},
+        "required": ["summary"],
+        "type": "object",
+        "additionalProperties": false
+    });
+    // Same key under the plain serializer already, so give the `preserve_order`
+    // builds a reason to differ: nested objects must sort recursively.
+    a["properties"] = json!({"findings": {"type": "array"}});
+    let same_body = json!({
+        "findings": {"type": "array"}
+    });
+    let mut mixed = b.clone();
+    mixed["properties"] = json!({
+        "type": "object",
+        "findings": {"type": "array"}
+    });
+    let mut mixed = json!({
+        "properties": {"findings": {"type": "array"}},
+        "required": ["summary"],
+        "type": "object",
+        "additionalProperties": false
+    });
+
+    let mk = |schema| {
+        let mut r = request("z-ai/glm-5.2", "the diff");
+        r.schema = schema;
+        r
+    };
+    assert_eq!(key(&mk(a)), key(&mk(mixed)), "same schema, different key order");
+    let _ = (b, same_body);
+}
+
+#[test]
 fn the_key_distinguishes_who_said_what() {
     // The same text as a system instruction and as user evidence is not the
     // same prompt: one is policy and the other is attacker-controlled.
