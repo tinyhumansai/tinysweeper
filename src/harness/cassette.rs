@@ -263,6 +263,7 @@ impl Model for Cassette {
             let mut state = self.state.lock().expect("cassette lock");
             state.recorded.push(take);
             state.served += 1;
+            state.cost_usd += response.usage.cost_usd;
             return Ok(response);
         }
 
