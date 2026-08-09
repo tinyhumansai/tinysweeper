@@ -27,7 +27,9 @@ for a person. Every ambiguity resolves towards waiting:
 | --- | --- |
 | `mergeable: None` — GitHub still computing | not mergeable |
 | A required check that never reported | not passed |
+| A required check that was **skipped** | not passed — it could not run |
 | A check still running | not passed |
+| An unrecognised conclusion | read as a failure |
 | A glob in the policy that will not compile | refuse, and say which |
 | A file the forge gave no patch for | unmeasurable, refuse |
 | `max_files = 0` | refuses everything; a zero cap is not "unlimited" |
