@@ -497,7 +497,7 @@ impl MongoChunkIndex {
                                         "compound": {
                                             "must": [{
                                                 "text": {
-                                                    "query": &query.text,
+                                                    "query": lexical_terms(&query.text),
                                                     "path": ["text", "symbol", "path"],
                                                 }
                                             }],
