@@ -381,6 +381,15 @@ impl GraphStore for MockGraphStore {
         Ok((before - nodes.len() - edges.len()) as u64)
     }
 
+    async fn symbols(&self, repo_id: &str) -> Result<Vec<GraphNode>> {
+        let nodes = self.nodes.lock().expect("graph lock");
+        Ok(nodes
+            .values()
+            .filter(|node| node.repo_id == repo_id && node.kind == NodeKind::Symbol)
+            .cloned()
+            .collect())
+    }
+
     async fn delete_paths(&self, repo_id: &str, paths: &[String]) -> Result<u64> {
         if paths.is_empty() {
             return Ok(0);
