@@ -348,6 +348,28 @@ fn validate_retrieval(config: &Config, problems: &mut Vec<String>) {
     }
 }
 
+fn validate_overview(config: &Config, problems: &mut Vec<String>) {
+    let overview = &config.overview;
+    if !overview.enabled {
+        return;
+    }
+
+    // A zero here does not disable the feature, it produces a comment with an
+    // empty diagram in it — which reads as "this change touches nothing".
+    // Turning the map off is one key, and it is not this one.
+    for (name, value) in [
+        ("max_components", overview.max_components),
+        ("max_paths_per_component", overview.max_paths_per_component),
+    ] {
+        if value == 0 {
+            problems.push(format!(
+                "`overview.{name} = 0` with `overview.enabled = true` would post an empty \
+                 diagram; set it above zero or set `overview.enabled = false`"
+            ));
+        }
+    }
+}
+
 fn validate_lanes(config: &Config, problems: &mut Vec<String>) {
     for (name, lane) in &config.lanes {
         let Some(lane_id) = LaneId::parse(name) else {
