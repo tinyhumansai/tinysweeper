@@ -115,6 +115,12 @@ struct Playback {
     /// hit is an allowed fallback and is reported; a strict miss is the
     /// staleness the corpus exists to make loud.
     misses: usize,
+    /// Dollars of every answer served this run, recorded or replayed.
+    ///
+    /// Accumulated at serve time rather than derived from the written files,
+    /// so the figure is right even for a case that failed after its calls —
+    /// the ones no proposal will ever account for.
+    cost_usd: f64,
     /// Takes recorded this run, in call order.
     recorded: Vec<Take>,
 }
