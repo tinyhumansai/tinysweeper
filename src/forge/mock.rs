@@ -13,8 +13,8 @@ use async_trait::async_trait;
 
 use crate::error::{Error, Result};
 use crate::forge::types::{
-    ChangedFile, CheckRun, Commit, Issue, IssueComment, PullRequest, RepoId, ReviewComment,
-    ReviewEvent,
+    ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, Issue, IssueComment, PullRequest,
+    RepoId, ReviewComment, ReviewEvent, ReviewVerdict,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -105,6 +105,10 @@ pub struct MockState {
     pub issues: BTreeMap<u64, Issue>,
     /// tinysweeper's own last review state, keyed by pull request number.
     pub own_reviews: BTreeMap<u64, ReviewEvent>,
+    /// Check runs, keyed by the commit they report on and then by check name.
+    pub checks: BTreeMap<String, BTreeMap<String, CheckStatus>>,
+    /// Reviews, oldest first, keyed by pull request number.
+    pub reviews: BTreeMap<u64, Vec<ReviewVerdict>>,
     /// Repository file contents, keyed by [`file_key`].
     ///
     /// Keyed by commit as well as path because that is the distinction the
@@ -125,6 +129,17 @@ impl MockState {
     /// Serve `content` for `path` at `sha`.
     pub fn set_file(&mut self, sha: &str, path: &str, content: &str) {
         self.blobs.insert(file_key(sha, path), content.to_string());
+    }
+
+    /// Report `name` on `sha`. `conclusion: None` means still running.
+    pub fn set_check(&mut self, sha: &str, name: &str, conclusion: Option<CheckConclusion>) {
+        self.checks.entry(sha.to_string()).or_default().insert(
+            name.to_string(),
+            CheckStatus {
+                name: name.to_string(),
+                conclusion,
+            },
+        );
     }
 }
 
@@ -194,6 +209,24 @@ impl MockForge {
         {
             let mut state = self.state.lock().expect("mock state lock");
             state.review_comments.insert(number, comments);
+        }
+        self
+    }
+
+    /// Report a check run on a commit.
+    pub fn with_check(self, sha: &str, name: &str, conclusion: Option<CheckConclusion>) -> Self {
+        {
+            let mut state = self.state.lock().expect("mock state lock");
+            state.set_check(sha, name, conclusion);
+        }
+        self
+    }
+
+    /// Add the reviews left on a pull request, oldest first.
+    pub fn with_reviews(self, number: u64, reviews: Vec<ReviewVerdict>) -> Self {
+        {
+            let mut state = self.state.lock().expect("mock state lock");
+            state.reviews.insert(number, reviews);
         }
         self
     }
@@ -319,6 +352,20 @@ impl ForgeRead for MockForge {
             .get(&number)
             .cloned()
             .unwrap_or_default())
+    }
+
+    async fn check_runs(&self, _repo: &RepoId, sha: &str) -> Result<Vec<CheckStatus>> {
+        let state = self.state.lock().expect("mock state lock");
+        Ok(state
+            .checks
+            .get(sha)
+            .map(|checks| checks.values().cloned().collect())
+            .unwrap_or_default())
+    }
+
+    async fn reviews(&self, _repo: &RepoId, number: u64) -> Result<Vec<ReviewVerdict>> {
+        let state = self.state.lock().expect("mock state lock");
+        Ok(state.reviews.get(&number).cloned().unwrap_or_default())
     }
 
     async fn own_review_state(&self, _repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
@@ -784,6 +831,60 @@ mod tests {
             "{:?}",
             context.commits[0].patch
         );
+    }
+
+    #[tokio::test]
+    async fn check_runs_are_served_per_commit_not_per_pull_request() {
+        // Keyed on the SHA because that is the question the auto-merge gate
+        // asks: a check that is green on the previous head says nothing about
+        // the commit about to be merged.
+        let mut state = MockState::default();
+        state.set_check("abc123", "ci/build", Some(CheckConclusion::Success));
+        state.set_check("def456", "ci/build", Some(CheckConclusion::Failure));
+        let forge = MockForge::with_state(state);
+
+        let checks = forge.check_runs(&repo(), "abc123").await.expect("read");
+        assert_eq!(checks.len(), 1);
+        assert!(checks[0].is_green());
+
+        assert!(
+            !forge.check_runs(&repo(), "def456").await.expect("read")[0].is_green(),
+            "a different commit has its own checks"
+        );
+        assert!(
+            forge
+                .check_runs(&repo(), "unknown")
+                .await
+                .expect("read")
+                .is_empty(),
+            "an unreported commit has no checks, which is not an error"
+        );
+    }
+
+    #[tokio::test]
+    async fn reviews_are_served_in_submission_order() {
+        // The fold to a latest verdict per reviewer belongs to the policy, so
+        // the port has to hand over the history rather than a summary.
+        let forge = MockForge::new().with_reviews(
+            7,
+            vec![
+                ReviewVerdict {
+                    reviewer: "maintainer".into(),
+                    bot: false,
+                    state: ReviewEvent::RequestChanges,
+                },
+                ReviewVerdict {
+                    reviewer: "maintainer".into(),
+                    bot: false,
+                    state: ReviewEvent::Approve,
+                },
+            ],
+        );
+
+        let reviews = forge.reviews(&repo(), 7).await.expect("read");
+        assert_eq!(reviews.len(), 2);
+        assert_eq!(reviews[0].state, ReviewEvent::RequestChanges);
+        assert_eq!(reviews[1].state, ReviewEvent::Approve);
     }
 
     #[tokio::test]
