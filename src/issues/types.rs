@@ -7,6 +7,10 @@
 use serde::{Deserialize, Serialize};
 
 /// How urgent the issue is, in the order a triager reads them.
+///
+/// The only axis triage labels on. An `IssueSeverity` used to sit beside this
+/// and mapped onto it one for one — `Critical`→`P0` through `Low`→`P3` — so it
+/// was two spellings of one fact; see `docs/modules/issues/LABELS.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Priority {
@@ -50,46 +54,6 @@ impl Priority {
             Priority::P1.label(),
             Priority::P2.label(),
             Priority::P3.label(),
-        ]
-    }
-}
-
-/// How bad the reported problem is when it happens.
-///
-/// Distinct from [`Priority`] on purpose: a data-loss bug behind a flag nobody
-/// has enabled is critical *and* low priority, and collapsing the two loses the
-/// only interesting thing triage has to say about it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum IssueSeverity {
-    /// Data loss, a security hole, or an outage.
-    Critical,
-    /// A broken core path with no workaround.
-    High,
-    /// Broken with a workaround.
-    Medium,
-    /// Cosmetic or an enhancement.
-    Low,
-}
-
-impl IssueSeverity {
-    /// The label tinysweeper applies for this severity.
-    pub fn label(self) -> &'static str {
-        match self {
-            IssueSeverity::Critical => "severity: critical",
-            IssueSeverity::High => "severity: high",
-            IssueSeverity::Medium => "severity: medium",
-            IssueSeverity::Low => "severity: low",
-        }
-    }
-
-    /// Every severity label.
-    pub fn labels() -> [&'static str; 4] {
-        [
-            IssueSeverity::Critical.label(),
-            IssueSeverity::High.label(),
-            IssueSeverity::Medium.label(),
-            IssueSeverity::Low.label(),
         ]
     }
 }
@@ -156,8 +120,6 @@ pub struct IssueVerdict {
     pub kind: Option<IssueKind>,
     /// Suggested priority, if it committed to one.
     pub priority: Option<Priority>,
-    /// Suggested severity, if it committed to one.
-    pub severity: Option<IssueSeverity>,
     /// One sentence for the triage comment.
     pub summary: String,
     /// Its claim of prior art, if any.
@@ -177,8 +139,8 @@ pub struct TriagePlan {
     pub add_labels: Vec<String>,
     /// Labels superseded by one being added, in the same facet.
     ///
-    /// Never a label outside the `priority:`/`severity:` facets this bot owns:
-    /// two severities on one item are a contradiction, not two opinions, but a
+    /// Never a label outside the `priority:` facet this bot owns: two
+    /// priorities on one item are a contradiction, not two opinions, but a
     /// human's own labels are not ours to retire.
     pub remove_labels: Vec<String>,
     /// Labels that were suggested and refused, with why. For the log.

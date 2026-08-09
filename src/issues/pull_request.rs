@@ -9,9 +9,13 @@
 //! [`review`](crate::app::review::review) already produced or GitHub already
 //! reported, and the mapping is one sentence:
 //!
-//! > Severity is the highest severity the review itself found; priority is that
-//! > severity mapped `Critical`→P0, `High`→P1, `Medium`→P2, `Low` or nothing→P3,
-//! > then demoted one step while the pull request is a draft.
+//! > Priority is the highest severity the review itself found, mapped
+//! > `Critical`→P0, `High`→P1, `Medium`→P2, `Low` or nothing→P3, then demoted
+//! > one step while the pull request is a draft.
+//!
+//! That derivation is the whole label. There was once a second, `severity:`,
+//! label saying the same thing in different words; it is gone, and only
+//! `priority:` is written now.
 //!
 //! That the mapping reads only `highest_severity` and `draft` is the security
 //! property, not an accident: the title, the body and the diff never reach it,
@@ -29,7 +33,7 @@ use crate::config::types::Severity;
 use crate::error::Result;
 use crate::forge::types::{PullRequest, RepoId};
 use crate::issues::labels::plan;
-use crate::issues::types::{IssueSeverity, Priority};
+use crate::issues::types::Priority;
 use crate::ports::forge::ForgeWrite;
 
 /// What triage concluded about a pull request.
@@ -42,32 +46,18 @@ pub struct Triage {
 }
 
 impl Triage {
-    /// The labels this verdict wants present, priority first.
+    /// The labels this verdict wants present.
+    ///
+    /// One label, on one axis. The severity is already said by the priority —
+    /// the mapping between them was one to one — so emitting both put two
+    /// spellings of one fact on every pull request. See
+    /// `docs/modules/issues/LABELS.md`.
     ///
     /// A clean review still gets a priority label: an unlabelled pull request
     /// is indistinguishable from an untriaged one, and "nothing found, look
     /// last" is a useful thing for the list to say.
     pub fn labels(&self) -> Vec<String> {
-        let mut labels = vec![self.priority.label().to_string()];
-        labels.extend(
-            self.severity
-                .map(|severity| issue_severity(severity).label().to_string()),
-        );
-        labels
-    }
-}
-
-/// The review's severity, said in the triage vocabulary.
-///
-/// A total mapping between two four-valued scales that already share their
-/// words, so the label a pull request gets and the label an issue gets mean the
-/// same thing — which is the whole reason the vocabulary is shared.
-fn issue_severity(severity: Severity) -> IssueSeverity {
-    match severity {
-        Severity::Critical => IssueSeverity::Critical,
-        Severity::High => IssueSeverity::High,
-        Severity::Medium => IssueSeverity::Medium,
-        Severity::Low => IssueSeverity::Low,
+        vec![self.priority.label().to_string()]
     }
 }
 
@@ -145,10 +135,10 @@ pub async fn apply_triage(
     // request carrying both labels, which a human notices; the other order
     // leaves it carrying neither, which reads as a triage that did nothing.
     //
-    // Only labels in the `priority:`/`severity:` facets, and only ones the new
-    // label replaces. A severity that stayed `high` after the finding was fixed
-    // is worse than no label at all: it says the opposite of the truth, right
-    // next to a label saying the truth.
+    // Only labels in the `priority:` facet, and only ones the new label
+    // replaces. A priority that stayed `p0` after the finding was fixed is
+    // worse than no label at all: it says the opposite of the truth, right next
+    // to a label saying the truth.
     for label in &planned.remove {
         write.remove_label(repo, pull_request.number, label).await?;
     }
@@ -206,14 +196,34 @@ mod tests {
     }
 
     #[test]
-    fn the_severity_label_restates_the_reviews_own_worst_finding() {
+    fn no_severity_label_is_ever_derived() {
+        // The regression this exists to stop. The priority below is *derived*
+        // from the review's worst finding and stays; the second label that
+        // restated it does not, because it re-created labels this repository
+        // has already pruned.
+        for worst in [
+            None,
+            Some(Severity::Low),
+            Some(Severity::Medium),
+            Some(Severity::High),
+            Some(Severity::Critical),
+        ] {
+            let labels = triage(&pull_request(), &proposal(worst)).labels();
+            assert!(
+                !labels
+                    .iter()
+                    .any(|label| label.to_ascii_lowercase().starts_with("severity:")),
+                "{worst:?} produced {labels:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_priority_label_restates_the_reviews_own_worst_finding() {
         let verdict = triage(&pull_request(), &proposal(Some(Severity::High)));
 
         assert_eq!(verdict.severity, Some(Severity::High));
-        assert_eq!(
-            verdict.labels(),
-            vec!["priority: p1".to_string(), "severity: high".to_string()]
-        );
+        assert_eq!(verdict.labels(), vec!["priority: p1".to_string()]);
     }
 
     #[test]
@@ -233,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn a_clean_review_gets_a_priority_but_no_severity_label() {
+    fn a_clean_review_still_gets_a_priority_label() {
         let verdict = triage(&pull_request(), &proposal(None));
 
         assert_eq!(verdict.severity, None);
@@ -287,7 +297,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn labelling_writes_exactly_the_two_triage_labels() {
+    async fn labelling_writes_exactly_the_one_triage_label() {
         let forge = MockForge::new();
         let pr = pull_request();
 
@@ -301,7 +311,7 @@ mod tests {
         .await
         .expect("triaged");
 
-        assert_eq!(added, vec!["priority: p1", "severity: high"]);
+        assert_eq!(added, vec!["priority: p1"]);
         match forge.writes().as_slice() {
             [Write::Labels { number, labels }] => {
                 assert_eq!(*number, 7);
@@ -312,7 +322,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn triage_owns_its_facets_and_nothing_else() {
+    async fn triage_owns_its_facet_and_nothing_else() {
         let forge = MockForge::new();
         let pr = PullRequest {
             // A human has already decided this is urgent, and disagreed with
@@ -331,17 +341,17 @@ mod tests {
         .await
         .expect("triaged");
 
-        // `needs-design` is outside the two facets triage owns, so it is not
+        // `needs-design` is outside the facet triage owns, so it is not
         // touched, not mentioned, and not reasoned about.
         //
         // `priority: p0` **is** superseded, and that is a deliberate change
         // from add-only. A facet is exclusive: `p0` beside `p3` is not two
         // opinions, it is a contradiction, and a maintainer scanning the list
         // cannot tell which is current. Without provenance we cannot know who
-        // set the `p0` — so the rule is that triage owns `priority:` and
-        // `severity:` outright, and `issues.block_labels` is the documented way
-        // to pin an item by hand, because it refuses the whole plan rather than
-        // fighting over one facet.
+        // set the `p0` — so the rule is that triage owns `priority:` outright,
+        // and `issues.block_labels` is the documented way to pin an item by
+        // hand, because it refuses the whole plan rather than fighting over the
+        // facet.
         let writes = forge.writes();
         let removed: Vec<&str> = writes
             .iter()
@@ -359,7 +369,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_label_outside_the_owned_facets_is_never_removed() {
+    async fn a_label_outside_the_owned_facet_is_never_removed() {
         let forge = MockForge::new();
         let pr = PullRequest {
             labels: vec!["needs-design".into(), "good first issue".into()],
@@ -390,7 +400,7 @@ mod tests {
     async fn a_re_review_with_the_same_verdict_writes_nothing() {
         let forge = MockForge::new();
         let pr = PullRequest {
-            labels: vec!["severity: medium".into(), "priority: p2".into()],
+            labels: vec!["priority: p2".into()],
             ..pull_request()
         };
 

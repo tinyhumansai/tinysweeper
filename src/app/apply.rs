@@ -501,7 +501,9 @@ mod tests {
             })
             .expect("the pull request was labelled");
 
-        assert_eq!(labels, vec!["priority: p1", "severity: high"]);
+        // One label, on the one axis triage owns: the priority derived from the
+        // review's own worst finding.
+        assert_eq!(labels, vec!["priority: p1"]);
     }
 
     #[tokio::test]

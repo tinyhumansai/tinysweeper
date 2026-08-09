@@ -21,7 +21,7 @@ use crate::error::{Error, Result};
 use crate::forge::types::RepoId;
 use crate::issues::close::{CloseInputs, CloseOutcome, Referenced};
 use crate::issues::types::{
-    ClaimKind, DuplicateClaim, IssueKind, IssueSeverity, IssueVerdict, Priority, TriagePlan,
+    ClaimKind, DuplicateClaim, IssueKind, IssueVerdict, Priority, TriagePlan,
 };
 use crate::issues::{close, comment, dedupe, kind, labels, prompt};
 use crate::ports::forge::ForgeRead;
@@ -267,10 +267,6 @@ pub fn parse_verdict(value: &Value) -> Result<IssueVerdict> {
             .get("priority")
             .and_then(Value::as_str)
             .and_then(parse_priority),
-        severity: object
-            .get("severity")
-            .and_then(Value::as_str)
-            .and_then(parse_severity),
         summary: object
             .get("summary")
             .and_then(Value::as_str)
@@ -305,24 +301,15 @@ fn parse_priority(text: &str) -> Option<Priority> {
     }
 }
 
-/// A severity the schema allows, or `None` for anything else.
-fn parse_severity(text: &str) -> Option<IssueSeverity> {
-    match text.trim().to_ascii_lowercase().as_str() {
-        "critical" => Some(IssueSeverity::Critical),
-        "high" => Some(IssueSeverity::High),
-        "medium" => Some(IssueSeverity::Medium),
-        "low" => Some(IssueSeverity::Low),
-        _ => None,
-    }
-}
-
-/// The labels a verdict suggests, priority first.
+/// The labels a verdict suggests.
+///
+/// One axis, so at most one label: `priority:`. The `severity:` label that used
+/// to accompany it mapped onto the priority one for one and is gone.
 fn suggested_labels(verdict: &IssueVerdict) -> Vec<String> {
     verdict
         .priority
         .map(|p| p.label().to_string())
         .into_iter()
-        .chain(verdict.severity.map(|s| s.label().to_string()))
         .collect()
 }
 
@@ -408,7 +395,6 @@ mod tests {
     fn answer(extra: Value) -> Value {
         let mut base = json!({
             "priority": "p1",
-            "severity": "high",
             "summary": "The editor crashes when saving a large file."
         });
         if let (Some(base), Some(extra)) = (base.as_object_mut(), extra.as_object()) {
@@ -420,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn a_verdict_parses_priority_severity_and_a_duplicate() {
+    fn a_verdict_parses_a_priority_and_a_duplicate() {
         let verdict = parse_verdict(&answer(json!({
             "duplicate_of": 7,
             "confidence": 0.9
@@ -428,7 +414,6 @@ mod tests {
         .expect("parses");
 
         assert_eq!(verdict.priority, Some(Priority::P1));
-        assert_eq!(verdict.severity, Some(IssueSeverity::High));
         assert_eq!(
             verdict.claim,
             Some(DuplicateClaim {
@@ -457,13 +442,12 @@ mod tests {
     fn an_unknown_priority_costs_one_label_and_nothing_else() {
         let verdict = parse_verdict(&json!({
             "priority": "urgent!!!",
-            "severity": "low",
             "summary": "Cosmetic."
         }))
         .expect("parses");
 
         assert_eq!(verdict.priority, None);
-        assert_eq!(verdict.severity, Some(IssueSeverity::Low));
+        assert_eq!(verdict.summary, "Cosmetic.", "the rest survives");
     }
 
     #[test]
@@ -506,10 +490,7 @@ mod tests {
         .await
         .expect("triages");
 
-        assert_eq!(
-            outcome.plan.add_labels,
-            vec!["priority: p1".to_string(), "severity: high".to_string()]
-        );
+        assert_eq!(outcome.plan.add_labels, vec!["priority: p1".to_string()]);
         assert!(outcome.plan.close.is_none());
         assert!(outcome.plan.comment.is_some());
     }

@@ -24,7 +24,7 @@ environment, so every guard is testable on its own.
 | Decision | Who makes it | Can a model influence it? |
 | --- | --- | --- |
 | Which issues are candidate duplicates | `dedupe::shortlist` | No |
-| Suggested priority and severity | the model | Yes — it is the suggestion |
+| Suggested priority | the model | Yes — it is the suggestion |
 | Which labels are actually added | `labels::plan` | Only within the vocabulary |
 | Whether a claimed reference is real | `triage::verify`, re-fetched from the forge | No |
 | Whether the issue closes | `close::decide` | No |
@@ -35,8 +35,8 @@ human applied" is enforced by the type rather than by remembering it.
 
 ## Files
 
-- `types.rs` — `Priority`, `IssueSeverity`, the advisory `IssueVerdict`, and the
-  deterministic `TriagePlan`.
+- `types.rs` — `Priority`, the advisory `IssueVerdict`, and the deterministic
+  `TriagePlan`.
 - `dedupe.rs` — the candidate shortlist: Jaccard overlap of normalised
   title+body tokens, floor at `MIN_SIMILARITY`, capped and ordered.
 - `prompt.rs` — the cacheable `SYSTEM` prefix and the volatile suffix. Issue
@@ -128,8 +128,8 @@ is decided by `triage.rs`, which holds only a `ForgeRead`.
 
 ## Pull request triage — `pull_request.rs`
 
-The same two labels, on a pull request, so one list view answers "where do I
-look first" for both kinds of item.
+The same label, on a pull request, so one list view answers "where do I look
+first" for both kinds of item.
 
 **No model call.** A pull request has already had a full review by the time this
 runs, and that review computed the highest severity of every finding. Asking a
@@ -137,9 +137,9 @@ model to re-judge the pull request would cost a second full prompt and could
 return a verdict that contradicts the check run published beside it. The mapping
 is one sentence:
 
-> Severity is the highest severity the review itself found; priority is that
-> severity mapped `Critical`→P0, `High`→P1, `Medium`→P2, `Low` or nothing→P3,
-> then demoted one step while the pull request is a draft.
+> Priority is the highest severity the review itself found, mapped
+> `Critical`→P0, `High`→P1, `Medium`→P2, `Low` or nothing→P3, then demoted one
+> step while the pull request is a draft.
 
 The highest severity is read back through `Proposal::has_severity_at_or_above`
 rather than off `Proposal::findings()`, because that reads each lane's
@@ -179,3 +179,9 @@ The vocabulary lives in `presets/labels.toml` and is applied with
 `scripts/sync-labels.py`. See [LABELS.md](LABELS.md) for why there is one
 ordered axis rather than a priority and a severity, and why nothing in it
 shadows a native GitHub field.
+
+`labels::vocabulary` is the code side of that file, and it holds `priority: p0`
+… `p3` and nothing else. The `severity:` facet it used to carry mapped onto the
+priority one for one — `Critical`→`p0` through `Low`→`p3` — so it put two
+spellings of one fact on every item, and the three labels were pruned from this
+repository. `no_severity_label_is_ever_planned` keeps them from coming back.
