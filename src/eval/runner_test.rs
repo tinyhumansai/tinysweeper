@@ -238,31 +238,49 @@ async fn a_stale_cassette_fails_the_case_rather_than_scoring_an_old_prompt() {
     // question nobody asked.
     let score = &outcome.scores[0];
     if score.error.is_none() {
-        // Probe why: build the exact critique prompt under both configs.
+        // Probe why: the replay claimed success with no model calls. Dump what
+        // was recorded against what the reply asked for.
         use crate::config::types::LaneId;
+        use crate::harness::cassette::key;
         use crate::harness::prompt::{self, PromptInputs};
-        use crate::ports::model::Message;
-        let probe = |cfg: &Config| {
-            let diff = crate::evidence::diff::FileDiff {
-                path: "src/lib.rs".into(),
-                ..Default::default()
-            };
+        use crate::harness::schema;
+        use crate::ports::model::{Message, ModelRequest};
+        let build_msg = |cfg: &Config| {
             let built = prompt::build(&PromptInputs {
                 focus_path: Some("src/lib.rs"),
                 changed_paths: &["src/lib.rs".into()],
                 ..PromptInputs::new(LaneId::Critique, cfg)
             });
-            (built.prefix().len(), built.suffix().len())
+            (
+                built.prefix().to_string(),
+                built.suffix().to_string(),
+            )
         };
-        eprintln!(
-            "PROBE record({},{}) edited({},{}) instr_count_record={} edited={}",
-            probe(&config()).0,
-            probe(&config()).1,
-            probe(&edited).0,
-            probe(&edited).1,
-            config().path_instructions.len(),
-            edited.path_instructions.len()
-        );
+        let (pre, suf) = build_msg(&edited);
+        let request = ModelRequest {
+            model: config().model_for(LaneId::Critique).to_string(),
+            messages: vec![Message::system(&pre), Message::user(&suf)],
+            schema: schema::json_schema(),
+            schema_name: "tinysweeper_critique".into(),
+            max_tokens: config().models.max_tokens,
+        };
+        eprintln!("EDIT KEY {}", key(&request));
+        let replay_dir = corpus
+            .cases
+            .iter()
+            .find(|c| c.case.id == "ts-0001")
+            .map(|c| c.cassette_dir(&corpus.root))
+            .expect("case");
+        let mut files: Vec<_> = std::fs::read_dir(&replay_dir)
+            .expect("read cassette")
+            .filter_map(|e| e.ok())
+            .collect();
+        files.sort_by_key(|e| e.file_name());
+        for entry in &files {
+            let path = entry.path();
+            let raw = std::fs::read_to_string(&path).expect("read take");
+            eprintln!("TAKE {path}:\n{raw}");
+        }
     }
     assert!(score.error.is_some(), "expected a cassette miss");
     assert!(
