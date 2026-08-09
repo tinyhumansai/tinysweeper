@@ -235,7 +235,7 @@ fn identity(finding: &crate::findings::types::Finding) -> String {
         .unwrap_or_else(|| finding.fingerprint(&finding.title))
 }
 
-fn review_body(proposal: &Proposal, event: ReviewEvent) -> String {
+fn review_body(proposal: &Proposal, event: ReviewEvent, previous: Option<ReviewEvent>) -> String {
     let blocking = proposal
         .lanes
         .iter()
