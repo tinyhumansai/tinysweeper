@@ -512,7 +512,7 @@ mod tests {
             "the marker must close: {body}"
         );
         assert!(
-            !body[marker..].contains("![") ,
+            !body[marker..].contains("!["),
             "nothing may follow the fingerprint marker: {body}"
         );
     }
