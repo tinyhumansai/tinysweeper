@@ -192,3 +192,25 @@ test, and each asserts that `MockForge` recorded no merge at all.
 | `complexity.rs` | The measured signals. |
 | `paths.rs` | Glob compilation and exact login comparison. Both fail closed. |
 | `types.rs` | `Decision`, `Refusal`, `Outcome`. |
+
+## A note on `require_approvals`
+
+It counts **human** approvals, and there is a trap in that worth stating.
+
+On a repository whose pull requests are opened by its only maintainer, nobody
+else is going to approve, so `require_approvals = 1` means nothing ever merges.
+The fix is not to make bot approvals count — a bot approving its own policy is
+not a second opinion, and that property is why the field is worth having. It is
+to move the human act somewhere it actually happens: set
+`require_approvals = 0` and keep `allow_labels = ["automerge"]`, so a person
+with write access says "merge this once it is green" once, up front, instead of
+after the wait for CI.
+
+`allow_labels = []` *and* `require_approvals = 0` together mean every green
+pull request from anybody merges itself. That is a defensible setting for a
+private repository and a bad one for anything taking outside contributions,
+where `sensitive_paths` and the complexity caps would be the only thing between
+a stranger and the default branch. The `automerge` label is in
+`presets/labels.toml` but is never applied by triage — nothing in the label
+vocabulary can produce that name — precisely so the bot cannot authorise
+itself.
