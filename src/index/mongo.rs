@@ -101,15 +101,39 @@ const TEXT_INDEX: &str = "tinysweeper_text";
 /// clause count.
 const MAX_LEXICAL_TERMS: usize = 300;
 
-/// The first [`MAX_LEXICAL_TERMS`] terms of `text`.
+/// The lexical arm's query: at most [`MAX_LEXICAL_TERMS`] analyzer tokens.
 ///
-/// Terms are already frequency-ranked by `retrieve::query`, so truncating from
-/// the tail drops the least informative ones.
+/// Counting whitespace-separated words is **not** enough, and getting that
+/// wrong is how the original fix would still have failed. The index analyzer
+/// splits on punctuation, so `src/harness/openrouter.rs` is one whitespace term
+/// but four tokens, and a path-heavy query would clear the clause limit while
+/// looking well under the cap. This splits the same way the analyzer will —
+/// anything that is not alphanumeric is a separator — and counts what the
+/// server will actually count.
+///
+/// Tokens are deduplicated, keeping first occurrence: `retrieve::query` ranks
+/// identifiers by frequency, so a repeated token carries no extra weight in a
+/// BM25 query but does spend a clause.
 fn lexical_terms(text: &str) -> String {
-    text.split_whitespace()
-        .take(MAX_LEXICAL_TERMS)
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut seen = BTreeSet::new();
+    let mut tokens = Vec::new();
+
+    for token in text.split(|c: char| !c.is_alphanumeric()) {
+        if token.is_empty() {
+            continue;
+        }
+        // Lowercased for the dedupe only: the analyzer folds case itself, so
+        // `Chunk` and `chunk` would otherwise spend two clauses to say one
+        // thing.
+        if seen.insert(token.to_ascii_lowercase()) {
+            tokens.push(token);
+            if tokens.len() == MAX_LEXICAL_TERMS {
+                break;
+            }
+        }
+    }
+
+    tokens.join(" ")
 }
 
 /// The vector the boot probe searches with.
