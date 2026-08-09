@@ -97,8 +97,9 @@ pub async fn apply(
     // GitHub keeps the latest review per reviewer, so re-approving changes
     // nothing on the merge button and only adds a timeline entry — on every
     // push, for the whole life of a clean pull request.
-    let redundant_approval =
-        event == ReviewEvent::Approve && previous == Some(ReviewEvent::Approve) && comments.is_empty();
+    let redundant_approval = event == ReviewEvent::Approve
+        && previous == Some(ReviewEvent::Approve)
+        && comments.is_empty();
 
     if !redundant_approval
         && (!comments.is_empty()
@@ -181,11 +182,7 @@ fn review_event(
 ///
 /// Read from the forge rather than remembered, so it stays correct across a
 /// restart, a redeploy, and a human dismissing the review by hand.
-async fn own_review_state(
-    read: &dyn ForgeRead,
-    repo: &RepoId,
-    number: u64,
-) -> Option<ReviewEvent> {
+async fn own_review_state(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Option<ReviewEvent> {
     match read.own_review_state(repo, number).await {
         Ok(state) => state,
         Err(err) => {
