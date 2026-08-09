@@ -279,7 +279,7 @@ async fn a_stale_cassette_fails_the_case_rather_than_scoring_an_old_prompt() {
         for entry in &files {
             let path = entry.path();
             let raw = std::fs::read_to_string(&path).expect("read take");
-            eprintln!("TAKE {path}:\n{raw}");
+            eprintln!("TAKE {}:\n{raw}", path.display());
         }
     }
     assert!(score.error.is_some(), "expected a cassette miss");
