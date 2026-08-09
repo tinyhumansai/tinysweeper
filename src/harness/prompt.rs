@@ -745,6 +745,25 @@ mod tests {
     }
 
     #[test]
+    fn every_lane_is_told_that_a_containment_fixture_is_not_a_finding() {
+        // A live false positive: the security fixture that proves a hostile
+        // AGENTS.md is contained was itself reported as a prompt-injection
+        // attempt, with the advice to delete it. That advice would have deleted
+        // the evidence the defence works.
+        for lane in [
+            LaneId::Critique,
+            LaneId::Security,
+            LaneId::Tests,
+            LaneId::Commits,
+        ] {
+            let config = config();
+            let prefix = build(&PromptInputs::new(lane, &config)).prefix().to_string();
+            assert!(prefix.contains("test fixture"), "{lane:?}");
+            assert!(prefix.contains("asserts that it is contained"), "{lane:?}");
+        }
+    }
+
+    #[test]
     fn a_lane_scoped_rule_reaches_that_lane_only() {
         let mut config = config();
         config.path_instructions = vec![PathInstruction {
