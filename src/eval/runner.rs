@@ -102,9 +102,23 @@ pub async fn run(
             continue;
         }
 
-        let cassette = open_cassette(case, corpus, model.clone(), options)?;
+        // A case whose cassette cannot be opened is scored as failed, not
+        // dropped: the same rule `rescore` states below — a corpus that
+        // silently scores fewer cases than it holds reports recall that is
+        // wrong in the flattering direction.
+        let cassette = match open_cassette(case, corpus, model.clone(), options) {
+            Ok(cassette) => cassette,
+            Err(err) => {
+                scores.push(crate::eval::score::failed(
+                    &case.case,
+                    err.to_string(),
+                    std::time::Duration::default(),
+                ));
+                continue;
+            }
+        };
         let started = Instant::now();
-        let outcome = review_case(case, &config, cassette.clone()).await;
+        let outcome = review_case(case, &with_lanes(&config, case), cassette.clone()).await;
         let wall = started.elapsed();
 
         if options.record {
