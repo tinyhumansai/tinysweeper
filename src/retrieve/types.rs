@@ -314,6 +314,46 @@ mod tests {
     }
 
     #[test]
+    fn an_impact_only_review_is_not_labeled_diff_only() {
+        // The blast radius is retrieval's verdict too, even when the index
+        // holds no chunk for any dependent. Calling that a diff-only review
+        // would bury the one sentence worth reading.
+        use crate::graph::impact::Impact as GraphImpact;
+        use crate::index::types::{EdgeKind, GraphEdge, GraphNode, Neighbourhood};
+
+        let neighbourhood = Neighbourhood {
+            nodes: vec![GraphNode::symbol("acme/app", "src/billing.rs", "settle")],
+            edges: vec![GraphEdge::new(
+                "acme/app",
+                "src/caller.rs",
+                "src/billing.rs#settle",
+                EdgeKind::Calls,
+                "src/caller.rs",
+            )],
+        };
+        let impact = GraphImpact::of(
+            &neighbourhood,
+            &["src/billing.rs#settle".to_string()],
+            crate::graph::impact::DEFAULT_MAX_REACHED,
+        );
+
+        let context = RetrievedContext {
+            status: RetrievalStatus::Ready,
+            chunks: Vec::new(),
+            dropped: 0,
+            tokens: 0,
+            graph_nodes: 1,
+            impact,
+        };
+        assert!(!context.renders_nothing());
+        assert_eq!(
+            context.note(),
+            None,
+            "impact is context; it is not a diff-only review"
+        );
+    }
+
+    #[test]
     fn a_rendered_chunk_names_its_file_lines_and_provenance() {
         let mut graph = chunk("src/caller.rs", 4, 9);
         graph.provenance = Provenance::Graph;
