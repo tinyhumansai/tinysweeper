@@ -116,6 +116,11 @@ pub struct Expansion {
     /// plenty but none of it is indexed" are distinguishable, which are two
     /// very different things to have to fix.
     pub nodes: usize,
+    /// What depends on the change, and what no test reaches.
+    ///
+    /// Derived from the same walk rather than a second query: the edges are
+    /// already in hand and the only thing left to decide is direction.
+    pub impact: Impact,
 }
 
 /// Walk out from the diff and fetch the chunks of what it reaches.
