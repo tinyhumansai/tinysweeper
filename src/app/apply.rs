@@ -473,12 +473,15 @@ mod tests {
             .await
             .expect("applies");
 
+        // The review itself is an approval; what it must not carry is a single
+        // inline comment, because there was nothing to say about a line.
         assert!(
-            !forge
-                .writes()
-                .iter()
-                .any(|w| matches!(w, Write::Review { .. })),
-            "silence should be silent"
+            forge.writes().iter().all(|w| match w {
+                Write::Review { comments, .. } => comments.is_empty(),
+                _ => true,
+            }),
+            "{:#?}",
+            forge.writes()
         );
     }
 
