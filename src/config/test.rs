@@ -61,6 +61,47 @@ fn parse(text: &str) -> Config {
 }
 
 #[test]
+fn reasoning_with_too_small_a_budget_is_rejected() {
+    // The production failure this exists to stop: reasoning and the answer are
+    // drawn from one allowance, and at 8000 both configured models spent the
+    // whole of it thinking and returned empty content. Every review then failed
+    // over to the last model in the fallback chain, silently.
+    let config = parse("version = 1\n[models]\nmax_tokens = 8000\nreasoning_effort = \"high\"\n");
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("models.max_tokens = 8000"), "{joined}");
+    assert!(joined.contains("reasoning_effort"), "{joined}");
+}
+
+#[test]
+fn lowering_the_effort_does_not_satisfy_the_budget_floor() {
+    // Measured: both models burn the entire allowance at `low` exactly as they
+    // do at `high`. This key picks a style of thinking, never an amount, so
+    // treating `low` as a smaller `high` would reintroduce the failure while
+    // looking like a fix for it.
+    let config = parse("version = 1\n[models]\nmax_tokens = 8000\nreasoning_effort = \"low\"\n");
+    assert!(
+        validate::validate(&config)
+            .join("\n")
+            .contains("models.max_tokens = 8000"),
+        "`low` was accepted at a budget that cannot work"
+    );
+}
+
+#[test]
+fn turning_reasoning_off_makes_a_small_budget_fine() {
+    // The escape hatch has to actually work, or the floor is just a wall: with
+    // no reasoning the whole allowance goes to the answer, and 8000 was
+    // measured as ample — 2572 tokens and 13 findings on a 23k-token diff.
+    let config = parse("version = 1\n[models]\nmax_tokens = 8000\nreasoning_effort = \"off\"\n");
+    assert!(
+        !validate::validate(&config)
+            .join("\n")
+            .contains("models.max_tokens = 8000"),
+        "`off` should not be held to the reasoning floor"
+    );
+}
+
+#[test]
 fn the_built_in_defaults_are_valid() {
     let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
     let problems = validate::validate(&config);
