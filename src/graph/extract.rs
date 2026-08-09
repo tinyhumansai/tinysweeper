@@ -81,6 +81,9 @@ pub fn parse_as(file: &SourceFile, language: Language) -> Result<ParsedFile> {
                 }
                 lang::CAP_CALL => calls.push(usage(capture.node, source, true)),
                 lang::CAP_REF => refs.push(usage(capture.node, source, false)),
+                lang::CAP_HERITAGE => {
+                    heritage.extend(standalone_heritage(capture.node, source, language));
+                }
                 other if other.starts_with(lang::CAP_DEF_PREFIX) => {
                     decl = Some((capture.node, other));
                 }
