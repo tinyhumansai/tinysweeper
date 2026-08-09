@@ -140,7 +140,9 @@ pub fn build(repo_id: &str, files: &[SourceFile]) -> Result<RepoGraph> {
             // each one would bury the handful of genuinely broken *imports*
             // that `unresolved` exists to make findable. The gap is still
             // measurable as `usages_total - usages_resolved`.
-            let Some(target) = target_for(&file.path, usage, &local, &bindings, &defined_in) else {
+            let Some(target) =
+                target_for(&file.path, &usage.name, &local, &bindings, &defined_in)
+            else {
                 continue;
             };
             coverage.usages_resolved += 1;
@@ -148,6 +150,39 @@ pub fn build(repo_id: &str, files: &[SourceFile]) -> Result<RepoGraph> {
                 continue;
             }
             let edge = GraphEdge::new(repo_id, &source, &target, kind, &file.path);
+            edges.insert(edge.id(), edge);
+
+            // A call made from a test scope into code that is not itself test
+            // code is coverage. Derived from the resolved call rather than
+            // asserted from the file name, so `foo_test.rs` claims to cover
+            // exactly what it actually reaches. References are excluded: a
+            // test that names a type does not exercise it.
+            if kind == EdgeKind::Calls
+                && file.in_test_scope(usage.byte)
+                && !crate::graph::path::is_test_path(path_of(&target))
+            {
+                let covers = GraphEdge::new(repo_id, &source, &target, EdgeKind::Tests, &file.path);
+                edges.insert(covers.id(), covers);
+            }
+        }
+
+        for relation in &file.heritage {
+            // Both ends are resolved the same way a usage is: a Rust
+            // `impl Display for Ledger` names two types and declares neither,
+            // so assuming the child is local would attach the edge to a symbol
+            // that file does not define.
+            let (Some(child), Some(parent)) = (
+                target_for(&file.path, &relation.child, &local, &bindings, &defined_in),
+                target_for(&file.path, &relation.parent, &local, &bindings, &defined_in),
+            ) else {
+                continue;
+            };
+            if child == parent {
+                continue;
+            }
+            // Child to parent, so walking *inbound* from a changed base class
+            // lists what implements it — the direction a review asks in.
+            let edge = GraphEdge::new(repo_id, &child, &parent, EdgeKind::Extends, &file.path);
             edges.insert(edge.id(), edge);
         }
     }
