@@ -11,7 +11,7 @@ harness works. This file is the labelling contract.
 
 ## Layout
 
-```
+```text
 cases/<id>.toml        one labelled pull request
 fixtures/<id>.json     its frozen forge state, written by `eval add`
 cassettes/<id>/        the model's recorded answers, written by `eval run --record`
