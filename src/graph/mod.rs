@@ -14,7 +14,8 @@
 //! 3. [`resolve`] turns a specifier into the file it names, per language, and
 //!    records what it could not.
 //! 4. [`build`] assembles nodes and edges and writes them; [`traverse`] walks
-//!    them back out, bounded by hops and by a hard node cap.
+//!    them back out, bounded by hops and by a hard node cap, and [`rank`]
+//!    decides which nodes survive that cap.
 //!
 //! **This graph exists to be traversed during a review**, not to be browsed. The
 //! obvious version of this feature is a dashboard endpoint whose only caller is
@@ -34,6 +35,7 @@ pub mod build;
 pub mod extract;
 pub mod lang;
 pub mod path;
+pub mod rank;
 pub mod resolve;
 pub mod traverse;
 pub mod types;
@@ -41,6 +43,7 @@ pub mod types;
 pub use crate::graph::aliases::{AliasConfig, AliasPattern, TsBaseUrl};
 pub use crate::graph::build::{build, sync_all, sync_paths};
 pub use crate::graph::extract::parse;
+pub use crate::graph::rank::rank;
 pub use crate::graph::resolve::{Resolution, Resolver};
 pub use crate::graph::traverse::{DEFAULT_HOPS, DEFAULT_MAX_NODES, NeighbourQuery, neighbours};
 pub use crate::graph::types::{
