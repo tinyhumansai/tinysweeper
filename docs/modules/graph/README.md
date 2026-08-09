@@ -20,14 +20,15 @@ looks like a feature and answers no question.
 
 | File | Contents |
 | --- | --- |
-| `types.rs` | `Language`, `SourceFile`, `Definition`, `ImportStmt`, `Usage`, `ParsedFile`, `Unresolved`, `Coverage`, `RepoGraph` |
+| `types.rs` | `Language`, `SourceFile`, `Definition`, `ImportStmt`, `Usage`, `Heritage`, `ParsedFile`, `Unresolved`, `Coverage`, `RepoGraph` |
 | `lang.rs` | Grammar selection and the tree-sitter queries, one set per language |
 | `extract.rs` | Parsing: one file in, one `ParsedFile` out. The only tree-sitter caller |
 | `aliases.rs` | `AliasConfig` — path aliases read from `tsconfig.json`, `go.mod`, `Cargo.toml` |
-| `path.rs` | Repo-relative path arithmetic |
+| `path.rs` | Repo-relative path arithmetic, and `is_test_path` |
 | `resolve.rs` | `Resolver` — a specifier and a file in, the file it names out |
-| `build.rs` | Nodes and edges out of parsed files; `sync_all` / `sync_paths` to store them |
-| `traverse.rs` | `NeighbourQuery` and the bounded, capped walk back out |
+| `build.rs` | Nodes and edges out of parsed files; `sync_all` / `build_paths` + `sync_paths` / `rebuild_set` to store them |
+| `traverse.rs` | `NeighbourQuery`, the uncapped `walk`, and the capped `neighbours` |
+| `impact.rs` | `Impact` — the same walk read inbound only: what breaks, and what nothing tests |
 
 Storage goes through the `GraphStore` port (`src/ports/graph.rs`). The node,
 edge and neighbourhood wire types live in `src/index/types.rs`, alongside the
