@@ -63,6 +63,22 @@ pub const PRICES: &[(&str, f64)] = &[
     // priced rather than left unknown — otherwise every test run would log a
     // warning about a model we wrote ourselves.
     ("mock:hash-bag", 0.0),
+    // Through the OpenRouter gateway. `provider:model` where the model id
+    // itself contains a slash, so these keys carry both separators. Only a
+    // fallback: `OpenRouterEmbedder` reports the cost the gateway charged and
+    // the indexer records that, so these matter for a response with no usage
+    // block. Without them a live index logged "no embedding price known" on
+    // every batch.
+    ("openrouter:openai/text-embedding-3-small", 0.02),
+    ("openrouter:openai/text-embedding-3-large", 0.13),
+    ("openrouter:voyageai/voyage-4", 0.06),
+    ("openrouter:voyageai/voyage-4-lite", 0.02),
+    ("openrouter:voyageai/voyage-4-large", 0.12),
+    ("openrouter:mistralai/codestral-embed-2505", 0.15),
+    ("openrouter:qwen/qwen3-embedding-8b", 0.01),
+    ("openrouter:qwen/qwen3-embedding-4b", 0.02),
+    ("openrouter:baai/bge-m3", 0.01),
+    ("openrouter:google/gemini-embedding-001", 0.15),
 ];
 
 /// What `tokens` tokens cost under `model`, in USD.

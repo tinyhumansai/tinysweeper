@@ -73,7 +73,18 @@ impl OpenRouterEmbedder {
                      `openrouter` embedding provider"
                 ))
             })?;
+        Self::with_key(signature, api_key, base_url)
+    }
 
+    /// Build with the key already in hand.
+    ///
+    /// Split from [`OpenRouterEmbedder::new`] so tests never have to reach for
+    /// `std::env::set_var`, which is `unsafe` in Rust 2024 precisely because it
+    /// races every other thread reading the environment — and this crate's
+    /// tests run in parallel. A test that mutated the variable could make an
+    /// unrelated test read a key that was never configured for it, which is a
+    /// flake that presents as a security test failing at random.
+    pub fn with_key(signature: EmbedSignature, api_key: String, base_url: &str) -> Result<Self> {
         let url = match base_url.trim() {
             "" => OPENROUTER_EMBEDDINGS_URL.to_string(),
             given => given.to_string(),

@@ -82,6 +82,83 @@ const INDEX_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// vector index it does not depend on the embedding model.
 const TEXT_INDEX: &str = "tinysweeper_text";
 
+/// How many terms the lexical arm may carry.
+///
+/// Lucene expands a `text` operator into one clause per term per searched
+/// path, and mongot ships `maxClauseCount = 1024`. The retrieval query is
+/// bounded in *characters* — roughly four thousand of them, mostly
+/// frequency-ranked identifiers — which is several hundred terms, and across
+/// the three paths below that clears the limit and the whole aggregation fails
+/// with `UnknownError: maxClauseCount is set to 1024`.
+///
+/// Found by deploying: every review on a real repository degraded to diff-only
+/// with that error, so the hybrid search had never actually run. It fails
+/// closed and says so, which is why it was visible at all, but the retrieval it
+/// was built for never happened.
+///
+/// 300 × 3 paths = 900, leaving room for the filter clauses. Only the lexical
+/// arm is capped: the dense arm embeds the query as one vector and has no
+/// clause count.
+const MAX_LEXICAL_TERMS: usize = 300;
+
+/// The lexical arm's query, budgeted by the tokens the analyzer will produce.
+///
+/// Two separate concerns, and conflating them broke one of them:
+///
+/// **Counting.** The analyzer splits on punctuation, so one whitespace-separated
+/// word can be several clauses — `src/harness/openrouter.rs` is one word and
+/// three or four tokens. Counting words would let a path-heavy query pass a
+/// cap of 300 and still overrun the 1024 clause limit.
+///
+/// **Emitting.** The terms themselves must go out *intact*. An earlier fix
+/// split on every non-alphanumeric character and emitted the fragments, which
+/// turned `chunk_id` into `chunk id` — and exact-identifier matching is the
+/// entire reason the lexical arm exists next to a dense one. Underscores are
+/// word-joining under UAX#29, so the analyzer keeps `chunk_id` whole; splitting
+/// on them was both wrong and self-defeating.
+///
+/// So: estimate each word's token cost, spend from a budget, and emit the word
+/// unchanged. The estimate is deliberately conservative — it counts a
+/// separator run as a split even where the analyzer might join — because
+/// over-counting costs a little recall and under-counting fails the entire
+/// aggregation.
+///
+/// Words are deduplicated, keeping first occurrence: `retrieve::query` ranks
+/// identifiers by frequency, and a repeat adds no BM25 weight while still
+/// spending clauses.
+fn lexical_terms(text: &str) -> String {
+    let mut seen = BTreeSet::new();
+    let mut terms = Vec::new();
+    let mut spent = 0usize;
+
+    for word in text.split_whitespace() {
+        let cost = analyzer_tokens(word);
+        if cost == 0 {
+            continue;
+        }
+        if spent + cost > MAX_LEXICAL_TERMS {
+            break;
+        }
+        if seen.insert(word.to_ascii_lowercase()) {
+            spent += cost;
+            terms.push(word);
+        }
+    }
+
+    terms.join(" ")
+}
+
+/// How many tokens the index analyzer will make of one word.
+///
+/// Underscores and digits stay attached — UAX#29 treats `_` as word-joining, so
+/// `chunk_id` and `sha256` are one token each. Everything else non-alphanumeric
+/// is a boundary.
+fn analyzer_tokens(word: &str) -> usize {
+    word.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|part| !part.is_empty())
+        .count()
+}
+
 /// The vector the boot probe searches with.
 ///
 /// A unit vector, not a zero one. Cosine similarity against the zero vector is
@@ -467,7 +544,7 @@ impl MongoChunkIndex {
                                         "compound": {
                                             "must": [{
                                                 "text": {
-                                                    "query": &query.text,
+                                                    "query": lexical_terms(&query.text),
                                                     "path": ["text", "symbol", "path"],
                                                 }
                                             }],

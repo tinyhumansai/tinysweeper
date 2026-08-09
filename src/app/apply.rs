@@ -235,10 +235,16 @@ fn review_body(proposal: &Proposal, event: ReviewEvent) -> String {
     // The full token breakdown goes in the body deliberately. Cache hit rate is
     // the difference between a cheap re-review and a ruinous one, and nobody
     // tunes a number they cannot see.
-    body.push_str(&format!(
-        "\n\n<sub>{}{}</sub>",
-        crate::findings::render::cost_line(&proposal.usage(), &proposal.models),
-        crate::findings::render::per_lane_costs(&proposal.lane_costs()),
+    //
+    // A fenced, column-aligned block rather than a `<sub>` sentence per lane:
+    // the point of the breakdown is comparing lanes, and six numbers that land
+    // in a different place on every row cannot be compared at a glance. The
+    // fence also stops the renderer reflowing away the alignment.
+    body.push_str("\n\n");
+    body.push_str(&crate::findings::render::cost_table(
+        &proposal.usage(),
+        &proposal.models,
+        &proposal.lane_costs(),
     ));
     body.push_str(&format!(
         "\n<!-- {MARKER_PREFIX}state v=1 sha={} -->",
@@ -260,13 +266,21 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
                 // The forge assigns the author on the way in; on the way out it
                 // is what tells dedupe whether a marker is ours.
                 author: String::new(),
+                // Badges first, on their own line, then the title, then the
+                // body. A reader scanning a page of comments decides whether to
+                // stop on the badges alone, so they must not be buried in a
+                // run-on line with the title — and the footer is the wrong
+                // place for the one fact that decides attention.
                 body: format!(
-                    "{} **{}**\n\n{}\n\n<sub>{} · {} · <!-- {MARKER_PREFIX}fp={} --></sub>",
-                    crate::findings::render::badge(finding.severity),
+                    "{}  {}\n\n**{}**\n\n{}\n\n<sub>rule `{}` · <!-- {MARKER_PREFIX}fp={} --></sub>",
+                    crate::findings::render::priority_badge(finding.severity),
+                    crate::findings::render::lane_confidence_badge(
+                        finding.lane,
+                        finding.confidence
+                    ),
                     finding.title,
                     finding.body,
-                    finding.lane,
-                    crate::findings::render::confidence_badge(finding.confidence),
+                    finding.rule,
                     // The identity review stamped, over the code this finding
                     // anchors to. Recomputing it here from the title — as this
                     // once did — makes the marker depend on the model's
@@ -456,6 +470,57 @@ mod tests {
         assert_eq!(event, ReviewEvent::RequestChanges);
         assert!(body.contains("Requesting changes"), "{body}");
         assert!(body.contains("**high**"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn an_inline_comment_leads_with_its_badges() {
+        // A reader scanning a page of comments decides whether to stop on the
+        // badges, so they go first, on their own line, before the title.
+        let forge = forge("abc123");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![finding()]),
+            None,
+        )
+        .await
+        .expect("applies");
+
+        let body = forge
+            .writes()
+            .into_iter()
+            .find_map(|w| match w {
+                Write::Review { comments, .. } => comments.into_iter().next(),
+                _ => None,
+            })
+            .expect("an inline comment")
+            .body;
+        let mut lines = body.lines();
+
+        let first = lines.next().expect("a first line");
+        assert!(first.starts_with("![priority"), "{body}");
+        assert!(first.contains("label=priority"), "{body}");
+        assert!(first.contains("critique-"), "lane and confidence: {body}");
+        assert!(
+            !first.contains("**"),
+            "the title must not share the badge line: {body}"
+        );
+
+        assert!(body.contains("**Guard the index"), "{body}");
+
+        // The fingerprint marker must remain the *last* marker in the body:
+        // `findings::prior::marker_value` reads it with `rfind`, so anything
+        // appended after it would silently break cross-push dedupe.
+        let marker = body.rfind("tinysweeper:fp=").expect("a marker");
+        assert!(
+            body[marker..].find("-->").is_some(),
+            "the marker must close: {body}"
+        );
+        assert!(
+            !body[marker..].contains("!["),
+            "nothing may follow the fingerprint marker: {body}"
+        );
     }
 
     #[tokio::test]

@@ -98,11 +98,37 @@ services:
       # second place to set them is a second way for the key to disagree with
       # the vectors already written. Only the API key lives in the environment,
       # under whatever name `embeddings.api_key_env` gives.
+      # `openrouter` is the default provider, so this is the key the index
+      # needs. The others are forwarded for a deployment that overrides
+      # `embeddings.provider`.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
       TINYSWEEPER_WEBHOOK_SECRET: ${TINYSWEEPER_WEBHOOK_SECRET:?set a webhook secret}
-      TINYSWEEPER_GITHUB_APP_ID: ${TINYSWEEPER_GITHUB_APP_ID:-}
-      TINYSWEEPER_GITHUB_PRIVATE_KEY: ${TINYSWEEPER_GITHUB_PRIVATE_KEY:-}
+      # These two names are read verbatim by `server::auth::AppAuth::from_env`.
+      # They were previously spelled `TINYSWEEPER_GITHUB_*` here, which the
+      # binary never reads, so the container could not authenticate as the App
+      # however the environment was set.
+      #
+      # `:-` and not `:?`: Compose interpolates the whole file before it starts
+      # anything, so a required variable here would also break
+      # `docker compose up mongod` — bringing the database up alone, which is
+      # what the integration tests and a first-time setup both do, and neither
+      # has any use for a GitHub credential. The server already refuses to boot
+      # without these and names the missing one, so the check is not lost, only
+      # moved to the service that actually needs it.
+      TINYSWEEPER_APP_ID: ${TINYSWEEPER_APP_ID:-}
+      TINYSWEEPER_APP_PRIVATE_KEY: ${TINYSWEEPER_APP_PRIVATE_KEY:-}
       RUST_LOG: ${RUST_LOG:-tinysweeper=info}
+    # The runtime image carries no configuration — it is a binary and nothing
+    # else — so without this mount the server runs entirely on built-in
+    # defaults. That is not a smaller version of the intended behaviour: it
+    # means `[embeddings]` is off, so the index never builds and every review is
+    # diff-only, silently. Mounting the file is the interim answer; the real one
+    # is #12, fetching each reviewed repository's own config through the forge
+    # rather than reading one from the server's filesystem.
+    volumes:
+      - ./.tinysweeper.toml:/home/tinysweeper/.tinysweeper.toml:ro
     ports:
       - "8080:8080"
     depends_on:
