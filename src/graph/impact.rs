@@ -137,19 +137,13 @@ impl Impact {
                 .or_insert(relation);
         }
 
-        let mut reached: Vec<Impacted> = strongest
-            .into_iter()
-            .map(|(id, relation)| Impacted {
-                id: id.to_string(),
-                relation,
-            })
-            .collect();
-        // Relation first, then id: the cap must drop importers before it drops
-        // a test, and ties must break the same way every run or a golden test
-        // on the rendered prompt would depend on map iteration order.
+        let total = strongest.len();
+        let mut reached = select(strongest, max_reached);
+        // Relation first, then id, so the block reads grouped. Ties break the
+        // same way every run — a golden test on the rendered prompt would
+        // otherwise depend on map iteration order.
         reached.sort_by(|a, b| (a.relation, &a.id).cmp(&(b.relation, &b.id)));
-        let truncated = reached.len().saturating_sub(max_reached);
-        reached.truncate(max_reached);
+        let truncated = total.saturating_sub(reached.len());
 
         // Only symbols the graph *holds*. A seed guessed from a hunk heading
         // that names nothing, or a file added by this pull request, is absent
