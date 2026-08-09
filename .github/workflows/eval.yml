@@ -57,12 +57,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Record and score the corpus
+      - name: Record the corpus
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           cargo run --locked --features harness,github -- \
             eval run --record --max-cost-usd "${{ inputs.max_cost_usd || '5.00' }}"
+
+      # `eval run --record` scores inline as it goes, but the documented
+      # pipeline keeps scoring separate for exactly the case here: re-reading
+      # the proposals on disk under the current matching rule before reporting,
+      # so a rule edit between records never reports off a stale scorecard.
+      - name: Score the corpus
+        run: |
+          cargo run --locked --features harness,github -- \
+            eval score
 
       - name: Compare against the committed baseline
         run: |
