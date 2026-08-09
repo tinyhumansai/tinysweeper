@@ -393,6 +393,57 @@ pub fn route(event: &str, payload: &Payload) -> Action {
     }
 }
 
+/// The pull requests a delivery invites auto-merge to reconsider, if any.
+///
+/// Every arm is a moment at which a refusal the policy made earlier might have
+/// stopped being true, and nothing else. There is no arm for `opened` or
+/// `synchronize`: a pull request that has just appeared or just moved has no
+/// checks on its new head yet, so evaluating it can only produce
+/// `CheckPending`, and the `check_suite` that follows a moment later is the
+/// same trigger with the evidence attached.
+///
+/// `None` means "not an auto-merge trigger" and leaves the delivery to the
+/// rest of [`route`]. An empty list is never returned, so a check event naming
+/// no pull request falls through to the ordinary path rather than queueing a
+/// job with nothing to do.
+fn automerge_trigger(event: &str, payload: &Payload) -> Option<Vec<u64>> {
+    let numbers = match event {
+        // A check finishing is the commonest reason a `CheckPending` or
+        // `CheckFailing` refusal has just expired.
+        "check_run" | "check_suite" if payload.action == "completed" => {
+            let check = match event {
+                "check_run" => payload.check_run.as_ref(),
+                _ => payload.check_suite.as_ref(),
+            }?;
+            check
+                .pull_requests
+                .iter()
+                .map(|pr| pr.number)
+                .collect::<Vec<_>>()
+        }
+        // An approval arriving, or a changes-request being dismissed or
+        // superseded. This is the event tinysweeper's own approving review
+        // produces, which is what makes the bot-guard exemption above matter.
+        "pull_request_review" if matches!(payload.action.as_str(), "submitted" | "dismissed") => {
+            vec![payload.pull_request.as_ref()?.number]
+        }
+        // Labels are the human opt-in and the human veto: `allow_labels` and
+        // `block_labels` are both evaluated from them, so adding or removing
+        // one is a direct instruction to reconsider.
+        "pull_request"
+            if matches!(
+                payload.action.as_str(),
+                "labeled" | "unlabeled" | "ready_for_review"
+            ) =>
+        {
+            vec![payload.pull_request.as_ref()?.number]
+        }
+        _ => return None,
+    };
+
+    (!numbers.is_empty()).then_some(numbers)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
