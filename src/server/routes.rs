@@ -16,6 +16,7 @@ use futures::FutureExt;
 use serde_json::json;
 use tokio::sync::Semaphore;
 
+use crate::automerge::types::Outcome;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::forge::RepoId;
