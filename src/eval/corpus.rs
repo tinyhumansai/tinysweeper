@@ -330,10 +330,9 @@ fn validate(case: &Case, path: &Path) -> std::result::Result<(), Vec<String>> {
     }
 }
 
-/// Read one frozen fixture.
-fn read_fixture(path: &Path) -> Result<Fixture> {
-    let raw = std::fs::read_to_string(path).map_err(|err| Error::path(path, err))?;
-    let fixture: Fixture = serde_json::from_str(&raw)
+/// Parse a frozen fixture, checked against the invariants it must hold.
+fn parse_fixture(raw: &str, path: &Path) -> Result<Fixture> {
+    let fixture: Fixture = serde_json::from_str(raw)
         .map_err(|err| Error::path(path, format!("not a fixture: {err}")))?;
     if fixture.pull_request.head_sha.trim().is_empty() {
         return Err(Error::path(
