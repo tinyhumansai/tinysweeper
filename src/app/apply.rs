@@ -164,6 +164,55 @@ pub async fn apply(
     Ok(())
 }
 
+/// Post or update the change-map comment.
+///
+/// One comment per pull request, found by its marker and edited in place. The
+/// alternative — a fresh comment per push — turns a diagram into a scroll bar,
+/// and the diagram of a two-push-old head is not a diagram of the pull request.
+///
+/// Writes nothing at all when the map says nothing worth saying: a single
+/// component with nothing reaching out of it is a box, and a comment containing
+/// one box is noise with a picture in it.
+async fn publish_overview(
+    read: &dyn ForgeRead,
+    write: &dyn ForgeWrite,
+    config: &Config,
+    proposal: &Proposal,
+) -> Result<()> {
+    if !config.overview.enabled {
+        return Ok(());
+    }
+    let Some(map) = &proposal.overview else {
+        return Ok(());
+    };
+    let Some(body) = crate::overview::comment(map) else {
+        return Ok(());
+    };
+
+    let repo = RepoId::parse(&proposal.repo)
+        .ok_or_else(|| Error::Forge(format!("`{}` is not owner/name", proposal.repo)))?;
+
+    // Ours by marker *and* by author. The marker alone is not enough: a
+    // contributor can copy it into their own comment, and editing someone
+    // else's comment because it quotes one of our markers would be a write we
+    // were tricked into. The forge fills in the author on the way out; an
+    // adapter that leaves it empty falls through to posting a new comment,
+    // which is the harmless direction to be wrong in.
+    let existing = read
+        .comments(&repo, proposal.number)
+        .await?
+        .into_iter()
+        .find(|comment| comment.body.contains(crate::overview::MARKER) && comment.own);
+
+    match existing {
+        Some(comment) => write.update_comment(&repo, comment.id, &body).await,
+        None => write
+            .create_comment(&repo, proposal.number, &body)
+            .await
+            .map(|_| ()),
+    }
+}
+
 /// Decide how to submit the review.
 ///
 /// `previous` is tinysweeper's own last verdict on this pull request, if any.
