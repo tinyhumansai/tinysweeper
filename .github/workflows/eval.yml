@@ -53,6 +53,7 @@ jobs:
           # must never be able to read a GITHUB_TOKEN out of the checkout's git
           # config. The workflow needs no authenticated git at all.
           persist-credentials: false
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
