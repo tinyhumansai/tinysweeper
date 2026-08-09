@@ -86,7 +86,17 @@ pub fn score(case: &Case, proposal: &Proposal, wall: Duration) -> CaseScore {
             continue;
         }
 
-        match case.expected.iter().find(|e| matches(e, finding)) {
+        // Prefer an expectation nothing has claimed yet. Two labels can both
+        // match one finding — `lines: None` and no `must_mention` matches the
+        // whole file, and `LINE_TOLERANCE` widens line-fenced expectations —
+        // so taking the first match would report the second label as missed
+        // while the finding that satisfies it sits in `judged` as a duplicate.
+        let chosen = case
+            .expected
+            .iter()
+            .find(|e| matches(e, finding) && !claimed.contains_key(e.id.as_str()))
+            .or_else(|| case.expected.iter().find(|e| matches(e, finding)));
+        match chosen {
             Some(expected) => {
                 let count = claimed.entry(expected.id.as_str()).or_insert(0);
                 *count += 1;
