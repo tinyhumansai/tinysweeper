@@ -269,6 +269,7 @@ impl Model for Cassette {
         }
 
         if self.mode == Mode::Strict {
+            state.misses += 1;
             return Err(Error::Model(format!(
                 "cassette miss in {}: no recorded answer for a `{}` call to `{}` (key {key}). \
                  The prompt changed since this was recorded — re-record the corpus, or replay \
