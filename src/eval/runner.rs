@@ -139,25 +139,26 @@ pub async fn run(
         let score = match outcome {
             Ok(proposal) => {
                 spent += proposal.cost_usd;
-                write_proposal(&options.out, &case.case.id, &proposal)?;
                 if strict_misses > 0 {
                     // The review closed, but a strict replay that could not
                     // answer a call means a lane worked around the miss and
                     // reported "could not be reviewed". Scoring that proposal as
                     // if the answers were real would measure a prompt nobody
                     // asked — this is the staleness the corpus exists to make
-                    // loud, so the case is failed instead.
-                    crate::eval::score::failed(
-                        &case.case,
-                        format!(
-                            "{} call(s) had no recorded answer; re-record the corpus with \
-                             `eval run --record`, or replay loosely and accept the numbers \
-                             describe the old prompt",
-                            strict_misses
-                        ),
-                        wall,
-                    )
+                    // loud. No proposal is written: a proposal on disk is what a
+                    // later `eval score` trusts, and re-scoring a stale replay
+                    // as a normal result would silently undo the failure. A
+                    // marker is persisted instead, which `rescore` reproduces.
+                    let reason = format!(
+                        "{} call(s) had no recorded answer; re-record the corpus with \
+                         `eval run --record`, or replay loosely and accept the numbers \
+                         describe the old prompt",
+                        strict_misses
+                    );
+                    write_failure(&options.out, &case.case.id, &reason)?;
+                    crate::eval::score::failed(&case.case, reason, wall)
                 } else {
+                    write_proposal(&options.out, &case.case.id, &proposal)?;
                     crate::eval::score::score(&case.case, &proposal, wall)
                 }
             }
