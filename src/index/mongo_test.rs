@@ -478,33 +478,54 @@ live_test!(
 );
 
 #[test]
-fn the_lexical_arm_stays_under_lucene_s_clause_limit() {
-    // mongot ships `maxClauseCount = 1024` and expands a `text` operator into
-    // one clause per term per path. The retrieval query is bounded in
-    // characters, not terms, so a large diff produced several hundred
-    // identifiers, which across three paths overran the limit and failed the
-    // whole aggregation — every review on a real repository silently degraded
-    // to diff-only. Found in deployment, not in a test, which is why this one
-    // exists.
-    let many: String = (0..900)
-        .map(|i| format!("identifier_{i}"))
+fn the_budget_counts_analyzer_tokens_not_words() {
+    // The hole in counting words: the analyzer splits on punctuation, so one
+    // path is several clauses. 400 three-token paths must not all fit.
+    let paths: String = (0..400)
+        .map(|i| format!("src/harness/mod{i}.rs"))
         .collect::<Vec<_>>()
         .join(" ");
-    let capped = lexical_terms(&many);
+    let capped = lexical_terms(&paths);
 
-    let terms = capped.split_whitespace().count();
-    assert_eq!(terms, MAX_LEXICAL_TERMS);
+    let cost: usize = capped.split_whitespace().map(analyzer_tokens).sum();
+    assert!(cost <= MAX_LEXICAL_TERMS, "spent {cost}");
+    assert!(cost * 3 < 1024, "three paths at {cost} tokens overruns Lucene");
     assert!(
-        terms * 3 < 1024,
-        "three paths at {terms} terms is {} clauses",
-        terms * 3
+        capped.split_whitespace().count() < 400,
+        "a path-heavy query must be truncated: {capped}"
     );
 }
 
 #[test]
+fn an_identifier_survives_intact() {
+    // The regression this replaces: splitting on every non-alphanumeric emitted
+    // `chunk id` for `chunk_id`. Exact-identifier matching is the whole reason
+    // the lexical arm sits next to a dense one, so fragmenting the identifiers
+    // defeats the arm while satisfying the clause limit.
+    let capped = lexical_terms("chunk_id resolve_range sha256 src/index/mongo.rs");
+    assert!(capped.contains("chunk_id"), "{capped}");
+    assert!(capped.contains("resolve_range"), "{capped}");
+    assert!(capped.contains("sha256"), "{capped}");
+    assert!(capped.contains("src/index/mongo.rs"), "{capped}");
+}
+
+#[test]
+fn an_underscore_costs_one_token_and_a_slash_costs_several() {
+    assert_eq!(analyzer_tokens("chunk_id"), 1);
+    assert_eq!(analyzer_tokens("sha256"), 1);
+    assert_eq!(analyzer_tokens("src/index/mongo.rs"), 4);
+    assert_eq!(analyzer_tokens("---"), 0);
+}
+
+#[test]
+fn a_repeated_word_spends_only_one_clause() {
+    // BM25 gains nothing from the same term twice, and a clause is exactly what
+    // the limit is measured in.
+    let capped = lexical_terms("chunk Chunk chunk_id chunk");
+    assert_eq!(capped.split_whitespace().count(), 2, "{capped}");
+}
+
+#[test]
 fn a_short_query_is_left_alone() {
-    assert_eq!(
-        lexical_terms("resolve range anchor"),
-        "resolve range anchor"
-    );
+    assert_eq!(lexical_terms("resolve range anchor"), "resolve range anchor");
 }
