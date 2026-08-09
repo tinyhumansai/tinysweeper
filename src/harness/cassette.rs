@@ -292,6 +292,7 @@ impl Model for Cassette {
         match self.ordered.get(cursor) {
             Some(take) => {
                 state.loose_hits += 1;
+                state.cost_usd += take.usage.cost_usd;
                 Ok(replayed(take))
             }
             None => Err(Error::Model(format!(
