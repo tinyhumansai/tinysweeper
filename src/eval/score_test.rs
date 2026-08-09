@@ -63,6 +63,7 @@ fn finding(path: &str, line: u64, title: &str, body: &str) -> Finding {
         title: title.into(),
         body: body.into(),
         suggestion: None,
+        applicable: None,
         late: false,
         identity: Some("abcd1234".into()),
     }
