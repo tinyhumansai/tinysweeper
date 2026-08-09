@@ -35,6 +35,17 @@ request_changes_at = "high"
 # second is not submitted while the first still stands.
 approve_when_clean = true
 
+# The change-map comment: one diagram of what the pull request touches and what
+# it reaches, edited in place on every push. On by default, which is safe in a
+# way most defaults here are not — it makes no model call, so it costs nothing,
+# and it posts exactly one comment however many times the branch is pushed.
+[overview]
+enabled = true
+max_components = 10
+max_impacted = 6
+max_links = 24
+max_paths_per_component = 12
+
 [paths]
 ignore = [
     "**/*.lock",
