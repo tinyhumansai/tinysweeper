@@ -318,26 +318,6 @@ fn replayed(take: &Take) -> ModelResponse {
 /// returns an array that does not implement `LowerHex`, and a hex crate is not
 /// worth a dependency in the offline default build.
 pub fn key(request: &ModelRequest) -> String {
-    if std::env::var_os("TS_DUMP_KEY").is_some() {
-        let mut dbg = String::new();
-        dbg.push_str(&format!("model: {:?}\n", request.model));
-        dbg.push_str(&format!("schema_name: {:?}\n", request.schema_name));
-        dbg.push_str(&format!("schema: {}\n", request.schema.to_string()));
-        dbg.push_str(&format!("max_tokens: {}\n", request.max_tokens));
-        for (i, m) in request.messages.iter().enumerate() {
-            dbg.push_str(&format!("msg[{i}] {}: {:?}\n", role_name(m), m.content));
-        }
-        let log = "/tmp/ts-key-dump.txt";
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log)
-            .and_then(|mut f| {
-                use std::io::Write;
-                f.write_all(dbg.as_bytes())
-            })
-            .ok();
-    }
     let mut hasher = Sha256::new();
     hasher.update(request.model.as_bytes());
     hasher.update(b"\0");
