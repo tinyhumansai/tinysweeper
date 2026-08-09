@@ -27,18 +27,17 @@ pub const MAX_COMMENTS: usize = 10;
 pub const SYSTEM: &str = "\
 You are tinysweeper, triaging one issue in a software repository.
 
-Return four things:
+Return three things:
 
 1. `type` — what kind of work this is: bug (something is broken), feature (a
    request, an idea, or new functionality), task (a specific piece of work that
    is neither). Choose task when neither of the other two clearly fits.
-2. `priority` — how soon a maintainer should act: p0 (drop everything), p1
-   (next), p2 (soon), p3 (someday).
-3. `severity` — how bad the reported problem is when it happens: critical
-   (data loss, a security hole, an outage), high (a broken core path with no
-   workaround), medium (broken, with a workaround), low (cosmetic, or an
-   enhancement request).
-4. Optionally, prior art: either `duplicate_of`, an issue number that already
+2. `priority` — how soon a maintainer should act, weighing how bad the problem
+   is against how many people meet it: p0 (drop everything: data loss, a
+   security hole, an outage), p1 (next: a broken core path with no
+   workaround), p2 (soon: broken, with a workaround), p3 (someday: cosmetic, or
+   an enhancement request).
+3. Optionally, prior art: either `duplicate_of`, an issue number that already
    reports the same thing, or `resolved_by`, a pull request number that already
    fixed it. Give at most one, and give `confidence` for it.
 
@@ -64,17 +63,16 @@ pub fn schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "priority", "severity", "summary"],
+        "required": ["type", "priority", "summary"],
         "properties": {
             // A closed enum, and deliberately not the organisation's own type
             // names: the classification is fixed vocabulary, and mapping it
             // onto whatever types exist is deterministic code's job.
             "type": {"type": "string", "enum": ["bug", "feature", "task"]},
+            // One ordered axis and no second one. `severity` used to sit beside
+            // this and mapped onto it one for one, so it cost a field on every
+            // call and told triage nothing `priority` had not already said.
             "priority": {"type": "string", "enum": ["p0", "p1", "p2", "p3"]},
-            "severity": {
-                "type": "string",
-                "enum": ["critical", "high", "medium", "low"]
-            },
             "summary": {"type": "string"},
             "duplicate_of": {"type": ["integer", "null"], "minimum": 1},
             "resolved_by": {"type": ["integer", "null"], "minimum": 1},
@@ -138,6 +136,28 @@ pub fn suffix(issue: &Issue, comments: &[IssueComment], candidates: &[Candidate]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_schema_never_asks_for_a_severity() {
+        // The regression this exists to stop. `severity` restated `priority`
+        // one for one, so asking for it paid for a field nothing reads — and
+        // an answer that carried one re-created labels this repository pruned.
+        let schema = schema();
+
+        assert!(schema["properties"].get("severity").is_none(), "{schema:#}");
+        assert!(
+            !schema["required"]
+                .as_array()
+                .expect("required is a list")
+                .iter()
+                .any(|field| field == "severity"),
+            "{schema:#}"
+        );
+        assert!(
+            !SYSTEM.to_ascii_lowercase().contains("severity"),
+            "the prefix still asks the model for a severity"
+        );
+    }
 
     /// Assembled at runtime rather than written as a literal: a fixture that
     /// looks like a credential has had a push rejected here before.

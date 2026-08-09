@@ -23,6 +23,12 @@ while and a fixed issue kept its old `severity: high` beside its new
 There is now a single ordered axis, `priority: p0` … `p3`, coloured cool to hot
 so a list reads at a glance without anyone learning the scheme.
 
+The code agrees: `labels::vocabulary` offers only `priority:`, the triage schema
+no longer asks a model for a severity, and pull request triage derives the
+priority from the review's own worst finding and emits that one label.
+`no_severity_label_is_ever_planned` fails if a `severity:` label is ever planned
+again — a run that emitted one would re-create labels `--prune` has deleted.
+
 ## Nothing here duplicates a native field
 
 Bug, Feature and Task are **GitHub issue types**, set on the issue itself, so

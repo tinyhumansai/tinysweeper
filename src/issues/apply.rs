@@ -224,8 +224,8 @@ mod tests {
         // with both labels, which a human notices; the other order leaves it
         // with neither, which reads as a triage that did nothing.
         let superseding = TriagePlan {
-            remove_labels: vec!["severity: high".into()],
-            add_labels: vec!["severity: low".into()],
+            remove_labels: vec!["priority: p1".into()],
+            add_labels: vec!["priority: p3".into()],
             comment: None,
             ..plan()
         };

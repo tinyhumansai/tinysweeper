@@ -33,5 +33,5 @@ pub use crate::issues::apply::apply_plan;
 pub use crate::issues::close::{CloseInputs, CloseOutcome, Referenced, decide};
 pub use crate::issues::triage::{TriageOutcome, triage};
 pub use crate::issues::types::{
-    ClaimKind, ClosePlan, DuplicateClaim, IssueSeverity, IssueVerdict, Priority, TriagePlan,
+    ClaimKind, ClosePlan, DuplicateClaim, IssueVerdict, Priority, TriagePlan,
 };
