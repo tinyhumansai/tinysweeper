@@ -373,6 +373,53 @@ pub async fn sync_paths(
     Ok(store.upsert_nodes(&nodes).await? + store.upsert_edges(&edges).await?)
 }
 
+/// The files an incremental rebuild has to re-parse, given what changed.
+///
+/// Not just the changed ones, and the reason is
+/// [`GraphStore::delete_paths`]: it removes every edge *touching* a path,
+/// including the inbound ones written by files that did not change — which are
+/// exactly the edges a blast radius is made of. Re-parsing the changed files'
+/// existing graph neighbours puts them back. It is still a few dozen files
+/// where a full rebuild is thousands.
+///
+/// The residual gap, stated because it is real and not fixable at this price:
+/// a file that did not change and had *no* edge to the changed file gets no new
+/// edge either, so a call that only now resolves — because this push added the
+/// symbol it names — is missed until either file is touched again. Catching it
+/// would mean parsing every file on every push, which is the cost this exists
+/// to avoid.
+///
+/// Removed paths seed the walk, so their dependents are re-parsed and stop
+/// pointing at a file that is gone, but are never returned for parsing
+/// themselves.
+pub async fn rebuild_set(
+    store: &dyn GraphStore,
+    repo_id: &str,
+    changed: &[String],
+    removed: &[String],
+) -> Result<BTreeSet<String>> {
+    let mut seeds: Vec<String> = changed.to_vec();
+    seeds.extend(removed.iter().cloned());
+    seeds.sort();
+    seeds.dedup();
+
+    let mut set: BTreeSet<String> = changed.iter().cloned().collect();
+    if seeds.is_empty() {
+        return Ok(set);
+    }
+    let neighbourhood = crate::graph::traverse::walk(
+        store,
+        repo_id,
+        &crate::graph::traverse::NeighbourQuery::new(seeds).hops(1),
+    )
+    .await?;
+    set.extend(neighbourhood.nodes.into_iter().map(|node| node.path));
+    for gone in removed {
+        set.remove(gone);
+    }
+    Ok(set)
+}
+
 fn endpoint_belongs_to(endpoint: &str, path: &str) -> bool {
     endpoint == path
         || endpoint
