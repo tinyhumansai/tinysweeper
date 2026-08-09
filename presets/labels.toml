@@ -57,6 +57,16 @@ name = "tinysweeper:manual-only"
 color = "5319e7"
 description = "No automatic action. A human triggers anything that happens here."
 
+# The auto-merge opt-in. Created by the sync script but never applied by the
+# bot, and that asymmetry is the point: `automerge.allow_labels` reads it as a
+# person's authorisation to merge without waiting for them, so a bot that could
+# apply it would be authorising itself. Nothing in the triage vocabulary above
+# can produce this name.
+[[labels]]
+name = "automerge"
+color = "0e8a16"
+description = "Merge this once every check is green and nothing objects. Applied by people only."
+
 # Workflow labels GitHub ships with, kept because people use them and they say
 # something no other field does.
 [[labels]]
