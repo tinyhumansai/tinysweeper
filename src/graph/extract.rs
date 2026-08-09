@@ -479,11 +479,25 @@ fn rust_test_attribute(node: Node, source: &[u8]) -> bool {
     while let Some(current) = sibling {
         match current.kind() {
             "attribute_item" => {
-                if text(current, source)
-                    .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-                    .any(|token| token == "test")
+                // The attribute's own path decides, not every word its text
+                // contains: `#[cfg(feature = "test")]` sets a feature flag and
+                // `#[serde(rename = "test")]` names a serialised field, and
+                // neither puts the item in a test scope. A token scan could
+                // not tell them apart — `test` sat inside a string literal.
+                if let Some(attribute) = current.named_child(0)
+                    && let Some(path) = attribute.named_child(0)
                 {
-                    return true;
+                    let path = text(path, source);
+                    if path == "test" || path.ends_with("::test") {
+                        return true;
+                    }
+                    if (path == "cfg" || path.ends_with("::cfg"))
+                        && attribute
+                            .child_by_field_name("arguments")
+                            .is_some_and(|args| bare_test_identifier(args, source))
+                    {
+                        return true;
+                    }
                 }
             }
             "line_comment" | "block_comment" | "attribute" => {}
@@ -492,6 +506,21 @@ fn rust_test_attribute(node: Node, source: &[u8]) -> bool {
         sibling = current.prev_sibling();
     }
     false
+}
+
+/// Whether a `cfg(..)` argument list names the bare `test` identifier.
+///
+/// `cfg(test)` holds one; `cfg(feature = "test")` does not — there the word
+/// sits inside a string literal, which selects nothing and must not count.
+/// Wrapped predicates are walked so `cfg(all(test, ...))` still counts; only
+/// identifiers qualify, so no recursion can reach the inside of a literal.
+fn bare_test_identifier(node: Node, source: &[u8]) -> bool {
+    if node.kind() == "identifier" {
+        return text(node, source) == "test";
+    }
+    let mut walker = node.walk();
+    node.named_children(&mut walker)
+        .any(|child| bare_test_identifier(child, source))
 }
 
 /// Pull the specifier and bound names out of one import statement.
