@@ -41,17 +41,6 @@ pub struct Triage {
 /// are never skipped: the lane's job for them is adjudication, and a scanner
 /// match is exactly the evidence that makes a generated file worth a look.
 pub fn triage(diffs: &[FileDiff], forced: &[&str]) -> Triage {
-    // RED baseline: today's behaviour, every changed file in diff order.
-    let _ = (forced, skip_reason as fn(&str) -> Option<&'static str>, priority as fn(&FileDiff) -> i32);
-    return Triage {
-        review: diffs
-            .iter()
-            .filter(|d| !d.changed_lines.is_empty())
-            .map(|d| d.path.clone())
-            .collect(),
-        skipped: Vec::new(),
-    };
-    #[allow(unreachable_code)]
     let mut scored: Vec<(i32, String)> = Vec::new();
     let mut skipped = Vec::new();
 
