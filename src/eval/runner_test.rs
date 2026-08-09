@@ -250,6 +250,16 @@ async fn a_stale_cassette_fails_the_case_rather_than_scoring_an_old_prompt() {
         score.error
     );
     assert_eq!(score.missed, ["E1"], "a failed review found nothing");
+
+    // The failure must be durable, or a later `eval score` would silently
+    // re-score the stale replay as a normal result the run never produced.
+    assert!(
+        !out.join("ts-0001/proposal.json").exists(),
+        "a stale replay must not leave a rescoreable proposal behind"
+    );
+    let rescored = rescore(&corpus, &out).expect("rescoring is free");
+    let error = rescored[0].error.as_deref().expect("must stay failed");
+    assert!(error.contains("re-record"), "{error}");
 }
 
 #[tokio::test]
