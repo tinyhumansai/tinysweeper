@@ -119,6 +119,10 @@ max_tokens = 16000
 # 23k-token diff with a demanding system prompt, both configured models spend
 # reasoning like this:
 #
+# `max_tokens` below is the ceiling each *run* was given, not the shipped
+# value; the shipped budget is 16000, which is why the $max_tokens$ this file
+# sets clears the floor this change validates.
+#
 #   model               effort  max_tokens  reasoning  content
 #   z-ai/glm-5.2        high      8000        8000     empty, finish=length
 #   z-ai/glm-5.2        low       8000        8000     empty, finish=length
