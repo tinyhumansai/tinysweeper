@@ -146,15 +146,11 @@ impl Resolver {
             return Resolution::Resolved(vec![hit]);
         }
 
-        // `java.*`, `javax.*` and `jdk.*` are the standard library by
-        // specification, not by convention, so they are external with
-        // certainty rather than "we could not find it".
-        if specifier.starts_with("java.")
-            || specifier.starts_with("javax.")
-            || specifier.starts_with("jdk.")
-        {
-            return Resolution::Unresolved(UnresolvedReason::External);
-        }
+        // Every unmatched Java specifier is external, never missing: the class
+        // is either the standard library (`java.*`, `javax.*`, `jdk.*` —
+        // external by specification) or a third-party jar (external by
+        // convention). The two are not told apart because neither is a broken
+        // reference this repository could have resolved.
         Resolution::Unresolved(UnresolvedReason::External)
     }
 
