@@ -594,7 +594,10 @@ mod tests {
             ".env.production",
             ".secrets.baseline",
         ] {
-            assert!(is_supply_chain_file(path), "{path} was not treated as supply chain");
+            assert!(
+                is_supply_chain_file(path),
+                "{path} was not treated as supply chain"
+            );
         }
     }
 
