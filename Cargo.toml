@@ -100,7 +100,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 default = ["treesitter"]
 # The tinyagents-backed model provider (OpenRouter / Moonshot / MiniMax, all
 # one OpenAI-compatible code path).
-harness = ["dep:tinyagents"]
+harness = ["dep:tinyagents", "dep:reqwest"]
 # The real GitHub adapter behind the `Forge` port.
 github = ["dep:octocrab", "dep:reqwest"]
 # The webhook server: `tinysweeper serve`.

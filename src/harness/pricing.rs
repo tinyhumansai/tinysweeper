@@ -100,6 +100,20 @@ const EMBED_PRICES: &[(&str, f64)] = &[
     ("voyage/voyage-3-large", 0.18),
     ("openai/text-embedding-3-small", 0.02),
     ("openai/text-embedding-3-large", 0.13),
+    // Through the OpenRouter gateway. Only a fallback: the gateway reports the
+    // cost it actually charged and `OpenRouterEmbedder` prefers that, so these
+    // are what a response missing its `usage` block falls back to. Prices read
+    // from the gateway's own model listing.
+    ("openrouter/openai/text-embedding-3-small", 0.02),
+    ("openrouter/openai/text-embedding-3-large", 0.13),
+    ("openrouter/voyageai/voyage-4", 0.06),
+    ("openrouter/voyageai/voyage-4-lite", 0.02),
+    ("openrouter/voyageai/voyage-4-large", 0.12),
+    ("openrouter/mistralai/codestral-embed-2505", 0.15),
+    ("openrouter/qwen/qwen3-embedding-8b", 0.01),
+    ("openrouter/qwen/qwen3-embedding-4b", 0.02),
+    ("openrouter/baai/bge-m3", 0.01),
+    ("openrouter/google/gemini-embedding-001", 0.15),
 ];
 
 /// The price of `model`, when it is known.

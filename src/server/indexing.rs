@@ -32,12 +32,12 @@ use crate::error::{Error, Result};
 use crate::forge::RepoId;
 use crate::graph::types::SourceFile;
 use crate::index::mongo::MongoIndex;
-use crate::index::provider::ProviderEmbedder;
 use crate::index::types::EmbedSignature;
 use crate::indexer::fetch::Checkout;
 use crate::indexer::mongo::MongoManifest;
 use crate::indexer::run::Indexer;
 use crate::indexer::types::IndexOutcome;
+use crate::ports::embed::Embedder;
 
 /// Which host repositories are fetched from.
 ///
@@ -70,7 +70,7 @@ const MAX_GRAPH_FILE_BYTES: u64 = 512 * 1024;
 /// handled at every call site.
 pub struct IndexBackend {
     /// The provider-backed embedder. Its signature partitions the index.
-    pub embedder: Arc<ProviderEmbedder>,
+    pub embedder: Arc<dyn Embedder>,
     /// Every retrieval store, over the same database as `server::store`.
     pub index: Arc<MongoIndex>,
     /// The freshness record and the claim.
@@ -96,10 +96,10 @@ impl IndexBackend {
     /// choice and must not be papered over as "retrieval off" — a silently
     /// unindexed reviewer still posts reviews, just worse ones.
     pub async fn open(config: &Config) -> Result<Option<Self>> {
-        let Some(embedder) = ProviderEmbedder::from_config(&config.embeddings)? else {
+        let Some(embedder) = crate::index::embedder_from_config(&config.embeddings)? else {
             return Ok(None);
         };
-        let signature = crate::ports::embed::Embedder::signature(&embedder);
+        let signature = embedder.signature();
 
         let index = MongoIndex::from_env().await?;
         // The boot assertion, on the collection reviews actually query. A
@@ -110,7 +110,7 @@ impl IndexBackend {
         let manifest = MongoManifest::connect(&mongo_uri()?, &mongo_db()).await?;
 
         Ok(Some(Self {
-            embedder: Arc::new(embedder),
+            embedder,
             index: Arc::new(index),
             manifest: Arc::new(manifest),
             signature,
