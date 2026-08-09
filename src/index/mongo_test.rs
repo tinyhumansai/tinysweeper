@@ -521,11 +521,39 @@ fn an_underscore_costs_one_token_and_a_slash_costs_several() {
 }
 
 #[test]
-fn a_repeated_word_spends_only_one_clause() {
-    // BM25 gains nothing from the same term twice, and a clause is exactly what
-    // the limit is measured in.
-    let capped = lexical_terms("chunk Chunk chunk_id chunk");
-    assert_eq!(capped.split_whitespace().count(), 2, "{capped}");
+fn a_repeated_word_spends_no_budget() {
+    // A weaker version of this asserted on `chunk Chunk chunk_id chunk`, which
+    // passes under a plain whitespace splitter and so guarded nothing. This
+    // fails unless repeats are genuinely free: the budget is filled with
+    // distinct words, then each is repeated. Without dedupe the repeats spend
+    // the budget and the tail is truncated away.
+    let distinct: Vec<String> = (0..MAX_LEXICAL_TERMS).map(|i| format!("word{i}")).collect();
+    let with_repeats = format!("{} {}", distinct.join(" "), distinct.join(" "));
+
+    let capped = lexical_terms(&with_repeats);
+    let terms: Vec<&str> = capped.split_whitespace().collect();
+
+    assert_eq!(
+        terms.len(),
+        MAX_LEXICAL_TERMS,
+        "every distinct word survives"
+    );
+    assert_eq!(
+        terms.last(),
+        Some(&distinct[MAX_LEXICAL_TERMS - 1].as_str()),
+        "the tail must not be truncated by its own repeats: {capped}"
+    );
+}
+
+#[test]
+fn a_repeat_is_matched_case_insensitively() {
+    // The analyzer folds case, so `Chunk` and `chunk` are one clause.
+    assert_eq!(
+        lexical_terms("chunk Chunk CHUNK")
+            .split_whitespace()
+            .count(),
+        1
+    );
 }
 
 #[test]
