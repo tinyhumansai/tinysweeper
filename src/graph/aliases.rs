@@ -96,6 +96,9 @@ impl AliasConfig {
         ordered.sort_by_key(|f| (f.path.matches('/').count(), f.path.clone()));
 
         for file in ordered {
+            if !is_alias_config(&file.path) {
+                continue;
+            }
             let name = file.path.rsplit('/').next().unwrap_or(&file.path);
             let dir = parent_dir(&file.path);
             match name {
