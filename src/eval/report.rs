@@ -102,7 +102,10 @@ pub fn compare(current: &Scorecard, baseline: &Scorecard, allow_drift: bool) -> 
 }
 
 /// Render a scorecard as markdown, optionally against a baseline.
-pub fn markdown(card: &Scorecard, baseline: Option<&Scorecard>) -> String {
+///
+/// `allow_drift` reaches `compare` verbatim so the rendered verdict never
+/// contradicts the exit status of `eval report --gate --allow-config-drift`.
+pub fn markdown(card: &Scorecard, baseline: Option<&Scorecard>, allow_drift: bool) -> String {
     let mut out = String::new();
 
     out.push_str("# Review quality\n\n");
