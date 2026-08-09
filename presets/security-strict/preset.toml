@@ -36,11 +36,6 @@ Flag running as root, unpinned base image tags, secrets baked into layers, and
 # Last, so every entry above still wins for the paths it names. Scoped to the
 # security lane: the taxonomy is precision there and pure token cost anywhere
 # else.
-[[path_instructions]]
-glob = "**/*"
-rules = "security"
-lanes = ["security"]
-
 [lanes.critique]
 model = "deep"
 
