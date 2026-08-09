@@ -25,17 +25,74 @@ use crate::ports::graph::GraphStore;
 /// configuration files carrying path aliases are what make the internal edges
 /// resolvable at all.
 pub fn build(repo_id: &str, files: &[SourceFile]) -> Result<RepoGraph> {
+    build_inner(repo_id, files, None, &[])
+}
+
+/// Build the graph for only `paths`, resolving against the rest of the tree.
+///
+/// The incremental counterpart to [`build`], and the two arguments it adds are
+/// both there for the same reason: parsing a subset of a repository answers
+/// repository-wide questions for the subset and nowhere else.
+///
+/// * `files` is still the **whole tree**. Text is only read for what will be
+///   parsed and for the alias configuration; every other entry may carry an
+///   empty body, because what resolution needs from an untouched file is that
+///   its path exists.
+/// * `known` is the stored symbol table — [`GraphStore::symbols`] — which is
+///   what lets a call in a re-parsed file resolve into a file that was not
+///   re-parsed. Entries for `paths` are ignored in favour of what was just
+///   parsed, so a deleted symbol does not resurrect itself.
+///
+/// [`RepoGraph::coverage`] describes the parsed subset, not the repository. A
+/// partial run's resolution rate is not the repository's, and reporting it as
+/// though it were would make the one metric that says whether the resolver
+/// works depend on which files a push happened to touch.
+pub fn build_paths(
+    repo_id: &str,
+    files: &[SourceFile],
+    paths: &[String],
+    known: &[GraphNode],
+) -> Result<RepoGraph> {
+    let wanted: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
+    build_inner(repo_id, files, Some(&wanted), known)
+}
+
+fn build_inner(
+    repo_id: &str,
+    files: &[SourceFile],
+    only: Option<&BTreeSet<&str>>,
+    known: &[GraphNode],
+) -> Result<RepoGraph> {
     let resolver = Resolver::new(files);
 
     let mut parsed: Vec<ParsedFile> = Vec::new();
     for file in files {
+        if only.is_some_and(|only| !only.contains(file.path.as_str())) {
+            continue;
+        }
         if let Some(one) = parse(file)? {
             parsed.push(one);
         }
     }
 
     // Repo-wide symbol table, built before any usage is resolved.
+    //
+    // Stored symbols go in first and freshly parsed ones after, so a file that
+    // was re-parsed contributes only what it defines *now*. Seeding from the
+    // store in the other order would leave a renamed function defined under
+    // both names until the next full rebuild.
     let mut defined_in: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let reparsed: BTreeSet<&str> = parsed.iter().map(|file| file.path.as_str()).collect();
+    for node in known {
+        let Some(symbol) = &node.symbol else { continue };
+        if reparsed.contains(node.path.as_str()) {
+            continue;
+        }
+        defined_in
+            .entry(symbol.clone())
+            .or_default()
+            .insert(node.path.clone());
+    }
     for file in &parsed {
         for definition in &file.defs {
             defined_in
