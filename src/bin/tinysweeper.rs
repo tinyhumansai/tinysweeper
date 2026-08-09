@@ -727,13 +727,15 @@ labelled_by = ""
     )
 }
 
-/// Escape one value for the `title = "..."` line of a case stub.
+/// Escape one value for a `"..."` line of a case stub.
 ///
 /// A pull request title is a single line, but it can still carry a quote, a
 /// backslash, or a tab — each of which would silently corrupt the TOML the
-/// stub guards. Escaping all of them keeps the file parseable whatever the
-/// title is; the crate's own `toml` module is not used because the stub is
-/// comment-rich and hand-shaped, and only this one value is interpolated.
+/// stub guards. `id` gets the same treatment for the same reason: it is
+/// operator input with no upstream validation. Escaping all of them keeps the
+/// file parseable whatever the value is; the crate's own `toml` module is not
+/// used because the stub is comment-rich and hand-shaped, and only these two
+/// values are interpolated.
 #[cfg(feature = "github")]
 fn toml_escape(value: &str) -> String {
     value
