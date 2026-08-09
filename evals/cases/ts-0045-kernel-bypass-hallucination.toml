@@ -6,10 +6,9 @@ labels = ["regression", "hallucination", "commits"]
 
 # The failure this guards is not a missed finding — it is a confident, invented
 # one. There is nothing here a reviewer *should* report, so the case scores as
-# noise measurement and the forbidden entries are the whole point. `exhaustive`
-# is asserted here (top-level, on the case, not under `[provenance]`) because
-# noise only counts when the case is `exhaustive` — that is the flag that
-# asserts every finding on this pull request is a false positive.
+# noise measurement and the forbidden entries are the whole point. Noise only
+# counts when the case is `exhaustive` — that is the flag that asserts every
+# finding on this pull request is a false positive.
 exhaustive = true
 
 [provenance]
