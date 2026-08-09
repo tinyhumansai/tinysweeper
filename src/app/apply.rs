@@ -466,6 +466,7 @@ mod tests {
     fn proposal(head: &str, findings: Vec<Finding>) -> Proposal {
         let highest_severity = findings.iter().map(|finding| finding.severity).max();
         Proposal {
+            overview: None,
             unreviewed: vec![],
             version: 1,
             repo: "tinyhumansai/tinysweeper".into(),
