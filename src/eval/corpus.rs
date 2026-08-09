@@ -167,7 +167,25 @@ pub fn load(root: &Path) -> Result<Corpus> {
             ));
             continue;
         }
-        let fixture = match read_fixture(&fixture_path) {
+        let fixture_raw = match std::fs::read_to_string(&fixture_path) {
+            Ok(raw) => raw,
+            Err(err) => {
+                problems.push(format!(
+                    "{} ({}): {}",
+                    path.display(),
+                    case.id,
+                    Error::path(&fixture_path, err)
+                ));
+                continue;
+            }
+        };
+        // The fixture's bytes are hashed before they are parsed, under the same
+        // rule as the case file: two baselines scored against different model
+        // input must not silently compare. The TOML names the fixture, so an
+        // edit to `fixtures/*.json` with an unchanged case file is exactly the
+        // prompt change the digest exists to make loud.
+        hasher.update(fixture_raw.as_bytes());
+        let fixture = match parse_fixture(&fixture_raw, &fixture_path) {
             Ok(fixture) => fixture,
             Err(err) => {
                 problems.push(format!("{} ({}): {err}", path.display(), case.id));
