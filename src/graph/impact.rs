@@ -168,6 +168,44 @@ impl Impact {
         }
     }
 
+    /// Fill the cap round-robin across relations rather than in priority order.
+    ///
+    /// Strict priority order looks right and fails on the commonest shape there
+    /// is: a well-tested function with twenty-six test callers spends the whole
+    /// block naming tests and never mentions the production code that would
+    /// break. A reviewer needs some of each far more than all of the first, so
+    /// each relation takes a turn, and only relations that have run out give up
+    /// their share. Within a relation, ids go in sorted order.
+    fn select(strongest: BTreeMap<&str, Relation>, max_reached: usize) -> Vec<Impacted> {
+        let mut queues: BTreeMap<Relation, Vec<&str>> = BTreeMap::new();
+        for (id, relation) in strongest {
+            queues.entry(relation).or_default().push(id);
+        }
+        let mut out = Vec::with_capacity(max_reached.min(queues.values().map(Vec::len).sum()));
+        let mut taken = 0;
+        while out.len() < max_reached && taken < usize::MAX {
+            let before = out.len();
+            for (relation, ids) in queues.iter_mut() {
+                if out.len() == max_reached {
+                    break;
+                }
+                if let Some(id) = ids.get(taken) {
+                    out.push(Impacted {
+                        id: (*id).to_string(),
+                        relation: *relation,
+                    });
+                }
+            }
+            // A whole round in which no queue still had an entry means every
+            // relation is exhausted; without this the loop would spin.
+            if out.len() == before {
+                break;
+            }
+            taken += 1;
+        }
+        out
+    }
+
     /// The block a lane is shown, or an empty string when there is nothing.
     ///
     /// Written as comment lines rather than prose because it sits in the same
