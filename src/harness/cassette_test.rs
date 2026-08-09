@@ -214,6 +214,57 @@ async fn an_exhausted_loose_cassette_says_how_far_it_got() {
 }
 
 #[tokio::test]
+async fn cost_usd_sums_every_answer_served_recorded_or_replayed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let live = Arc::new(MockModel::always(answer()).with_usage(Usage {
+        input_tokens: 100,
+        output_tokens: 20,
+        cached_tokens: 0,
+        embed_tokens: 0,
+        cost_usd: 0.01,
+    }));
+    let recorder = Cassette::record(live, dir.path());
+    recorder
+        .complete(request("z-ai/glm-5.2", "one"))
+        .await
+        .expect("records");
+    recorder
+        .complete(request("z-ai/glm-5.2", "two"))
+        .await
+        .expect("records");
+    assert_eq!(recorder.cost_usd(), 0.02);
+    recorder.flush().expect("flushes");
+
+    // Replay reports the same figure, because usage is replayed verbatim.
+    let player = Cassette::replay(dir.path(), Mode::Strict).expect("loads");
+    player
+        .complete(request("z-ai/glm-5.2", "one"))
+        .await
+        .expect("replays");
+    player
+        .complete(request("z-ai/glm-5.2", "two"))
+        .await
+        .expect("replays");
+    assert_eq!(player.cost_usd(), 0.02);
+
+    // A strict miss served no answer and must cost nothing — a failed case is
+    // charged only for what it actually used.
+    let miss_dir = tempfile::tempdir().expect("tempdir");
+    let recorder = Cassette::record(Arc::new(MockModel::always(answer())), miss_dir.path());
+    recorder
+        .complete(request("z-ai/glm-5.2", "known"))
+        .await
+        .expect("records");
+    recorder.flush().expect("flushes");
+    let strict = Cassette::replay(miss_dir.path(), Mode::Strict).expect("loads");
+    strict
+        .complete(request("z-ai/glm-5.2", "different"))
+        .await
+        .expect_err("must not serve the old answer");
+    assert_eq!(strict.cost_usd(), 0.0);
+}
+
+#[tokio::test]
 async fn calls_replay_in_the_order_they_were_made() {
     let dir = tempfile::tempdir().expect("tempdir");
     let live = MockModel::new()
