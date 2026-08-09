@@ -677,7 +677,7 @@ async fn automerge_inner_reporting(
         tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
     }
 
-    outcome
+    outcome.map(Some)
 }
 
 /// Whether a review may use what earlier cycles remembered.
