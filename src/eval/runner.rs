@@ -314,9 +314,26 @@ pub fn with_lanes(config: &Config, case: &LoadedCase) -> Config {
 fn write_proposal(out: &Path, id: &str, proposal: &Proposal) -> Result<()> {
     let dir = out.join(id);
     std::fs::create_dir_all(&dir).map_err(|err| crate::error::Error::path(&dir, err))?;
+    // A successful run supersedes a previously recorded failure of the case.
+    let _ = std::fs::remove_file(dir.join("failure.json"));
     let path = dir.join("proposal.json");
     let json = serde_json::to_string_pretty(proposal)?;
     std::fs::write(&path, json).map_err(|err| crate::error::Error::path(&path, err))
+}
+
+/// Persist that a case failed, where a later `eval score` can reproduce it.
+///
+/// The mirror of [`write_proposal`], and the two are mutually exclusive on
+/// disk. A strict replay that could not answer a call is not a measurement, so
+/// it must not leave a proposal behind that a later `eval score` would trust
+/// as one — the failure is what belongs there, and `rescore` prefers it.
+fn write_failure(out: &Path, id: &str, reason: &str) -> Result<()> {
+    let dir = out.join(id);
+    std::fs::create_dir_all(&dir).map_err(|err| crate::error::Error::path(&dir, err))?;
+    let _ = std::fs::remove_file(dir.join("proposal.json"));
+    let path = dir.join("failure.json");
+    std::fs::write(&path, serde_json::to_string(reason)?)
+        .map_err(|err| crate::error::Error::path(&path, err))
 }
 
 /// A short hash of everything about the configuration that can move a score.
