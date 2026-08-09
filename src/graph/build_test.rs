@@ -613,3 +613,313 @@ fn a_top_level_use_super_still_resolves_to_the_parent_module() {
         EdgeKind::Imports
     ));
 }
+
+// --- Inheritance and coverage edges -----------------------------------------
+
+#[test]
+fn an_implementation_is_reachable_inbound_from_the_trait_it_implements() {
+    // The blast radius a review wants: change `Store`, and the graph names
+    // every type that has to change with it — across files, which is where a
+    // similarity query has nothing to go on.
+    let graph = build(
+        REPO,
+        &files(&[
+            ("src/ports/store.rs", "pub trait Store {}\n"),
+            (
+                "src/mongo.rs",
+                "use crate::ports::store::Store;\npub struct Mongo;\nimpl Store for Mongo {}\n",
+            ),
+        ]),
+    )
+    .expect("builds");
+
+    assert!(
+        has_edge(
+            &graph,
+            "src/mongo.rs#Mongo",
+            "src/ports/store.rs#Store",
+            EdgeKind::Extends
+        ),
+        "no extends edge across the crate: {:?}",
+        graph.edges
+    );
+}
+
+#[test]
+fn a_test_that_calls_a_function_covers_it() {
+    let graph = build(
+        REPO,
+        &files(&[
+            (
+                "src/lib/math.ts",
+                "export function computeTotal(n: number[]): number { return n.length; }\n",
+            ),
+            (
+                "src/lib/math.test.ts",
+                "import { computeTotal } from './math';\n\
+                 it('adds', () => { computeTotal([]); });\n",
+            ),
+        ]),
+    )
+    .expect("builds");
+
+    assert!(
+        has_edge(
+            &graph,
+            "src/lib/math.test.ts",
+            "src/lib/math.ts#computeTotal",
+            EdgeKind::Tests
+        ),
+        "the suite covers nothing: {:?}",
+        graph.edges
+    );
+}
+
+#[test]
+fn production_code_never_claims_to_test_anything() {
+    // The failure this guards is the expensive one: a coverage edge out of
+    // non-test code would tell a reviewer a change is already exercised when
+    // nothing exercises it.
+    let graph = build(
+        REPO,
+        &files(&[
+            ("src/lib/math.ts", "export function total(): number { return 1; }\n"),
+            (
+                "src/app/page.ts",
+                "import { total } from '../lib/math';\nexport function render() { return total(); }\n",
+            ),
+        ]),
+    )
+    .expect("builds");
+
+    assert!(
+        !graph.edges.iter().any(|e| e.kind == EdgeKind::Tests),
+        "{:?}",
+        graph.edges
+    );
+}
+
+#[test]
+fn a_test_helper_called_by_a_test_is_not_reported_as_covered_code() {
+    // Both ends are test code. Recording that would make a test file look like
+    // the thing under test, and put test helpers in the blast radius of a
+    // production change.
+    let graph = build(
+        REPO,
+        &files(&[
+            (
+                "src/lib/support.test.ts",
+                "export function fixture(): number { return 1; }\n",
+            ),
+            (
+                "src/lib/math.test.ts",
+                "import { fixture } from './support.test';\nit('adds', () => { fixture(); });\n",
+            ),
+        ]),
+    )
+    .expect("builds");
+
+    assert!(
+        !graph.edges.iter().any(|e| e.kind == EdgeKind::Tests),
+        "{:?}",
+        graph.edges
+    );
+}
+
+#[test]
+fn this_repositorys_own_tests_cover_its_own_code() {
+    // Measured on the real tree rather than a fixture, for the same reason
+    // `this_repository_resolves_every_internal_import` is: the conventions
+    // being detected are this codebase's, and a fixture cannot fail when they
+    // drift.
+    let graph = build(REPO, &this_crate()).expect("builds");
+
+    let covered: std::collections::BTreeSet<&str> = graph
+        .edges
+        .iter()
+        .filter(|e| e.kind == EdgeKind::Tests)
+        .map(|e| e.to.as_str())
+        .collect();
+
+    assert!(
+        covered.len() > 100,
+        "only {} symbols have a coverage edge; the in-crate test convention is not being seen",
+        covered.len()
+    );
+    assert!(
+        graph.edges.iter().any(|e| e.kind == EdgeKind::Extends),
+        "no inheritance edges at all on a codebase built out of ports and impls"
+    );
+}
+
+// --- incremental rebuilds ---------------------------------------------------
+
+/// The stored graph as comparable rows, so two ways of producing it can be
+/// asserted equal rather than merely "both non-empty".
+async fn stored(store: &MockGraphStore) -> (Vec<String>, Vec<(String, String, EdgeKind)>) {
+    let hood = neighbours(
+        store,
+        REPO,
+        // Every node, reached from every node: the mock walks from seeds, so
+        // seeding with all of them is how a test reads the whole store back.
+        &NeighbourQuery::new(
+            store
+                .symbols(REPO)
+                .await
+                .expect("symbols")
+                .into_iter()
+                .map(|n| n.id),
+        )
+        .hops(2)
+        .max_nodes(10_000),
+    )
+    .await
+    .expect("walks");
+    let mut nodes: Vec<String> = hood.nodes.into_iter().map(|n| n.id).collect();
+    let mut edges: Vec<(String, String, EdgeKind)> = hood
+        .edges
+        .into_iter()
+        .map(|e| (e.from, e.to, e.kind))
+        .collect();
+    nodes.sort();
+    nodes.dedup();
+    edges.sort();
+    edges.dedup();
+    (nodes, edges)
+}
+
+/// Three files: `page.ts` calls `math.ts`, and `math.test.ts` covers it. Only
+/// `math.ts` is edited, so the inbound edges from the other two are the ones a
+/// naive incremental sync would delete and never rebuild.
+fn linked_repo(total_body: &str) -> Vec<SourceFile> {
+    files(&[
+        (
+            "tsconfig.json",
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@/*":["src/*"]}}}"#,
+        ),
+        (
+            "src/lib/math.ts",
+            &format!("export function computeTotal(n: number[]): number {{ {total_body} }}\n"),
+        ),
+        (
+            "src/app/page.ts",
+            "import { computeTotal } from \"@/lib/math\";\n\
+             export function render(n: number[]): number { return computeTotal(n); }\n",
+        ),
+        (
+            "src/lib/math.test.ts",
+            "import { computeTotal } from \"@/lib/math\";\n\
+             it('adds', () => { computeTotal([]); });\n",
+        ),
+    ])
+}
+
+#[tokio::test]
+async fn an_incremental_rebuild_lands_the_same_graph_as_a_full_one() {
+    // The decisive test for incremental sync, and it is decisive because the
+    // obvious implementation fails it: `delete_paths` removes every edge
+    // *touching* the changed file, so re-parsing only that file drops the
+    // caller and the test that point at it — precisely the edges the whole
+    // graph exists to provide.
+    let before = linked_repo("return n.length;");
+    let after = linked_repo("return n.length + 1;");
+
+    let incremental = MockGraphStore::new();
+    sync_all(&incremental, REPO, &build(REPO, &before).expect("builds"))
+        .await
+        .expect("writes");
+
+    let changed = vec!["src/lib/math.ts".to_string()];
+    let known = incremental.symbols(REPO).await.expect("symbols");
+    let parse: Vec<String> = rebuild_set(&incremental, REPO, &changed, &[])
+        .await
+        .expect("neighbours")
+        .into_iter()
+        .collect();
+    assert!(
+        parse.contains(&"src/app/page.ts".to_string())
+            && parse.contains(&"src/lib/math.test.ts".to_string()),
+        "the dependents were not scheduled for re-parsing: {parse:?}"
+    );
+
+    let partial = build_paths(REPO, &after, &parse, &known).expect("builds");
+    sync_paths(&incremental, REPO, &partial, &parse)
+        .await
+        .expect("writes");
+
+    let full = MockGraphStore::new();
+    sync_all(&full, REPO, &build(REPO, &after).expect("builds"))
+        .await
+        .expect("writes");
+
+    assert_eq!(stored(&incremental).await, stored(&full).await);
+}
+
+#[test]
+fn a_re_parsed_file_resolves_into_one_that_was_not() {
+    // What `known` is for: `page.ts` is re-parsed alone, and its call has to
+    // land on a symbol in `math.ts`, which this run never looked at.
+    let tree = linked_repo("return n.length;");
+    let known = vec![crate::index::types::GraphNode::symbol(
+        REPO,
+        "src/lib/math.ts",
+        "computeTotal",
+    )];
+
+    let graph = build_paths(REPO, &tree, &["src/app/page.ts".to_string()], &known).expect("builds");
+
+    assert!(
+        has_edge(
+            &graph,
+            "src/app/page.ts#render",
+            "src/lib/math.ts#computeTotal",
+            EdgeKind::Calls
+        ),
+        "the call did not resolve without the callee being parsed: {:?}",
+        graph.edges
+    );
+}
+
+#[test]
+fn a_renamed_symbol_does_not_survive_under_its_old_name() {
+    // The stored table is seeded *before* the parsed one and yields to it, so
+    // a file's own stale symbols cannot outvote what it now defines.
+    let tree = files(&[(
+        "src/lib/math.ts",
+        "export function computeSubtotal(n: number[]): number { return n.length; }\n",
+    )]);
+    let known = vec![crate::index::types::GraphNode::symbol(
+        REPO,
+        "src/lib/math.ts",
+        "computeTotal",
+    )];
+
+    let graph = build_paths(REPO, &tree, &["src/lib/math.ts".to_string()], &known).expect("builds");
+
+    assert!(node_ids(&graph).contains(&"src/lib/math.ts#computeSubtotal"));
+    assert!(
+        !node_ids(&graph).contains(&"src/lib/math.ts#computeTotal"),
+        "the old name came back: {:?}",
+        node_ids(&graph)
+    );
+}
+
+#[tokio::test]
+async fn a_deleted_file_is_removed_and_never_parsed_back() {
+    let before = linked_repo("return n.length;");
+    let store = MockGraphStore::new();
+    sync_all(&store, REPO, &build(REPO, &before).expect("builds"))
+        .await
+        .expect("writes");
+
+    let removed = vec!["src/lib/math.ts".to_string()];
+    let parse = rebuild_set(&store, REPO, &[], &removed)
+        .await
+        .expect("neighbours");
+
+    assert!(!parse.contains("src/lib/math.ts"), "{parse:?}");
+    assert!(
+        parse.contains("src/app/page.ts"),
+        "its dependents must be re-parsed so they stop pointing at it: {parse:?}"
+    );
+}

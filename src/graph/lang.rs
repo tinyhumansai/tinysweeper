@@ -24,6 +24,14 @@ pub(crate) const CAP_IMPORT: &str = "import.stmt";
 pub(crate) const CAP_CALL: &str = "use.call";
 /// Capture name for an identifier in any other position.
 pub(crate) const CAP_REF: &str = "use.ref";
+/// Capture name for a standalone inheritance construct, walked by the
+/// extractor.
+///
+/// Only needed where inheritance is *not* written on the declaration itself.
+/// A TypeScript class carries its own `extends` clause, so the `def.class`
+/// capture already reaches it; a Rust `impl Display for Ledger` is a separate
+/// item that names two types and declares neither, so nothing else would.
+pub(crate) const CAP_HERITAGE: &str = "heritage.stmt";
 /// Prefix for a capture that exists only to be tested by a query predicate.
 ///
 /// Ruby has no import *statement* — `require_relative "x"` is an ordinary
@@ -97,6 +105,8 @@ const RUST_QUERY: &str = r#"
 (mod_item name: (identifier) @name) @def.module
 
 (use_declaration) @import.stmt
+
+(impl_item) @heritage.stmt
 
 (call_expression function: (identifier) @use.call)
 (call_expression function: (scoped_identifier name: (identifier) @use.call))
@@ -265,7 +275,7 @@ mod tests {
                     );
                 } else {
                     assert!(
-                        [CAP_NAME, CAP_IMPORT, CAP_CALL, CAP_REF].contains(capture)
+                        [CAP_NAME, CAP_IMPORT, CAP_CALL, CAP_REF, CAP_HERITAGE].contains(capture)
                             || capture.starts_with(CAP_IGNORE_PREFIX),
                         "{}: stray capture {capture}",
                         lang.tag()

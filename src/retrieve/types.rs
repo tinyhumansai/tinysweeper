@@ -138,6 +138,12 @@ pub struct RetrievedContext {
     pub tokens: usize,
     /// Graph nodes the walk reached, before chunks were fetched for them.
     pub graph_nodes: usize,
+    /// What existing code depends on the change, and what no test reaches.
+    ///
+    /// Not chunks, and deliberately not budgeted like them: this is a list of
+    /// names, a line each, and it is the one part of retrieval that stays
+    /// useful when the index holds no chunk for any of them.
+    pub impact: crate::graph::impact::Impact,
 }
 
 impl Default for RetrievedContext {
@@ -156,6 +162,7 @@ impl RetrievedContext {
             dropped: 0,
             tokens: 0,
             graph_nodes: 0,
+            impact: Default::default(),
         }
     }
 
@@ -170,6 +177,16 @@ impl RetrievedContext {
     /// Whether any chunk reached the prompt.
     pub fn is_empty(&self) -> bool {
         self.chunks.is_empty()
+    }
+
+    /// Whether the lane is shown nothing at all.
+    ///
+    /// Distinct from [`RetrievedContext::is_empty`] because the blast radius
+    /// survives an index that holds no chunk for any dependent: knowing
+    /// `Ledger::settle` has fourteen callers and no test is worth saying even
+    /// when none of the fourteen can be quoted.
+    pub fn renders_nothing(&self) -> bool {
+        self.chunks.is_empty() && self.impact.is_empty()
     }
 
     /// How many chunks each arm contributed.
@@ -191,10 +208,14 @@ impl RetrievedContext {
     /// pull request, so putting it in the cacheable prefix would destroy every
     /// cache hit while looking correct — see `crate::harness::prompt`.
     pub fn render(&self) -> String {
-        if self.chunks.is_empty() {
+        if self.renders_nothing() {
             return String::new();
         }
         let mut out = String::with_capacity(self.tokens * 4 + 256);
+        // The blast radius leads. It is the shortest part and the part that
+        // says what to look for; a reviewer that reads only the first lines of
+        // the block should get the warning, not the first quoted chunk.
+        out.push_str(&self.impact.render());
         for chunk in &self.chunks {
             out.push_str(&chunk.render());
             out.push('\n');
@@ -211,7 +232,10 @@ impl RetrievedContext {
     pub fn note(&self) -> Option<String> {
         match &self.status {
             RetrievalStatus::Off => None,
-            RetrievalStatus::Ready if self.chunks.is_empty() => {
+            // "Nothing rendered" rather than "no chunks": a blast radius is
+            // retrieval's verdict too, and telling every lane the review ran
+            // on the diff alone would bury it.
+            RetrievalStatus::Ready if self.renders_nothing() => {
                 Some("No related code was found in the index; reviewed from the diff alone.".into())
             }
             RetrievalStatus::Ready => None,
@@ -290,6 +314,46 @@ mod tests {
     }
 
     #[test]
+    fn an_impact_only_review_is_not_labeled_diff_only() {
+        // The blast radius is retrieval's verdict too, even when the index
+        // holds no chunk for any dependent. Calling that a diff-only review
+        // would bury the one sentence worth reading.
+        use crate::graph::impact::Impact as GraphImpact;
+        use crate::index::types::{EdgeKind, GraphEdge, GraphNode, Neighbourhood};
+
+        let neighbourhood = Neighbourhood {
+            nodes: vec![GraphNode::symbol("acme/app", "src/billing.rs", "settle")],
+            edges: vec![GraphEdge::new(
+                "acme/app",
+                "src/caller.rs",
+                "src/billing.rs#settle",
+                EdgeKind::Calls,
+                "src/caller.rs",
+            )],
+        };
+        let impact = GraphImpact::of(
+            &neighbourhood,
+            &["src/billing.rs#settle".to_string()],
+            crate::graph::impact::DEFAULT_MAX_REACHED,
+        );
+
+        let context = RetrievedContext {
+            status: RetrievalStatus::Ready,
+            chunks: Vec::new(),
+            dropped: 0,
+            tokens: 0,
+            graph_nodes: 1,
+            impact,
+        };
+        assert!(!context.renders_nothing());
+        assert_eq!(
+            context.note(),
+            None,
+            "impact is context; it is not a diff-only review"
+        );
+    }
+
+    #[test]
     fn a_rendered_chunk_names_its_file_lines_and_provenance() {
         let mut graph = chunk("src/caller.rs", 4, 9);
         graph.provenance = Provenance::Graph;
@@ -300,6 +364,7 @@ mod tests {
             dropped: 0,
             tokens: 0,
             graph_nodes: 1,
+            impact: Default::default(),
         };
         let rendered = context.render();
 

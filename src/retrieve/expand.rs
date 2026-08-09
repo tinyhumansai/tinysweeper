@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::config::types::Retrieval;
 use crate::error::Result;
 use crate::evidence::diff::FileDiff;
+use crate::graph::impact::Impact;
 use crate::graph::rank::rank;
 use crate::graph::traverse::{self, NeighbourQuery};
 use crate::index::types::{Chunk, EdgeKind, EmbedSignature, Neighbourhood};
@@ -149,6 +150,11 @@ pub struct Expansion {
     /// plenty but none of it is indexed" are distinguishable, which are two
     /// very different things to have to fix.
     pub nodes: usize,
+    /// What depends on the change, and what no test reaches.
+    ///
+    /// Derived from the same walk rather than a second query: the edges are
+    /// already in hand and the only thing left to decide is direction.
+    pub impact: Impact,
 }
 
 /// Walk out from the diff and fetch the chunks of what it reaches.
@@ -170,7 +176,13 @@ pub async fn expand(
 ) -> Result<Expansion> {
     let (hops, max_nodes, max_chunks) =
         (bounds.graph_hops, bounds.max_graph_nodes, bounds.max_chunks);
-    if hops == 0 || max_nodes == 0 || max_chunks == 0 {
+    // Only `graph_hops == 0` makes the walk itself pointless. `max_graph_nodes`
+    // and `max_chunks` bound the *code* a lane is shown; the blast radius is a
+    // list of names that costs a line each and is enabled separately by
+    // `max_impact`, so a config that turns node or chunk context off should
+    // still get the warning. The cap below turns such a walk into an
+    // impact-only retrieval rather than nothing at all.
+    if hops == 0 {
         return Ok(Expansion::default());
     }
 
@@ -183,7 +195,13 @@ pub async fn expand(
         .hops(hops)
         .kinds(EdgeKind::ALL)
         .max_nodes(max_nodes);
-    let neighbourhood = traverse::neighbours(graph, repo_id, &query).await?;
+    let walked = traverse::walk(graph, repo_id, &query).await?;
+
+    // Before the cap. The blast radius is a handful of names and the cap exists
+    // to bound how much *code* reaches the prompt; letting one bound the other
+    // would drop dependents to make room for chunks.
+    let impact = Impact::of(&walked, &query.seeds, bounds.max_impact);
+    let neighbourhood = traverse::cap(walked, &query.seeds, max_nodes);
 
     let changed: BTreeSet<&str> = diffs.iter().map(|diff| diff.path.as_str()).collect();
     let mut paths = ranked_paths(&neighbourhood, &seeds, &changed);
@@ -206,6 +224,7 @@ pub async fn expand(
     Ok(Expansion {
         chunks,
         nodes: neighbourhood.nodes.len(),
+        impact,
     })
 }
 

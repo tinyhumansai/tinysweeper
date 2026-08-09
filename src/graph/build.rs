@@ -25,17 +25,74 @@ use crate::ports::graph::GraphStore;
 /// configuration files carrying path aliases are what make the internal edges
 /// resolvable at all.
 pub fn build(repo_id: &str, files: &[SourceFile]) -> Result<RepoGraph> {
+    build_inner(repo_id, files, None, &[])
+}
+
+/// Build the graph for only `paths`, resolving against the rest of the tree.
+///
+/// The incremental counterpart to [`build`], and the two arguments it adds are
+/// both there for the same reason: parsing a subset of a repository answers
+/// repository-wide questions for the subset and nowhere else.
+///
+/// * `files` is still the **whole tree**. Text is only read for what will be
+///   parsed and for the alias configuration; every other entry may carry an
+///   empty body, because what resolution needs from an untouched file is that
+///   its path exists.
+/// * `known` is the stored symbol table — [`GraphStore::symbols`] — which is
+///   what lets a call in a re-parsed file resolve into a file that was not
+///   re-parsed. Entries for `paths` are ignored in favour of what was just
+///   parsed, so a deleted symbol does not resurrect itself.
+///
+/// [`RepoGraph::coverage`] describes the parsed subset, not the repository. A
+/// partial run's resolution rate is not the repository's, and reporting it as
+/// though it were would make the one metric that says whether the resolver
+/// works depend on which files a push happened to touch.
+pub fn build_paths(
+    repo_id: &str,
+    files: &[SourceFile],
+    paths: &[String],
+    known: &[GraphNode],
+) -> Result<RepoGraph> {
+    let wanted: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
+    build_inner(repo_id, files, Some(&wanted), known)
+}
+
+fn build_inner(
+    repo_id: &str,
+    files: &[SourceFile],
+    only: Option<&BTreeSet<&str>>,
+    known: &[GraphNode],
+) -> Result<RepoGraph> {
     let resolver = Resolver::new(files);
 
     let mut parsed: Vec<ParsedFile> = Vec::new();
     for file in files {
+        if only.is_some_and(|only| !only.contains(file.path.as_str())) {
+            continue;
+        }
         if let Some(one) = parse(file)? {
             parsed.push(one);
         }
     }
 
     // Repo-wide symbol table, built before any usage is resolved.
+    //
+    // Stored symbols go in first and freshly parsed ones after, so a file that
+    // was re-parsed contributes only what it defines *now*. Seeding from the
+    // store in the other order would leave a renamed function defined under
+    // both names until the next full rebuild.
     let mut defined_in: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let reparsed: BTreeSet<&str> = parsed.iter().map(|file| file.path.as_str()).collect();
+    for node in known {
+        let Some(symbol) = &node.symbol else { continue };
+        if reparsed.contains(node.path.as_str()) {
+            continue;
+        }
+        defined_in
+            .entry(symbol.clone())
+            .or_default()
+            .insert(node.path.clone());
+    }
     for file in &parsed {
         for definition in &file.defs {
             defined_in
@@ -140,7 +197,8 @@ pub fn build(repo_id: &str, files: &[SourceFile]) -> Result<RepoGraph> {
             // each one would bury the handful of genuinely broken *imports*
             // that `unresolved` exists to make findable. The gap is still
             // measurable as `usages_total - usages_resolved`.
-            let Some(target) = target_for(&file.path, usage, &local, &bindings, &defined_in) else {
+            let Some(target) = target_for(&file.path, &usage.name, &local, &bindings, &defined_in)
+            else {
                 continue;
             };
             coverage.usages_resolved += 1;
@@ -148,6 +206,39 @@ pub fn build(repo_id: &str, files: &[SourceFile]) -> Result<RepoGraph> {
                 continue;
             }
             let edge = GraphEdge::new(repo_id, &source, &target, kind, &file.path);
+            edges.insert(edge.id(), edge);
+
+            // A call made from a test scope into code that is not itself test
+            // code is coverage. Derived from the resolved call rather than
+            // asserted from the file name, so `foo_test.rs` claims to cover
+            // exactly what it actually reaches. References are excluded: a
+            // test that names a type does not exercise it.
+            if kind == EdgeKind::Calls
+                && file.in_test_scope(usage.byte)
+                && !crate::graph::path::is_test_path(path_of(&target))
+            {
+                let covers = GraphEdge::new(repo_id, &source, &target, EdgeKind::Tests, &file.path);
+                edges.insert(covers.id(), covers);
+            }
+        }
+
+        for relation in &file.heritage {
+            // Both ends are resolved the same way a usage is: a Rust
+            // `impl Display for Ledger` names two types and declares neither,
+            // so assuming the child is local would attach the edge to a symbol
+            // that file does not define.
+            let (Some(child), Some(parent)) = (
+                target_for(&file.path, &relation.child, &local, &bindings, &defined_in),
+                target_for(&file.path, &relation.parent, &local, &bindings, &defined_in),
+            ) else {
+                continue;
+            };
+            if child == parent {
+                continue;
+            }
+            // Child to parent, so walking *inbound* from a changed base class
+            // lists what implements it — the direction a review asks in.
+            let edge = GraphEdge::new(repo_id, &child, &parent, EdgeKind::Extends, &file.path);
             edges.insert(edge.id(), edge);
         }
     }
@@ -185,25 +276,21 @@ pub fn build(repo_id: &str, files: &[SourceFile]) -> Result<RepoGraph> {
 /// unique. Anything else is left unresolved rather than guessed.
 fn target_for(
     path: &str,
-    usage: &crate::graph::types::Usage,
+    name: &str,
     local: &BTreeSet<&str>,
     bindings: &BTreeMap<String, Vec<String>>,
     defined_in: &BTreeMap<String, BTreeSet<String>>,
 ) -> Option<String> {
-    if local.contains(usage.name.as_str()) {
-        return Some(format!("{path}#{}", usage.name));
+    if local.contains(name) {
+        return Some(format!("{path}#{name}"));
     }
-    if let Some(targets) = bindings.get(&usage.name) {
+    if let Some(targets) = bindings.get(name) {
         let defining: Vec<&String> = targets
             .iter()
-            .filter(|t| {
-                defined_in
-                    .get(&usage.name)
-                    .is_some_and(|files| files.contains(*t))
-            })
+            .filter(|t| defined_in.get(name).is_some_and(|files| files.contains(*t)))
             .collect();
         if let Some(target) = defining.first() {
-            return Some(format!("{target}#{}", usage.name));
+            return Some(format!("{target}#{name}"));
         }
         // Imported but the target does not define the name itself: a
         // re-export, or a name we cannot see. The file edge is still true.
@@ -211,12 +298,20 @@ fn target_for(
             return Some((*target).clone());
         }
     }
-    let files = defined_in.get(&usage.name)?;
+    let files = defined_in.get(name)?;
     if files.len() == 1 {
         let target = files.iter().next()?;
-        return Some(format!("{target}#{}", usage.name));
+        return Some(format!("{target}#{name}"));
     }
     None
+}
+
+/// The file half of a node id, which is the whole id for a file node.
+fn path_of(id: &str) -> &str {
+    match id.split_once('#') {
+        Some((path, _)) => path,
+        None => id,
+    }
 }
 
 fn last_segment(specifier: &str) -> String {
@@ -276,6 +371,53 @@ pub async fn sync_paths(
         .cloned()
         .collect();
     Ok(store.upsert_nodes(&nodes).await? + store.upsert_edges(&edges).await?)
+}
+
+/// The files an incremental rebuild has to re-parse, given what changed.
+///
+/// Not just the changed ones, and the reason is
+/// [`GraphStore::delete_paths`]: it removes every edge *touching* a path,
+/// including the inbound ones written by files that did not change — which are
+/// exactly the edges a blast radius is made of. Re-parsing the changed files'
+/// existing graph neighbours puts them back. It is still a few dozen files
+/// where a full rebuild is thousands.
+///
+/// The residual gap, stated because it is real and not fixable at this price:
+/// a file that did not change and had *no* edge to the changed file gets no new
+/// edge either, so a call that only now resolves — because this push added the
+/// symbol it names — is missed until either file is touched again. Catching it
+/// would mean parsing every file on every push, which is the cost this exists
+/// to avoid.
+///
+/// Removed paths seed the walk, so their dependents are re-parsed and stop
+/// pointing at a file that is gone, but are never returned for parsing
+/// themselves.
+pub async fn rebuild_set(
+    store: &dyn GraphStore,
+    repo_id: &str,
+    changed: &[String],
+    removed: &[String],
+) -> Result<BTreeSet<String>> {
+    let mut seeds: Vec<String> = changed.to_vec();
+    seeds.extend(removed.iter().cloned());
+    seeds.sort();
+    seeds.dedup();
+
+    let mut set: BTreeSet<String> = changed.iter().cloned().collect();
+    if seeds.is_empty() {
+        return Ok(set);
+    }
+    let neighbourhood = crate::graph::traverse::walk(
+        store,
+        repo_id,
+        &crate::graph::traverse::NeighbourQuery::new(seeds).hops(1),
+    )
+    .await?;
+    set.extend(neighbourhood.nodes.into_iter().map(|node| node.path));
+    for gone in removed {
+        set.remove(gone);
+    }
+    Ok(set)
 }
 
 fn endpoint_belongs_to(endpoint: &str, path: &str) -> bool {

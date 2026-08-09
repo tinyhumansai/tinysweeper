@@ -84,13 +84,31 @@ pub async fn neighbours(
     repo_id: &str,
     query: &NeighbourQuery,
 ) -> Result<Neighbourhood> {
-    if query.seeds.is_empty() || query.max_nodes == 0 {
+    if query.max_nodes == 0 {
         return Ok(Neighbourhood::default());
     }
-    let raw = store
-        .neighbours(repo_id, &query.seeds, query.hops, &query.kinds)
-        .await?;
+    let raw = walk(store, repo_id, query).await?;
     Ok(cap(raw, &query.seeds, query.max_nodes))
+}
+
+/// Walk the graph without applying the node cap.
+///
+/// Exposed for the one caller that needs the whole walk: the blast radius is a
+/// list of *names*, not of code, and it costs a line each. Deriving it from the
+/// capped neighbourhood would silently drop dependents to make room for chunks
+/// nobody asked to see — and the count of what was dropped would be wrong too,
+/// which is worse than the omission.
+pub async fn walk(
+    store: &dyn GraphStore,
+    repo_id: &str,
+    query: &NeighbourQuery,
+) -> Result<Neighbourhood> {
+    if query.seeds.is_empty() {
+        return Ok(Neighbourhood::default());
+    }
+    store
+        .neighbours(repo_id, &query.seeds, query.hops, &query.kinds)
+        .await
 }
 
 /// Keep the `max_nodes` highest-ranked nodes, then drop dangling edges.

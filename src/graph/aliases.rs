@@ -96,6 +96,9 @@ impl AliasConfig {
         ordered.sort_by_key(|f| (f.path.matches('/').count(), f.path.clone()));
 
         for file in ordered {
+            if !is_alias_config(&file.path) {
+                continue;
+            }
             let name = file.path.rsplit('/').next().unwrap_or(&file.path);
             let dir = parent_dir(&file.path);
             match name {
@@ -251,6 +254,20 @@ fn nearest_config<'a>(from: &str, configs: impl Iterator<Item = &'a str>) -> Opt
                     .is_some_and(|rest| rest.starts_with('/'))
         })
         .max_by_key(|dir| dir.len())
+}
+
+/// Whether a path is one of the configuration files aliases are read from.
+///
+/// Public because an incremental rebuild has to read these files' text even
+/// when nothing in them changed: skipping `tsconfig.json` would leave every
+/// `@/…` specifier in the repository unresolvable, and the resolver would
+/// record each one as a broken import rather than as the working one it is.
+/// Kept beside the match that consumes the names so the two cannot drift.
+pub fn is_alias_config(path: &str) -> bool {
+    matches!(
+        path.rsplit('/').next().unwrap_or(path),
+        "tsconfig.json" | "jsconfig.json" | "go.mod" | "Cargo.toml"
+    )
 }
 
 /// The directory part of a repo-relative path, `""` at the root.

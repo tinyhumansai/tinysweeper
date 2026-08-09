@@ -38,6 +38,7 @@ use crate::indexer::mongo::MongoManifest;
 use crate::indexer::run::Indexer;
 use crate::indexer::types::IndexOutcome;
 use crate::ports::embed::Embedder;
+use crate::ports::graph::GraphStore;
 
 /// Which host repositories are fetched from.
 ///
@@ -177,7 +178,7 @@ impl IndexBackend {
             // The graph is what turns "code that reads like the diff" into "the
             // caller this change breaks", so it is rebuilt from the same
             // checkout rather than left to a second fetch.
-            if let Err(err) = self.sync_graph(&repo_id, &checkout, config).await {
+            if let Err(err) = self.sync_graph(&repo_id, &checkout, config, report).await {
                 // A graph failure costs expansion, not retrieval: the chunks are
                 // already written and queryable. Failing the whole run here
                 // would throw away an index that just cost money.
@@ -188,27 +189,110 @@ impl IndexBackend {
         Ok(outcome)
     }
 
-    /// Rebuild the code graph from a checkout already on disk.
-    async fn sync_graph(&self, repo_id: &str, checkout: &Checkout, config: &Config) -> Result<()> {
+    /// Bring the code graph up to date with a checkout already on disk.
+    ///
+    /// Incremental when it can be, whole when it has to be. The indexer already
+    /// knows which files' content changed — it decided that to avoid paying for
+    /// their embeddings — so parsing the other several thousand a second time
+    /// buys nothing. A repository the graph has never held, or one whose graph
+    /// a previous run failed to write, is rebuilt whole, and that decision is
+    /// made from the store rather than from a flag: a flag can be wrong about
+    /// what is actually stored, and the consequence of being wrong is a graph
+    /// with edges only among the files this push happened to touch.
+    async fn sync_graph(
+        &self,
+        repo_id: &str,
+        checkout: &Checkout,
+        config: &Config,
+        report: &crate::indexer::types::IndexReport,
+    ) -> Result<()> {
         let selector = crate::chunk::Selector::new(&config.paths.ignore)?;
         let selection = selector.walk(checkout.path())?;
 
+        let known = self.index.graph.symbols(repo_id).await?;
+        // An alias configuration re-maps specifiers repository-wide, and the
+        // file itself is never parsed into a graph node, so `rebuild_set` —
+        // which walks out from changed nodes' neighbours — adds nothing for it.
+        // Rebuilding whole puts the new mapping into every edge; the set of
+        // such files is tiny, so the cost is one full parse per alias edit.
+        let aliases_moved = report
+            .changed
+            .iter()
+            .chain(report.removed.iter())
+            .any(|path| crate::graph::aliases::is_alias_config(path));
+        let parse = match known.is_empty() || aliases_moved {
+            true => None,
+            false => Some(
+                crate::graph::build::rebuild_set(
+                    &self.index.graph,
+                    repo_id,
+                    &report.changed,
+                    &report.removed,
+                )
+                .await?,
+            ),
+        };
+
+        // Whole-tree text for a full build; for an incremental one, text only
+        // for what will be parsed. Every other path still has to appear, with
+        // an empty body: resolution asks the tree *which files exist*, and a
+        // specifier that resolves to a file we left out is recorded as a broken
+        // import rather than as the working one it is.
         let mut files: Vec<SourceFile> = Vec::new();
         for path in &selection.selected {
+            let needs_text = match &parse {
+                None => true,
+                Some(parse) => parse.contains(path) || crate::graph::aliases::is_alias_config(path),
+            };
+            if !needs_text {
+                files.push(SourceFile::new(path.clone(), String::new()));
+                continue;
+            }
             let full = checkout.path().join(path);
             let readable = std::fs::metadata(&full)
                 .map(|meta| meta.len() <= MAX_GRAPH_FILE_BYTES)
                 .unwrap_or(false);
             // Lossless or nothing: a file that is not UTF-8 has no symbols this
             // build can extract, and lossy-converting it would invent them.
-            if readable && let Ok(text) = std::fs::read_to_string(&full) {
-                files.push(SourceFile::new(path.clone(), text));
+            match readable.then(|| std::fs::read_to_string(&full)) {
+                Some(Ok(text)) => files.push(SourceFile::new(path.clone(), text)),
+                _ => files.push(SourceFile::new(path.clone(), String::new())),
             }
         }
 
-        let graph = crate::graph::build::build(repo_id, &files)?;
-        let written = crate::graph::build::sync_all(&self.index.graph, repo_id, &graph).await?;
-        tracing::info!(repo = repo_id, nodes = written, "code graph rebuilt");
+        let Some(parse) = parse else {
+            let graph = crate::graph::build::build(repo_id, &files)?;
+            let written = crate::graph::build::sync_all(&self.index.graph, repo_id, &graph).await?;
+            tracing::info!(repo = repo_id, nodes = written, "code graph built");
+            return Ok(());
+        };
+
+        // Deleted paths are not parsed — there is nothing to parse — but they
+        // must still be deleted, so they join the set `sync_paths` clears.
+        let mut touched: Vec<String> = parse.iter().cloned().collect();
+        touched.extend(report.removed.iter().cloned());
+        touched.sort();
+        touched.dedup();
+        if touched.is_empty() {
+            return Ok(());
+        }
+
+        let graph = crate::graph::build::build_paths(
+            repo_id,
+            &files,
+            &parse.iter().cloned().collect::<Vec<_>>(),
+            &known,
+        )?;
+        let written =
+            crate::graph::build::sync_paths(&self.index.graph, repo_id, &graph, &touched).await?;
+        tracing::info!(
+            repo = repo_id,
+            changed = report.changed.len(),
+            reparsed = parse.len(),
+            of = selection.selected.len(),
+            nodes = written,
+            "code graph updated"
+        );
         Ok(())
     }
 }

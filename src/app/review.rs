@@ -417,13 +417,19 @@ pub async fn review_with_retrieval(
     spend.merge(retrieval_spend);
     let retrieved_context = retrieved.render();
     let retrieval_note = retrieved.note();
-    if !retrieved.is_empty() {
+    if !retrieved.renders_nothing() {
         let (search, graph) = retrieved.counts();
         tracing::debug!(
             search,
             graph,
             tokens = retrieved.tokens,
             dropped = retrieved.dropped,
+            // The two numbers an operator needs to tell "the graph is working"
+            // from "the graph is wired in": a blast radius that is always empty
+            // means the index holds no edges into anything this repository
+            // changes.
+            impacted = retrieved.impact.reached.len(),
+            untested = retrieved.impact.untested.len(),
             "retrieved context for the review"
         );
     }

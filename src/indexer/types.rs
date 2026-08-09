@@ -248,6 +248,20 @@ pub struct IndexReport {
     /// The number that says whether incremental re-indexing is working: on a
     /// push touching one file of a thousand, this is nearly every chunk.
     pub reused: u64,
+    /// Files whose content actually changed this run.
+    ///
+    /// Not the same as [`IndexReport::files`], which counts every file the run
+    /// looked at. This is the subset whose chunk ids differ from what the
+    /// manifest already had — the same content-hash comparison that decides
+    /// whether to call the embedder, reported so that the code graph can
+    /// re-parse the same subset instead of the whole tree.
+    ///
+    /// Empty after a run that found nothing to do, and *complete* after the
+    /// first index of a repository, because a file with no manifest entry
+    /// differs from it in every chunk.
+    pub changed: Vec<String>,
+    /// Paths whose chunks were removed: deleted, newly ignored, or too large.
+    pub removed: Vec<String>,
     /// What the embeddings cost.
     pub usage: EmbedUsage,
     /// Every file left out, with a reason.

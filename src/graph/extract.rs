@@ -16,7 +16,10 @@ use tree_sitter::{Node, Parser, QueryCursor};
 
 use crate::error::{Error, Result};
 use crate::graph::lang;
-use crate::graph::types::{Definition, ImportStmt, Language, ParsedFile, SourceFile, Usage};
+use crate::graph::path;
+use crate::graph::types::{
+    Definition, Heritage, ImportStmt, Language, ParsedFile, SourceFile, Usage,
+};
 
 /// Parse one file into definitions, imports and usages.
 ///
@@ -45,6 +48,7 @@ pub fn parse_as(file: &SourceFile, language: Language) -> Result<ParsedFile> {
 
     let mut defs: Vec<Definition> = Vec::new();
     let mut imports: Vec<ImportStmt> = Vec::new();
+    let mut heritage: Vec<Heritage> = Vec::new();
     let mut calls: Vec<Usage> = Vec::new();
     let mut refs: Vec<Usage> = Vec::new();
     // Rust `mod foo;` is both a declaration and a file reference. Recorded here
@@ -77,6 +81,9 @@ pub fn parse_as(file: &SourceFile, language: Language) -> Result<ParsedFile> {
                 }
                 lang::CAP_CALL => calls.push(usage(capture.node, source, true)),
                 lang::CAP_REF => refs.push(usage(capture.node, source, false)),
+                lang::CAP_HERITAGE => {
+                    heritage.extend(standalone_heritage(capture.node, source, language));
+                }
                 other if other.starts_with(lang::CAP_DEF_PREFIX) => {
                     decl = Some((capture.node, other));
                 }
@@ -105,7 +112,9 @@ pub fn parse_as(file: &SourceFile, language: Language) -> Result<ParsedFile> {
                     inline_mods.push((decl_node.start_byte(), decl_node.end_byte()));
                 }
             }
+            heritage.extend(declared_heritage(decl_node, &name, source, language));
             defs.push(Definition {
+                test: is_test_definition(decl_node, &name, kind, source, language),
                 name,
                 kind,
                 line: line(name_node),
@@ -157,12 +166,17 @@ pub fn parse_as(file: &SourceFile, language: Language) -> Result<ParsedFile> {
     defs.sort_by_key(|d| (d.start_byte, d.end_byte));
     defs.dedup_by(|a, b| a.name == b.name && a.start_byte == b.start_byte);
 
+    heritage.sort_by(|a, b| (a.byte, &a.child, &a.parent).cmp(&(b.byte, &b.child, &b.parent)));
+    heritage.dedup_by(|a, b| a.child == b.child && a.parent == b.parent && a.byte == b.byte);
+
     Ok(ParsedFile {
         path: file.path.clone(),
         lang: language,
         defs,
         imports,
         usages,
+        heritage,
+        test_file: path::is_test_path(&file.path),
     })
 }
 
@@ -217,6 +231,313 @@ fn unquote(raw: &str) -> String {
         }
     }
     trimmed.to_string()
+}
+
+// --- Inheritance -------------------------------------------------------------
+
+/// Inheritance written *on* a declaration, which therefore names its own child.
+///
+/// `class Ledger extends Base`, `class Ledger(Base)`, `trait Ledger: Base`, and
+/// a Go struct's embedded fields all take this path. Rust's `impl Trait for
+/// Type` does not: it declares neither of the two types it names, so it is
+/// captured separately and handled by [`standalone_heritage`].
+fn declared_heritage(decl: Node, name: &str, source: &[u8], language: Language) -> Vec<Heritage> {
+    let parents = match language {
+        Language::TypeScript | Language::Tsx => ts_parents(decl, source),
+        Language::Python => python_parents(decl, source),
+        Language::Go => go_parents(decl, source),
+        Language::Rust => rust_supertraits(decl, source),
+        // Java (`extends`/`implements`) and Ruby (`< Superclass`) both write
+        // inheritance on the declaration, but neither grammar has a parent
+        // walker yet. Recording nothing is honest: a missing heritage edge
+        // just means the graph is caller-complete for those two languages, not
+        // inheritance-complete.
+        Language::Java | Language::Ruby => Vec::new(),
+    };
+    parents
+        .into_iter()
+        .filter(|parent| parent != name)
+        .map(|parent| Heritage {
+            child: name.to_string(),
+            parent,
+            line: line(decl),
+            byte: decl.start_byte(),
+        })
+        .collect()
+}
+
+/// Inheritance written as its own item: a Rust `impl Trait for Type`.
+///
+/// A bare `impl Type { .. }` names no trait and yields nothing — an inherent
+/// impl relates a type to no other type, and inventing a self-edge for it
+/// would put every type in the repository one hop from itself.
+fn standalone_heritage(node: Node, source: &[u8], language: Language) -> Vec<Heritage> {
+    if language != Language::Rust || node.kind() != "impl_item" {
+        return Vec::new();
+    }
+    let (Some(trait_node), Some(type_node)) = (
+        node.child_by_field_name("trait"),
+        node.child_by_field_name("type"),
+    ) else {
+        return Vec::new();
+    };
+    let (Some(parent), Some(child)) = (type_name(trait_node, source), type_name(type_node, source))
+    else {
+        return Vec::new();
+    };
+    if parent == child {
+        return Vec::new();
+    }
+    vec![Heritage {
+        child,
+        parent,
+        line: line(node),
+        byte: node.start_byte(),
+    }]
+}
+
+/// The name a type expression ultimately refers to.
+///
+/// Generic arguments are deliberately *not* followed. `extends Repository<User>`
+/// inherits from `Repository`; recording `User` as a base class would make the
+/// blast radius of a change to `User` include every class that merely mentions
+/// it in a type position.
+fn type_name(node: Node, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "type_identifier" | "identifier" | "primitive_type" => Some(text(node, source)),
+        "generic_type"
+        | "qualified_type"
+        | "scoped_type_identifier"
+        | "nested_type_identifier"
+        | "member_expression"
+        | "attribute" => node
+            .child_by_field_name("name")
+            .or_else(|| node.child_by_field_name("type"))
+            .or_else(|| node.child_by_field_name("property"))
+            .or_else(|| node.child_by_field_name("attribute"))
+            .and_then(|inner| type_name(inner, source)),
+        "pointer_type" | "generic_type_with_turbofish" => node
+            .named_child(0)
+            .and_then(|inner| type_name(inner, source)),
+        _ => None,
+    }
+}
+
+/// Collect type names from a subtree, without descending into type arguments.
+fn collect_type_names(node: Node, source: &[u8], out: &mut Vec<String>) {
+    if node.kind() == "type_arguments" || node.kind() == "type_parameters" {
+        return;
+    }
+    if let Some(name) = type_name(node, source) {
+        out.push(name);
+        return;
+    }
+    let mut walker = node.walk();
+    for child in node.named_children(&mut walker) {
+        collect_type_names(child, source, out);
+    }
+}
+
+/// `class A extends B implements C`, and `interface A extends B`.
+fn ts_parents(decl: Node, source: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut walker = decl.walk();
+    for child in decl.named_children(&mut walker) {
+        if matches!(
+            child.kind(),
+            "class_heritage" | "extends_clause" | "implements_clause" | "extends_type_clause"
+        ) {
+            collect_type_names(child, source, &mut out);
+        }
+    }
+    out
+}
+
+/// `class Ledger(Base, metaclass=Meta)` — the positional bases only.
+fn python_parents(decl: Node, source: &[u8]) -> Vec<String> {
+    let Some(bases) = decl.child_by_field_name("superclasses") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut walker = bases.walk();
+    for child in bases.named_children(&mut walker) {
+        // `metaclass=Meta` is configuration, not a base class.
+        if child.kind() == "keyword_argument" {
+            continue;
+        }
+        if let Some(name) = type_name(child, source) {
+            out.push(name);
+        }
+    }
+    out
+}
+
+/// Go's embedding: a struct or interface field with a type and no name.
+///
+/// This is the language's whole inheritance story, and the "no name" test is
+/// what distinguishes it — `Mutex` embeds, `mu Mutex` is an ordinary field and
+/// promotes nothing.
+fn go_parents(decl: Node, source: &[u8]) -> Vec<String> {
+    let Some(underlying) = decl.child_by_field_name("type") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    match underlying.kind() {
+        "struct_type" => {
+            let Some(fields) = underlying.named_child(0) else {
+                return out;
+            };
+            let mut walker = fields.walk();
+            for field in fields.named_children(&mut walker) {
+                if field.kind() != "field_declaration"
+                    || field.child_by_field_name("name").is_some()
+                {
+                    continue;
+                }
+                if let Some(name) = field
+                    .child_by_field_name("type")
+                    .and_then(|t| type_name(t, source))
+                {
+                    out.push(name);
+                }
+            }
+        }
+        "interface_type" => {
+            let mut walker = underlying.walk();
+            for child in underlying.named_children(&mut walker) {
+                // A method signature declares behaviour; only a bare type name
+                // embeds another interface.
+                if matches!(child.kind(), "method_spec" | "method_elem") {
+                    continue;
+                }
+                collect_type_names(child, source, &mut out);
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// `trait Ledger: Display + Debug` — the supertrait bounds.
+fn rust_supertraits(decl: Node, source: &[u8]) -> Vec<String> {
+    if decl.kind() != "trait_item" {
+        return Vec::new();
+    }
+    let Some(bounds) = decl.child_by_field_name("bounds") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    collect_type_names(bounds, source, &mut out);
+    // Lifetimes and `Sized` bounds are not supertraits worth an edge: every
+    // trait in the language has them and they relate it to nothing local.
+    out.retain(|name| name != "Sized");
+    out
+}
+
+// --- Test scopes -------------------------------------------------------------
+
+/// Whether a declaration is a test, by the rule its own test runner uses.
+///
+/// Nothing here is a guess about intent. `go test` runs `TestX`; pytest
+/// collects `test*` and `Test*`; `cargo test` runs what `#[test]` or
+/// `#[cfg(test)]` marks. TypeScript is absent on purpose — a Jest test is an
+/// anonymous callback inside `it(...)`, so the file is the only scope there is,
+/// and [`ParsedFile::test_file`] carries that.
+fn is_test_definition(
+    decl: Node,
+    name: &str,
+    kind: crate::graph::types::SymbolKind,
+    source: &[u8],
+    language: Language,
+) -> bool {
+    use crate::graph::types::SymbolKind;
+    match language {
+        Language::Rust => rust_test_attribute(decl, source),
+        Language::Python => match kind {
+            SymbolKind::Class => starts_with_word(name, "Test"),
+            SymbolKind::Function | SymbolKind::Method => name.starts_with("test"),
+            _ => false,
+        },
+        Language::Go => {
+            matches!(kind, SymbolKind::Function)
+                && ["Test", "Benchmark", "Fuzz", "Example"]
+                    .iter()
+                    .any(|prefix| starts_with_word(name, prefix))
+        }
+        Language::TypeScript | Language::Tsx => false,
+        // No test-runner rule is defined for these yet. Java's `@Test` is an
+        // attribute like Rust's `#[test]`, and Ruby's runners name methods
+        // `test_*` or describe blocks; until one of those is modelled, a Java
+        // or Ruby file claims no test scope, which is a coverage miss the
+        // reader sees rather than a name-guess that lies.
+        Language::Java | Language::Ruby => false,
+    }
+}
+
+/// Whether `name` begins with `prefix` as a complete word.
+///
+/// `TestLedger` is a Go test; `Testing` is not, and neither is `Tester`. The
+/// rule is the runner's: the character after the prefix must not be lowercase.
+fn starts_with_word(name: &str, prefix: &str) -> bool {
+    let Some(rest) = name.strip_prefix(prefix) else {
+        return false;
+    };
+    !rest.starts_with(|c: char| c.is_lowercase())
+}
+
+/// Whether an item carries a `#[test]`-family or `#[cfg(test)]` attribute.
+///
+/// `#[cfg(test)]` counts, and counting it is the point: it is what marks the
+/// `mod tests` block that holds every in-crate test in this codebase, and
+/// marking the module makes every function inside it a test scope without
+/// having to recognise `#[tokio::test]`, `#[rstest]` and the rest by name.
+fn rust_test_attribute(node: Node, source: &[u8]) -> bool {
+    let mut sibling = node.prev_sibling();
+    while let Some(current) = sibling {
+        match current.kind() {
+            "attribute_item" => {
+                // The attribute's own path decides, not every word its text
+                // contains: `#[cfg(feature = "test")]` sets a feature flag and
+                // `#[serde(rename = "test")]` names a serialised field, and
+                // neither puts the item in a test scope. A token scan could
+                // not tell them apart — `test` sat inside a string literal.
+                if let Some(attribute) = current.named_child(0)
+                    && let Some(path) = attribute.named_child(0)
+                {
+                    let path = text(path, source);
+                    if path == "test" || path.ends_with("::test") {
+                        return true;
+                    }
+                    if (path == "cfg" || path.ends_with("::cfg"))
+                        && attribute
+                            .child_by_field_name("arguments")
+                            .is_some_and(|args| bare_test_identifier(args, source))
+                    {
+                        return true;
+                    }
+                }
+            }
+            "line_comment" | "block_comment" | "attribute" => {}
+            _ => break,
+        }
+        sibling = current.prev_sibling();
+    }
+    false
+}
+
+/// Whether a `cfg(..)` argument list names the bare `test` identifier.
+///
+/// `cfg(test)` holds one; `cfg(feature = "test")` does not — there the word
+/// sits inside a string literal, which selects nothing and must not count.
+/// Wrapped predicates are walked so `cfg(all(test, ...))` still counts; only
+/// identifiers qualify, so no recursion can reach the inside of a literal.
+fn bare_test_identifier(node: Node, source: &[u8]) -> bool {
+    if node.kind() == "identifier" {
+        return text(node, source) == "test";
+    }
+    let mut walker = node.walk();
+    node.named_children(&mut walker)
+        .any(|child| bare_test_identifier(child, source))
 }
 
 /// Pull the specifier and bound names out of one import statement.

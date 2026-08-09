@@ -16,6 +16,9 @@
 //! 4. [`build`] assembles nodes and edges and writes them; [`traverse`] walks
 //!    them back out, bounded by hops and by a hard node cap, and [`rank`]
 //!    decides which nodes survive that cap.
+//! 5. [`impact`] reads that walk *inbound only*, for the narrower question a
+//!    review asks: what existing code breaks if this change is wrong, and what
+//!    changed code no test reaches.
 //!
 //! **This graph exists to be traversed during a review**, not to be browsed. The
 //! obvious version of this feature is a dashboard endpoint whose only caller is
@@ -33,6 +36,7 @@
 pub mod aliases;
 pub mod build;
 pub mod extract;
+pub mod impact;
 pub mod lang;
 pub mod path;
 pub mod rank;
@@ -43,6 +47,7 @@ pub mod types;
 pub use crate::graph::aliases::{AliasConfig, AliasPattern, TsBaseUrl};
 pub use crate::graph::build::{build, sync_all, sync_paths};
 pub use crate::graph::extract::parse;
+pub use crate::graph::impact::{DEFAULT_MAX_REACHED, Impact, Impacted, Relation};
 pub use crate::graph::rank::rank;
 pub use crate::graph::resolve::{Resolution, Resolver};
 pub use crate::graph::traverse::{DEFAULT_HOPS, DEFAULT_MAX_NODES, NeighbourQuery, neighbours};
