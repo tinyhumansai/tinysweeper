@@ -278,6 +278,32 @@ fn a_second_finding_on_a_claimed_expectation_is_a_duplicate_not_an_invention() {
 }
 
 #[test]
+fn two_overlapping_expectations_are_claimed_by_two_findings() {
+    // `lines: None` with no keywords matches every finding in the file, so two
+    // such expectations can both match one finding. The matcher must give the
+    // second finding the unclaimed label rather than recording it as a
+    // duplicate of the first and reporting E2 as missed.
+    let case = case(
+        vec![
+            expectation("E1", "src/a.rs", None, &[]),
+            expectation("E2", "src/a.rs", None, &[]),
+        ],
+        vec![],
+    );
+    let card = scored(
+        &case,
+        vec![
+            finding("src/a.rs", 1, "First defect", "b"),
+            finding("src/a.rs", 40, "Second defect", "b"),
+        ],
+    );
+
+    assert_eq!(card.true_positives, 2);
+    assert_eq!(card.duplicates, 0);
+    assert!(card.missed.is_empty());
+}
+
+#[test]
 fn the_strongest_finding_claims_the_expectation() {
     let case = case(
         vec![expectation(
