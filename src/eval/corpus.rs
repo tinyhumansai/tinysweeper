@@ -154,7 +154,7 @@ pub fn load(root: &Path) -> Result<Corpus> {
         // the corpus and read an operator's files into the model. Resolving
         // both sides against the filesystem keeps every `..` honest.
         if let (Ok(root), Ok(fixture)) = (
-            std::fs::canonicalize(&root),
+            std::fs::canonicalize(root),
             std::fs::canonicalize(&fixture_path),
         ) && !fixture.starts_with(&root)
         {
