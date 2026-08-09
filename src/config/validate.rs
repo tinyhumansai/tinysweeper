@@ -195,7 +195,10 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
     // Reasoning is drawn from the same allowance as the answer, and the effort
     // key does not bound it — measured, both configured models spend the
     // *entire* budget thinking at `high` and at `low` alike, then return empty
-    // content with `finish_reason = "length"`.
+    // content with `finish_reason = "length"`. The runs that back this are the
+    // table in `config/defaults.toml` next to `reasoning_effort`: both models
+    // at 8000 tokens, showing a full reasoning burn and no content at either
+    // effort, `off` clearing the same budget.
     //
     // A floor rather than a formula because the failure is bimodal: there is no
     // setting at which the model thinks proportionally less, so there is no
