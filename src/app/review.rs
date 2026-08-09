@@ -48,6 +48,15 @@ pub struct Proposal {
     pub head_sha: String,
     /// One entry per lane that ran.
     pub lanes: Vec<LaneProposal>,
+    /// The change map: what this pull request touches and what it reaches.
+    ///
+    /// `None` when `overview.enabled` is off, and on every proposal written
+    /// before the map existed — which is why it is `Option` rather than a
+    /// default-empty map: an absent field and "the change touches nothing" are
+    /// different claims, and `apply` must not publish the second when it means
+    /// the first.
+    #[serde(default)]
+    pub overview: Option<crate::overview::ChangeMap>,
     /// Paths that changed and that no lane could read, because the forge
     /// supplied no diff for them.
     ///
