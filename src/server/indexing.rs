@@ -38,6 +38,7 @@ use crate::indexer::mongo::MongoManifest;
 use crate::indexer::run::Indexer;
 use crate::indexer::types::IndexOutcome;
 use crate::ports::embed::Embedder;
+use crate::ports::graph::GraphStore;
 
 /// Which host repositories are fetched from.
 ///
