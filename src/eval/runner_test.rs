@@ -227,7 +227,7 @@ async fn a_stale_cassette_fails_the_case_rather_than_scoring_an_old_prompt() {
         &edited,
         None,
         &RunOptions {
-            out,
+            out: out.clone(),
             ..RunOptions::default()
         },
     )
