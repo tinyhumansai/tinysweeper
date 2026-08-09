@@ -295,13 +295,130 @@ mod tests {
         }
     }
 
+    /// Records which pull requests the merge route asked about, and answers
+    /// with a refusal — the outcome that matters, since a route that reports
+    /// only successes hides the half operators press the button for.
+    #[derive(Default)]
+    struct MergeRecorder {
+        asked: Mutex<Vec<(String, Option<u64>)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Merges for MergeRecorder {
+        async fn evaluate(
+            &self,
+            repo: &RepoId,
+            number: Option<u64>,
+        ) -> crate::error::Result<Vec<MergeReport>> {
+            self.asked
+                .lock()
+                .expect("not poisoned")
+                .push((repo.to_string(), number));
+            Ok(vec![
+                MergeReport {
+                    number: 7,
+                    outcome: "merged",
+                    detail: None,
+                },
+                MergeReport {
+                    number: 9,
+                    outcome: "refused",
+                    detail: Some("it is a draft".into()),
+                },
+            ])
+        }
+    }
+
     fn app(reviews: Arc<Recorder>) -> axum::Router {
+        app_with(reviews, Arc::new(MergeRecorder::default()))
+    }
+
+    fn app_with(reviews: Arc<Recorder>, merges: Arc<MergeRecorder>) -> axum::Router {
         router(
             Some(AdminAuth::new(TOKEN).expect("a long enough token")),
             "tinyhumansai".into(),
             reviews,
+            merges,
         )
         .expect("a token mounts the router")
+    }
+
+    #[tokio::test]
+    async fn an_unauthenticated_merge_sweep_is_refused() {
+        // The route that can put code on the default branch gets the same
+        // guard as the one that only spends money, checked the same way.
+        let merges = Arc::new(MergeRecorder::default());
+        let response = app_with(Arc::new(Recorder::default()), merges.clone())
+            .oneshot(post(
+                "/admin/merges/tinyhumansai/tinysweeper",
+                None,
+                "{ this is not json",
+            ))
+            .await
+            .expect("a response");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(merges.asked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_merge_sweep_outside_the_organisation_is_refused() {
+        let merges = Arc::new(MergeRecorder::default());
+        let response = app_with(Arc::new(Recorder::default()), merges.clone())
+            .oneshot(post("/admin/merges/someone-else/their-repo", Some(TOKEN), "{}"))
+            .await
+            .expect("a response");
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(
+            merges.asked.lock().unwrap().is_empty(),
+            "nothing outside the organisation may be merged"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_merge_sweep_reports_the_refusals_as_well_as_the_merges() {
+        let merges = Arc::new(MergeRecorder::default());
+        let response = app_with(Arc::new(Recorder::default()), merges.clone())
+            .oneshot(post("/admin/merges/tinyhumansai/tinysweeper", Some(TOKEN), "{}"))
+            .await
+            .expect("a response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            *merges.asked.lock().unwrap(),
+            vec![("tinyhumansai/tinysweeper".to_string(), None)]
+        );
+
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("a body");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(json["merged"], serde_json::json!([7]));
+        // The refusal and its reason survive to the operator. A sweep that
+        // reported only what it merged would leave "why not the other one?"
+        // answerable solely from the server's log.
+        assert_eq!(json["results"][1]["outcome"], "refused");
+        assert_eq!(json["results"][1]["detail"], "it is a draft");
+    }
+
+    #[tokio::test]
+    async fn a_merge_sweep_may_name_one_pull_request() {
+        let merges = Arc::new(MergeRecorder::default());
+        let response = app_with(Arc::new(Recorder::default()), merges.clone())
+            .oneshot(post(
+                "/admin/merges/tinyhumansai/tinysweeper",
+                Some(TOKEN),
+                "{\"number\":42}",
+            ))
+            .await
+            .expect("a response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            *merges.asked.lock().unwrap(),
+            vec![("tinyhumansai/tinysweeper".to_string(), Some(42))]
+        );
     }
 
     fn post(path: &str, token: Option<&str>, body: &'static str) -> Request<Body> {
