@@ -179,6 +179,16 @@ impl RetrievedContext {
         self.chunks.is_empty()
     }
 
+    /// Whether the lane is shown nothing at all.
+    ///
+    /// Distinct from [`RetrievedContext::is_empty`] because the blast radius
+    /// survives an index that holds no chunk for any dependent: knowing
+    /// `Ledger::settle` has fourteen callers and no test is worth saying even
+    /// when none of the fourteen can be quoted.
+    pub fn renders_nothing(&self) -> bool {
+        self.chunks.is_empty() && self.impact.is_empty()
+    }
+
     /// How many chunks each arm contributed.
     ///
     /// The acceptance measurement for graph expansion: a pipeline whose graph
