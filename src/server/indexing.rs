@@ -288,60 +288,6 @@ impl IndexBackend {
         Ok(())
     }
 
-    /// The files an incremental rebuild has to re-parse.
-    ///
-    /// Not just the changed ones. `delete_paths` removes every edge *touching*
-    /// a path, including the inbound ones written by files that did not change
-    /// — which are the edges the blast radius is made of. Re-parsing the
-    /// changed files' existing graph neighbours is what puts those back, and it
-    /// is still a few dozen files where a full rebuild is thousands.
-    ///
-    /// The residual gap, stated because it is real: a file that did not change
-    /// and had no edge to the changed file gets no new edge either, so a call
-    /// that only *now* resolves — because this push added the symbol it names —
-    /// is missed until either file is touched again. A full re-index fixes it,
-    /// and one wrong-way rebuild is cheaper than parsing every file on every
-    /// push to catch it.
-    async fn rebuild_set(
-        &self,
-        repo_id: &str,
-        report: &crate::indexer::types::IndexReport,
-    ) -> Result<std::collections::BTreeSet<String>> {
-        let mut seeds: Vec<String> = report.changed.clone();
-        seeds.extend(report.removed.iter().cloned());
-        seeds.sort();
-        seeds.dedup();
-
-        let mut set: std::collections::BTreeSet<String> = report.changed.iter().cloned().collect();
-        if seeds.is_empty() {
-            return Ok(set);
-        }
-        let neighbourhood = crate::graph::traverse::walk(
-            &self.index.graph,
-            repo_id,
-            &crate::graph::NeighbourQuery::new(seeds).hops(1),
-        )
-        .await?;
-        set.extend(neighbourhood.nodes.into_iter().map(|node| node.path));
-        // A path that was deleted is a neighbour of itself and must not be
-        // parsed back into existence.
-        for gone in &report.removed {
-            set.remove(gone);
-        }
-        Ok(set)
-    }
-}
-
-/// Whether a file configures the path aliases resolution depends on.
-///
-/// Read on every run, incremental or not: an incremental build that skipped
-/// `tsconfig.json` would resolve none of the `@/…` specifiers the repository is
-/// written in, and would record every one of them as a broken import.
-fn carries_aliases(path: &str) -> bool {
-    matches!(
-        path.rsplit('/').next().unwrap_or(path),
-        "tsconfig.json" | "jsconfig.json" | "go.mod" | "Cargo.toml"
-    )
 }
 
 /// Index `repo` in the background, requeueing rather than waiting on a claim.
