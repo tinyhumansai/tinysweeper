@@ -69,8 +69,9 @@ pub struct Corpus {
     pub root: PathBuf,
     /// Every case, sorted by id so two runs enumerate identically.
     pub cases: Vec<LoadedCase>,
-    /// A hash over every case file, so a report can refuse to diff against a
-    /// baseline scored on different labels.
+    /// A hash over every case file and the fixture it loads, so a report can
+    /// refuse to diff against a baseline scored on different labels — or
+    /// against a fixture edit that changed what the model was handed.
     pub digest: String,
 }
 
