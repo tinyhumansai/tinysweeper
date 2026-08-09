@@ -14,6 +14,13 @@ use crate::forge::types::{
     ReviewComment, ReviewEvent,
 };
 
+/// How many commits of a range get their patch fetched.
+///
+/// Matches the number the `commits` lane will render, so the calls that are
+/// made are the calls whose answers are used. Commits past it arrive with
+/// `patch: None`, which the lane reports rather than hides.
+pub const MAX_PATCHED_COMMITS: usize = 50;
+
 /// Read access to a forge. This is what lanes get.
 #[async_trait]
 pub trait ForgeRead: Send + Sync {
@@ -23,8 +30,18 @@ pub trait ForgeRead: Send + Sync {
     /// Fetch the files a pull request changed.
     async fn changed_files(&self, repo: &RepoId, number: u64) -> Result<Vec<ChangedFile>>;
 
-    /// Fetch the commits in a pull request's range.
+    /// Fetch the commits in a pull request's range, as metadata only.
+    ///
+    /// The patch is a separate call on every forge worth supporting, so it is
+    /// a separate method here: [`commit_patch`](Self::commit_patch).
     async fn commits(&self, repo: &RepoId, number: u64) -> Result<Vec<Commit>>;
+
+    /// Fetch the unified patch one commit introduced.
+    ///
+    /// `None` when the forge has no patch to give — a merge commit, a commit
+    /// whose diff the forge declines to render — which is not an error: the
+    /// `commits` lane renders the absence rather than inventing a diff.
+    async fn commit_patch(&self, repo: &RepoId, sha: &str) -> Result<Option<String>>;
 
     /// Fetch the issue comments on a pull request or issue.
     async fn comments(&self, repo: &RepoId, number: u64) -> Result<Vec<IssueComment>>;
@@ -65,10 +82,20 @@ pub trait ForgeRead: Send + Sync {
     /// Default-implemented in terms of the calls above so an adapter only has
     /// to override it when the forge offers something cheaper.
     async fn pull_request_context(&self, repo: &RepoId, number: u64) -> Result<PullRequestContext> {
+        let mut commits = self.commits(repo, number).await?;
+
+        // One request per commit, so the count is capped rather than left to
+        // the branch. A two-hundred-commit branch would otherwise spend two
+        // hundred API calls — and the whole rate-limit budget of a review — on
+        // patches the `commits` lane will not even render.
+        for commit in commits.iter_mut().take(MAX_PATCHED_COMMITS) {
+            commit.patch = self.commit_patch(repo, &commit.sha).await?;
+        }
+
         Ok(PullRequestContext {
             pull_request: self.pull_request(repo, number).await?,
             files: self.changed_files(repo, number).await?,
-            commits: self.commits(repo, number).await?,
+            commits,
             comments: self.comments(repo, number).await?,
             checks: Default::default(),
         })

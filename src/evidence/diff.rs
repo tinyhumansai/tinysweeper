@@ -318,6 +318,37 @@ pub fn render(diffs: &[FileDiff]) -> String {
     out
 }
 
+/// Cut a raw patch down to `limit` bytes, saying what was cut.
+///
+/// The note is part of the returned text on purpose. A reviewer shown a
+/// silently shortened patch believes it is the whole change and reasons about
+/// what is missing as if it were not there; a reviewer shown "12 KiB omitted"
+/// knows the difference between "the diff does not do that" and "I was not
+/// shown the part that might".
+///
+/// The cut lands on a line boundary — half a hunk line reads as a different
+/// change than the one that was made — and never inside a character.
+pub fn truncate_patch(patch: &str, limit: usize) -> String {
+    if patch.len() <= limit {
+        return patch.to_string();
+    }
+
+    let mut end = 0;
+    for (index, _) in patch.char_indices() {
+        if index > limit {
+            break;
+        }
+        end = index;
+    }
+    let cut = patch[..end].rfind('\n').map(|n| n + 1).unwrap_or(end);
+    let dropped = patch.len() - cut;
+
+    format!(
+        "{}… {dropped} further bytes of this patch omitted.\n",
+        &patch[..cut]
+    )
+}
+
 fn parse_hunk_header(line: &str) -> Option<Hunk> {
     // @@ -old_start,old_lines +new_start,new_lines @@ optional heading
     let body = line.strip_prefix("@@")?;
@@ -359,6 +390,33 @@ fn parse_range(text: &str) -> Option<(u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_patch_inside_the_limit_is_returned_unchanged() {
+        assert_eq!(truncate_patch("+one\n+two\n", 1024), "+one\n+two\n");
+    }
+
+    #[test]
+    fn truncation_cuts_on_a_line_boundary_and_says_how_much_it_dropped() {
+        let patch = "+one\n+two\n+three\n+four\n";
+        let cut = truncate_patch(patch, 10);
+
+        assert!(cut.starts_with("+one\n+two\n"), "{cut}");
+        assert!(!cut.contains("+three"), "{cut}");
+        assert!(
+            cut.contains("13 further bytes of this patch omitted"),
+            "{cut}"
+        );
+    }
+
+    #[test]
+    fn truncation_never_splits_a_character() {
+        // A multi-byte line straddling the limit: slicing by byte would panic.
+        let patch = "+ünïcödé line one\n+ünïcödé line two\n";
+        let cut = truncate_patch(patch, 5);
+
+        assert!(cut.contains("further bytes"), "{cut}");
+    }
 
     const SIMPLE: &str = "\
 @@ -1,4 +1,5 @@

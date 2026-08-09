@@ -26,6 +26,8 @@ use async_trait::async_trait;
 
 use crate::config::types::LaneId;
 use crate::error::Result;
+use crate::evidence::diff::truncate_patch;
+use crate::falsify::Falsifier;
 use crate::forge::types::Commit;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
@@ -47,6 +49,25 @@ pub const ADJUDICATES: [ScanKind; 3] = [ScanKind::Secret, ScanKind::Blob, ScanKi
 /// going to rewrite, and sending them all is a large bill for a review nobody
 /// asked for.
 const MAX_COMMITS: usize = 50;
+
+/// How many patch bytes the whole range may spend.
+///
+/// The commit list has been capped since this lane existed; the patches are the
+/// part that can be a thousand times larger than the messages, so they get a
+/// cap of their own. Once it is gone the remaining commits are still listed
+/// with their messages — losing the history entirely would be a worse answer
+/// than losing the diffs — and the omission is stated in the evidence.
+const MAX_PATCH_BYTES: usize = 48 * 1024;
+
+/// How much of the budget any single commit may take.
+///
+/// Without it, one commit that vendors a dependency spends the whole range's
+/// budget and every commit after it is reduced to its subject line — which is
+/// precisely the state that produced findings built from subjects alone.
+const MAX_COMMIT_PATCH_BYTES: usize = 12 * 1024;
+
+/// The smallest remaining budget worth spending on a patch at all.
+const MIN_USEFUL_PATCH_BYTES: usize = 512;
 
 /// The commits lane.
 pub struct Commits {
@@ -126,6 +147,39 @@ impl Lane for Commits {
             spend,
         );
 
+        // The falsification pass, on the model's findings and *before* the
+        // scanner's are merged in. Two reasons for that order:
+        //
+        // - This lane's characteristic failure is a claim the evidence
+        //   disproves — reading "kernel bypass" in a subject and reporting
+        //   hardware access from a patch that does nothing of the sort (issue
+        //   #47). That is exactly what a falsifier can prove wrong, which is
+        //   not true of most lanes' output.
+        // - A scanner match must never be filtered. The document the filter
+        //   sees is the commit range, and a committed key found by a regular
+        //   expression is not up for a model's opinion — the same rule that
+        //   makes `merge_scanner_findings` unconditional.
+        //
+        // The filter is shown the same evidence the lane was, so a finding
+        // about a commit message is judged against the messages rather than
+        // rejected for being absent from a diff.
+        let filtered = Falsifier::new(self.model.as_ref(), input.config)
+            .filter(
+                LaneId::Commits,
+                std::mem::take(&mut outcome.findings),
+                &evidence,
+            )
+            .await;
+        outcome.spend.merge(filtered.spend);
+        outcome.findings = filtered.findings;
+        if !filtered.rejected.is_empty() {
+            let _ = write!(
+                outcome.summary,
+                "\n\n{} finding(s) dropped: the commit range disproved them.",
+                filtered.rejected.len()
+            );
+        }
+
         merge_scanner_findings(&mut outcome, &scanner);
         Ok(outcome)
     }
@@ -158,8 +212,20 @@ fn merge_scanner_findings(outcome: &mut LaneOutcome, scanner: &[&crate::scan::ty
 /// is asked to judge whether an identity looks accidental — a commit authored
 /// as `root@localhost` is worth a word. They are evidence, and they never reach
 /// a comment: the model is told to describe the problem, not to quote it.
+/// Each commit's patch follows its message, because the lane is specified to
+/// review `git log -p`: without the patch it can only judge the subject line,
+/// and a subject line is exactly the thin evidence that produced a confident
+/// security finding about a change that did nothing of the kind (issue #47).
+///
+/// Patches are scrubbed like everything else here. The security lane sees the
+/// diff unredacted; this one adjudicates the secret scanner's output, and a
+/// lane that must never quote a credential is better off never holding one.
 fn render_commits(commits: &[Commit]) -> String {
     let mut out = String::new();
+    let mut budget = MAX_PATCH_BYTES;
+    let mut over_budget = 0usize;
+    let mut unfetched = 0usize;
+
     for commit in commits.iter().take(MAX_COMMITS) {
         let short: String = commit.sha.chars().take(8).collect();
         let _ = writeln!(
@@ -169,12 +235,47 @@ fn render_commits(commits: &[Commit]) -> String {
             scrub(&commit.author_name),
             indent(&scrub(&commit.message))
         );
+
+        match commit.patch.as_deref() {
+            None => {
+                unfetched += 1;
+                let _ = writeln!(out, "    [no patch was fetched for this commit]");
+            }
+            // A few hundred bytes of patch followed by a truncation note is
+            // worse than an honest omission: it looks like the whole change.
+            Some(_) if budget < MIN_USEFUL_PATCH_BYTES => {
+                over_budget += 1;
+                let _ = writeln!(
+                    out,
+                    "    [patch omitted: the range's patch budget is spent]"
+                );
+            }
+            Some(patch) => {
+                let allowance = budget.min(MAX_COMMIT_PATCH_BYTES);
+                let shown = truncate_patch(&scrub(patch), allowance);
+                budget = budget.saturating_sub(shown.len());
+                let _ = writeln!(out, "{}", indent(&shown));
+            }
+        }
     }
+
     if commits.len() > MAX_COMMITS {
         let _ = writeln!(
             out,
             "… and {} more commits, not shown.",
             commits.len() - MAX_COMMITS
+        );
+    }
+    // Stated, not hidden. The instructions tell the model it may not raise a
+    // finding about a commit whose patch it was not shown, and it can only obey
+    // that if it knows which those are.
+    if unfetched > 0 {
+        let _ = writeln!(out, "[{unfetched} commit(s) arrived without a patch.]");
+    }
+    if over_budget > 0 {
+        let _ = writeln!(
+            out,
+            "[{over_budget} commit(s) had their patch omitted for size.]"
         );
     }
     out
@@ -220,12 +321,17 @@ mod tests {
                 message: "wip".into(),
                 author_name: "Someone".into(),
                 author_email: "someone@example.com".into(),
+                patch: Some("--- a/src/config.rs\n+++ b/src/config.rs\n@@ -1,2 +1,3 @@\n a\n+const K: &str = \"…\";\n b\n".into()),
             },
             Commit {
                 sha: "0987654fed".into(),
                 message: "fix: guard the empty basket\n\nTotals now return zero.".into(),
                 author_name: "Someone".into(),
                 author_email: "someone@example.com".into(),
+                patch: Some(
+                    "--- a/src/basket.rs\n+++ b/src/basket.rs\n@@ -3,2 +3,3 @@\n fn total() {\n+    if items.is_empty() { return 0; }\n }\n"
+                        .into(),
+                ),
             },
         ]
     }
@@ -403,6 +509,167 @@ mod tests {
         );
     }
 
+    /// A commit whose subject says something alarming and whose patch does
+    /// nothing of the kind. The regression from issue #47: the lane read
+    /// "kernel bypass" in a subject and reported that a container had been
+    /// given direct hardware access, from a patch that no-ops one function.
+    fn loaded_subject_commits() -> Vec<Commit> {
+        vec![Commit {
+            sha: "feed1234ab".into(),
+            message: "fix: kernel bypass shim so mongod starts on 6.19".into(),
+            author_name: "Someone".into(),
+            author_email: "someone@example.com".into(),
+            patch: Some(
+                "--- a/docker/entrypoint.py\n+++ b/docker/entrypoint.py\n\
+                 @@ -10,6 +10,9 @@\n def main():\n\
+                 +def _check_tuning():\n+    # no-op: the probe fails on 6.19\n+    return None\n\
+                 \n     start_mongod()\n"
+                    .into(),
+            ),
+        }]
+    }
+
+    // --- issue #47: a subject is not evidence ------------------------------
+
+    #[tokio::test]
+    async fn golden_a_loaded_subject_with_a_benign_patch_raises_no_finding() {
+        // First call: the lane's model does what it did on PR #45 — reads the
+        // subject and reports hardware access. Second call: the falsifier,
+        // shown the same commit range, proves it wrong from the patch.
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "This branch grants a container direct hardware access.",
+                "findings": [{
+                    "path": "docker/entrypoint.py",
+                    "rule": "privileged-container",
+                    "title": "Do not bypass the host kernel's network stack",
+                    "body": "The commit enables DPDK-style kernel-bypass networking, \
+                             giving the MongoDB container direct hardware access.",
+                    "severity": "critical", "confidence": 0.9
+                }]
+            }))
+            .then(json!({
+                "incorrect": [{
+                    "index": 1,
+                    "reason": "the patch only makes one tuning probe return None; \
+                               nothing in it touches networking or privileges"
+                }]
+            }));
+
+        let outcome = run_with(model.clone(), &config(), &loaded_subject_commits(), &[]).await;
+
+        assert!(
+            outcome.findings.is_empty(),
+            "a finding built from a subject line survived: {:#?}",
+            outcome.findings
+        );
+        assert!(outcome.summary.contains("disproved"), "{}", outcome.summary);
+        assert_eq!(model.calls(), 2, "the falsification pass has to have run");
+    }
+
+    #[tokio::test]
+    async fn the_instructions_say_a_word_in_a_message_is_not_evidence() {
+        let model = MockModel::silent();
+        run_with(model.clone(), &config(), &loaded_subject_commits(), &[]).await;
+
+        let prompt = model.last_prompt().expect("recorded");
+        assert!(
+            prompt.contains("never evidence of the thing it names"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Every finding must quote the patch"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Anything you inferred from a message alone"),
+            "{prompt}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_patch_for_each_commit_reaches_the_prompt() {
+        let model = MockModel::silent();
+        run_with(model.clone(), &config(), &commits(), &[]).await;
+
+        let prompt = model.last_prompt().expect("recorded");
+        assert!(prompt.contains("+++ b/src/basket.rs"), "{prompt}");
+        assert!(prompt.contains("if items.is_empty()"), "{prompt}");
+    }
+
+    #[tokio::test]
+    async fn a_scanner_finding_is_not_up_for_falsification() {
+        // The falsifier is told this one is wrong. It is a regular expression's
+        // match, not a model's opinion, and it stays.
+        let model = MockModel::new()
+            .then(json!({"summary": "…", "findings": [{
+                "path": "src/config.rs", "rule": "wobbly", "title": "Something else",
+                "body": "…", "severity": "low", "confidence": 0.5
+            }]}))
+            .then(
+                json!({"incorrect": [{"index": 1, "reason": "not in the range"},
+                                       {"index": 2, "reason": "the key is an example"}]}),
+            );
+
+        let outcome = run_with(model, &config(), &commits(), &[secret_finding()]).await;
+
+        assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
+        assert_eq!(outcome.findings[0].rule, "aws-access-key-id");
+    }
+
+    #[test]
+    fn a_commit_with_no_patch_is_rendered_as_such_rather_than_as_an_empty_diff() {
+        let commits = vec![Commit {
+            sha: "abc1234".into(),
+            message: "chore: something".into(),
+            patch: None,
+            ..Commit::default()
+        }];
+        let rendered = render_commits(&commits);
+
+        assert!(
+            rendered.contains("[no patch was fetched for this commit]"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("1 commit(s) arrived without a patch."),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn the_patch_budget_is_bounded_and_the_omission_is_reported() {
+        let big = format!(
+            "--- a/vendor.rs\n{}",
+            "+a line of vendored code\n".repeat(4_000)
+        );
+        let commits: Vec<Commit> = (0..12)
+            .map(|i| Commit {
+                sha: format!("{i:040x}"),
+                message: format!("chore: vendor {i}"),
+                patch: Some(big.clone()),
+                ..Commit::default()
+            })
+            .collect();
+        let rendered = render_commits(&commits);
+
+        assert!(
+            rendered.len() < MAX_PATCH_BYTES * 2,
+            "the range spent {} bytes",
+            rendered.len()
+        );
+        assert!(
+            rendered.contains("further bytes of this patch omitted"),
+            "truncation is stated"
+        );
+        assert!(
+            rendered.contains("had their patch omitted for size"),
+            "the dropped commits are stated: {rendered}"
+        );
+        // Every commit is still listed, patch or no patch.
+        assert!(rendered.contains("chore: vendor 11"), "{rendered}");
+    }
+
     #[tokio::test]
     async fn nothing_to_review_never_calls_the_model() {
         let model = MockModel::new();
@@ -442,6 +709,7 @@ mod tests {
             message: format!("chore: add key {}", key()),
             author_name: "Someone".into(),
             author_email: "someone@example.com".into(),
+            patch: Some(format!("+const K: &str = \"{}\";\n", key())),
         }];
         let rendered = render_commits(&commits);
 

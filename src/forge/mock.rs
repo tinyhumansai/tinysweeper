@@ -93,6 +93,9 @@ pub struct MockState {
     /// Changed files, keyed by pull request number.
     pub files: BTreeMap<u64, Vec<ChangedFile>>,
     /// Commits, keyed by pull request number.
+    ///
+    /// A `patch` set here is served by `commit_patch` and withheld from
+    /// `commits`, which is how the real forge behaves.
     pub commits: BTreeMap<u64, Vec<Commit>>,
     /// Issue comments, keyed by item number.
     pub comments: BTreeMap<u64, Vec<IssueComment>>,
@@ -277,7 +280,31 @@ impl ForgeRead for MockForge {
 
     async fn commits(&self, _repo: &RepoId, number: u64) -> Result<Vec<Commit>> {
         let state = self.state.lock().expect("mock state lock");
-        Ok(state.commits.get(&number).cloned().unwrap_or_default())
+        Ok(state
+            .commits
+            .get(&number)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            // Metadata only, exactly like the real listing endpoint. A test
+            // that sees a patch here would be passing on behaviour GitHub does
+            // not have, and the plumbing this mock exists to check —
+            // `pull_request_context` fetching each patch — would be untested.
+            .map(|commit| Commit {
+                patch: None,
+                ..commit
+            })
+            .collect())
+    }
+
+    async fn commit_patch(&self, _repo: &RepoId, sha: &str) -> Result<Option<String>> {
+        let state = self.state.lock().expect("mock state lock");
+        Ok(state
+            .commits
+            .values()
+            .flatten()
+            .find(|commit| commit.sha == sha)
+            .and_then(|commit| commit.patch.clone()))
     }
 
     async fn comments(&self, _repo: &RepoId, number: u64) -> Result<Vec<IssueComment>> {
@@ -721,5 +748,50 @@ mod tests {
         assert_eq!(context.pull_request.number, 7);
         assert_eq!(context.files.len(), 1);
         assert_eq!(context.commits.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_context_helper_fetches_a_patch_for_every_commit() {
+        // The listing endpoint returns metadata; the patch is a second call.
+        // The `commits` lane cannot review `git log -p` unless this helper
+        // makes it — issue #47.
+        let forge = MockForge::new().with_pull_request(
+            pull_request(7),
+            Vec::new(),
+            vec![Commit {
+                sha: "abc123".into(),
+                message: "feat: something".into(),
+                patch: Some("--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n+ok\n".into()),
+                ..Commit::default()
+            }],
+        );
+
+        assert_eq!(
+            forge.commits(&repo(), 7).await.expect("listed")[0].patch,
+            None,
+            "the listing endpoint returns metadata only"
+        );
+
+        let context = forge
+            .pull_request_context(&repo(), 7)
+            .await
+            .expect("context");
+        assert!(
+            context.commits[0]
+                .patch
+                .as_deref()
+                .is_some_and(|patch| patch.contains("+ok")),
+            "{:?}",
+            context.commits[0].patch
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_commit_has_no_patch_rather_than_an_error() {
+        let forge = MockForge::new();
+        assert_eq!(
+            forge.commit_patch(&repo(), "nope").await.expect("read"),
+            None
+        );
     }
 }
