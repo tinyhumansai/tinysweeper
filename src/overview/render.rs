@@ -13,10 +13,10 @@
 
 use std::fmt::Write as _;
 
+use crate::VERSION;
 use crate::findings::render::escape_cell;
 use crate::overview::mermaid;
 use crate::overview::types::{ChangeMap, Component, GraphStatus, Role};
-use crate::VERSION;
 
 /// The marker that identifies tinysweeper's own change-map comment.
 ///
@@ -89,7 +89,10 @@ fn headline(map: &ChangeMap) -> String {
             );
         }
         GraphStatus::Walked { nodes } => {
-            let _ = write!(line, " Nothing outside it imports these files ({nodes} graph nodes walked).");
+            let _ = write!(
+                line,
+                " Nothing outside it imports these files ({nodes} graph nodes walked)."
+            );
         }
     }
 
@@ -110,7 +113,8 @@ const LEGEND: &str = "<sub>Green: changed. Grey: untouched, reached through an i
 
 /// One row per component.
 fn table(map: &ChangeMap) -> String {
-    let mut out = String::from("\n| Component | | Files | Lines | Findings |\n|---|---|---:|---:|---:|\n");
+    let mut out =
+        String::from("\n| Component | | Files | Lines | Findings |\n|---|---|---:|---:|---:|\n");
     for component in &map.components {
         let _ = writeln!(
             out,

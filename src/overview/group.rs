@@ -47,10 +47,8 @@ pub fn choose_depth(paths: impl IntoIterator<Item = impl AsRef<str>>, max: usize
         .max(1);
 
     for depth in (1..=deepest).rev() {
-        let distinct: BTreeSet<String> = paths
-            .iter()
-            .map(|path| component_of(path, depth))
-            .collect();
+        let distinct: BTreeSet<String> =
+            paths.iter().map(|path| component_of(path, depth)).collect();
         if distinct.len() <= max.max(1) {
             return depth;
         }
@@ -75,8 +73,14 @@ mod tests {
 
     #[test]
     fn depth_truncates_from_the_left() {
-        assert_eq!(component_of("packages/web/src/app/page.tsx", 2), "packages/web");
-        assert_eq!(component_of("packages/web/src/app/page.tsx", 4), "packages/web/src/app");
+        assert_eq!(
+            component_of("packages/web/src/app/page.tsx", 2),
+            "packages/web"
+        );
+        assert_eq!(
+            component_of("packages/web/src/app/page.tsx", 4),
+            "packages/web/src/app"
+        );
     }
 
     #[test]

@@ -74,10 +74,26 @@ fn golden_a_change_across_two_modules_draws_what_it_reaches() {
             file("src/app/apply.rs"),
         ],
         edges: vec![
-            edge("src/app/review.rs", "src/lanes/critique.rs", EdgeKind::Imports),
-            edge("src/app/review.rs", "src/lanes/security.rs", EdgeKind::Imports),
-            edge("src/app/apply.rs", "src/lanes/critique.rs", EdgeKind::Imports),
-            edge("src/lanes/critique.rs", "src/graph/build.rs", EdgeKind::Imports),
+            edge(
+                "src/app/review.rs",
+                "src/lanes/critique.rs",
+                EdgeKind::Imports,
+            ),
+            edge(
+                "src/app/review.rs",
+                "src/lanes/security.rs",
+                EdgeKind::Imports,
+            ),
+            edge(
+                "src/app/apply.rs",
+                "src/lanes/critique.rs",
+                EdgeKind::Imports,
+            ),
+            edge(
+                "src/lanes/critique.rs",
+                "src/graph/build.rs",
+                EdgeKind::Imports,
+            ),
         ],
     };
 
@@ -110,7 +126,10 @@ fn golden_a_change_across_two_modules_draws_what_it_reaches() {
 
 #[test]
 fn components_are_directories_at_the_deepest_depth_that_fits() {
-    let diffs = [diff("src/lanes/critique.rs", 1), diff("src/graph/build.rs", 1)];
+    let diffs = [
+        diff("src/lanes/critique.rs", 1),
+        diff("src/graph/build.rs", 1),
+    ];
     let map = build(&diffs, &[], GraphView::Absent, &limits());
 
     let names: Vec<&str> = map.components.iter().map(|c| c.name.as_str()).collect();
@@ -119,7 +138,10 @@ fn components_are_directories_at_the_deepest_depth_that_fits() {
 
 #[test]
 fn a_tight_component_budget_collapses_the_grain_rather_than_dropping_files() {
-    let diffs = [diff("src/lanes/critique.rs", 1), diff("src/graph/build.rs", 1)];
+    let diffs = [
+        diff("src/lanes/critique.rs", 1),
+        diff("src/graph/build.rs", 1),
+    ];
     let map = build(
         &diffs,
         &[],
@@ -257,7 +279,11 @@ fn a_symbol_node_is_attributed_to_its_file() {
 fn arrows_are_capped_heaviest_first() {
     let diffs = [diff("src/a/one.rs", 1)];
     let walk = Neighbourhood {
-        nodes: vec![file("src/a/one.rs"), file("src/b/two.rs"), file("src/c/three.rs")],
+        nodes: vec![
+            file("src/a/one.rs"),
+            file("src/b/two.rs"),
+            file("src/c/three.rs"),
+        ],
         edges: vec![
             edge("src/b/two.rs", "src/a/one.rs", EdgeKind::Imports),
             edge("src/b/two.rs", "src/a/one.rs#run", EdgeKind::Calls),

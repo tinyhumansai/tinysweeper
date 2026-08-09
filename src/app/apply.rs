@@ -1078,8 +1078,9 @@ mod tests {
             .writes()
             .into_iter()
             .filter(|write| match write {
-                Write::Comment { body, .. } | Write::CommentUpdate { body, .. } =>
-                    body.contains(crate::overview::MARKER),
+                Write::Comment { body, .. } | Write::CommentUpdate { body, .. } => {
+                    body.contains(crate::overview::MARKER)
+                }
                 _ => false,
             })
             .collect()
@@ -1088,9 +1089,15 @@ mod tests {
     #[tokio::test]
     async fn a_pull_request_gets_one_change_map_comment() {
         let forge = forge("abc123");
-        apply(&forge, &forge, &config(), &proposal_with_map("abc123"), None)
-            .await
-            .expect("applies");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal_with_map("abc123"),
+            None,
+        )
+        .await
+        .expect("applies");
 
         let posted = overview_comments(&forge);
         assert_eq!(posted.len(), 1, "{posted:#?}");
@@ -1114,9 +1121,15 @@ mod tests {
             }],
         );
 
-        apply(&forge, &forge, &config(), &proposal_with_map("abc123"), None)
-            .await
-            .expect("applies");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal_with_map("abc123"),
+            None,
+        )
+        .await
+        .expect("applies");
 
         let posted = overview_comments(&forge);
         assert_eq!(posted.len(), 1, "{posted:#?}");
@@ -1140,9 +1153,15 @@ mod tests {
             }],
         );
 
-        apply(&forge, &forge, &config(), &proposal_with_map("abc123"), None)
-            .await
-            .expect("applies");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal_with_map("abc123"),
+            None,
+        )
+        .await
+        .expect("applies");
 
         let posted = overview_comments(&forge);
         assert_eq!(posted.len(), 1, "{posted:#?}");
@@ -1162,17 +1181,31 @@ mod tests {
             .await
             .expect("applies");
 
-        assert!(overview_comments(&forge).is_empty(), "{:#?}", forge.writes());
+        assert!(
+            overview_comments(&forge).is_empty(),
+            "{:#?}",
+            forge.writes()
+        );
     }
 
     #[tokio::test]
     async fn a_stale_head_draws_nothing_either() {
         let forge = forge("def456");
-        apply(&forge, &forge, &config(), &proposal_with_map("abc123"), None)
-            .await
-            .expect("applies");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal_with_map("abc123"),
+            None,
+        )
+        .await
+        .expect("applies");
 
-        assert!(overview_comments(&forge).is_empty(), "{:#?}", forge.writes());
+        assert!(
+            overview_comments(&forge).is_empty(),
+            "{:#?}",
+            forge.writes()
+        );
     }
 
     #[tokio::test]
@@ -1195,9 +1228,15 @@ mod tests {
         // review is submitted at all — and it is exactly the pull request whose
         // reviewer has nothing but the files tab to go on.
         let forge = forge("abc123").with_own_review(7, ReviewEvent::Approve);
-        apply(&forge, &forge, &config(), &proposal_with_map("abc123"), None)
-            .await
-            .expect("applies");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal_with_map("abc123"),
+            None,
+        )
+        .await
+        .expect("applies");
 
         assert!(
             !forge
