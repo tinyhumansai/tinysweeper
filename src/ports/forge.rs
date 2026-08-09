@@ -10,8 +10,8 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 use crate::forge::types::{
-    ChangedFile, CheckRun, Commit, Issue, IssueComment, PullRequest, PullRequestContext, RepoId,
-    ReviewComment, ReviewEvent,
+    ChangedFile, CheckRun, CheckStatus, Commit, Issue, IssueComment, PullRequest,
+    PullRequestContext, RepoId, ReviewComment, ReviewEvent, ReviewVerdict,
 };
 
 /// How many commits of a range get their patch fetched.
@@ -51,6 +51,27 @@ pub trait ForgeRead: Send + Sync {
     /// Used for fingerprint dedupe: a finding already posted is never posted
     /// again, across pushes.
     async fn review_comments(&self, repo: &RepoId, number: u64) -> Result<Vec<ReviewComment>>;
+
+    /// The check runs reported against one commit.
+    ///
+    /// Pinned to a SHA rather than to a pull request number on purpose: the
+    /// auto-merge gate asks whether *this commit* is green, and a check that
+    /// passed on the previous head says nothing about the one about to be
+    /// merged. A commit nothing has reported on yields an empty list, which is
+    /// not an error — and is not a pass either.
+    ///
+    /// No default implementation. An adapter that forgot to answer would
+    /// otherwise report "no checks", and a gate that cannot see a red check is
+    /// worse than no gate.
+    async fn check_runs(&self, repo: &RepoId, sha: &str) -> Result<Vec<CheckStatus>>;
+
+    /// Every review left on a pull request, oldest first.
+    ///
+    /// The history rather than a verdict: only the caller knows that a later
+    /// `COMMENT` must not retire an earlier `CHANGES_REQUESTED`, and folding
+    /// here would bury that rule in an adapter no offline test can reach.
+    /// Dismissed reviews are omitted — they no longer block anything.
+    async fn reviews(&self, repo: &RepoId, number: u64) -> Result<Vec<ReviewVerdict>>;
 
     /// The state of tinysweeper's own most recent review on a pull request.
     ///

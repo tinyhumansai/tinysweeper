@@ -183,6 +183,60 @@ impl CheckConclusion {
     }
 }
 
+/// A check run as it was observed on a commit.
+///
+/// Distinct from [`CheckRun`], which is a check being *written*: a check being
+/// read may not have finished, and the difference is load-bearing for
+/// `src/automerge`. A conclusion of `None` means queued or in progress, which
+/// is never treated as a pass — merging while a required check is still running
+/// is exactly the mistake the gate exists to avoid.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckStatus {
+    /// The check name, e.g. `tinysweeper/gate`.
+    pub name: String,
+    /// The outcome, or `None` while it is still running.
+    pub conclusion: Option<CheckConclusion>,
+}
+
+impl CheckStatus {
+    /// Build from the forge's wire strings.
+    ///
+    /// Lives here rather than in the GitHub adapter so the offline suite can
+    /// test it: the default build does not compile the adapter, and this
+    /// mapping is exactly the part of it that decides whether a pull request
+    /// gets merged.
+    ///
+    /// `None` is a check that has not concluded. An unrecognised conclusion
+    /// becomes [`CheckConclusion::Failure`] on purpose — a conclusion added to
+    /// the API after this was written must not be read as a pass.
+    pub fn from_api(name: &str, conclusion: Option<&str>) -> Self {
+        Self {
+            name: name.to_string(),
+            conclusion: conclusion.map(|raw| match raw {
+                "success" => CheckConclusion::Success,
+                "neutral" => CheckConclusion::Neutral,
+                "skipped" | "stale" => CheckConclusion::Skipped,
+                "action_required" => CheckConclusion::ActionRequired,
+                _ => CheckConclusion::Failure,
+            }),
+        }
+    }
+
+    /// Whether this check is affirmative evidence that it passed.
+    ///
+    /// Only `Success` counts. `Neutral` and `Skipped` are deliberately not
+    /// green: a check that declined to run has reported nothing, and the
+    /// conservative reading of "nothing" is "not yet".
+    pub fn is_green(&self) -> bool {
+        self.conclusion == Some(CheckConclusion::Success)
+    }
+
+    /// Whether this check has not concluded yet.
+    pub fn is_pending(&self) -> bool {
+        self.conclusion.is_none()
+    }
+}
+
 /// A check run to publish.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckRun {
@@ -216,6 +270,20 @@ pub enum ReviewEvent {
 }
 
 impl ReviewEvent {
+    /// Read a submitted review state off the wire.
+    ///
+    /// `None` for anything that carries no verdict: `DISMISSED` was retired by
+    /// a human, `PENDING` was never submitted, and neither says anything about
+    /// the merge button.
+    pub fn from_api(state: &str) -> Option<Self> {
+        match state {
+            "APPROVED" => Some(ReviewEvent::Approve),
+            "CHANGES_REQUESTED" => Some(ReviewEvent::RequestChanges),
+            "COMMENTED" => Some(ReviewEvent::Comment),
+            _ => None,
+        }
+    }
+
     /// The GitHub API's name for this event.
     pub fn as_api(self) -> &'static str {
         match self {
@@ -223,6 +291,38 @@ impl ReviewEvent {
             ReviewEvent::RequestChanges => "REQUEST_CHANGES",
             ReviewEvent::Approve => "APPROVE",
         }
+    }
+}
+
+/// One review someone left on a pull request.
+///
+/// Reported in the order the reviews were submitted, so the caller can fold
+/// them down to the latest verdict per reviewer itself. Doing the fold here
+/// would hide the one rule that matters — a later `COMMENT` does not retire an
+/// earlier `CHANGES_REQUESTED` — inside an adapter no test can reach.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewVerdict {
+    /// The reviewer's login.
+    pub reviewer: String,
+    /// Whether the reviewer is a bot account.
+    ///
+    /// Decided by the forge, from the account type, rather than guessed from
+    /// the login: `automerge.require_approvals` counts human approvals, and a
+    /// gate that a bot can satisfy on its own is not a gate.
+    pub bot: bool,
+    /// The verdict itself.
+    pub state: ReviewEvent,
+}
+
+impl ReviewVerdict {
+    /// Whether this review counts towards `automerge.require_approvals`.
+    pub fn is_human_approval(&self) -> bool {
+        !self.bot && self.state == ReviewEvent::Approve
+    }
+
+    /// Whether this review blocks the merge button.
+    pub fn is_blocking(&self) -> bool {
+        self.state == ReviewEvent::RequestChanges
     }
 }
 
@@ -322,6 +422,164 @@ mod tests {
         for bad in ["tinysweeper", "/tinysweeper", "owner/", "a/b/c", ""] {
             assert!(RepoId::parse(bad).is_none(), "accepted `{bad}`");
         }
+    }
+
+    #[test]
+    fn an_unrecognised_check_conclusion_is_read_as_a_failure() {
+        // The direction of this mistake is chosen deliberately. A conclusion
+        // GitHub adds after this code was written must not be read as a pass by
+        // the auto-merge gate; refusing to merge costs a wait, merging on a
+        // conclusion nobody has seen costs a revert.
+        assert_eq!(
+            CheckStatus::from_api("ci", Some("success")).conclusion,
+            Some(CheckConclusion::Success)
+        );
+        assert_eq!(
+            CheckStatus::from_api("ci", Some("neutral")).conclusion,
+            Some(CheckConclusion::Neutral)
+        );
+        assert_eq!(
+            CheckStatus::from_api("ci", Some("skipped")).conclusion,
+            Some(CheckConclusion::Skipped)
+        );
+        assert_eq!(
+            CheckStatus::from_api("ci", Some("stale")).conclusion,
+            Some(CheckConclusion::Skipped)
+        );
+        assert_eq!(
+            CheckStatus::from_api("ci", Some("action_required")).conclusion,
+            Some(CheckConclusion::ActionRequired)
+        );
+        for raw in ["failure", "cancelled", "timed_out", "something_new"] {
+            assert_eq!(
+                CheckStatus::from_api("ci", Some(raw)).conclusion,
+                Some(CheckConclusion::Failure),
+                "`{raw}` must not be mistaken for a pass"
+            );
+        }
+
+        let pending = CheckStatus::from_api("ci", None);
+        assert_eq!(pending.name, "ci");
+        assert!(pending.is_pending());
+    }
+
+    #[test]
+    fn only_submitted_review_states_carry_a_verdict() {
+        assert_eq!(
+            ReviewEvent::from_api("APPROVED"),
+            Some(ReviewEvent::Approve)
+        );
+        assert_eq!(
+            ReviewEvent::from_api("CHANGES_REQUESTED"),
+            Some(ReviewEvent::RequestChanges)
+        );
+        assert_eq!(
+            ReviewEvent::from_api("COMMENTED"),
+            Some(ReviewEvent::Comment)
+        );
+        // Dismissed was retired by a human and pending was never submitted;
+        // neither says anything about the merge button.
+        for raw in ["DISMISSED", "PENDING", "", "approved"] {
+            assert_eq!(ReviewEvent::from_api(raw), None, "`{raw}` is not a verdict");
+        }
+    }
+
+    #[test]
+    fn a_bot_review_is_not_a_human_approval() {
+        // `automerge.require_approvals` counts *human* approvals. A bot that
+        // approves every clean pull request — tinysweeper itself does — would
+        // otherwise satisfy the requirement on its own, which would make the
+        // setting mean nothing.
+        let human = ReviewVerdict {
+            reviewer: "maintainer".into(),
+            bot: false,
+            state: ReviewEvent::Approve,
+        };
+        let bot = ReviewVerdict {
+            reviewer: "tinysweeper[bot]".into(),
+            bot: true,
+            state: ReviewEvent::Approve,
+        };
+
+        assert!(human.is_human_approval());
+        assert!(!bot.is_human_approval());
+        assert!(
+            !ReviewVerdict {
+                state: ReviewEvent::Comment,
+                ..human
+            }
+            .is_human_approval(),
+            "a plain comment is not an approval"
+        );
+    }
+
+    #[test]
+    fn only_a_changes_request_blocks_the_merge_button() {
+        // A bot's changes-request blocks exactly as a human's does: tinysweeper
+        // blocking its own auto-merge is the whole point of the gate.
+        for bot in [false, true] {
+            assert!(
+                ReviewVerdict {
+                    reviewer: "someone".into(),
+                    bot,
+                    state: ReviewEvent::RequestChanges,
+                }
+                .is_blocking()
+            );
+        }
+        for state in [ReviewEvent::Approve, ReviewEvent::Comment] {
+            assert!(
+                !ReviewVerdict {
+                    reviewer: "someone".into(),
+                    bot: false,
+                    state,
+                }
+                .is_blocking(),
+                "{state:?} does not block"
+            );
+        }
+    }
+
+    #[test]
+    fn a_check_is_green_only_when_it_concluded_successfully() {
+        // Everything else — pending, neutral, skipped, failed — is not
+        // evidence that the check passed, and the auto-merge gate treats it as
+        // a refusal rather than as an absence.
+        let green = CheckStatus {
+            name: "ci/build".into(),
+            conclusion: Some(CheckConclusion::Success),
+        };
+        assert!(green.is_green());
+
+        for conclusion in [
+            None,
+            Some(CheckConclusion::Failure),
+            Some(CheckConclusion::ActionRequired),
+            Some(CheckConclusion::Neutral),
+            Some(CheckConclusion::Skipped),
+        ] {
+            let check = CheckStatus {
+                name: "ci/build".into(),
+                conclusion,
+            };
+            assert!(!check.is_green(), "{conclusion:?} is not green");
+        }
+    }
+
+    #[test]
+    fn a_check_still_running_is_pending_rather_than_failed() {
+        let pending = CheckStatus {
+            name: "ci/build".into(),
+            conclusion: None,
+        };
+        assert!(pending.is_pending());
+        assert!(
+            !CheckStatus {
+                name: "ci/build".into(),
+                conclusion: Some(CheckConclusion::Failure),
+            }
+            .is_pending()
+        );
     }
 
     #[test]

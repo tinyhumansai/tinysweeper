@@ -13,8 +13,8 @@ use octocrab::Octocrab;
 use crate::error::{Error, Result};
 use crate::evidence::diff::truncate_patch;
 use crate::forge::types::{
-    ChangedFile, CheckConclusion, CheckRun, Commit, FileStatus, Issue, IssueComment, PullRequest,
-    RepoId, ReviewComment, ReviewEvent,
+    ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, FileStatus, Issue, IssueComment,
+    PullRequest, RepoId, ReviewComment, ReviewEvent, ReviewVerdict,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -36,6 +36,70 @@ fn api(err: octocrab::Error) -> Error {
 /// the chance to shorten it. The `commits` lane applies its own, tighter budget
 /// across the whole range on top of this.
 const MAX_FILE_PATCH_BYTES: usize = 16 * 1024;
+
+/// How many items one page of a paged endpoint returns. GitHub's maximum.
+const PER_PAGE: usize = 100;
+
+/// How many pages of check runs are read before giving up.
+///
+/// A bound rather than an unbounded loop: a repository with a pathological
+/// number of check runs must not be able to hold a worker forever.
+const MAX_CHECK_PAGES: usize = 10;
+
+/// How many pages of reviews are read before giving up.
+///
+/// Its own constant rather than an alias of [`MAX_CHECK_PAGES`]. The two bound
+/// unrelated endpoints and the reasoning behind each is different — a thousand
+/// check runs on one commit is pathological, a thousand reviews on a long-lived
+/// pull request is merely unusual — so a shared constant would silently move
+/// one bound whenever somebody tuned the other.
+const MAX_REVIEW_PAGES: usize = 20;
+
+/// Read every page of a paged endpoint, or fail loudly.
+///
+/// The subtle bug this exists to prevent: exiting the loop on
+/// `fetched < PER_PAGE` only fires when the *last* page is short. A final page
+/// that happens to be exactly full falls out of the range instead, and whatever
+/// was on the next page is dropped **without a diagnostic**.
+///
+/// That matters because both callers fail closed on missing data — a check run
+/// nobody reported is not a pass, an unretired changes-request nobody saw is
+/// not an approval. Silently short data does not fail closed; it fails *open*,
+/// because absence is what both readers treat as innocent. So exhausting the
+/// bound with a full page is an error rather than a truncation: the caller
+/// refuses instead of merging on a history it only partly read.
+async fn read_all_pages<T, F, Fut>(
+    fetch: F,
+    items_of: impl Fn(&serde_json::Value) -> Option<&Vec<serde_json::Value>>,
+    map_page: impl Fn(&[serde_json::Value]) -> Vec<T>,
+    max_pages: usize,
+    what: &str,
+) -> Result<Vec<T>>
+where
+    F: Fn(usize) -> Fut,
+    Fut: std::future::Future<Output = Result<serde_json::Value>>,
+{
+    let mut out = Vec::new();
+
+    for page in 1..=max_pages {
+        let raw = fetch(page).await?;
+        let Some(items) = items_of(&raw) else {
+            break;
+        };
+        let fetched = items.len();
+        out.extend(map_page(items));
+
+        if fetched < PER_PAGE {
+            return Ok(out);
+        }
+    }
+
+    // Every page was full right up to the bound, so there may well be another.
+    Err(Error::Forge(format!(
+        "{what} did not fit in {max_pages} pages of {PER_PAGE}; refusing to \
+         report a partial list, because a missing entry reads as innocent"
+    )))
+}
 
 /// Read-only GitHub access.
 pub struct GitHubRead {
@@ -120,51 +184,81 @@ impl GitHubRead {
 
     /// How many distinct reviewers currently approve.
     ///
+    /// Folded from [`ForgeRead::reviews`] rather than parsing the endpoint a
+    /// second time. Two parsers over one payload drift, and this pair already
+    /// proved it: one paged the endpoint and one did not, so they disagreed
+    /// about a pull request with a long history.
+    ///
     /// GitHub returns every review ever left, so a plain count of `APPROVED`
     /// double-counts a reviewer who approved twice and, worse, keeps counting
     /// one who later requested changes. Only each reviewer's *latest* verdict
-    /// says anything about the present state.
+    /// says anything about the present state, and `reviews` already drops the
+    /// states that carry no verdict at all.
     ///
-    /// Best-effort: an unreadable reviews list yields zero, which is the
-    /// conservative direction for every caller — nothing gates *on* having
-    /// fewer approvals than really exist.
+    /// Best-effort: an unreadable list yields zero, the conservative direction
+    /// for every caller — nothing gates *on* having fewer approvals than exist.
     async fn approvals(&self, repo: &RepoId, number: u64) -> u32 {
-        let route = format!(
-            "/repos/{}/{}/pulls/{number}/reviews?per_page=100",
-            repo.owner, repo.name
-        );
-
-        match self.client.get(&route, None::<&()>).await {
-            Ok(raw) => Self::approvals_from_reviews(&raw),
+        match self.reviews(repo, number).await {
+            Ok(reviews) => approvals_of(&reviews),
             Err(err) => {
                 tracing::warn!(%err, "could not read reviews; reporting zero approvals");
                 0
             }
         }
     }
+}
 
-    /// The latest-verdict-per-reviewer count, split out for offline tests.
-    fn approvals_from_reviews(raw: &serde_json::Value) -> u32 {
-        let Some(reviews) = raw.as_array() else {
-            return 0;
-        };
-
-        let mut latest: HashMap<&str, &str> = HashMap::new();
-        for review in reviews {
-            let (Some(login), Some(state)) =
-                (review["user"]["login"].as_str(), review["state"].as_str())
-            else {
-                continue;
-            };
-            // `COMMENTED` is not a verdict — GitHub lets a reviewer comment
-            // without withdrawing an approval, so it must not overwrite one.
-            if matches!(state, "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED") {
-                latest.insert(login, state);
-            }
+/// Count the reviewers whose *latest* verdict is an approval.
+///
+/// Pure, so the rule it encodes is covered offline: a reviewer who approved and
+/// then requested changes must not still be counted, and approving twice counts
+/// once.
+fn approvals_of(reviews: &[ReviewVerdict]) -> u32 {
+    let mut latest: HashMap<&str, &ReviewVerdict> = HashMap::new();
+    for review in reviews {
+        // `Comment` is not a verdict. GitHub lets a reviewer comment without
+        // touching their approval, so letting one overwrite the previous entry
+        // would silently retire an approval that still stands — and in the
+        // merge-gate direction that matters, it reads as *fewer* approvals than
+        // exist, which stalls rather than merges. Still a bug, still wrong.
+        if review.state == ReviewEvent::Comment {
+            continue;
         }
-
-        latest.values().filter(|s| **s == "APPROVED").count() as u32
+        latest.insert(review.reviewer.as_str(), review);
     }
+
+    latest
+        .values()
+        .filter(|verdict| verdict.state == ReviewEvent::Approve)
+        .count() as u32
+}
+
+/// Map one page of the reviews endpoint.
+///
+/// Split out from the request so the shape decisions — which states carry a
+/// verdict, and what makes a reviewer a bot — are covered by the offline suite
+/// rather than only behind the `github` feature.
+fn verdicts_from_page(items: &[serde_json::Value]) -> Vec<ReviewVerdict> {
+    items
+        .iter()
+        .filter_map(|review| {
+            // `DISMISSED` and `PENDING` carry no verdict: one was retired by a
+            // human, the other was never submitted. The mapping is tested
+            // offline on `ReviewEvent`.
+            let state = ReviewEvent::from_api(review["state"].as_str()?)?;
+            Some(ReviewVerdict {
+                reviewer: review["user"]["login"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                // The account type, as GitHub reports it, rather than a guess
+                // from the login. An approval only counts towards
+                // `require_approvals` when a human left it.
+                bot: review["user"]["type"].as_str() == Some("Bot"),
+                state,
+            })
+        })
+        .collect()
 }
 
 #[async_trait]
@@ -387,6 +481,61 @@ impl ForgeRead for GitHubRead {
         }
 
         Ok(comments)
+    }
+
+    async fn check_runs(&self, repo: &RepoId, sha: &str) -> Result<Vec<CheckStatus>> {
+        // Read to exhaustion rather than truncated at the first page. A missing
+        // check reads to the auto-merge gate as "not reported", so short data
+        // would turn a red required check into a merge.
+        read_all_pages(
+            |page| async move {
+                let route = format!(
+                    "/repos/{}/{}/commits/{sha}/check-runs?per_page={PER_PAGE}&page={page}",
+                    repo.owner, repo.name
+                );
+                self.client.get(route, None::<&()>).await.map_err(api)
+            },
+            |raw| raw["check_runs"].as_array(),
+            |items| {
+                items
+                    .iter()
+                    // The wire-string mapping lives on `CheckStatus` rather
+                    // than here, so the offline suite can test the one decision
+                    // that matters: an unrecognised conclusion is never a pass.
+                    .map(|item| {
+                        CheckStatus::from_api(
+                            item["name"].as_str().unwrap_or_default(),
+                            item["conclusion"].as_str(),
+                        )
+                    })
+                    .collect()
+            },
+            MAX_CHECK_PAGES,
+            "the check runs for this commit",
+        )
+        .await
+    }
+
+    async fn reviews(&self, repo: &RepoId, number: u64) -> Result<Vec<ReviewVerdict>> {
+        // Same reasoning as `check_runs`, and the stakes are higher: the port
+        // promises the *whole* history so the caller can fold it to a
+        // latest-verdict-per-reviewer. The oldest entries are where an unretired
+        // `CHANGES_REQUESTED` lives, and dropping them would leave the gate
+        // reading a history in which nobody ever blocked the merge.
+        read_all_pages(
+            |page| async move {
+                let route = format!(
+                    "/repos/{}/{}/pulls/{number}/reviews?per_page={PER_PAGE}&page={page}",
+                    repo.owner, repo.name
+                );
+                self.client.get(route, None::<&()>).await.map_err(api)
+            },
+            |raw| raw.as_array(),
+            verdicts_from_page,
+            MAX_REVIEW_PAGES,
+            "the review history for this pull request",
+        )
+        .await
     }
 
     async fn own_review_state(&self, repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
@@ -713,44 +862,162 @@ mod tests {
         assert_eq!(sizes.get("src/main.rs"), None);
     }
 
+    /// A verdict, built without going near the wire format.
+    fn verdict(reviewer: &str, state: ReviewEvent) -> ReviewVerdict {
+        ReviewVerdict {
+            reviewer: reviewer.into(),
+            bot: false,
+            state,
+        }
+    }
+
     #[test]
     fn only_a_reviewers_latest_verdict_counts_towards_approvals() {
         // The bug this exists to stop: someone approves, then finds a problem
         // and requests changes, and a naive count still reports an approval.
-        let reviews = json!([
-            {"user": {"login": "ana"}, "state": "APPROVED"},
-            {"user": {"login": "ana"}, "state": "CHANGES_REQUESTED"},
-            {"user": {"login": "bo"}, "state": "APPROVED"},
-        ]);
+        let reviews = [
+            verdict("ana", ReviewEvent::Approve),
+            verdict("ana", ReviewEvent::RequestChanges),
+            verdict("bo", ReviewEvent::Approve),
+        ];
 
-        assert_eq!(GitHubRead::approvals_from_reviews(&reviews), 1);
+        assert_eq!(approvals_of(&reviews), 1);
     }
 
     #[test]
     fn approving_twice_counts_once() {
-        let reviews = json!([
-            {"user": {"login": "ana"}, "state": "APPROVED"},
-            {"user": {"login": "ana"}, "state": "APPROVED"},
-        ]);
+        let reviews = [
+            verdict("ana", ReviewEvent::Approve),
+            verdict("ana", ReviewEvent::Approve),
+        ];
 
-        assert_eq!(GitHubRead::approvals_from_reviews(&reviews), 1);
+        assert_eq!(approvals_of(&reviews), 1);
     }
 
     #[test]
     fn a_later_comment_does_not_withdraw_an_approval() {
-        // GitHub lets a reviewer comment without changing their verdict, so
-        // `COMMENTED` must not overwrite the approval that still stands.
-        let reviews = json!([
-            {"user": {"login": "ana"}, "state": "APPROVED"},
-            {"user": {"login": "ana"}, "state": "COMMENTED"},
+        // GitHub lets a reviewer comment without changing their verdict.
+        // `verdicts_from_page` deliberately keeps `COMMENTED` — the history is
+        // the port's contract and other callers want it — so the fold is where
+        // the rule has to live. This test caught it being dropped.
+        let page = json!([
+            {"user": {"login": "ana", "type": "User"}, "state": "APPROVED"},
+            {"user": {"login": "ana", "type": "User"}, "state": "COMMENTED"},
         ]);
 
-        assert_eq!(GitHubRead::approvals_from_reviews(&reviews), 1);
+        let reviews = verdicts_from_page(page.as_array().expect("an array"));
+
+        assert_eq!(approvals_of(&reviews), 1);
     }
 
     #[test]
-    fn an_unreadable_reviews_payload_reports_no_approvals() {
+    fn no_reviews_is_no_approvals() {
         // Conservative direction: nothing gates on having *fewer* approvals.
-        assert_eq!(GitHubRead::approvals_from_reviews(&json!({})), 0);
+        assert_eq!(approvals_of(&[]), 0);
+    }
+
+    #[test]
+    fn a_page_of_reviews_maps_only_the_states_that_carry_a_verdict() {
+        let page = serde_json::json!([
+            {"user": {"login": "ana", "type": "User"}, "state": "APPROVED"},
+            {"user": {"login": "bo", "type": "User"}, "state": "CHANGES_REQUESTED"},
+            // Retired by a human; it no longer blocks anything.
+            {"user": {"login": "cy", "type": "User"}, "state": "DISMISSED"},
+            // Never submitted.
+            {"user": {"login": "di", "type": "User"}, "state": "PENDING"},
+            {"user": {"login": "tinysweeper", "type": "Bot"}, "state": "APPROVED"},
+        ]);
+
+        let verdicts = verdicts_from_page(page.as_array().expect("an array"));
+
+        let seen: Vec<&str> = verdicts.iter().map(|v| v.reviewer.as_str()).collect();
+        assert_eq!(seen, ["ana", "bo", "tinysweeper"], "{verdicts:?}");
+        assert!(
+            verdicts
+                .iter()
+                .find(|v| v.reviewer == "tinysweeper")
+                .expect("the bot")
+                .bot,
+            "the account type comes from GitHub, not from the login: {verdicts:?}"
+        );
+        assert!(
+            !verdicts
+                .iter()
+                .find(|v| v.reviewer == "ana")
+                .expect("ana")
+                .bot,
+            "{verdicts:?}"
+        );
+    }
+
+    #[test]
+    fn a_review_without_a_recognised_state_is_dropped_rather_than_guessed() {
+        let page = serde_json::json!([
+            {"user": {"login": "ana", "type": "User"}, "state": "SOMETHING_NEW"},
+        ]);
+
+        assert!(verdicts_from_page(page.as_array().expect("an array")).is_empty());
+    }
+
+    /// A client that answers every request with the same canned page.
+    ///
+    /// Enough to drive `read_all_pages` past its bound, which is the case the
+    /// offline suite could not otherwise reach — and the one that used to drop
+    /// data silently.
+    fn full_page(items: usize) -> serde_json::Value {
+        serde_json::Value::Array(
+            (0..items)
+                .map(|i| serde_json::json!({"user": {"login": format!("r{i}"), "type": "User"}, "state": "APPROVED"}))
+                .collect(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_short_final_page_ends_the_read() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+
+        let out = read_all_pages(
+            move |_page| {
+                let n = seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                // A full page, then a short one: the normal shape.
+                std::future::ready(Ok(if n == 0 {
+                    full_page(PER_PAGE)
+                } else {
+                    full_page(3)
+                }))
+            },
+            |raw| raw.as_array(),
+            verdicts_from_page,
+            MAX_REVIEW_PAGES,
+            "reviews",
+        )
+        .await
+        .expect("a short page is a clean end");
+
+        assert_eq!(out.len(), PER_PAGE + 3);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn exhausting_the_bound_on_a_full_page_is_an_error_not_a_truncation() {
+        // The silent-drop bug: every page full right up to the cap means there
+        // is probably another one. Returning what we have would hand the
+        // auto-merge gate a history it believes is complete — and absence is
+        // exactly what that gate reads as innocent.
+        let err = read_all_pages(
+            |_page| std::future::ready(Ok(full_page(PER_PAGE))),
+            |raw| raw.as_array(),
+            verdicts_from_page,
+            3,
+            "reviews",
+        )
+        .await
+        .expect_err("a full last page must not read as the end");
+
+        assert!(
+            format!("{err}").contains("refusing to report a partial list"),
+            "{err}"
+        );
     }
 }

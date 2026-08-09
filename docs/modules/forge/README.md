@@ -16,6 +16,33 @@ timestamps. The age guards on issue closing are the most safety-critical
 arithmetic in the codebase, and this shape makes them trivially testable without
 a clock to fake.
 
+## Reading state a merge decision could be taken on
+
+`CheckStatus` and `ReviewVerdict` are the read-side counterparts of `CheckRun`
+and `ReviewEvent`, and they are separate types because a check being *read* may
+not have finished. `CheckStatus::conclusion` is an `Option`: `None` is "still
+running", and `is_green()` is true only for `Success`. `Neutral` and `Skipped`
+are deliberately not green — a check that declined to run has reported nothing,
+and the conservative reading of nothing is "not yet".
+
+`CheckStatus::from_api` and `ReviewEvent::from_api` live in `types.rs` rather
+than in the adapter so the offline suite can test them. An unrecognised check
+conclusion maps to `Failure` on purpose: a conclusion GitHub adds after this was
+written must never be mistaken for a pass by a caller deciding whether to merge.
+
+`ForgeRead::reviews` returns the history, oldest first, rather than a folded
+verdict. Only the caller knows that a later `COMMENT` does not retire an earlier
+`CHANGES_REQUESTED`, and folding in the adapter would bury that rule where no
+offline test can reach it. `ReviewVerdict::bot` comes from the account type
+GitHub reports, not from the shape of the login, because "how many humans
+approved this" is a question a bot must not be able to answer for itself.
+
+`check_runs` is keyed on a commit SHA rather than a pull request number: a check
+that is green on the previous head says nothing about the commit about to be
+merged. Neither method has a default implementation — an adapter that forgot to
+answer would report "no checks", and a caller that cannot see a red check is
+worse off than one that cannot see any.
+
 ## `MockForge` is not a stub
 
 It backs the entire test suite *and* `--dry-run` in production. Because it
