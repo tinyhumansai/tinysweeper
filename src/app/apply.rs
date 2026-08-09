@@ -84,12 +84,24 @@ pub async fn apply(
 
     // Submit a review if:
     // - there are inline comments to post, or
-    // - the verdict is Approve (clears a previous block), or
+    // - the verdict is Approve (clears a previous block, or satisfies a
+    //   "review required" rule), or
     // - the verdict is RequestChanges (blocks the merge, even if only in the summary).
     // Blocking verdicts must be submitted even without inline comments, because
     // findings that could not be anchored to lines still appear in the summary
     // and need the blocking verdict on GitHub to enforce the gate.
-    if !comments.is_empty() || event == ReviewEvent::Approve || event == ReviewEvent::RequestChanges
+    //
+    // The one thing not worth saying twice is an approval that already stands.
+    // GitHub keeps the latest review per reviewer, so re-approving changes
+    // nothing on the merge button and only adds a timeline entry — on every
+    // push, for the whole life of a clean pull request.
+    let redundant_approval =
+        event == ReviewEvent::Approve && previous == Some(ReviewEvent::Approve) && comments.is_empty();
+
+    if !redundant_approval
+        && (!comments.is_empty()
+            || event == ReviewEvent::Approve
+            || event == ReviewEvent::RequestChanges)
     {
         write
             .create_review(
