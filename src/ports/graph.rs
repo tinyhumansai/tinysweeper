@@ -32,7 +32,13 @@ pub trait GraphStore: Send + Sync {
     /// Remove a repository's whole graph, returning how many rows went.
     async fn delete_repo(&self, repo_id: &str) -> Result<u64>;
 
-    /// Every symbol node this repository has, ids and paths only.
+    /// Every symbol node this repository has.
+    ///
+    /// Implementations must populate `id`, `repo_id`, `kind`, `path` and
+    /// `symbol`; `lang` may be omitted. `build_inner` resolves names through
+    /// `symbol` and skips any node where it is `None`, so a table without that
+    /// field is an empty table — every incremental rebuild would silently lose
+    /// cross-file resolution.
     ///
     /// What makes an incremental rebuild possible at all. Resolving a call in a
     /// re-parsed file needs to know which file defines the name it calls, and
