@@ -368,15 +368,32 @@ pub enum EdgeKind {
     Calls,
     /// The source mentions the target without calling it.
     References,
+    /// The source type inherits from, implements, or embeds the target type.
+    ///
+    /// One kind for what four languages spell four ways — `extends`,
+    /// `implements`, `impl Trait for`, struct embedding — because the question
+    /// a review asks of all of them is the same one: change this declaration
+    /// and who else has to change with it? Splitting them would make every
+    /// consumer enumerate the variants to ask it.
+    Extends,
+    /// The source test exercises the target symbol.
+    ///
+    /// Derived from a resolved call out of a test scope, never asserted from a
+    /// name: "`foo_test.rs` probably tests `foo.rs`" is a guess, and a wrong
+    /// coverage edge is worse than a missing one because it is the edge a
+    /// reviewer would use to decide a change is already covered.
+    Tests,
 }
 
 impl EdgeKind {
     /// Every edge kind, for traversals that do not want to filter.
-    pub const ALL: [EdgeKind; 4] = [
+    pub const ALL: [EdgeKind; 6] = [
         EdgeKind::Imports,
         EdgeKind::Defines,
         EdgeKind::Calls,
         EdgeKind::References,
+        EdgeKind::Extends,
+        EdgeKind::Tests,
     ];
 }
 
