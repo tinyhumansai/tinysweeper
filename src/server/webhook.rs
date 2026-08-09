@@ -510,6 +510,144 @@ mod tests {
         }))
     }
 
+    /// A `check_run` or `check_suite` delivery, sent — as the real ones always
+    /// are — by a bot.
+    fn check_payload(event: &str, action: &str, numbers: &[u64]) -> Payload {
+        let pulls: Vec<_> = numbers.iter().map(|n| serde_json::json!({"number": n})).collect();
+        payload(serde_json::json!({
+            "action": action,
+            "repository": {"full_name": "tinyhumansai/tinysweeper"},
+            "installation": {"id": 152184043},
+            "sender": {"login": "github-actions[bot]", "type": "Bot"},
+            event: {"pull_requests": pulls},
+        }))
+    }
+
+    #[test]
+    fn a_finished_check_asks_auto_merge_to_look_again() {
+        for event in ["check_run", "check_suite"] {
+            assert_eq!(
+                route(event, &check_payload(event, "completed", &[7])),
+                Action::AutoMerge {
+                    repo: "tinyhumansai/tinysweeper".into(),
+                    numbers: vec![7],
+                    installation: 152184043,
+                },
+                "{event} did not trigger auto-merge"
+            );
+        }
+    }
+
+    #[test]
+    fn the_bot_guard_does_not_apply_to_auto_merge() {
+        // The whole reason auto-merge is decided before the guard. Every event
+        // that can make a pull request mergeable is sent by a bot — the checks
+        // are ours and so is the approval that clears a previous objection — so
+        // a guard applied here would mean the trigger never fires at all.
+        let delivery = check_payload("check_suite", "completed", &[7]);
+        assert_eq!(
+            delivery.sender.as_ref().map(|s| s.kind.as_str()),
+            Some("Bot"),
+            "the fixture has to be sent by a bot or it proves nothing"
+        );
+        assert!(matches!(
+            route("check_suite", &delivery),
+            Action::AutoMerge { .. }
+        ));
+    }
+
+    #[test]
+    fn a_check_that_has_not_finished_is_not_a_trigger() {
+        for action in ["created", "requested", "rerequested"] {
+            assert!(
+                matches!(
+                    route("check_run", &check_payload("check_run", action, &[7])),
+                    Action::Ignore(_)
+                ),
+                "`{action}` queued an evaluation with nothing to evaluate"
+            );
+        }
+    }
+
+    #[test]
+    fn a_check_naming_no_pull_request_is_ignored_rather_than_queued() {
+        // GitHub sends these for commits on branches with no open pull
+        // request, and for forks. An empty list must not become a job.
+        assert!(matches!(
+            route("check_suite", &check_payload("check_suite", "completed", &[])),
+            Action::Ignore(_)
+        ));
+    }
+
+    #[test]
+    fn a_check_on_a_commit_heading_several_pull_requests_names_all_of_them() {
+        // One commit can be the head of more than one open pull request.
+        // Taking the first would silently strand the rest.
+        assert_eq!(
+            route(
+                "check_suite",
+                &check_payload("check_suite", "completed", &[7, 9, 11])
+            ),
+            Action::AutoMerge {
+                repo: "tinyhumansai/tinysweeper".into(),
+                numbers: vec![7, 9, 11],
+                installation: 152184043,
+            }
+        );
+    }
+
+    #[test]
+    fn an_approval_asks_auto_merge_to_look_again() {
+        for action in ["submitted", "dismissed"] {
+            let mut delivery = pr_payload(action);
+            delivery.action = action.into();
+            assert!(
+                matches!(
+                    route("pull_request_review", &delivery),
+                    Action::AutoMerge { numbers, .. } if numbers == vec![7]
+                ),
+                "`{action}` did not trigger auto-merge"
+            );
+        }
+    }
+
+    #[test]
+    fn labelling_a_pull_request_asks_auto_merge_to_look_again() {
+        // `allow_labels` and `block_labels` are both read off the labels, so
+        // adding or removing one is a direct instruction to reconsider.
+        for action in ["labeled", "unlabeled"] {
+            assert!(
+                matches!(
+                    route("pull_request", &pr_payload(action)),
+                    Action::AutoMerge { .. }
+                ),
+                "`{action}` did not trigger auto-merge"
+            );
+        }
+    }
+
+    #[test]
+    fn leaving_draft_is_still_a_review_and_not_a_merge() {
+        // It clears the `Draft` refusal, but lanes skip a draft, so a pull
+        // request leaving draft needs reviewing before it needs merging. The
+        // approval that review produces brings it back to auto-merge.
+        assert!(matches!(
+            route("pull_request", &pr_payload("ready_for_review")),
+            Action::Review { .. }
+        ));
+    }
+
+    #[test]
+    fn a_push_is_not_an_auto_merge_trigger() {
+        // Evaluating a pull request whose head has just moved can only produce
+        // `CheckPending`: the checks on the new head have not started. The
+        // `check_suite` that follows is the same trigger with evidence.
+        assert!(matches!(
+            route("pull_request", &pr_payload("synchronize")),
+            Action::Review { .. }
+        ));
+    }
+
     fn issue_payload(action: &str) -> Payload {
         payload(serde_json::json!({
             "action": action,
