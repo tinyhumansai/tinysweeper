@@ -596,16 +596,19 @@ async fn the_blast_radius_of_a_real_change_names_its_dependents_and_its_coverage
     let embedder = embedder();
     let index = MockChunkIndex::new();
 
-    // `estimate_tokens` is called from all over the crate and covered by its
-    // own module's tests, so both halves of the answer should be non-empty.
+    // `graph::path::normalise` is called from other modules and exercised by
+    // its own module's tests, so both halves of the answer should be
+    // non-empty. It is also named only once in the crate — a symbol defined in
+    // two files is deliberately left ambiguous by the builder, and picking one
+    // would have tested the resolver's refusal to guess rather than this.
     let diffs = vec![parse_file_patch(
-        "src/harness/pricing.rs",
-        "@@ -1,4 +1,4 @@ pub fn estimate_tokens(text: &str) -> u64\n-    (text.len() / 4) as u64\n+    text.len().div_ceil(4) as u64\n",
+        "src/graph/path.rs",
+        "@@ -14,4 +14,4 @@ pub fn normalise(path: &str) -> String\n-    let mut segments: Vec<&str> = Vec::new();\n+    let mut segments: Vec<&str> = Vec::with_capacity(8);\n",
     )];
 
     let context = Retriever::new(&embedder, &index)
         .with_graph(&graph_store)
-        .retrieve(&config(), REPO, "Round token estimates up", HEAD, &diffs)
+        .retrieve(&config(), REPO, "Preallocate the segment buffer", HEAD, &diffs)
         .await
         .0;
 
