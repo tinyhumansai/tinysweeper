@@ -153,16 +153,19 @@ pub fn router(
     auth: Option<AdminAuth>,
     allowed_org: String,
     reviews: Arc<dyn FullReviews>,
+    merges: Arc<dyn Merges>,
 ) -> Option<Router> {
     let auth = Arc::new(auth?);
     let state = ManualState {
         allowed_org: allowed_org.into(),
         reviews,
+        merges,
     };
 
     Some(
         Router::new()
             .route("/admin/reviews/{owner}/{name}", post(full_review))
+            .route("/admin/merges/{owner}/{name}", post(auto_merge))
             // `route_layer`, so the token is checked before the `Json`
             // extractor parses anything an anonymous caller sent.
             .route_layer(axum::middleware::from_fn_with_state(
