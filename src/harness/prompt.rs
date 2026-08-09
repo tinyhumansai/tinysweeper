@@ -354,7 +354,16 @@ pub fn push_fenced(out: &mut String, label: &str, content: &str) {
 /// reports it as a configuration problem, and losing the whole review over one
 /// bad pattern would be a worse failure than losing one rule.
 fn path_instructions(inputs: &PromptInputs<'_>) -> String {
-    let table = &inputs.config.path_instructions;
+    // Lane scoping is applied *before* the first-match selection, not after. An
+    // entry written for another lane must not consume a path's one match and
+    // leave that lane with nothing — which is what filtering afterwards would
+    // do, silently.
+    let table: Vec<&crate::config::types::PathInstruction> = inputs
+        .config
+        .path_instructions
+        .iter()
+        .filter(|rule| rule.lanes.is_empty() || rule.lanes.contains(&inputs.lane))
+        .collect();
 
     let paths: Vec<&str> = match inputs.focus_path {
         Some(path) => vec![path],
