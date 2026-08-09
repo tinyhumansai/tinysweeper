@@ -93,11 +93,10 @@ fn turning_reasoning_off_makes_a_small_budget_fine() {
     // no reasoning the whole allowance goes to the answer, and 8000 was
     // measured as ample — 2572 tokens and 13 findings on a 23k-token diff.
     let config = parse("version = 1\n[models]\nmax_tokens = 8000\nreasoning_effort = \"off\"\n");
+    let problems = validate::validate(&config);
     assert!(
-        !validate::validate(&config)
-            .join("\n")
-            .contains("models.max_tokens = 8000"),
-        "`off` should not be held to the reasoning floor"
+        problems.is_empty(),
+        "`off` should not be held to the reasoning floor: {problems:#?}"
     );
 }
 
