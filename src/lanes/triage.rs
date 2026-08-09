@@ -534,6 +534,70 @@ mod tests {
         }
     }
 
+    /// Every pattern in the supply-chain list has a positive test so that
+    /// deleting an arm silently weakens triage ordering.
+    #[test]
+    fn every_supply_chain_pattern_is_promoted() {
+        for path in [
+            // CI runners, matched by prefix or by well-known filename.
+            ".github/workflows/release.yml",
+            ".circleci/config.yml",
+            ".travis.yml",
+            ".gitlab-ci.yml",
+            "Jenkinsfile",
+            "azure-pipelines.yml",
+            "bitbucket-pipelines.yml",
+            "appveyor.yml",
+            "circle.yml",
+            ".pre-commit-config.yaml",
+            ".pre-commit-config.yml",
+            // Dependency manifests — the declaration, never the lockfile.
+            "package.json",
+            "pyproject.toml",
+            "setup.py",
+            "setup.cfg",
+            "requirements.txt",
+            "Pipfile",
+            "Gemfile",
+            "composer.json",
+            "pom.xml",
+            "build.gradle",
+            "build.gradle.kts",
+            "build.sbt",
+            "go.mod",
+            "Cargo.toml",
+            "mix.exs",
+            "Podfile",
+            // Where packages are fetched from, and with whose credentials.
+            ".npmrc",
+            ".yarnrc",
+            ".yarnrc.yml",
+            ".pypirc",
+            // Bots that open and merge pull requests on their own.
+            "renovate.json",
+            "dependabot.yml",
+            "dependabot.yaml",
+            // Who is required to approve the next change.
+            "CODEOWNERS",
+            // Deployment surface.
+            "docker-compose.yml",
+            "docker-compose.yaml",
+            "docker-compose.override.yml",
+            "serverless.yml",
+            "netlify.toml",
+            "vercel.json",
+            "ansible.cfg",
+            "app.yaml",
+            "infra/main.tf",
+            // Secrets, and the baseline that decides which ones get through.
+            ".env",
+            ".env.production",
+            ".secrets.baseline",
+        ] {
+            assert!(is_supply_chain_file(path), "{path} was not treated as supply chain");
+        }
+    }
+
     #[test]
     fn a_test_file_is_reviewed_last_but_still_reviewed() {
         let out = triage(
