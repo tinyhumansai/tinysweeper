@@ -38,3 +38,9 @@ provider = "openrouter"
 model = "openai/text-embedding-3-small"
 dimensions = 1536
 api_key_env = "OPENROUTER_API_KEY"
+
+# Issue triage, turned on for this repository so the job is exercised on real
+# issues. Closing stays off: the labels and the duplicate cross-links are the
+# useful half, and closing someone else's issue is the expensive mistake.
+[issues]
+enabled = true
