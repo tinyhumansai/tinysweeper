@@ -636,7 +636,7 @@ async fn the_blast_radius_of_a_real_change_names_its_dependents_and_its_coverage
         .collect();
     assert!(
         !callers.is_empty(),
-        "nothing calls a function the whole crate calls: {:?}",
+        "no caller for {path}#{symbol}, which production code calls: {:?}",
         context.impact
     );
     assert!(
@@ -645,7 +645,12 @@ async fn the_blast_radius_of_a_real_change_names_its_dependents_and_its_coverage
             .reached
             .iter()
             .any(|entry| entry.relation == crate::graph::Relation::Test),
-        "no test covers a function its own module tests: {:?}",
+        "no coverage for {path}#{symbol}, which a test reaches: {:?}",
+        context.impact
+    );
+    assert!(
+        context.impact.untested.is_empty(),
+        "a symbol a test reaches must not also be reported as untested: {:?}",
         context.impact
     );
 
