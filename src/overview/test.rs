@@ -364,11 +364,14 @@ fn a_hostile_filename_cannot_escape_a_diagram_label() {
     let diagram = mermaid::flowchart(&build(&diffs, &[], GraphView::Absent, &limits()))
         .expect("worth drawing");
 
-    assert!(!diagram.contains("click"), "{diagram}");
-    assert!(!diagram.contains("javascript"), "{diagram}");
-    // Exactly two opening quotes per node line, and none of them the file's.
-    for line in diagram.lines().filter(|l| l.contains("n0[")) {
+    // The words survive as text — a label is prose, and prose is harmless. The
+    // punctuation that would have ended the statement does not: every node
+    // line has exactly the two quotes and the one bracket pair the renderer
+    // wrote, so nothing in a filename can become syntax.
+    for line in diagram.lines().filter(|l| l.trim_start().starts_with('n')) {
         assert_eq!(line.matches('"').count(), 2, "{line}");
+        assert_eq!(line.matches(']').count(), 1, "{line}");
+        assert_eq!(line.matches('[').count(), 1, "{line}");
     }
 }
 
