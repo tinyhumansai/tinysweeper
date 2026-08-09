@@ -24,6 +24,7 @@ pub mod comment;
 pub mod dedupe;
 pub mod labels;
 pub mod prompt;
+pub mod pull_request;
 pub mod triage;
 pub mod types;
 

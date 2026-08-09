@@ -126,6 +126,7 @@ pub async fn triage(
     let mut plan = TriagePlan {
         number,
         add_labels: label_plan.add,
+        remove_labels: label_plan.remove,
         declined_labels: label_plan.declined,
         ..TriagePlan::default()
     };
