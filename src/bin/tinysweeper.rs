@@ -165,7 +165,16 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
 
-    match cli.command {
+    dispatch(cli.command).await
+}
+
+/// Dispatch one parsed command to its application entry point.
+///
+/// Kept separate from process setup so command tests can exercise the same
+/// parse-to-application path an operator invokes without initialising a
+/// process-global tracing subscriber.
+async fn dispatch(command: Command) -> Result<()> {
+    match command {
         Command::Review {
             repo,
             pr,
@@ -600,6 +609,17 @@ mod tests {
     fn unimplemented_commands_name_their_milestone() {
         let err = not_yet("review", "M3").unwrap_err();
         assert!(err.to_string().contains("scheduled for M3"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn check_runs_end_to_end_from_parsed_command_line_arguments() {
+        // This is deliberately the repository configuration: resolving its
+        // preset makes the test cross the CLI, configuration discovery,
+        // layering, and validation boundaries without credentials or network
+        // access.
+        let cli = Cli::try_parse_from(["tinysweeper", "check", "."]).expect("parses");
+
+        dispatch(cli.command).await.expect("validates the config");
     }
 
     #[cfg(feature = "serve")]
