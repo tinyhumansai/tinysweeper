@@ -198,3 +198,68 @@ fn the_file_that_defines_a_changed_symbol_is_not_its_dependent() {
             .is_empty()
     );
 }
+
+#[test]
+fn a_heavily_tested_symbol_does_not_crowd_out_the_code_that_would_break() {
+    // The shape that made strict priority order wrong: twenty-six test callers
+    // and three production ones. Ordering by relation alone spends the whole
+    // block on tests and never names the code a mistake would break.
+    let seeds = vec!["src/app/apply.rs#apply".to_string()];
+    let mut edges = Vec::new();
+    for n in 0..26 {
+        edges.push(edge(
+            &format!("src/app/apply.rs#covers_case_{n:02}"),
+            "src/app/apply.rs#apply",
+            EdgeKind::Tests,
+        ));
+    }
+    for n in 0..3 {
+        edges.push(edge(
+            &format!("src/server/routes{n}.rs#handle"),
+            "src/app/apply.rs#apply",
+            EdgeKind::Calls,
+        ));
+    }
+    let neighbourhood = hood(&[symbol("src/app/apply.rs#apply")], &edges);
+
+    let impact = Impact::of(&neighbourhood, &seeds, 8);
+    let callers = impact
+        .reached
+        .iter()
+        .filter(|e| e.relation == Relation::Caller)
+        .count();
+    assert_eq!(callers, 3, "{:?}", impact.reached);
+    assert_eq!(impact.reached.len(), 8);
+    assert_eq!(impact.truncated, 21);
+}
+
+#[test]
+fn a_relation_with_nothing_left_gives_its_share_to_the_others() {
+    // Round-robin must not reserve room for a relation that has run out, or a
+    // change with one test and forty callers would list one of each.
+    let seeds = vec!["src/ledger.rs#settle".to_string()];
+    let mut edges = vec![edge(
+        "src/ledger_test.rs#settles",
+        "src/ledger.rs#settle",
+        EdgeKind::Tests,
+    )];
+    for n in 0..10 {
+        edges.push(edge(
+            &format!("src/caller{n:02}.rs#use_it"),
+            "src/ledger.rs#settle",
+            EdgeKind::Calls,
+        ));
+    }
+    let neighbourhood = hood(&[symbol("src/ledger.rs#settle")], &edges);
+
+    let impact = Impact::of(&neighbourhood, &seeds, 6);
+    assert_eq!(impact.reached.len(), 6);
+    assert_eq!(
+        impact
+            .reached
+            .iter()
+            .filter(|e| e.relation == Relation::Caller)
+            .count(),
+        5
+    );
+}
