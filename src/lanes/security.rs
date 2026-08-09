@@ -77,15 +77,21 @@ impl Lane for Security {
             return Ok(skipped);
         }
 
-        let reviewable: Vec<String> = input
-            .diffs
-            .iter()
-            .filter(|d| !d.changed_lines.is_empty())
-            .map(|d| d.path.clone())
-            .collect();
+        // Deterministic triage before any token is spent: drop the files that
+        // cannot carry a vulnerability, and review what is left riskiest first
+        // so an exhausted budget was spent on the files that mattered.
+        let forced: Vec<&str> = scanner.iter().map(|f| f.path.as_str()).collect();
+        let triaged = triage(input.diffs, &forced);
+
+        if triaged.review.is_empty() && scanner.is_empty() {
+            return Ok(LaneOutcome::skipped(&format!(
+                "No changed file has any attack surface.{}",
+                skip_note(&triaged.skipped)
+            )));
+        }
 
         let outcome =
-            per_file_with_budget(&reviewable, input.config.models.budget_usd_per_pr, |path| {
+            per_file_with_budget(&triaged.review, input.config.models.budget_usd_per_pr, |path| {
                 let model = self.model.clone();
                 let config = input.config;
                 let repo_policy = input.repo_policy;
