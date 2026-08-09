@@ -15,6 +15,9 @@
 //!    records what it could not.
 //! 4. [`build`] assembles nodes and edges and writes them; [`traverse`] walks
 //!    them back out, bounded by hops and by a hard node cap.
+//! 5. [`impact`] reads that walk *inbound only*, for the narrower question a
+//!    review asks: what existing code breaks if this change is wrong, and what
+//!    changed code no test reaches.
 //!
 //! **This graph exists to be traversed during a review**, not to be drawn. The
 //! obvious version of this feature is a dashboard endpoint whose only caller is
