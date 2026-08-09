@@ -6,7 +6,7 @@
 //! the worst are met first, and the detail sits in a `<details>` block that
 //! costs nothing to leave folded.
 
-use crate::config::types::Severity;
+use crate::config::types::{LaneId, Severity};
 use crate::findings::types::Finding;
 use crate::ports::model::Usage;
 
@@ -16,13 +16,49 @@ use crate::ports::model::Usage;
 /// they carry the word as well as the colour — which matters for anyone who
 /// cannot distinguish red from amber — and they line up in a table.
 pub fn badge(severity: Severity) -> String {
-    let (label, colour) = match severity {
+    let (label, colour) = severity_parts(severity);
+    format!("![{label}](https://img.shields.io/badge/{label}-{colour}?style=flat-square)")
+}
+
+/// The severity badge, labelled, for the head of an inline comment.
+///
+/// `label=priority` puts the word "priority" in the grey half and the level in
+/// the coloured half, so the badge reads as a sentence rather than a bare word
+/// whose meaning depends on knowing our colour scheme. The unlabelled
+/// [`badge`] stays for the summary table, where a column heading already says
+/// what the colour means and repeating it on every row is noise.
+pub fn priority_badge(severity: Severity) -> String {
+    let (label, colour) = severity_parts(severity);
+    format!("![priority {label}](https://img.shields.io/badge/{label}-{colour}?label=priority)")
+}
+
+/// The lane and how sure it is, as one badge.
+///
+/// Two facts that are only useful together: "tests" alone does not say whether
+/// to act, and "likely" alone does not say who is talking. Pairing them costs
+/// one badge instead of two and reads as `tests | likely`.
+pub fn lane_confidence_badge(lane: LaneId, confidence: f64) -> String {
+    let (word, colour) = confidence_parts(confidence);
+    format!("![{lane} {word}](https://img.shields.io/badge/{lane}-{word}-{colour})")
+}
+
+/// Colour and word for a severity.
+fn severity_parts(severity: Severity) -> (&'static str, &'static str) {
+    match severity {
         Severity::Critical => ("critical", "b60205"),
         Severity::High => ("high", "d93f0b"),
         Severity::Medium => ("medium", "fbca04"),
         Severity::Low => ("low", "0e8a16"),
-    };
-    format!("![{label}](https://img.shields.io/badge/{label}-{colour}?style=flat-square)")
+    }
+}
+
+/// Colour and word for a confidence, bucketed.
+fn confidence_parts(confidence: f64) -> (&'static str, &'static str) {
+    match confidence {
+        c if c >= 0.9 => ("confident", "1f6feb"),
+        c if c >= 0.7 => ("likely", "6f42c1"),
+        _ => ("uncertain", "8b949e"),
+    }
 }
 
 /// A confidence badge, bucketed rather than exact.
@@ -30,11 +66,7 @@ pub fn badge(severity: Severity) -> String {
 /// A model's 0.83 is not meaningfully different from its 0.79, and printing two
 /// decimal places implies a precision that is not there.
 pub fn confidence_badge(confidence: f64) -> String {
-    let (label, colour) = match confidence {
-        c if c >= 0.9 => ("confident", "1f6feb"),
-        c if c >= 0.7 => ("likely", "6f42c1"),
-        _ => ("uncertain", "8b949e"),
-    };
+    let (label, colour) = confidence_parts(confidence);
     format!("![{label}](https://img.shields.io/badge/{label}-{colour}?style=flat-square)")
 }
 
@@ -183,6 +215,105 @@ pub fn per_lane_costs(lanes: &[(String, Usage, Vec<String>)]) -> String {
         out.push_str(&format!("\n{name}: {}", cost_line(usage, models)));
     }
     out
+}
+
+/// The spend, as a column-aligned block in a fenced code span.
+///
+/// Prose wraps and reflows, so the same six numbers land in a different place
+/// on every row and comparing two lanes means reading rather than glancing.
+/// Fixed-width columns make the expensive lane the one your eye stops on, which
+/// is the only reason anyone opens this section.
+///
+/// The total is the first row and is deliberately unlabelled: it is the sum of
+/// the rows beneath it, and a `total:` label would compete with the lane names
+/// for attention when the interesting number is almost always a lane.
+///
+/// Fenced rather than a markdown table because a table's pipes are re-laid-out
+/// by the renderer and the alignment is lost — the thing this exists for.
+pub fn cost_table(
+    total: &Usage,
+    total_models: &[String],
+    lanes: &[(String, Usage, Vec<String>)],
+) -> String {
+    let mut rows: Vec<[String; 6]> = vec![row("", total, total_models)];
+
+    for (name, usage, models) in lanes {
+        // Same rule as `per_lane_costs`: a lane that spent nothing is noise.
+        if usage.cost_usd <= 0.0 && usage.input_tokens == 0 && usage.embed_tokens == 0 {
+            continue;
+        }
+        rows.push(row(&format!("{name}:"), usage, models));
+    }
+
+    // Nothing but a total means there is no breakdown to align, and a one-row
+    // table reads worse than the sentence it replaced.
+    if rows.len() < 2 {
+        return format!("```\n{}\n```", cost_line(total, total_models).trim());
+    }
+
+    // The last column is never padded: trailing spaces are invisible and only
+    // make the block wider than the terminal it is read in.
+    let widths: [usize; 5] = std::array::from_fn(|column| {
+        rows.iter()
+            .map(|cells| cells[column].chars().count())
+            .max()
+            .unwrap_or(0)
+    });
+
+    let mut out = String::from("```\n");
+    for cells in &rows {
+        let mut line = String::new();
+        for (column, cell) in cells.iter().enumerate().take(5) {
+            let pad = widths[column].saturating_sub(cell.chars().count());
+            line.push_str(cell);
+            line.push_str(&" ".repeat(pad));
+            // The input and output counts are one fact, so a slash joins them
+            // and the interpunct separates the groups.
+            line.push_str(match column {
+                0 => " ",
+                2 => " / ",
+                _ => " \u{b7} ",
+            });
+        }
+        line.push_str(&cells[5]);
+        out.push_str(line.trim_end());
+        out.push('\n');
+    }
+    out.push_str("```");
+    out
+}
+
+/// One row's cells: label, cost, input, output, cache, models.
+fn row(label: &str, usage: &Usage, models: &[String]) -> [String; 6] {
+    let cached = if usage.input_tokens > 0 {
+        let rate = usage.cached_tokens as f64 / usage.input_tokens as f64 * 100.0;
+        format!("{} cached ({rate:.0}%)", thousands(usage.cached_tokens))
+    } else {
+        // Not "0 cached (0%)": nothing was sent, so there was nothing to hit the
+        // cache, and a zero here reads as a cache that missed.
+        String::new()
+    };
+
+    let mut models = models.join(", ");
+    if usage.embed_tokens > 0 {
+        // Embedding spend rides in the model column rather than one of its own,
+        // which would be empty on every row of a review that never indexed.
+        let embedded = format!("{} embedded", thousands(usage.embed_tokens));
+        models = if models.is_empty() {
+            embedded
+        } else {
+            format!("{models} \u{b7} {embedded}")
+        };
+    }
+
+    [
+        label.to_string(),
+        format!("${:.4}", usage.cost_usd),
+        format!("{} in", thousands(usage.input_tokens)),
+        format!("{} out", thousands(usage.output_tokens)),
+        cached,
+        models,
+    ]
 }
 
 /// `12345` reads as `12,345`.
@@ -359,5 +490,138 @@ mod tests {
         assert_eq!(thousands(1_000), "1,000");
         assert_eq!(thousands(49_169), "49,169");
         assert_eq!(thousands(1_234_567), "1,234,567");
+    }
+}
+
+#[cfg(test)]
+mod cost_table_tests {
+    use super::*;
+
+    fn usage(cost: f64, input: u64, output: u64, cached: u64) -> Usage {
+        Usage {
+            cost_usd: cost,
+            input_tokens: input,
+            output_tokens: output,
+            cached_tokens: cached,
+            ..Default::default()
+        }
+    }
+
+    fn sample() -> String {
+        cost_table(
+            &usage(0.2672, 139_215, 6_896, 13_824),
+            &["minimax/minimax-m3".into(), "moonshotai/kimi-k3".into()],
+            &[
+                (
+                    "critique".into(),
+                    usage(0.0618, 19_733, 173, 0),
+                    vec!["moonshotai/kimi-k3".into()],
+                ),
+                (
+                    "security".into(),
+                    usage(0.1827, 59_392, 2_375, 11_520),
+                    vec!["moonshotai/kimi-k3".into()],
+                ),
+                (
+                    "commits".into(),
+                    usage(0.0010, 2_866, 132, 128),
+                    vec!["minimax/minimax-m3".into()],
+                ),
+            ],
+        )
+    }
+
+    #[test]
+    fn every_column_lines_up() {
+        // The whole point: a reader should be able to run an eye down the cost
+        // column. If the separators drift, they cannot.
+        let table = sample();
+        let body: Vec<&str> = table
+            .lines()
+            .filter(|l| !l.starts_with("```") && !l.is_empty())
+            .collect();
+
+        let first = body[0].find('$').expect("a cost");
+        for line in &body {
+            assert_eq!(line.find('$'), Some(first), "{table}");
+        }
+
+        // And the separator after the cost column, which is what actually
+        // proves the padding is per-column rather than accidental.
+        let sep = body[0].find(" · ").expect("a separator");
+        for line in &body {
+            assert_eq!(line.find(" · "), Some(sep), "{table}");
+        }
+    }
+
+    #[test]
+    fn the_total_is_first_and_unlabelled() {
+        let table = sample();
+        let body: Vec<&str> = table.lines().filter(|l| !l.starts_with("```")).collect();
+        assert!(body[0].trim_start().starts_with('$'), "{table}");
+        assert!(body[1].starts_with("critique:"), "{table}");
+    }
+
+    #[test]
+    fn it_is_fenced_so_the_renderer_cannot_reflow_it() {
+        let table = sample();
+        assert!(table.starts_with("```\n"), "{table}");
+        assert!(table.ends_with("```"), "{table}");
+    }
+
+    #[test]
+    fn no_row_carries_trailing_whitespace() {
+        // Padding the last column would widen the block for nothing and show up
+        // as ragged whitespace in a diff.
+        for line in sample().lines() {
+            assert_eq!(line, line.trim_end(), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn a_lane_that_spent_nothing_is_left_out() {
+        let table = cost_table(
+            &usage(0.0618, 19_733, 173, 0),
+            &["moonshotai/kimi-k3".into()],
+            &[
+                (
+                    "critique".into(),
+                    usage(0.0618, 19_733, 173, 0),
+                    vec!["moonshotai/kimi-k3".into()],
+                ),
+                ("gate".into(), usage(0.0, 0, 0, 0), vec![]),
+            ],
+        );
+        assert!(!table.contains("gate"), "{table}");
+    }
+
+    #[test]
+    fn a_run_that_sent_nothing_reports_no_cache_rate() {
+        // 0% would read as "the cache missed" rather than "nothing was sent".
+        let table = cost_table(&usage(0.0, 0, 0, 0), &[], &[]);
+        assert!(!table.contains('%'), "{table}");
+    }
+
+    #[test]
+    fn a_single_lane_falls_back_to_one_line() {
+        // A table of one row is worse than the sentence it replaced.
+        let single = usage(0.01, 100, 10, 0);
+        let table = cost_table(&single, &["m".into()], &[]);
+        assert_eq!(table.lines().count(), 3, "{table}");
+    }
+
+    #[test]
+    fn embedding_spend_appears_without_a_column_of_its_own() {
+        let mut with_embed = usage(0.02, 100, 10, 0);
+        with_embed.embed_tokens = 377_153;
+        let table = cost_table(
+            &with_embed,
+            &["m".into()],
+            &[
+                ("critique".into(), usage(0.01, 50, 5, 0), vec!["m".into()]),
+                ("security".into(), with_embed, vec!["m".into()]),
+            ],
+        );
+        assert!(table.contains("377,153 embedded"), "{table}");
     }
 }

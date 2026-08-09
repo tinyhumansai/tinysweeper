@@ -34,4 +34,16 @@ needs the first without any risk of the second.
 | `types.rs` | `PullRequest`, `ChangedFile`, `Commit`, `CheckRun`, `Issue`, … |
 | `mock.rs` | The recording in-memory forge |
 
+`Commit::patch` is `None` until something fetches it. Both adapters behave the
+same way on purpose: the listing endpoint returns metadata, and the patch comes
+from `commit_patch`. `MockForge` withholds a stored patch from `commits()` for
+exactly that reason — a mock that handed it over would pass tests on behaviour
+GitHub does not have, and leave the `pull_request_context` plumbing untested.
+
+The GitHub adapter assembles a commit's patch from the commit endpoint's
+per-file `patch` fields rather than requesting `application/vnd.github.diff`,
+because the JSON shape lets each file be capped on the way in. A commit that
+vendors a directory must not be held in memory in full before anything gets the
+chance to shorten it.
+
 The octocrab-backed `github.rs` arrives with M6, behind the `github` feature.

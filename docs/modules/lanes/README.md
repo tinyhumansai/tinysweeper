@@ -37,6 +37,32 @@ regular expression first is that it cannot be argued with. What a model *can*
 do is add what a scanner cannot see, and its findings are dropped when they
 merely restate a scanner match on the same path and rule.
 
+## What the `commits` lane is shown
+
+`git log -p` over the range: each commit's message *and* the patch it
+introduced, fetched per commit by `ForgeRead::commit_patch` and assembled by
+`pull_request_context`. Without the patches the lane could only read subject
+lines, and it built a confident security finding out of the phrase "kernel
+bypass" in one (issue #47).
+
+Two bounds, both stated in the evidence rather than applied silently:
+
+| Bound | Value | What happens past it |
+|---|---|---|
+| Commits rendered | 50 | Listed as "… and N more commits, not shown." |
+| Commits fetched | `ports::forge::MAX_PATCHED_COMMITS` (50) | `patch: None`, rendered as "no patch was fetched" |
+| Patch bytes per range | 48 KiB | Message still shown, patch omitted, count reported |
+| Patch bytes per commit | 12 KiB | Cut on a line boundary with the dropped byte count |
+
+A commit with no patch is never rendered as an empty diff. The instructions let
+the lane judge such a commit's message as a message and forbid it from inferring
+what the commit did — a distinction it can only make if the evidence draws it.
+
+The lane's findings then go through `src/falsify` before the scanner findings
+are merged in. That order is the invariant: a model's claim about the range is
+exactly what a falsifier can prove wrong from the patches, and a scanner's match
+is never up for a model's opinion.
+
 ## Anchoring
 
 `lanes::anchor` holds the two rules, and the difference between them matters:

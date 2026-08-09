@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use octocrab::Octocrab;
 
 use crate::error::{Error, Result};
+use crate::evidence::diff::truncate_patch;
 use crate::forge::types::{
     ChangedFile, CheckConclusion, CheckRun, Commit, FileStatus, Issue, IssueComment, PullRequest,
     RepoId, ReviewComment, ReviewEvent,
@@ -25,6 +26,14 @@ fn client(token: &str) -> Result<Octocrab> {
 fn api(err: octocrab::Error) -> Error {
     Error::Forge(err.to_string())
 }
+
+/// How much of one file's patch is kept inside a commit's patch.
+///
+/// Applied at the boundary rather than at render time: a commit that adds a
+/// vendored tree would otherwise be held in memory in full before anything got
+/// the chance to shorten it. The `commits` lane applies its own, tighter budget
+/// across the whole range on top of this.
+const MAX_FILE_PATCH_BYTES: usize = 16 * 1024;
 
 /// Read-only GitHub access.
 pub struct GitHubRead {
@@ -156,10 +165,53 @@ impl ForgeRead for GitHubRead {
                             .as_str()
                             .unwrap_or_default()
                             .to_string(),
+                        // Metadata only. The patch is a separate request per
+                        // commit, made by `pull_request_context` for the
+                        // commits it is willing to pay for.
+                        patch: None,
                     })
                     .collect()
             })
             .unwrap_or_default())
+    }
+
+    async fn commit_patch(&self, repo: &RepoId, sha: &str) -> Result<Option<String>> {
+        // The commit endpoint carries per-file patches. Assembled here into one
+        // unified text rather than requested as `application/vnd.github.diff`,
+        // because the JSON shape lets each file be capped on the way in: a
+        // vendored directory landing in one commit must not pull megabytes into
+        // memory before anything gets to truncate it.
+        let route = format!("/repos/{}/{}/commits/{sha}", repo.owner, repo.name);
+        let raw: serde_json::Value = match self.client.get(&route, None::<&()>).await {
+            Ok(raw) => raw,
+            // A commit the forge will not render a diff for is not an error.
+            Err(octocrab::Error::GitHub { source, .. }) if source.status_code == 404 => {
+                return Ok(None);
+            }
+            Err(err) => return Err(api(err)),
+        };
+
+        let Some(files) = raw["files"].as_array() else {
+            return Ok(None);
+        };
+
+        let mut patch = String::new();
+        for file in files {
+            let path = file["filename"].as_str().unwrap_or_default();
+            let Some(hunks) = file["patch"].as_str() else {
+                // No patch means binary, or a file GitHub truncated. Named
+                // anyway: "this commit touched a binary" is evidence, and
+                // silence would read as "it touched nothing".
+                let status = file["status"].as_str().unwrap_or("changed");
+                patch.push_str(&format!("--- {path} ({status}, no textual patch)\n"));
+                continue;
+            };
+            patch.push_str(&format!("--- a/{path}\n+++ b/{path}\n"));
+            patch.push_str(truncate_patch(hunks, MAX_FILE_PATCH_BYTES).trim_end());
+            patch.push('\n');
+        }
+
+        Ok((!patch.is_empty()).then_some(patch))
     }
 
     async fn comments(&self, repo: &RepoId, number: u64) -> Result<Vec<IssueComment>> {

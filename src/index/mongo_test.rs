@@ -476,3 +476,90 @@ live_test!(
         );
     }
 );
+
+#[test]
+fn the_budget_counts_analyzer_tokens_not_words() {
+    // The hole in counting words: the analyzer splits on punctuation, so one
+    // path is several clauses. 400 three-token paths must not all fit.
+    let paths: String = (0..400)
+        .map(|i| format!("src/harness/mod{i}.rs"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let capped = lexical_terms(&paths);
+
+    let cost: usize = capped.split_whitespace().map(analyzer_tokens).sum();
+    assert!(cost <= MAX_LEXICAL_TERMS, "spent {cost}");
+    assert!(
+        cost * 3 < 1024,
+        "three paths at {cost} tokens overruns Lucene"
+    );
+    assert!(
+        capped.split_whitespace().count() < 400,
+        "a path-heavy query must be truncated: {capped}"
+    );
+}
+
+#[test]
+fn an_identifier_survives_intact() {
+    // The regression this replaces: splitting on every non-alphanumeric emitted
+    // `chunk id` for `chunk_id`. Exact-identifier matching is the whole reason
+    // the lexical arm sits next to a dense one, so fragmenting the identifiers
+    // defeats the arm while satisfying the clause limit.
+    let capped = lexical_terms("chunk_id resolve_range sha256 src/index/mongo.rs");
+    assert!(capped.contains("chunk_id"), "{capped}");
+    assert!(capped.contains("resolve_range"), "{capped}");
+    assert!(capped.contains("sha256"), "{capped}");
+    assert!(capped.contains("src/index/mongo.rs"), "{capped}");
+}
+
+#[test]
+fn an_underscore_costs_one_token_and_a_slash_costs_several() {
+    assert_eq!(analyzer_tokens("chunk_id"), 1);
+    assert_eq!(analyzer_tokens("sha256"), 1);
+    assert_eq!(analyzer_tokens("src/index/mongo.rs"), 4);
+    assert_eq!(analyzer_tokens("---"), 0);
+}
+
+#[test]
+fn a_repeated_word_spends_no_budget() {
+    // A weaker version of this asserted on `chunk Chunk chunk_id chunk`, which
+    // passes under a plain whitespace splitter and so guarded nothing. This
+    // fails unless repeats are genuinely free: the budget is filled with
+    // distinct words, then each is repeated. Without dedupe the repeats spend
+    // the budget and the tail is truncated away.
+    let distinct: Vec<String> = (0..MAX_LEXICAL_TERMS).map(|i| format!("word{i}")).collect();
+    let with_repeats = format!("{} {}", distinct.join(" "), distinct.join(" "));
+
+    let capped = lexical_terms(&with_repeats);
+    let terms: Vec<&str> = capped.split_whitespace().collect();
+
+    assert_eq!(
+        terms.len(),
+        MAX_LEXICAL_TERMS,
+        "every distinct word survives"
+    );
+    assert_eq!(
+        terms.last(),
+        Some(&distinct[MAX_LEXICAL_TERMS - 1].as_str()),
+        "the tail must not be truncated by its own repeats: {capped}"
+    );
+}
+
+#[test]
+fn a_repeat_is_matched_case_insensitively() {
+    // The analyzer folds case, so `Chunk` and `chunk` are one clause.
+    assert_eq!(
+        lexical_terms("chunk Chunk CHUNK")
+            .split_whitespace()
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn a_short_query_is_left_alone() {
+    assert_eq!(
+        lexical_terms("resolve range anchor"),
+        "resolve range anchor"
+    );
+}

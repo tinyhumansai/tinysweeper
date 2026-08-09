@@ -109,8 +109,16 @@ services:
       # They were previously spelled `TINYSWEEPER_GITHUB_*` here, which the
       # binary never reads, so the container could not authenticate as the App
       # however the environment was set.
-      TINYSWEEPER_APP_ID: ${TINYSWEEPER_APP_ID:?set the GitHub App id}
-      TINYSWEEPER_APP_PRIVATE_KEY: ${TINYSWEEPER_APP_PRIVATE_KEY:?set the GitHub App private key}
+      #
+      # `:-` and not `:?`: Compose interpolates the whole file before it starts
+      # anything, so a required variable here would also break
+      # `docker compose up mongod` — bringing the database up alone, which is
+      # what the integration tests and a first-time setup both do, and neither
+      # has any use for a GitHub credential. The server already refuses to boot
+      # without these and names the missing one, so the check is not lost, only
+      # moved to the service that actually needs it.
+      TINYSWEEPER_APP_ID: ${TINYSWEEPER_APP_ID:-}
+      TINYSWEEPER_APP_PRIVATE_KEY: ${TINYSWEEPER_APP_PRIVATE_KEY:-}
       RUST_LOG: ${RUST_LOG:-tinysweeper=info}
     # The runtime image carries no configuration — it is a binary and nothing
     # else — so without this mount the server runs entirely on built-in

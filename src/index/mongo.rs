@@ -101,15 +101,62 @@ const TEXT_INDEX: &str = "tinysweeper_text";
 /// clause count.
 const MAX_LEXICAL_TERMS: usize = 300;
 
-/// The first [`MAX_LEXICAL_TERMS`] terms of `text`.
+/// The lexical arm's query, budgeted by the tokens the analyzer will produce.
 ///
-/// Terms are already frequency-ranked by `retrieve::query`, so truncating from
-/// the tail drops the least informative ones.
+/// Two separate concerns, and conflating them broke one of them:
+///
+/// **Counting.** The analyzer splits on punctuation, so one whitespace-separated
+/// word can be several clauses — `src/harness/openrouter.rs` is one word and
+/// three or four tokens. Counting words would let a path-heavy query pass a
+/// cap of 300 and still overrun the 1024 clause limit.
+///
+/// **Emitting.** The terms themselves must go out *intact*. An earlier fix
+/// split on every non-alphanumeric character and emitted the fragments, which
+/// turned `chunk_id` into `chunk id` — and exact-identifier matching is the
+/// entire reason the lexical arm exists next to a dense one. Underscores are
+/// word-joining under UAX#29, so the analyzer keeps `chunk_id` whole; splitting
+/// on them was both wrong and self-defeating.
+///
+/// So: estimate each word's token cost, spend from a budget, and emit the word
+/// unchanged. The estimate is deliberately conservative — it counts a
+/// separator run as a split even where the analyzer might join — because
+/// over-counting costs a little recall and under-counting fails the entire
+/// aggregation.
+///
+/// Words are deduplicated, keeping first occurrence: `retrieve::query` ranks
+/// identifiers by frequency, and a repeat adds no BM25 weight while still
+/// spending clauses.
 fn lexical_terms(text: &str) -> String {
-    text.split_whitespace()
-        .take(MAX_LEXICAL_TERMS)
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut seen = BTreeSet::new();
+    let mut terms = Vec::new();
+    let mut spent = 0usize;
+
+    for word in text.split_whitespace() {
+        let cost = analyzer_tokens(word);
+        if cost == 0 {
+            continue;
+        }
+        if spent + cost > MAX_LEXICAL_TERMS {
+            break;
+        }
+        if seen.insert(word.to_ascii_lowercase()) {
+            spent += cost;
+            terms.push(word);
+        }
+    }
+
+    terms.join(" ")
+}
+
+/// How many tokens the index analyzer will make of one word.
+///
+/// Underscores and digits stay attached — UAX#29 treats `_` as word-joining, so
+/// `chunk_id` and `sha256` are one token each. Everything else non-alphanumeric
+/// is a boundary.
+fn analyzer_tokens(word: &str) -> usize {
+    word.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|part| !part.is_empty())
+        .count()
 }
 
 /// The vector the boot probe searches with.

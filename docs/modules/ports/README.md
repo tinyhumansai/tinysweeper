@@ -19,6 +19,17 @@ survives contributors who have not read `AGENTS.md`.
 If you find yourself wanting to pass a `ForgeWrite` into a lane, the answer is
 that the lane should return a proposal and the apply path should act on it.
 
+## Commit patches are a second call
+
+`ForgeRead::commits` returns metadata; `ForgeRead::commit_patch` returns one
+commit's patch. Every forge worth supporting bills them as separate requests, so
+the port says so rather than pretending otherwise. `pull_request_context` makes
+the second call for the first `MAX_PATCHED_COMMITS` commits and leaves the rest
+with `patch: None` — one request per commit means a two-hundred-commit branch
+would otherwise spend a review's whole rate-limit budget on patches nothing
+renders. `None` means "not fetched", never "changed nothing"; the `commits` lane
+depends on being able to tell the difference.
+
 ## `Model`
 
 Lanes never talk to a provider SDK. They describe what they want — messages, a

@@ -45,6 +45,19 @@ a provider outage must not look like a clean review.
 
 Both properties are asserted directly in `src/falsify/test.rs`.
 
+## Which lanes run it
+
+`critique`, and `commits`. The `commits` lane was added after issue #47, where
+it read a loaded phrase in a commit subject and reported a privilege escalation
+that the commit's patch plainly did not make — a claim the evidence disproves,
+which is precisely what this pass is for. Its "diff" there is the rendered
+commit range, so a finding about a message is judged against the messages rather
+than rejected for being absent from a patch.
+
+The pass runs on the lane's **model** findings only. Scanner findings are merged
+in afterwards and are never shown to the filter: a committed key found by a
+regular expression is not up for a model's opinion.
+
 ## Cost
 
 One call per lane, on the cheap tier `Config::model_for_workload(Workload::Falsify)` resolves to, skipped entirely when the lane

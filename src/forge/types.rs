@@ -130,6 +130,15 @@ pub struct Commit {
     /// The author's email. Checked for noreply/mismatch shapes by the `commits`
     /// lane, and never echoed into a comment.
     pub author_email: String,
+    /// The unified patch this commit introduced, when it was fetched.
+    ///
+    /// `None` means **not fetched** — beyond the patch budget, or served by an
+    /// adapter that only returns metadata — and never "this commit changed
+    /// nothing". The `commits` lane depends on the distinction: a finding may
+    /// only cite a patch it was actually shown, so a commit whose patch is
+    /// absent has to be rendered as such rather than as an empty diff.
+    #[serde(default)]
+    pub patch: Option<String>,
 }
 
 /// The state a check run reports.
