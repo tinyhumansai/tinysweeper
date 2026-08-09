@@ -53,8 +53,14 @@ mod tests {
 
     #[test]
     fn decisions_keep_their_deterministic_reasons() {
-        assert!(matches!(Decision::Resolve("fixed"), Decision::Resolve("fixed")));
-        assert!(matches!(Decision::Leave("human reply"), Decision::Leave("human reply")));
+        assert!(matches!(
+            Decision::Resolve("fixed"),
+            Decision::Resolve("fixed")
+        ));
+        assert!(matches!(
+            Decision::Leave("human reply"),
+            Decision::Leave("human reply")
+        ));
         assert!(matches!(Decision::Ask, Decision::Ask));
     }
 
@@ -70,6 +76,9 @@ mod tests {
             }],
         };
         assert!(!plan.is_empty());
-        assert_eq!(serde_json::from_str::<ThreadPlan>(&serde_json::to_string(&plan).unwrap()).unwrap(), plan);
+        assert_eq!(
+            serde_json::from_str::<ThreadPlan>(&serde_json::to_string(&plan).unwrap()).unwrap(),
+            plan
+        );
     }
 }
