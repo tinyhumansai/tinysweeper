@@ -112,10 +112,36 @@ fallback = ["deepseek/deepseek-v4-pro", "minimax/minimax-m3"]
 # the findings that arrived and the rest are simply never seen, which reads
 # exactly like a clean review. That is the failure this number is set against.
 max_tokens = 16000
-# Reasoning is billed against `max_tokens`. It was off entirely because
-# `kimi-k3` spent all 8000 tokens thinking and returned empty content; measured
-# on `deepseek-v4-pro` at `high`, the same prompt uses 416 reasoning tokens and
-# finishes cleanly. Set to `off` if you put a thinking-heavy model back.
+# Reasoning is billed against `max_tokens`, and this key does **not** bound it.
+#
+# The 416-token figure that used to be recorded here was measured on a toy
+# prompt and did not survive contact with a real one. Re-measured against a
+# 23k-token diff with a demanding system prompt, both configured models spend
+# reasoning like this:
+#
+#   model               effort  max_tokens  reasoning  content
+#   z-ai/glm-5.2        high      8000        8000     empty, finish=length
+#   z-ai/glm-5.2        low       8000        8000     empty, finish=length
+#   z-ai/glm-5.2        off       8000           0     2572 tokens, 13 findings
+#   z-ai/glm-5.2        high     32000           8     7429 tokens, 23 findings
+#   deepseek-v4-pro     high      8000        8000     empty, finish=length
+#   deepseek-v4-pro     low       8000        8000     empty, finish=length
+#   deepseek-v4-pro     off       8000           0      966 tokens
+#   deepseek-v4-pro     high     32000        8152     9246 tokens
+#
+# Two things in that table are worth keeping. First, `low` is not a smaller
+# `high`: both models burned the *entire* allowance thinking at either setting,
+# so turning the dial down is not a way to bound spend — only `off` is. Second,
+# the failure is bimodal rather than gradual. There is no setting at which the
+# model thinks a bit and answers a bit; either reasoning fits and the answer is
+# whole, or reasoning takes everything and the content is empty.
+#
+# `high` is kept because `max_tokens` above is now 16000, which cleared it in
+# production — no structured-output failure and no fallback in the hours after
+# the deploy. But the margin is thinner than it looks: 8152 of those 16000 went
+# on thinking in the measurement above, so a harder prompt is one step from the
+# same cliff. If this starts failing again, `off` is the fix that is *proven*
+# rather than the one that buys room, and it costs 13 findings against 23.
 reasoning_effort = "high"
 budget_usd_per_pr = 1.0
 
