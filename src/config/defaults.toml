@@ -157,6 +157,7 @@ context_tokens = 8000
 max_chunks = 40
 graph_hops = 2
 max_graph_nodes = 60
+max_impact = 20
 
 [lanes.critique]
 model = "deep"
