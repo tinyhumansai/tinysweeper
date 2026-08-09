@@ -112,6 +112,15 @@ services:
       TINYSWEEPER_APP_ID: ${TINYSWEEPER_APP_ID:?set the GitHub App id}
       TINYSWEEPER_APP_PRIVATE_KEY: ${TINYSWEEPER_APP_PRIVATE_KEY:?set the GitHub App private key}
       RUST_LOG: ${RUST_LOG:-tinysweeper=info}
+    # The runtime image carries no configuration — it is a binary and nothing
+    # else — so without this mount the server runs entirely on built-in
+    # defaults. That is not a smaller version of the intended behaviour: it
+    # means `[embeddings]` is off, so the index never builds and every review is
+    # diff-only, silently. Mounting the file is the interim answer; the real one
+    # is #12, fetching each reviewed repository's own config through the forge
+    # rather than reading one from the server's filesystem.
+    volumes:
+      - ./.tinysweeper.toml:/home/tinysweeper/.tinysweeper.toml:ro
     ports:
       - "8080:8080"
     depends_on:
