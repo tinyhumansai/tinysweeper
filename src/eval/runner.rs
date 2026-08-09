@@ -168,9 +168,10 @@ async fn review_case(case: &LoadedCase, config: &Config, model: Arc<Cassette>) -
 
 /// The configuration a corpus run is allowed to use.
 ///
-/// Two overrides, both to stop the harness measuring something other than
-/// review quality. See the module doc for why `incremental` in particular is
-/// not a preference.
+/// One override, and it is the load-bearing one: `incremental` forced off so
+/// the measures run order instead of review quality. The second pin the module
+/// doc mentions — a fresh [`MemoryState`] per case — lives in `review_case`,
+/// because it is a property of the state store rather than of the config.
 fn prepare(config: &Config) -> Config {
     let mut config = config.clone();
     config.review.incremental = false;
