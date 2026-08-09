@@ -41,15 +41,32 @@ use crate::index::types::{EdgeKind, Neighbourhood};
 pub use crate::overview::render::{MARKER, comment};
 pub use crate::overview::types::{ChangeMap, Component, GraphStatus, Link, Role};
 
+/// What the caller was able to get out of the code graph.
+///
+/// Three cases rather than an `Option`, because "there is no graph here",
+/// "the graph is there and knows nothing about these files" and "the graph is
+/// there and did not answer" need three different things done about them, and
+/// only the last one is somebody's bug. Collapsing them was the first version
+/// of this and it made an outage indistinguishable from a supported offline
+/// deployment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphView<'a> {
+    /// No graph store is attached to this deployment at all.
+    Absent,
+    /// A graph is attached, but the walk failed.
+    Unavailable,
+    /// The walk ran; this is what it reached.
+    Walked(&'a Neighbourhood),
+}
+
 /// Build the map for one review.
 ///
-/// `neighbourhood` is the bounded walk out from the changed files, or `None`
-/// where no graph store was attached. `findings` are the ones that survived
-/// filtering, so the diagram marks what the review will actually say.
+/// `findings` are the ones that survived filtering, so the diagram marks what
+/// the review will actually say rather than what a lane first proposed.
 pub fn build(
     diffs: &[FileDiff],
     findings: &[Finding],
-    neighbourhood: Option<&Neighbourhood>,
+    view: GraphView<'_>,
     limits: &Overview,
 ) -> ChangeMap {
     let changed_paths: BTreeSet<String> = diffs.iter().map(|d| d.path.clone()).collect();
