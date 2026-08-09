@@ -503,6 +503,8 @@ fn the_lexical_arm_stays_under_lucene_s_clause_limit() {
 
 #[test]
 fn a_short_query_is_left_alone() {
-    assert_eq!(lexical_terms("resolve range anchor"), "resolve range anchor");
+    assert_eq!(
+        lexical_terms("resolve range anchor"),
+        "resolve range anchor"
+    );
 }
-
