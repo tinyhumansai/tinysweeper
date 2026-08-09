@@ -138,7 +138,7 @@ impl Impact {
         }
 
         let total = strongest.len();
-        let mut reached = select(strongest, max_reached);
+        let mut reached = Self::select(strongest, max_reached);
         // Relation first, then id, so the block reads grouped. Ties break the
         // same way every run — a golden test on the rendered prompt would
         // otherwise depend on map iteration order.
