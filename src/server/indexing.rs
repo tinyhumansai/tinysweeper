@@ -210,7 +210,17 @@ impl IndexBackend {
         let selection = selector.walk(checkout.path())?;
 
         let known = self.index.graph.symbols(repo_id).await?;
-        let parse = match known.is_empty() {
+        // An alias configuration re-maps specifiers repository-wide, and the
+        // file itself is never parsed into a graph node, so `rebuild_set` —
+        // which walks out from changed nodes' neighbours — adds nothing for it.
+        // Rebuilding whole puts the new mapping into every edge; the set of
+        // such files is tiny, so the cost is one full parse per alias edit.
+        let aliases_moved = report
+            .changed
+            .iter()
+            .chain(report.removed.iter())
+            .any(|path| crate::graph::aliases::is_alias_config(path));
+        let parse = match known.is_empty() || aliases_moved {
             true => None,
             false => Some(
                 crate::graph::build::rebuild_set(
