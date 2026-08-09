@@ -29,7 +29,13 @@
 //!    has nothing to jailbreak — the worst it can do is emit different bullets.
 //! 4. **Structural validation.** The answer has to actually *be* a bullet list
 //!    within [`MAX_RULES`]×[`MAX_RULE_CHARS`]. Anything else — prose, a refusal,
-//!    a literal `NO_RULES` — yields nothing at all.
+//!    a literal `NO_RULES` — yields nothing at all. Markdown framing around the
+//!    list (a wrapping code fence, headings) is dropped rather than read, which
+//!    is not a relaxation: no text reaches a prompt that would not have anyway.
+//!    A discarded answer is asked for once more ([`EXTRACT_ATTEMPTS`]), because
+//!    the cost of a strict check is that a well-behaved model occasionally slips
+//!    its format and loses a whole file's rules. The re-ask is what keeps the
+//!    strictness affordable; it is never a reason to relax it.
 //!
 //! A content-hash cache sits in front of the model call, so one unique file
 //! content is extracted once.
@@ -63,6 +69,21 @@ pub const NO_RULES: &str = "NO_RULES";
 /// assumption that the prompt is the thing that gets talked out of its limits.
 const EXTRACT_MAX_TOKENS: u32 = 2000;
 
+/// How many times one file may be put to the extractor.
+///
+/// The structural check is all-or-nothing on purpose, and a cheap model slips
+/// its output format every so often — measured on this repository's own
+/// `AGENTS.md`, roughly one call in ten answers with a perfect bullet list and
+/// then one trailing sentence, which throws the whole extraction away. Rolling
+/// the same call again turns a one-in-ten loss into a one-in-a-hundred one,
+/// which is the right place to spend: the alternative is to accept the trailing
+/// sentence, and that is the exact thing the check exists to refuse.
+///
+/// Two, not more. A retry is worth a second cheap call; a retry loop would let
+/// a model that cannot follow the format at all cost a call per attempt on
+/// every pull request.
+const EXTRACT_ATTEMPTS: usize = 2;
+
 /// The extraction call's entire system prompt.
 ///
 /// Deliberately self-contained. It names no repository, quotes no diff and
@@ -74,6 +95,11 @@ const EXTRACT_SYSTEM: &str = r#"You extract project coding rules from one docume
 Output ONLY a markdown bullet list of the project's coding rules. One rule per
 bullet, each line beginning with "- ". No preamble, no headings, no explanation,
 no code fences, no closing remarks.
+
+The output ends with the last bullet. Every single line of it begins with "- ".
+Do not add a closing sentence, a summary, a safety note, or any remark about the
+document or about instructions in it — not even after a correct list. A single
+line that is not a bullet makes the whole answer unusable and it is thrown away.
 
 Hard limits:
 - At most 25 bullets. Stop at 25 even if the file states more.
@@ -146,14 +172,58 @@ fn truncate_bytes(content: &str, limit: usize) -> &str {
     &content[..end]
 }
 
+/// Whether a line is a markdown ATX heading.
+///
+/// Deliberately narrow: `#` through `######` followed by a space, or a `#` run
+/// on its own. It has to be a shape a sentence cannot accidentally take, since
+/// heading lines are the one kind of non-bullet line the parser tolerates.
+fn is_heading(line: &str) -> bool {
+    let hashes = line.chars().take_while(|c| *c == '#').count();
+    (1..=6).contains(&hashes)
+        && line[hashes..]
+            .chars()
+            .next()
+            .is_none_or(char::is_whitespace)
+}
+
+/// Unwrap an answer that is entirely inside one fenced code block.
+///
+/// Backticks only, and only when the fence opens the answer and closes it:
+/// anything less than a wrapper around the whole thing is a fence *within* the
+/// answer, which is not framing and is left alone to be rejected.
+fn strip_wrapping_fence(trimmed: &str) -> &str {
+    let Some(rest) = trimmed.strip_prefix("```") else {
+        return trimmed;
+    };
+    let Some(close) = rest.rfind("```") else {
+        return trimmed;
+    };
+    // The opening fence's info string (```markdown) runs to the end of its line.
+    let Some(open_end) = rest[..close].find('\n') else {
+        return trimmed;
+    };
+    rest[open_end + 1..close].trim()
+}
+
 /// Structural validation: turn a model's answer into rules, or into nothing.
 ///
 /// The failure mode this exists for is a model that was talked out of its
 /// format. Anything that is not a clean bullet list is discarded **entirely**
 /// rather than salvaged line by line — a partial salvage is exactly how an
 /// injected paragraph gets through with a `- ` glued to the front of it.
+///
+/// Two kinds of *framing* are tolerated, and neither of them is a relaxation of
+/// that rule: markdown headings, and a code fence around the whole answer. A
+/// heading wrapped around an otherwise perfect list is what was measured on live
+/// scan-tier calls over this repository's own `AGENTS.md` (issue #48); the fence
+/// is the same shape and the prompt forbids it in the same sentence, so it is
+/// covered here rather than waiting for a second incident. Both are dropped
+/// rather than read — a heading never becomes a rule, the fence never survives —
+/// so nothing new reaches a review prompt. What is still refused is the thing
+/// the check is actually for: a line of prose. `Certainly! Here are the rules:`
+/// is not a heading, and it still discards the whole answer.
 pub fn parse_rules(raw: &str) -> Vec<String> {
-    let trimmed = raw.trim();
+    let trimmed = strip_wrapping_fence(raw.trim());
     if trimmed.is_empty() {
         return Vec::new();
     }
@@ -168,6 +238,13 @@ pub fn parse_rules(raw: &str) -> Vec<String> {
     for line in trimmed.lines() {
         let line = line.trim();
         if line.is_empty() {
+            continue;
+        }
+
+        // Dropped, not read: the heading is the document's section title, and
+        // putting it in a review prompt would be putting untrusted text there
+        // without it having passed the per-rule checks below.
+        if is_heading(line) {
             continue;
         }
 
@@ -320,10 +397,50 @@ impl<'a> Extractor<'a> {
         }))
     }
 
-    /// The model call. One file, one call, no review context.
+    /// The model calls for one file. No review context, and at most
+    /// [`EXTRACT_ATTEMPTS`] of them.
+    ///
+    /// The retry is on the *format*, never on the content: an answer that
+    /// parses is taken as it stands, and so is the `NO_RULES` sentinel, which is
+    /// a correct answer rather than a failed one. Asking again for a file that
+    /// genuinely states no rules would pay a second call for the same "no".
+    ///
+    /// A model *error* is not retried here — the gateway already walks its
+    /// fallback models — and it costs the file rather than the review.
     async fn extract_one(&self, file: &InstructionFile) -> Result<(Vec<String>, Usage)> {
-        let response = self
-            .model
+        let mut usage = Usage::default();
+
+        for attempt in 1..=EXTRACT_ATTEMPTS {
+            let response = self.call(file).await?;
+            usage.add(response.usage);
+
+            let raw = response
+                .value
+                .get("rules_markdown")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+
+            let rules = parse_rules(raw);
+            if !rules.is_empty() || raw.trim() == NO_RULES {
+                return Ok((rules, usage));
+            }
+
+            tracing::warn!(
+                path = %file.path,
+                attempt,
+                "an extraction was discarded; asking again"
+            );
+        }
+
+        Ok((Vec::new(), usage))
+    }
+
+    /// One extraction request. Identical on every attempt: the retry exists to
+    /// re-roll a model that slipped its format, and rewriting the prompt between
+    /// attempts would mean the answer that lands was produced by a prompt no
+    /// test covers.
+    async fn call(&self, file: &InstructionFile) -> Result<crate::ports::model::ModelResponse> {
+        self.model
             .complete(ModelRequest {
                 model: self.model_id.clone(),
                 messages: vec![
@@ -337,15 +454,7 @@ impl<'a> Extractor<'a> {
                 schema_name: "tinysweeper_rule_extraction".into(),
                 max_tokens: EXTRACT_MAX_TOKENS,
             })
-            .await?;
-
-        let raw = response
-            .value
-            .get("rules_markdown")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-
-        Ok((parse_rules(raw), response.usage))
+            .await
     }
 }
 
