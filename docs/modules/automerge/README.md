@@ -141,6 +141,42 @@ merge methods — squash is disabled on this one. The forge refusing the method 
 reported as `Outcome::Rejected` rather than raised as an error: the pull request
 is exactly where it was, which is the safe state, and the next run tries again.
 
+## What runs it
+
+The policy is reached three ways, all of them through the same
+`merge_if_qualified`, so there is one decision procedure and no second write
+path:
+
+| Trigger | Where |
+| --- | --- |
+| A webhook delivery | `server::webhook::automerge_trigger` → `routes::handle_automerge` |
+| The end of a review | `routes::review_inner`, spawned after the check runs and the approval are published |
+| An operator, by hand | `POST /admin/merges/{owner}/{name}`, optionally `{"number": N}` |
+| The CLI | `tinysweeper automerge --repo … --pr …`, with `--dry-run` |
+
+The delivery triggers are `check_run`/`check_suite` on `completed`,
+`pull_request_review` on `submitted` or `dismissed`, and `pull_request` on
+`labeled` or `unlabeled`. Each is a moment at which a refusal made earlier
+might have stopped being true. There is no trigger on `opened` or
+`synchronize`: a pull request whose head has just moved has no checks on it
+yet, so evaluating it can only produce `CheckPending`, and the `check_suite`
+that follows is the same trigger with the evidence attached.
+
+**These triggers are exempt from the bot-sender guard**, which every other
+route obeys. They have to be: the check runs are ours and so is the approval
+that clears a previous objection, so a guard applied here would mean the
+trigger never fires on the events that matter. It is safe because the loop the
+guard exists to stop cannot form — auto-merge writes nothing but a merge, a
+merge closes the pull request, and a closed pull request is refused by the
+first check in the policy. A refusal writes nothing at all.
+
+Concurrency is handled with a `{repo}#automerge-{number}` lease shared by every
+trigger. Several checks finishing at once is the normal case and each one is a
+delivery; without the lease they would evaluate the same pull request
+concurrently and race to merge it. The lease is deliberately *not* the review
+semaphore: that one bounds minutes of model calls, and a merge has no business
+queueing behind work it has nothing to do with.
+
 ## Testing
 
 `src/automerge/test.rs`, weighted deliberately towards the refusals. Merging is
