@@ -476,3 +476,35 @@ live_test!(
         );
     }
 );
+
+#[test]
+fn the_lexical_arm_stays_under_lucene_s_clause_limit() {
+    // mongot ships `maxClauseCount = 1024` and expands a `text` operator into
+    // one clause per term per path. The retrieval query is bounded in
+    // characters, not terms, so a large diff produced several hundred
+    // identifiers, which across three paths overran the limit and failed the
+    // whole aggregation — every review on a real repository silently degraded
+    // to diff-only. Found in deployment, not in a test, which is why this one
+    // exists.
+    let many: String = (0..900)
+        .map(|i| format!("identifier_{i}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let capped = lexical_terms(&many);
+
+    let terms = capped.split_whitespace().count();
+    assert_eq!(terms, MAX_LEXICAL_TERMS);
+    assert!(
+        terms * 3 < 1024,
+        "three paths at {terms} terms is {} clauses",
+        terms * 3
+    );
+}
+
+#[test]
+fn a_short_query_is_left_alone() {
+    assert_eq!(
+        lexical_terms("resolve range anchor"),
+        "resolve range anchor"
+    );
+}
