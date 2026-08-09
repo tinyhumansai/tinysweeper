@@ -86,11 +86,13 @@ multi-line highlight for a one-sentence remark is noise.
 
 The verification happens during `review`, not here, for the same reason a
 finding's identity does: it needs the parsed diff, and this module holds a
-proposal and no diff. Everything `suggest` cannot establish — a range GitHub
-would reject, a replaced line that only exists in the base revision, an
-indentation shortfall it cannot infer — comes back as `None`, and the inert
-fence is what gets rendered. A wrong applicable suggestion is a button that
-breaks the build; a wrong inert one is a typo in a comment.
+proposal and no diff. A range GitHub would reject or a replaced line that only
+exists in the base revision comes back as `None`, and the inert fence is what
+gets rendered. An indentation shortfall it cannot infer is different: the
+replacement is simply left as the model wrote it, because there is no uniform
+prefix to restore, and the suggestion is still offered. A wrong applicable
+suggestion is a button that breaks the build; a wrong inert one is a typo in a
+comment.
 
 ## Files
 
