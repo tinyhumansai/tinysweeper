@@ -237,7 +237,33 @@ async fn a_stale_cassette_fails_the_case_rather_than_scoring_an_old_prompt() {
     // Scored as a failure, loudly, rather than silently replaying answers to a
     // question nobody asked.
     let score = &outcome.scores[0];
-    eprintln!("DEBUG stale outcome: {:#?}", outcome);
+    if score.error.is_none() {
+        // Probe why: build the exact critique prompt under both configs.
+        use crate::harness::prompt::{self, PromptInputs};
+        use crate::lanes::LaneId;
+        use crate::ports::model::Message;
+        let probe = |cfg: &Config| {
+            let diff = crate::evidence::diff::FileDiff {
+                path: "src/lib.rs".into(),
+                ..Default::default()
+            };
+            let built = prompt::build(&PromptInputs {
+                focus_path: Some("src/lib.rs"),
+                changed_paths: &["src/lib.rs".into()],
+                ..PromptInputs::new(LaneId::Critique, cfg)
+            });
+            (built.prefix().len(), built.suffix().len())
+        };
+        eprintln!(
+            "PROBE record({},{}) edited({},{}) instr_count_record={} edited={}",
+            probe(&config()).0,
+            probe(&config()).1,
+            probe(&edited).0,
+            probe(&edited).1,
+            config().path_instructions.len(),
+            edited.path_instructions.len()
+        );
+    }
     assert!(score.error.is_some(), "expected a cassette miss");
     assert!(
         score
