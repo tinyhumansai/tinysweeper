@@ -138,10 +138,12 @@ max_tokens = 16000
 #
 # `high` is kept because `max_tokens` above is now 16000, which cleared it in
 # production — no structured-output failure and no fallback in the hours after
-# the deploy. But the margin is thinner than it looks: 8152 of those 16000 went
-# on thinking in the measurement above, so a harder prompt is one step from the
-# same cliff. If this starts failing again, `off` is the fix that is *proven*
-# rather than the one that buys room, and it costs 13 findings against 23.
+# the deploy. 16000 itself was never measured; the table brackets it with the
+# ceiling that fails (8000) and the one that stays safe (32000), where
+# `deepseek-v4-pro` spent 8152 of the allowance on reasoning before it
+# answered. A harder prompt is one step from the same cliff. If this starts
+# failing again, `off` is the fix that is *proven* rather than the one that
+# buys room, and it costs 13 findings against 23.
 reasoning_effort = "high"
 budget_usd_per_pr = 1.0
 
