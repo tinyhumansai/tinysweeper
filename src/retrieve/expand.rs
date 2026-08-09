@@ -180,6 +180,7 @@ pub async fn expand(
     Ok(Expansion {
         chunks,
         nodes: neighbourhood.nodes.len(),
+        impact,
     })
 }
 
