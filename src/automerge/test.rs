@@ -671,6 +671,14 @@ impl crate::ports::forge::ForgeWrite for RefusingForge {
     async fn remove_label(&self, _repo: &RepoId, _number: u64, _label: &str) -> crate::Result<()> {
         unreachable!("auto-merge removes no labels")
     }
+    async fn set_issue_type(
+        &self,
+        _repo: &RepoId,
+        _number: u64,
+        _type_name: &str,
+    ) -> crate::Result<()> {
+        unreachable!("auto-merge sets no issue types")
+    }
     async fn close_issue(&self, _repo: &RepoId, _number: u64) -> crate::Result<()> {
         unreachable!("auto-merge closes no issues")
     }

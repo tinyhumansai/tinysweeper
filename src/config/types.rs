@@ -656,6 +656,12 @@ pub struct Issues {
     pub apply_labels: bool,
     /// Never apply more than this many labels to one issue.
     pub max_labels: usize,
+    /// Set GitHub's native issue type from the classification.
+    ///
+    /// Only ever on an issue that carries no type: the type is a single field,
+    /// so tinysweeper adding one is helpful and tinysweeper replacing one is
+    /// destructive. An owner that defines no issue types is unaffected.
+    pub apply_issue_type: bool,
     /// Labels tinysweeper may apply. Empty means any label already in the repo.
     pub allow_labels: Vec<String>,
     /// Never touch an issue carrying one of these.

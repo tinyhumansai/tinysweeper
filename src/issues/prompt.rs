@@ -27,15 +27,18 @@ pub const MAX_COMMENTS: usize = 10;
 pub const SYSTEM: &str = "\
 You are tinysweeper, triaging one issue in a software repository.
 
-Return three things:
+Return four things:
 
-1. `priority` — how soon a maintainer should act: p0 (drop everything), p1
+1. `type` — what kind of work this is: bug (something is broken), feature (a
+   request, an idea, or new functionality), task (a specific piece of work that
+   is neither). Choose task when neither of the other two clearly fits.
+2. `priority` — how soon a maintainer should act: p0 (drop everything), p1
    (next), p2 (soon), p3 (someday).
-2. `severity` — how bad the reported problem is when it happens: critical
+3. `severity` — how bad the reported problem is when it happens: critical
    (data loss, a security hole, an outage), high (a broken core path with no
    workaround), medium (broken, with a workaround), low (cosmetic, or an
    enhancement request).
-3. Optionally, prior art: either `duplicate_of`, an issue number that already
+4. Optionally, prior art: either `duplicate_of`, an issue number that already
    reports the same thing, or `resolved_by`, a pull request number that already
    fixed it. Give at most one, and give `confidence` for it.
 
@@ -61,8 +64,12 @@ pub fn schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["priority", "severity", "summary"],
+        "required": ["type", "priority", "severity", "summary"],
         "properties": {
+            // A closed enum, and deliberately not the organisation's own type
+            // names: the classification is fixed vocabulary, and mapping it
+            // onto whatever types exist is deterministic code's job.
+            "type": {"type": "string", "enum": ["bug", "feature", "task"]},
             "priority": {"type": "string", "enum": ["p0", "p1", "p2", "p3"]},
             "severity": {
                 "type": "string",
@@ -240,6 +247,31 @@ mod tests {
             !suffix.contains("comment 0\n"),
             "the oldest are dropped once the cap is reached"
         );
+    }
+
+    #[test]
+    fn the_schema_offers_exactly_the_three_classifications() {
+        // A closed enum is what makes the mapping deterministic: a fourth word
+        // has nowhere to land, so it can only ever set no type.
+        let schema = schema();
+        assert_eq!(
+            schema["properties"]["type"]["enum"],
+            json!(["bug", "feature", "task"])
+        );
+        assert!(
+            schema["required"]
+                .as_array()
+                .expect("a required list")
+                .contains(&json!("type"))
+        );
+    }
+
+    #[test]
+    fn the_prefix_explains_the_classification_without_naming_this_repository() {
+        // It is the cacheable half, so it may describe the three words and
+        // nothing about the organisation's own type names.
+        assert!(SYSTEM.contains("`type`"));
+        assert!(SYSTEM.contains("task"));
     }
 
     #[test]

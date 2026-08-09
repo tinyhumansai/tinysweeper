@@ -105,6 +105,15 @@ pub trait ForgeRead: Send + Sync {
     /// List open issues, most recently updated first.
     async fn open_issues(&self, repo: &RepoId, limit: usize) -> Result<Vec<Issue>>;
 
+    /// The names of the issue types the repository's owner defines.
+    ///
+    /// Read rather than hard-coded: "Bug", "Feature" and "Task" are only
+    /// GitHub's defaults, and another organisation renames or replaces them.
+    /// An owner with no issue types — a user account, or an organisation that
+    /// never enabled them — yields an empty list, which is not an error and
+    /// means triage sets no type at all.
+    async fn issue_types(&self, repo: &RepoId) -> Result<Vec<String>>;
+
     /// Fetch everything a lane needs about a pull request in one go.
     ///
     /// Default-implemented in terms of the calls above so an adapter only has
@@ -164,6 +173,13 @@ pub trait ForgeWrite: Send + Sync {
 
     /// Add labels to an issue or pull request.
     async fn add_labels(&self, repo: &RepoId, number: u64, labels: &[String]) -> Result<()>;
+
+    /// Set an issue's native issue type, by type name.
+    ///
+    /// The type is a single field, so this *replaces* whatever is there.
+    /// Callers must have established that the issue carries no type yet;
+    /// nothing here can tell a human's choice from an empty one.
+    async fn set_issue_type(&self, repo: &RepoId, number: u64, type_name: &str) -> Result<()>;
 
     /// Remove a label. Absent labels are not an error.
     async fn remove_label(&self, repo: &RepoId, number: u64, label: &str) -> Result<()>;

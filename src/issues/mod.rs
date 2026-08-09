@@ -22,6 +22,7 @@ pub mod apply;
 pub mod close;
 pub mod comment;
 pub mod dedupe;
+pub mod kind;
 pub mod labels;
 pub mod prompt;
 pub mod pull_request;

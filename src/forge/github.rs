@@ -205,6 +205,57 @@ where
     )))
 }
 
+/// One issue, as the REST issues endpoint renders it.
+///
+/// Parsed by hand rather than through octocrab's model because the model has no
+/// field for `type`, and the native issue type is the whole point of this path.
+/// Every field degrades to its empty value: a triage that loses the body is
+/// worse than useless, but an error here would lose the triage entirely.
+fn issue_from_json(raw: &serde_json::Value) -> Issue {
+    Issue {
+        number: raw["number"].as_u64().unwrap_or_default(),
+        title: raw["title"].as_str().unwrap_or_default().to_string(),
+        body: raw["body"].as_str().unwrap_or_default().to_string(),
+        author: raw["user"]["login"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        labels: raw["labels"]
+            .as_array()
+            .map(|labels| {
+                labels
+                    .iter()
+                    .filter_map(|label| label["name"].as_str())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        open: raw["state"].as_str() == Some("open"),
+        age_days: 0,
+        quiet_days: 0,
+        comments: raw["comments"].as_u64().unwrap_or_default() as u32,
+        // Absent, null, or an object without a name all mean "nobody has
+        // chosen a type", which is the only state triage may write into.
+        issue_type: raw["type"]["name"].as_str().map(str::to_string),
+    }
+}
+
+/// The type names in an `/orgs/{org}/issue-types` answer.
+///
+/// Anything that is not a list — a 404 body from a user account, an error
+/// object — yields no names, and no names means triage sets no type.
+fn type_names_from_json(raw: &serde_json::Value) -> Vec<String> {
+    raw.as_array()
+        .map(|types| {
+            types
+                .iter()
+                .filter_map(|entry| entry["name"].as_str())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Read-only GitHub access.
 pub struct GitHubRead {
     client: Octocrab,
@@ -786,23 +837,27 @@ impl ForgeRead for GitHubRead {
     }
 
     async fn issue(&self, repo: &RepoId, number: u64) -> Result<Issue> {
-        let issue = self
-            .client
-            .issues(&repo.owner, &repo.name)
-            .get(number)
-            .await
-            .map_err(api)?;
+        // The raw route rather than octocrab's typed one: its `Issue` model has
+        // no `type`, and a second request just to read one field would double
+        // the call budget of every triage.
+        let route = format!("/repos/{}/{}/issues/{number}", repo.owner, repo.name);
+        let raw: serde_json::Value = self.client.get(&route, None::<&()>).await.map_err(api)?;
 
         Ok(Issue {
+            // Trusted over the payload: the caller asked about this number.
             number,
-            title: issue.title,
-            body: issue.body.unwrap_or_default(),
-            author: issue.user.login,
-            labels: issue.labels.into_iter().map(|l| l.name).collect(),
-            open: matches!(issue.state, octocrab::models::IssueState::Open),
-            age_days: 0,
-            quiet_days: 0,
-            comments: issue.comments,
+            ..issue_from_json(&raw)
+        })
+    }
+
+    async fn issue_types(&self, repo: &RepoId) -> Result<Vec<String>> {
+        // A repository owned by a user account has no issue types and answers
+        // 404, which is an ordinary answer here rather than a failure: it means
+        // this repository sets no types, not that the triage should stop.
+        let route = format!("/orgs/{}/issue-types", repo.owner);
+        Ok(match self.client.get(&route, None::<&()>).await {
+            Ok(raw) => type_names_from_json(&raw),
+            Err(_) => Vec::new(),
         })
     }
 
@@ -833,6 +888,10 @@ impl ForgeRead for GitHubRead {
                 age_days: 0,
                 quiet_days: 0,
                 comments: i.comments,
+                // Not read for the shortlist: the candidates are only ever
+                // compared for similarity, and asking for two hundred issues'
+                // types would cost a request each.
+                issue_type: None,
             })
             .collect())
     }
@@ -963,6 +1022,25 @@ impl ForgeWrite for GitHubWrite {
         Ok(())
     }
 
+    async fn set_issue_type(&self, repo: &RepoId, number: u64, type_name: &str) -> Result<()> {
+        // A PATCH on the issue with the type *name*, which is the documented
+        // route and the one confirmed live; the id would force every caller to
+        // carry a per-organisation mapping.
+        let route = format!("/repos/{}/{}/issues/{number}", repo.owner, repo.name);
+        let body = serde_json::json!({"type": type_name});
+        let _: serde_json::Value = self
+            .client
+            .patch(route, Some(&body))
+            .await
+            .map_err(api)
+            .map_err(|error: Error| {
+                Error::Forge(format!(
+                    "setting the issue type to {type_name} failed: {error}"
+                ))
+            })?;
+        Ok(())
+    }
+
     async fn close_issue(&self, repo: &RepoId, number: u64) -> Result<()> {
         self.client
             .issues(&repo.owner, &repo.name)
@@ -1029,6 +1107,68 @@ impl ForgeWrite for GitHubWrite {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn an_issue_carrying_a_native_type_reports_its_name() {
+        let issue = issue_from_json(&json!({
+            "number": 5,
+            "title": "Crash on save",
+            "body": "It crashes.",
+            "user": {"login": "reporter"},
+            "labels": [{"name": "priority: p1"}],
+            "state": "open",
+            "comments": 2,
+            "type": {"id": 29989536, "name": "Bug"}
+        }));
+
+        assert_eq!(issue.number, 5);
+        assert_eq!(issue.author, "reporter");
+        assert_eq!(issue.labels, vec!["priority: p1".to_string()]);
+        assert!(issue.open);
+        assert_eq!(issue.comments, 2);
+        assert_eq!(issue.issue_type, Some("Bug".to_string()));
+    }
+
+    #[test]
+    fn an_issue_with_no_type_reports_none_rather_than_an_empty_name() {
+        // The distinction is the whole guard: `None` means "nobody has chosen",
+        // and an empty string would read as a choice tinysweeper may overwrite.
+        let issue = issue_from_json(&json!({
+            "number": 6,
+            "title": "Add a dark theme",
+            "body": null,
+            "user": {"login": "reporter"},
+            "labels": [],
+            "state": "closed",
+            "comments": 0,
+            "type": null
+        }));
+
+        assert_eq!(issue.issue_type, None);
+        assert!(!issue.open);
+        assert!(issue.body.is_empty());
+    }
+
+    #[test]
+    fn the_type_names_an_owner_defines_are_read_in_the_order_returned() {
+        let names = type_names_from_json(&json!([
+            {"id": 29989535, "name": "Task", "description": "A specific piece of work"},
+            {"id": 29989536, "name": "Bug"},
+            {"id": 29989537, "name": "Feature"},
+        ]));
+        assert_eq!(
+            names,
+            vec!["Task".to_string(), "Bug".to_string(), "Feature".to_string()]
+        );
+    }
+
+    #[test]
+    fn an_answer_that_is_not_a_list_of_types_yields_no_types() {
+        // What a user-account repository, or an organisation that never enabled
+        // issue types, effectively returns. Not an error: it disables the
+        // feature for that repository and triage carries on.
+        assert!(type_names_from_json(&json!({"message": "Not Found"})).is_empty());
+    }
 
     #[test]
     fn a_tree_reports_blob_sizes_and_skips_directories() {

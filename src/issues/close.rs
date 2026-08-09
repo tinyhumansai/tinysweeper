@@ -188,6 +188,7 @@ mod tests {
             age_days: 90,
             quiet_days: 90,
             comments: 1,
+            issue_type: None,
         }
     }
 

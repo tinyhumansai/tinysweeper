@@ -41,6 +41,9 @@ human applied" is enforced by the type rather than by remembering it.
   title+body tokens, floor at `MIN_SIMILARITY`, capped and ordered.
 - `prompt.rs` — the cacheable `SYSTEM` prefix and the volatile suffix. Issue
   text never appears in the prefix.
+- `kind.rs` — the classification-to-issue-type mapping, and the refusals that
+  keep it from overwriting anything. Pure: it takes the classification, the
+  type the issue already has, and the type names the owner defines.
 - `labels.rs` — the add-only label planner. **The reusable seam:** it takes
   `(existing: &[String], suggested: &[String], policy: &Issues)` and nothing
   issue-shaped, so pull request triage can call it unchanged.
@@ -77,11 +80,48 @@ Everything is under the pre-existing `[issues]` section of
 so a repository that turns triage on gets labelling and cross-links first and
 has to ask twice before anything closes.
 
+## Native issue types
+
+GitHub has a native issue type — Bug, Feature, Task by default — and triage sets
+it rather than shadowing it with a label. The model returns a `type` of `bug`,
+`feature` or `task` in the same structured answer that already carries the
+priority, so classification costs no extra call, and `kind::plan` turns that one
+word into a type name deterministically:
+
+> Set the issue type whose name equals the classification word,
+> case-insensitively, and set nothing otherwise.
+
+No fuzzy match, no nearest neighbour, no default. The available names are read
+from `ForgeRead::issue_types`, which is `GET /orgs/{org}/issue-types`, because
+"Bug", "Feature" and "Task" are only GitHub's defaults and an organisation may
+rename them or define none.
+
+Four things make it refuse, each recorded on the plan as
+`declined_issue_type` for the log rather than raised as an error:
+
+- `issues.apply_issue_type` is off.
+- **The issue already carries a type.** Checked first, and the reason this rule
+  is stricter than the label rules: labels are add-only within a facet and a new
+  label in an owned facet merely supersedes the old one, but the type is a
+  single field, so writing it *destroys* whatever a human chose.
+- The owner defines no issue types at all — the common case, and an ordinary
+  answer rather than a failure.
+- No defined type matches the classification. An organisation whose types are
+  "Defect" and "Epic" gets nothing, not the closest one.
+
+The write is `ForgeWrite::set_issue_type`, a `PATCH` on the issue carrying the
+type *name*, and it lives on the write half like every other mutation: the plan
+is decided by `triage.rs`, which holds only a `ForgeRead`.
+
 ## Known gaps
 
 - Maintainer protection is expressed through `issues.close.protected_authors`.
   The gate accepts a `maintainers` list, but the server passes an empty one
   because `ForgeRead` cannot yet report a repository's collaborators.
+- Priority stays a label. GitHub's own priority is a Projects v2 custom field,
+  not an issue field, so reading or writing it needs the `read:project` scope
+  and a project to write into. Until a project is in play, `priority: p0…p3`
+  from `presets/labels.toml` is the only priority tinysweeper records.
 - Issue triage runs under the deployment's configuration rather than the
   reviewed repository's `.tinysweeper.toml`: that overlay is read at a commit,
   and an issue has no commit to read it at.

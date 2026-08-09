@@ -62,6 +62,13 @@ pub enum Write {
         /// The label removed.
         label: String,
     },
+    /// An issue's native type was set.
+    IssueType {
+        /// The issue.
+        number: u64,
+        /// The type name written.
+        name: String,
+    },
     /// An issue was closed.
     IssueClosed {
         /// The issue.
@@ -108,6 +115,11 @@ pub struct MockState {
     pub review_comments: BTreeMap<u64, Vec<ReviewComment>>,
     /// Issues, keyed by number.
     pub issues: BTreeMap<u64, Issue>,
+    /// The issue type names the owning organisation defines.
+    ///
+    /// Empty by default, which is what an organisation that never enabled
+    /// issue types looks like — the case triage has to survive.
+    pub issue_types: Vec<String>,
     /// tinysweeper's own last review state, keyed by pull request number.
     pub own_reviews: BTreeMap<u64, ReviewEvent>,
     /// Check runs, keyed by the commit they report on and then by check name.
@@ -413,6 +425,11 @@ impl ForgeRead for MockForge {
             .cloned()
             .collect())
     }
+
+    async fn issue_types(&self, _repo: &RepoId) -> Result<Vec<String>> {
+        let state = self.state.lock().expect("mock state lock");
+        Ok(state.issue_types.clone())
+    }
 }
 
 #[async_trait]
@@ -538,6 +555,23 @@ impl ForgeWrite for MockForge {
         Ok(())
     }
 
+    async fn set_issue_type(&self, _repo: &RepoId, number: u64, type_name: &str) -> Result<()> {
+        self.record(Write::IssueType {
+            number,
+            name: type_name.to_string(),
+        });
+        // Applied to state as well as recorded: the rule is "never overwrite a
+        // type a human set", and a mock whose reads never showed the write
+        // would make that test pass without exercising the guard.
+        if !self.read_only {
+            let mut state = self.state.lock().expect("mock state lock");
+            if let Some(issue) = state.issues.get_mut(&number) {
+                issue.issue_type = Some(type_name.to_string());
+            }
+        }
+        Ok(())
+    }
+
     async fn close_issue(&self, _repo: &RepoId, number: u64) -> Result<()> {
         self.record(Write::IssueClosed { number });
         if !self.read_only {
@@ -640,6 +674,57 @@ mod tests {
         let forge = MockForge::new();
         let err = forge.pull_request(&repo(), 7).await.unwrap_err();
         assert!(err.to_string().contains("no pull request #7"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn setting_an_issue_type_is_recorded_and_applied_to_state() {
+        let forge = MockForge::new().with_issue(Issue {
+            number: 5,
+            open: true,
+            ..Issue::default()
+        });
+        forge
+            .set_issue_type(&repo(), 5, "Bug")
+            .await
+            .expect("sets the type");
+
+        assert_eq!(
+            forge.writes(),
+            vec![Write::IssueType {
+                number: 5,
+                name: "Bug".into(),
+            }]
+        );
+        assert_eq!(
+            forge.issue(&repo(), 5).await.expect("found").issue_type,
+            Some("Bug".to_string()),
+            "the read half has to see the write, or the never-overwrite rule \
+             cannot be tested end to end"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_org_with_no_issue_types_reads_as_an_empty_list_not_an_error() {
+        let forge = MockForge::new();
+        assert!(
+            forge
+                .issue_types(&repo())
+                .await
+                .expect("an org without types is not an error")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_issue_types_an_org_defines_are_served_from_state() {
+        let forge = MockForge::with_state(MockState {
+            issue_types: vec!["Bug".into(), "Feature".into(), "Task".into()],
+            ..MockState::default()
+        });
+        assert_eq!(
+            forge.issue_types(&repo()).await.expect("reads"),
+            vec!["Bug".to_string(), "Feature".to_string(), "Task".to_string()]
+        );
     }
 
     #[tokio::test]

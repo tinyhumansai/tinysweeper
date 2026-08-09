@@ -21,9 +21,9 @@ use crate::error::{Error, Result};
 use crate::forge::types::RepoId;
 use crate::issues::close::{CloseInputs, CloseOutcome, Referenced};
 use crate::issues::types::{
-    ClaimKind, DuplicateClaim, IssueSeverity, IssueVerdict, Priority, TriagePlan,
+    ClaimKind, DuplicateClaim, IssueKind, IssueSeverity, IssueVerdict, Priority, TriagePlan,
 };
-use crate::issues::{close, comment, dedupe, labels, prompt};
+use crate::issues::{close, comment, dedupe, kind, labels, prompt};
 use crate::ports::forge::ForgeRead;
 use crate::ports::model::{Message, Model, ModelRequest, Spend};
 
@@ -100,6 +100,21 @@ pub async fn triage(
 
     let label_plan = labels::plan(&issue.labels, &suggested_labels(&verdict), policy);
 
+    // Read rather than assumed, and only when the policy is on: an owner's
+    // issue types cost a request, and a run that will set no type must not
+    // spend one. The names come back as the owner spells them.
+    let available = if policy.apply_issue_type {
+        forge.issue_types(repo).await?
+    } else {
+        Vec::new()
+    };
+    let type_decision = kind::plan(
+        verdict.kind,
+        issue.issue_type.as_deref(),
+        &available,
+        policy.apply_issue_type,
+    );
+
     let offered: Vec<u64> = candidates.iter().map(|c| c.number).collect();
     let referenced = match &verdict.claim {
         // Only a claim that clears the dedupe floor *and* names an offered
@@ -128,6 +143,14 @@ pub async fn triage(
         add_labels: label_plan.add,
         remove_labels: label_plan.remove,
         declined_labels: label_plan.declined,
+        set_issue_type: match &type_decision {
+            kind::Decision::Set(name) => Some(name.clone()),
+            kind::Decision::Skip(_) => None,
+        },
+        declined_issue_type: match type_decision {
+            kind::Decision::Set(_) => None,
+            kind::Decision::Skip(reason) => Some(reason),
+        },
         ..TriagePlan::default()
     };
     let mut cross_link = None;
@@ -236,6 +259,10 @@ pub fn parse_verdict(value: &Value) -> Result<IssueVerdict> {
         });
 
     Ok(IssueVerdict {
+        kind: object
+            .get("type")
+            .and_then(Value::as_str)
+            .and_then(parse_kind),
         priority: object
             .get("priority")
             .and_then(Value::as_str)
@@ -251,6 +278,20 @@ pub fn parse_verdict(value: &Value) -> Result<IssueVerdict> {
             .to_string(),
         claim,
     })
+}
+
+/// A classification the schema allows, or `None` for anything else.
+///
+/// `None` rather than a fallback to `Task`: an answer outside the vocabulary is
+/// an answer that did not classify, and the native type is one field a guess
+/// would overwrite.
+fn parse_kind(text: &str) -> Option<IssueKind> {
+    match text.trim().to_ascii_lowercase().as_str() {
+        "bug" => Some(IssueKind::Bug),
+        "feature" => Some(IssueKind::Feature),
+        "task" => Some(IssueKind::Task),
+        _ => None,
+    }
 }
 
 /// A priority the schema allows, or `None` for anything else.
@@ -308,6 +349,7 @@ mod tests {
                 comment: true,
                 apply_labels: true,
                 max_labels: 3,
+                apply_issue_type: true,
                 dedupe: true,
                 dedupe_confidence_min: 0.75,
                 close,
@@ -398,6 +440,20 @@ mod tests {
     }
 
     #[test]
+    fn a_verdict_parses_the_classification() {
+        let verdict = parse_verdict(&answer(json!({"type": "feature"}))).expect("parses");
+        assert_eq!(verdict.kind, Some(IssueKind::Feature));
+    }
+
+    #[test]
+    fn a_classification_outside_the_schema_is_no_classification() {
+        // Not an error, and above all not a guess: the type is a single field.
+        let verdict = parse_verdict(&answer(json!({"type": "chore"}))).expect("parses");
+        assert_eq!(verdict.kind, None);
+        assert_eq!(verdict.priority, Some(Priority::P1), "the rest survives");
+    }
+
+    #[test]
     fn an_unknown_priority_costs_one_label_and_nothing_else() {
         let verdict = parse_verdict(&json!({
             "priority": "urgent!!!",
@@ -456,6 +512,140 @@ mod tests {
         );
         assert!(outcome.plan.close.is_none());
         assert!(outcome.plan.comment.is_some());
+    }
+
+    /// A forge whose organisation defines GitHub's three default types.
+    fn forge_with_types(issues: Vec<Issue>) -> MockForge {
+        let mut state = MockState::default();
+        for issue in issues {
+            state.issues.insert(issue.number, issue);
+        }
+        state.issue_types = vec!["Task".into(), "Bug".into(), "Feature".into()];
+        MockForge::with_state(state)
+    }
+
+    #[tokio::test]
+    async fn a_classified_issue_is_planned_the_matching_native_type() {
+        let forge = forge_with_types(vec![subject()]);
+        let model = MockModel::new().then(answer(json!({"type": "bug"})));
+
+        let outcome = triage(
+            &forge,
+            Arc::new(model),
+            &config(IssueClose::default()),
+            &repo(),
+            42,
+            &[],
+        )
+        .await
+        .expect("triages");
+
+        assert_eq!(outcome.plan.set_issue_type, Some("Bug".to_string()));
+    }
+
+    #[tokio::test]
+    async fn a_type_a_human_already_set_is_never_overwritten() {
+        let typed = Issue {
+            issue_type: Some("Feature".into()),
+            ..subject()
+        };
+        let forge = forge_with_types(vec![typed]);
+        let model = MockModel::new().then(answer(json!({"type": "bug"})));
+
+        let outcome = triage(
+            &forge,
+            Arc::new(model),
+            &config(IssueClose::default()),
+            &repo(),
+            42,
+            &[],
+        )
+        .await
+        .expect("triages");
+
+        assert_eq!(outcome.plan.set_issue_type, None);
+        assert_eq!(
+            outcome.plan.declined_issue_type,
+            Some("the issue already carries an issue type")
+        );
+    }
+
+    #[tokio::test]
+    async fn an_organisation_with_no_issue_types_triages_normally() {
+        // The common case, and the one that must not become an error: most
+        // repositories have no issue types at all.
+        let forge = forge_with(vec![subject()]);
+        let model = MockModel::new().then(answer(json!({"type": "bug"})));
+
+        let outcome = triage(
+            &forge,
+            Arc::new(model),
+            &config(IssueClose::default()),
+            &repo(),
+            42,
+            &[],
+        )
+        .await
+        .expect("an owner without issue types is not an error");
+
+        assert_eq!(outcome.plan.set_issue_type, None);
+        assert_eq!(
+            outcome.plan.declined_issue_type,
+            Some("this owner defines no issue types")
+        );
+        assert!(
+            !outcome.plan.add_labels.is_empty(),
+            "labelling must survive there being no issue types"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_classification_no_defined_type_matches_sets_nothing() {
+        let mut state = MockState::default();
+        state.issues.insert(42, subject());
+        state.issue_types = vec!["Defect".into(), "Epic".into()];
+        let forge = MockForge::with_state(state);
+        let model = MockModel::new().then(answer(json!({"type": "bug"})));
+
+        let outcome = triage(
+            &forge,
+            Arc::new(model),
+            &config(IssueClose::default()),
+            &repo(),
+            42,
+            &[],
+        )
+        .await
+        .expect("triages");
+
+        assert_eq!(outcome.plan.set_issue_type, None);
+        assert_eq!(
+            outcome.plan.declined_issue_type,
+            Some("no issue type matches the classification")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_policy_being_off_plans_no_type_even_where_one_matches() {
+        let config = Config {
+            issues: Issues {
+                apply_issue_type: false,
+                ..config(IssueClose::default()).issues
+            },
+            ..Config::default()
+        };
+        let forge = forge_with_types(vec![subject()]);
+        let model = MockModel::new().then(answer(json!({"type": "bug"})));
+
+        let outcome = triage(&forge, Arc::new(model), &config, &repo(), 42, &[])
+            .await
+            .expect("triages");
+
+        assert_eq!(outcome.plan.set_issue_type, None);
+        assert_eq!(
+            outcome.plan.declined_issue_type,
+            Some("issues.apply_issue_type is off")
+        );
     }
 
     #[tokio::test]

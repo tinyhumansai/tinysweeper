@@ -25,6 +25,12 @@ pub async fn apply_plan(forge: &dyn ForgeWrite, repo: &RepoId, plan: &TriagePlan
         forge.remove_label(repo, plan.number, label).await?;
     }
 
+    // Only ever set, never cleared: a plan carrying no type is an issue whose
+    // type is either a human's or absent, and both are left exactly as found.
+    if let Some(name) = &plan.set_issue_type {
+        forge.set_issue_type(repo, plan.number, name).await?;
+    }
+
     if let Some(body) = &plan.comment {
         forge.create_comment(repo, plan.number, body).await?;
     }
@@ -81,6 +87,48 @@ mod tests {
                     body: format!("{MARKER}\nLabelled `priority: p2`."),
                 },
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_planned_issue_type_is_written_before_the_comment_that_reports_it() {
+        let forge = MockForge::new();
+        let plan = TriagePlan {
+            set_issue_type: Some("Bug".into()),
+            ..plan()
+        };
+        apply_plan(&forge, &repo(), &plan).await.expect("applies");
+
+        let writes = forge.writes();
+        let typed = writes
+            .iter()
+            .position(|write| matches!(write, Write::IssueType { .. }))
+            .expect("the type was set");
+        let commented = writes
+            .iter()
+            .position(|write| matches!(write, Write::Comment { .. }))
+            .expect("a comment was posted");
+        assert!(typed < commented, "{writes:?}");
+        assert_eq!(
+            writes[typed],
+            Write::IssueType {
+                number: 42,
+                name: "Bug".into(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_plan_with_no_type_touches_the_type_field_at_all() {
+        // The refusal path: an issue whose type was left alone must see no
+        // PATCH, because writing one would overwrite whatever is there.
+        let forge = MockForge::new();
+        apply_plan(&forge, &repo(), &plan()).await.expect("applies");
+        assert!(
+            !forge
+                .writes()
+                .iter()
+                .any(|write| matches!(write, Write::IssueType { .. }))
         );
     }
 
