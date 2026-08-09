@@ -32,6 +32,20 @@ pub trait GraphStore: Send + Sync {
     /// Remove a repository's whole graph, returning how many rows went.
     async fn delete_repo(&self, repo_id: &str) -> Result<u64>;
 
+    /// Every symbol node this repository has, ids and paths only.
+    ///
+    /// What makes an incremental rebuild possible at all. Resolving a call in a
+    /// re-parsed file needs to know which file defines the name it calls, and
+    /// that is a repository-wide fact — parsing only the changed files answers
+    /// it for the changed files and nowhere else. The stored symbols *are* that
+    /// table, so a push re-parses what changed and reads the rest back.
+    ///
+    /// One query returning small rows, against the many-thousand-file parse it
+    /// replaces. It is still the largest read on the indexing path, so a caller
+    /// that only needs to know whether a graph exists should not reach for it
+    /// twice.
+    async fn symbols(&self, repo_id: &str) -> Result<Vec<GraphNode>>;
+
     /// Remove the nodes belonging to the given paths and every edge touching
     /// one of them.
     ///
