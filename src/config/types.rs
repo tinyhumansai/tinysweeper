@@ -305,6 +305,32 @@ pub struct Threads {
     pub ask_model: bool,
 }
 
+/// The change-map comment: the diagram posted on a pull request.
+///
+/// Every ceiling here is a *legibility* budget, not a cost one — the map costs
+/// nothing, because nothing in it comes from a model. Past a dozen boxes a
+/// diagram stops being read at all, which is the failure these numbers exist to
+/// prevent; whatever does not fit is folded away and counted, never dropped
+/// silently.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Overview {
+    /// Whether a pull request gets a change-map comment at all.
+    pub enabled: bool,
+    /// How many changed components to draw.
+    ///
+    /// Also the grain of the whole picture: components are directory prefixes
+    /// at the deepest level that fits under this number, so raising it does not
+    /// only add boxes — it can split `src` into its subdirectories.
+    pub max_components: usize,
+    /// How many untouched-but-reached components to draw beside them.
+    pub max_impacted: usize,
+    /// How many arrows to draw, heaviest first.
+    pub max_links: usize,
+    /// How many paths to list per component under the diagram.
+    pub max_paths_per_component: usize,
+}
+
 /// Which paths are reviewed at all.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
