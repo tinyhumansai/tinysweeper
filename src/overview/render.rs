@@ -172,6 +172,7 @@ fn files(map: &ChangeMap) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MARKER_PREFIX;
 
     #[test]
     fn the_marker_carries_the_crate_marker_prefix() {
