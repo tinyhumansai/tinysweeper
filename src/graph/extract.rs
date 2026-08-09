@@ -48,6 +48,7 @@ pub fn parse_as(file: &SourceFile, language: Language) -> Result<ParsedFile> {
 
     let mut defs: Vec<Definition> = Vec::new();
     let mut imports: Vec<ImportStmt> = Vec::new();
+    let mut heritage: Vec<Heritage> = Vec::new();
     let mut calls: Vec<Usage> = Vec::new();
     let mut refs: Vec<Usage> = Vec::new();
     // Rust `mod foo;` is both a declaration and a file reference. Recorded here
