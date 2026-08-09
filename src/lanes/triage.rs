@@ -106,7 +106,10 @@ fn skip_reason(path: &str) -> Option<&'static str> {
         return Some("dependency lockfile");
     }
 
-    let extension = name.rsplit_once('.').map(|(_, ext)| ext).unwrap_or_default();
+    let extension = name
+        .rsplit_once('.')
+        .map(|(_, ext)| ext)
+        .unwrap_or_default();
     if matches!(
         extension,
         "md" | "markdown" | "rst" | "adoc" | "txt" | "csv" | "po" | "mo"
@@ -221,12 +224,55 @@ fn added_sinks(diff: &FileDiff) -> i32 {
             "shell=true",
             "system(",
         ],
-        &["eval(", "new function(", "pickle.loads", "yaml.load", "unserialize", "marshal.loads"],
-        &["execute(", "raw_sql", "query(", "format!(\"select", "\"select ", "'select "],
-        &["innerhtml", "dangerouslysetinnerhtml", "v-html", "trustashtml", "|safe"],
-        &["fs.readfile", "open(", "path.join", "filepath.join", "sendfile", "readfilesync"],
-        &["verify", "signature", "hmac", "jwt", "decode_token", "bcrypt", "md5", "sha1"],
-        &["request.get", "requests.get", "fetch(", "urlopen", "http.get", "reqwest::"],
+        &[
+            "eval(",
+            "new function(",
+            "pickle.loads",
+            "yaml.load",
+            "unserialize",
+            "marshal.loads",
+        ],
+        &[
+            "execute(",
+            "raw_sql",
+            "query(",
+            "format!(\"select",
+            "\"select ",
+            "'select ",
+        ],
+        &[
+            "innerhtml",
+            "dangerouslysetinnerhtml",
+            "v-html",
+            "trustashtml",
+            "|safe",
+        ],
+        &[
+            "fs.readfile",
+            "open(",
+            "path.join",
+            "filepath.join",
+            "sendfile",
+            "readfilesync",
+        ],
+        &[
+            "verify",
+            "signature",
+            "hmac",
+            "jwt",
+            "decode_token",
+            "bcrypt",
+            "md5",
+            "sha1",
+        ],
+        &[
+            "request.get",
+            "requests.get",
+            "fetch(",
+            "urlopen",
+            "http.get",
+            "reqwest::",
+        ],
     ];
 
     let added: String = diff
@@ -259,7 +305,10 @@ mod tests {
         let out = triage(&[diff("Cargo.lock", "serde = \"1\"")], &[]);
 
         assert!(out.review.is_empty(), "{:?}", out.review);
-        assert_eq!(out.skipped, vec![("Cargo.lock".into(), "dependency lockfile")]);
+        assert_eq!(
+            out.skipped,
+            vec![("Cargo.lock".into(), "dependency lockfile")]
+        );
     }
 
     #[test]
@@ -314,7 +363,10 @@ mod tests {
 
         assert_eq!(
             out.review,
-            vec!["src/zzz_shell.rs".to_string(), "src/aaa_plain.rs".to_string()]
+            vec![
+                "src/zzz_shell.rs".to_string(),
+                "src/aaa_plain.rs".to_string()
+            ]
         );
     }
 
@@ -343,7 +395,10 @@ mod tests {
 
         assert_eq!(
             out.review,
-            vec!["src/handler.rs".to_string(), "tests/handler_test.rs".to_string()]
+            vec![
+                "src/handler.rs".to_string(),
+                "tests/handler_test.rs".to_string()
+            ]
         );
     }
 
