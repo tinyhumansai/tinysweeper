@@ -169,13 +169,18 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
     // the same reason when there is none. It is mounted separately from the
     // admin router because it needs the worker, not the trust database.
     let dispatch: Arc<dyn FullReviews> = Arc::new(ManualDispatch {
+        state: manual_state.clone(),
+    });
+    let merges: Arc<dyn Merges> = Arc::new(MergeDispatch {
         state: manual_state,
     });
-    if let Some(routes) = manual::router(manual_auth, manual::allowed_org(), dispatch) {
+    if let Some(routes) = manual::router(manual_auth, manual::allowed_org(), dispatch, merges) {
         app = app.merge(routes);
         tracing::info!(
             organisation = %manual::allowed_org(),
-            "manual full reviews are available under /admin/reviews"
+            automerge = enabled_automerge,
+            "manual full reviews are available under /admin/reviews, \
+             and auto-merge sweeps under /admin/merges"
         );
     }
 
