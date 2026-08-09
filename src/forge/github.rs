@@ -979,18 +979,35 @@ impl ForgeWrite for GitHubWrite {
             "event": event.as_api(),
             "comments": comments
                 .iter()
-                .map(|c| serde_json::json!({
-                    "path": c.path,
-                    "line": c.line,
+                .map(|c| {
                     // Every finding here is anchored to a line the diff
                     // actually touches (see `anchored_in_diff`), always on
                     // the head revision. GitHub defaults `side` to `RIGHT`
                     // when omitted, but naming it keeps that from being an
                     // implicit fact one API change away from silently
                     // failing every inline comment.
-                    "side": "RIGHT",
-                    "body": c.body,
-                }))
+                    let mut comment = serde_json::json!({
+                        "path": c.path,
+                        "line": c.line,
+                        "side": "RIGHT",
+                        "body": c.body,
+                    });
+                    // A suggestion that spans more than one line anchors a
+                    // *range*. The range needs `start_line` and `start_side`
+                    // on the wire together, or GitHub treats the comment as
+                    // pinned to `line` alone and a multi-line "Commit
+                    // suggestion" would replace just that one line, deleting
+                    // the rest of the block (see `apply::inline_comments`,
+                    // which refuses to build a range for a single-line
+                    // replacement — so a `Some` start here always means a
+                    // real range, and `start_side` is `RIGHT` for the same
+                    // reason `side` is).
+                    if let Some(start_line) = c.start_line {
+                        comment["start_line"] = serde_json::json!(start_line);
+                        comment["start_side"] = serde_json::json!("RIGHT");
+                    }
+                    comment
+                })
                 .collect::<Vec<_>>(),
         });
         if comments.is_empty() {
