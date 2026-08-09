@@ -232,6 +232,15 @@ impl MockForge {
         self
     }
 
+    /// Add existing review threads to a pull request.
+    pub fn with_review_threads(self, number: u64, threads: Vec<ReviewThread>) -> Self {
+        {
+            let mut state = self.state.lock().expect("mock state lock");
+            state.review_threads.insert(number, threads);
+        }
+        self
+    }
+
     /// Report a check run on a commit.
     pub fn with_check(self, sha: &str, name: &str, conclusion: Option<CheckConclusion>) -> Self {
         {

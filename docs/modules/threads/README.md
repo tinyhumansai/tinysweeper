@@ -11,25 +11,28 @@ A thread is resolved when **all** of these hold:
 2. Its **first** comment is ours — exact login match through
    `findings::prior::is_own_login`. A prefix match would count
    `tinysweeper-anything` as ourselves, and anyone can register that account.
-3. That comment carries a well-formed fingerprint marker
-   (`<!-- tinysweeper:fp=… -->`, sixteen lowercase hex characters).
-4. A **human** has replied: some comment after the opener whose author is not a
-   bot and is not us. Two bots replying to each other is a loop nobody watches.
-5. GitHub reports the thread as **outdated** — the code it anchors to changed.
-6. The fingerprint is **absent** from the findings this run produced.
+3. That comment has the renderer-owned finding title (`**title**`) that the
+   review agent receives as prior context.
+4. GitHub reports the thread as **outdated** — the code it anchors to changed.
+5. The review agent explicitly reports that exact prior title as fixed after
+   examining the new diff.
 
-Nothing in that list asks a model anything. Steps 5 and 6 together are the
-evidence: the code moved and the objection stopped reproducing.
+Steps 4 and 5 are the evidence: the code moved, and the review agent examined
+the updated code and said that this particular objection no longer reproduces.
+A new commit therefore closes a fixed finding without requiring the author to
+also reply to the old comment. The agent verdict is advisory; deterministic
+code verifies ownership and the outdated state before the write side acts.
 
 ## What the model may and may not decide
 
-When the code did **not** change (step 5 fails), no fingerprint can settle the
-thread — the only evidence is the reply itself. That case, and only that case,
+When the code did **not** change (step 4 fails), the new diff cannot settle the
+thread — the only evidence is a **human** reply. That case, and only that case,
 reaches `threads::advise::ask`, behind `threads.ask_model`, which **defaults to
-off**. Its answer is advisory in the literal sense the security boundary
-requires: it can only add an entry to a plan, the plan only ever names threads
-tinysweeper itself opened, and the mutation is performed by `apply_plan` from
-`src/app/apply.rs` after every model call has returned.
+off**. Bot-only replies never reach the model. Its answer is advisory in the
+literal sense the security boundary requires: it can only add an entry to a
+plan, the plan only ever names threads tinysweeper itself opened, and the
+mutation is performed by `apply_plan` from `src/app/apply.rs` after every model
+call has returned.
 
 With the flag off, such a thread is simply left for a human.
 
