@@ -232,7 +232,10 @@ impl RetrievedContext {
     pub fn note(&self) -> Option<String> {
         match &self.status {
             RetrievalStatus::Off => None,
-            RetrievalStatus::Ready if self.chunks.is_empty() => {
+            // "Nothing rendered" rather than "no chunks": a blast radius is
+            // retrieval's verdict too, and telling every lane the review ran
+            // on the diff alone would bury it.
+            RetrievalStatus::Ready if self.renders_nothing() => {
                 Some("No related code was found in the index; reviewed from the diff alone.".into())
             }
             RetrievalStatus::Ready => None,
