@@ -259,3 +259,135 @@ fn a_syntax_error_still_yields_what_parsed() {
     assert_eq!(specifiers(&file), vec!["./b"]);
     assert!(names(&file).contains(&"ok"));
 }
+
+#[test]
+fn java_definitions_imports_and_calls() {
+    let file = parsed(
+        "src/main/java/com/example/Cart.java",
+        r#"
+package com.example;
+
+import com.example.pricing.Money;
+import static com.example.pricing.Rates.VAT;
+import com.example.util.*;
+
+public class Cart {
+    private final Money total;
+
+    public Cart(Money total) {
+        this.total = total;
+    }
+
+    public Money charge() {
+        return Rates.apply(total, VAT);
+    }
+}
+
+interface Priced { Money price(); }
+
+enum Currency { GBP, USD }
+
+record Line(String sku, int quantity) {}
+"#,
+    );
+
+    let defs = names(&file);
+    for expected in ["Cart", "charge", "Priced", "Currency", "Line", "total"] {
+        assert!(defs.contains(&expected), "{expected} missing from {defs:?}");
+    }
+    assert_eq!(
+        specifiers(&file),
+        [
+            "com.example.pricing.Money",
+            "com.example.pricing.Rates.VAT",
+            "com.example.util",
+        ]
+    );
+    assert!(calls(&file).contains(&"apply"), "{:?}", calls(&file));
+
+    // A wildcard import binds no name: it says a package is visible, not which
+    // type came from it.
+    let wildcard = file
+        .imports
+        .iter()
+        .find(|i| i.specifier == "com.example.util")
+        .expect("the wildcard import");
+    assert!(wildcard.names.is_empty());
+
+    // A single-type import binds the type name, which is what a later bare
+    // `Money` in this file refers to.
+    let single = file
+        .imports
+        .iter()
+        .find(|i| i.specifier == "com.example.pricing.Money")
+        .expect("the single-type import");
+    assert_eq!(single.names, ["Money"]);
+}
+
+#[test]
+fn ruby_definitions_requires_and_calls() {
+    let file = parsed(
+        "lib/shop/cart.rb",
+        r#"
+require "json"
+require_relative "money"
+require_relative "../shop/pricing"
+
+module Shop
+  VAT = 0.2
+
+  class Cart
+    def initialize(lines)
+      @lines = lines
+    end
+
+    def total
+      Pricing.apply(subtotal, VAT)
+    end
+
+    def self.empty
+      new([])
+    end
+  end
+end
+"#,
+    );
+
+    let defs = names(&file);
+    for expected in ["Shop", "Cart", "initialize", "total", "empty", "VAT"] {
+        assert!(defs.contains(&expected), "{expected} missing from {defs:?}");
+    }
+
+    // The callee travels on the specifier: `require` and `require_relative`
+    // resolve against different roots and are otherwise indistinguishable.
+    assert_eq!(
+        specifiers(&file),
+        [
+            "require json",
+            "require_relative money",
+            "require_relative ../shop/pricing",
+        ]
+    );
+    assert!(calls(&file).contains(&"apply"), "{:?}", calls(&file));
+}
+
+/// Ruby writes locals, method calls and attribute reads with the same bare
+/// identifier, so capturing every one as a reference would make `total` here a
+/// reference to `total` in every other file with an attribute by that name.
+/// Only constants, which are unambiguous, carry reference edges.
+#[test]
+fn ruby_bare_locals_are_not_reference_edges() {
+    let file = parsed(
+        "lib/shop/cart.rb",
+        "def total\n  subtotal = 1\n  subtotal + Shop::VAT\nend\n",
+    );
+    let refs: Vec<&str> = file
+        .usages
+        .iter()
+        .filter(|u| !u.call)
+        .map(|u| u.name.as_str())
+        .collect();
+
+    assert!(!refs.contains(&"subtotal"), "{refs:?}");
+    assert!(refs.contains(&"Shop"), "{refs:?}");
+}

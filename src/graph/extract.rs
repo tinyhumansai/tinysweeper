@@ -80,6 +80,11 @@ pub fn parse_as(file: &SourceFile, language: Language) -> Result<ParsedFile> {
                 other if other.starts_with(lang::CAP_DEF_PREFIX) => {
                     decl = Some((capture.node, other));
                 }
+                // A capture that exists only for a query predicate to test —
+                // Ruby's `require` matcher. Named rather than swept up by the
+                // catch-all so a mistyped capture name stays distinguishable
+                // from a deliberately ignored one.
+                other if other.starts_with(lang::CAP_IGNORE_PREFIX) => {}
                 _ => {}
             }
         }
@@ -221,7 +226,94 @@ fn walk_import(node: Node, source: &[u8], language: Language) -> Vec<ImportStmt>
         Language::Python => python_import(node, source),
         Language::TypeScript | Language::Tsx => ts_import(node, source),
         Language::Go => go_import(node, source),
+        Language::Java => java_import(node, source),
+        Language::Ruby => ruby_import(node, source),
     }
+}
+
+// --- Java -------------------------------------------------------------------
+
+/// `import a.b.C;` and `import static a.b.C.member;`, single or on-demand.
+///
+/// The specifier keeps its dots; the resolver turns them into a path. A
+/// wildcard import binds no name — `import a.b.*` makes every type in the
+/// package visible without saying which — so the file edge is recorded and the
+/// name bindings are left empty rather than guessed at.
+fn java_import(node: Node, source: &[u8]) -> Vec<ImportStmt> {
+    let text = text(node, source);
+    let body = text
+        .trim()
+        .trim_start_matches("import")
+        .trim()
+        .trim_start_matches("static")
+        .trim()
+        .trim_end_matches(';')
+        .trim();
+    if body.is_empty() {
+        return Vec::new();
+    }
+
+    let wildcard = body.ends_with(".*");
+    let specifier = body.trim_end_matches(".*").trim_end_matches('.');
+    if specifier.is_empty() {
+        return Vec::new();
+    }
+    let names = if wildcard {
+        Vec::new()
+    } else {
+        specifier
+            .rsplit('.')
+            .next()
+            .map(|name| vec![name.to_string()])
+            .unwrap_or_default()
+    };
+    vec![ImportStmt {
+        byte: node.start_byte(),
+        specifier: specifier.to_string(),
+        names,
+        line: line(node),
+    }]
+}
+
+// --- Ruby -------------------------------------------------------------------
+
+/// `require_relative "x"` and friends, which are method calls rather than
+/// statements.
+///
+/// The callee is kept on the front of the specifier — `require_relative x`
+/// versus `require x` — because the two resolve against completely different
+/// roots and the resolver has no other way to tell them apart. Rust's
+/// `mod foo;` marker uses the same trick for the same reason.
+///
+/// No names are bound. Ruby's `require` makes a file's constants visible
+/// without naming any of them, so there is nothing to bind and inventing a
+/// binding from the filename would attribute every use of `Foo` in the file to
+/// whichever `require` happened to mention `foo`.
+fn ruby_import(node: Node, source: &[u8]) -> Vec<ImportStmt> {
+    let Some(method) = node.child_by_field_name("method") else {
+        return Vec::new();
+    };
+    let Some(arguments) = node.child_by_field_name("arguments") else {
+        return Vec::new();
+    };
+    let mut cursor = arguments.walk();
+    let Some(first) = arguments
+        .named_children(&mut cursor)
+        .find(|child| child.kind() == "string")
+    else {
+        return Vec::new();
+    };
+
+    let literal = unquote(&text(first, source));
+    if literal.is_empty() {
+        return Vec::new();
+    }
+    vec![ImportStmt {
+        byte: node.start_byte(),
+        specifier: format!("{} {literal}", text(method, source)),
+        names: Vec::new(),
+        line: line(node),
+    }]
 }
 
 // --- Rust ------------------------------------------------------------------

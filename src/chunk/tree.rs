@@ -58,6 +58,16 @@ const CONTAINERS: &[&str] = &[
     // Python
     "class_definition",
     "decorated_definition",
+    // Java. `class_declaration` above already covers the declaration itself;
+    // these are the bodies whose members are the cut points.
+    "class_body",
+    "interface_body",
+    "enum_body",
+    "enum_body_declarations",
+    // Ruby. Unlike every other grammar here these node kinds are bare words,
+    // which is why they need naming rather than falling out of the suffix rule.
+    "class",
+    "singleton_class",
 ];
 
 /// Node kinds that name something, beyond the generic suffix rule below.
@@ -67,6 +77,12 @@ const EXTRA_DEFINITIONS: &[&str] = &[
     "decorated_definition",
     "method_definition",
     "public_field_definition",
+    // Ruby again: `def` is `method`, `def self.x` is `singleton_method`.
+    "method",
+    "singleton_method",
+    "class",
+    "module",
+    "singleton_class",
 ];
 
 /// Split `source` at symbol boundaries.
@@ -117,6 +133,8 @@ fn grammar(language: Language) -> tree_sitter::Language {
         Language::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
         Language::Python => tree_sitter_python::LANGUAGE.into(),
         Language::Go => tree_sitter_go::LANGUAGE.into(),
+        Language::Java => tree_sitter_java::LANGUAGE.into(),
+        Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
     }
 }
 
