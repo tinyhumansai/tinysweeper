@@ -354,9 +354,7 @@ fn go_an_embedded_interface_is_heritage_and_a_method_signature_is_not() {
     );
     assert!(heritage(&file).contains(&("Reader", "Closer")));
     assert!(
-        !heritage(&file)
-            .iter()
-            .any(|(_, parent)| *parent == "Read"),
+        !heritage(&file).iter().any(|(_, parent)| *parent == "Read"),
         "a method signature declares behaviour; it embeds nothing: {:?}",
         file.heritage
     );
