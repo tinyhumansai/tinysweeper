@@ -248,6 +248,7 @@ mod outcome_tests {
             title: "t".into(),
             body: "b".into(),
             suggestion: None,
+            applicable: None,
             late: false,
             identity: None,
         }

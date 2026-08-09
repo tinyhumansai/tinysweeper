@@ -31,6 +31,7 @@ fn finding(title: &str) -> Finding {
         title: title.into(),
         body: "`i` is never bounds-checked.".into(),
         suggestion: None,
+        applicable: None,
         late: false,
         identity: None,
     }
@@ -202,6 +203,7 @@ async fn a_finding_about_code_not_in_the_diff_survives() {
         title: "The constant MAX_SIZE is never explained".into(),
         body: "The value 1024 is used throughout but never documented.".into(),
         suggestion: None,
+        applicable: None,
         late: false,
         identity: None,
     };

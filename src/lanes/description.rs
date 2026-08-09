@@ -155,6 +155,7 @@ fn empty_body_outcome(pr: &PullRequest, files: usize) -> LaneOutcome {
                    Say what changed, why, and how it was verified."
                 .into(),
             suggestion: Some(suggestion),
+            applicable: None,
             late: false,
             identity: None,
         }],

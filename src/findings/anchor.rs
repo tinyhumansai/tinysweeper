@@ -42,14 +42,21 @@ pub fn anchor_context(finding: &Finding, diffs: &[FileDiff]) -> String {
     lines.join("\n")
 }
 
-/// Stamp every finding with the identity dedupe and triage key on.
+/// Stamp every finding with the identity dedupe and triage key on, and with
+/// the applicable suggestion if one can be built.
 ///
 /// Done in one place so review, apply and the dedupe reader cannot disagree
-/// about what a finding *is*.
+/// about what a finding *is*. The suggestion joins it for the same reason it
+/// exists here at all: both need the parsed diff, and the apply path has none.
+///
+/// Order matters. The identity is computed first and over the *original* code,
+/// so stamping a suggestion cannot move a finding's fingerprint and re-post a
+/// comment that was already deduped away.
 pub fn stamp(findings: &mut [Finding], diffs: &[FileDiff]) {
     for finding in findings.iter_mut() {
         let context = anchor_context(finding, diffs);
         finding.identity = Some(finding.fingerprint(&context));
+        finding.applicable = crate::findings::suggest::applicable(finding, diffs);
     }
 }
 
@@ -78,6 +85,7 @@ mod tests {
             title: "Guard the index before dereferencing".into(),
             body: "…".into(),
             suggestion: None,
+            applicable: None,
             late: false,
             identity: None,
         }

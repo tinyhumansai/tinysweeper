@@ -11,6 +11,21 @@ use sha2::{Digest, Sha256};
 use crate::config::types::{LaneId, Severity};
 use crate::scan::types::Finding as ScanFinding;
 
+/// A replacement GitHub will accept as a one-click commit.
+///
+/// The line span is load-bearing and is *not* the span the model quoted: GitHub
+/// replaces exactly the lines the review comment is anchored to, so the comment
+/// carrying this must be anchored to `start_line..=end_line` and nothing else.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Suggestion {
+    /// First head-revision line the replacement covers.
+    pub start_line: u64,
+    /// Last head-revision line the replacement covers, inclusive.
+    pub end_line: u64,
+    /// The replacement text, indented to sit where the original did.
+    pub replacement: String,
+}
+
 /// Something worth telling the author about.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Finding {
@@ -40,6 +55,18 @@ pub struct Finding {
     pub body: String,
     /// A concrete replacement for the anchored lines, if there is one.
     pub suggestion: Option<String>,
+    /// The same replacement, verified safe to post as a GitHub `suggestion`
+    /// block that a maintainer can commit with one click.
+    ///
+    /// Stamped during review by
+    /// [`suggest::applicable`](crate::findings::suggest::applicable), which
+    /// needs the parsed diff to check that GitHub will accept the anchor and to
+    /// restore the indentation normalisation dropped. `None` whenever any of
+    /// that could not be established — the apply path then falls back to
+    /// rendering [`Finding::suggestion`] as an inert fence, which is wrong
+    /// about nothing.
+    #[serde(default)]
+    pub applicable: Option<Suggestion>,
     /// Whether this was raised against code the pull request did not change.
     ///
     /// Only ever set after actually diffing against an earlier reviewed SHA.
@@ -143,6 +170,7 @@ impl From<ScanFinding> for Finding {
             title: scan.title,
             body,
             suggestion: None,
+            applicable: None,
             late: false,
             identity: None,
         }
@@ -166,6 +194,7 @@ mod tests {
             title: "Guard the index before dereferencing".into(),
             body: "…".into(),
             suggestion: None,
+            applicable: None,
             late: false,
             identity: None,
         }

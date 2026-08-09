@@ -403,10 +403,27 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
         .findings()
         .filter_map(|finding| {
             let line = finding.line?;
+            // A suggestion block replaces exactly the lines the comment is
+            // anchored to, so carrying one *changes the anchor*: it widens to
+            // the span the replacement covers. Without a suggestion the comment
+            // stays a single-line pin, which is what a reader wants — a
+            // multi-line highlight for a one-sentence remark is noise.
+            let (start_line, line) = match &finding.applicable {
+                Some(suggestion) if suggestion.start_line < suggestion.end_line => {
+                    (Some(suggestion.start_line), suggestion.end_line)
+                }
+                Some(suggestion) => (None, suggestion.end_line),
+                None => (None, line),
+            };
+            let suggestion = finding
+                .applicable
+                .as_ref()
+                .map(|s| format!("\n\n```suggestion\n{}\n```", s.replacement))
+                .unwrap_or_default();
             Some(ReviewComment {
                 path: finding.path.clone(),
                 line: Some(line),
-                start_line: None,
+                start_line,
                 // The forge assigns the author on the way in; on the way out it
                 // is what tells dedupe whether a marker is ours.
                 author: String::new(),
@@ -424,8 +441,13 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
                 // footnote size buries the reasoning under the assertion.
                 // `rule_line` splits the class from the explanation so the
                 // first is scannable and the second still reads as prose.
+                //
+                // The suggestion block sits after the prose and before the
+                // footer: GitHub renders it as a diff with a commit button, and
+                // a reader has to have been told why before being offered the
+                // button.
                 body: format!(
-                    "{}  {}\n\n**{}**\n\n{}\n\n{} · <!-- {MARKER_PREFIX}fp={} -->",
+                    "{}  {}\n\n**{}**\n\n{}{}\n\n{} · <!-- {MARKER_PREFIX}fp={} -->",
                     crate::findings::render::priority_badge(finding.severity),
                     crate::findings::render::lane_confidence_badge(
                         finding.lane,
@@ -433,6 +455,7 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
                     ),
                     finding.title,
                     finding.body,
+                    suggestion,
                     crate::findings::render::rule_line(&finding.rule),
                     // The identity review stamped, over the code this finding
                     // anchors to. Recomputing it here from the title — as this
@@ -510,6 +533,7 @@ mod tests {
             title: "Guard the index before dereferencing".into(),
             body: "`i` is never bounds-checked.".into(),
             suggestion: None,
+            applicable: None,
             late: false,
             identity: None,
         }
@@ -664,6 +688,82 @@ mod tests {
         assert_eq!(event, ReviewEvent::RequestChanges);
         assert!(body.contains("Requesting changes"), "{body}");
         assert!(body.contains("**high**"), "{body}");
+    }
+
+    /// A stamped suggestion becomes a one-click block, and the comment widens
+    /// to the span it replaces — GitHub substitutes exactly the anchored lines,
+    /// so a narrower anchor would delete the rest of the block.
+    #[tokio::test]
+    async fn an_applicable_suggestion_becomes_a_commit_button_over_its_own_span() {
+        let mut f = finding();
+        f.applicable = Some(crate::findings::types::Suggestion {
+            start_line: 2,
+            end_line: 4,
+            replacement: "    if let Some(x) = items.get(i) {\n        use_it(x);\n    }".into(),
+        });
+
+        let forge = forge("abc123");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![f]),
+            None,
+        )
+        .await
+        .expect("applies");
+
+        let comment = forge
+            .writes()
+            .into_iter()
+            .find_map(|w| match w {
+                Write::Review { comments, .. } => comments.into_iter().next(),
+                _ => None,
+            })
+            .expect("an inline comment");
+
+        assert_eq!(comment.start_line, Some(2));
+        assert_eq!(comment.line, Some(4));
+        assert!(
+            comment
+                .body
+                .contains("```suggestion\n    if let Some(x) = items.get(i) {"),
+            "{}",
+            comment.body
+        );
+        // Before the footer, so the reader has the reason before the button.
+        let block = comment.body.find("```suggestion").expect("a block");
+        let footer = comment.body.find("**[RULE]").expect("a footer");
+        assert!(block < footer, "{}", comment.body);
+    }
+
+    /// Without a suggestion the comment stays a single-line pin. Widening it
+    /// unconditionally would highlight a whole block for a one-line remark.
+    #[tokio::test]
+    async fn a_finding_with_no_applicable_suggestion_stays_a_single_line_pin() {
+        let forge = forge("abc123");
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![finding()]),
+            None,
+        )
+        .await
+        .expect("applies");
+
+        let comment = forge
+            .writes()
+            .into_iter()
+            .find_map(|w| match w {
+                Write::Review { comments, .. } => comments.into_iter().next(),
+                _ => None,
+            })
+            .expect("an inline comment");
+
+        assert_eq!(comment.start_line, None);
+        assert_eq!(comment.line, Some(2));
+        assert!(!comment.body.contains("```suggestion"), "{}", comment.body);
     }
 
     #[tokio::test]

@@ -43,6 +43,7 @@ fn finding(path: &str, severity: Severity) -> Finding {
         title: "t".into(),
         body: "b".into(),
         suggestion: None,
+        applicable: None,
         late: false,
         identity: None,
     }

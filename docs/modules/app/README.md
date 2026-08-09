@@ -73,6 +73,25 @@ starting it endorsing a red pull request. And an approval that already stands is
 not restated, or every push to a clean pull request would add a review that
 changes nothing.
 
+## Suggestions are anchored, or they are not offered
+
+A finding may carry a `suggestion`. Where `findings::suggest` could verify one,
+`apply` posts it as a GitHub ` ```suggestion ` block — a diff with a **Commit
+suggestion** button — instead of an inert fence the maintainer retypes.
+
+Carrying one **changes the comment's anchor**: GitHub replaces exactly the lines
+the comment is attached to, so the comment widens from a single-line pin to the
+span the replacement covers. Without a suggestion it stays a pin, because a
+multi-line highlight for a one-sentence remark is noise.
+
+The verification happens during `review`, not here, for the same reason a
+finding's identity does: it needs the parsed diff, and this module holds a
+proposal and no diff. Everything `suggest` cannot establish — a range GitHub
+would reject, a replaced line that only exists in the base revision, an
+indentation shortfall it cannot infer — comes back as `None`, and the inert
+fence is what gets rendered. A wrong applicable suggestion is a button that
+breaks the build; a wrong inert one is a typo in a comment.
+
 ## Files
 
 | File | Role |
