@@ -1,0 +1,37 @@
+{
+  "key": "7efb557b9ec78cdc",
+  "model_requested": "z-ai/glm-5.2",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 4685,
+    "output_tokens": 3565,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00111225
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The `None` branch of the `match` in `shorten` is never exercised by any test. It handles input whose first `limit` characters contain no space — CJK text, long single words, URLs — and is reachable with real model output. Every test fixture either returns early (string ≤ limit) or finds a space, so if someone broke the no-space branch (e.g. returned the full string untruncated, or panicked), no test would catch it.\n\n```rust\nmatch head.rfind(' ') {\n    Some(space) => format!(\"{}…\", &head[..space]),\n    None => format!(\"{head}…\"),\n}\n```",
+        "confidence": 0.82,
+        "existing_code": "        None => format!(\"{head}…\"),",
+        "path": "src/findings/summarise.rs",
+        "rule": "Maintain at least 80% coverage for meaningful library behaviour",
+        "severity": "medium",
+        "title": "Exercise the no-space branch of shorten"
+      },
+      {
+        "body": "The `a_multibyte_title_does_not_panic` test claims to verify that multibyte truncation does not panic, but the Japanese fixture is only 17 characters — shorter than the limit of 20 — so `shorten` returns it unchanged and never reaches the character-slicing path the test is supposed to guard. The fixture passes trivially.\n\n```rust\n            \"日本語のタイトルはとても長いのです\",\n```\n\nAt 17 characters this satisfies `text.chars().count() <= limit` and hits the early return. To actually exercise the multibyte safety the fixture would need to exceed the limit so that `text.chars().take(limit).collect()` and `head.rfind(' ')` run on multibyte content.",
+        "confidence": 0.72,
+        "existing_code": "            \"日本語のタイトルはとても長いのです\",",
+        "path": "src/findings/summarise.rs",
+        "rule": "Cover lane behaviour with golden tests asserting findings that survive filtering, dedupe and capping",
+        "severity": "low",
+        "title": "Make the multibyte test fixture long enough to truncate"
+      }
+    ],
+    "resolved": [],
+    "summary": "The new `summarise` module adds two pure functions with in-crate tests. The tests for `shorten` do cover the early-return, word-boundary, and one multibyte case, and they can fail on regression. Two gaps remain: the `None` branch of the `match` in `shorten` (no space in the truncated head) is never exercised, and the Japanese multibyte fixture is too short to trigger truncation, so it does not actually test the multibyte-safety path its comment claims to guard. The `first_sentence` `None` branch (no `. ` found) is also untested but that is lower risk. The infrastructure changes (the kernel-bypass entrypoint shim, compose overlays, config) are deployment plumbing with no library-behaviour surface and correctly need no tests."
+  }
+}

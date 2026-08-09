@@ -1,0 +1,29 @@
+{
+  "key": "86f2a405ae5e917d",
+  "model_requested": "z-ai/glm-5.2",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 1779,
+    "output_tokens": 1145,
+    "cached_tokens": 1583,
+    "embed_tokens": 0,
+    "cost_usd": 0.000286199
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "OpenRouter is a chat/completion routing gateway; it does not expose an OpenAI-compatible embeddings endpoint, so `provider = \"openrouter\"` paired with `openai/text-embedding-3-small` will most likely fail at request time. The comment explicitly states this goes \"through the same gateway the completion models use,\" which is the load-bearing assumption that is probably wrong: completions and embeddings are different API surfaces, and OpenRouter does not relay the latter. If so, no vectors ever get written regardless of `enabled = true`. I could not verify OpenRouter's current API surface from the diff, so treat this as a check-the-vendor claim rather than a certainty, but if it holds the section is inert.",
+        "confidence": 0.4,
+        "existing_code": "provider = \"openrouter\"\nmodel = \"openai/text-embedding-3-small\"",
+        "late": false,
+        "path": ".tinysweeper.toml",
+        "rule": "Return `Result<T>` using the crate error type from `src/error.rs`.",
+        "severity": "medium",
+        "title": "Verify OpenRouter serves an embeddings endpoint before relying on it"
+      }
+    ],
+    "resolved": [],
+    "summary": "The added `[embeddings]` section is internally consistent and the partition-key comment is sound, but one load-bearing assumption needs a real check: OpenRouter is a chat/completion gateway and is not known to expose an embeddings endpoint, so `provider = \"openrouter\"` with `openai/text-embedding-3-small` may never produce vectors. Flag that for verification; otherwise the change looks fine."
+  }
+}
