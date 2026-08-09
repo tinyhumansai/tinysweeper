@@ -7,7 +7,7 @@ caller three files away that the diff breaks, because that caller shares no
 vocabulary with it. The graph is the other half: seed it with the symbols a pull
 request touched and walk outwards.
 
-**This graph exists to be traversed during a review, not to be drawn.** That is
+**This graph exists to be traversed during a review, not to be browsed.** That is
 the whole design constraint, and it is worth stating because the obvious version
 of this feature fails it. The obvious version is a dashboard endpoint —
 `buildRepoGraph`, called from exactly one HTTP route, never from a review — whose
