@@ -192,6 +192,38 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
         problems.push("`models.max_tokens = 0` would produce no output".into());
     }
 
+    // Reasoning is drawn from the same allowance as the answer, and the effort
+    // key does not bound it — measured, both configured models spend the
+    // *entire* budget thinking at `high` and at `low` alike, then return empty
+    // content with `finish_reason = "length"`. The runs that back this are the
+    // table in `config/defaults.toml` next to `reasoning_effort`: both models
+    // at 8000 tokens, showing a full reasoning burn and no content at either
+    // effort, `off` clearing the same budget.
+    //
+    // A floor rather than a formula because the failure is bimodal: there is no
+    // setting at which the model thinks proportionally less, so there is no
+    // ratio to compute. 12000 sits below the 16000 that cleared this in
+    // production and above the 8000 that reproduced it every time.
+    //
+    // Caught here because the alternative is catching it in production, which
+    // is what happened: every review failed over to the last model in the
+    // fallback chain, and the only symptom was a warning line nobody was
+    // reading. A configuration that cannot work should not start.
+    const REASONING_FLOOR: u32 = 12_000;
+    if models.reasoning_effort.trim() != "off"
+        && !models.reasoning_effort.trim().is_empty()
+        && models.max_tokens < REASONING_FLOOR
+    {
+        problems.push(format!(
+            "`models.max_tokens = {}` is too small with `models.reasoning_effort = \"{}\"`: \
+             reasoning is billed against the same allowance and measurably consumes all of it, \
+             leaving nothing to answer with. Raise it to at least {REASONING_FLOOR}, or set \
+             `models.reasoning_effort = \"off\"` — lowering the effort does not bound it",
+            models.max_tokens,
+            models.reasoning_effort.trim(),
+        ));
+    }
+
     // `!is_finite()` catches nan and inf, which sail straight through a
     // `<= 0.0` comparison and would disable the spend ceiling entirely.
     if !models.budget_usd_per_pr.is_finite() || models.budget_usd_per_pr <= 0.0 {

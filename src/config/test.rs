@@ -61,6 +61,82 @@ fn parse(text: &str) -> Config {
 }
 
 #[test]
+fn reasoning_with_too_small_a_budget_is_rejected() {
+    // The production failure this exists to stop: reasoning and the answer are
+    // drawn from one allowance, and at 8000 both configured models — the
+    // z-ai/glm-5.2 deep tier and the deepseek-v4-pro fallback — spent the whole
+    // of it thinking and returned empty content, `finish_reason = "length"`.
+    // Every review then failed over to the last model in the fallback chain,
+    // silently. The measured rows live in `config/defaults.toml`.
+    //
+    // 8000 here is deliberately a failing budget, not the shipped one. The
+    // defaults ship `max_tokens = 16000`, above the 12000 floor, and
+    // `the_built_in_defaults_are_valid` below asserts DEFAULTS runs clean
+    // through `validate::validate` — so the floor and the shipped defaults
+    // cannot disagree.
+    let config = parse("version = 1\n[models]\nmax_tokens = 8000\nreasoning_effort = \"high\"\n");
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("models.max_tokens = 8000"), "{joined}");
+    assert!(joined.contains("reasoning_effort"), "{joined}");
+}
+
+#[test]
+fn lowering_the_effort_does_not_satisfy_the_budget_floor() {
+    // Measured at both settings: the table in `config/defaults.toml` lists
+    // `low` rows for each configured model and they burn the entire allowance
+    // exactly as the `high` rows do. This key picks a style of thinking, never
+    // an amount, so treating `low` as a smaller `high` would reintroduce the
+    // failure while looking like a fix for it.
+    let config = parse("version = 1\n[models]\nmax_tokens = 8000\nreasoning_effort = \"low\"\n");
+    assert!(
+        validate::validate(&config)
+            .join("\n")
+            .contains("models.max_tokens = 8000"),
+        "`low` was accepted at a budget that cannot work"
+    );
+}
+
+#[test]
+fn reasoning_is_accepted_at_exactly_the_floor() {
+    // The boundary the other three tests bracket. A regression from
+    // `< REASONING_FLOOR` to `<= REASONING_FLOOR` would reject the floor itself,
+    // and no test today would notice — 12000 is the largest budget never
+    // checked. It is also the smallest budget the validation accepts, so it is
+    // the value a traced regression would land on.
+    let config = parse("version = 1\n[models]\nmax_tokens = 12000\nreasoning_effort = \"high\"\n");
+    let problems = validate::validate(&config);
+    assert!(
+        !problems.iter().any(|p| p.contains("reasoning_effort")),
+        "12000 is the floor and must be accepted: {problems:#?}"
+    );
+}
+
+#[test]
+fn one_token_below_the_floor_is_rejected() {
+    // A hair under the boundary is still under it; this pins the cut to the
+    // exact value rather than a range.
+    let config = parse("version = 1\n[models]\nmax_tokens = 11999\nreasoning_effort = \"high\"\n");
+    let joined = validate::validate(&config).join("\n");
+    assert!(
+        joined.contains("reasoning_effort"),
+        "11999 is below the floor and must be rejected: {joined}"
+    );
+}
+
+#[test]
+fn turning_reasoning_off_makes_a_small_budget_fine() {
+    // The escape hatch has to actually work, or the floor is just a wall: with
+    // no reasoning the whole allowance goes to the answer, and 8000 was
+    // measured as ample — 2572 tokens and 13 findings on a 23k-token diff.
+    let config = parse("version = 1\n[models]\nmax_tokens = 8000\nreasoning_effort = \"off\"\n");
+    let problems = validate::validate(&config);
+    assert!(
+        problems.is_empty(),
+        "`off` should not be held to the reasoning floor: {problems:#?}"
+    );
+}
+
+#[test]
 fn the_built_in_defaults_are_valid() {
     let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
     let problems = validate::validate(&config);
