@@ -771,6 +771,14 @@ mod tests {
                 .to_string();
             assert!(prefix.contains("test fixture"), "{lane:?}");
             assert!(prefix.contains("asserts that it is contained"), "{lane:?}");
+            // The exception must not blind the reviewer: the opposite case —
+            // a payload on a live path, or a credential a test asserts nothing
+            // about — is still explicitly a finding.
+            assert!(
+                prefix.contains("payload placed on a live path")
+                    && prefix.contains("is still a finding"),
+                "the exception must stay narrow: {lane:?}"
+            );
         }
     }
 
