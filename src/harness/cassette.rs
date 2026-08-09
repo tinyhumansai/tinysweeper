@@ -325,9 +325,14 @@ pub fn key(request: &ModelRequest) -> String {
     hasher.update(b"\0");
     // The schema is the output contract, not just its name a provider wants:
     // two responses with the same name but different properties are different
-    // answers. `Value::to_string` is deterministic — `serde_json` sorts the
-    // map keys without the `preserve_order` feature.
-    hasher.update(request.schema.to_string().as_bytes());
+    // answers. `serde_json`'s key ordering is a feature flag, not a property:
+    // the `serve` build pulls in `bson`, which turns on `preserve_order`, and
+    // the same schema then serializes its map keys in insertion order — the
+    // schema bytes differ between two builds of this very crate that agree on
+    // every affordance of the contract. Hash a canonical form instead: map
+    // keys sorted at every depth, so the key is the schema no matter which
+    // serde_json this build links.
+    hasher.update(canonical_schema(&request.schema).to_string().as_bytes());
     hasher.update(b"\0");
     hasher.update(request.max_tokens.to_le_bytes());
     for message in &request.messages {
