@@ -192,20 +192,29 @@ async fn publish_overview(
     let repo = RepoId::parse(&proposal.repo)
         .ok_or_else(|| Error::Forge(format!("`{}` is not owner/name", proposal.repo)))?;
 
-    // Ours by marker *and* by author. The marker alone is not enough: a
-    // contributor can copy it into their own comment, and editing someone
-    // else's comment because it quotes one of our markers would be a write we
-    // were tricked into. The forge fills in the author on the way out; an
-    // adapter that leaves it empty falls through to posting a new comment,
-    // which is the harmless direction to be wrong in.
+    // Ours by author *and* by marker, in that order. The marker alone is not
+    // enough: anyone can copy it into their own comment, and editing a
+    // contributor's comment because it quotes one of our markers is a write we
+    // were tricked into making. `is_own_login` is the same exact-login check
+    // dedupe already trusts — a prefix match would accept `tinysweeper-evil`,
+    // an account anybody can register.
+    //
+    // A comment with no id cannot be edited, so it falls through to posting a
+    // new one. That is the harmless direction to be wrong in: a duplicate
+    // comment is noise, whereas editing the wrong comment destroys someone's
+    // words.
     let existing = read
         .comments(&repo, proposal.number)
         .await?
         .into_iter()
-        .find(|comment| comment.body.contains(crate::overview::MARKER) && comment.own);
+        .find(|comment| {
+            crate::findings::prior::is_own_login(&comment.author)
+                && comment.body.contains(crate::overview::MARKER)
+        })
+        .and_then(|comment| comment.id);
 
     match existing {
-        Some(comment) => write.update_comment(&repo, comment.id, &body).await,
+        Some(id) => write.update_comment(&repo, id, &body).await,
         None => write
             .create_comment(&repo, proposal.number, &body)
             .await
