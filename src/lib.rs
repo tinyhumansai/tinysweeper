@@ -10,6 +10,7 @@
 //! Modules land milestone by milestone; see `ROADMAP.md`.
 
 pub mod app;
+pub mod automerge;
 pub mod chunk;
 pub mod config;
 pub mod error;

@@ -116,6 +116,39 @@ fn every_scaffolded_capability_is_off_by_default() {
 }
 
 #[test]
+fn auto_merge_ships_with_every_deterministic_threshold_set() {
+    // Every threshold has to have a shipped value. A missing one deserialises
+    // to `0`, and a zero cap refuses everything — safe, but it would make the
+    // feature look broken rather than conservative, so the defaults are
+    // asserted here rather than left to the derive.
+    let dir = repo(None, &[]);
+    let automerge = load(dir.path(), None).expect("loads").config.automerge;
+
+    assert_eq!(automerge.max_files, 20);
+    assert_eq!(automerge.max_changed_lines, 400);
+    assert_eq!(automerge.max_hunks, 30);
+    assert_eq!(automerge.max_directories, 5);
+    assert!(
+        automerge
+            .sensitive_paths
+            .contains(&".github/**".to_string()),
+        "CI workflow paths must be sensitive by default: {:?}",
+        automerge.sensitive_paths
+    );
+    assert!(automerge.allow_dependency_bumps);
+    assert_eq!(
+        automerge.dependency_bots,
+        vec!["dependabot[bot]".to_string(), "renovate[bot]".to_string()]
+    );
+    assert!(
+        automerge
+            .dependency_paths
+            .iter()
+            .any(|glob| glob.contains("Cargo.lock"))
+    );
+}
+
+#[test]
 fn stale_handling_defaults_to_marking_never_closing() {
     let dir = repo(None, &[]);
     let config = load(dir.path(), None).expect("loads").config;
@@ -267,6 +300,42 @@ budget_usd_per_pr = 0.0
     assert!(
         problems.len() >= 8,
         "expected every problem, got {problems:#?}"
+    );
+}
+
+#[test]
+fn an_unreadable_auto_merge_glob_is_caught_before_it_can_refuse_everything() {
+    // The policy fails closed on a malformed glob, which is safe but silent:
+    // the operator sees a pull request that never merges and no reason why.
+    // Saying so at load time is the difference between a bug report and a typo.
+    let config = parse(
+        "version = 1\n[automerge]\nenabled = true\nsensitive_paths = [\"src/**/[\"]\ndependency_paths = [\"**/{\"]\n",
+    );
+    let problems = validate::validate(&config);
+
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("automerge.sensitive_paths")),
+        "{problems:#?}"
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("automerge.dependency_paths")),
+        "{problems:#?}"
+    );
+}
+
+#[test]
+fn a_zero_auto_merge_cap_is_flagged_as_refusing_everything() {
+    let config = parse("version = 1\n[automerge]\nenabled = true\nmax_files = 0\n");
+    let problems = validate::validate(&config);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("`automerge.max_files = 0`")),
+        "{problems:#?}"
     );
 }
 

@@ -567,6 +567,45 @@ pub struct AutoMerge {
     pub allow_labels: Vec<String>,
     /// Never merge a pull request carrying one of these.
     pub block_labels: Vec<String>,
+    /// Refuse a pull request touching more than this many files.
+    ///
+    /// File count is the cheapest proxy for "a human should look at this":
+    /// a change spread over thirty files is a refactor, whatever its line
+    /// count. `0` refuses everything, which is the safe reading of a
+    /// misconfigured cap rather than a special case meaning "unlimited".
+    pub max_files: usize,
+    /// Refuse a pull request adding and removing more than this many lines.
+    pub max_changed_lines: u64,
+    /// Refuse a pull request whose diff has more than this many hunks.
+    ///
+    /// Hunks, not lines: twenty scattered one-line edits are harder to be
+    /// sure about than one new two-hundred-line file.
+    pub max_hunks: usize,
+    /// Refuse a pull request touching more than this many distinct directories.
+    ///
+    /// The blast radius across the tree. A change confined to one directory
+    /// can break one thing; a change across eight has crossed module
+    /// boundaries and wants a reviewer who knows all of them.
+    pub max_directories: usize,
+    /// Globs naming paths that always want a human.
+    ///
+    /// Anything that changes what runs, or who may run it: CI workflows,
+    /// deploy configuration, authentication, the security boundary itself,
+    /// and dependency manifests.
+    pub sensitive_paths: Vec<String>,
+    /// Whether a verified dependency-bump bot may merge manifest-only changes.
+    pub allow_dependency_bumps: bool,
+    /// The exact logins of the dependency bots that exemption applies to.
+    ///
+    /// Matched exactly, never by prefix, and only against an author GitHub
+    /// itself reports as `type: "Bot"`.
+    pub dependency_bots: Vec<String>,
+    /// Globs naming the manifests and lockfiles a dependency bump may touch.
+    ///
+    /// The exemption holds only when *every* changed path matches one of
+    /// these. One source file in the same pull request and it is an ordinary
+    /// change again.
+    pub dependency_paths: Vec<String>,
 }
 
 /// Issue triage: dedupe, classify, label, and either escalate with a

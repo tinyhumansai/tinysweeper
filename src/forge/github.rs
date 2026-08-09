@@ -278,7 +278,18 @@ impl ForgeRead for GitHubRead {
             number,
             title: pr.title.unwrap_or_default(),
             body: pr.body.unwrap_or_default(),
-            author: pr.user.map(|u| u.login).unwrap_or_default(),
+            author: pr
+                .user
+                .as_ref()
+                .map(|u| u.login.clone())
+                .unwrap_or_default(),
+            // GitHub's own answer, not a guess from the login. Auto-merge's
+            // dependency-bump exemption is only as safe as this field.
+            author_is_bot: pr
+                .user
+                .as_ref()
+                .map(|u| u.r#type.eq_ignore_ascii_case("bot"))
+                .unwrap_or(false),
             draft: pr.draft.unwrap_or(false),
             base_ref: base.ref_field,
             base_sha: base.sha,
