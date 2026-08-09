@@ -220,8 +220,12 @@ pub enum Action {
     AutoMerge {
         /// `owner/name`.
         repo: String,
-        /// Pull request number.
-        number: u64,
+        /// The pull requests to re-evaluate.
+        ///
+        /// A list rather than a number because one commit can be the head of
+        /// several open pull requests, and a check payload names all of them.
+        /// Taking the first would silently strand the rest.
+        numbers: Vec<u64>,
         /// The installation that can act on it.
         installation: u64,
     },
