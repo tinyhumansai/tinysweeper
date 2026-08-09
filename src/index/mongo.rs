@@ -898,6 +898,24 @@ impl GraphStore for MongoGraphStore {
         Ok(nodes + edges)
     }
 
+    async fn symbols(&self, repo_id: &str) -> Result<Vec<GraphNode>> {
+        // Projected down to the four fields the symbol table needs. The whole
+        // point of this call is that it is cheaper than re-parsing the tree,
+        // and shipping every node's `lang` back for a monorepo is a cost with
+        // no reader.
+        let mut cursor = self
+            .nodes
+            .find(doc! { "repo_id": repo_id, "kind": "symbol" })
+            .projection(doc! { "repo_id": 1, "node_id": 1, "kind": 1, "path": 1, "symbol": 1 })
+            .await
+            .map_err(mongo)?;
+        let mut out = Vec::new();
+        while let Some(document) = cursor.next().await {
+            out.push(node_from_document(&document.map_err(mongo)?));
+        }
+        Ok(out)
+    }
+
     async fn delete_paths(&self, repo_id: &str, paths: &[String]) -> Result<u64> {
         if paths.is_empty() {
             return Ok(0);
