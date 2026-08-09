@@ -1051,6 +1051,154 @@ mod tests {
         assert!(body.contains("800 cached (8%)"), "{body}");
         assert!(body.contains("kimi-k3"), "{body}");
     }
+    // --- the change map ----------------------------------------------------
+
+    /// A proposal carrying a two-component map, which is the smallest one
+    /// worth drawing.
+    fn proposal_with_map(head: &str) -> Proposal {
+        use crate::evidence::diff::parse_file_patch;
+
+        let diffs = [
+            parse_file_patch("src/lanes/critique.rs", "@@ -1,1 +1,2 @@\n x\n+y\n"),
+            parse_file_patch("docs/readme.md", "@@ -1,1 +1,2 @@\n x\n+y\n"),
+        ];
+        Proposal {
+            overview: Some(crate::overview::build(
+                &diffs,
+                &[],
+                crate::overview::GraphView::Absent,
+                &config().overview,
+            )),
+            ..proposal(head, vec![])
+        }
+    }
+
+    fn overview_comments(forge: &MockForge) -> Vec<Write> {
+        forge
+            .writes()
+            .into_iter()
+            .filter(|write| match write {
+                Write::Comment { body, .. } | Write::CommentUpdate { body, .. } =>
+                    body.contains(crate::overview::MARKER),
+                _ => false,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_pull_request_gets_one_change_map_comment() {
+        let forge = forge("abc123");
+        apply(&forge, &forge, &config(), &proposal_with_map("abc123"), None)
+            .await
+            .expect("applies");
+
+        let posted = overview_comments(&forge);
+        assert_eq!(posted.len(), 1, "{posted:#?}");
+        assert!(
+            matches!(&posted[0], Write::Comment { body, .. } if body.contains("```mermaid")),
+            "{posted:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_push_edits_the_same_comment_rather_than_adding_one() {
+        // The whole reason the map carries a marker. A fresh diagram per push
+        // turns a pull request into a scroll bar, and the older diagrams are
+        // all wrong by then.
+        let forge = forge("abc123").with_comments(
+            7,
+            vec![IssueComment {
+                id: Some(4242),
+                author: "tinysweeper[bot]".into(),
+                body: format!("{}\n\nan earlier diagram", crate::overview::MARKER),
+            }],
+        );
+
+        apply(&forge, &forge, &config(), &proposal_with_map("abc123"), None)
+            .await
+            .expect("applies");
+
+        let posted = overview_comments(&forge);
+        assert_eq!(posted.len(), 1, "{posted:#?}");
+        assert!(
+            matches!(&posted[0], Write::CommentUpdate { comment_id, .. } if *comment_id == 4242),
+            "{posted:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_contributor_who_copies_the_marker_does_not_get_their_comment_edited() {
+        // Anyone can paste a marker into their own comment. Editing it because
+        // of that would be a write we were tricked into making, and it would
+        // destroy somebody's words.
+        let forge = forge("abc123").with_comments(
+            7,
+            vec![IssueComment {
+                id: Some(4242),
+                author: "helpful-contributor".into(),
+                body: format!("{} nice bot", crate::overview::MARKER),
+            }],
+        );
+
+        apply(&forge, &forge, &config(), &proposal_with_map("abc123"), None)
+            .await
+            .expect("applies");
+
+        let posted = overview_comments(&forge);
+        assert_eq!(posted.len(), 1, "{posted:#?}");
+        assert!(
+            matches!(&posted[0], Write::Comment { .. }),
+            "a new comment, not an edit of theirs: {posted:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn turning_the_map_off_posts_no_comment() {
+        let forge = forge("abc123");
+        let mut config = config();
+        config.overview.enabled = false;
+
+        apply(&forge, &forge, &config, &proposal_with_map("abc123"), None)
+            .await
+            .expect("applies");
+
+        assert!(overview_comments(&forge).is_empty(), "{:#?}", forge.writes());
+    }
+
+    #[tokio::test]
+    async fn a_stale_head_draws_nothing_either() {
+        let forge = forge("def456");
+        apply(&forge, &forge, &config(), &proposal_with_map("abc123"), None)
+            .await
+            .expect("applies");
+
+        assert!(overview_comments(&forge).is_empty(), "{:#?}", forge.writes());
+    }
+
+    #[tokio::test]
+    async fn a_proposal_written_before_the_map_existed_still_publishes() {
+        // `overview: None` is what an old `findings.json` deserialises to, and
+        // it must mean "no map was built", never "the change touches nothing".
+        let forge = forge("abc123");
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
+            .await
+            .expect("applies");
+
+        assert!(overview_comments(&forge).is_empty());
+        assert!(!forge.checks().is_empty(), "the verdict still went out");
+    }
+
+    #[tokio::test]
+    async fn a_change_map_that_cannot_be_posted_does_not_cost_the_verdict() {
+        // Nobody is gated on a picture. A read-only forge fails every write;
+        // the check runs above it must still have been published, and `apply`
+        // must still report success for the parts that landed.
+        let forge = forge("abc123").read_only();
+        let result = apply(&forge, &forge, &config(), &proposal_with_map("abc123"), None).await;
+
+        assert!(result.is_err() || overview_comments(&forge).is_empty());
+    }
+
     #[tokio::test]
     async fn a_planned_thread_is_resolved_when_the_verdict_is_published() {
         // The mutation half of thread resolution. The decision was taken during
