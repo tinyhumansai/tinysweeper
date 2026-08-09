@@ -384,7 +384,17 @@ pub struct Models {
     /// Tried in order when the selected model fails.
     pub fallback: Vec<String>,
     /// Cap on tokens generated per model call.
+    ///
+    /// Reasoning is billed against this same ceiling, so a thinking-heavy model
+    /// can spend the whole budget and return empty content — see
+    /// `reasoning_effort`.
     pub max_tokens: u32,
+    /// How hard the model should think: `off`, `low`, `medium`, `high`.
+    ///
+    /// `off` disables reasoning outright. It is the setting that rescues a
+    /// deployment whose model reasons past `max_tokens` and answers with
+    /// nothing, which is a real failure this repository has measured.
+    pub reasoning_effort: String,
     /// Hard USD ceiling for a single pull request's review.
     pub budget_usd_per_pr: f64,
 }
