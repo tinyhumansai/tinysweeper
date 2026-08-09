@@ -149,6 +149,23 @@ pub fn load(root: &Path) -> Result<Corpus> {
         }
 
         let fixture_path = path.parent().unwrap_or(Path::new(".")).join(&case.fixture);
+        // The fixture path is data in a case file. `../fixtures/` is how every
+        // case reaches its frozen forge state, but `../../..` would walk out of
+        // the corpus and read an operator's files into the model. Resolving
+        // both sides against the filesystem keeps every `..` honest.
+        if let (Ok(root), Ok(fixture)) = (
+            std::fs::canonicalize(&root),
+            std::fs::canonicalize(&fixture_path),
+        ) && !fixture.starts_with(&root)
+        {
+            problems.push(format!(
+                "{} ({}): fixture `{}` resolves outside the corpus",
+                path.display(),
+                case.id,
+                case.fixture
+            ));
+            continue;
+        }
         let fixture = match read_fixture(&fixture_path) {
             Ok(fixture) => fixture,
             Err(err) => {
