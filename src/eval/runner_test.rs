@@ -239,8 +239,8 @@ async fn a_stale_cassette_fails_the_case_rather_than_scoring_an_old_prompt() {
     let score = &outcome.scores[0];
     if score.error.is_none() {
         // Probe why: build the exact critique prompt under both configs.
+        use crate::config::types::LaneId;
         use crate::harness::prompt::{self, PromptInputs};
-        use crate::lanes::LaneId;
         use crate::ports::model::Message;
         let probe = |cfg: &Config| {
             let diff = crate::evidence::diff::FileDiff {
