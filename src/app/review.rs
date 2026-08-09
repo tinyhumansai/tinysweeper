@@ -322,6 +322,9 @@ pub async fn review_with_retrieval(
             // A kill switch means nobody asked for a verdict, so "incomplete"
             // would be the wrong word for it. There is simply no review.
             unreviewed: Vec::new(),
+            // Nor a diagram: drawing the change of a pull request the bot was
+            // switched off for is still commenting on it.
+            overview: None,
             cost_usd: 0.0,
             input_tokens: 0,
             output_tokens: 0,
