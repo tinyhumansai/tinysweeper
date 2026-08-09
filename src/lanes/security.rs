@@ -91,8 +91,10 @@ impl Lane for Security {
             )));
         }
 
-        let outcome =
-            per_file_with_budget(&triaged.review, input.config.models.budget_usd_per_pr, |path| {
+        let outcome = per_file_with_budget(
+            &triaged.review,
+            input.config.models.budget_usd_per_pr,
+            |path| {
                 let model = self.model.clone();
                 let config = input.config;
                 let repo_policy = input.repo_policy;
@@ -118,8 +120,9 @@ impl Lane for Security {
                     )
                     .await
                 }
-            })
-            .await;
+            },
+        )
+        .await;
 
         let mut outcome = outcome.into_outcome();
         outcome.summary.push_str(&skip_note(&triaged.skipped));
