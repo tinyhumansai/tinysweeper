@@ -137,6 +137,31 @@ against the zero vector is undefined and the server rejects the whole
 aggregation for it, so a zero probe would fail against a perfectly good
 deployment — a boot assertion that cries wolf is worse than none.
 
+Boot is therefore slow the first time against an empty database, and slowest
+against a managed one: the indexes are created and then waited on, and provider
+-side index builds take tens of seconds each. The server logs nothing and does
+not bind until they are queryable. That is the assertion working, not a hang.
+
+### Against a managed deployment
+
+`docker-compose.atlas.yml` points the server at an external MongoDB and detaches
+it from the bundled pair:
+
+```sh
+TINYSWEEPER_MONGODB_URI='mongodb+srv://…' \
+    docker compose -f docker-compose.yml -f docker-compose.atlas.yml up -d tinysweeper
+```
+
+The overlay leaves the `mongod` and `mongot` service definitions in place, so
+the live tests below still work unchanged.
+
+Check the deployment, do not assume it. Running `$vectorSearch` against a
+collection that does not exist returns an empty result rather than an error, so
+a probe written that way reports success on a cluster that supports none of the
+three stages. The honest check is a round trip: insert, create the index, wait
+for `READY`, query, and read the scores back. `MongoIndex::prepare` does exactly
+that, which is why pointing the server at a deployment is itself the test.
+
 ## Running the live tests
 
 `cargo test` stays offline: the MongoDB tests are `#[ignore]`d and skip without
