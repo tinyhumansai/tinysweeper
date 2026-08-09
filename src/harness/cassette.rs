@@ -109,6 +109,12 @@ struct Playback {
     served: usize,
     /// How many were served by call order rather than by key.
     loose_hits: usize,
+    /// How many strict replay could not serve by key.
+    ///
+    /// Separate from `loose_hits` because the two mean opposite things: a loose
+    /// hit is an allowed fallback and is reported; a strict miss is the
+    /// staleness the corpus exists to make loud.
+    misses: usize,
     /// Takes recorded this run, in call order.
     recorded: Vec<Take>,
 }
