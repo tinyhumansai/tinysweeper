@@ -29,6 +29,7 @@
 pub mod aliases;
 pub mod build;
 pub mod extract;
+pub mod impact;
 pub mod lang;
 pub mod path;
 pub mod resolve;
