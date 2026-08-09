@@ -134,6 +134,15 @@ pub struct Definition {
     pub start_byte: usize,
     /// Exclusive end of the declaration.
     pub end_byte: usize,
+    /// Whether this declaration is a test.
+    ///
+    /// What makes a resolved call out of it a
+    /// [`Tests`](crate::index::types::EdgeKind::Tests) edge rather than only a
+    /// `calls` edge. Decided by the extractor because the evidence is
+    /// syntactic and per-language — a `#[test]` attribute, a `Test` prefix Go
+    /// requires, a `test_` prefix pytest collects on — and none of it survives
+    /// into the graph types.
+    pub test: bool,
 }
 
 /// An import as written, before resolution.
