@@ -26,7 +26,39 @@ fn client(token: &str) -> Result<Octocrab> {
 }
 
 fn api(err: octocrab::Error) -> Error {
-    Error::Forge(err.to_string())
+    Error::Forge(chain(&err))
+}
+
+/// Render an error together with everything it wraps.
+///
+/// `err.to_string()` alone is not enough here, and the reason is specific
+/// rather than stylistic. octocrab's `Error::GitHub` variant carries no
+/// `#[snafu(display(...))]`, so Snafu falls back to printing the variant
+/// name — the literal string `GitHub` — while the status code, GitHub's own
+/// message and the `errors` array all sit in the `source` and are discarded.
+///
+/// That is the commonest failure this adapter has: a 403 from a missing
+/// permission, a 404 from an uninstalled app, a 422 from a malformed write.
+/// Every one of them logged as `forge: GitHub` and nothing else, which is
+/// indistinguishable from every other one of them. A review that failed for
+/// want of a scope looked exactly like a review that failed on a typo'd path.
+///
+/// Nothing here can leak a credential: the chain is GitHub's own response
+/// body, which never contains the token that was sent.
+fn chain(err: &dyn std::error::Error) -> String {
+    let mut rendered = err.to_string();
+    let mut source = err.source();
+    while let Some(inner) = source {
+        let next = inner.to_string();
+        // Snafu repeats the variant's display in the source for some variants.
+        // Appending `GitHub: GitHub` helps nobody.
+        if !rendered.ends_with(&next) {
+            rendered.push_str(": ");
+            rendered.push_str(&next);
+        }
+        source = inner.source();
+    }
+    rendered
 }
 
 /// How much of one file's patch is kept inside a commit's patch.
