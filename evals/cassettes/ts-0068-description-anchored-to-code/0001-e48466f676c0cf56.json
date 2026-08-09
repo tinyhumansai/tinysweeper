@@ -1,0 +1,16 @@
+{
+  "key": "e48466f676c0cf56",
+  "model_requested": "z-ai/glm-5.2",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_rule_extraction",
+  "usage": {
+    "input_tokens": 1425,
+    "output_tokens": 540,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00021855
+  },
+  "value": {
+    "rules_markdown": "- One responsibility per module, with core types in a module-local `types.rs`.\n- Every port in `src/ports/` is one trait in one file.\n- Declare every CLI subcommand even when its milestone has not landed.\n- Production surface lives only in `src/server/`; do not distribute or run as a GitHub Action.\n- Add review policies as data folders under `presets/`, never as new code modules.\n- Never edit the `vendor/tinyagents` submodule; change it upstream and bump the pin.\n- Declare examples in `Cargo.toml` with `required-features` so credential-needing tests skip in CI.\n- Keep the default build offline; network needs go behind features (`harness`, `github`, `serve`).\n- Use rustfmt output and Rust 2024 idioms; `snake_case` for modules/files, `PascalCase` for types.\n- Return `Result<T>` using the crate error type from `src/error.rs`.\n- Start every file with a `//!` module doc describing its role and any feature gating.\n- Comments explain the decision, not the code; note why load-bearing flags or orderings matter.\n- Public items carry doc comments; Clap fields use `///` so it becomes help text.\n- Keep tests in-crate as `#[cfg(test)] mod tests`, moving to sibling `test.rs` when large; no `tests/` directory.\n- Give every port an always-compiled offline mock.\n- Cover lane behaviour with golden tests asserting findings after filtering, dedupe and capping.\n- Maintain at least 80% coverage for meaningful library behaviour.\n- Keep Markdown files at 500 lines or fewer; split and link when larger.\n- The model never holds a write token; lanes run read-only and write credentials are minted only in `src/apply/` after model calls.\n- Never execute contributor code; read diff and tree only.\n- Treat PR bodies, comments and diffs as untrusted input; fence and label them as data in prompts.\n- Only deterministic policy in `src/apply/` and `src/automerge/` may mutate GitHub; model verdicts are advisory.\n- Report found secrets by type and location only; never expose the value in comments, summaries or logs.\n- Use concise, imperative commit subjects and keep commits small.\n- PRs state what changed, behaviour changes, and how it was verified."
+  }
+}

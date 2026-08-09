@@ -1,0 +1,18 @@
+{
+  "key": "767a0901d483f09d",
+  "model_requested": "z-ai/glm-5.2",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_description",
+  "usage": {
+    "input_tokens": 7488,
+    "output_tokens": 191,
+    "cached_tokens": 6664,
+    "embed_tokens": 0,
+    "cost_usd": 0.00018633200000000002
+  },
+  "value": {
+    "findings": [],
+    "resolved": [],
+    "summary": "The PR title and body accurately describe the diff: the scan/deep models are moved from minimax-m3 and kimi-k3 to z-ai/glm-5.2, the fallback chain is changed to deepseek-v4-pro and minimax-m3, reasoning becomes configurable via a new `reasoning_effort` field (defaulting to `\"high\"`) instead of being hard-disabled, and every model named in the description gets a price entry in `harness::pricing`. The description's claims about the fallback chain, reasoning hazard, tier separation, and verification (fmt/clippy/test counts) all correspond to concrete code and test additions in the diff. No significant change in the diff is left unmentioned, and nothing in the description claims a change the diff does not make."
+  }
+}

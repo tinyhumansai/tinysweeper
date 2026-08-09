@@ -1,0 +1,72 @@
+{
+  "corpus_digest": "ac09ff8b69793969",
+  "config_digest": "e29a012de73c576a",
+  "loose_replays": 0,
+  "cases": [
+    {
+      "id": "ts-0045-kernel-bypass-hallucination",
+      "true_positives": 0,
+      "missed": [],
+      "false_positives": 0,
+      "unscored": 1,
+      "exhaustive": false,
+      "duplicates": 0,
+      "forbidden_hits": [],
+      "optional_hits": 0,
+      "judged": [
+        {
+          "lane": "critique",
+          "path": "src/findings/summarise.rs",
+          "line": 23,
+          "title": "shorten can return limit+1 chars, exceeding the cap it enforces",
+          "verdict": "unscored",
+          "reason": "the case does not claim to list every true finding"
+        }
+      ],
+      "cost_usd": 0.003660362,
+      "over_budget": false,
+      "input_tokens": 33937,
+      "output_tokens": 10261,
+      "cached_tokens": 17064,
+      "wall_secs": 0.0,
+      "models": [
+        "z-ai/glm-5.2"
+      ],
+      "lane_costs": {
+        "commits": 0.0,
+        "critique": 0.0010692190000000002,
+        "description": 0.0005252000000000001,
+        "security": 0.000971645,
+        "tests": 0.00083376
+      }
+    },
+    {
+      "id": "ts-0068-description-anchored-to-code",
+      "true_positives": 0,
+      "missed": [],
+      "false_positives": 0,
+      "unscored": 0,
+      "exhaustive": false,
+      "duplicates": 0,
+      "forbidden_hits": [],
+      "optional_hits": 0,
+      "judged": [],
+      "cost_usd": 0.0026598470000000003,
+      "over_budget": false,
+      "input_tokens": 38169,
+      "output_tokens": 6977,
+      "cached_tokens": 27139,
+      "wall_secs": 0.0,
+      "models": [
+        "z-ai/glm-5.2"
+      ],
+      "lane_costs": {
+        "commits": 0.0,
+        "critique": 0.001402675,
+        "description": 0.000186332,
+        "security": 0.00038284,
+        "tests": 0.00046945000000000005
+      }
+    }
+  ]
+}

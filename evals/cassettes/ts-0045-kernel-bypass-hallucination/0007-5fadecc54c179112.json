@@ -1,0 +1,18 @@
+{
+  "key": "5fadecc54c179112",
+  "model_requested": "z-ai/glm-5.2",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2070,
+    "output_tokens": 433,
+    "cached_tokens": 1800,
+    "embed_tokens": 0,
+    "cost_usd": 0.00013756
+  },
+  "value": {
+    "findings": [],
+    "resolved": [],
+    "summary": "The new docker-compose overlay mounts a repository-local script read-only into the mongod container and sets a glibc tunable. It is an opt-in local-dev file, introduces no secrets, no network calls, no auth changes, and no untrusted-input sinks. The mounted script's content lives in another file and is outside this review."
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "key": "fe0eaf653fb2034f",
+  "model_requested": "z-ai/glm-5.2",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3381,
+    "output_tokens": 172,
+    "cached_tokens": 3042,
+    "embed_tokens": 0,
+    "cost_usd": 0.00010111600000000001
+  },
+  "value": {
+    "findings": [],
+    "resolved": [],
+    "summary": "The change updates the model pricing table and adds tests verifying priced coverage and cost math. No untrusted input reaches a dangerous sink, no authentication, network, subprocess, deserialization, path traversal, secret-handling, dependency, or CI surface is touched. The new tests parse a compile-time `DEFAULTS` constant, not external input. No security findings."
+  }
+}

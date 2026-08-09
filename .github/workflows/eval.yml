@@ -1,0 +1,74 @@
+# Review quality, measured against the labelled corpus in `evals/`.
+#
+# The offline half already runs in `ci.yml`: `cargo test --locked` replays the
+# committed cassettes and asserts both regressions still hold, for free. This
+# workflow is the *live* half — it re-records against the real model, which
+# costs money and needs a key.
+#
+# Deliberately **not** a required check. Run-to-run variance has not been
+# measured yet: the gateway routes where it likes, no `seed` is honoured, and
+# gating merges on a noisy metric teaches people to re-run CI rather than to
+# read it. Make it required once the spread across repeats is known.
+name: eval
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_cost_usd:
+        description: Hard ceiling for the whole run, in dollars.
+        default: "5.00"
+  schedule:
+    # Weekly, so drift in the model behind the same id is noticed without
+    # anybody remembering to look.
+    - cron: "0 6 * * 1"
+  pull_request:
+    # Only what can move a score. A change to the server or the automerge gate
+    # cannot, and paying for a corpus run on one is waste.
+    paths:
+      - "src/lanes/**"
+      - "src/harness/prompt.rs"
+      - "src/harness/schema.rs"
+      - "src/falsify/**"
+      - "src/eval/**"
+      - "presets/**"
+      - "evals/**"
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    # A fork must never reach OPENROUTER_API_KEY. `pull_request` gives a
+    # read-only token, but repository *secrets* are the thing being guarded and
+    # this is the only condition that keeps them off a fork's branch.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Record and score the corpus
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          cargo run --locked --features harness,github -- \
+            eval run --record --max-cost-usd "${{ inputs.max_cost_usd || '5.00' }}"
+
+      - name: Compare against the committed baseline
+        run: |
+          cargo run --locked --features harness,github -- \
+            eval report --baseline evals/baselines/current.json \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the scorecard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorecard
+          path: evals/runs/latest/

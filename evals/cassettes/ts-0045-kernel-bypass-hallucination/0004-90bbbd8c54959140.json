@@ -1,0 +1,16 @@
+{
+  "key": "90bbbd8c54959140",
+  "model_requested": "z-ai/glm-5.2",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_falsify",
+  "usage": {
+    "input_tokens": 3726,
+    "output_tokens": 354,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00033870000000000005
+  },
+  "value": {
+    "incorrect": []
+  }
+}

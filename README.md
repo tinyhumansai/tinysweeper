@@ -127,6 +127,23 @@ no tokens — useful before you push, and the way prompt changes get iterated.
 tinysweeper local-review --base origin/main
 ```
 
+### Measure whether a change helped
+
+`eval` scores the review against the labelled corpus in `evals/`. Running costs
+money; scoring and reporting are free and offline, because a matching rule gets
+rewritten many times before it is right.
+
+```sh
+tinysweeper eval run --record   # live, writes cassettes and proposals
+tinysweeper eval score          # free, re-reads the proposals on disk
+tinysweeper eval report --baseline evals/baselines/current.json
+```
+
+`cargo test` replays the committed cassettes on every run, so a prompt change
+that nobody re-recorded fails offline and for free. See
+[evals/README.md](evals/README.md) for the labelling contract — including what
+the corpus does not measure yet.
+
 ## Built on
 
 [TinyAgents](https://github.com/tinyhumansai/tinyagents), a recursive

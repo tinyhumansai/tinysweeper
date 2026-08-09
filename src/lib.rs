@@ -14,6 +14,7 @@ pub mod automerge;
 pub mod chunk;
 pub mod config;
 pub mod error;
+pub mod eval;
 pub mod evidence;
 pub mod falsify;
 pub mod findings;

@@ -1,0 +1,16 @@
+{
+  "key": "4497e3eda1a56fbb",
+  "model_requested": "z-ai/glm-5.2",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_rule_extraction",
+  "usage": {
+    "input_tokens": 1340,
+    "output_tokens": 14,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00009688000000000001
+  },
+  "value": {
+    "rules_markdown": "Uncompressed content "
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "key": "e01abc2e7b65aa1c",
+  "model_requested": "z-ai/glm-5.2",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 6367,
+    "output_tokens": 108,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00046945000000000005
+  },
+  "value": {
+    "findings": [],
+    "resolved": [],
+    "summary": "The PR adds a configurable reasoning effort setting for the OpenRouter gateway, switches default models to cheaper alternatives, and updates the pricing table accordingly. Tests cover the new `reasoning_options` function, verify the setting reaches the gateway, assert all default-selected models have prices, and pin cost figures including argument ordering for `completion_cost`. These tests would fail if behavior regressed: if `reasoning_effort` were not forwarded, if "
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "key": "38b8337bcd81f141",
+  "model_requested": "z-ai/glm-5.2",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2299,
+    "output_tokens": 816,
+    "cached_tokens": 2023,
+    "embed_tokens": 0,
+    "cost_usd": 0.00022513900000000001
+  },
+  "value": {
+    "findings": [],
+    "resolved": [],
+    "summary": "The change looks sound. It fixes a real auth bug by renaming the GitHub App env vars to the names the binary actually reads (`TINYSWEEPER_APP_ID`, `TINYSWEEPER_APP_PRIVATE_KEY`) and making them required with `:?` instead of silently defaulting to empty. The added API-key env vars default to empty and forward optional provider keys, which is fine. The read-only volume mount of `.tinysweeper.toml` is standard for supplying config to a container; the comments confirm secrets live in the environment, not the file. No new dangerous sinks, no widened permissions, no secrets committed to code."
+  }
+}

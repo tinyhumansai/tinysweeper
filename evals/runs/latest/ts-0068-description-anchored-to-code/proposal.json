@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "repo": "tinyhumansai/tinysweeper",
+  "number": 68,
+  "head_sha": "f57624fe521b3596c4be81f6b62d20bcc0d2a4aa",
+  "lanes": [
+    {
+      "lane": "critique",
+      "check_name": "tinysweeper/critique",
+      "conclusion": "success",
+      "summary": "The change is mostly sound: `reasoning_options` correctly maps `\"off\"`/`\"\"` to disabled reasoning and passes other efforts through, the wire from config to gateway is tested, and the pricing tests cover the new models and argument-order hazards. One concern: the new `reasoning_effort` field on `Models` has no visible `#[serde(default)]`, so config files that omit it may fail to deserialize — but this depends on whether the struct has a container-level default that I cannot see from the diff.",
+      "findings": [],
+      "resolved": [],
+      "deduped": 0,
+      "highest_severity": null,
+      "usage": {
+        "input_tokens": 11766,
+        "output_tokens": 5359,
+        "cached_tokens": 10525,
+        "embed_tokens": 0,
+        "cost_usd": 0.0014026750000000001
+      },
+      "models": [
+        "z-ai/glm-5.2"
+      ]
+    },
+    {
+      "lane": "security",
+      "check_name": "tinysweeper/security",
+      "conclusion": "success",
+      "summary": "Reviewed 4 files; 0 findings.",
+      "findings": [],
+      "resolved": [],
+      "deduped": 0,
+      "highest_severity": null,
+      "usage": {
+        "input_tokens": 11123,
+        "output_tokens": 779,
+        "cached_tokens": 9950,
+        "embed_tokens": 0,
+        "cost_usd": 0.00038284
+      },
+      "models": [
+        "z-ai/glm-5.2"
+      ]
+    },
+    {
+      "lane": "tests",
+      "check_name": "tinysweeper/tests",
+      "conclusion": "success",
+      "summary": "The PR adds a configurable reasoning effort setting for the OpenRouter gateway, switches default models to cheaper alternatives, and updates the pricing table accordingly. Tests cover the new `reasoning_options` function, verify the setting reaches the gateway, assert all default-selected models have prices, and pin cost figures including argument ordering for `completion_cost`. These tests would fail if behavior regressed: if `reasoning_effort` were not forwarded, if",
+      "findings": [],
+      "resolved": [],
+      "deduped": 0,
+      "highest_severity": null,
+      "usage": {
+        "input_tokens": 6367,
+        "output_tokens": 108,
+        "cached_tokens": 0,
+        "embed_tokens": 0,
+        "cost_usd": 0.00046945000000000005
+      },
+      "models": [
+        "z-ai/glm-5.2"
+      ]
+    },
+    {
+      "lane": "commits",
+      "check_name": "tinysweeper/commits",
+      "conclusion": "neutral",
+      "summary": "Nothing sensitive found in what this pull request commits.",
+      "findings": [],
+      "resolved": [],
+      "deduped": 0,
+      "highest_severity": null,
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": 0,
+        "embed_tokens": 0,
+        "cost_usd": 0.0
+      },
+      "models": []
+    },
+    {
+      "lane": "description",
+      "check_name": "tinysweeper/description",
+      "conclusion": "success",
+      "summary": "The PR title and body accurately describe the diff: the scan/deep models are moved from minimax-m3 and kimi-k3 to z-ai/glm-5.2, the fallback chain is changed to deepseek-v4-pro and minimax-m3, reasoning becomes configurable via a new `reasoning_effort` field (defaulting to `\"high\"`) instead of being hard-disabled, and every model named in the description gets a price entry in `harness::pricing`. The description's claims about the fallback chain, reasoning hazard, tier separation, and verification (fmt/clippy/test counts) all correspond to concrete code and test additions in the diff. No significant change in the diff is left unmentioned, and nothing in the description claims a change the diff does not make.",
+      "findings": [],
+      "resolved": [],
+      "deduped": 0,
+      "highest_severity": null,
+      "usage": {
+        "input_tokens": 7488,
+        "output_tokens": 191,
+        "cached_tokens": 6664,
+        "embed_tokens": 0,
+        "cost_usd": 0.00018633200000000002
+      },
+      "models": [
+        "z-ai/glm-5.2"
+      ]
+    }
+  ],
+  "unreviewed": [],
+  "cost_usd": 0.0026598470000000003,
+  "input_tokens": 38169,
+  "output_tokens": 6977,
+  "cached_tokens": 27139,
+  "embed_tokens": 0,
+  "models": [
+    "z-ai/glm-5.2"
+  ],
+  "threads": {
+    "resolve": []
+  }
+}
