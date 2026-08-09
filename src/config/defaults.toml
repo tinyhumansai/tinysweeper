@@ -330,8 +330,9 @@ resolve_when_tracked = false
 scrub_patterns = []
 
 [threads]
-# Close a conversation whose finding no longer reproduces on changed code.
-# Deterministic: the fingerprint is either in this run's findings or it is not.
+# Close a conversation the review agent confirms the new code fixed.
+# The agent sees the prior finding and current diff; apply still requires an
+# outdated thread opened by tinysweeper before it writes anything.
 resolve_fixed = true
 # Ask a model whether a reply settled a finding the code did not change. Off:
 # the only evidence in that case is a comment, and comments are untrusted input.

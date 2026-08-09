@@ -181,7 +181,13 @@ fn is_sha(value: &str) -> bool {
 /// The apply path renders `{badge} **{title}**`, so the title is the first
 /// bold run. A body that does not match that shape simply has no title, which
 /// costs a prompt layer-4 line and nothing else.
-fn title_in(body: &str) -> Option<String> {
+/// The finding title rendered in a comment body, when it has the shape that
+/// [`crate::app::apply`] writes.
+///
+/// Thread resolution uses the same title that the review agent receives as
+/// prior context. A body that does not match this renderer-owned shape has no
+/// trustworthy identity to match and therefore remains open.
+pub fn title_in(body: &str) -> Option<String> {
     let start = body.find("**")? + 2;
     let rest = &body[start..];
     let end = rest.find("**")?;

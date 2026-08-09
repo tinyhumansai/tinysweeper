@@ -290,10 +290,11 @@ pub struct Review {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Threads {
-    /// Resolve a thread whose finding no longer reproduces on changed code.
+    /// Resolve a thread the review agent confirms the new code fixed.
     ///
-    /// Deterministic and free: the fingerprint in the comment either appears in
-    /// this run's findings or it does not. Nothing is asked of a model.
+    /// The agent receives the prior finding and current diff, but its verdict
+    /// is advisory: deterministic code still limits the mutation to our own,
+    /// outdated threads.
     pub resolve_fixed: bool,
     /// Ask a model whether a reply settled a finding the code did not change.
     ///

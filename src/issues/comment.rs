@@ -79,7 +79,7 @@ mod tests {
     fn plan() -> TriagePlan {
         TriagePlan {
             number: 42,
-            add_labels: vec!["priority: p2".into(), "severity: medium".into()],
+            add_labels: vec!["priority: p2".into()],
             ..TriagePlan::default()
         }
     }
@@ -90,7 +90,6 @@ mod tests {
         assert!(body.starts_with(MARKER));
         assert!(body.contains("The editor crashes on save."));
         assert!(body.contains("`priority: p2`"));
-        assert!(body.contains("`severity: medium`"));
     }
 
     #[test]

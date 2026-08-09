@@ -13,6 +13,7 @@ use crate::forge::{MockForge, MockState};
 use crate::harness::mock::MockModel;
 
 const FINGERPRINT: &str = "0123456789abcdef";
+const TITLE: &str = "Guard the index";
 
 fn repo() -> RepoId {
     RepoId::parse("tinyhumansai/tinysweeper").unwrap()
@@ -27,7 +28,7 @@ fn ours() -> ReviewThread {
         comments: vec![
             ThreadComment {
                 author: "tinysweeper[bot]".into(),
-                body: format!("**Guard the index**\n\n<!-- tinysweeper:fp={FINGERPRINT} -->"),
+                body: format!("**{TITLE}**\n\n<!-- tinysweeper:fp={FINGERPRINT} -->"),
                 bot: true,
             },
             ThreadComment {
@@ -39,7 +40,7 @@ fn ours() -> ReviewThread {
     }
 }
 
-fn fingerprints(entries: &[&str]) -> BTreeSet<String> {
+fn resolved_titles(entries: &[&str]) -> BTreeSet<String> {
     entries.iter().map(|e| e.to_string()).collect()
 }
 
@@ -56,15 +57,34 @@ fn config() -> Config {
 #[test]
 fn a_finding_that_no_longer_reproduces_on_changed_code_is_resolved() {
     assert!(matches!(
-        decide(&ours(), &fingerprints(&["cafebabecafebabe"])),
+        decide(&ours(), &resolved_titles(&[TITLE])),
         Decision::Resolve(_)
+    ));
+}
+
+#[test]
+fn an_agent_confirmed_fix_closes_a_thread_without_a_human_reply() {
+    let mut thread = ours();
+    thread.comments.truncate(1);
+
+    assert!(matches!(
+        decide(&thread, &resolved_titles(&[TITLE])),
+        Decision::Resolve(_)
+    ));
+}
+
+#[test]
+fn a_missing_finding_is_not_treated_as_an_agent_confirmed_fix() {
+    assert!(matches!(
+        decide(&ours(), &BTreeSet::new()),
+        Decision::Leave("the review agent did not confirm the finding is fixed")
     ));
 }
 
 #[test]
 fn a_finding_that_still_reproduces_is_left_alone() {
     assert!(matches!(
-        decide(&ours(), &fingerprints(&[FINGERPRINT])),
+        decide(&ours(), &BTreeSet::new()),
         Decision::Leave(_)
     ));
 }
@@ -94,9 +114,10 @@ fn a_lookalike_login_did_not_open_our_thread() {
 }
 
 #[test]
-fn a_reply_from_a_bot_does_not_count_as_a_human_asking() {
+fn a_bot_reply_does_not_close_a_thread_when_code_is_unchanged() {
     // Two bots replying to each other is a loop nobody is watching.
     let mut thread = ours();
+    thread.is_outdated = false;
     thread.comments[1].bot = true;
     thread.comments[1].author = "dependabot[bot]".into();
     assert!(matches!(
@@ -108,6 +129,7 @@ fn a_reply_from_a_bot_does_not_count_as_a_human_asking() {
 #[test]
 fn our_own_follow_up_is_not_a_reply_either() {
     let mut thread = ours();
+    thread.is_outdated = false;
     thread.comments[1].author = "tinysweeper[bot]".into();
     thread.comments[1].bot = false;
     assert!(matches!(
@@ -127,9 +149,9 @@ fn an_already_resolved_thread_is_not_resolved_again() {
 }
 
 #[test]
-fn a_thread_without_a_well_formed_fingerprint_is_left_alone() {
+fn a_thread_without_a_renderer_title_is_left_alone() {
     let mut thread = ours();
-    thread.comments[0].body = "**Guard the index** <!-- tinysweeper:fp=nope -->".into();
+    thread.comments[0].body = "no renderer-owned title here".into();
     assert!(matches!(
         decide(&thread, &BTreeSet::new()),
         Decision::Leave(_)
@@ -149,7 +171,7 @@ fn forge_with(threads: Vec<ReviewThread>) -> MockForge {
     MockForge::with_state(state)
 }
 
-async fn plan_for(forge: &MockForge, config: &Config, current: &[&str]) -> ThreadPlan {
+async fn plan_for(forge: &MockForge, config: &Config, resolved: &[&str]) -> ThreadPlan {
     let model = MockModel::silent();
     plan(
         forge,
@@ -157,7 +179,7 @@ async fn plan_for(forge: &MockForge, config: &Config, current: &[&str]) -> Threa
         config,
         &repo(),
         7,
-        &fingerprints(current),
+        &resolved_titles(resolved),
     )
     .await
     .expect("plans")
@@ -167,7 +189,7 @@ async fn plan_for(forge: &MockForge, config: &Config, current: &[&str]) -> Threa
 #[tokio::test]
 async fn planning_writes_nothing_and_applying_resolves_exactly_the_planned_thread() {
     let forge = forge_with(vec![ours()]);
-    let plan = plan_for(&forge, &config(), &[]).await;
+    let plan = plan_for(&forge, &config(), &[TITLE]).await;
 
     assert!(
         forge.writes().is_empty(),
@@ -212,7 +234,7 @@ async fn every_refusal_leaves_the_forge_untouched() {
         t.is_resolved = true;
         t
     };
-    // Still reproduces: the same fingerprint is in the current run.
+    // The agent did not report this title fixed, so it stays open.
     let reproduces = {
         let mut t = ours();
         t.id = "PRRT_open".into();
