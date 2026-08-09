@@ -145,23 +145,23 @@ fn a_body_that_is_not_json_names_itself_in_the_error() {
 fn the_key_never_reaches_the_debug_output() {
     // Secrets are reported by type and location only, and a derived `Debug` on
     // a struct holding an API key is the easiest way to break that.
-    unsafe { std::env::set_var("TINYSWEEPER_TEST_OR_KEY", "sk-or-v1-not-a-real-key") };
     let embedder =
-        OpenRouterEmbedder::new(signature(1536), "TINYSWEEPER_TEST_OR_KEY", "").expect("builds");
+        OpenRouterEmbedder::with_key(signature(1536), "sk-or-v1-not-a-real-key".to_string(), "")
+            .expect("builds");
     let rendered = format!("{embedder:?}");
 
     assert!(!rendered.contains("not-a-real-key"), "{rendered}");
     assert!(rendered.contains("redacted"), "{rendered}");
-    unsafe { std::env::remove_var("TINYSWEEPER_TEST_OR_KEY") };
 }
 
 #[test]
 fn a_missing_key_is_a_configuration_error_naming_the_variable() {
-    unsafe { std::env::remove_var("TINYSWEEPER_TEST_ABSENT_KEY") };
-    let err = OpenRouterEmbedder::new(signature(1536), "TINYSWEEPER_TEST_ABSENT_KEY", "")
+    // A variable name no process would have set, so this needs no mutation of
+    // the environment to be a reliable "absent" case.
+    let err = OpenRouterEmbedder::new(signature(1536), "TINYSWEEPER_ABSENT_KEY_5f3a2b1c", "")
         .expect_err("refuses");
     assert!(
-        err.to_string().contains("TINYSWEEPER_TEST_ABSENT_KEY"),
+        err.to_string().contains("TINYSWEEPER_ABSENT_KEY_5f3a2b1c"),
         "{err}"
     );
 }
