@@ -26,7 +26,39 @@ fn client(token: &str) -> Result<Octocrab> {
 }
 
 fn api(err: octocrab::Error) -> Error {
-    Error::Forge(err.to_string())
+    Error::Forge(chain(&err))
+}
+
+/// Render an error together with everything it wraps.
+///
+/// `err.to_string()` alone is not enough here, and the reason is specific
+/// rather than stylistic. octocrab's `Error::GitHub` variant carries no
+/// `#[snafu(display(...))]`, so Snafu falls back to printing the variant
+/// name — the literal string `GitHub` — while the status code, GitHub's own
+/// message and the `errors` array all sit in the `source` and are discarded.
+///
+/// That is the commonest failure this adapter has: a 403 from a missing
+/// permission, a 404 from an uninstalled app, a 422 from a malformed write.
+/// Every one of them logged as `forge: GitHub` and nothing else, which is
+/// indistinguishable from every other one of them. A review that failed for
+/// want of a scope looked exactly like a review that failed on a typo'd path.
+///
+/// Nothing here can leak a credential: the chain is GitHub's own response
+/// body, which never contains the token that was sent.
+fn chain(err: &dyn std::error::Error) -> String {
+    let mut rendered = err.to_string();
+    let mut source = err.source();
+    while let Some(inner) = source {
+        let next = inner.to_string();
+        // Snafu repeats the variant's display in the source for some variants.
+        // Appending `GitHub: GitHub` helps nobody.
+        if !rendered.ends_with(&next) {
+            rendered.push_str(": ");
+            rendered.push_str(&next);
+        }
+        source = inner.source();
+    }
+    rendered
 }
 
 /// How much of one file's patch is kept inside a commit's patch.
@@ -1125,6 +1157,57 @@ fn review_comment_payload(c: &ReviewComment) -> serde_json::Value {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// A two-link error chain shaped like octocrab's: an outer value whose own
+    /// `Display` says nothing useful, wrapping the one that does.
+    #[derive(Debug)]
+    struct Outer(Inner);
+    #[derive(Debug)]
+    struct Inner(&'static str);
+
+    impl std::fmt::Display for Outer {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            // Exactly what octocrab's `Error::GitHub` renders: the variant
+            // name, and not one word about what went wrong.
+            write!(f, "GitHub")
+        }
+    }
+    impl std::fmt::Display for Inner {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+    impl std::error::Error for Outer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+    impl std::error::Error for Inner {}
+
+    #[test]
+    fn a_forge_error_carries_what_github_actually_said() {
+        // The bug this pins: `err.to_string()` on octocrab's `GitHub` variant
+        // is the literal word "GitHub", because the variant has no display
+        // attribute and the status, message and errors array all live in the
+        // source. Every 403, 404 and 422 in the product logged identically.
+        let err = Outer(Inner("Resource not accessible by integration"));
+        assert_eq!(err.to_string(), "GitHub", "the fixture must reproduce it");
+        assert_eq!(
+            chain(&err),
+            "GitHub: Resource not accessible by integration"
+        );
+    }
+
+    #[test]
+    fn a_source_that_merely_repeats_the_outer_message_is_not_appended_twice() {
+        let err = Outer(Inner("GitHub"));
+        assert_eq!(chain(&err), "GitHub");
+    }
+
+    #[test]
+    fn an_error_with_no_source_is_rendered_unchanged() {
+        assert_eq!(chain(&Inner("plain")), "plain");
+    }
 
     #[test]
     fn an_issue_carrying_a_native_type_reports_its_name() {
