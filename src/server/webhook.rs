@@ -73,6 +73,41 @@ pub struct Payload {
     /// The sender.
     #[serde(default)]
     pub sender: Option<UserRef>,
+    /// The check run, on `check_run` events.
+    #[serde(default)]
+    pub check_run: Option<CheckRef>,
+    /// The check suite, on `check_suite` events.
+    #[serde(default)]
+    pub check_suite: Option<CheckRef>,
+}
+
+/// A check run or check suite, reduced to the pull requests it reports on.
+///
+/// Only `pull_requests` is read. The conclusion carried alongside it is
+/// deliberately ignored: auto-merge re-reads every check on the head SHA
+/// through the forge anyway, and a decision made from the one check that
+/// happened to arrive last would be a decision made from a fifth of the
+/// evidence.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CheckRef {
+    /// The pull requests this check reports on.
+    ///
+    /// Empty on a check for a commit that belongs to no open pull request, and
+    /// — a real GitHub quirk — on a check for a pull request from a fork,
+    /// which is why an empty list is ignored rather than treated as an error.
+    #[serde(default)]
+    pub pull_requests: Vec<PullRequestNumberRef>,
+}
+
+/// A pull request reduced to its number.
+///
+/// Separate from [`PullRequestRef`] because the objects GitHub nests inside a
+/// check payload carry no `user` and no `draft`, so deserialising them as a
+/// `PullRequestRef` would fail on every check event.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PullRequestNumberRef {
+    /// Its number.
+    pub number: u64,
 }
 
 /// A repository reference.
