@@ -39,11 +39,7 @@ fn a_callee_is_context_but_not_blast_radius() {
     let neighbourhood = hood(
         &[symbol("src/ledger.rs#settle")],
         &[
-            edge(
-                "src/app.rs#render",
-                "src/ledger.rs#settle",
-                EdgeKind::Calls,
-            ),
+            edge("src/app.rs#render", "src/ledger.rs#settle", EdgeKind::Calls),
             edge("src/ledger.rs#settle", "src/log.rs#log", EdgeKind::Calls),
         ],
     );
@@ -181,7 +177,11 @@ fn an_implementor_of_a_changed_trait_is_in_the_radius() {
 
     let impact = Impact::of(&neighbourhood, &seeds, DEFAULT_MAX_REACHED);
     assert_eq!(impact.reached[0].relation, Relation::Implementor);
-    assert!(impact.render().contains("implemented by src/mongo.rs#Mongo"));
+    assert!(
+        impact
+            .render()
+            .contains("implemented by src/mongo.rs#Mongo")
+    );
 }
 
 #[test]
@@ -189,7 +189,11 @@ fn the_file_that_defines_a_changed_symbol_is_not_its_dependent() {
     let seeds = vec!["src/ledger.rs#settle".to_string()];
     let neighbourhood = hood(
         &[symbol("src/ledger.rs#settle")],
-        &[edge("src/ledger.rs", "src/ledger.rs#settle", EdgeKind::Defines)],
+        &[edge(
+            "src/ledger.rs",
+            "src/ledger.rs#settle",
+            EdgeKind::Defines,
+        )],
     );
 
     assert!(
