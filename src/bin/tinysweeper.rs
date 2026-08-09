@@ -689,7 +689,7 @@ async fn add_case(_repo: &str, _pr: u64, _id: &str, _corpus: &std::path::Path) -
 fn case_stub(id: &str, repo: &str, pr: u64, title: &str) -> String {
     format!(
         r#"schema = 1
-id = "{id}"
+id = "{}"
 title = "{}"
 fixture = "../fixtures/{id}.json"
 labels = []
