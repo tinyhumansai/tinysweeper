@@ -643,7 +643,7 @@ mod tests {
         let forge = MockForge::new();
         let comment = ReviewComment {
             path: "src/lib.rs".into(),
-            line: 42,
+            line: Some(42),
             start_line: None,
             author: String::new(),
             body: "finding".into(),

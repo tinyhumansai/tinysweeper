@@ -101,6 +101,22 @@ impl ChangedFile {
     pub fn is_opaque(&self) -> bool {
         self.patch.is_none()
     }
+
+    /// Whether this file changed in a way we were never shown.
+    ///
+    /// The two reasons a patch is absent are not equally innocent. A binary
+    /// file has no textual diff to give and GitHub reports it as zero lines
+    /// added and zero removed — there is nothing a reviewer could have read. A
+    /// *truncated* patch is different: the forge is telling us lines changed
+    /// and simultaneously declining to say which.
+    ///
+    /// Counting the second as "no reviewable content" is how a large file can
+    /// pass through a review untouched and still leave the gate green. Callers
+    /// must surface it instead, which is what separates "we looked and found
+    /// nothing" from "we never looked".
+    pub fn evidence_missing(&self) -> bool {
+        self.patch.is_none() && self.additions + self.deletions > 0
+    }
 }
 
 /// What happened to a changed file.
@@ -216,7 +232,14 @@ pub struct ReviewComment {
     /// The file it anchors to.
     pub path: String,
     /// The line in the head revision.
-    pub line: u64,
+    ///
+    /// `None` on the read path for a comment GitHub does not attach to a line —
+    /// a reply on an outdated diff, or one whose anchor was rebased away. That
+    /// case used to arrive as the literal `0`, indistinguishable from a real
+    /// line zero and silently sorting first in anything ordered by line.
+    /// Required on the write path; `apply` only builds a comment for a finding
+    /// that resolved to a line.
+    pub line: Option<u64>,
     /// The first line, when the comment spans a range.
     pub start_line: Option<u64>,
     /// The login of whoever wrote it. Empty on a comment being *written* —
@@ -308,5 +331,52 @@ mod tests {
         assert!(!CheckConclusion::Success.blocks());
         assert!(!CheckConclusion::Neutral.blocks());
         assert!(!CheckConclusion::Skipped.blocks());
+    }
+
+    #[test]
+    fn a_binary_file_is_opaque_but_not_missing_evidence() {
+        // GitHub reports a binary change as zero lines either way, so there was
+        // never a diff to withhold. Treating this as missing evidence would
+        // caveat every pull request that touches an image.
+        let file = ChangedFile {
+            path: "logo.png".into(),
+            patch: None,
+            additions: 0,
+            deletions: 0,
+            ..ChangedFile::default()
+        };
+
+        assert!(file.is_opaque());
+        assert!(!file.evidence_missing());
+    }
+
+    #[test]
+    fn a_truncated_patch_is_missing_evidence() {
+        // The forge says lines changed and declines to say which. This is the
+        // case that used to read as "nothing to review" and leave the gate
+        // green over a file nobody had seen.
+        let file = ChangedFile {
+            path: "src/huge.rs".into(),
+            patch: None,
+            additions: 4000,
+            deletions: 12,
+            ..ChangedFile::default()
+        };
+
+        assert!(file.evidence_missing());
+    }
+
+    #[test]
+    fn a_file_with_a_patch_is_never_missing_evidence() {
+        let file = ChangedFile {
+            path: "src/main.rs".into(),
+            patch: Some("@@ -1 +1 @@\n-a\n+b\n".into()),
+            additions: 1,
+            deletions: 1,
+            ..ChangedFile::default()
+        };
+
+        assert!(!file.is_opaque());
+        assert!(!file.evidence_missing());
     }
 }

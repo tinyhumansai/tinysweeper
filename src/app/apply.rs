@@ -297,7 +297,7 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
             let line = finding.line?;
             Some(ReviewComment {
                 path: finding.path.clone(),
-                line,
+                line: Some(line),
                 start_line: None,
                 // The forge assigns the author on the way in; on the way out it
                 // is what tells dedupe whether a marker is ours.
@@ -467,7 +467,7 @@ mod tests {
 
         assert_eq!(review.len(), 1);
         assert_eq!(review[0].path, "src/main.rs");
-        assert_eq!(review[0].line, 2);
+        assert_eq!(review[0].line, Some(2));
         assert!(
             review[0].body.contains("tinysweeper:fp="),
             "{}",

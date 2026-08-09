@@ -47,3 +47,46 @@ vendors a directory must not be held in memory in full before anything gets the
 chance to shorten it.
 
 The octocrab-backed `github.rs` arrives with M6, behind the `github` feature.
+
+## Absence has to mean absence
+
+Three fields on the read path used to answer with a value where the honest
+answer was "unknown", and each one degraded silently rather than loudly.
+
+`ChangedFile::size_bytes` was hard-coded `None`, so `scan::blobs` could never
+raise `large-blob` against the real adapter no matter how `max_blob_bytes` was
+set. It now comes from one recursive git-tree request at the head revision —
+one round trip for the whole revision rather than a blob request per file,
+because the file that most needs a size is the one whose blob is most expensive
+to serve. When the tree is truncated or unreadable the field stays `None`, which
+`scan::blobs` reads as unknown. A zero would have read as *safely small*.
+
+`ReviewComment::line` mapped GitHub's `null` to the literal `0`, which is
+indistinguishable from a real line zero and sorts first in anything ordered by
+line. It is now `Option<u64>`: `None` on the read path for a comment GitHub does
+not attach to a line, and `Some` on the write path, which `apply` only ever
+builds for a finding that resolved to one.
+
+`PullRequest::approvals` was hard-coded `0`. It is now each reviewer's *latest*
+verdict, counted once — a plain tally of `APPROVED` keeps counting a reviewer
+who later requested changes, and double-counts one who approved twice. A
+`COMMENTED` review does not overwrite a standing approval, because GitHub lets a
+reviewer comment without withdrawing one.
+
+## A missing patch is not an empty change
+
+`patch` is absent for two unrelated reasons and only one of them is innocent. A
+binary file has no textual diff to give, and GitHub reports it as zero lines
+added and zero removed. A *truncated* patch is the forge saying lines changed
+while declining to say which.
+
+`ChangedFile::evidence_missing()` separates them: no patch, but changed lines.
+`is_opaque()` still answers the weaker question and must not be used as proof of
+binary content.
+
+This mattered because the second case used to read as "no reviewable content".
+The lane skipped the file, the blob scanner only inspects added files, and
+`tinysweeper/gate` reported success over a change nobody had seen. The gate now
+degrades a pass to `Neutral` and names the files. Deliberately not `Failure`: we
+do not know there is a problem, only that we did not look, and blocking a merge
+on our own blind spot punishes the contributor for the forge's truncation.
