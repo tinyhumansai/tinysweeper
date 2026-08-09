@@ -155,7 +155,13 @@ pub async fn expand(
         .hops(hops)
         .kinds(EdgeKind::ALL)
         .max_nodes(max_nodes);
-    let neighbourhood = traverse::neighbours(graph, repo_id, &query).await?;
+    let walked = traverse::walk(graph, repo_id, &query).await?;
+
+    // Before the cap. The blast radius is a handful of names and the cap exists
+    // to bound how much *code* reaches the prompt; letting one bound the other
+    // would drop dependents to make room for chunks.
+    let impact = Impact::of(&walked, &query.seeds, bounds.max_impact);
+    let neighbourhood = traverse::cap(walked, &query.seeds, max_nodes);
 
     let changed: BTreeSet<&str> = diffs.iter().map(|diff| diff.path.as_str()).collect();
     let mut paths: Vec<String> = neighbourhood
