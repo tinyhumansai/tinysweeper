@@ -602,17 +602,29 @@ async fn the_blast_radius_of_a_real_change_names_its_dependents_and_its_coverage
     // renames it, and — worse — would quietly start passing for the wrong
     // reason if the coverage half stopped working and the name happened to be
     // ambiguous, which is exactly how a symbol-level assertion fails silently.
+    // A caller is a `calls` edge whose source is not also a *test* of the same
+    // target. Filtering by path instead would have missed the trap this crate
+    // is full of: an inline `#[cfg(test)] mod tests` lives in the file it
+    // tests, so "the caller is in another file" is not the same question.
+    let covering: BTreeSet<(&str, &str)> = built
+        .edges
+        .iter()
+        .filter(|e| e.kind == EdgeKind::Tests)
+        .map(|e| (e.from.as_str(), e.to.as_str()))
+        .collect();
     let called: BTreeSet<&str> = built
         .edges
         .iter()
-        .filter(|e| e.kind == EdgeKind::Calls && !e.path.contains("_test."))
+        .filter(|e| {
+            e.kind == EdgeKind::Calls && !covering.contains(&(e.from.as_str(), e.to.as_str()))
+        })
         .map(|e| e.to.as_str())
         .collect();
-    let (path, symbol) = built
-        .edges
+    let (path, symbol) = covering
         .iter()
-        .filter(|e| e.kind == EdgeKind::Tests && called.contains(e.to.as_str()))
-        .filter_map(|e| e.to.split_once('#'))
+        .map(|(_, to)| *to)
+        .filter(|to| called.contains(to))
+        .filter_map(|to| to.split_once('#'))
         .min()
         .expect("this crate calls and tests at least one of its own functions");
 
