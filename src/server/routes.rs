@@ -145,6 +145,11 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
 
     let manual_state = state.clone();
     let manual_auth = admin_auth.clone();
+    // Logged once at boot rather than discovered from behaviour. "Auto-merge
+    // is configured and nothing acts on it" was a real bug in this repository;
+    // a line at startup saying which way the switch is set is the cheapest
+    // thing that would have caught it.
+    let enabled_automerge = state.config.config.automerge.enabled;
 
     let mut app = Router::new()
         .route("/healthz", get(healthz))
