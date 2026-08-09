@@ -114,14 +114,14 @@ impl Embedded {
     /// Bill `vectors` against a token count the **provider** reported.
     ///
     /// The counterpart to [`Embedded::billed`], and the difference is the only
-    /// interesting thing about it: this one is not an estimate. No provider
-    /// reachable through tinyagents' `EmbeddingModel` reports usage today —
-    /// the trait returns `Vec<Vec<f32>>` and the adapters decode `data` and
-    /// discard the response's `usage` object — so nothing in this build calls
-    /// it yet. It exists so that plumbing a real count through is a one-line
-    /// change at the call site instead of a redesign of the accounting, and so
-    /// that the estimate is visibly a *fallback* rather than the only shape the
-    /// type has.
+    /// interesting thing about it: this one is not an estimate.
+    ///
+    /// No provider reachable through tinyagents' `EmbeddingModel` reports usage
+    /// — the trait returns `Vec<Vec<f32>>` and every adapter decodes `data` and
+    /// discards the response's `usage` object — so those providers still take
+    /// the estimating path. [`OpenRouterEmbedder`](crate::index::OpenRouterEmbedder)
+    /// bypasses that trait for exactly this reason and calls in here with the
+    /// gateway's own count.
     pub fn metered(signature: &EmbedSignature, tokens: u64, vectors: Vec<Vec<f32>>) -> Self {
         Self {
             vectors,
@@ -131,6 +131,38 @@ impl Embedded {
                 ..Default::default()
             },
         }
+    }
+
+    /// Bill `vectors` at a price the **provider** charged.
+    ///
+    /// Strictly better than [`Embedded::metered`] where it is available,
+    /// because it skips the local price table entirely. That table is
+    /// hand-maintained and goes stale silently — an unpriced model used to cost
+    /// `0.0` and escape the budget altogether, and now costs the ceiling, which
+    /// is safe but wrong. A gateway quoting what it actually billed cannot
+    /// disagree with the invoice, and it already includes any routing markup a
+    /// per-model table would miss.
+    pub fn charged(tokens: u64, cost_usd: f64) -> Self {
+        Self {
+            vectors: Vec::new(),
+            usage: crate::ports::model::Usage {
+                embed_tokens: tokens,
+                cost_usd,
+                ..Default::default()
+            },
+        }
+    }
+
+    /// Attach vectors to a bill built by [`Embedded::charged`].
+    ///
+    /// Separate because the cost and the vectors come out of one response but
+    /// are validated apart: the vectors have to be reordered and width-checked
+    /// before they are worth keeping, and doing that inside a constructor that
+    /// also prices the call would make the failure path harder to read.
+    #[must_use]
+    pub fn with_vectors(mut self, vectors: Vec<Vec<f32>>) -> Self {
+        self.vectors = vectors;
+        self
     }
 
     /// The single vector a query embedding produced.

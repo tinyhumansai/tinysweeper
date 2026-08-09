@@ -105,10 +105,14 @@ pinned_total_chars = 12000
 # OpenAI-compatible server to embed without leaving the network at all.
 [embeddings]
 enabled = false
-provider = "voyage"
-model = "voyage-code-3"
-dimensions = 1024
-api_key_env = "VOYAGE_API_KEY"
+# The same gateway the completion models use, so one key and one bill cover
+# the whole product. `dimensions` is not discoverable from the API — it is
+# measured against the model and pinned here, because it is both the index
+# partition key and the width the search index is created with.
+provider = "openrouter"
+model = "openai/text-embedding-3-small"
+dimensions = 1536
+api_key_env = "OPENROUTER_API_KEY"
 base_url = ""
 batch = 64
 requests_per_minute = 60
