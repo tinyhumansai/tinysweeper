@@ -157,6 +157,54 @@ async fn re_indexing_unchanged_content_issues_zero_embedding_calls() {
     assert_eq!(second.deleted, 0);
     assert_eq!(second.reused, first.upserted);
     assert_eq!(second.usage.cost_usd, 0.0);
+
+    // The same finding, reported for the code graph to act on. A `changed` list
+    // that named every file would make the graph re-parse the whole tree on a
+    // push that embedded nothing — the exact waste this run just avoided.
+    assert_eq!(second.changed, Vec::<String>::new());
+    assert_eq!(first.changed.len(), first.files as usize);
+}
+
+#[tokio::test]
+async fn only_the_edited_file_is_reported_as_changed() {
+    let checkout = Checkout::new();
+    let rig = Rig::new();
+    rig.indexer()
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("indexes");
+
+    checkout.write("src/beta.rs", "fn beta() -> usize {\n    22\n}\n");
+    let second = report(
+        rig.indexer()
+            .index_repo(REPO, "sha-2", &checkout.root())
+            .await
+            .expect("indexes"),
+    );
+
+    assert_eq!(second.changed, ["src/beta.rs"]);
+    assert!(second.removed.is_empty());
+}
+
+#[tokio::test]
+async fn a_deleted_file_is_reported_as_removed_rather_than_changed() {
+    let checkout = Checkout::new();
+    let rig = Rig::new();
+    rig.indexer()
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("indexes");
+
+    checkout.remove("src/beta.rs");
+    let second = report(
+        rig.indexer()
+            .index_repo(REPO, "sha-2", &checkout.root())
+            .await
+            .expect("indexes"),
+    );
+
+    assert_eq!(second.removed, ["src/beta.rs"]);
+    assert!(second.changed.is_empty(), "{:?}", second.changed);
 }
 
 #[tokio::test]
