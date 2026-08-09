@@ -368,14 +368,19 @@ labelled_by = "tester"
     .expect("records");
 
     // …then make two of them lie about the run.
-    std::fs::write(out.join("ts-garbage/proposal.json"), "not a proposal at all")
-        .expect("write");
+    std::fs::write(
+        out.join("ts-garbage/proposal.json"),
+        "not a proposal at all",
+    )
+    .expect("write");
     std::fs::remove_file(out.join("ts-missing/proposal.json")).expect("remove");
 
     let scores = rescore(&corpus, &out).expect("rescoring is free");
     assert_eq!(scores.len(), 3);
-    let by_id: std::collections::HashMap<_, _> =
-        scores.iter().map(|score| (score.id.clone(), score)).collect();
+    let by_id: std::collections::HashMap<_, _> = scores
+        .iter()
+        .map(|score| (score.id.clone(), score))
+        .collect();
 
     // The valid one scores exactly as it did live.
     let ok = by_id["ts-ok"];

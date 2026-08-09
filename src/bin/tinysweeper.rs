@@ -481,7 +481,10 @@ async fn run_eval(command: EvalCommand) -> Result<()> {
 
             match format.as_str() {
                 "json" => println!("{}", serde_json::to_string_pretty(&card)?),
-                "md" => println!("{}", eval::markdown(&card, baseline.as_ref(), allow_config_drift)),
+                "md" => println!(
+                    "{}",
+                    eval::markdown(&card, baseline.as_ref(), allow_config_drift)
+                ),
                 other => {
                     return Err(tinysweeper::Error::config(format!(
                         "`{other}` is not a format; use `md` or `json`"

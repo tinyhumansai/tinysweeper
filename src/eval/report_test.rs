@@ -127,7 +127,10 @@ fn a_loose_replay_is_announced_before_any_number_is_read() {
 #[test]
 fn rendering_is_stable_so_two_reports_diff_only_where_they_differ() {
     let scored = card(vec![case_score("ts-0001", 1, &["E2"], 1)]);
-    assert_eq!(markdown(&scored, None, false), markdown(&scored, None, false));
+    assert_eq!(
+        markdown(&scored, None, false),
+        markdown(&scored, None, false)
+    );
 }
 
 #[test]

@@ -291,8 +291,14 @@ pub fn digest_of(config: &Config) -> String {
     let review = &config.review;
     field(b"lanes\0", review.lanes.join(",").as_bytes());
     field(b"strictness\0", &review.strictness.to_le_bytes());
-    field(b"severity_gate\0", format!("{:?}", review.severity_gate).as_bytes());
-    field(b"confidence_min\0", format!("{:?}", review.confidence_min).as_bytes());
+    field(
+        b"severity_gate\0",
+        format!("{:?}", review.severity_gate).as_bytes(),
+    );
+    field(
+        b"confidence_min\0",
+        format!("{:?}", review.confidence_min).as_bytes(),
+    );
     field(b"max_comments\0", &review.max_comments.to_le_bytes());
     let models = &config.models;
     field(b"scan\0", models.scan.as_bytes());
@@ -308,8 +314,14 @@ pub fn digest_of(config: &Config) -> String {
         field(b"lane\0", id.as_bytes());
         field(b"lane_model\0", format!("{:?}", lane.model).as_bytes());
         field(b"lane_fail_on\0", format!("{:?}", lane.fail_on).as_bytes());
-        field(b"lane_rulepack\0", format!("{:?}", lane.secret_rulepack).as_bytes());
-        field(b"lane_max_blob\0", format!("{:?}", lane.max_blob_bytes).as_bytes());
+        field(
+            b"lane_rulepack\0",
+            format!("{:?}", lane.secret_rulepack).as_bytes(),
+        );
+        field(
+            b"lane_max_blob\0",
+            format!("{:?}", lane.max_blob_bytes).as_bytes(),
+        );
     }
     for instruction in &config.path_instructions {
         field(b"glob\0", instruction.glob.as_bytes());

@@ -219,11 +219,7 @@ pub fn markdown(card: &Scorecard, baseline: Option<&Scorecard>, allow_drift: boo
                     Some(line) => format!("{}:{line}", judged.path),
                     None => judged.path.clone(),
                 };
-                let _ = writeln!(
-                    out,
-                    "- `{anchor}` {} — {}",
-                    judged.title, judged.reason
-                );
+                let _ = writeln!(out, "- `{anchor}` {} — {}", judged.title, judged.reason);
             }
             out.push('\n');
         }
