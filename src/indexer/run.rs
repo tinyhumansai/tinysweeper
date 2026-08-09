@@ -330,6 +330,7 @@ impl<'a> Indexer<'a> {
         if !removed.is_empty() {
             report.deleted += self.index.delete_paths(repo_id, &removed).await?;
             self.manifest.forget(repo_id, signature, &removed).await?;
+            report.removed = removed;
         }
 
         Ok(report)
