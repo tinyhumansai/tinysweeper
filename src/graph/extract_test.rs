@@ -259,3 +259,143 @@ fn a_syntax_error_still_yields_what_parsed() {
     assert_eq!(specifiers(&file), vec!["./b"]);
     assert!(names(&file).contains(&"ok"));
 }
+
+// --- Inheritance ------------------------------------------------------------
+
+fn heritage(file: &ParsedFile) -> Vec<(&str, &str)> {
+    file.heritage
+        .iter()
+        .map(|h| (h.child.as_str(), h.parent.as_str()))
+        .collect()
+}
+
+#[test]
+fn typescript_extends_and_implements_are_both_heritage() {
+    let file = parsed(
+        "src/ledger.ts",
+        "class Ledger extends Base implements Auditable, Serializable {}\n\
+         interface Auditable extends Traceable {}\n",
+    );
+    assert!(heritage(&file).contains(&("Ledger", "Base")));
+    assert!(heritage(&file).contains(&("Ledger", "Auditable")));
+    assert!(heritage(&file).contains(&("Ledger", "Serializable")));
+    assert!(heritage(&file).contains(&("Auditable", "Traceable")));
+}
+
+#[test]
+fn a_generic_argument_is_not_a_base_class() {
+    // `extends Repository<User>` inherits from `Repository`. Recording `User`
+    // too would put every class that merely mentions it one hop from it.
+    let file = parsed(
+        "src/repo.ts",
+        "class UserRepo extends Repository<User> {}\n",
+    );
+    assert_eq!(heritage(&file), vec![("UserRepo", "Repository")]);
+}
+
+#[test]
+fn python_positional_bases_are_heritage_and_a_metaclass_is_not() {
+    let file = parsed(
+        "app/ledger.py",
+        "class Ledger(Base, Auditable, metaclass=Meta):\n    pass\n",
+    );
+    assert!(heritage(&file).contains(&("Ledger", "Base")));
+    assert!(heritage(&file).contains(&("Ledger", "Auditable")));
+    assert!(
+        !heritage(&file).iter().any(|(_, parent)| *parent == "Meta"),
+        "{:?}",
+        file.heritage
+    );
+}
+
+#[test]
+fn a_rust_trait_impl_relates_the_type_to_the_trait_it_implements() {
+    let file = parsed(
+        "src/ledger.rs",
+        "pub struct Ledger;\nimpl Display for Ledger {}\nimpl Ledger { fn new() {} }\n",
+    );
+    assert_eq!(heritage(&file), vec![("Ledger", "Display")]);
+}
+
+#[test]
+fn rust_supertraits_are_heritage() {
+    let file = parsed("src/port.rs", "pub trait Store: Send + Sync + Sized {}\n");
+    assert!(heritage(&file).contains(&("Store", "Send")));
+    assert!(heritage(&file).contains(&("Store", "Sync")));
+    assert!(
+        !heritage(&file).iter().any(|(_, parent)| *parent == "Sized"),
+        "every trait has it, so it relates this one to nothing: {:?}",
+        file.heritage
+    );
+}
+
+#[test]
+fn go_embedding_is_heritage_and_a_named_field_is_not() {
+    let file = parsed(
+        "pkg/store/store.go",
+        "type Store struct {\n\tsync.Mutex\n\tReader\n\tname string\n}\n",
+    );
+    assert!(heritage(&file).contains(&("Store", "Mutex")));
+    assert!(heritage(&file).contains(&("Store", "Reader")));
+    assert!(
+        !heritage(&file).iter().any(|(_, parent)| *parent == "string"),
+        "a named field promotes nothing: {:?}",
+        file.heritage
+    );
+}
+
+// --- Test scopes ------------------------------------------------------------
+
+fn scope_of(file: &ParsedFile, name: &str) -> bool {
+    let def = file
+        .defs
+        .iter()
+        .find(|d| d.name == name)
+        .unwrap_or_else(|| panic!("no definition named {name} in {:?}", names(file)));
+    file.in_test_scope(def.start_byte)
+}
+
+#[test]
+fn a_rust_cfg_test_module_makes_everything_inside_it_a_test_scope() {
+    let file = parsed(
+        "src/ledger.rs",
+        "pub fn settle() {}\n\
+         #[cfg(test)]\nmod tests {\n    #[test]\n    fn settles() {}\n}\n",
+    );
+    assert!(scope_of(&file, "settles"));
+    assert!(!scope_of(&file, "settle"), "production code is not a test");
+}
+
+#[test]
+fn go_and_python_test_names_follow_their_runners_rules() {
+    let go = parsed(
+        "pkg/store/store.go",
+        "func TestStore(t *testing.T) {}\nfunc Testing() {}\nfunc BenchmarkStore(b *B) {}\n",
+    );
+    assert!(scope_of(&go, "TestStore"));
+    assert!(scope_of(&go, "BenchmarkStore"));
+    assert!(!scope_of(&go, "Testing"), "`go test` does not run it either");
+
+    let python = parsed(
+        "app/ledger.py",
+        "def test_settles():\n    pass\n\ndef settle():\n    pass\n",
+    );
+    assert!(scope_of(&python, "test_settles"));
+    assert!(!scope_of(&python, "settle"));
+}
+
+#[test]
+fn a_typescript_test_file_is_a_test_scope_even_though_its_cases_are_anonymous() {
+    // The case this exists for: `it("...", () => ...)` names no definition, so
+    // without the file-level flag a Jest suite would cover nothing at all.
+    let file = parsed(
+        "src/lib/math.test.ts",
+        "import { total } from './math';\nit('adds', () => { total(); });\n",
+    );
+    assert!(file.test_file);
+    assert!(file.in_test_scope(0));
+
+    let production = parsed("src/lib/math.ts", "export function total() { return 1; }\n");
+    assert!(!production.test_file);
+    assert!(!production.in_test_scope(0));
+}
