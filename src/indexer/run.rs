@@ -556,6 +556,16 @@ impl FileWork {
         }
     }
 
+    /// Whether this file's content differs from what the manifest confirmed.
+    ///
+    /// A set comparison, not a length one: a file can gain and lose a chunk in
+    /// the same edit and keep its count.
+    fn changed(&self) -> bool {
+        let fresh: BTreeSet<&String> = self.ids.iter().collect();
+        let confirmed: BTreeSet<&String> = self.previous.iter().collect();
+        fresh != confirmed
+    }
+
     /// The pending record: the old confirmed set, plus what is about to land.
     fn intent(&self) -> IndexedFile {
         let mut pending = self.ids.clone();
