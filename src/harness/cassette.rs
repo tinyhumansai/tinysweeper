@@ -180,6 +180,16 @@ impl Cassette {
         self.state.lock().expect("cassette lock").loose_hits
     }
 
+    /// How many strict-replay calls had no recorded answer.
+    ///
+    /// Strict replay never recovers from a miss: the call simply errors. The
+    /// error is *loud* where it happens, but a lane's fan-out can turn it into
+    /// a neutral "could not be reviewed" summary — so the run also checks this
+    /// count to decide a case that could not actually be replayed is failed.
+    pub fn strict_misses(&self) -> usize {
+        self.state.lock().expect("cassette lock").misses
+    }
+
     /// How many calls were served.
     pub fn served(&self) -> usize {
         self.state.lock().expect("cassette lock").served
