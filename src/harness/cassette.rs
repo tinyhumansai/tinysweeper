@@ -306,6 +306,12 @@ pub fn key(request: &ModelRequest) -> String {
     hasher.update(b"\0");
     hasher.update(request.schema_name.as_bytes());
     hasher.update(b"\0");
+    // The schema is the output contract, not just its name a provider wants:
+    // two responses with the same name but different properties are different
+    // answers. `Value::to_string` is deterministic — `serde_json` sorts the
+    // map keys without the `preserve_order` feature.
+    hasher.update(request.schema.to_string().as_bytes());
+    hasher.update(b"\0");
     hasher.update(request.max_tokens.to_le_bytes());
     for message in &request.messages {
         hasher.update(b"\0");
