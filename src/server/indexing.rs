@@ -177,7 +177,7 @@ impl IndexBackend {
             // The graph is what turns "code that reads like the diff" into "the
             // caller this change breaks", so it is rebuilt from the same
             // checkout rather than left to a second fetch.
-            if let Err(err) = self.sync_graph(&repo_id, &checkout, config).await {
+            if let Err(err) = self.sync_graph(&repo_id, &checkout, config, report).await {
                 // A graph failure costs expansion, not retrieval: the chunks are
                 // already written and queryable. Failing the whole run here
                 // would throw away an index that just cost money.
