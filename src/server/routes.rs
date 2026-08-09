@@ -291,7 +291,116 @@ async fn receive(
             tokio::spawn(handle_triage(state, repo, number, author, installation));
             (StatusCode::ACCEPTED, "queued").into_response()
         }
+        Action::AutoMerge {
+            repo,
+            numbers,
+            installation,
+        } => {
+            for number in numbers {
+                tokio::spawn(handle_automerge(
+                    state.clone(),
+                    repo.clone(),
+                    number,
+                    installation,
+                ));
+            }
+            (StatusCode::ACCEPTED, "queued").into_response()
+        }
     }
+}
+
+/// Re-evaluate one pull request against the auto-merge policy, off the request
+/// path.
+///
+/// Errors are logged and dropped. Auto-merge failing is the safe direction by
+/// construction — the pull request stays exactly where it was — so a forge
+/// hiccup here is a log line, never a failed delivery that GitHub retries.
+async fn handle_automerge(state: AppState, repo: String, number: u64, installation: u64) {
+    if let Err(err) = automerge_inner(&state, &repo, number, installation).await {
+        tracing::error!(%err, %repo, number, "auto-merge evaluation failed");
+    }
+}
+
+async fn automerge_inner(
+    state: &AppState,
+    repo: &str,
+    number: u64,
+    installation: u64,
+) -> Result<()> {
+    // Checked before anything is read. With the feature off this path fires on
+    // every check run in every repository the app is installed on, and an
+    // API call per delivery to prove a disabled feature is disabled is a rate
+    // limit spent on nothing.
+    if !state.config.config.automerge.enabled {
+        tracing::debug!(%repo, number, "auto-merge is off");
+        return Ok(());
+    }
+
+    let repo_id =
+        RepoId::parse(repo).ok_or_else(|| Error::Forge(format!("`{repo}` is not owner/name")))?;
+
+    // Not held against `permits`: that semaphore bounds concurrent *reviews*,
+    // which are minutes of model calls. This is four reads and possibly one
+    // merge, and queueing it behind a review would mean a merge waiting on
+    // work it has nothing to do with.
+    //
+    // The lease is what keeps it honest instead. Several checks finishing at
+    // once is the normal case, and every one of them is a delivery: without
+    // this, five deliveries would evaluate the same pull request concurrently
+    // and race to merge it.
+    let lease = format!("{repo}#automerge-{number}");
+    if !state.store.claim_lease(&lease, "server").await? {
+        tracing::debug!(%lease, "another worker is already evaluating this merge");
+        return Ok(());
+    }
+
+    let outcome = evaluate_and_merge(state, &repo_id, number, installation).await;
+
+    if let Err(err) = state.store.release_lease(&lease).await {
+        tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
+    }
+
+    match outcome? {
+        Outcome::Merged { method } => {
+            tracing::info!(%repo, number, %method, "auto-merged");
+        }
+        // Logged at debug, not info. Every check run on every open pull request
+        // reaches this line, and the overwhelmingly common refusal is "another
+        // check is still running" — at info that is the only thing in the log.
+        Outcome::Refused(refusal) => {
+            tracing::debug!(%repo, number, reason = %refusal, "not auto-merging");
+        }
+        Outcome::Rejected { method, reason } => {
+            tracing::warn!(%repo, number, %method, %reason, "the forge refused the merge");
+        }
+    }
+    Ok(())
+}
+
+/// Mint the credentials and run the policy.
+///
+/// The read handle and the write handle are minted separately from the same
+/// installation token, and the split is the point: `merge_if_qualified` takes
+/// them as two arguments so that the half of the code which decides is
+/// statically unable to write. There is no model in this path at all.
+async fn evaluate_and_merge(
+    state: &AppState,
+    repo: &RepoId,
+    number: u64,
+    installation: u64,
+) -> Result<Outcome> {
+    let token = state.auth.installation_token(installation).await?;
+    let read = crate::forge::github::GitHubRead::new(&token)?;
+    let write = crate::forge::github::GitHubWrite::new(&token)?;
+
+    crate::automerge::merge_if_qualified(
+        &read,
+        &write,
+        &state.config.config.automerge,
+        repo,
+        number,
+    )
+    .await
 }
 
 /// Triage one issue, off the request path.
