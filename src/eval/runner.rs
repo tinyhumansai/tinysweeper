@@ -244,23 +244,41 @@ fn open_cassette(
 pub fn rescore(corpus: &Corpus, out: &Path) -> Result<Vec<CaseScore>> {
     let mut scores = Vec::with_capacity(corpus.cases.len());
     for case in &corpus.cases {
-        let path = out.join(&case.case.id).join("proposal.json");
-        let score = match std::fs::read_to_string(&path) {
-            Ok(raw) => match serde_json::from_str::<Proposal>(&raw) {
-                Ok(proposal) => {
-                    crate::eval::score::score(&case.case, &proposal, std::time::Duration::default())
+        let dir = out.join(&case.case.id);
+        // A case that failed stays failed. `run` persists a strict-miss replay
+        // as a `failure.json` marker rather than a proposal, so re-scoring must
+        // reproduce that failure instead of trusting a proposal that was never
+        // emitted — or `eval score` would silently turn a stale replay into a
+        // normal scorecard entry.
+        let score = match std::fs::read_to_string(dir.join("failure.json")) {
+            Ok(raw) => {
+                let reason = serde_json::from_str::<String>(&raw).unwrap_or_else(|_| {
+                    format!("the run failed for an unreadable reason: {raw}")
+                });
+                crate::eval::score::failed(&case.case, reason, std::time::Duration::default())
+            }
+            Err(_) => {
+                let path = dir.join("proposal.json");
+                match std::fs::read_to_string(&path) {
+                    Ok(raw) => match serde_json::from_str::<Proposal>(&raw) {
+                        Ok(proposal) => crate::eval::score::score(
+                            &case.case,
+                            &proposal,
+                            std::time::Duration::default(),
+                        ),
+                        Err(err) => crate::eval::score::failed(
+                            &case.case,
+                            format!("{}: not a proposal: {err}", path.display()),
+                            std::time::Duration::default(),
+                        ),
+                    },
+                    Err(_) => crate::eval::score::failed(
+                        &case.case,
+                        format!("no proposal at {}; run `eval run` first", path.display()),
+                        std::time::Duration::default(),
+                    ),
                 }
-                Err(err) => crate::eval::score::failed(
-                    &case.case,
-                    format!("{}: not a proposal: {err}", path.display()),
-                    std::time::Duration::default(),
-                ),
-            },
-            Err(_) => crate::eval::score::failed(
-                &case.case,
-                format!("no proposal at {}; run `eval run` first", path.display()),
-                std::time::Duration::default(),
-            ),
+            }
         };
         scores.push(score);
     }
