@@ -68,6 +68,16 @@ Copied, at source, from octopus, which had already worked this out.
    an injected paragraph gets through with a `- ` glued to the front. Rules over
    the character ceiling are dropped, not truncated.
 
+   A discarded answer is asked for once more, and only then given up on
+   (`EXTRACT_ATTEMPTS`). This is the price of an all-or-nothing check: measured
+   on this repository's own `AGENTS.md`, roughly one call in ten came back as a
+   perfect bullet list followed by one trailing sentence, and the file's rules
+   were silently lost (issue #48). The re-ask makes the strictness affordable.
+   It is never a reason to relax the check — accepting the trailing sentence is
+   exactly the failure the check exists to refuse. The `NO_RULES` sentinel is a
+   *correct* answer and is not re-asked; neither is a model error, since the
+   gateway already walks its fallback models.
+
 A content-hash cache sits in front of the model call, so one unique file content
 is extracted once, ever — including across forks whose `AGENTS.md` matches
 upstream's, and across every push that did not touch the file.
