@@ -732,8 +732,7 @@ fn this_repositorys_own_tests_cover_its_own_code() {
     // `this_repository_resolves_every_internal_import` is: the conventions
     // being detected are this codebase's, and a fixture cannot fail when they
     // drift.
-    let files = crate::graph::build_test::repo_files();
-    let graph = build(REPO, &files).expect("builds");
+    let graph = build(REPO, &this_crate()).expect("builds");
 
     let covered: std::collections::BTreeSet<&str> = graph
         .edges
