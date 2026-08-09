@@ -201,6 +201,7 @@ impl<'a> Retriever<'a> {
                 dropped: assembled.dropped,
                 tokens: assembled.tokens,
                 graph_nodes: expansion.nodes,
+                impact: expansion.impact,
             },
             spend,
         )
