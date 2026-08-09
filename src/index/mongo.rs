@@ -82,6 +82,36 @@ const INDEX_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// vector index it does not depend on the embedding model.
 const TEXT_INDEX: &str = "tinysweeper_text";
 
+/// How many terms the lexical arm may carry.
+///
+/// Lucene expands a `text` operator into one clause per term per searched
+/// path, and mongot ships `maxClauseCount = 1024`. The retrieval query is
+/// bounded in *characters* — roughly four thousand of them, mostly
+/// frequency-ranked identifiers — which is several hundred terms, and across
+/// the three paths below that clears the limit and the whole aggregation fails
+/// with `UnknownError: maxClauseCount is set to 1024`.
+///
+/// Found by deploying: every review on a real repository degraded to diff-only
+/// with that error, so the hybrid search had never actually run. It fails
+/// closed and says so, which is why it was visible at all, but the retrieval it
+/// was built for never happened.
+///
+/// 300 × 3 paths = 900, leaving room for the filter clauses. Only the lexical
+/// arm is capped: the dense arm embeds the query as one vector and has no
+/// clause count.
+const MAX_LEXICAL_TERMS: usize = 300;
+
+/// The first [`MAX_LEXICAL_TERMS`] terms of `text`.
+///
+/// Terms are already frequency-ranked by `retrieve::query`, so truncating from
+/// the tail drops the least informative ones.
+fn lexical_terms(text: &str) -> String {
+    text.split_whitespace()
+        .take(MAX_LEXICAL_TERMS)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// The vector the boot probe searches with.
 ///
 /// A unit vector, not a zero one. Cosine similarity against the zero vector is
