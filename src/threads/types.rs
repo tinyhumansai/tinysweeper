@@ -46,3 +46,30 @@ impl ThreadPlan {
         self.resolve.is_empty()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decisions_keep_their_deterministic_reasons() {
+        assert!(matches!(Decision::Resolve("fixed"), Decision::Resolve("fixed")));
+        assert!(matches!(Decision::Leave("human reply"), Decision::Leave("human reply")));
+        assert!(matches!(Decision::Ask, Decision::Ask));
+    }
+
+    #[test]
+    fn plans_round_trip_and_report_emptiness() {
+        let empty = ThreadPlan::default();
+        assert!(empty.is_empty());
+
+        let plan = ThreadPlan {
+            resolve: vec![PlannedResolve {
+                id: "thread-1".into(),
+                reason: "the code changed".into(),
+            }],
+        };
+        assert!(!plan.is_empty());
+        assert_eq!(serde_json::from_str::<ThreadPlan>(&serde_json::to_string(&plan).unwrap()).unwrap(), plan);
+    }
+}
