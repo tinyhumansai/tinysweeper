@@ -225,6 +225,8 @@ pub struct Config {
     pub models: Models,
     /// The knowledge centre: curated documents and rule extraction.
     pub knowledge: Knowledge,
+    /// Which embedding provider fills and queries the code index.
+    pub embeddings: Embeddings,
     /// How much repository context a review retrieves, and what it costs.
     pub retrieval: Retrieval,
     /// Per-lane overrides, keyed by lane id.
@@ -376,6 +378,72 @@ pub struct Knowledge {
     /// How many characters all pinned documents reach the prompt with,
     /// together. Zero disables pinned injection.
     pub pinned_total_chars: usize,
+}
+
+/// Which embedding provider fills and queries the code index.
+///
+/// A separate section from `[models]` rather than three more fields on it, and
+/// the reason is that these values are not interchangeable with a completion
+/// model's. `provider`, `model` and `dimensions` together *are* the index
+/// partition key — [`EmbedSignature`](crate::index::types::EmbedSignature) —
+/// so editing one of them does not reconfigure a call, it invalidates every
+/// vector already written. Keeping them in their own block is what makes that
+/// legible to whoever edits it.
+///
+/// Off by default. An embedding provider costs real money per indexed byte and
+/// needs a key nobody has by accident, so a deployment that has not said
+/// otherwise runs diff-only exactly as it did before this existed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Embeddings {
+    /// Whether an embedding provider is configured at all.
+    ///
+    /// `false` leaves the index cold, which every retrieval path already knows
+    /// how to degrade through.
+    pub enabled: bool,
+    /// The provider, e.g. `voyage`. Also the first half of the signature.
+    pub provider: String,
+    /// The model id, e.g. `voyage-code-3`. The second half of the signature.
+    pub model: String,
+    /// Vector width. The third half of the signature, and it is carried
+    /// separately because the search index declares it at creation time.
+    pub dimensions: usize,
+    /// Environment variable holding the provider's API key. Never the key.
+    pub api_key_env: String,
+    /// Override the provider's own API base URL. Empty means "the default",
+    /// which is what every hosted deployment wants; it exists for a local
+    /// OpenAI-compatible server.
+    pub base_url: String,
+    /// How many texts go in one embedding call.
+    pub batch: usize,
+    /// Client-side ceiling on provider requests per minute.
+    ///
+    /// Applied process-wide by the harness adapter. It is not politeness: a
+    /// full index of a monorepo will otherwise walk straight into the
+    /// provider's own limit and spend its time in backoff.
+    pub requests_per_minute: u32,
+    /// Hard USD ceiling for one indexing run of one repository.
+    ///
+    /// The counterpart to `models.budget_usd_per_pr`. Indexing a large
+    /// repository is the single largest token count this program produces, so
+    /// it gets a ceiling of its own rather than sharing the review's.
+    pub budget_usd_per_index: f64,
+}
+
+impl Embeddings {
+    /// The index partition key this configuration describes.
+    ///
+    /// Returns `None` when embeddings are off, which is the same thing every
+    /// caller means by "there is no index to query".
+    pub fn signature(&self) -> Option<crate::index::types::EmbedSignature> {
+        self.enabled.then(|| {
+            crate::index::types::EmbedSignature::new(
+                self.provider.trim(),
+                self.model.trim(),
+                self.dimensions,
+            )
+        })
+    }
 }
 
 /// What a review retrieves from the code index before it reads the diff.

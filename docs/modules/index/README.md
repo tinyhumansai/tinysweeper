@@ -14,6 +14,7 @@ changes", the knowledge base for "what did we already decide".
 | --- | --- |
 | `types.rs` | `Chunk`, `EmbeddedChunk`, `ScoredChunk`, `HybridQuery`, `EmbedSignature`, `GraphNode`, `GraphEdge`, `Neighbourhood`, `KnowledgeDoc`, `KnowledgeScope` |
 | `mock.rs` | `MockEmbedder`, `MockChunkIndex`, `MockGraphStore`, `MockKnowledgeStore` — always compiled |
+| `provider.rs` | `ProviderEmbedder` — the real embedder over tinyagents. Behind `harness` |
 | `mongo.rs` | `MongoIndex` and the four MongoDB adapters. Behind `serve` |
 
 The ports themselves are in `src/ports/{embed,index,graph,knowledge}.rs`.
@@ -42,6 +43,53 @@ swapping the embedding model invalidates the index by construction: the old rows
 are still there, they simply stop matching. `Embedder::signature()` is on the
 trait for the same reason: an embedder that could not name itself would let a
 model swap go unnoticed.
+
+The provider-backed embedder has to make that correspondence hold against a
+second spelling of the same idea. tinyagents' `EmbeddingModel::signature()`
+returns `provider=…;model=…;dims=…`; `EmbedSignature::harness_key()` is the same
+string, with a test asserting they are byte-identical, and
+`ProviderEmbedder::new` refuses to construct when the configured signature and
+the one the model reports describe different spaces. That turns "the index is
+answering from the wrong embedding space" — which is silent, and looks like bad
+retrieval rather than a fault — into a startup error naming both keys.
+
+## The real provider
+
+`ProviderEmbedder` is a thin adapter over tinyagents' `EmbeddingModel`, exactly
+as `harness::openrouter::GatewayModel` is over its completion provider: the
+harness owns the transport, the process-global rate limiter and the
+`Retry-After` backoff, and this crate owns the signature and the bill. Which
+provider is built comes from `[embeddings]` in the configuration — `voyage`,
+`openai`, `cohere`, `ollama` or the offline `mock` — and every arm is a model
+whose price is on file, because adding one without adding its price is how
+indexing escapes the budget.
+
+`voyage-code-3` at 1024 dimensions is the default: the corpus is code, it is
+trained for code retrieval specifically, and 1024 is both its native width and
+the cheapest to store as float32 `binData`.
+
+Tokens are still estimated. No provider reachable through the harness reports
+embedding usage — the trait returns `Vec<Vec<f32>>` and each adapter decodes the
+response's `data` array and discards its `usage` object — so there is nothing to
+plumb through even for the providers that send one on the wire.
+`Embedded::metered` is the constructor a real count would use, and it is unused
+on purpose rather than absent, so plumbing one through later is a one-line
+change at the call site.
+
+## Proving it end to end
+
+`examples/index_and_retrieve.rs` indexes a checkout with the configured
+provider and runs one hybrid query against it. It is declared with
+`required-features = ["serve"]` so it never builds in CI: it needs a real
+embedding provider and a MongoDB 8.2+ deployment with `mongot`, and the default
+`cargo test` must touch neither. What the mocks cannot tell you is whether a
+provider returns vectors of the width it advertises and whether MongoDB accepts
+them into a `$rankFusion` query; that is what this is for.
+
+```sh
+docker compose up -d mongot
+cargo run --features serve --example index_and_retrieve -- . "hybrid search"
+```
 
 ## Why the ports are wider than `add`/`query`
 

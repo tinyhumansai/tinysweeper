@@ -84,6 +84,10 @@ jsonwebtoken = { version = "11", default-features = false, features = ["rust_cry
 mongodb = { version = "3", optional = true }
 bson = { version = "2", optional = true }
 subtle = { version = "2", optional = true }
+# Used by the indexer to hold one shallow checkout while it is read. A
+# dev-dependency already, so this adds nothing to the lock file — it becomes a
+# runtime dependency only under `serve`.
+tempfile = { version = "3", optional = true }
 tower-http = { version = "0.6", features = ["trace", "limit"], optional = true }
 
 # --- optional: the GitHub forge adapter ---
@@ -107,6 +111,7 @@ serve = [
     "dep:mongodb",
     "dep:bson",
     "dep:subtle",
+    "dep:tempfile",
     "dep:tower-http",
     "github",
     "harness",
@@ -120,3 +125,11 @@ all = ["harness", "github", "serve", "treesitter"]
 
 [dev-dependencies]
 tempfile = "3"
+
+# Declared explicitly (`autoexamples = false`) so a credential-needing smoke
+# test never builds in CI. This one needs an embedding provider and a MongoDB
+# 8.2+ deployment with mongot attached; `serve` pulls in `harness` for the
+# provider adapter.
+[[example]]
+name = "index_and_retrieve"
+required-features = ["serve"]

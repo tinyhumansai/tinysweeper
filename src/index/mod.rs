@@ -16,6 +16,8 @@
 pub mod mock;
 #[cfg(feature = "serve")]
 pub mod mongo;
+#[cfg(feature = "harness")]
+pub mod provider;
 pub mod types;
 
 pub use crate::index::mock::{MockChunkIndex, MockEmbedder, MockGraphStore, MockKnowledgeStore};
@@ -23,6 +25,9 @@ pub use crate::index::types::{
     Chunk, ChunkMethod, EdgeKind, EmbedSignature, Embedded, EmbeddedChunk, GraphEdge, GraphNode,
     HybridQuery, KnowledgeDoc, KnowledgeScope, Neighbourhood, NodeKind, ScoredChunk,
 };
+
+#[cfg(feature = "harness")]
+pub use crate::index::provider::ProviderEmbedder;
 
 #[cfg(feature = "serve")]
 pub use crate::index::mongo::{MongoIndex, VECTOR_SEARCH_UNAVAILABLE};

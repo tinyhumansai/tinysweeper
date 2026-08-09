@@ -13,11 +13,9 @@
 //! and every path under `/admin` 404s, because the alternative to fail-closed
 //! here is shipping an unauthenticated write endpoint.
 //!
-//! Contributor trust and knowledge documents are complete. Index status is
-//! declared but returns `501`: the store behind it lands in another
-//! workstream, and the same reasoning that declares every CLI subcommand up
-//! front applies here — a stable coordinate shape lets the caller be written
-//! now. That stub is marked `TODO(index-store)`.
+//! Every route is implemented. The index routes answer `503` on a deployment
+//! with no embedding provider, which is not a stub: there is genuinely no index
+//! to report on, and saying so is a different answer from an empty one.
 //!
 //! The knowledge routes are the write side of the knowledge centre. A document
 //! body reaches a review prompt, so these endpoints are the *only* trusted way
@@ -41,6 +39,7 @@ use crate::error::{Error, Result};
 use crate::index::types::{KnowledgeDoc, KnowledgeScope};
 use crate::knowledge::types::{doc_id, valid_slug};
 use crate::ports::knowledge::KnowledgeStore;
+use crate::server::indexing::IndexBackend;
 use crate::server::store::{Contributor, Store, Trust};
 
 /// Shortest admin token the server will start with.
@@ -121,10 +120,26 @@ struct AdminState {
     /// retrieval database, in which case the knowledge routes answer `503`
     /// rather than pretending to have written something.
     knowledge: Option<Arc<dyn KnowledgeStore>>,
+    /// The indexing stack. `None` when no embedding provider is configured, in
+    /// which case the index routes answer `503` rather than reporting an
+    /// index that could not exist.
+    index: Option<Arc<IndexBackend>>,
     auth: Arc<AdminAuth>,
 }
 
 impl AdminState {
+    /// The indexing stack, or the error a caller can act on.
+    fn index(&self) -> std::result::Result<&IndexBackend, ApiError> {
+        self.index.as_deref().ok_or_else(|| {
+            ApiError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no embedding provider is configured on this deployment, so there is no index. \
+                 Set `[embeddings]` in the server's configuration."
+                    .into(),
+            )
+        })
+    }
+
     /// The knowledge store, or the error a caller can act on.
     fn knowledge(&self) -> std::result::Result<&dyn KnowledgeStore, ApiError> {
         self.knowledge.as_deref().ok_or_else(|| {
@@ -175,12 +190,14 @@ pub struct TrustRequest {
 pub fn router(
     store: Store,
     knowledge: Option<Arc<dyn KnowledgeStore>>,
+    index: Option<Arc<IndexBackend>>,
     auth: Option<AdminAuth>,
 ) -> Option<Router> {
     let auth = auth?;
     let state = AdminState {
         store,
         knowledge,
+        index,
         auth: Arc::new(auth),
     };
 
@@ -189,7 +206,7 @@ pub fn router(
         // every review with nothing able to set it; this is that surface.
         .route("/admin/contributors/{login}", get(get_contributor))
         .route("/admin/contributors/{login}/trust", put(set_trust))
-        // Index status and re-index. TODO(index-store).
+        // Index status and re-index.
         .route("/admin/index/{owner}/{name}", get(index_status))
         .route("/admin/index/{owner}/{name}/reindex", post(reindex))
         // Knowledge documents, org- and repo-scoped.
@@ -250,17 +267,6 @@ impl From<Error> for ApiError {
     }
 }
 
-/// A declared endpoint whose store has not landed.
-///
-/// `501` rather than `404`: the route exists and the shape is committed to, so
-/// a caller written against it today is not written against a guess.
-fn not_implemented(what: &str, tracking: &str) -> ApiError {
-    ApiError(
-        StatusCode::NOT_IMPLEMENTED,
-        format!("{what} is declared but not implemented yet ({tracking})"),
-    )
-}
-
 async fn get_contributor(
     State(state): State<AdminState>,
     Path(login): Path<String>,
@@ -288,18 +294,111 @@ async fn set_trust(
     Ok(Json(state.store.contributor(&login).await?))
 }
 
+/// What a repository's index currently holds, and what it has cost.
+///
+/// The signature is reported alongside the record rather than left implicit:
+/// it is the partition key, so "absent" from a deployment that has just changed
+/// embedding model means something quite different from "absent" on a
+/// repository nobody has pushed to, and the two are indistinguishable without
+/// it.
 async fn index_status(
+    State(state): State<AdminState>,
     Path((owner, name)): Path<(String, String)>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let _ = (owner, name);
-    Err(not_implemented("index status", "TODO(index-store)"))
+    use crate::ports::manifest::IndexManifest;
+
+    let repo_id = valid_repo(&owner, &name)?;
+    let backend = state.index()?;
+    let record = backend.manifest.state(&repo_id, &backend.signature).await?;
+
+    Ok(Json(json!({
+        "repo": repo_id,
+        "signature": backend.signature.key(),
+        "state": record.state,
+        "revision": record.revision,
+        "chunks": record.chunks,
+        "message": record.message,
+        "usage": record.usage,
+    })))
 }
 
+/// Discard a repository's index so the next delivery rebuilds it.
+///
+/// It does **not** index inline, and that is a decision rather than a
+/// shortcut. Indexing needs a checkout, and a checkout needs an installation
+/// token, which this route has no way to mint: the admin credential
+/// authenticates a human, not an app installation. Rather than invent a second
+/// credential path into GitHub for an operator convenience, the route resets
+/// the freshness record and lets the ordinary push path do the work with the
+/// token it already holds.
+///
+/// The reset deletes the chunks as well as the record. Forgetting the record
+/// alone would leave every existing chunk with nothing pointing at it — the
+/// next run would neither reuse nor delete them, and stale code would sit in
+/// retrieval permanently. So the two go together, and the window in between is
+/// a cold index, which every retrieval path already degrades through.
 async fn reindex(
+    State(state): State<AdminState>,
     Path((owner, name)): Path<(String, String)>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let _ = (owner, name);
-    Err(not_implemented("re-indexing", "TODO(index-store)"))
+    use crate::indexer::types::{Claim, Settled};
+    use crate::ports::index::ChunkIndex;
+    use crate::ports::manifest::IndexManifest;
+
+    let repo_id = valid_repo(&owner, &name)?;
+    let backend = state.index()?;
+    let signature = &backend.signature;
+
+    // The same claim a worker takes, for the same reason: resetting the record
+    // underneath a run in progress would have that run confirm chunks against a
+    // record that no longer exists. A refused claim is `409`, not a wait — the
+    // operator can retry, and a request that blocked on a two-hour index would
+    // time out anyway.
+    let lease = match backend.manifest.claim(&repo_id, signature, "admin").await? {
+        Claim::Granted(lease) => lease,
+        Claim::Busy { holder } => {
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                format!(
+                    "this repository is being indexed right now{}; try again shortly",
+                    holder.map(|h| format!(" by `{h}`")).unwrap_or_default()
+                ),
+            ));
+        }
+    };
+
+    let paths = backend.manifest.paths(&repo_id, signature).await?;
+    let deleted = if paths.is_empty() {
+        0
+    } else {
+        let removed = backend.index.code.delete_paths(&repo_id, &paths).await?;
+        backend.manifest.forget(&repo_id, signature, &paths).await?;
+        removed
+    };
+
+    // Released as a completed run that reflects *no* revision, which is exactly
+    // what `RepoIndex::is_fresh` needs to see for the next push to do the work.
+    backend
+        .manifest
+        .release(
+            &lease,
+            &Settled::Done {
+                revision: None,
+                chunks: 0,
+                usage: Default::default(),
+            },
+        )
+        .await?;
+
+    tracing::info!(%repo_id, deleted, "admin discarded the index; the next push rebuilds it");
+
+    Ok(Json(json!({
+        "repo": repo_id,
+        "signature": signature.key(),
+        "deleted_chunks": deleted,
+        "state": "absent",
+        "note": "the index was discarded; the next delivery for this repository rebuilds it",
+    })))
 }
 
 async fn list_org_knowledge(
@@ -425,6 +524,16 @@ async fn delete_doc(
     tracing::info!(%id, "admin deleted a knowledge document");
 
     Ok(Json(json!({ "deleted": id })))
+}
+
+/// The `owner/name` repository id for a path pair, both checked.
+///
+/// The same validators the knowledge routes use, because this string is a
+/// database key on the index side exactly as it is on theirs.
+fn valid_repo(owner: &str, name: &str) -> std::result::Result<String, ApiError> {
+    let owner = valid_login(owner)?;
+    let name = valid_repository_name(name)?;
+    Ok(format!("{owner}/{name}"))
 }
 
 /// The repository scope for an `owner`/`name` pair, both checked.

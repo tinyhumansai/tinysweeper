@@ -20,10 +20,10 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::forge::RepoId;
 use crate::index::mongo::MongoIndex;
-use crate::index::types::EmbedSignature;
 use crate::ports::knowledge::KnowledgeStore;
 use crate::server::admin::{self, AdminAuth};
 use crate::server::auth::AppAuth;
+use crate::server::indexing::{IndexBackend, index_in_background};
 use crate::server::store::{Store, Trust};
 use crate::server::webhook::{self, Action, Payload};
 
@@ -35,6 +35,14 @@ use crate::server::webhook::{self, Action, Payload};
 /// bill.
 const MAX_CONCURRENT_REVIEWS: usize = 4;
 
+/// How many repositories may be indexed at once.
+///
+/// Lower than the review cap and for a different reason. A review is mostly
+/// waiting on one model; a full index is a fetch, a tree in memory and
+/// thousands of embedding calls, so two of them concurrently is already the
+/// provider's rate limit and a good deal of the machine.
+const MAX_CONCURRENT_INDEXES: usize = 2;
+
 /// How the server was configured.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -44,10 +52,6 @@ pub struct ServerConfig {
     pub webhook_secret: String,
     /// Review configuration used when a repository has no file of its own.
     pub config: Config,
-    /// The embedding signature retrieval runs under, when retrieval is enabled.
-    ///
-    /// `None` disables retrieval entirely, which is a supported deployment.
-    pub embedding: Option<EmbedSignature>,
     /// Credential guarding `/admin`. `None` leaves the admin API unmounted —
     /// see `crate::server::admin` for why that is the fail-closed choice.
     pub admin_auth: Option<AdminAuth>,
@@ -63,6 +67,13 @@ struct AppState {
     knowledge: Option<Arc<dyn KnowledgeStore>>,
     auth: Arc<AppAuth>,
     permits: Arc<Semaphore>,
+    /// The embedder and the retrieval stores, when `[embeddings]` names a
+    /// provider. `None` runs every review diff-only, which is what tinysweeper
+    /// did before an index existed.
+    index: Option<Arc<IndexBackend>>,
+    /// Bounds concurrent indexing separately from concurrent reviewing: a
+    /// delivery burst must not turn into a burst of full indexes.
+    index_permits: Arc<Semaphore>,
 }
 
 /// Run the server until the process is stopped.
@@ -92,13 +103,24 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
         }
     };
 
-    if let Some(signature) = &config.embedding {
-        tracing::info!(%signature, "verifying MongoDB hybrid search");
-        MongoIndex::from_env().await?.prepare(signature).await?;
-        tracing::info!("MongoDB hybrid search is available");
-    } else {
-        tracing::info!("retrieval is disabled: no embedding provider configured");
-    }
+    // Opening the backend runs the same boot assertion, and it now also proves
+    // the *embedder* is usable: a provider whose key is missing or whose model
+    // reports a different width than `[embeddings]` declares is a startup
+    // failure rather than a partial index discovered later. An operator who
+    // configured no provider gets `None` and a log line saying so.
+    let index = match IndexBackend::open(&config.config).await? {
+        Some(backend) => {
+            tracing::info!(
+                signature = %backend.signature,
+                "retrieval is on; MongoDB hybrid search is available"
+            );
+            Some(Arc::new(backend))
+        }
+        None => {
+            tracing::info!("retrieval is disabled: no embedding provider configured");
+            None
+        }
+    };
 
     let admin_auth = config.admin_auth.clone();
     let state = AppState {
@@ -107,6 +129,8 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
         knowledge: knowledge.clone(),
         auth: Arc::new(auth),
         permits: Arc::new(Semaphore::new(MAX_CONCURRENT_REVIEWS)),
+        index: index.clone(),
+        index_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_INDEXES)),
     };
 
     let mut app = Router::new()
@@ -117,7 +141,7 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
     // Mounted only when a token is configured. An admin router without a
     // credential would be an unauthenticated write endpoint on the public
     // internet, so its absence is the safe failure.
-    match admin::router(store, knowledge, admin_auth) {
+    match admin::router(store, knowledge, index, admin_auth) {
         Some(admin) => {
             app = app.merge(admin);
             tracing::info!("the admin API is mounted under /admin");
@@ -277,6 +301,21 @@ async fn review_inner(
         forge.pull_request(&repo_id, number).await?
     };
 
+    // Indexing is kicked off here and deliberately not awaited. A cold full
+    // index takes minutes; a review is expected in seconds. The review runs
+    // against whatever the index holds right now, and `crate::retrieve` says so
+    // in the check-run summary when that is nothing. See `server::indexing`.
+    if let Some(backend) = &state.index {
+        tokio::spawn(index_in_background(
+            backend.clone(),
+            Arc::new(state.config.config.clone()),
+            state.index_permits.clone(),
+            repo_id.clone(),
+            pull_request.head_sha.clone(),
+            read_token.clone(),
+        ));
+    }
+
     let lease = format!("{repo}#{number}@{}", pull_request.head_sha);
     if !state.store.claim_lease(&lease, "server").await? {
         tracing::debug!(%lease, "another worker holds this review");
@@ -331,15 +370,18 @@ async fn run_and_publish(
     // push replay this run's evidence verbatim and pay cache prices for it.
     // Dedupe does not depend on it — that reads the markers off the pull
     // request — so a database problem costs money, never a duplicate comment.
-    // Retrieval is not attached here yet, and the reason is a missing adapter
-    // rather than a decision: nothing in this build implements the `Embedder`
-    // port against a real provider, so there is no way to embed a query. The
-    // indexer has the same gap — a server that cannot embed cannot fill an
-    // index either — so attaching a `Retriever` now would only ever produce the
-    // `Cold` verdict. The seam is `app::review::review_with_retrieval`; the
-    // moment a provider-backed embedder lands, this call moves to it and the
-    // stores come off `MongoIndex`.
-    let proposal = crate::app::review::review_with_context(
+    // Retrieval is attached when a provider is configured, and left off when
+    // one is not. Both are supported: `crate::retrieve` never errors, it
+    // returns a status the check-run summary states, so a cold index, a stale
+    // one or an unreachable database all produce a diff-only review that says
+    // it is diff-only rather than one that quietly is.
+    let retriever = state.index.as_ref().map(|backend| {
+        crate::retrieve::Retriever::new(backend.embedder.as_ref(), &backend.index.code)
+            .with_graph(&backend.index.graph)
+            .with_manifest(backend.manifest.as_ref())
+    });
+
+    let proposal = crate::app::review::review_with_retrieval(
         forge,
         model,
         &state.config.config,
@@ -347,6 +389,7 @@ async fn run_and_publish(
         number,
         Some(&state.store),
         state.knowledge.as_deref(),
+        retriever.as_ref(),
     )
     .await?;
 

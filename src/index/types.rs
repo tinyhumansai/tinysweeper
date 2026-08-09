@@ -48,6 +48,23 @@ impl EmbedSignature {
         format!("{}:{}:{}", self.provider, self.model, self.dims)
     }
 
+    /// The same identity, spelled the way the agent harness spells it.
+    ///
+    /// tinyagents' `EmbeddingModel::signature()` returns
+    /// `provider=…;model=…;dims=…`, and the provider-backed embedder is built
+    /// from a model that reports exactly those three values. Two independent
+    /// spellings of one identity is how a partition key quietly stops matching
+    /// the space it names, so the correspondence is a method with a test on it
+    /// rather than a convention. The format is duplicated here, not imported,
+    /// because this file is always compiled and tinyagents is not; the test in
+    /// `crate::index::provider` asserts the two strings are byte-identical.
+    pub fn harness_key(&self) -> String {
+        format!(
+            "provider={};model={};dims={}",
+            self.provider, self.model, self.dims
+        )
+    }
+
     /// The key this embedder is priced under.
     ///
     /// Dimensionality is left out: a provider charges per token for a model,
@@ -84,6 +101,28 @@ impl Embedded {
             .iter()
             .map(|text| crate::harness::pricing::estimate_tokens(text))
             .sum();
+        Self {
+            vectors,
+            usage: crate::ports::model::Usage {
+                embed_tokens: tokens,
+                cost_usd: crate::harness::pricing::embedding_cost(&signature.price_key(), tokens),
+                ..Default::default()
+            },
+        }
+    }
+
+    /// Bill `vectors` against a token count the **provider** reported.
+    ///
+    /// The counterpart to [`Embedded::billed`], and the difference is the only
+    /// interesting thing about it: this one is not an estimate. No provider
+    /// reachable through tinyagents' `EmbeddingModel` reports usage today —
+    /// the trait returns `Vec<Vec<f32>>` and the adapters decode `data` and
+    /// discard the response's `usage` object — so nothing in this build calls
+    /// it yet. It exists so that plumbing a real count through is a one-line
+    /// change at the call site instead of a redesign of the accounting, and so
+    /// that the estimate is visibly a *fallback* rather than the only shape the
+    /// type has.
+    pub fn metered(signature: &EmbedSignature, tokens: u64, vectors: Vec<Vec<f32>>) -> Self {
         Self {
             vectors,
             usage: crate::ports::model::Usage {

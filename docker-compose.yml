@@ -93,11 +93,12 @@ services:
     environment:
       TINYSWEEPER_MONGODB_URI: mongodb://${MONGO_ROOT_USERNAME:-tinysweeper}:${MONGO_ROOT_PASSWORD}@mongod:27017/?authSource=admin&directConnection=true
       TINYSWEEPER_MONGODB_DB: tinysweeper
-      # Retrieval is opt-in. Set all three or none: a half-configured provider
-      # is refused at startup rather than silently disabling retrieval.
-      TINYSWEEPER_EMBED_PROVIDER: ${TINYSWEEPER_EMBED_PROVIDER:-}
-      TINYSWEEPER_EMBED_MODEL: ${TINYSWEEPER_EMBED_MODEL:-}
-      TINYSWEEPER_EMBED_DIMS: ${TINYSWEEPER_EMBED_DIMS:-}
+      # Retrieval is opt-in and configured in `[embeddings]`, not here: the
+      # provider, model and dimensions are the index partition key, and a
+      # second place to set them is a second way for the key to disagree with
+      # the vectors already written. Only the API key lives in the environment,
+      # under whatever name `embeddings.api_key_env` gives.
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
       TINYSWEEPER_WEBHOOK_SECRET: ${TINYSWEEPER_WEBHOOK_SECRET:?set a webhook secret}
       TINYSWEEPER_GITHUB_APP_ID: ${TINYSWEEPER_GITHUB_APP_ID:-}
       TINYSWEEPER_GITHUB_PRIVATE_KEY: ${TINYSWEEPER_GITHUB_PRIVATE_KEY:-}

@@ -23,6 +23,8 @@
 //! upstream counts it at all.
 
 pub mod cost;
+#[cfg(feature = "serve")]
+pub mod fetch;
 pub mod mock;
 #[cfg(feature = "serve")]
 pub mod mongo;
@@ -36,5 +38,7 @@ pub use crate::indexer::types::{
     Claim, IndexLease, IndexOutcome, IndexReport, IndexState, IndexedFile, RepoIndex, Settled,
 };
 
+#[cfg(feature = "serve")]
+pub use crate::indexer::fetch::Checkout;
 #[cfg(feature = "serve")]
 pub use crate::indexer::mongo::MongoManifest;
