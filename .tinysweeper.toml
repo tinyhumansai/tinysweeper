@@ -76,3 +76,10 @@ enabled = true
 require_approvals = 0
 allow_labels = ["automerge"]
 block_labels = ["do-not-merge", "wip", "tinysweeper:human-review"]
+
+# `merge`, not the `squash` default, because this repository has squash and
+# rebase both disabled. The forge would answer a squash request with a 405 and
+# the policy would report `Outcome::Rejected` — correct, safe, and completely
+# invisible unless somebody reads the log, which is the shape of bug that makes
+# a working feature look broken.
+method = "merge"
