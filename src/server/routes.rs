@@ -262,6 +262,10 @@ async fn receive(
     }
 
     match webhook::route(&event, &payload) {
+        Action::TrackDraft => {
+            tracing::debug!(%event, "tracking draft pull request");
+            (StatusCode::OK, "tracked").into_response()
+        }
         Action::Ignore(reason) => {
             tracing::debug!(%event, reason, "ignoring");
             (StatusCode::OK, "ignored").into_response()
@@ -545,6 +549,17 @@ async fn review_inner(
         use crate::ports::forge::ForgeRead;
         forge.pull_request(&repo_id, number).await?
     };
+
+    // Comment and review-comment deliveries do not carry the draft flag, so
+    // routing alone cannot prevent a manual-looking request from waking the
+    // workflow. Read the live state before claiming a lease, indexing, calling
+    // a model, or minting a write token; drafts are recorded through delivery
+    // claims and start their first workflow only once GitHub says they are
+    // ready for review.
+    if pull_request.draft {
+        tracing::debug!(%repo, number, "tracking draft pull request without reviewing");
+        return Ok(());
+    }
 
     // Indexing is kicked off here and deliberately not awaited. A cold full
     // index takes minutes; a review is expected in seconds. The review runs

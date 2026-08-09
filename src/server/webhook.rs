@@ -151,6 +151,12 @@ pub struct InstallationRef {
 /// What the server decided to do about a delivery.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
+    /// Record this draft delivery without starting a review.
+    ///
+    /// Claiming the delivery before routing keeps the pull request visible to
+    /// the server and makes a redelivery idempotent. The first non-draft
+    /// delivery, normally `ready_for_review`, starts the workflow.
+    TrackDraft,
     /// Review this pull request.
     Review {
         /// `owner/name`.
@@ -210,11 +216,15 @@ pub fn route(event: &str, payload: &Payload) -> Action {
             };
             match payload.action.as_str() {
                 "opened" | "synchronize" | "reopened" | "ready_for_review" | "edited" => {
-                    Action::Review {
-                        repo: repository.full_name.clone(),
-                        number: pr.number,
-                        author: pr.user.login.clone(),
-                        installation: installation.id,
+                    if pr.draft {
+                        Action::TrackDraft
+                    } else {
+                        Action::Review {
+                            repo: repository.full_name.clone(),
+                            number: pr.number,
+                            author: pr.user.login.clone(),
+                            installation: installation.id,
+                        }
                     }
                 }
                 _ => Action::Ignore("uninteresting pull request action"),
@@ -463,11 +473,32 @@ mod tests {
     }
 
     #[test]
-    fn closing_a_pull_request_does_nothing() {
+    fn a_draft_pull_request_is_tracked_without_starting_a_review() {
+        let mut payload = pr_payload("opened");
+        payload.pull_request.as_mut().expect("pull request").draft = true;
+
+        assert_eq!(route("pull_request", &payload), Action::TrackDraft);
+    }
+
+    #[test]
+    fn a_ready_draft_starts_the_review_workflow() {
+        let mut payload = pr_payload("ready_for_review");
+        payload.pull_request.as_mut().expect("pull request").draft = false;
+
         assert!(matches!(
-            route("pull_request", &pr_payload("closed")),
-            Action::Ignore(_)
+            route("pull_request", &payload),
+            Action::Review { number: 7, .. }
         ));
+    }
+
+    #[test]
+    fn closing_a_pull_request_does_nothing() {
+        let mut payload = pr_payload("closed");
+        payload.pull_request.as_mut().expect("pull request").draft = true;
+        assert_eq!(
+            route("pull_request", &payload),
+            Action::Ignore("uninteresting pull request action")
+        );
     }
 
     #[test]
