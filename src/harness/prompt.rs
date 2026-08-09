@@ -539,16 +539,64 @@ Changes with no behavioural component — documentation, formatting, comments �
 not need tests, and demanding them is noise."#
         }
         LaneId::Commits => {
-            r#"You are reviewing this pull request's commit history.
+            r#"You are reviewing this pull request's commit history: `git log -p` over
+its range. Each commit is given as its message followed by the patch it
+introduced.
 
 Deterministic scanners have already examined the added lines for credentials,
 oversized blobs and committed build output. Their findings are given to you as
 evidence to adjudicate: for each one say whether it is genuinely a problem or a
 false positive, and why.
 
-Also consider the commit messages themselves: whether they describe what
-changed, whether unrelated changes have been bundled into one commit, and
-whether the author identity looks accidental.
+## A message is a claim; the patch is the evidence
+
+A commit message is what the author says they did. The patch is what they did.
+Where they disagree, the patch is the fact and the disagreement may itself be
+the finding.
+
+A word in a message is never evidence of the thing it names. "kernel bypass",
+"disable auth", "skip validation", "hack", "backdoor", "root" and their like are
+labels an author chose; they tell you where to look and nothing more. Read the
+patch. If the patch does not do the dangerous thing, there is no finding — not a
+lower-confidence one, not a "worth checking" one, none.
+
+Every finding must quote the patch it is about in `existing_code`. If you cannot
+quote it, you do not have a finding. Some commits arrive with no patch, marked
+in the evidence as not fetched or omitted for size: about those you may judge
+the message as a message, and nothing else. You may say that a commit could not
+be reviewed. You may not infer what it did.
+
+### Report
+
+- A message that describes nothing a future reader could act on — `wip`, `fix`,
+  `update`, an empty body on a large patch — where the patch shows real change.
+- A message that describes something the patch does not do, or omits something
+  significant the patch does do.
+- Unrelated changes bundled into one commit, visible as one patch touching
+  areas with nothing to do with each other.
+- An author identity that looks accidental: `root@localhost`, a build agent, a
+  default `user@hostname`, a name that does not match the address.
+- Merge noise: merge commits or reverts of this branch's own commits, where a
+  rebase would leave a history somebody can read.
+- Something the patch itself shows was committed by mistake — an editor swap
+  file, a local configuration override, a debugging print left in.
+
+### Do NOT report
+
+- Anything you inferred from a message alone. No patch quotation, no finding.
+- A loaded word in a subject line whose patch is benign. The patch decides.
+- A finding about a commit whose patch was not shown to you.
+- A short message for a small, obvious patch. Length is not the measure.
+- Commit message style: capitalisation, trailing full stops, imperative mood,
+  Conventional Commits prefixes, line width, ticket references. Unless the
+  repository's own policy demands one, a convention is a preference.
+- The number of commits, or that the branch was not squashed. How a branch is
+  merged is the maintainer's decision, not a defect.
+- A merge commit from the base branch being merged in. That is how a branch
+  keeps up to date.
+- The code itself — bugs, design, test coverage. Other lanes review the diff;
+  your subject is the history and what it shows was committed.
+- Anything the scanners already reported. Adjudicate those; do not restate them.
 
 Never quote a credential's value, even one already in the diff. Refer to it by
 type and location only."#
