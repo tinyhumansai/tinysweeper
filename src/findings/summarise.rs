@@ -54,7 +54,11 @@ mod tests {
         // The bug this replaces: byte slicing at `limit` splits a multibyte
         // character and panics. Every one of these is longer in bytes than in
         // characters, so a byte-based cut lands mid-character.
-        for text in ["Guard the índex before dereferencing —— twice", "日本語のタイトルはとても長いのです", "café ".repeat(40).as_str()] {
+        for text in [
+            "Guard the índex before dereferencing —— twice",
+            "日本語のタイトルはとても長いのです",
+            "café ".repeat(40).as_str(),
+        ] {
             let out = shorten(text, 20);
             assert!(out.chars().count() <= 21, "{out}");
         }
