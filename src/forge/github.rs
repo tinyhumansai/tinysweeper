@@ -310,6 +310,10 @@ impl ForgeRead for GitHubRead {
                 .map(|l| l.name)
                 .collect(),
             mergeable: pr.mergeable,
+            // `merged_at` rather than `merged`: octocrab only populates the
+            // latter on some endpoints, and a missing bool would read as "not
+            // merged" on exactly the path that decides whether an issue closes.
+            merged: pr.merged_at.is_some(),
             approvals: self.approvals(repo, number).await,
         })
     }

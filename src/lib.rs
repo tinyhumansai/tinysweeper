@@ -22,6 +22,7 @@ pub mod graph;
 pub mod harness;
 pub mod index;
 pub mod indexer;
+pub mod issues;
 pub mod knowledge;
 pub mod lanes;
 pub mod ports;

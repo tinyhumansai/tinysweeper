@@ -73,6 +73,12 @@ pub struct PullRequest {
     pub labels: Vec<String>,
     /// Whether GitHub considers it mergeable, when known.
     pub mergeable: Option<bool>,
+    /// Whether it was actually merged.
+    ///
+    /// Distinct from "closed": issue triage may only close an issue as fixed by
+    /// a pull request that *landed*, and a closed-unmerged pull request fixed
+    /// nothing. Kept as a plain bool so the offline mock needs no clock.
+    pub merged: bool,
     /// Approving reviews currently on it.
     pub approvals: u32,
 }
