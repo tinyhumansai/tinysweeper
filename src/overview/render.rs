@@ -73,6 +73,10 @@ fn headline(map: &ChangeMap) -> String {
             " No code graph is attached to this repository, so this shows the change's own \
              shape and not what it reaches.",
         ),
+        GraphStatus::Unavailable => line.push_str(
+            " The code graph did not answer for this review, so what the change reaches is \
+             not shown. This is an outage, not an empty result.",
+        ),
         GraphStatus::Cold => line.push_str(
             " The code graph knows nothing about these files yet — normal for newly added \
              files, and a cold index otherwise.",
