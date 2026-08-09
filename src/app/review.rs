@@ -858,6 +858,13 @@ fn lane_proposal(
         b.severity
             .cmp(&a.severity)
             .then(b.confidence.total_cmp(&a.confidence))
+            // Corroboration breaks ties and nothing more. It sits *after*
+            // severity and confidence deliberately: agreement between
+            // reviewers is evidence about which of two equally-rated findings
+            // to keep when `max_comments` bites, not a reason to rank a minor
+            // finding above a serious one. Without a council every finding
+            // carries 1 and this term never fires.
+            .then(b.corroboration.cmp(&a.corroboration))
     });
 
     let over_cap = findings.len().saturating_sub(config.review.max_comments);

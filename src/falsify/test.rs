@@ -34,6 +34,7 @@ fn finding(title: &str) -> Finding {
         applicable: None,
         late: false,
         identity: None,
+        corroboration: 1,
     }
 }
 
@@ -206,6 +207,7 @@ async fn a_finding_about_code_not_in_the_diff_survives() {
         applicable: None,
         late: false,
         identity: None,
+        corroboration: 1,
     };
 
     let outcome = filter(&model, vec![finding_about_absent_code.clone()]).await;

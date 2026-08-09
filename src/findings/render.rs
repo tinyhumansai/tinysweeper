@@ -398,6 +398,7 @@ mod tests {
             applicable: None,
             late: false,
             identity: None,
+            corroboration: 1,
         }
     }
 

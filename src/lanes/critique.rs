@@ -36,10 +36,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::config::types::{Config, LaneId};
+use crate::council;
 use crate::error::Result;
 use crate::evidence::diff::FileDiff;
 use crate::evidence::replay;
 use crate::falsify::{Falsifier, Rejection};
+use crate::findings::types::Finding;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema::{self, RawFinding};
 use crate::lanes::fanout::{FileReview, per_file_with_budget};
@@ -128,12 +130,106 @@ async fn review_file(
 ) -> Result<FileReview> {
     let config: &Config = input.config;
     let evidence = replay::render(std::slice::from_ref(diff));
+    let reviewers = council::reviewers(config, LaneId::Critique);
+
+    let mut spend = Spend::default();
+    let mut per_reviewer: Vec<Vec<Finding>> = Vec::with_capacity(reviewers.len());
+    let mut summary = String::new();
+    let mut resolved: Vec<String> = Vec::new();
+    let mut unanchored = 0usize;
+    let mut discarded = 0usize;
+
+    for reviewer in &reviewers {
+        // One reviewer's failure is not the lane's. With a council configured,
+        // losing one angle should cost that angle and nothing else — the same
+        // rule `lanes::fanout` applies to a file that could not be reviewed.
+        let asked = ask(model, input, changed_paths, diff, &evidence, reviewer).await;
+        let asked = match asked {
+            Ok(asked) => asked,
+            Err(err) if reviewers.len() > 1 => {
+                tracing::warn!(agent = reviewer.id, %err, "a council reviewer failed");
+                continue;
+            }
+            Err(err) => return Err(err),
+        };
+
+        spend.merge(asked.spend);
+        unanchored += asked.unanchored;
+        discarded += asked.discarded;
+        // The first reviewer's prose, taken whole. Blending N summaries would
+        // author text no reviewer wrote, which is the objection `src/falsify`
+        // raises to a filter that can return findings of its own.
+        if summary.is_empty() {
+            summary = asked.summary;
+            resolved = asked.resolved;
+        }
+        per_reviewer.push(asked.findings);
+    }
+
+    if per_reviewer.is_empty() {
+        return Err(crate::error::Error::lane(
+            "critique",
+            format!("every reviewer failed on {}", diff.path),
+        ));
+    }
+
+    // Corroboration is a separate switch from the council itself, so the merge
+    // can be measured before a second agent is what is being judged. Off, the
+    // findings are concatenated exactly as the reviewers produced them.
+    let findings: Vec<Finding> = if config.council.corroboration {
+        council::merge(per_reviewer)
+    } else {
+        per_reviewer.into_iter().flatten().collect()
+    };
+
+    // Step 5, once over the merged set rather than once per reviewer. The
+    // filter can only reject, so more inputs in one pass is identical semantics
+    // at a fraction of the calls.
+    let filtered = Falsifier::new(model, config)
+        .filter(LaneId::Critique, findings, &evidence)
+        .await;
+    spend.merge(filtered.spend);
+
+    Ok(FileReview {
+        summary: summarise(
+            summary.trim(),
+            unanchored,
+            discarded,
+            &filtered.rejected,
+            filtered.findings.len(),
+        ),
+        findings: filtered.findings,
+        resolved,
+        spend,
+    })
+}
+
+/// What one reviewer said about one file.
+struct Asked {
+    summary: String,
+    resolved: Vec<String>,
+    findings: Vec<Finding>,
+    spend: Spend,
+    unanchored: usize,
+    discarded: usize,
+}
+
+/// Ask one reviewer about one file, and place what it said.
+async fn ask(
+    model: &dyn Model,
+    input: &LaneInput<'_>,
+    changed_paths: &[String],
+    diff: &FileDiff,
+    evidence: &str,
+    reviewer: &council::Reviewer<'_>,
+) -> Result<Asked> {
+    let config: &Config = input.config;
 
     let built = prompt::build(&PromptInputs {
         repo_policy: input.repo_policy,
         extracted_rules: input.extracted_rules,
         prior_findings: input.prior_findings,
-        new_evidence: &evidence,
+        new_evidence: evidence,
         // Every path the pull request touched, not just this one. This selects
         // which `path_instructions` are injected, and narrowing it to the focus
         // file would silently drop the rules for every other changed path from
@@ -141,6 +237,7 @@ async fn review_file(
         // well as the rules.
         changed_paths,
         focus_path: Some(&diff.path),
+        persona: reviewer.persona,
         retrieved_context: input.retrieved_context,
         ..PromptInputs::new(LaneId::Critique, config)
     });
@@ -150,7 +247,7 @@ async fn review_file(
     // message is the one part guaranteed to be sent first.
     let response = model
         .complete(ModelRequest {
-            model: config.model_for(LaneId::Critique).to_string(),
+            model: reviewer.model.to_string(),
             messages: vec![
                 Message::system(built.prefix()),
                 Message::user(built.suffix()),
@@ -202,7 +299,7 @@ async fn review_file(
                     diff: Some(diff),
                     file: input.file_contents.get(&raw.path).map(String::as_str),
                     comment: &comment,
-                    rendered_diff: &evidence,
+                    rendered_diff: evidence,
                 },
                 &mut spend,
             )
@@ -232,24 +329,16 @@ async fn review_file(
         findings.push(finding);
     }
 
-    // Step 5, on the findings that survived positioning. It sees only the
-    // diff, and it can only remove.
-    let filtered = Falsifier::new(model, config)
-        .filter(LaneId::Critique, findings, &evidence)
-        .await;
-    spend.merge(filtered.spend);
-
-    Ok(FileReview {
-        summary: summarise(
-            parsed.summary.trim(),
-            unanchored,
-            discarded,
-            &filtered.rejected,
-            filtered.findings.len(),
-        ),
-        findings: filtered.findings,
+    // Falsification is deliberately *not* here: it runs once over the merged
+    // set in `review_file`, because a reject-only filter given more inputs in
+    // one pass has identical semantics at a fraction of the calls.
+    Ok(Asked {
+        summary: parsed.summary,
         resolved: parsed.resolved,
+        findings,
         spend,
+        unanchored,
+        discarded,
     })
 }
 

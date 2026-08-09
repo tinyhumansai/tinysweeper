@@ -30,6 +30,7 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_retrieval(config, &mut problems);
     validate_overview(config, &mut problems);
     validate_lanes(config, &mut problems);
+    validate_council(config, &mut problems);
     validate_automerge(config, &mut problems);
     validate_issues(config, &mut problems);
     validate_automation(config, &mut problems);
@@ -642,6 +643,55 @@ fn validate_sentry(config: &Config, problems: &mut Vec<String>) {
             "`sentry.max_per_run = 0` would promote nothing; it exists to stop a Sentry spike flooding the tracker, not to disable promotion"
                 .into(),
         );
+    }
+}
+
+/// The council: who reviews, with what character.
+fn validate_council(config: &Config, problems: &mut Vec<String>) {
+    let council = &config.council;
+
+    if council.enabled && council.agents.is_empty() {
+        problems.push(
+            "`council.enabled = true` with no `[[council.agents]]` reviews nothing differently; \
+             either add an agent or leave the council off"
+                .into(),
+        );
+    }
+
+    let mut seen = std::collections::BTreeSet::new();
+    for agent in &council.agents {
+        if agent.id.trim().is_empty() {
+            problems.push("a `[[council.agents]]` entry has no `id`".into());
+        } else if !seen.insert(agent.id.as_str()) {
+            // The id names the agent in the cost line and the check summary, so
+            // two agents sharing one makes the report unreadable.
+            problems.push(format!(
+                "two `[[council.agents]]` entries share the id `{}`",
+                agent.id
+            ));
+        }
+
+        if let Some(persona) = agent.persona.as_deref()
+            && crate::council::persona::lookup(persona).is_none()
+        {
+            // A persona is a name, never text: repository prose reaches a
+            // prompt through exactly one door and this is not it. So a typo has
+            // to be an error rather than a reviewer with no character.
+            problems.push(format!(
+                "`{}` names the persona `{persona}`, which does not exist. Known: {}",
+                agent.id,
+                known(&crate::council::persona::NAMES)
+            ));
+        }
+
+        for lane in &agent.lanes {
+            if !config.review.lanes.iter().any(|name| name == lane.as_str()) {
+                problems.push(format!(
+                    "`{}` reviews the `{lane}` lane, which `review.lanes` does not enable",
+                    agent.id
+                ));
+            }
+        }
     }
 }
 

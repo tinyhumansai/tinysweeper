@@ -66,6 +66,7 @@ fn finding(path: &str, line: u64, title: &str, body: &str) -> Finding {
         applicable: None,
         late: false,
         identity: Some("abcd1234".into()),
+        corroboration: 1,
     }
 }
 

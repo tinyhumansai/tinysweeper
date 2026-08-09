@@ -93,6 +93,8 @@ impl RawFinding {
             title: truncate(&scrub(&self.title), 80),
             body: scrub(&self.body),
             suggestion: self.suggestion.as_deref().map(scrub),
+            // One reviewer said so. The council raises it when another agrees.
+            corroboration: 1,
             // Stamped later, by `findings::suggest`, which has the diff.
             applicable: None,
             late: self.late,
