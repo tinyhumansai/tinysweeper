@@ -27,3 +27,14 @@ instructions = """
 Flag any widening of `permissions`, any unpinned third-party action, and any
 step that interpolates untrusted context into a shell.
 """
+
+# Retrieval on, through the same gateway the completion models use. The three
+# fields below are the index partition key: change any of them and the vectors
+# already written stop matching, which is why they live here rather than in the
+# environment.
+[embeddings]
+enabled = true
+provider = "openrouter"
+model = "openai/text-embedding-3-small"
+dimensions = 1536
+api_key_env = "OPENROUTER_API_KEY"
