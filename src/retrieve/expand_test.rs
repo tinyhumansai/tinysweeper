@@ -200,22 +200,54 @@ async fn the_changed_files_own_chunks_are_never_returned_as_context() {
 }
 
 #[tokio::test]
-async fn a_zero_bound_expands_nothing_rather_than_everything() {
+async fn a_zero_hop_bound_expands_nothing_rather_than_everything() {
     let graph = caller_graph().await;
     let index = index_with(&[("src/caller.rs", 1, 12, "fn checkout() {}")]).await;
 
-    for (hops, nodes, chunks) in [(0, 60, 40), (2, 0, 40), (2, 60, 0)] {
+    let expansion = expand(
+        &graph,
+        &index,
+        &signature(),
+        REPO,
+        &callee_diff(),
+        &bounds(0, 60, 40),
+    )
+    .await
+    .expect("expands");
+    assert_eq!(expansion, Expansion::default());
+}
+
+#[tokio::test]
+async fn a_zero_node_or_chunk_bound_still_keeps_the_blast_radius() {
+    // The node and chunk caps bound the *code* a lane is shown; the blast
+    // radius is a list of names enabled separately by `max_impact`, so a config
+    // with zero node or chunk context is exactly the case where the warning is
+    // all the retrieval there is.
+    let graph = caller_graph().await;
+    let index = index_with(&[("src/caller.rs", 1, 12, "fn checkout() {}")]).await;
+
+    for (nodes, chunks) in [(0, 40), (60, 0)] {
         let expansion = expand(
             &graph,
             &index,
             &signature(),
             REPO,
             &callee_diff(),
-            &bounds(hops, nodes, chunks),
+            &bounds(2, nodes, chunks),
         )
         .await
         .expect("expands");
-        assert_eq!(expansion, Expansion::default(), "{hops}/{nodes}/{chunks}");
+        assert!(expansion.chunks.is_empty(), "{nodes}/{chunks}");
+        assert_eq!(expansion.nodes, 0, "{nodes}/{chunks}");
+        assert!(
+            expansion
+                .impact
+                .reached
+                .iter()
+                .any(|row| row.id == "src/caller.rs#checkout"),
+            "the blast radius survives the caps: {:?}",
+            expansion.impact.reached
+        );
     }
 }
 
