@@ -7,7 +7,7 @@ caller three files away that the diff breaks, because that caller shares no
 vocabulary with it. The graph is the other half: seed it with the symbols a pull
 request touched and walk outwards.
 
-**This graph exists to be traversed during a review, not to be drawn.** That is
+**This graph exists to be traversed during a review, not to be browsed.** That is
 the whole design constraint, and it is worth stating because the obvious version
 of this feature fails it. The obvious version is a dashboard endpoint —
 `buildRepoGraph`, called from exactly one HTTP route, never from a review — whose
@@ -15,6 +15,11 @@ structural edges come from a regex that gives up on any specifier that does not
 begin with `.` or `..`. Applied to its own codebase, which writes almost every
 internal import as `@/lib/…`, it produces a graph with essentially no edges. It
 looks like a feature and answers no question.
+
+The one picture drawn out of it — the change map in
+[`overview`](../overview/README.md) — is the same bounded walk, seeded the same
+way, rendered for the reviewer of one pull request instead of for a prompt.
+There is still no query anybody can point at the graph for its own sake.
 
 ## Files
 
@@ -28,6 +33,7 @@ looks like a feature and answers no question.
 | `resolve.rs` | `Resolver` — a specifier and a file in, the file it names out |
 | `build.rs` | Nodes and edges out of parsed files; `sync_all` / `build_paths` + `sync_paths` / `rebuild_set` to store them |
 | `traverse.rs` | `NeighbourQuery`, the uncapped `walk`, and the capped `neighbours` |
+| `rank.rs` | Personalised PageRank — which nodes survive the cap |
 | `impact.rs` | `Impact` — the same walk read inbound only: what breaks, and what nothing tests |
 
 Storage goes through the `GraphStore` port (`src/ports/graph.rs`). The node,
@@ -83,6 +89,8 @@ Each language gets the rules its own toolchain uses.
 | Rust | `crate::` / `self::` / `super::` / the crate's own name, `foo.rs` vs `foo/mod.rs`, bodyless `mod foo;`, `#[path = "…"]` |
 | Python | dotted absolute modules matched against the tree (so `src/` layouts work with no packaging metadata), explicit relative imports, `__init__.py` packages |
 | Go | package directories rooted at the `go.mod` module path; an import resolves to every non-test `.go` file in the directory, because that is what a Go package is |
+| Java | dotted packages matched against the tree, so any `src/main/java` or Gradle multi-module root works with no `pom.xml` read; a `static` import drops its trailing member and retries, which also covers `Outer.Inner` |
+| Ruby | `require_relative` against the requiring file's directory; `require` matched against the tree, because `$LOAD_PATH` is assembled at runtime and there is nothing to read |
 
 Two details that only look like details:
 
@@ -96,6 +104,17 @@ Two details that only look like details:
 Ambiguity is never guessed. Two equally plausible Python modules resolve to
 `Ambiguous` and produce no edge, because a wrong edge sends retrieval into the
 wrong file with full confidence, which is worse than a missing one.
+
+Java and Ruby both break the tie instead, and deliberately: the shallowest
+candidate wins. `src/main` and `src/test` genuinely both provide the same type
+in every Maven layout, and the main tree is the one a reviewer means. Reporting
+that as ambiguous would produce no edges at all on the most ordinary Java
+repository there is.
+
+Ruby has one further departure. `require` names a gem as often as it names a
+file, a gem and a typo are indistinguishable without resolving a Gemfile, and
+so an unmatched `require` is `External`. A `require_relative` that matches
+nothing is `NoSuchFile` — that one really is broken.
 
 ## Coverage is measured, not assumed
 
@@ -131,10 +150,8 @@ not redundant. Hops bound the shape of the walk; the cap bounds its size. Two
 hops out of a widely imported module is most of the repository, and a prompt
 containing most of the repository is worse than one containing nothing.
 
-Truncation is breadth-first from the seeds, so what survives is the closest
-blast radius rather than whatever the store returned first, and edges whose
-endpoints were dropped go with them. Defaults are deliberately small: one hop,
-200 nodes.
+What survives the cap is decided by `rank.rs`, and edges whose endpoints were
+dropped go with them. Defaults are deliberately small: one hop, 200 nodes.
 
 Edges are walked in both directions. Whoever calls a changed function is at
 least as much of the blast radius as whatever it calls — and for a leaf that
@@ -163,6 +180,36 @@ emitted **only** for symbols the graph actually holds. "No test covers this" and
 and reporting the second as the first tells a reviewer we looked when we did
 not. It is rendered above the retrieved chunks in the lane's prompt, because it
 is the shortest part and the part that says what to look for.
+
+## Ranking, because distance runs out of road
+
+Truncation used to be breadth-first from the seeds, keeping the closest blast
+radius. That is defensible one hop out. Two hops out of a widely imported
+module every candidate sits at the *same* distance, and the tie-break —
+alphabetical order on the node id — silently decided what the reviewer got to
+read.
+
+`rank.rs` is personalised PageRank, the idea taken from aider's `repomap.py`.
+All the restart mass goes to the seeds, so score still decays with distance, but
+at equal distance a node the diff reaches by many paths beats one it reaches by
+a single edge. Edge kinds carry different weight — `calls` 1.0, `references`
+0.6, `imports` 0.5, `defines` 0.3 — and `defines` is small on purpose: it is the
+edge from a file to every symbol in it, so at any larger weight one seeded file
+sprays its mass across every unrelated symbol sharing the file and the ranking
+collapses into "big files win".
+
+Seeds are pinned above everything else regardless of score. On an undirected
+walk mass piles up where the edges are, so a seed at the end of a call chain
+scores below the file it calls — a fair statement about connectivity and a
+useless one about review. A cap that drops a seed has truncated the thing it was
+asked about.
+
+Two things aider does are deliberately not copied. It scales an edge by
+`sqrt(num_refs)`; edges here are deduplicated by id in `build.rs`, so that count
+is not in the data and inventing it would be a lie. It also boosts rare
+identifiers and damps ubiquitous ones (`new`, `get`, `len`); `build::target_for`
+already refuses to emit an edge for any usage it cannot attribute to a single
+definition, which is the same noise control applied earlier and harder.
 
 ## Incremental writes
 

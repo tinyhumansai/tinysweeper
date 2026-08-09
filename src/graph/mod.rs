@@ -14,17 +14,24 @@
 //! 3. [`resolve`] turns a specifier into the file it names, per language, and
 //!    records what it could not.
 //! 4. [`build`] assembles nodes and edges and writes them; [`traverse`] walks
-//!    them back out, bounded by hops and by a hard node cap.
+//!    them back out, bounded by hops and by a hard node cap, and [`rank`]
+//!    decides which nodes survive that cap.
 //! 5. [`impact`] reads that walk *inbound only*, for the narrower question a
 //!    review asks: what existing code breaks if this change is wrong, and what
 //!    changed code no test reaches.
 //!
-//! **This graph exists to be traversed during a review**, not to be drawn. The
+//! **This graph exists to be traversed during a review**, not to be browsed. The
 //! obvious version of this feature is a dashboard endpoint whose only caller is
 //! an HTTP route — and whose specifier matching gives up on anything that is
 //! not a relative path, so it cannot follow the very aliases its own codebase
 //! is written in. Retrieval seeds [`traverse::neighbours`] with the symbols a
 //! diff touches; that is the whole reason the resolver is as careful as it is.
+//!
+//! [`crate::overview`] does draw one picture, and it is the same bounded walk
+//! seeded the same way — a review output about one pull request, not a browsing
+//! surface over the repository. The distinction is the one this module cares
+//! about: every drawing is of a change, and there is no query anybody can point
+//! at the graph for its own sake.
 
 pub mod aliases;
 pub mod build;
@@ -32,6 +39,7 @@ pub mod extract;
 pub mod impact;
 pub mod lang;
 pub mod path;
+pub mod rank;
 pub mod resolve;
 pub mod traverse;
 pub mod types;
@@ -40,6 +48,7 @@ pub use crate::graph::aliases::{AliasConfig, AliasPattern, TsBaseUrl};
 pub use crate::graph::build::{build, sync_all, sync_paths};
 pub use crate::graph::extract::parse;
 pub use crate::graph::impact::{DEFAULT_MAX_REACHED, Impact, Impacted, Relation};
+pub use crate::graph::rank::rank;
 pub use crate::graph::resolve::{Resolution, Resolver};
 pub use crate::graph::traverse::{DEFAULT_HOPS, DEFAULT_MAX_NODES, NeighbourQuery, neighbours};
 pub use crate::graph::types::{

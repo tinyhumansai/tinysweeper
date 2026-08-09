@@ -15,14 +15,15 @@
 //! repository, and a prompt containing the repository is worse than one
 //! containing nothing.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::config::types::Retrieval;
 use crate::error::Result;
 use crate::evidence::diff::FileDiff;
 use crate::graph::impact::Impact;
+use crate::graph::rank::rank;
 use crate::graph::traverse::{self, NeighbourQuery};
-use crate::index::types::{Chunk, EdgeKind, EmbedSignature};
+use crate::index::types::{Chunk, EdgeKind, EmbedSignature, Neighbourhood};
 use crate::ports::graph::GraphStore;
 use crate::ports::index::ChunkIndex;
 
@@ -105,6 +106,38 @@ fn named(candidate: &str) -> Option<String> {
         .then(|| candidate.to_string())
 }
 
+/// The files a neighbourhood covers, best-ranked first, minus the changed ones.
+///
+/// A file's rank is the best rank of any node in it. A file is worth reading
+/// because of its most implicated symbol, not because of how many barely
+/// related ones it happens to also contain — summing would make a large file
+/// win on size alone, which is the failure `graph::rank` weights `Defines` down
+/// to avoid in the first place.
+fn ranked_paths(
+    neighbourhood: &Neighbourhood,
+    seeds: &[String],
+    changed: &BTreeSet<&str>,
+) -> Vec<String> {
+    let by_id: BTreeMap<&str, &str> = neighbourhood
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node.path.as_str()))
+        .collect();
+
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut paths = Vec::new();
+    for (id, _) in rank(neighbourhood, seeds) {
+        let Some(&path) = by_id.get(id.as_str()) else {
+            continue;
+        };
+        if changed.contains(path) || !seen.insert(path) {
+            continue;
+        }
+        paths.push(path.to_string());
+    }
+    paths
+}
+
 /// What the walk found.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Expansion {
@@ -158,7 +191,7 @@ pub async fn expand(
         return Ok(Expansion::default());
     }
 
-    let query = NeighbourQuery::new(seeds)
+    let query = NeighbourQuery::new(seeds.clone())
         .hops(hops)
         .kinds(EdgeKind::ALL)
         .max_nodes(max_nodes);
@@ -171,14 +204,18 @@ pub async fn expand(
     let neighbourhood = traverse::cap(walked, &query.seeds, max_nodes);
 
     let changed: BTreeSet<&str> = diffs.iter().map(|diff| diff.path.as_str()).collect();
-    let mut paths: Vec<String> = neighbourhood
-        .nodes
-        .iter()
-        .map(|node| node.path.clone())
-        .filter(|path| !changed.contains(path.as_str()))
-        .collect();
+    let mut paths = ranked_paths(&neighbourhood, &seeds, &changed);
+
+    // A path list longer than the chunk ceiling cannot be represented anyway —
+    // one chunk per file is the floor — and `ChunkIndex::chunks_in_paths` is
+    // contractually ordered by `(path, start_line)`, so the surplus is dropped
+    // *alphabetically* by the store. Truncating by rank here is what makes the
+    // ranking bind: the files that survive are the ones the diff most
+    // implicates rather than the ones early in the alphabet.
+    paths.truncate(max_chunks);
+    // Restored to the store's own order once the selection is made, so the
+    // request says nothing about ordering that the port does not promise.
     paths.sort_unstable();
-    paths.dedup();
 
     let chunks = index
         .chunks_in_paths(signature, repo_id, &paths, max_chunks)

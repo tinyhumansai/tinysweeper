@@ -150,6 +150,9 @@ fn priority(diff: &FileDiff) -> i32 {
     if is_agent_instruction_file(diff.path.rsplit('/').next().unwrap_or(&diff.path)) {
         score += 6;
     }
+    if is_supply_chain_file(&diff.path) {
+        score += 5;
+    }
     if sensitive_path(&diff.path) {
         score += 4;
     }
@@ -162,6 +165,111 @@ fn priority(diff: &FileDiff) -> i32 {
         score -= 3;
     }
     score
+}
+
+/// Files where a change alters **what runs or what it runs as**, rather than
+/// what the program computes.
+///
+/// These are the pull requests that read as boring and are not. A one-line
+/// addition to `.pre-commit-config.yaml` runs a stranger's code on every
+/// contributor's machine. A `setup.py` executes at install time. An `.npmrc`
+/// line repoints a registry. A `CODEOWNERS` edit changes who has to approve the
+/// *next* pull request. None of that trips [`added_sinks`], because the diff
+/// contains no sink — it contains configuration — and none of it trips
+/// [`sensitive_path`], because the filename says nothing about authorisation.
+///
+/// Ranked above [`sensitive_path`] and below an agent instruction file: a
+/// changed build manifest is a supply-chain change with certainty, where a path
+/// containing `auth` is a guess that happens to be usually right.
+///
+/// The list is aider's `special.py`, cut down hard. Most of what aider carries
+/// there is high-signal for *reading a repository* and irrelevant here —
+/// `LICENSE`, `README.md`, `.gitkeep`, `.editorconfig` — and promoting those
+/// would push inert files up a queue that exists to spend a security budget.
+/// Lockfiles are deliberately absent too: [`skip_reason`] drops them as
+/// generated, and listing them here would contradict that.
+fn is_supply_chain_file(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+
+    // Anything a CI runner executes. `.github/workflows` is matched by prefix
+    // rather than by name because the filename inside it is arbitrary.
+    if path.starts_with(".github/workflows/") || path == ".circleci/config.yml" {
+        return true;
+    }
+    if matches!(
+        name,
+        ".travis.yml"
+            | ".gitlab-ci.yml"
+            | "Jenkinsfile"
+            | "azure-pipelines.yml"
+            | "bitbucket-pipelines.yml"
+            | "appveyor.yml"
+            | "circle.yml"
+            | ".pre-commit-config.yaml"
+            | ".pre-commit-config.yml"
+    ) {
+        return true;
+    }
+
+    // Dependency manifests — the *declaration*, not the lock. A new dependency
+    // is a new supply chain; the lockfile that follows is machine-written.
+    if matches!(
+        name,
+        "package.json"
+            | "pyproject.toml"
+            | "setup.py"
+            | "setup.cfg"
+            | "requirements.txt"
+            | "Pipfile"
+            | "Gemfile"
+            | "composer.json"
+            | "pom.xml"
+            | "build.gradle"
+            | "build.gradle.kts"
+            | "build.sbt"
+            | "go.mod"
+            | "Cargo.toml"
+            | "mix.exs"
+            | "Podfile"
+    ) {
+        return true;
+    }
+
+    // Where packages are fetched from, and with whose credentials.
+    if matches!(name, ".npmrc" | ".yarnrc" | ".yarnrc.yml" | ".pypirc") {
+        return true;
+    }
+
+    // Bots that open and merge pull requests on their own.
+    if matches!(name, "renovate.json" | "dependabot.yml" | "dependabot.yaml") {
+        return true;
+    }
+
+    // Who is required to approve the next change.
+    if name == "CODEOWNERS" {
+        return true;
+    }
+
+    // Deployment surface: what image runs, with what environment, in what
+    // account. `sensitive_path` already catches `dockerfile` and `terraform`
+    // by substring; these are the ones it misses.
+    if matches!(
+        name,
+        "docker-compose.yml"
+            | "docker-compose.yaml"
+            | "docker-compose.override.yml"
+            | "serverless.yml"
+            | "netlify.toml"
+            | "vercel.json"
+            | "ansible.cfg"
+            | "app.yaml"
+    ) || name.ends_with(".tf")
+    {
+        return true;
+    }
+
+    // Secrets, and the baseline that decides which ones are allowed through.
+    name == ".env" || name.starts_with(".env.") || name == ".secrets.baseline"
 }
 
 /// Path segments that name an authorisation, credential or trust boundary.
@@ -381,6 +489,116 @@ mod tests {
         );
 
         assert_eq!(out.review[0], "src/auth/session.rs");
+    }
+
+    /// The case the sink list and the path hints both miss: a manifest whose
+    /// diff is pure configuration and whose filename names nothing sensitive.
+    #[test]
+    fn a_supply_chain_manifest_outranks_ordinary_source() {
+        let out = triage(
+            &[
+                diff("src/render.rs", "let x = 1;"),
+                diff(".pre-commit-config.yaml", "  - repo: https://example.test"),
+                diff("package.json", "\"left-pad\": \"^1.3.0\""),
+            ],
+            &[],
+        );
+
+        assert_eq!(out.review[2], "src/render.rs", "{:?}", out.review);
+        assert!(out.review[..2].contains(&".pre-commit-config.yaml".to_string()));
+        assert!(out.review[..2].contains(&"package.json".to_string()));
+    }
+
+    /// A lockfile must not be promoted by the supply-chain rule after being
+    /// skipped as generated — the two would contradict each other.
+    #[test]
+    fn a_manifests_lockfile_is_still_skipped() {
+        let out = triage(
+            &[
+                diff("package.json", "\"left-pad\": \"^1.3.0\""),
+                diff("package-lock.json", "\"resolved\": \"https://r.test\""),
+            ],
+            &[],
+        );
+
+        assert_eq!(out.review, vec!["package.json".to_string()]);
+        assert_eq!(out.skipped[0].0, "package-lock.json");
+    }
+
+    /// Guard against importing aider's list wholesale: it is a "worth reading"
+    /// list, and most of it is inert from a security lane's point of view.
+    #[test]
+    fn inert_repository_furniture_is_not_treated_as_supply_chain() {
+        for path in ["LICENSE", "README.md", ".gitkeep", ".editorconfig"] {
+            assert!(!is_supply_chain_file(path), "{path} was promoted");
+        }
+    }
+
+    /// Every pattern in the supply-chain list has a positive test so that
+    /// deleting an arm silently weakens triage ordering.
+    #[test]
+    fn every_supply_chain_pattern_is_promoted() {
+        for path in [
+            // CI runners, matched by prefix or by well-known filename.
+            ".github/workflows/release.yml",
+            ".circleci/config.yml",
+            ".travis.yml",
+            ".gitlab-ci.yml",
+            "Jenkinsfile",
+            "azure-pipelines.yml",
+            "bitbucket-pipelines.yml",
+            "appveyor.yml",
+            "circle.yml",
+            ".pre-commit-config.yaml",
+            ".pre-commit-config.yml",
+            // Dependency manifests — the declaration, never the lockfile.
+            "package.json",
+            "pyproject.toml",
+            "setup.py",
+            "setup.cfg",
+            "requirements.txt",
+            "Pipfile",
+            "Gemfile",
+            "composer.json",
+            "pom.xml",
+            "build.gradle",
+            "build.gradle.kts",
+            "build.sbt",
+            "go.mod",
+            "Cargo.toml",
+            "mix.exs",
+            "Podfile",
+            // Where packages are fetched from, and with whose credentials.
+            ".npmrc",
+            ".yarnrc",
+            ".yarnrc.yml",
+            ".pypirc",
+            // Bots that open and merge pull requests on their own.
+            "renovate.json",
+            "dependabot.yml",
+            "dependabot.yaml",
+            // Who is required to approve the next change.
+            "CODEOWNERS",
+            // Deployment surface.
+            "docker-compose.yml",
+            "docker-compose.yaml",
+            "docker-compose.override.yml",
+            "serverless.yml",
+            "netlify.toml",
+            "vercel.json",
+            "ansible.cfg",
+            "app.yaml",
+            "infra/main.tf",
+            // Secrets, and the baseline that decides which ones get through.
+            ".env",
+            ".env.production",
+            ".secrets.baseline",
+        ] {
+            assert!(
+                is_supply_chain_file(path),
+                "{path} was not treated as supply chain"
+            );
+        }
     }
 
     #[test]

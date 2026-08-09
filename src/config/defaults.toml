@@ -35,6 +35,17 @@ request_changes_at = "high"
 # second is not submitted while the first still stands.
 approve_when_clean = true
 
+# The change-map comment: one diagram of what the pull request touches and what
+# it reaches, edited in place on every push. On by default, which is safe in a
+# way most defaults here are not — it makes no model call, so it costs nothing,
+# and it posts exactly one comment however many times the branch is pushed.
+[overview]
+enabled = true
+max_components = 10
+max_impacted = 6
+max_links = 24
+max_paths_per_component = 12
+
 [paths]
 ignore = [
     "**/*.lock",
@@ -89,7 +100,18 @@ deep = "z-ai/glm-5.2"
 # mandatory for this endpoint", which made the whole chain a guaranteed failure
 # rather than a safety net.
 fallback = ["deepseek/deepseek-v4-pro", "minimax/minimax-m3"]
-max_tokens = 8000
+# A ceiling, not a purchase: tokens are billed as produced, so raising this
+# costs nothing on the calls that finish early and buys headroom on the ones
+# that would otherwise be cut off. It was 8000, which is the same budget the
+# *reasoning* is drawn from — see `reasoning_effort` below — so a lane reviewing
+# a large diff was thinking and answering out of one 8000-token allowance.
+#
+# Running out entirely is loud: the harness turns empty content with
+# `finish_reason = "length"` into an error naming this key. Running out *part
+# way* through the findings array is the quiet one — the repair ladder salvages
+# the findings that arrived and the rest are simply never seen, which reads
+# exactly like a clean review. That is the failure this number is set against.
+max_tokens = 16000
 # Reasoning is billed against `max_tokens`. It was off entirely because
 # `kimi-k3` spent all 8000 tokens thinking and returned empty content; measured
 # on `deepseek-v4-pro` at `high`, the same prompt uses 416 reasoning tokens and

@@ -81,6 +81,19 @@ pub enum Refusal {
         /// The check run's name.
         name: String,
     },
+    /// A check named in `require_checks` reported, but not a verdict.
+    ///
+    /// `Skipped` is the case: the check could not run, so the gate it was
+    /// named for has no evidence behind it. Distinct from
+    /// [`Refusal::RequiredCheckMissing`] because the two need different
+    /// fixes — one is a check that vanished, the other is a check that ran
+    /// and declined — and telling an operator "has not reported" about a
+    /// check sitting in front of them on the page is worse than saying
+    /// nothing.
+    RequiredCheckInconclusive {
+        /// The check run's name.
+        name: String,
+    },
     /// The pull request changed no files, so there is nothing to judge.
     NoChangedFiles,
     /// More files than `max_files`.
@@ -143,6 +156,12 @@ impl fmt::Display for Refusal {
             Refusal::RequiredCheckMissing { name } => {
                 write!(f, "the required check `{name}` has not reported")
             }
+            Refusal::RequiredCheckInconclusive { name } => {
+                write!(
+                    f,
+                    "the required check `{name}` was skipped, so it is not evidence of a pass"
+                )
+            }
             Refusal::NoChangedFiles => write!(f, "it changes no files"),
             Refusal::TooManyFiles { files, max } => {
                 write!(f, "it changes {files} files, over the cap of {max}")
@@ -182,4 +201,77 @@ pub enum Outcome {
         /// What the forge said.
         reason: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_refusal_has_a_human_readable_explanation() {
+        let refusals = [
+            Refusal::Disabled,
+            Refusal::UnreadablePolicy("glob".into()),
+            Refusal::Draft,
+            Refusal::BlockedLabel("hold".into()),
+            Refusal::MissingAllowLabel,
+            Refusal::NotMergeable,
+            Refusal::ChangesRequested {
+                reviewer: "reviewer".into(),
+            },
+            Refusal::NotEnoughApprovals { have: 1, want: 2 },
+            Refusal::CheckFailing { name: "ci".into() },
+            Refusal::CheckPending { name: "ci".into() },
+            Refusal::RequiredCheckMissing { name: "ci".into() },
+            Refusal::NoChangedFiles,
+            Refusal::TooManyFiles { files: 4, max: 3 },
+            Refusal::SensitivePath {
+                path: "src/auth.rs".into(),
+            },
+            Refusal::TooComplex {
+                signal: "hunks",
+                value: 4,
+                max: 3,
+            },
+            Refusal::Unmeasurable {
+                path: "blob".into(),
+            },
+            Refusal::HeadMoved {
+                evaluated: "old".into(),
+                live: "new".into(),
+            },
+        ];
+        assert!(
+            refusals
+                .iter()
+                .all(|refusal| !refusal.to_string().is_empty())
+        );
+    }
+
+    #[test]
+    fn decisions_expose_only_mergeable_outcomes() {
+        let merge = Decision::Merge;
+        let refusal = Decision::Refuse(Refusal::Draft);
+        assert!(merge.is_merge());
+        assert!(merge.refusal().is_none());
+        assert!(!refusal.is_merge());
+        assert!(matches!(refusal.refusal(), Some(Refusal::Draft)));
+        assert!(matches!(
+            Outcome::Merged {
+                method: "squash".into()
+            },
+            Outcome::Merged { .. }
+        ));
+        assert!(matches!(
+            Outcome::Refused(Refusal::Draft),
+            Outcome::Refused(_)
+        ));
+        assert!(matches!(
+            Outcome::Rejected {
+                method: "merge".into(),
+                reason: "blocked".into()
+            },
+            Outcome::Rejected { .. }
+        ));
+    }
 }
