@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::json;
+use tinyagents::harness::context::RunConfig;
 use tinyagents::harness::message::Message as TaMessage;
 use tinyagents::harness::model::ResponseFormat;
 use tinyagents::harness::providers::openai::OpenAiModel;
@@ -114,8 +115,10 @@ impl GatewayModel {
             })
             .collect();
 
+        // `invoke` rather than `invoke_default`, because the run configuration
+        // is where the output ceiling lives — see [`run_config`].
         let run = harness
-            .invoke_default(&(), messages)
+            .invoke(&(), (), run_config(request), messages)
             .await
             .map_err(|err| Error::Model(format!("{model}: {err}")))?;
 
@@ -148,6 +151,29 @@ impl GatewayModel {
             usage,
         })
     }
+}
+
+/// The run this call is made from, carrying the configured output ceiling.
+///
+/// `models.max_tokens` reaches the provider as the run's per-turn output cap
+/// rather than as a field on the request: the agent loop builds the provider
+/// request itself, and `RunConfig::max_turn_output_tokens` is the documented
+/// hook it applies before dispatching. Setting it on a request we do not own
+/// would be discarded — which is exactly what used to happen to this setting.
+///
+/// The loop lowers, never raises: it takes the minimum of this cap and any cap
+/// the request already carries, and its truncated-empty retry may still grow
+/// the budget from here. Both are wanted — the ceiling is protection against a
+/// runaway answer, not a demand for one.
+fn run_config(request: &ModelRequest) -> RunConfig {
+    let config = RunConfig::new("tinysweeper-lane");
+    // `config::validate` rejects `max_tokens = 0`, but a `Config` built in code
+    // can carry it, and forwarding a zero cap asks the provider for an empty
+    // answer on every lane. Leave the ceiling off rather than guarantee failure.
+    if request.max_tokens == 0 {
+        return config;
+    }
+    config.with_max_turn_output_tokens(request.max_tokens)
 }
 
 #[async_trait]
@@ -193,6 +219,35 @@ mod tests {
             max_tokens: 100,
             budget_usd_per_pr: 1.0,
         }
+    }
+
+    fn request(max_tokens: u32) -> ModelRequest {
+        ModelRequest {
+            model: "moonshotai/kimi-k3".into(),
+            messages: vec![],
+            schema: json!({"type": "object"}),
+            schema_name: "tinysweeper_critique".into(),
+            max_tokens,
+        }
+    }
+
+    #[test]
+    fn the_configured_ceiling_reaches_the_run_the_provider_is_called_from() {
+        // `models.max_tokens` was accepted, validated, documented as the
+        // ceiling on a response — and then dropped on the floor, so the
+        // provider's own default decided how long an answer could get.
+        assert_eq!(
+            run_config(&request(4_096)).max_turn_output_tokens,
+            Some(4_096)
+        );
+    }
+
+    #[test]
+    fn a_zero_ceiling_is_not_forwarded() {
+        // `config::validate` rejects `max_tokens = 0`, but a `Config` built in
+        // code can still carry it, and asking a provider for zero output tokens
+        // turns a configuration mistake into an empty answer on every lane.
+        assert_eq!(run_config(&request(0)).max_turn_output_tokens, None);
     }
 
     #[test]
