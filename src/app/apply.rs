@@ -681,15 +681,81 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_clean_pull_request_that_was_never_blocked_stays_silent() {
-        // No approval to hand out: approving every green pull request would be
-        // a bot rubber-stamping work it did not really vouch for.
+    async fn a_clean_pull_request_is_approved() {
         let forge = forge("abc123");
         apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
             .await
             .expect("applies");
 
+        let (body, event) = review_of(&forge).expect("an approval was posted");
+        assert_eq!(event, ReviewEvent::Approve);
+        // A first approval must not claim to be clearing an objection that was
+        // never made.
+        assert!(
+            !body.contains("Clearing the changes request"),
+            "nothing was blocking, so there is nothing to clear: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn approving_can_be_turned_off_without_turning_blocking_off() {
+        let mut config = config();
+        config.review.approve_when_clean = false;
+
+        let forge = forge("abc123");
+        apply(&forge, &forge, &config, &proposal("abc123", vec![]), None)
+            .await
+            .expect("applies");
+
         assert!(review_of(&forge).is_none(), "{:#?}", forge.writes());
+    }
+
+    #[tokio::test]
+    async fn an_approval_that_already_stands_is_not_restated() {
+        // Otherwise every push to a clean pull request adds a review that
+        // changes nothing on the merge button.
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::Approve);
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
+            .await
+            .expect("applies");
+
+        assert!(review_of(&forge).is_none(), "{:#?}", forge.writes());
+    }
+
+    #[tokio::test]
+    async fn a_previous_block_is_cleared_by_an_approval_naming_it() {
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::RequestChanges);
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
+            .await
+            .expect("applies");
+
+        let (body, event) = review_of(&forge).expect("a clearing review was posted");
+        assert_eq!(event, ReviewEvent::Approve);
+        assert!(
+            body.contains("Clearing the changes request"),
+            "the author needs to be told the block is gone: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_lane_is_never_approved_just_because_blocking_is_off() {
+        // `request_changes_at = "off"` asks tinysweeper to stop objecting. It
+        // does not ask it to start endorsing a pull request whose gate is red.
+        let mut config = config();
+        config.review.request_changes_at = "off".into();
+
+        let forge = forge("abc123");
+        apply(
+            &forge,
+            &forge,
+            &config,
+            &proposal("abc123", vec![finding()]),
+            None,
+        )
+        .await
+        .expect("applies");
+
+        assert_eq!(review_of(&forge).expect("posted").1, ReviewEvent::Comment);
     }
 
     #[tokio::test]
