@@ -17,7 +17,11 @@
 //!    charset are expanded over changed-file ancestors; no configured path, no
 //!    `..`, bounded count — see
 //!    [`crate::knowledge::types::valid_instruction_file`]. Without it a config
-//!    entry is a way to read arbitrary repository paths.
+//!    entry is a way to read arbitrary repository paths. The one exception is
+//!    [`crate::knowledge::types::BUILTIN_INSTRUCTION_PATHS`], a constant set of
+//!    conventional locations such as `.github/AGENTS.md`; a constant is not
+//!    attacker-controlled, so it adds those paths and nothing else, which a
+//!    relaxed charset could not do.
 //! 2. **Fetch at the pull request's head SHA, through the forge.** Not from
 //!    disk: there is no checkout on the server path, and reading the *bot's own*
 //!    working directory — which is what the code this replaced did — reports

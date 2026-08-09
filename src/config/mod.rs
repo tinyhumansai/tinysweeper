@@ -11,6 +11,7 @@
 //! anyone maintaining a second copy of that knowledge.
 
 pub mod merge;
+pub mod remote;
 pub mod types;
 pub mod validate;
 

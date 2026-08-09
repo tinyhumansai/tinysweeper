@@ -52,6 +52,14 @@ Copied, at source, from octopus, which had already worked this out.
    can therefore select *which filenames* are policy without being a way to
    read arbitrary repository paths. An invalid name is dropped at runtime with
    a warning and reported by `config::validate`.
+
+   The charset cannot express `.github/AGENTS.md`, which is a conventional
+   place to keep policy. That is fixed with `BUILTIN_INSTRUCTION_PATHS`, a
+   constant set of full paths compiled into the binary, **not** by relaxing the
+   charset: a constant adds exactly the locations written in it and is not
+   attacker-controlled, whereas a charset that admits `/` admits every path a
+   hostile config could name. Each built-in path is used only when its filename
+   is also in `knowledge.files`, so the constant adds locations and never names.
 2. **Fetch at the head SHA, through the forge.** `ForgeRead::file_at` reads the
    file at the commit under review, never from disk — there is no checkout on
    the server path. Truncated to `knowledge.max_file_bytes` and content-hashed.

@@ -326,8 +326,26 @@ async fn review_inner(
     // reaches the release below. Without it the `?` on the outcome is not the
     // only way out — an unwind skips everything — and the lease survives the
     // worker that took it.
+    // The reviewed repository's own policy, read through the forge because
+    // there is no checkout here. Without this every repository is reviewed
+    // under the *deployment's* `.tinysweeper.toml`, which is tinysweeper's own.
+    // Read at the base branch's tip rather than the head: a config is acted on
+    // deterministically, so reading it from the branch under review would let a
+    // pull request grade its own exam. See `crate::config::remote`.
+    let overlay = crate::config::remote::overlay(
+        &forge,
+        &repo_id,
+        &pull_request.base_sha,
+        &state.config.config,
+    )
+    .await;
+    if let Some(source) = &overlay.source {
+        tracing::info!(%repo, source, "reviewing under the repository's own configuration");
+    }
+
     let outcome = std::panic::AssertUnwindSafe(run_and_publish(
         state,
+        &overlay.config,
         &repo_id,
         number,
         installation,
@@ -353,8 +371,16 @@ async fn review_inner(
     Ok(())
 }
 
+/// Run the review and publish it.
+///
+/// `config` is the *effective* config for this repository — the deployment's,
+/// with the reviewed repository's own allow-listed keys laid over it. The model
+/// gateway and the index are still built from the deployment's config, because
+/// model choice, credentials and the index partition key are not things a
+/// reviewed repository may set.
 async fn run_and_publish(
     state: &AppState,
+    config: &Config,
     repo: &RepoId,
     number: u64,
     installation: u64,
@@ -384,7 +410,7 @@ async fn run_and_publish(
     let proposal = crate::app::review::review_with_retrieval(
         forge,
         model,
-        &state.config.config,
+        config,
         repo,
         number,
         Some(&state.store),
@@ -395,14 +421,7 @@ async fn run_and_publish(
 
     let write_token = state.auth.installation_token(installation).await?;
     let write = crate::forge::github::GitHubWrite::new(&write_token)?;
-    crate::app::apply(
-        forge,
-        &write,
-        &state.config.config,
-        &proposal,
-        Some(&state.store),
-    )
-    .await?;
+    crate::app::apply(forge, &write, config, &proposal, Some(&state.store)).await?;
 
     Ok(proposal)
 }

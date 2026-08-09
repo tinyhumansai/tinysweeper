@@ -40,6 +40,21 @@ pub const MAX_INSTRUCTION_FILES: usize = 25;
 /// Longest instruction filename accepted.
 pub const MAX_FILENAME_LEN: usize = 64;
 
+/// Conventional instruction-file locations outside the repository root.
+///
+/// The filename allow-list in [`valid_instruction_file`] cannot express these,
+/// and it must not be relaxed to: a charset that admits `/` admits every other
+/// path a hostile config could name, and the list of names *is* config. So the
+/// directory comes from a constant compiled into the binary instead. A constant
+/// is not attacker-controlled, so it adds exactly the locations written here and
+/// no attack surface; a relaxed charset would add every location at once.
+///
+/// Each entry is used only when its filename is also in the configured list —
+/// a repository that removed `CLAUDE.md` from `knowledge.files` has said that
+/// file is not its policy, and the same file under `.github/` is the same
+/// statement in a different place.
+pub const BUILTIN_INSTRUCTION_PATHS: [&str; 2] = [".github/AGENTS.md", ".github/CLAUDE.md"];
+
 /// Whether `name` is a filename this module will fetch from each scope.
 ///
 /// Strict allow-list, not a deny-list of bad shapes. An instruction filename
@@ -108,16 +123,24 @@ pub fn selected_instruction_files(configured: &[String]) -> Vec<String> {
 
 /// Expand each configured filename across every changed path's ancestors.
 ///
-/// The root is always included. A file such as `src/bin/main.rs` therefore
-/// considers both `AGENTS.md` and `src/AGENTS.md`; the latter is what lets a
-/// directory scope its own review policy. The final cap bounds forge reads and
-/// model work even for a pull request touching a very wide tree.
+/// The root is always included, as are the conventional locations in
+/// [`BUILTIN_INSTRUCTION_PATHS`] whose filename was configured. A file such as
+/// `src/bin/main.rs` therefore considers both `AGENTS.md` and `src/AGENTS.md`;
+/// the latter is what lets a directory scope its own review policy. The final
+/// cap bounds forge reads and model work even for a pull request touching a very
+/// wide tree.
 pub fn scoped_instruction_files(configured: &[String], changed_paths: &[String]) -> Vec<String> {
     let names = selected_instruction_files(configured);
     let mut paths = std::collections::BTreeSet::new();
 
     for name in &names {
         paths.insert(name.clone());
+    }
+    for path in BUILTIN_INSTRUCTION_PATHS {
+        let filename = path.rsplit_once('/').map(|(_, name)| name).unwrap_or(path);
+        if names.iter().any(|name| name == filename) {
+            paths.insert(path.to_string());
+        }
     }
     for changed_path in changed_paths {
         let components: Vec<_> = changed_path.split('/').collect();
@@ -278,11 +301,44 @@ mod tests {
         assert_eq!(
             paths,
             vec![
+                ".github/AGENTS.md".to_string(),
                 "AGENTS.md".to_string(),
                 "src/AGENTS.md".to_string(),
                 "src/bin/AGENTS.md".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn the_conventional_github_directory_location_is_read() {
+        // A repository whose only policy file is `.github/AGENTS.md` must have
+        // it read. The charset allow-list cannot express that path, so it comes
+        // from a hardcoded constant instead of a relaxed charset.
+        let paths = scoped_instruction_files(&["AGENTS.md".to_string()], &[]);
+        assert!(paths.contains(&".github/AGENTS.md".to_string()));
+        assert!(valid_instruction_path(".github/AGENTS.md"));
+    }
+
+    #[test]
+    fn a_builtin_location_is_only_read_when_its_filename_is_configured() {
+        // The constant set adds locations, never filenames: a repository that
+        // dropped `CLAUDE.md` from `knowledge.files` has said it is not policy,
+        // and `.github/CLAUDE.md` is the same file in a different place.
+        let paths = scoped_instruction_files(&["AGENTS.md".to_string()], &[]);
+        assert!(!paths.contains(&".github/CLAUDE.md".to_string()));
+    }
+
+    #[test]
+    fn a_config_supplied_path_is_still_rejected_outright() {
+        // The constant set is not a licence to name paths in config: the
+        // acceptance criterion of the issue that added it.
+        let configured = vec![
+            "../../etc/passwd".to_string(),
+            ".github/AGENTS.md".to_string(),
+            ".git/config".to_string(),
+        ];
+        assert!(selected_instruction_files(&configured).is_empty());
+        assert!(scoped_instruction_files(&configured, &["src/main.rs".to_string()]).is_empty());
     }
 
     #[test]
