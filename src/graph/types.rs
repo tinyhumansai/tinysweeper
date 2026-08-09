@@ -181,6 +181,27 @@ pub struct Usage {
     pub byte: usize,
 }
 
+/// One declaration inheriting from another, as written.
+///
+/// Names, not resolved ids: `class Ledger extends Base` says nothing about
+/// which file `Base` lives in, and deciding that is the resolver's job — the
+/// same two-pass split that keeps a `calls` edge from being guessed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Heritage {
+    /// The declaration doing the inheriting, unqualified.
+    ///
+    /// Usually defined in this file, but not always: Rust writes
+    /// `impl Display for Ledger` in whatever file is convenient, so the child
+    /// is resolved rather than assumed local.
+    pub child: String,
+    /// The base class, interface, trait or embedded type, unqualified.
+    pub parent: String,
+    /// 1-based line of the declaration.
+    pub line: u32,
+    /// Byte offset, for attribution to an enclosing definition.
+    pub byte: usize,
+}
+
 /// Everything extraction found in one file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedFile {
@@ -194,6 +215,32 @@ pub struct ParsedFile {
     pub imports: Vec<ImportStmt>,
     /// Identifier usages, in source order.
     pub usages: Vec<Usage>,
+    /// Inheritance as written, unresolved.
+    pub heritage: Vec<Heritage>,
+    /// Whether the file itself is a test file by path convention.
+    ///
+    /// Separate from [`Definition::test`] because the two carry different
+    /// languages' evidence. A Rust test is a function with an attribute; a
+    /// Jest test is an anonymous callback inside `it(...)` that no query will
+    /// ever give a name to, so for TypeScript the *file* is the only test
+    /// scope there is.
+    pub test_file: bool,
+}
+
+impl ParsedFile {
+    /// Whether the byte offset sits inside a test scope.
+    ///
+    /// A whole test file is one scope; otherwise it is the innermost enclosing
+    /// definition that declared itself a test. Used to decide whether a
+    /// resolved call also earns a [`Tests`](crate::index::types::EdgeKind::Tests)
+    /// edge.
+    pub fn in_test_scope(&self, byte: usize) -> bool {
+        self.test_file
+            || self
+                .defs
+                .iter()
+                .any(|d| d.test && d.start_byte <= byte && byte < d.end_byte)
+    }
 }
 
 impl ParsedFile {
