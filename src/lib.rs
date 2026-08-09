@@ -13,6 +13,7 @@ pub mod app;
 pub mod automerge;
 pub mod chunk;
 pub mod config;
+pub mod council;
 pub mod error;
 pub mod eval;
 pub mod evidence;
