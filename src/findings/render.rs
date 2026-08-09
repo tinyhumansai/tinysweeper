@@ -199,7 +199,11 @@ pub fn per_lane_costs(lanes: &[(String, Usage, Vec<String>)]) -> String {
 ///
 /// Fenced rather than a markdown table because a table's pipes get re-laid-out
 /// by the renderer and the alignment is lost — the thing this exists for.
-pub fn cost_table(total: &Usage, total_models: &[String], lanes: &[(String, Usage, Vec<String>)]) -> String {
+pub fn cost_table(
+    total: &Usage,
+    total_models: &[String],
+    lanes: &[(String, Usage, Vec<String>)],
+) -> String {
     let mut rows: Vec<[String; 6]> = Vec::new();
     rows.push(row("", total, total_models));
 

@@ -489,7 +489,10 @@ fn the_budget_counts_analyzer_tokens_not_words() {
 
     let cost: usize = capped.split_whitespace().map(analyzer_tokens).sum();
     assert!(cost <= MAX_LEXICAL_TERMS, "spent {cost}");
-    assert!(cost * 3 < 1024, "three paths at {cost} tokens overruns Lucene");
+    assert!(
+        cost * 3 < 1024,
+        "three paths at {cost} tokens overruns Lucene"
+    );
     assert!(
         capped.split_whitespace().count() < 400,
         "a path-heavy query must be truncated: {capped}"
@@ -527,5 +530,8 @@ fn a_repeated_word_spends_only_one_clause() {
 
 #[test]
 fn a_short_query_is_left_alone() {
-    assert_eq!(lexical_terms("resolve range anchor"), "resolve range anchor");
+    assert_eq!(
+        lexical_terms("resolve range anchor"),
+        "resolve range anchor"
+    );
 }
