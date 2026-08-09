@@ -452,7 +452,7 @@ mod tests {
     use crate::app::review::LaneProposal;
     use crate::config::types::{LaneId, Severity};
     use crate::findings::types::Finding;
-    use crate::forge::types::{CheckConclusion, PullRequest};
+    use crate::forge::types::{CheckConclusion, IssueComment, PullRequest};
     use crate::forge::{MockForge, MockState, Write};
 
     fn config() -> Config {
