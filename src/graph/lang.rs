@@ -32,6 +32,14 @@ pub(crate) const CAP_REF: &str = "use.ref";
 /// capture already reaches it; a Rust `impl Display for Ledger` is a separate
 /// item that names two types and declares neither, so nothing else would.
 pub(crate) const CAP_HERITAGE: &str = "heritage.stmt";
+/// Prefix for a capture that exists only to be tested by a query predicate.
+///
+/// Ruby has no import *statement* — `require_relative "x"` is an ordinary
+/// method call — so the only way to recognise one is a `#match?` on the callee,
+/// and a predicate can only test something that was captured. The extractor
+/// already ignores captures it does not know; this makes that deliberate rather
+/// than incidental, and keeps the vocabulary test honest.
+pub(crate) const CAP_IGNORE_PREFIX: &str = "_";
 
 /// Map the `def.<kind>` capture suffix onto a [`SymbolKind`].
 pub(crate) fn symbol_kind(capture: &str) -> Option<SymbolKind> {
@@ -57,6 +65,8 @@ pub(crate) fn grammar(lang: Language) -> TsLanguage {
         Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         Language::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
         Language::Go => tree_sitter_go::LANGUAGE.into(),
+        Language::Java => tree_sitter_java::LANGUAGE.into(),
+        Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
     }
 }
 
@@ -71,6 +81,8 @@ pub(crate) fn query_source(lang: Language) -> &'static str {
         Language::Python => PYTHON_QUERY,
         Language::TypeScript | Language::Tsx => TYPESCRIPT_QUERY,
         Language::Go => GO_QUERY,
+        Language::Java => JAVA_QUERY,
+        Language::Ruby => RUBY_QUERY,
     }
 }
 
@@ -157,6 +169,56 @@ const GO_QUERY: &str = r#"
 (field_identifier) @use.ref
 "#;
 
+/// Node names cross-checked against aider's `java-tags.scm`, which is the
+/// best-tested public inventory of this grammar. The declaration set is wider
+/// here — aider captures classes, methods and interfaces; a graph also needs
+/// enums, records and fields, or an edge to a constant resolves to nothing.
+const JAVA_QUERY: &str = r#"
+(class_declaration name: (identifier) @name) @def.class
+(interface_declaration name: (identifier) @name) @def.interface
+(annotation_type_declaration name: (identifier) @name) @def.interface
+(enum_declaration name: (identifier) @name) @def.enum
+(record_declaration name: (identifier) @name) @def.class
+(method_declaration name: (identifier) @name) @def.method
+(constructor_declaration name: (identifier) @name) @def.method
+(field_declaration declarator: (variable_declarator name: (identifier) @name)) @def.const
+
+(import_declaration) @import.stmt
+
+(method_invocation name: (identifier) @use.call)
+(object_creation_expression type: (type_identifier) @use.call)
+
+(type_identifier) @use.ref
+"#;
+
+/// Ruby has no import statement, so the `require` family is matched as the
+/// method call it actually is. The `@_require` capture exists only for the
+/// predicate to test — see [`CAP_IGNORE_PREFIX`].
+///
+/// `(identifier) @use.ref` is deliberately absent, unlike Python and
+/// TypeScript. Ruby writes local variables, method calls and attribute reads
+/// with the same bare-identifier syntax, so capturing every identifier as a
+/// reference would make `name` in one file a reference to `name` in every other
+/// file that has an attribute by that name. Constants are capitalised and
+/// therefore unambiguous, so they carry the reference edges instead.
+const RUBY_QUERY: &str = r#"
+(method name: (_) @name) @def.method
+(singleton_method name: (_) @name) @def.method
+(class name: (constant) @name) @def.class
+(module name: (constant) @name) @def.module
+(assignment left: (constant) @name) @def.const
+
+((call
+   method: (identifier) @_require
+   arguments: (argument_list (string)))
+ @import.stmt
+ (#match? @_require "^(require|require_relative|load|autoload)$"))
+
+(call method: (identifier) @use.call)
+
+(constant) @use.ref
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +236,8 @@ mod tests {
             Language::TypeScript,
             Language::Tsx,
             Language::Go,
+            Language::Java,
+            Language::Ruby,
         ] {
             let compiled = query(lang);
             assert!(compiled.is_ok(), "{}: {:?}", lang.tag(), compiled.err());
@@ -198,6 +262,8 @@ mod tests {
             Language::TypeScript,
             Language::Tsx,
             Language::Go,
+            Language::Java,
+            Language::Ruby,
         ] {
             let compiled = query(lang).expect("query compiles");
             for capture in compiled.capture_names() {
@@ -209,7 +275,8 @@ mod tests {
                     );
                 } else {
                     assert!(
-                        [CAP_NAME, CAP_IMPORT, CAP_CALL, CAP_REF, CAP_HERITAGE].contains(capture),
+                        [CAP_NAME, CAP_IMPORT, CAP_CALL, CAP_REF, CAP_HERITAGE].contains(capture)
+                            || capture.starts_with(CAP_IGNORE_PREFIX),
                         "{}: stray capture {capture}",
                         lang.tag()
                     );

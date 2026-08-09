@@ -34,6 +34,11 @@ pub enum Language {
     Tsx,
     /// Go: package paths rooted at the `go.mod` module path.
     Go,
+    /// Java: dotted package names against the source root that holds them.
+    Java,
+    /// Ruby: `require_relative` against the file's own directory, `require`
+    /// against the load path.
+    Ruby,
 }
 
 impl Language {
@@ -51,6 +56,8 @@ impl Language {
             "ts" | "mts" | "cts" => Some(Self::TypeScript),
             "tsx" | "jsx" | "js" | "mjs" | "cjs" => Some(Self::Tsx),
             "go" => Some(Self::Go),
+            "java" => Some(Self::Java),
+            "rb" | "rake" | "gemspec" => Some(Self::Ruby),
             _ => None,
         }
     }
@@ -66,6 +73,8 @@ impl Language {
             Self::Python => "python",
             Self::TypeScript | Self::Tsx => "typescript",
             Self::Go => "go",
+            Self::Java => "java",
+            Self::Ruby => "ruby",
         }
     }
 }

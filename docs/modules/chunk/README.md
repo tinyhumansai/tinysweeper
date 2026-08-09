@@ -62,11 +62,18 @@ bytes. A chunk that merged three equal functions is not the first one.
 
 ## Languages
 
-Symbol-aware: Rust, TypeScript, TSX, JavaScript (and JSX), Python, Go. TSX is
-separate from TypeScript because tree-sitter ships two grammars and the
-TypeScript one fails on the first JSX element.
+Symbol-aware: Rust, TypeScript, TSX, JavaScript (and JSX), Python, Go, Java,
+Ruby. TSX is separate from TypeScript because tree-sitter ships two grammars and
+the TypeScript one fails on the first JSX element.
 
-Everything else on the extension allowlist — Markdown, SQL, Java, YAML and the
+Ruby is the one grammar whose declarations do not fall out of the generic
+`_item` / `_declaration` / `_definition` suffix rule — its node kinds are bare
+words, `method`, `class`, `module` — so they are listed explicitly in
+`EXTRA_DEFINITIONS`. Without those entries the file parses, produces no cut
+points, and falls back to the line splitter mid-method while still looking like
+it worked.
+
+Everything else on the extension allowlist — Markdown, SQL, Kotlin, YAML and the
 rest of `EXTRA_EXTENSIONS` — is indexed through the line splitter, labelled with
 its extension and marked `Lines`. Indexed-and-honest beats invisible.
 
