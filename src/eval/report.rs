@@ -231,7 +231,7 @@ pub fn markdown(card: &Scorecard, baseline: Option<&Scorecard>, allow_drift: boo
 
     if let Some(baseline) = baseline {
         out.push_str("\n## Against the baseline\n\n");
-        match compare(card, baseline, false) {
+        match compare(card, baseline, allow_drift) {
             Comparison::Pass => out.push_str("**PASS** — nothing regressed.\n"),
             Comparison::Fail(reasons) => {
                 out.push_str("**FAIL**\n\n");
