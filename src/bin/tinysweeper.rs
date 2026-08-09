@@ -719,8 +719,25 @@ labelled_by = ""
 # reason = "Three earlier runs called this dead code. It is not."
 # matches = ["dead code", "unused"]
 "#,
-        title.replace('"', "'"),
+        toml_escape(title),
     )
+}
+
+/// Escape one value for the `title = "..."` line of a case stub.
+///
+/// A pull request title is a single line, but it can still carry a quote, a
+/// backslash, or a tab — each of which would silently corrupt the TOML the
+/// stub guards. Escaping all of them keeps the file parseable whatever the
+/// title is; the crate's own `toml` module is not used because the stub is
+/// comment-rich and hand-shaped, and only this one value is interpolated.
+#[cfg(feature = "github")]
+fn toml_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 /// The first eight characters of a sha, for a human reading a terminal.
