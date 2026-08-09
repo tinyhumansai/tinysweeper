@@ -499,11 +499,7 @@ mod cost_table_tests {
         )
     }
 
-    #[test]
-    fn show_the_table() {
-        println!("{}", sample());
-    }
-
+    
     #[test]
     fn every_column_lines_up() {
         // The whole point: a reader should be able to run an eye down the cost
