@@ -185,6 +185,99 @@ pub fn per_lane_costs(lanes: &[(String, Usage, Vec<String>)]) -> String {
     out
 }
 
+/// The spend, as a column-aligned block in a fenced code span.
+///
+/// Prose wraps and reflows, so the same six numbers land in a different place
+/// on every row and comparing two lanes means reading rather than glancing.
+/// Fixed-width columns make the expensive lane the one your eye stops on, which
+/// is the only reason anyone opens this section.
+///
+/// The total is the first row and is deliberately unlabelled: it is the sum of
+/// the rows beneath it, and a `total:` label would compete with the lane names
+/// for attention when the interesting number is almost always a lane.
+///
+/// Fenced rather than a markdown table because a table's pipes are re-laid-out
+/// by the renderer and the alignment is lost — the thing this exists for.
+pub fn cost_table(
+    total: &Usage,
+    total_models: &[String],
+    lanes: &[(String, Usage, Vec<String>)],
+) -> String {
+    let mut rows: Vec<[String; 6]> = vec![row("", total, total_models)];
+
+    for (name, usage, models) in lanes {
+        // Same rule as `per_lane_costs`: a lane that spent nothing is noise.
+        if usage.cost_usd <= 0.0 && usage.input_tokens == 0 && usage.embed_tokens == 0 {
+            continue;
+        }
+        rows.push(row(&format!("{name}:"), usage, models));
+    }
+
+    // Nothing but a total means there is no breakdown to align, and a one-row
+    // table reads worse than the sentence it replaced.
+    if rows.len() < 2 {
+        return format!("```\n{}\n```", cost_line(total, total_models).trim());
+    }
+
+    // The last column is never padded: trailing spaces are invisible and only
+    // make the block wider than the terminal it is read in.
+    let widths: [usize; 5] = std::array::from_fn(|column| {
+        rows.iter()
+            .map(|cells| cells[column].chars().count())
+            .max()
+            .unwrap_or(0)
+    });
+
+    let mut out = String::from("```\n");
+    for cells in &rows {
+        let mut line = String::new();
+        for (column, cell) in cells.iter().enumerate().take(5) {
+            let pad = widths[column].saturating_sub(cell.chars().count());
+            line.push_str(cell);
+            line.push_str(&" ".repeat(pad));
+            line.push_str(if column == 0 { " " } else { " \u{b7} " });
+        }
+        line.push_str(&cells[5]);
+        out.push_str(line.trim_end());
+        out.push('\n');
+    }
+    out.push_str("```");
+    out
+}
+
+/// One row's cells: label, cost, input, output, cache, models.
+fn row(label: &str, usage: &Usage, models: &[String]) -> [String; 6] {
+    let cached = if usage.input_tokens > 0 {
+        let rate = usage.cached_tokens as f64 / usage.input_tokens as f64 * 100.0;
+        format!("{} cached ({rate:.0}%)", thousands(usage.cached_tokens))
+    } else {
+        // Not "0 cached (0%)": nothing was sent, so there was nothing to hit the
+        // cache, and a zero here reads as a cache that missed.
+        String::new()
+    };
+
+    let mut models = models.join(", ");
+    if usage.embed_tokens > 0 {
+        // Embedding spend rides in the model column rather than one of its own,
+        // which would be empty on every row of a review that never indexed.
+        let embedded = format!("{} embedded", thousands(usage.embed_tokens));
+        models = if models.is_empty() {
+            embedded
+        } else {
+            format!("{models} \u{b7} {embedded}")
+        };
+    }
+
+    [
+        label.to_string(),
+        format!("${:.4}", usage.cost_usd),
+        format!("{} in", thousands(usage.input_tokens)),
+        format!("{} out", thousands(usage.output_tokens)),
+        cached,
+        models,
+    ]
+}
+
 /// `12345` reads as `12,345`.
 fn thousands(value: u64) -> String {
     let digits = value.to_string();
