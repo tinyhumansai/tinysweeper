@@ -256,10 +256,15 @@ fn review_body(proposal: &Proposal, event: ReviewEvent, previous: Option<ReviewE
                  hand."
             )
         }
-        ReviewEvent::Approve => {
+        // An approval means two different things depending on what stood
+        // before it, and saying the wrong one is worse than saying nothing: a
+        // first-time approval that claims to be "clearing the changes request"
+        // invents an objection that was never made.
+        ReviewEvent::Approve if previous == Some(ReviewEvent::RequestChanges) => {
             "The previously-blocking findings are resolved. Clearing the changes request."
                 .to_string()
         }
+        ReviewEvent::Approve => "tinysweeper found nothing blocking. Approving.".to_string(),
         ReviewEvent::Comment if blocking == 0 => "tinysweeper found nothing blocking.".to_string(),
         ReviewEvent::Comment => format!("tinysweeper: {blocking} lane(s) blocking."),
     };
