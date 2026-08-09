@@ -430,7 +430,7 @@ async fn run_eval(command: EvalCommand) -> Result<()> {
             for id in &outcome.skipped {
                 println!("skipped `{id}`: the run hit --max-cost-usd");
             }
-            println!("{}", eval::markdown(&card, None));
+            println!("{}", eval::markdown(&card, None, false));
             println!("scorecard written to {}", path.display());
             Ok(())
         }
@@ -454,7 +454,7 @@ async fn run_eval(command: EvalCommand) -> Result<()> {
                 cases: scores,
             };
             let path = eval::write_scorecard(&run, &card)?;
-            println!("{}", eval::markdown(&card, None));
+            println!("{}", eval::markdown(&card, None, false));
             println!("scorecard written to {}", path.display());
             Ok(())
         }
@@ -471,7 +471,7 @@ async fn run_eval(command: EvalCommand) -> Result<()> {
 
             match format.as_str() {
                 "json" => println!("{}", serde_json::to_string_pretty(&card)?),
-                "md" => println!("{}", eval::markdown(&card, baseline.as_ref())),
+                "md" => println!("{}", eval::markdown(&card, baseline.as_ref(), allow_config_drift)),
                 other => {
                     return Err(tinysweeper::Error::config(format!(
                         "`{other}` is not a format; use `md` or `json`"

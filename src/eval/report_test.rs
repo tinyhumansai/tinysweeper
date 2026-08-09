@@ -59,7 +59,7 @@ fn an_all_clean_corpus_reports_no_recall_rather_than_dividing_by_zero() {
     // is measured — and it must not render as 0% or NaN.
     let scored = card(vec![case_score("ts-clean", 0, &[], 0)]);
     assert_eq!(scored.recall(), None);
-    assert!(markdown(&scored, None).contains("| recall | n/a |"));
+    assert!(markdown(&scored, None, false).contains("| recall | n/a |"));
 }
 
 #[test]
@@ -100,7 +100,7 @@ fn findings_on_clean_pull_requests_are_reported_on_their_own() {
     let scored = card(vec![clean, case_score("ts-0001", 1, &[], 0)]);
 
     assert_eq!(scored.clean_case_findings(), 2);
-    let rendered = markdown(&scored, None);
+    let rendered = markdown(&scored, None, false);
     // The most legible noise number in the report: every one is a comment on a
     // pull request that had nothing wrong with it.
     assert!(
@@ -115,7 +115,7 @@ fn a_loose_replay_is_announced_before_any_number_is_read() {
     let mut scored = card(vec![case_score("ts-0001", 1, &[], 0)]);
     scored.loose_replays = 3;
 
-    let rendered = markdown(&scored, None);
+    let rendered = markdown(&scored, None, false);
     let warning = rendered.find("replayed by call order").expect("warned");
     let totals = rendered.find("## Totals").expect("has totals");
     assert!(
@@ -127,7 +127,7 @@ fn a_loose_replay_is_announced_before_any_number_is_read() {
 #[test]
 fn rendering_is_stable_so_two_reports_diff_only_where_they_differ() {
     let scored = card(vec![case_score("ts-0001", 1, &["E2"], 1)]);
-    assert_eq!(markdown(&scored, None), markdown(&scored, None));
+    assert_eq!(markdown(&scored, None, false), markdown(&scored, None, false));
 }
 
 #[test]
@@ -226,7 +226,7 @@ fn the_baseline_section_shows_both_sides_of_every_number() {
     let baseline = card(vec![case_score("ts-0001", 2, &[], 0)]);
     let current = card(vec![case_score("ts-0001", 2, &[], 1)]);
 
-    let rendered = markdown(&current, Some(&baseline));
+    let rendered = markdown(&current, Some(&baseline), false);
     assert!(rendered.contains("## Against the baseline"), "{rendered}");
     assert!(
         rendered.contains("| metric | baseline | now |"),
@@ -238,7 +238,7 @@ fn the_baseline_section_shows_both_sides_of_every_number() {
 #[test]
 fn what_it_missed_names_every_expectation_by_id() {
     let scored = card(vec![case_score("ts-0001", 1, &["E2", "E3"], 0)]);
-    let rendered = markdown(&scored, None);
+    let rendered = markdown(&scored, None, false);
 
     // A report that says "recall 33%" and not *which* defects were missed is a
     // number nobody can act on.
