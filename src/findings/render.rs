@@ -587,7 +587,7 @@ mod cost_table_tests {
             &["m".into()],
             &[
                 ("critique".into(), usage(0.01, 50, 5, 0), vec!["m".into()]),
-                ("security".into(), with_embed.clone(), vec!["m".into()]),
+                ("security".into(), with_embed, vec!["m".into()]),
             ],
         );
         assert!(table.contains("377,153 embedded"), "{table}");
