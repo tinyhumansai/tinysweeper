@@ -575,6 +575,107 @@ impl FullReviews for ManualDispatch {
     }
 }
 
+/// The manual auto-merge button's way into the policy.
+///
+/// Unlike the review button this answers synchronously. There is no model in
+/// the path — four reads and possibly a merge — so the operator gets the
+/// refusals back rather than having to go and read the log for them, and the
+/// refusals are the point of pressing it.
+struct MergeDispatch {
+    state: AppState,
+}
+
+#[async_trait::async_trait]
+impl Merges for MergeDispatch {
+    async fn evaluate(&self, repo: &RepoId, number: Option<u64>) -> Result<Vec<MergeReport>> {
+        // Refused up front rather than reported per pull request. An operator
+        // who has not turned the feature on wants to be told that once, not
+        // twenty times with a number attached.
+        if !self.state.config.config.automerge.enabled {
+            return Err(Error::Forge(
+                "`[automerge] enabled` is false in the deployment's configuration".into(),
+            ));
+        }
+
+        let installation = self
+            .state
+            .auth
+            .installation_for_repo(&repo.owner, &repo.name)
+            .await?;
+        let token = self.state.auth.installation_token(installation).await?;
+        let read = crate::forge::github::GitHubRead::new(&token)?;
+
+        let numbers = match number {
+            Some(number) => vec![number],
+            None => read.open_pull_requests(repo, MAX_MANUAL_REVIEWS).await?,
+        };
+
+        let mut reports = Vec::new();
+        for number in numbers {
+            // Sequential, not concurrent. Each merge changes the default
+            // branch, which can make the *next* pull request unmergeable;
+            // evaluating them all against the state that held before the first
+            // merge would be evaluating a snapshot that no longer exists.
+            let outcome = automerge_inner_reporting(&self.state, repo, number, installation).await;
+            reports.push(match outcome {
+                Ok(Outcome::Merged { .. }) => MergeReport {
+                    number,
+                    outcome: "merged",
+                    detail: None,
+                },
+                Ok(Outcome::Refused(refusal)) => MergeReport {
+                    number,
+                    outcome: "refused",
+                    detail: Some(refusal.to_string()),
+                },
+                Ok(Outcome::Rejected { method, reason }) => MergeReport {
+                    number,
+                    outcome: "rejected",
+                    detail: Some(format!("the forge refused a `{method}` merge: {reason}")),
+                },
+                // One pull request failing to evaluate must not abandon the
+                // rest of the sweep, which is the operator's whole request.
+                Err(err) => MergeReport {
+                    number,
+                    outcome: "error",
+                    detail: Some(err.to_string()),
+                },
+            });
+        }
+
+        Ok(reports)
+    }
+}
+
+/// Evaluate one pull request and hand back the outcome rather than logging it.
+///
+/// Shares the lease with the webhook path deliberately: a sweep running while
+/// a delivery is being handled must not evaluate the same pull request twice
+/// and race to merge it.
+async fn automerge_inner_reporting(
+    state: &AppState,
+    repo: &RepoId,
+    number: u64,
+    installation: u64,
+) -> Result<Outcome> {
+    let lease = format!("{repo}#automerge-{number}");
+    if !state.store.claim_lease(&lease, "server").await? {
+        return Ok(Outcome::Refused(
+            crate::automerge::types::Refusal::UnreadablePolicy(
+                "another worker is already evaluating this pull request".into(),
+            ),
+        ));
+    }
+
+    let outcome = evaluate_and_merge(state, repo, number, installation).await;
+
+    if let Err(err) = state.store.release_lease(&lease).await {
+        tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
+    }
+
+    outcome
+}
+
 /// Whether a review may use what earlier cycles remembered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
