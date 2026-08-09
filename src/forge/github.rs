@@ -1140,6 +1140,57 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// A two-link error chain shaped like octocrab's: an outer value whose own
+    /// `Display` says nothing useful, wrapping the one that does.
+    #[derive(Debug)]
+    struct Outer(Inner);
+    #[derive(Debug)]
+    struct Inner(&'static str);
+
+    impl std::fmt::Display for Outer {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            // Exactly what octocrab's `Error::GitHub` renders: the variant
+            // name, and not one word about what went wrong.
+            write!(f, "GitHub")
+        }
+    }
+    impl std::fmt::Display for Inner {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+    impl std::error::Error for Outer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+    impl std::error::Error for Inner {}
+
+    #[test]
+    fn a_forge_error_carries_what_github_actually_said() {
+        // The bug this pins: `err.to_string()` on octocrab's `GitHub` variant
+        // is the literal word "GitHub", because the variant has no display
+        // attribute and the status, message and errors array all live in the
+        // source. Every 403, 404 and 422 in the product logged identically.
+        let err = Outer(Inner("Resource not accessible by integration"));
+        assert_eq!(err.to_string(), "GitHub", "the fixture must reproduce it");
+        assert_eq!(
+            chain(&err),
+            "GitHub: Resource not accessible by integration"
+        );
+    }
+
+    #[test]
+    fn a_source_that_merely_repeats_the_outer_message_is_not_appended_twice() {
+        let err = Outer(Inner("GitHub"));
+        assert_eq!(chain(&err), "GitHub");
+    }
+
+    #[test]
+    fn an_error_with_no_source_is_rendered_unchanged() {
+        assert_eq!(chain(&Inner("plain")), "plain");
+    }
+
     #[test]
     fn an_issue_carrying_a_native_type_reports_its_name() {
         let issue = issue_from_json(&json!({
