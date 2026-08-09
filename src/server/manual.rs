@@ -437,7 +437,13 @@ mod tests {
     #[tokio::test]
     async fn no_token_configured_means_no_manual_review_route_at_all() {
         assert!(
-            router(None, "tinyhumansai".into(), Arc::new(Recorder::default())).is_none(),
+            router(
+                None,
+                "tinyhumansai".into(),
+                Arc::new(Recorder::default()),
+                Arc::new(MergeRecorder::default())
+            )
+            .is_none(),
             "an unauthenticated way to spend money on reviews is not a supported deployment"
         );
     }
