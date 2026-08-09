@@ -230,7 +230,7 @@ pub struct ParsedFile {
 impl ParsedFile {
     /// Whether the byte offset sits inside a test scope.
     ///
-    /// A whole test file is one scope; otherwise it is the innermost enclosing
+    /// A whole test file is one scope; otherwise it is any enclosing
     /// definition that declared itself a test. Used to decide whether a
     /// resolved call also earns a [`Tests`](crate::index::types::EdgeKind::Tests)
     /// edge.
@@ -241,9 +241,7 @@ impl ParsedFile {
                 .iter()
                 .any(|d| d.test && d.start_byte <= byte && byte < d.end_byte)
     }
-}
 
-impl ParsedFile {
     /// The innermost definition containing `byte`, if any.
     ///
     /// Innermost rather than outermost so a call inside a method is attributed
