@@ -32,19 +32,24 @@ Every call logs its numbers at `info` — input, cached, output and reasoning
 tokens, the ceiling, and the finish reason. A call whose reasoning took more than
 half the budget also warns: it is one larger diff away from the ladder above.
 
-## Prompt tracing
+## Where a call goes to be read afterwards
 
-`TINYSWEEPER_PROMPT_LOG=<dir>` writes one JSON line per model call to
-`<dir>/prompts-<pid>.jsonl`: the messages as sent, the raw text, the parsed
-structured output, the finish reason and the usage. It is what makes a bad
-review reproducible after the process has exited.
+Two places, for two different questions, and neither is a third log file:
 
-**Off unless the variable is set.** A traced line contains the pull request's
-diff and body verbatim — untrusted input, which may itself contain a credential
-the contributor committed. That is fine in a checkout and is not fine on a shared
-host, so enabling it is an operator's decision. The API key is never written: the
-trace is built from the request and the response, and the key lives on
-`GatewayModel`, whose `Debug` redacts it.
+- **Langfuse**, when `LANGFUSE_BASE_URL` / `LANGFUSE_PUBLIC_KEY` /
+  `LANGFUSE_SECRET_KEY` are set (see the README). Each call is exported as its
+  own trace with the prompt and the model's answer, which is what answers "what
+  did the model actually see" for a review that has already been published. Every
+  rung of the truncation ladder gets its own run id, so a retry at a larger
+  ceiling appears as a retry rather than overwriting the attempt that was cut
+  off.
+- **Cassettes** (`harness::cassette`), for the eval corpus: a recorded call is
+  replayed offline so a scoring rule can be rewritten without paying for the run
+  again. Prompts are recorded only when explicitly asked for, because a prompt
+  embeds the reviewed repository's diff.
+
+Both carry untrusted pull request text, so both are opt-in and belong in a
+server's secret environment rather than a checkout.
 
 ## Cost
 

@@ -7,12 +7,15 @@
 
 use std::fmt;
 
+use crate::automerge::policy::MergeApproved;
+
 /// The outcome of evaluating the deterministic policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
-    /// Every criterion passed. Still subject to a live re-validation of the
-    /// head SHA before anything is merged.
-    Merge,
+    /// Every criterion passed, carrying the proof of it. Still subject to a
+    /// live re-validation of the head SHA before anything is merged — see
+    /// [`MergeApproved`] for why the witness is not a staleness guarantee.
+    Allow(MergeApproved),
     /// Leave it alone, for this reason.
     Refuse(Refusal),
 }
@@ -20,14 +23,26 @@ pub enum Decision {
 impl Decision {
     /// Whether this decision permits a merge.
     pub fn is_merge(&self) -> bool {
-        matches!(self, Decision::Merge)
+        matches!(self, Decision::Allow(_))
+    }
+
+    /// The approval, if this decision carries one.
+    ///
+    /// The only way to obtain a [`MergeApproved`] outside `policy`, and
+    /// therefore the only way to reach
+    /// [`ForgeWrite::merge`](crate::ports::forge::ForgeWrite::merge).
+    pub fn approval(&self) -> Option<&MergeApproved> {
+        match self {
+            Decision::Allow(approval) => Some(approval),
+            Decision::Refuse(_) => None,
+        }
     }
 
     /// The refusal, if this is one.
     pub fn refusal(&self) -> Option<&Refusal> {
         match self {
             Decision::Refuse(refusal) => Some(refusal),
-            Decision::Merge => None,
+            Decision::Allow(_) => None,
         }
     }
 }
@@ -248,13 +263,16 @@ mod tests {
         );
     }
 
+    /// The `Allow` half of this moved to `test.rs` as
+    /// `an_approval_is_only_obtainable_from_a_passing_evaluation`: a
+    /// `Decision::Allow` can no longer be hand-built here, because
+    /// `MergeApproved` is unforgeable outside `policy` — which is the property
+    /// under test, so the assertion has to run against a real evaluation.
     #[test]
-    fn decisions_expose_only_mergeable_outcomes() {
-        let merge = Decision::Merge;
+    fn a_refusal_reports_itself_and_never_permits_a_merge() {
         let refusal = Decision::Refuse(Refusal::Draft);
-        assert!(merge.is_merge());
-        assert!(merge.refusal().is_none());
         assert!(!refusal.is_merge());
+        assert!(refusal.approval().is_none());
         assert!(matches!(refusal.refusal(), Some(Refusal::Draft)));
         assert!(matches!(
             Outcome::Merged {

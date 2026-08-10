@@ -112,12 +112,61 @@ fallback = ["deepseek/deepseek-v4-pro", "minimax/minimax-m3"]
 # the findings that arrived and the rest are simply never seen, which reads
 # exactly like a clean review. That is the failure this number is set against.
 max_tokens = 16000
-# Reasoning is billed against `max_tokens`. It was off entirely because
-# `kimi-k3` spent all 8000 tokens thinking and returned empty content; measured
-# on `deepseek-v4-pro` at `high`, the same prompt uses 416 reasoning tokens and
-# finishes cleanly. Set to `off` if you put a thinking-heavy model back.
+# Reasoning is billed against `max_tokens`, and this key does **not** bound it.
+#
+# The 416-token figure that used to be recorded here was measured on a toy
+# prompt and did not survive contact with a real one. Re-measured against a
+# 23k-token diff with a demanding system prompt, both configured models spend
+# reasoning like this:
+#
+# `max_tokens` below is the ceiling each *run* was given, not the shipped
+# budget. The shipped value — 16000, set at the bottom of this block — clears
+# the 12000 floor this change validates against; the 8000 rows show the budget
+# that fails, the 32000 rows the one that clears.
+#
+#   model               effort  max_tokens  reasoning  content
+#   z-ai/glm-5.2        high      8000        8000     empty, finish=length
+#   z-ai/glm-5.2        low       8000        8000     empty, finish=length
+#   z-ai/glm-5.2        off       8000           0     2572 tokens, 13 findings
+#   z-ai/glm-5.2        high     32000           8     7429 tokens, 23 findings
+#   deepseek-v4-pro     high      8000        8000     empty, finish=length
+#   deepseek-v4-pro     low       8000        8000     empty, finish=length
+#   deepseek-v4-pro     off       8000           0      966 tokens
+#   deepseek-v4-pro     high     32000        8152     9246 tokens
+#
+# Two things in that table are worth keeping. First, `low` is not a smaller
+# `high`: both models burned the *entire* allowance thinking at either setting,
+# so turning the dial down is not a way to bound spend — only `off` is. Second,
+# the failure is bimodal rather than gradual. There is no setting at which the
+# model thinks a bit and answers a bit; either reasoning fits and the answer is
+# whole, or reasoning takes everything and the content is empty.
+#
+# `high` is kept because `max_tokens` above is now 16000, which cleared it in
+# production — no structured-output failure and no fallback in the hours after
+# the deploy. 16000 itself was never measured; the table brackets it with the
+# ceiling that fails (8000) and the one that stays safe (32000), where
+# `deepseek-v4-pro` spent 8152 of the allowance on reasoning before it
+# answered. A harder prompt is one step from the same cliff. If this starts
+# failing again, `off` is the fix that is *proven* rather than the one that
+# buys room, and it costs 13 findings against 23.
 reasoning_effort = "high"
 budget_usd_per_pr = 1.0
+
+# Several reviewers on one lane's evidence, folded into one review.
+#
+# Off, and off is the honest default: a second reviewer doubles the calls for
+# that lane, and whether it is worth the money is a question `tinysweeper eval`
+# answers rather than one anybody should guess. `[council]` is also on the *not
+# overridable* list in `src/config/remote` — every key here spends the
+# operator's money, which is the same line drawn around `[models]`.
+#
+# `corroboration` is a separate switch on purpose. With one agent the merge is
+# a provable no-op, so it can be turned on and measured before a second agent
+# is what is being judged.
+[council]
+enabled = false
+corroboration = true
+agents = []
 
 # The knowledge centre. `files` are read from the pull request's head commit
 # through the forge and are untrusted input — they are put through a sandboxed

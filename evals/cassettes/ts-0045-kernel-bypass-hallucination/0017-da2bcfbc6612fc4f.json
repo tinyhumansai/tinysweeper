@@ -1,0 +1,18 @@
+{
+  "key": "da2bcfbc6612fc4f",
+  "model_requested": "z-ai/glm-5.2",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2498,
+    "output_tokens": 846,
+    "cached_tokens": 2148,
+    "embed_tokens": 0,
+    "cost_usd": 0.000238544
+  },
+  "value": {
+    "findings": [],
+    "resolved": [],
+    "summary": "The new `summarise.rs` module is a small, self-contained text utility. Both `shorten` and `first_sentence` operate on in-memory strings with no network, subprocess, deserialization, filesystem, or secret-handling surface. The multibyte-slicing concern noted in comments is handled correctly: `shorten` works on a `chars()`-collected `String` and `rfind(' ')`/byte slicing on ASCII space is always on a char boundary; `first_sentence`'s `find`/slice boundaries land on ASCII `.`, also safe. No security problems introduced."
+  }
+}

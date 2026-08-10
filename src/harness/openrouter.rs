@@ -9,15 +9,19 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::json;
-use tinyagents::harness::context::RunConfig;
+use tinyagents::harness::context::{RunConfig, RunContext};
+use tinyagents::harness::events::EventSink;
 use tinyagents::harness::message::Message as TaMessage;
 use tinyagents::harness::model::ResponseFormat;
 use tinyagents::harness::providers::openai::OpenAiModel;
-use tinyagents::harness::runtime::{AgentHarness, RunPolicy};
+use tinyagents::harness::runtime::{AgentHarness, PayloadCapture, RunPolicy};
+use tinyagents::{
+    HarnessEventJournal, InMemoryEventJournal, JournalSink, LangfuseClient, LangfuseTraceConfig,
+};
 
 use crate::config::types::Models;
 use crate::error::{Error, Result};
-use crate::harness::{pricing, trace};
+use crate::harness::pricing;
 use crate::ports::model::{Model, ModelRequest, ModelResponse, Role, Usage};
 
 /// A model reached through an OpenAI-compatible gateway.
@@ -29,6 +33,7 @@ pub struct GatewayModel {
     base_url: String,
     fallbacks: Vec<String>,
     reasoning_effort: String,
+    langfuse: Option<LangfuseClient>,
 }
 
 impl std::fmt::Debug for GatewayModel {
@@ -100,6 +105,7 @@ impl GatewayModel {
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
+            langfuse: langfuse_client(),
         })
     }
 
@@ -120,12 +126,29 @@ impl GatewayModel {
             // with `reasoning: {max_tokens: N}` did not hold; that model
             // ignored the cap and ran to 37k characters.
             //
-            // It is on again because the model changed, and the new one was
-            // measured rather than assumed. `deepseek-v4-pro` at effort `high`,
-            // same shape of prompt and the same 8000-token ceiling: 416
-            // reasoning tokens, 522 completion tokens, `finish_reason` `stop`,
-            // valid structured output. Two orders of magnitude away from the
-            // budget rather than over it.
+            // It was turned on again on the strength of a measurement — 416
+            // reasoning tokens on `deepseek-v4-pro` at `high` — and that
+            // measurement was taken on a toy prompt. Re-measured against a
+            // 23k-token diff, the same model at the same setting and the same
+            // 8000-token ceiling spends **8000** reasoning tokens and returns
+            // empty content. So this is not a hazard that belonged to `kimi-k3`
+            // and went away; it is a property of reasoning sharing the budget,
+            // and every thinking model has it.
+            //
+            // Two findings from that re-measurement are load-bearing here:
+            //
+            // - **`low` is not a smaller `high`.** Both configured models burn
+            //   the entire allowance at either setting. This key selects a
+            //   *style* of thinking, never an amount, so it cannot be used to
+            //   bound spend. Only `"off"` bounds it.
+            // - **The failure is bimodal.** There is no setting at which the
+            //   model thinks a little and answers a little: either reasoning
+            //   fits and the answer is whole, or reasoning takes everything and
+            //   `finish_reason` is `length` with nothing to parse.
+            //
+            // What keeps it working today is `models.max_tokens`, raised to
+            // 16000, not this key. Anyone lowering that number should read the
+            // table in `config/defaults.toml` first.
             //
             // `models.reasoning_effort = "off"` restores the old behaviour for
             // a deployment that puts a thinking-heavy model back.
@@ -152,6 +175,14 @@ impl GatewayModel {
                 &request.schema_name,
                 request.schema.clone(),
             )),
+            capture: if self.langfuse.is_some() {
+                PayloadCapture {
+                    model_io: true,
+                    tool_io: false,
+                }
+            } else {
+                PayloadCapture::default()
+            },
             ..RunPolicy::default()
         });
 
@@ -167,10 +198,55 @@ impl GatewayModel {
 
         // `invoke` rather than `invoke_default`, because the run configuration
         // is where the output ceiling lives — see [`run_config`].
-        let run = harness
-            .invoke(&(), (), run_config(cap), messages)
-            .await
-            .map_err(|err| Error::Model(format!("{model}: {err}")))?;
+        let run_config = run_config(cap);
+        let run_id = run_config.run_id.clone();
+        let (journal, journal_sink) = self
+            .langfuse
+            .as_ref()
+            .map(|_| {
+                let journal = Arc::new(InMemoryEventJournal::new());
+                let sink = Arc::new(JournalSink::new(journal.clone(), run_id.clone()));
+                (journal, sink)
+            })
+            .unzip();
+        let events = EventSink::new();
+        if let Some(sink) = &journal_sink {
+            events.subscribe(sink.clone());
+        }
+        let result = harness
+            .invoke_in_context(
+                &(),
+                RunContext::new(run_config, ()).with_events(events),
+                messages,
+            )
+            .await;
+
+        if let (Some(journal), Some(sink), Some(client)) =
+            (journal, journal_sink, self.langfuse.as_ref())
+        {
+            sink.flush();
+            match journal.read_from(run_id.as_str(), 0).await {
+                Ok(observations) if !observations.is_empty() => {
+                    if let Err(err) = client
+                        .send_observations(
+                            LangfuseTraceConfig {
+                                name: Some("tinysweeper model call".to_string()),
+                                environment: std::env::var("LANGFUSE_ENVIRONMENT").ok(),
+                                ..Default::default()
+                            },
+                            &observations,
+                        )
+                        .await
+                    {
+                        tracing::warn!(%err, "could not export model call to Langfuse");
+                    }
+                }
+                Ok(_) => {}
+                Err(err) => tracing::warn!(%err, "could not read Langfuse observations"),
+            }
+        }
+
+        let run = result.map_err(|err| Error::Model(format!("{model}: {err}")))?;
 
         let totals = run.usage.usage;
         let finish_reason = run
@@ -195,7 +271,6 @@ impl GatewayModel {
             reported_cost_usd = reported_cost,
             "model call"
         );
-        trace::record(model, cap, request, &run);
 
         // Truncation, reported rather than repaired.
         //
@@ -358,8 +433,13 @@ enum CallOutcome {
 /// the request already carries, and its truncated-empty retry may still grow
 /// the budget from here. Both are wanted — the ceiling is protection against a
 /// runaway answer, not a demand for one.
+/// The run id is unique per call, and stays that way across the truncation
+/// ladder: each rung is its own Langfuse trace, so a retry at a larger ceiling
+/// is visible as a retry rather than overwriting the attempt that was cut off.
 fn run_config(cap: u32) -> RunConfig {
-    let config = RunConfig::new("tinysweeper-lane");
+    static NEXT_RUN_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let run_id = NEXT_RUN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let config = RunConfig::new(format!("tinysweeper-lane-{run_id}"));
     // `config::validate` rejects `max_tokens = 0`, but a `Config` built in code
     // can carry it, and forwarding a zero cap asks the provider for an empty
     // answer on every lane. Leave the ceiling off rather than guarantee failure.
@@ -367,6 +447,31 @@ fn run_config(cap: u32) -> RunConfig {
         return config;
     }
     config.with_max_turn_output_tokens(cap)
+}
+
+/// Build the direct Langfuse exporter only when its complete environment
+/// configuration is present. A deployment without telemetry keeps the
+/// existing offline and non-networking behaviour; malformed telemetry config
+/// is reported and never prevents a review from running.
+fn langfuse_client() -> Option<LangfuseClient> {
+    let configured = [
+        "LANGFUSE_BASE_URL",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+    ]
+    .iter()
+    .any(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()));
+    if !configured {
+        return None;
+    }
+
+    match LangfuseClient::from_env() {
+        Ok(client) => Some(client),
+        Err(err) => {
+            tracing::warn!(%err, "Langfuse telemetry is configured but unusable; continuing without it");
+            None
+        }
+    }
 }
 
 #[async_trait]
@@ -521,6 +626,7 @@ mod tests {
             api_key: "sk-secret-value".into(),
             base_url: "https://openrouter.ai/api/v1".into(),
             fallbacks: vec![],
+            langfuse: None,
         };
         let rendered = format!("{model:?}");
         assert!(!rendered.contains("sk-secret-value"), "{rendered}");
@@ -576,6 +682,7 @@ mod tests {
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
+            langfuse: None,
         };
 
         assert_eq!(

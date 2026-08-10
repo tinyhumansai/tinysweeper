@@ -96,16 +96,23 @@ pub async fn merge_snapshot(
         return Ok(Outcome::Refused(refusal));
     }
 
-    if let Decision::Refuse(refusal) = evaluate(config, &live) {
-        tracing::info!(number = live.pull_request.number, reason = %refusal, "not auto-merging");
-        return Ok(Outcome::Refused(refusal));
-    }
+    // The approval this produces is the only way to reach `write.merge` below,
+    // so the second evaluation is now load-bearing in the type system as well
+    // as in the control flow: deleting it would not merely skip a check, it
+    // would leave nothing to pass to the merge.
+    let approval = match evaluate(config, &live) {
+        Decision::Refuse(refusal) => {
+            tracing::info!(number = live.pull_request.number, reason = %refusal, "not auto-merging");
+            return Ok(Outcome::Refused(refusal));
+        }
+        Decision::Allow(approval) => approval,
+    };
 
     // The method comes from config because repositories disable merge methods:
     // squash is off on this one, and a hardcoded method would mean either
     // never merging or merging in a shape the repository has ruled out.
     let method = config.method.clone();
-    match write.merge(repo, live.pull_request.number, &method).await {
+    match write.merge(repo, &approval, &method).await {
         Ok(()) => {
             tracing::info!(number = live.pull_request.number, %method, "auto-merged");
             Ok(Outcome::Merged { method })

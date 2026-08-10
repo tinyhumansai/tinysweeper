@@ -33,11 +33,62 @@ pub struct Snapshot {
     pub reviews: Vec<ReviewVerdict>,
 }
 
+/// Proof that the policy passed, for one specific pull request.
+///
+/// [`crate::ports::forge::ForgeWrite::merge`] takes one of these, so a merge
+/// without a passing gate does not compile. That is the difference this type
+/// exists to make: before it, the impossibility was "the only call site sits
+/// behind two evaluations", which is discipline. `AGENTS.md` gives the reason
+/// `ForgeRead` and `ForgeWrite` are separate traits — an invariant the compiler
+/// enforces survives a contributor who has not read `AGENTS.md` — and this is
+/// the same argument one level down, on the one module that can mutate the
+/// default branch with nobody watching.
+///
+/// ## Why it lives here and not in `types.rs`
+///
+/// A private field restricts construction to the *defining module and its
+/// descendants*. Declared in `types.rs` with a `pub(super)` field — the shape
+/// `sentry::types::Scrubbed` uses — every module under `automerge` could mint
+/// one. Declared here, only `policy.rs` can, and [`evaluate`] is the only
+/// function in it that returns one. The tighter placement costs nothing, and
+/// the whole value of a witness is how small the set of things that can forge
+/// it is.
+///
+/// ## Why it carries the number
+///
+/// So a witness cannot be moved between pull requests. `merge` reads the
+/// number *from the token* rather than taking it as a separate argument, which
+/// makes "merge the pull request that was approved" the only expressible
+/// operation — approving #1 and merging #2 stops being a thing a caller can
+/// write. It also removes a parameter rather than adding one.
+///
+/// It is deliberately **not** a staleness guarantee. A witness says the policy
+/// passed against some snapshot, not that the snapshot is still true; that is
+/// what `merge_snapshot`'s head-SHA check and second evaluation are for, and
+/// they are unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeApproved {
+    /// The pull request the policy passed for. Private: this is the field that
+    /// makes the type unforgeable outside this module.
+    number: u64,
+}
+
+impl MergeApproved {
+    /// The pull request this approval is for.
+    pub fn number(&self) -> u64 {
+        self.number
+    }
+}
+
 /// Decide whether `snapshot` may be merged.
+///
+/// The `Allow` arm is the only place a [`MergeApproved`] is ever minted.
 pub fn evaluate(config: &AutoMerge, snapshot: &Snapshot) -> Decision {
     match refuse(config, snapshot) {
         Some(refusal) => Decision::Refuse(refusal),
-        None => Decision::Merge,
+        None => Decision::Allow(MergeApproved {
+            number: snapshot.pull_request.number,
+        }),
     }
 }
 

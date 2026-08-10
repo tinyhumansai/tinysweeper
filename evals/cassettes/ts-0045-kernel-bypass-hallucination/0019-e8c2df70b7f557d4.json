@@ -1,0 +1,29 @@
+{
+  "key": "e8c2df70b7f557d4",
+  "model_requested": "z-ai/glm-5.2",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_description",
+  "usage": {
+    "input_tokens": 4743,
+    "output_tokens": 1875,
+    "cached_tokens": 4126,
+    "embed_tokens": 0,
+    "cost_usd": 0.000509328
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The PR description is inaccurate for this diff. The title and body frame the change as adding `findings::summarise` (`shorten`, `first_sentence`) for an end-to-end deployment test, but the diff introduces several significant, unmentioned changes: a new kernel-bypass entrypoint shim (`deploy/mongo/kernel-bypass-entrypoint.py`) and compose overlay (`docker-compose.kernel-bypass.yml`), a renamed and now-required set of GitHub App environment variables in `docker-compose.yml` (`TINYSWEEPER_GITHUB_APP_ID` → `TINYSWEEPER_APP_ID`, `TINYSWEEPER_GITHUB_PRIVATE_KEY` → `TINYSWEEPER_APP_PRIVATE_KEY`), a read-only mount of `.tinysweeper.toml` into the container, and an `[embeddings]` block added to `.tinysweeper.toml`. The env-var rename is a behaviour change — the old names were never read by the binary — and the repository rules require the PR to state what changed and any behaviour change. None of this is mentioned.",
+        "confidence": 0.95,
+        "existing_code": "      TINYSWEEPER_APP_ID: ${TINYSWEEPER_APP_ID:?set the GitHub App id}\n      TINYSWEEPER_APP_PRIVATE_KEY: ${TINYSWEEPER_APP_PRIVATE_KEY:?set the GitHub App private key}",
+        "path": "docker-compose.yml",
+        "rule": "Pull requests state what changed, any behaviour change, and how it was verified.",
+        "severity": "high",
+        "suggestion": "Rewrite the PR body to cover every change in the diff, for example:\n\n---\n\nEnd-to-end deployment test. **Do not merge** — this exists to exercise the live server and will be closed.\n\n## What changed\n\n- **`findings::summarise`**: new module with `shorten` (truncate on a word boundary, for check-run titles) and `first_sentence`, both with tests. `shorten` works on character boundaries to avoid panicking on multibyte text.\n- **GitHub App auth fix in `docker-compose.yml`**: the env vars were previously `TINYSWEEPER_GITHUB_APP_ID` / `TINYSWEEPER_GITHUB_PRIVATE_KEY`, which `server::auth::AppAuth::from_env` never reads. Renamed to `TINYSWEEPER_APP_ID` / `TINYSWEEPER_APP_PRIVATE_KEY` and made them required (`:?`), so the container now fails loud instead of silently lacking App credentials.\n- **Embeddings config (`.tinysweeper.toml`)**: added an `[embeddings]` block with `provider = \"openrouter\"`, `model = \"openai/text-embedding-3-small\"`, `dimensions = 1536`, `api_key_env = \"OPENROUTER_API_KEY\"`. Forwarded `OPENROUTER_API_KEY`, `COHERE_API_KEY`, and `VOYAGE_API_KEY` into the container.\n- **Config mount in `docker-compose.yml`**: mounted `.tinysweeper.toml` read-only into the container so `[embeddings]` is on; without it the server runs on built-in defaults with retrieval off.\n- **MongoDB kernel-bypass overlay**: new `deploy/mongo/kernel-bypass-entrypoint.py` and `docker-compose.kernel-bypass.yml` for Linux kernels ≥ 6.19, where the community-server image 8.2.12-ubi9 refuses to start `mongod` via `enforce_kernel_compatibility`. The shim patches that function to a no-op and sets `GLIBC_TUNABLES=glibc.pthread.rseq=0`; opt-in overlay only, never the default.\n\n## Behaviour changes\n\n- GitHub App env var names changed and are now required.\n- The runtime container now reads a mounted `.tinysweeper.toml` with embeddings enabled.\n\n## How verified\n\nBrought up the full stack for the first time: MongoDB 8.2 with mongot, hybrid search live, OpenRouter embeddings, and the webhook path.",
+        "title": "Add a helper for shortening model-authored text"
+      }
+    ],
+    "resolved": [],
+    "summary": "The description does not match the diff. The title and body describe only the `findings::summarise` helper, but the diff also adds a MongoDB kernel-bypass shim and compose overlay, renames and makes required the GitHub App environment variables (a behaviour change), mounts `.tinysweeper.toml` into the container, and adds an `[embeddings]` configuration block. None of those are mentioned in the PR body, which the repository rules require. A corrected body is proposed in the suggestion."
+  }
+}

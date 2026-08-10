@@ -1,0 +1,97 @@
+{
+  "corpus_digest": "757b68b82e327d6e",
+  "config_digest": "6cdb039960d4f0e7",
+  "loose_replays": 0,
+  "cases": [
+    {
+      "id": "ts-0045-kernel-bypass-hallucination",
+      "true_positives": 0,
+      "missed": [],
+      "false_positives": 3,
+      "unscored": 0,
+      "exhaustive": true,
+      "duplicates": 0,
+      "forbidden_hits": [],
+      "optional_hits": 0,
+      "judged": [
+        {
+          "lane": "description",
+          "path": "(pull request description)",
+          "line": null,
+          "title": "Add a helper for shortening model-authored text",
+          "verdict": "false_positive",
+          "reason": "nothing is expected in (pull request description)"
+        },
+        {
+          "lane": "critique",
+          "path": "src/findings/summarise.rs",
+          "line": 20,
+          "title": "shorten can return limit+1 characters, breaking its own contract",
+          "verdict": "false_positive",
+          "reason": "nothing is expected in src/findings/summarise.rs"
+        },
+        {
+          "lane": "tests",
+          "path": "src/findings/summarise.rs",
+          "line": 23,
+          "title": "Exercise the no-space branch of shorten",
+          "verdict": "false_positive",
+          "reason": "nothing is expected in src/findings/summarise.rs"
+        }
+      ],
+      "cost_usd": 0.005881493,
+      "over_budget": false,
+      "input_tokens": 40669,
+      "output_tokens": 21712,
+      "cached_tokens": 30561,
+      "wall_secs": 281.211671153,
+      "models": [
+        "z-ai/glm-5.2"
+      ],
+      "lane_costs": {
+        "commits": 0.0,
+        "critique": 0.003094039,
+        "description": 0.000509328,
+        "security": 0.001023558,
+        "tests": 0.00111225
+      }
+    },
+    {
+      "id": "ts-0068-description-anchored-to-code",
+      "true_positives": 0,
+      "missed": [],
+      "false_positives": 0,
+      "unscored": 1,
+      "exhaustive": false,
+      "duplicates": 0,
+      "forbidden_hits": [],
+      "optional_hits": 0,
+      "judged": [
+        {
+          "lane": "tests",
+          "path": "src/harness/openrouter.rs",
+          "line": 334,
+          "title": "Gateway-wiring test is a tautology; it bypasses from_config",
+          "verdict": "unscored",
+          "reason": "the case does not claim to list every true finding"
+        }
+      ],
+      "cost_usd": 0.005812712,
+      "over_budget": false,
+      "input_tokens": 41240,
+      "output_tokens": 17871,
+      "cached_tokens": 17644,
+      "wall_secs": 137.482807043,
+      "models": [
+        "z-ai/glm-5.2"
+      ],
+      "lane_costs": {
+        "commits": 0.0,
+        "critique": 0.0034522500000000005,
+        "description": 0.0005326749999999999,
+        "security": 0.0007358709999999999,
+        "tests": 0.0009402799999999999
+      }
+    }
+  ]
+}

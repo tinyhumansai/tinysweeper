@@ -30,6 +30,7 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_retrieval(config, &mut problems);
     validate_overview(config, &mut problems);
     validate_lanes(config, &mut problems);
+    validate_council(config, &mut problems);
     validate_automerge(config, &mut problems);
     validate_issues(config, &mut problems);
     validate_automation(config, &mut problems);
@@ -189,6 +190,38 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
 
     if models.max_tokens == 0 {
         problems.push("`models.max_tokens = 0` would produce no output".into());
+    }
+
+    // Reasoning is drawn from the same allowance as the answer, and the effort
+    // key does not bound it — measured, both configured models spend the
+    // *entire* budget thinking at `high` and at `low` alike, then return empty
+    // content with `finish_reason = "length"`. The runs that back this are the
+    // table in `config/defaults.toml` next to `reasoning_effort`: both models
+    // at 8000 tokens, showing a full reasoning burn and no content at either
+    // effort, `off` clearing the same budget.
+    //
+    // A floor rather than a formula because the failure is bimodal: there is no
+    // setting at which the model thinks proportionally less, so there is no
+    // ratio to compute. 12000 sits below the 16000 that cleared this in
+    // production and above the 8000 that reproduced it every time.
+    //
+    // Caught here because the alternative is catching it in production, which
+    // is what happened: every review failed over to the last model in the
+    // fallback chain, and the only symptom was a warning line nobody was
+    // reading. A configuration that cannot work should not start.
+    const REASONING_FLOOR: u32 = 12_000;
+    if models.reasoning_effort.trim() != "off"
+        && !models.reasoning_effort.trim().is_empty()
+        && models.max_tokens < REASONING_FLOOR
+    {
+        problems.push(format!(
+            "`models.max_tokens = {}` is too small with `models.reasoning_effort = \"{}\"`: \
+             reasoning is billed against the same allowance and measurably consumes all of it, \
+             leaving nothing to answer with. Raise it to at least {REASONING_FLOOR}, or set \
+             `models.reasoning_effort = \"off\"` — lowering the effort does not bound it",
+            models.max_tokens,
+            models.reasoning_effort.trim(),
+        ));
     }
 
     // `!is_finite()` catches nan and inf, which sail straight through a
@@ -642,6 +675,55 @@ fn validate_sentry(config: &Config, problems: &mut Vec<String>) {
             "`sentry.max_per_run = 0` would promote nothing; it exists to stop a Sentry spike flooding the tracker, not to disable promotion"
                 .into(),
         );
+    }
+}
+
+/// The council: who reviews, with what character.
+fn validate_council(config: &Config, problems: &mut Vec<String>) {
+    let council = &config.council;
+
+    if council.enabled && council.agents.is_empty() {
+        problems.push(
+            "`council.enabled = true` with no `[[council.agents]]` reviews nothing differently; \
+             either add an agent or leave the council off"
+                .into(),
+        );
+    }
+
+    let mut seen = std::collections::BTreeSet::new();
+    for agent in &council.agents {
+        if agent.id.trim().is_empty() {
+            problems.push("a `[[council.agents]]` entry has no `id`".into());
+        } else if !seen.insert(agent.id.as_str()) {
+            // The id names the agent in the cost line and the check summary, so
+            // two agents sharing one makes the report unreadable.
+            problems.push(format!(
+                "two `[[council.agents]]` entries share the id `{}`",
+                agent.id
+            ));
+        }
+
+        if let Some(persona) = agent.persona.as_deref()
+            && crate::council::persona::lookup(persona).is_none()
+        {
+            // A persona is a name, never text: repository prose reaches a
+            // prompt through exactly one door and this is not it. So a typo has
+            // to be an error rather than a reviewer with no character.
+            problems.push(format!(
+                "`{}` names the persona `{persona}`, which does not exist. Known: {}",
+                agent.id,
+                known(&crate::council::persona::NAMES)
+            ));
+        }
+
+        for lane in &agent.lanes {
+            if !config.review.lanes.iter().any(|name| name == lane.as_str()) {
+                problems.push(format!(
+                    "`{}` reviews the `{lane}` lane, which `review.lanes` does not enable",
+                    agent.id
+                ));
+            }
+        }
     }
 }
 
