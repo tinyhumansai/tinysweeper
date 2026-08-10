@@ -400,6 +400,16 @@ annotate_sentry = true
 resolve_when_tracked = false
 scrub_patterns = []
 
+# Which repository each project promotes into. Empty by default, because there
+# is no defensible default: guessing a repository from a project slug is how
+# issues get opened in someone else's tracker. A project in `projects` with no
+# route here is skipped and logged, never guessed.
+#
+# [[sentry.route]]
+# project = "api"
+# repo    = "tinyhumansai/backend"
+# labels  = ["area: sentry"]
+
 [threads]
 # Close a conversation the review agent confirms the new code fixed.
 # The agent sees the prior finding and current diff; apply still requires an

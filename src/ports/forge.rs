@@ -120,6 +120,22 @@ pub trait ForgeRead: Send + Sync {
     /// means triage sets no type at all.
     async fn issue_types(&self, repo: &RepoId) -> Result<Vec<String>>;
 
+    /// Search issues in one repository, in GitHub issue-search syntax.
+    ///
+    /// The adapter scopes the query to `repo`; callers pass only the terms.
+    ///
+    /// **Open *and* closed issues are returned** unless the query narrows it.
+    /// The Sentry dedupe path depends on that: a promoted issue somebody has
+    /// since fixed and closed must still be found, or every sweep after the
+    /// fix reopens the same report. That is also why this is a search rather
+    /// than a filter over [`Self::open_issues`].
+    ///
+    /// Search is best-effort by nature — GitHub's index is eventually
+    /// consistent and its own rate limit is separate and low. A caller that
+    /// must not act on a stale answer should verify the hit it gets, and the
+    /// dedupe path does exactly that against the full issue body.
+    async fn search_issues(&self, repo: &RepoId, query: &str) -> Result<Vec<Issue>>;
+
     /// Fetch everything a lane needs about a pull request in one go.
     ///
     /// Default-implemented in terms of the calls above so an adapter only has

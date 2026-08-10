@@ -224,6 +224,26 @@ fn print_prose(loaded: &Loaded) {
         println!("  {:<16} {}", name, if enabled { "on" } else { "off" });
     }
 
+    // Routing is reported here rather than as a validation problem, because an
+    // unrouted project is a loud runtime skip and not a refusal to start. But
+    // it is exactly the "looks applied and is not" defect `doctor` exists to
+    // surface: a project that sweeps into nowhere is invisible otherwise.
+    if config.sentry.enabled {
+        println!("\nsentry routing");
+        if config.sentry.projects.is_empty() {
+            println!("  <no projects configured>");
+        }
+        for project in &config.sentry.projects {
+            match config.sentry.route_for(project) {
+                Some(route) => println!("  {:<24} -> {}", project, route.repo),
+                None => println!(
+                    "  {:<24} NO ROUTE — this project is skipped; add a [[sentry.route]] for it",
+                    project
+                ),
+            }
+        }
+    }
+
     println!("\ncredentials");
     for (variable, present, needed_for) in credentials(loaded) {
         println!(

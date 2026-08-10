@@ -927,7 +927,51 @@ impl ForgeRead for GitHubRead {
             })
             .collect())
     }
+
+    async fn search_issues(&self, repo: &RepoId, query: &str) -> Result<Vec<Issue>> {
+        // `repo:` is prepended here rather than trusted from the caller, so a
+        // query can only ever narrow the search inside one repository and
+        // never widen it into somebody else's.
+        let scoped = format!("repo:{}/{} {}", repo.owner, repo.name, query.trim());
+
+        let page = self
+            .client
+            .search()
+            .issues_and_pull_requests(&scoped)
+            .per_page(SEARCH_PAGE_SIZE)
+            .send()
+            .await
+            .map_err(api)?;
+
+        Ok(page
+            .items
+            .into_iter()
+            .filter(|i| i.pull_request.is_none())
+            .map(|i| Issue {
+                number: i.number,
+                title: i.title,
+                body: i.body.unwrap_or_default(),
+                author: i.user.login,
+                labels: i.labels.into_iter().map(|l| l.name).collect(),
+                // The search index reports state, and the dedupe path needs it
+                // — a closed tracked issue is still tracked.
+                open: matches!(i.state, octocrab::models::IssueState::Open),
+                age_days: 0,
+                quiet_days: 0,
+                comments: i.comments,
+                issue_type: None,
+            })
+            .collect())
+    }
 }
+
+/// How many search hits one dedupe lookup asks for.
+///
+/// The marker is unique per Sentry issue, so one hit is the expected answer
+/// and anything past a handful means the query matched prose rather than the
+/// marker. Small, because GitHub's search rate limit is separate from the REST
+/// one and considerably lower.
+const SEARCH_PAGE_SIZE: u8 = 20;
 
 /// Write access. Constructed only by `apply`.
 pub struct GitHubWrite {

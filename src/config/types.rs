@@ -854,11 +854,70 @@ pub struct Sentry {
     pub max_per_run: usize,
     /// Comment the GitHub issue link back onto the Sentry issue.
     pub annotate_sentry: bool,
-    /// Resolve the Sentry issue in the next release once it is tracked.
+    /// Resolve the Sentry issue once the GitHub issue tracking it is
+    /// **closed** — not when it is first promoted.
+    ///
+    /// The name is slightly misleading and the behaviour is deliberate.
+    /// Resolving at promotion time would mark an error fixed the moment
+    /// somebody noticed it: the Sentry issue would leave the unresolved list
+    /// while the bug is still in production, and the next occurrence would
+    /// have to reopen it. Tracked is not fixed. `sentry::link::resolve_if_fixed`
+    /// is where the rule lives.
     pub resolve_when_tracked: bool,
     /// Redact anything matching these patterns before it reaches GitHub. This
     /// runs on top of the always-on secret scrubbing, never instead of it.
     pub scrub_patterns: Vec<String>,
+    /// Where each project's issues are promoted.
+    ///
+    /// One deployment can watch several projects, and nothing else in this
+    /// section says which repository each one belongs to. A project listed in
+    /// [`Sentry::projects`] with no entry here is **skipped and logged**, never
+    /// guessed: inferring a repository from a project slug is exactly the kind
+    /// of plausible reasoning that opens issues in someone else's tracker.
+    pub route: Vec<SentryRoute>,
+}
+
+/// One project-to-repository route: `[[sentry.route]]`.
+///
+/// Routing is the deployment's decision, never the reviewed repository's —
+/// which is why `[sentry]` is on the not-overridable list in
+/// [`crate::config::remote`] and must stay there.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SentryRoute {
+    /// The Sentry project slug this route matches.
+    pub project: String,
+    /// The GitHub repository its issues are promoted into, as `owner/name`.
+    pub repo: String,
+    /// Labels applied on top of [`Sentry::labels`] for this project only.
+    ///
+    /// Additive rather than overriding, so a deployment-wide `sentry` label
+    /// cannot be silently dropped by a per-route list that forgot it.
+    pub labels: Vec<String>,
+}
+
+impl Sentry {
+    /// The route for `project`, or `None` when nothing routes it.
+    ///
+    /// First match wins. Duplicate projects are rejected by
+    /// `config::validate`, so in a valid configuration there is at most one.
+    pub fn route_for(&self, project: &str) -> Option<&SentryRoute> {
+        self.route.iter().find(|route| route.project == project)
+    }
+
+    /// Every label a promoted issue from `project` carries: the section-wide
+    /// list plus the route's own, deduplicated and order-stable.
+    pub fn labels_for(&self, project: &str) -> Vec<String> {
+        let mut labels = self.labels.clone();
+        if let Some(route) = self.route_for(project) {
+            for label in &route.labels {
+                if !labels.contains(label) {
+                    labels.push(label.clone());
+                }
+            }
+        }
+        labels
+    }
 }
 
 impl Config {

@@ -10,6 +10,7 @@
 use globset::Glob;
 
 use crate::config::types::{Config, LaneId, MergeMethod, ModelRef, Severity};
+use crate::forge::types::RepoId;
 
 /// The maximum schema version this build understands.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -640,8 +641,20 @@ fn validate_automation(config: &Config, problems: &mut Vec<String>) {
 fn validate_sentry(config: &Config, problems: &mut Vec<String>) {
     let sentry = &config.sentry;
 
-    if sentry.base_url.trim().is_empty() {
+    let base_url = sentry.base_url.trim();
+    if base_url.is_empty() {
         problems.push("`sentry.base_url` is empty".into());
+    } else if !base_url.starts_with("https://") {
+        // The client attaches the Sentry token as a default header on every
+        // request, so the scheme decides whether that credential crosses the
+        // network in cleartext. The default is `https://sentry.io/api/0`; this
+        // field exists for self-hosted installations, which is exactly where a
+        // bare `http://` gets typed. Refusing at validation keeps the token
+        // from ever being attached to such a client.
+        problems.push(format!(
+            "`sentry.base_url` must use https:// (found `{base_url}`); the Sentry token is sent \
+             on every request and http:// would transmit it in cleartext"
+        ));
     }
 
     if sentry.token_env.trim().is_empty() {
@@ -675,6 +688,53 @@ fn validate_sentry(config: &Config, problems: &mut Vec<String>) {
             "`sentry.max_per_run = 0` would promote nothing; it exists to stop a Sentry spike flooding the tracker, not to disable promotion"
                 .into(),
         );
+    }
+
+    validate_sentry_routes(config, problems);
+}
+
+/// The project-to-repository routing table.
+///
+/// A project with no route is **not** a validation problem: it is a loud
+/// runtime skip, so that adding a project to sweep and routing it can be two
+/// separate changes without the deployment refusing to start. The problems
+/// collected here are the ones that are unambiguously mistakes — a malformed
+/// repository, a duplicate project, or a route pointing at a project this
+/// deployment never sweeps.
+fn validate_sentry_routes(config: &Config, problems: &mut Vec<String>) {
+    let sentry = &config.sentry;
+    let mut seen: Vec<&str> = Vec::new();
+
+    for route in &sentry.route {
+        if route.project.trim().is_empty() {
+            problems.push("`sentry.route` entry has an empty `project`".into());
+            continue;
+        }
+
+        if seen.contains(&route.project.as_str()) {
+            problems.push(format!(
+                "`sentry.route` names project `{}` more than once; one project routes to one repository",
+                route.project
+            ));
+        }
+        seen.push(&route.project);
+
+        if RepoId::parse(&route.repo).is_none() {
+            problems.push(format!(
+                "`sentry.route` for project `{}` has `repo = \"{}\"`, which is not `owner/name`",
+                route.project, route.repo
+            ));
+        }
+
+        // A route for a project nobody sweeps writes to nothing. It is almost
+        // always a typo in one of the two lists, and silently ignoring it is
+        // how a project ends up believed-routed and unpromoted.
+        if !sentry.projects.iter().any(|p| p == &route.project) {
+            problems.push(format!(
+                "`sentry.route` routes project `{}`, which is not in `sentry.projects`; add it there or remove the route",
+                route.project
+            ));
+        }
     }
 }
 
