@@ -9,11 +9,15 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::json;
-use tinyagents::harness::context::RunConfig;
+use tinyagents::harness::context::{RunConfig, RunContext};
+use tinyagents::harness::events::EventSink;
 use tinyagents::harness::message::Message as TaMessage;
 use tinyagents::harness::model::ResponseFormat;
 use tinyagents::harness::providers::openai::OpenAiModel;
-use tinyagents::harness::runtime::{AgentHarness, RunPolicy};
+use tinyagents::harness::runtime::{AgentHarness, PayloadCapture, RunPolicy};
+use tinyagents::{
+    HarnessEventJournal, InMemoryEventJournal, JournalSink, LangfuseClient, LangfuseTraceConfig,
+};
 
 use crate::config::types::Models;
 use crate::error::{Error, Result};
@@ -29,6 +33,7 @@ pub struct GatewayModel {
     base_url: String,
     fallbacks: Vec<String>,
     reasoning_effort: String,
+    langfuse: Option<LangfuseClient>,
 }
 
 impl std::fmt::Debug for GatewayModel {
@@ -73,6 +78,7 @@ impl GatewayModel {
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
+            langfuse: langfuse_client(),
         })
     }
 
@@ -125,6 +131,14 @@ impl GatewayModel {
                 &request.schema_name,
                 request.schema.clone(),
             )),
+            capture: if self.langfuse.is_some() {
+                PayloadCapture {
+                    model_io: true,
+                    tool_io: false,
+                }
+            } else {
+                PayloadCapture::default()
+            },
             ..RunPolicy::default()
         });
 
@@ -140,10 +154,55 @@ impl GatewayModel {
 
         // `invoke` rather than `invoke_default`, because the run configuration
         // is where the output ceiling lives — see [`run_config`].
-        let run = harness
-            .invoke(&(), (), run_config(request), messages)
-            .await
-            .map_err(|err| Error::Model(format!("{model}: {err}")))?;
+        let run_config = run_config(request);
+        let run_id = run_config.run_id.clone();
+        let (journal, journal_sink) = self
+            .langfuse
+            .as_ref()
+            .map(|_| {
+                let journal = Arc::new(InMemoryEventJournal::new());
+                let sink = Arc::new(JournalSink::new(journal.clone(), run_id.clone()));
+                (journal, sink)
+            })
+            .unzip();
+        let events = EventSink::new();
+        if let Some(sink) = &journal_sink {
+            events.subscribe(sink.clone());
+        }
+        let result = harness
+            .invoke_in_context(
+                &(),
+                RunContext::new(run_config, ()).with_events(events),
+                messages,
+            )
+            .await;
+
+        if let (Some(journal), Some(sink), Some(client)) =
+            (journal, journal_sink, self.langfuse.as_ref())
+        {
+            sink.flush();
+            match journal.read_from(run_id.as_str(), 0).await {
+                Ok(observations) if !observations.is_empty() => {
+                    if let Err(err) = client
+                        .send_observations(
+                            LangfuseTraceConfig {
+                                name: Some("tinysweeper model call".to_string()),
+                                environment: std::env::var("LANGFUSE_ENVIRONMENT").ok(),
+                                ..Default::default()
+                            },
+                            &observations,
+                        )
+                        .await
+                    {
+                        tracing::warn!(%err, "could not export model call to Langfuse");
+                    }
+                }
+                Ok(_) => {}
+                Err(err) => tracing::warn!(%err, "could not read Langfuse observations"),
+            }
+        }
+
+        let run = result.map_err(|err| Error::Model(format!("{model}: {err}")))?;
 
         // Structured output is not optional: a lane that falls back to parsing
         // prose posts nonsense the first time a model phrases something
@@ -189,7 +248,9 @@ impl GatewayModel {
 /// the budget from here. Both are wanted — the ceiling is protection against a
 /// runaway answer, not a demand for one.
 fn run_config(request: &ModelRequest) -> RunConfig {
-    let config = RunConfig::new("tinysweeper-lane");
+    static NEXT_RUN_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let run_id = NEXT_RUN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let config = RunConfig::new(format!("tinysweeper-lane-{run_id}"));
     // `config::validate` rejects `max_tokens = 0`, but a `Config` built in code
     // can carry it, and forwarding a zero cap asks the provider for an empty
     // answer on every lane. Leave the ceiling off rather than guarantee failure.
@@ -197,6 +258,31 @@ fn run_config(request: &ModelRequest) -> RunConfig {
         return config;
     }
     config.with_max_turn_output_tokens(request.max_tokens)
+}
+
+/// Build the direct Langfuse exporter only when its complete environment
+/// configuration is present. A deployment without telemetry keeps the
+/// existing offline and non-networking behaviour; malformed telemetry config
+/// is reported and never prevents a review from running.
+fn langfuse_client() -> Option<LangfuseClient> {
+    let configured = [
+        "LANGFUSE_BASE_URL",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+    ]
+    .iter()
+    .any(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()));
+    if !configured {
+        return None;
+    }
+
+    match LangfuseClient::from_env() {
+        Ok(client) => Some(client),
+        Err(err) => {
+            tracing::warn!(%err, "Langfuse telemetry is configured but unusable; continuing without it");
+            None
+        }
+    }
 }
 
 #[async_trait]
@@ -281,6 +367,7 @@ mod tests {
             api_key: "sk-secret-value".into(),
             base_url: "https://openrouter.ai/api/v1".into(),
             fallbacks: vec![],
+            langfuse: None,
         };
         let rendered = format!("{model:?}");
         assert!(!rendered.contains("sk-secret-value"), "{rendered}");
@@ -336,6 +423,7 @@ mod tests {
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
+            langfuse: None,
         };
 
         assert_eq!(
