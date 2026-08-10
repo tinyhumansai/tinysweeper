@@ -17,7 +17,7 @@ use tinyagents::harness::runtime::{AgentHarness, RunPolicy};
 
 use crate::config::types::Models;
 use crate::error::{Error, Result};
-use crate::harness::pricing;
+use crate::harness::{pricing, trace};
 use crate::ports::model::{Model, ModelRequest, ModelResponse, Role, Usage};
 
 /// A model reached through an OpenAI-compatible gateway.
@@ -51,6 +51,33 @@ fn reasoning_options(effort: &str) -> serde_json::Value {
         "off" | "" => json!({ "reasoning": { "enabled": false } }),
         effort => json!({ "reasoning": { "effort": effort } }),
     }
+}
+
+/// Everything sent alongside every request that the OpenAI wire format has no
+/// field for: the reasoning block, and the ask for real accounting.
+///
+/// `usage.include` is OpenRouter's opt-in for returning what the call actually
+/// cost. Without it the only figure available is [`pricing`]'s own estimate from
+/// a hand-maintained rate table, and `models.budget_usd_per_pr` — a hard stop on
+/// a real bill — is then enforced against a guess that drifts every time a
+/// provider reprices. A gateway that does not know the field ignores it.
+fn provider_options(effort: &str) -> serde_json::Value {
+    let mut options = reasoning_options(effort);
+    options["usage"] = json!({ "include": true });
+    options
+}
+
+/// The cost the gateway says it charged, when it says so.
+///
+/// Read out of the raw response body rather than the parsed usage, because the
+/// OpenAI wire shape tinyagents parses has no cost field — this one is
+/// OpenRouter's extension, returned because [`provider_options`] asked for it.
+/// `None` means the gateway reported nothing and the estimate stands.
+fn gateway_cost(raw: Option<&serde_json::Value>) -> Option<f64> {
+    let cost = raw?.get("usage")?.get("cost")?.as_f64()?;
+    // A gateway that reports a nonsensical cost is a gateway to disbelieve: a
+    // negative figure would credit the budget rather than spend it.
+    (cost.is_finite() && cost >= 0.0).then_some(cost)
 }
 
 impl GatewayModel {
@@ -102,7 +129,7 @@ impl GatewayModel {
             //
             // `models.reasoning_effort = "off"` restores the old behaviour for
             // a deployment that puts a thinking-heavy model back.
-            .with_default_provider_options(reasoning_options(&self.reasoning_effort))
+            .with_default_provider_options(provider_options(&self.reasoning_effort))
             // Identifies us to OpenRouter, which is how per-application usage
             // shows up separately in their dashboard.
             .with_header(
@@ -118,7 +145,7 @@ impl GatewayModel {
         Ok(harness)
     }
 
-    async fn call(&self, model: &str, request: &ModelRequest) -> Result<ModelResponse> {
+    async fn call(&self, model: &str, request: &ModelRequest, cap: u32) -> Result<CallOutcome> {
         let mut harness = self.harness(model)?;
         harness.with_policy(RunPolicy {
             default_response_format: Some(ResponseFormat::json_schema(
@@ -141,9 +168,63 @@ impl GatewayModel {
         // `invoke` rather than `invoke_default`, because the run configuration
         // is where the output ceiling lives — see [`run_config`].
         let run = harness
-            .invoke(&(), (), run_config(request), messages)
+            .invoke(&(), (), run_config(cap), messages)
             .await
             .map_err(|err| Error::Model(format!("{model}: {err}")))?;
+
+        let totals = run.usage.usage;
+        let finish_reason = run
+            .final_response
+            .as_ref()
+            .and_then(|response| response.finish_reason.clone())
+            .unwrap_or_default();
+        let reported_cost = gateway_cost(run.final_response.as_ref().and_then(|r| r.raw.as_ref()));
+
+        // Every model call, at info, because the two failures this module has
+        // actually had — reasoning eating the whole budget, and an answer cut
+        // off part way through the findings array — are both invisible without
+        // these four numbers side by side.
+        tracing::info!(
+            model,
+            cap,
+            input_tokens = totals.input_tokens,
+            cached_tokens = totals.cache_read_tokens,
+            output_tokens = totals.output_tokens,
+            reasoning_tokens = totals.reasoning_tokens,
+            finish_reason = %finish_reason,
+            reported_cost_usd = reported_cost,
+            "model call"
+        );
+        trace::record(model, cap, request, &run);
+
+        // Truncation, reported rather than repaired.
+        //
+        // `finish_reason == "length"` means the answer was cut off at the
+        // ceiling. The harness recovers the *empty* case on its own, but the
+        // expensive case is the partial one: its repair ladder closes the
+        // unterminated JSON, so a findings array cut off after two entries
+        // parses cleanly and reads exactly like a review that found two things.
+        // Returning `Truncated` instead sends the call back up to `complete`,
+        // which retries with a larger ceiling before anything is published.
+        if finish_reason == "length" {
+            return Ok(CallOutcome::Truncated {
+                output_tokens: totals.output_tokens,
+                reasoning_tokens: totals.reasoning_tokens,
+            });
+        }
+
+        // Reasoning is billed against the same ceiling as the answer, so a
+        // model spending most of the budget thinking is one prompt away from
+        // the truncation above. Say so while the review still succeeds.
+        if totals.reasoning_tokens * 2 > u64::from(cap) {
+            tracing::warn!(
+                model,
+                cap,
+                reasoning_tokens = totals.reasoning_tokens,
+                "reasoning consumed over half the output budget; \
+                 consider raising `models.max_tokens` or lowering `models.reasoning_effort`"
+            );
+        }
 
         // Structured output is not optional: a lane that falls back to parsing
         // prose posts nonsense the first time a model phrases something
@@ -154,26 +235,115 @@ impl GatewayModel {
             ))
         })?;
 
-        let totals = run.usage.usage;
         let usage = Usage {
             input_tokens: totals.input_tokens,
             output_tokens: totals.output_tokens,
             cached_tokens: totals.cache_read_tokens,
             embed_tokens: 0,
-            cost_usd: pricing::completion_cost(
-                model,
-                totals.input_tokens,
-                totals.cache_read_tokens,
-                totals.output_tokens,
-            ),
+            // What the gateway says it charged, when it says — the rate table is
+            // a fallback for a gateway that reports nothing, not the preferred
+            // figure. `models.budget_usd_per_pr` stops a review on this number,
+            // so an estimate that drifts with a provider's repricing is the
+            // wrong thing to enforce a real bill against.
+            cost_usd: reported_cost.unwrap_or_else(|| {
+                pricing::completion_cost(
+                    model,
+                    totals.input_tokens,
+                    totals.cache_read_tokens,
+                    totals.output_tokens,
+                )
+            }),
         };
 
-        Ok(ModelResponse {
+        Ok(CallOutcome::Answer(ModelResponse {
             value,
             model: model.to_string(),
             usage,
-        })
+        }))
     }
+
+    /// One model, tried at the configured ceiling and then at growing ones
+    /// until it answers without being cut off.
+    ///
+    /// The ladder doubles, capped at [`MAX_TRUNCATION_RETRIES`] steps, and the
+    /// last rung's truncation is returned as an error naming the config key —
+    /// a review that cannot fit its findings in four times the configured
+    /// budget is a review whose operator needs to know, not one to publish half
+    /// of. Tokens are billed as produced, so a rung that is never reached costs
+    /// nothing.
+    async fn call_until_complete(
+        &self,
+        model: &str,
+        request: &ModelRequest,
+    ) -> Result<ModelResponse> {
+        let base = request.max_tokens;
+        let ladder = truncation_ladder(base);
+        let last = ladder.len() - 1;
+
+        for (attempt, cap) in ladder.into_iter().enumerate() {
+            match self.call(model, request, cap).await? {
+                CallOutcome::Answer(response) => return Ok(response),
+                CallOutcome::Truncated {
+                    output_tokens,
+                    reasoning_tokens,
+                } => {
+                    if attempt == last {
+                        return Err(Error::Model(format!(
+                            "{model} ran out of output tokens at {cap} \
+                             ({output_tokens} generated, {reasoning_tokens} of them reasoning); \
+                             the answer was cut off. Raise `models.max_tokens` (currently {base}) \
+                             or lower `models.reasoning_effort`."
+                        )));
+                    }
+                    tracing::warn!(
+                        model,
+                        cap,
+                        output_tokens,
+                        reasoning_tokens,
+                        "answer was cut off at the output ceiling; retrying with a larger one"
+                    );
+                }
+            }
+        }
+
+        unreachable!("the loop returns on its last iteration")
+    }
+}
+
+/// How many times a truncated answer is retried with a doubled ceiling before
+/// the call fails. Two retries means the last attempt runs at 4x
+/// `models.max_tokens`.
+const MAX_TRUNCATION_RETRIES: u32 = 2;
+
+/// The output ceilings one model is tried at, in order.
+///
+/// A zero base means "no ceiling" (see [`run_config`]): there is nothing to
+/// double, and a truncation at that point is the provider's own limit rather
+/// than ours, so the ladder is a single rung and the failure is reported
+/// straight away.
+fn truncation_ladder(base: u32) -> Vec<u32> {
+    if base == 0 {
+        return vec![0];
+    }
+    (0..=MAX_TRUNCATION_RETRIES)
+        .map(|step| base.saturating_mul(1 << step))
+        .collect()
+}
+
+/// What one model call produced.
+///
+/// Truncation is a third outcome rather than an error because it is the one
+/// failure worth *retrying differently*: same model, same prompt, more room.
+enum CallOutcome {
+    /// A complete, schema-satisfying answer.
+    Answer(ModelResponse),
+    /// The answer was cut off at the output ceiling.
+    Truncated {
+        /// Tokens generated before the cut-off.
+        output_tokens: u64,
+        /// How many of them went to the hidden reasoning channel.
+        reasoning_tokens: u64,
+    },
 }
 
 /// The run this call is made from, carrying the configured output ceiling.
@@ -188,21 +358,21 @@ impl GatewayModel {
 /// the request already carries, and its truncated-empty retry may still grow
 /// the budget from here. Both are wanted — the ceiling is protection against a
 /// runaway answer, not a demand for one.
-fn run_config(request: &ModelRequest) -> RunConfig {
+fn run_config(cap: u32) -> RunConfig {
     let config = RunConfig::new("tinysweeper-lane");
     // `config::validate` rejects `max_tokens = 0`, but a `Config` built in code
     // can carry it, and forwarding a zero cap asks the provider for an empty
     // answer on every lane. Leave the ceiling off rather than guarantee failure.
-    if request.max_tokens == 0 {
+    if cap == 0 {
         return config;
     }
-    config.with_max_turn_output_tokens(request.max_tokens)
+    config.with_max_turn_output_tokens(cap)
 }
 
 #[async_trait]
 impl Model for GatewayModel {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse> {
-        let mut last = match self.call(&request.model, &request).await {
+        let mut last = match self.call_until_complete(&request.model, &request).await {
             Ok(response) => return Ok(response),
             Err(err) => err,
         };
@@ -217,7 +387,7 @@ impl Model for GatewayModel {
                 error = %last,
                 "model call failed; trying the next model"
             );
-            match self.call(fallback, &request).await {
+            match self.call_until_complete(fallback, &request).await {
                 Ok(response) => return Ok(response),
                 Err(err) => last = err,
             }
@@ -261,7 +431,7 @@ mod tests {
         // ceiling on a response — and then dropped on the floor, so the
         // provider's own default decided how long an answer could get.
         assert_eq!(
-            run_config(&request(4_096)).max_turn_output_tokens,
+            run_config(request(4_096).max_tokens).max_turn_output_tokens,
             Some(4_096)
         );
     }
@@ -271,7 +441,77 @@ mod tests {
         // `config::validate` rejects `max_tokens = 0`, but a `Config` built in
         // code can still carry it, and asking a provider for zero output tokens
         // turns a configuration mistake into an empty answer on every lane.
-        assert_eq!(run_config(&request(0)).max_turn_output_tokens, None);
+        assert_eq!(
+            run_config(request(0).max_tokens).max_turn_output_tokens,
+            None
+        );
+    }
+
+    #[test]
+    fn every_request_asks_the_gateway_for_the_cost_it_charged() {
+        // Without this the only cost figure in the whole system is the rate
+        // table's estimate, and `budget_usd_per_pr` stops a real bill on it.
+        let options = provider_options("high");
+        assert_eq!(options["usage"], json!({ "include": true }));
+        // The reasoning block is still there: the two travel in one object and
+        // an overwrite would silently un-configure `reasoning_effort`.
+        assert_eq!(options["reasoning"], json!({ "effort": "high" }));
+    }
+
+    #[test]
+    fn the_reported_cost_is_read_out_of_the_raw_body() {
+        let raw = json!({ "usage": { "cost": 0.0123, "prompt_tokens": 10 } });
+        assert_eq!(gateway_cost(Some(&raw)), Some(0.0123));
+    }
+
+    #[test]
+    fn a_gateway_that_reports_no_cost_leaves_the_estimate_standing() {
+        // Every gateway other than OpenRouter, and OpenRouter itself on an
+        // endpoint that does not honour `usage.include`.
+        assert_eq!(gateway_cost(None), None);
+        assert_eq!(gateway_cost(Some(&json!({ "usage": {} }))), None);
+        assert_eq!(gateway_cost(Some(&json!({}))), None);
+    }
+
+    #[test]
+    fn a_nonsensical_reported_cost_is_disbelieved() {
+        // A negative cost would credit the per-pull-request budget instead of
+        // spending it, which turns a hard stop into no stop at all.
+        assert_eq!(
+            gateway_cost(Some(&json!({ "usage": { "cost": -1.0 } }))),
+            None
+        );
+        assert_eq!(
+            gateway_cost(Some(&json!({ "usage": { "cost": "0.01" } }))),
+            None
+        );
+    }
+
+    #[test]
+    fn a_truncated_answer_is_retried_at_a_larger_ceiling() {
+        // The failure this ladder exists for: an answer cut off part way
+        // through the findings array is closed by the harness' repair ladder
+        // and parses cleanly, so it reads exactly like a review that found
+        // fewer things. Growing the ceiling is the only fix that keeps the
+        // findings; four rungs of it would just be slow.
+        assert_eq!(truncation_ladder(16_000), vec![16_000, 32_000, 64_000]);
+    }
+
+    #[test]
+    fn a_ceiling_that_would_overflow_stops_growing_rather_than_wrapping() {
+        // Saturating, not wrapping: a wrapped ceiling asks the provider for
+        // almost no output and turns one truncated review into a guaranteed
+        // empty one.
+        let ladder = truncation_ladder(u32::MAX);
+        assert_eq!(ladder, vec![u32::MAX; 3]);
+    }
+
+    #[test]
+    fn an_absent_ceiling_is_a_single_rung() {
+        // Zero means the ceiling was never forwarded, so a truncation came from
+        // the provider's own limit and doubling nothing would just spend three
+        // calls to reach the same answer.
+        assert_eq!(truncation_ladder(0), vec![0]);
     }
 
     #[test]

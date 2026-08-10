@@ -12,6 +12,8 @@ pub mod openrouter;
 pub mod pricing;
 pub mod prompt;
 pub mod schema;
+#[cfg(feature = "harness")]
+pub mod trace;
 
 pub use crate::harness::mock::MockModel;
 pub use crate::harness::prompt::{Prompt, PromptInputs};
