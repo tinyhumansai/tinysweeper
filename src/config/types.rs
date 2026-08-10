@@ -854,7 +854,15 @@ pub struct Sentry {
     pub max_per_run: usize,
     /// Comment the GitHub issue link back onto the Sentry issue.
     pub annotate_sentry: bool,
-    /// Resolve the Sentry issue in the next release once it is tracked.
+    /// Resolve the Sentry issue once the GitHub issue tracking it is
+    /// **closed** — not when it is first promoted.
+    ///
+    /// The name is slightly misleading and the behaviour is deliberate.
+    /// Resolving at promotion time would mark an error fixed the moment
+    /// somebody noticed it: the Sentry issue would leave the unresolved list
+    /// while the bug is still in production, and the next occurrence would
+    /// have to reopen it. Tracked is not fixed. `sentry::link::resolve_if_fixed`
+    /// is where the rule lives.
     pub resolve_when_tracked: bool,
     /// Redact anything matching these patterns before it reaches GitHub. This
     /// runs on top of the always-on secret scrubbing, never instead of it.
