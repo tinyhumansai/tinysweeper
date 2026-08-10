@@ -92,6 +92,19 @@ enum Command {
         findings: std::path::PathBuf,
     },
 
+    /// Promote unresolved Sentry issues into tracked GitHub issues.
+    ///
+    /// Sweeps every project in `sentry.projects`, promoting the ones that
+    /// clear `min_events` / `min_users` / `ignore_culprits` into the
+    /// repository its `[[sentry.route]]` names. Deduplicated against GitHub, so
+    /// running it twice promotes nothing twice. Makes no model calls: a Sentry
+    /// event payload never reaches one.
+    Sentry {
+        /// Report what would be promoted without opening anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Merge a pull request if it qualifies under `[automerge]`.
     ///
     /// Deterministic and off unless the repository opts in. Makes no model
@@ -318,6 +331,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Apply { repo, pr, findings } => run_apply(&repo, pr, &findings).await,
         Command::Triage { repo, pr, findings } => run_triage(&repo, pr, &findings).await,
         Command::Automerge { repo, pr, dry_run } => run_automerge(&repo, pr, dry_run).await,
+        Command::Sentry { dry_run } => run_sentry(dry_run).await,
         Command::Eval(command) => run_eval(command).await,
         Command::LocalReview {
             base,
@@ -865,6 +879,95 @@ async fn run_automerge(repo: &str, pr: u64, dry_run: bool) -> Result<()> {
 async fn run_automerge(_repo: &str, _pr: u64, _dry_run: bool) -> Result<()> {
     Err(tinysweeper::Error::FeatureDisabled(
         "merging on GitHub",
+        "github",
+    ))
+}
+
+/// Sweep Sentry and promote what qualifies.
+///
+/// Needs both features: Sentry to read the issues, GitHub to open them. The
+/// arm is declared unconditionally so runbooks and scripts can be written
+/// against a stable surface, and a build without them says which one is
+/// missing rather than reporting an unknown subcommand.
+#[cfg(all(feature = "sentry", feature = "github"))]
+async fn run_sentry(dry_run: bool) -> Result<()> {
+    use tinysweeper::forge::github::{GitHubRead, GitHubWrite};
+    use tinysweeper::sentry::client::SentryClient;
+    use tinysweeper::sentry::{SweepOutcome, sweep};
+
+    let loaded = tinysweeper::config::load_validated(std::path::Path::new("."), None)?;
+    let config = &loaded.config;
+
+    let sentry = SentryClient::from_config(&config.sentry)?;
+    let read = GitHubRead::from_env()?;
+    // Built even for a dry run: `sweep` takes both handles and simply does not
+    // call the write one, so the dry run exercises the same code path rather
+    // than a parallel one that could disagree with it.
+    let write = GitHubWrite::from_env()?;
+
+    let report = match sweep(&read, &write, &sentry, config, dry_run).await? {
+        SweepOutcome::Disabled => {
+            println!("sentry promotion is off (`sentry.enabled = false`)");
+            return Ok(());
+        }
+        SweepOutcome::Ran(report) => report,
+    };
+
+    let verb = if report.dry_run {
+        "would promote"
+    } else {
+        "promoted"
+    };
+    println!("{verb} {} issue(s)", report.promoted.len());
+    for promoted in &report.promoted {
+        if report.dry_run {
+            println!(
+                "  {} {} -> {}",
+                promoted.project, promoted.short_id, promoted.repo
+            );
+        } else {
+            println!(
+                "  {} {} -> {}#{}",
+                promoted.project, promoted.short_id, promoted.repo, promoted.number
+            );
+        }
+    }
+
+    // Everything below is the loud half: a sweep that truncated, skipped a
+    // project, or failed one must say so on stdout, not only in a log line
+    // somebody has to go looking for.
+    for (project, cap) in &report.truncated {
+        println!("  ! {project}: truncated at max_per_run={cap}; re-run to continue");
+    }
+    for project in &report.unrouted {
+        println!("  ! {project}: no [[sentry.route]]; skipped rather than guessed");
+    }
+    for (project, err) in &report.failed {
+        println!("  ! {project}: failed: {err}");
+    }
+    if !report.resolved.is_empty() {
+        println!(
+            "  resolved {} sentry issue(s) whose tracking issue is closed",
+            report.resolved.len()
+        );
+    }
+    println!("  skipped {} issue(s)", report.skipped.len());
+
+    Ok(())
+}
+
+#[cfg(not(all(feature = "sentry", feature = "github")))]
+async fn run_sentry(_dry_run: bool) -> Result<()> {
+    // Name the feature that is actually missing. "sentry" first because it is
+    // the one a reader of this subcommand expects to need.
+    if cfg!(not(feature = "sentry")) {
+        return Err(tinysweeper::Error::FeatureDisabled(
+            "sweeping Sentry",
+            "sentry",
+        ));
+    }
+    Err(tinysweeper::Error::FeatureDisabled(
+        "opening GitHub issues",
         "github",
     ))
 }
