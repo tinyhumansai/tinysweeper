@@ -643,9 +643,14 @@ impl ForgeWrite for MockForge {
         Ok(())
     }
 
-    async fn merge(&self, _repo: &RepoId, number: u64, method: &str) -> Result<()> {
+    async fn merge(
+        &self,
+        _repo: &RepoId,
+        approval: &crate::automerge::policy::MergeApproved,
+        method: &str,
+    ) -> Result<()> {
         self.record(Write::Merged {
-            number,
+            number: approval.number(),
             method: method.to_string(),
         });
         Ok(())

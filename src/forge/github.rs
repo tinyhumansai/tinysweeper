@@ -1104,8 +1104,17 @@ impl ForgeWrite for GitHubWrite {
         graphql_errors(&raw, "the resolve-thread mutation")
     }
 
-    async fn merge(&self, repo: &RepoId, number: u64, method: &str) -> Result<()> {
+    async fn merge(
+        &self,
+        repo: &RepoId,
+        approval: &crate::automerge::policy::MergeApproved,
+        method: &str,
+    ) -> Result<()> {
         use octocrab::params::pulls::MergeMethod;
+
+        // From the approval, not from a parameter: the pull request merged is
+        // by construction the one the policy passed for.
+        let number = approval.number();
 
         let method = match method {
             "merge" => MergeMethod::Merge,
