@@ -359,3 +359,33 @@ fn truncation_lands_on_a_character_boundary() {
     );
     assert!(excerpt_bytes(&safe) <= MAX_EXCERPT_BYTES);
 }
+
+/// Issue #90 dedupe: the marker is built from values promotion has scrubbed
+/// **and truncated**, so a lookup that only scrubs searches for a marker that
+/// was never written — and re-promotes that issue on every sweep.
+///
+/// Pins that `marker_component` agrees with what `project` actually stores,
+/// which is the only reason the two paths cannot drift.
+#[test]
+fn a_marker_component_matches_what_promotion_stores() {
+    let long = "A".repeat(MARKER_COMPONENT_BYTES * 2);
+    let mut issue: RawIssue = serde_json::from_str(&issue_json()).expect("parses");
+    issue.short_id = long.clone();
+
+    let safe = project(&issue, None, "api", &config());
+    let looked_up = marker_component(&long, &config().scrub_patterns);
+
+    assert_eq!(
+        safe.short_id, looked_up,
+        "the dedupe lookup must derive the same value the marker is written from"
+    );
+    assert!(safe.short_id.len() <= MARKER_COMPONENT_BYTES);
+}
+
+/// The scrubbing half of the same agreement.
+#[test]
+fn a_marker_component_applies_the_configured_patterns() {
+    let patterns = vec!["SECRET".to_string()];
+    let out = marker_component("API-secret-1A2B", &patterns);
+    assert!(!out.contains("secret"), "{out}");
+}

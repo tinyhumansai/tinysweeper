@@ -265,8 +265,12 @@ async fn sweep_project(
         // it is still wrong. The real answer is that structural identifiers
         // should not be scrubbed at all, which is a design change rather than
         // a fix — tracked as a follow-up.
-        let dedupe_short_id = redact::scrub_text(&issue.short_id, &config.sentry.scrub_patterns);
-        let dedupe_project = redact::scrub_text(project, &config.sentry.scrub_patterns);
+        // `marker_component`, not `scrub_text`: the marker is built from
+        // values that promotion also truncates, so scrubbing alone would still
+        // miss a marker for any value over the cap.
+        let dedupe_short_id =
+            redact::marker_component(&issue.short_id, &config.sentry.scrub_patterns);
+        let dedupe_project = redact::marker_component(project, &config.sentry.scrub_patterns);
         match dedupe::find_tracked(read, repo, org, &dedupe_project, &dedupe_short_id).await? {
             Tracked::Yes(tracking) => {
                 tracing::debug!(

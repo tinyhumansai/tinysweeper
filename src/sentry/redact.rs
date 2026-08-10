@@ -115,6 +115,28 @@ pub fn scrub_text(text: &str, extra_patterns: &[String]) -> String {
     scrubbed
 }
 
+/// The cap applied to `short_id` and `project` by [`enforce_budget`].
+///
+/// Named because [`marker_component`] must use the same number: those two
+/// fields are what the dedupe marker is built from, and a lookup that
+/// normalises them differently from the promotion cannot match its own marker.
+pub const MARKER_COMPONENT_BYTES: usize = 128;
+
+/// Normalise a value the dedupe marker is built from, exactly as promotion does.
+///
+/// `promote::body` renders the marker from `SafeIssue.short_id` and
+/// `SafeIssue.project`, which have been **scrubbed and then truncated** by
+/// [`project`] + [`enforce_budget`]. A lookup that only scrubs searches for a
+/// marker that was never written, so any value over the cap is re-promoted on
+/// every sweep — the failure mode that scales.
+///
+/// Both paths call this so the two cannot drift apart again.
+pub fn marker_component(text: &str, patterns: &[String]) -> String {
+    let mut out = scrub_text(text, patterns);
+    truncate_to(&mut out, MARKER_COMPONENT_BYTES);
+    out
+}
+
 /// Remove every case-insensitive occurrence of `needle` from `haystack`.
 fn remove_literal_ci(haystack: &str, needle: &str) -> String {
     let mut out = String::with_capacity(haystack.len());
@@ -123,19 +145,24 @@ fn remove_literal_ci(haystack: &str, needle: &str) -> String {
     // Searches the original bytes rather than a lowered copy. Offsets taken
     // from a lowered string can address a different position in the original
     // even when the two have the same total length — see the note on
-    // [`pii::find_ascii_ci`]. Here that did not panic (the boundary check
-    // below caught it) but it could elide the *wrong span*: the pattern the
+    // [`pii::find_ci`]. Here that did not panic (the boundary check below
+    // caught it) but it could elide the *wrong span*: the pattern the
     // operator asked to remove would survive and unrelated text would go
     // instead, which is the failing-open direction for a scrubber.
     //
     // The old length guard also degraded silently to an exact-case
     // `replace` for any needle or haystack whose lowercase differs in
     // length, so a `scrub_patterns` entry quietly stopped being
-    // case-insensitive.
-    while let Some(found) = pii::find_ascii_ci(&haystack[cursor..], needle) {
+    // case-insensitive exactly when it was most likely to matter.
+    //
+    // `find_ci` returns the end offset rather than `start + needle.len()`,
+    // because a case-insensitive match can span a different number of bytes
+    // than the needle — which is the whole reason the old arithmetic was
+    // wrong.
+    while let Some((found, found_end)) = pii::find_ci(&haystack[cursor..], needle) {
         let start = cursor + found;
-        let end = start + needle.len();
-        // Defensive only: an ASCII-led needle cannot match off a boundary.
+        let end = cursor + found_end;
+        // Defensive only: `find_ci` walks real character boundaries.
         if !haystack.is_char_boundary(start) || !haystack.is_char_boundary(end) {
             break;
         }
@@ -243,8 +270,8 @@ fn enforce_budget(safe: &mut SafeIssue) {
     // `budget` to zero and reduced the exception message to the elision
     // marker, and was only then cut to 512 bytes. Charging a field at a length
     // it will not be promoted at is the whole defect.
-    truncate_to(&mut safe.short_id, 128);
-    truncate_to(&mut safe.project, 128);
+    truncate_to(&mut safe.short_id, MARKER_COMPONENT_BYTES);
+    truncate_to(&mut safe.project, MARKER_COMPONENT_BYTES);
     truncate_to(&mut safe.permalink, 512);
     truncate_to(&mut safe.level, 32);
     truncate_to(&mut safe.kind, 256);

@@ -133,6 +133,42 @@ async fn a_second_sweep_promotes_nothing_new() {
     assert!(third.promoted.is_empty());
 }
 
+/// The dedupe key must survive both normalisations promotion applies.
+///
+/// `promote::body` writes the marker from `SafeIssue.short_id`, which has been
+/// scrubbed **and truncated to `MARKER_COMPONENT_BYTES`**. A lookup that
+/// applied only one of those searched for a marker that was never written, so
+/// an over-long short id was re-promoted on every sweep — a duplicate per run,
+/// forever. This covers the sweep's own call site, not just the helper.
+#[tokio::test]
+async fn an_over_long_short_id_is_not_re_promoted_on_the_next_sweep() {
+    // Short tokens on purpose: a single long alphanumeric run is itself
+    // opaque-token-shaped, so scrubbing would replace the whole id and
+    // truncation would never engage — the test would pass without testing.
+    let long = "API 1A2B ".repeat(30);
+    assert!(
+        long.len() > crate::sentry::redact::MARKER_COMPONENT_BYTES,
+        "the fixture must exceed the cap or this proves nothing"
+    );
+    let forge = MockForge::new();
+    let sentry = MockSentry::new().with_issues("api", vec![issue(&long, "1", 500, 50)]);
+    let config = config(10);
+
+    let first = ran(sweep(&forge, &forge, &sentry, &config, false)
+        .await
+        .expect("ok"));
+    assert_eq!(first.promoted.len(), 1, "the first sweep promotes it");
+
+    let second = ran(sweep(&forge, &forge, &sentry, &config, false)
+        .await
+        .expect("ok"));
+    assert!(
+        second.promoted.is_empty(),
+        "the second sweep must find its own marker: {:?}",
+        second.promoted
+    );
+}
+
 /// Acceptance: a project with no route is skipped with a warning, not
 /// silently — the report carries it, so a caller can print it.
 #[tokio::test]

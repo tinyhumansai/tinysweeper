@@ -85,9 +85,9 @@ pub fn redact(text: &str) -> String {
 ///
 /// Case-insensitive on the keyword, because `bearer`, `Bearer` and `BEARER`
 /// all occur in real `Authorization` echoes.
-/// Byte-wise ASCII case-insensitive search, returning an offset into `haystack`.
+/// Case-insensitive substring search that returns a byte range in `haystack`.
 ///
-/// Exists because `to_lowercase()` is the wrong tool for locating a literal.
+/// Exists because `to_lowercase()` is the wrong tool for *locating* a literal.
 /// It is Unicode-aware, so a character's lowercase form can occupy a different
 /// number of bytes, and an offset found in the lowered copy then addresses a
 /// different position in the original. Comparing `lower.len() != text.len()`
@@ -96,17 +96,62 @@ pub fn redact(text: &str) -> String {
 /// internal offset still moves. Attacker-influenced text — which a Sentry
 /// exception message is — could therefore steer a slice.
 ///
-/// Searching the original bytes has no such failure mode, and needs no
-/// length guard. A match is always on a character boundary: the needles here
-/// begin with an ASCII byte, and an ASCII byte never appears inside a
-/// multi-byte UTF-8 sequence.
-pub(super) fn find_ascii_ci(haystack: &str, needle: &str) -> Option<usize> {
-    let (hay, pat) = (haystack.as_bytes(), needle.as_bytes());
-    if pat.is_empty() || pat.len() > hay.len() {
+/// So the walk happens over the *original*: candidate starts are real character
+/// boundaries of `haystack`, and the returned range is measured in its bytes.
+/// Folding is per character via [`char::to_lowercase`], which keeps this
+/// Unicode-correct — `RÉSUMÉ` matches `résumé` — rather than ASCII-only, since
+/// `sentry.scrub_patterns` is documented as case-insensitive and an operator
+/// may well configure a non-ASCII pattern.
+///
+/// The end offset is returned rather than derived from `needle.len()`, because
+/// a case-insensitive match can span a different number of bytes than the
+/// needle does.
+pub(super) fn find_ci(haystack: &str, needle: &str) -> Option<(usize, usize)> {
+    if needle.is_empty() {
         return None;
     }
-    hay.windows(pat.len())
-        .position(|window| window.eq_ignore_ascii_case(pat))
+    for (start, _) in haystack.char_indices() {
+        if let Some(end) = match_at(haystack, start, needle) {
+            return Some((start, end));
+        }
+    }
+    None
+}
+
+/// Whether `needle` matches `haystack` at `start`, case-insensitively.
+///
+/// Returns the byte offset in `haystack` just past the match. Compares the
+/// lowercase expansion of each side character by character, so a mapping that
+/// yields more than one character (`İ` → `i` + a combining dot) is handled
+/// without either side being materialised as a string.
+fn match_at(haystack: &str, start: usize, needle: &str) -> Option<usize> {
+    let mut hay = haystack[start..].chars();
+    let mut pat = needle.chars().flat_map(char::to_lowercase);
+    let mut consumed = 0usize;
+    let mut pending = None;
+
+    loop {
+        let Some(want) = pending.take().or_else(|| pat.next()) else {
+            return Some(start + consumed);
+        };
+        let got = hay.next()?;
+        consumed += got.len_utf8();
+
+        let mut folded = got.to_lowercase();
+        let first = folded.next()?;
+        if first != want {
+            return None;
+        }
+        // A character whose lowercase expands to several must match that many
+        // of the pattern's characters before the next haystack character.
+        for extra in folded {
+            let next_want = pat.next()?;
+            if extra != next_want {
+                return None;
+            }
+        }
+        pending = None;
+    }
 }
 
 fn redact_bearer(text: &str) -> String {
@@ -117,9 +162,8 @@ fn redact_bearer(text: &str) -> String {
     // addresses the string being sliced. The previous version bailed out
     // whenever lowercasing changed the byte length, which meant one `İ`
     // anywhere in a message silently disabled bearer redaction for all of it.
-    while let Some(found) = find_ascii_ci(&text[cursor..], "bearer ") {
-        let keyword_start = cursor + found;
-        let token_start = keyword_start + "bearer ".len();
+    while let Some((_, found_end)) = find_ci(&text[cursor..], "bearer ") {
+        let token_start = cursor + found_end;
         let token_end = text[token_start..]
             .find(|c: char| c.is_whitespace())
             .map(|offset| token_start + offset)
@@ -401,6 +445,18 @@ mod tests {
             out.contains("İİK"),
             "the surrounding text must survive: {out}"
         );
+    }
+
+    /// `scrub_patterns` is documented as case-insensitive, and an operator may
+    /// reasonably configure a non-ASCII pattern. ASCII-only folding would
+    /// silently stop matching it — a scrubber that fails open.
+    #[test]
+    fn case_insensitive_search_folds_beyond_ascii() {
+        assert!(find_ci("a RÉSUMÉ-SECRET here", "résumé-secret").is_some());
+        assert!(find_ci("a résumé-secret here", "RÉSUMÉ-SECRET").is_some());
+        // And the returned range addresses the ORIGINAL string.
+        let (start, end) = find_ci("xx RÉSUMÉ yy", "résumé").expect("matches");
+        assert_eq!(&"xx RÉSUMÉ yy"[start..end], "RÉSUMÉ");
     }
 
     /// A prefix must not protect an address. Without `:` as a separator the
