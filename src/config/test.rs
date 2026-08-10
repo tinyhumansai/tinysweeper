@@ -524,6 +524,74 @@ fn enabling_sentry_requires_an_org_and_a_project() {
 }
 
 #[test]
+fn a_sentry_route_parses_as_a_table_array() {
+    let config = parse(
+        "version = 1\n[sentry]\nenabled = true\norg = \"acme\"\nprojects = [\"api\"]\n\
+         \n[[sentry.route]]\nproject = \"api\"\nrepo = \"acme/backend\"\nlabels = [\"area: sentry\"]\n",
+    );
+
+    let route = config.sentry.route_for("api").expect("a route");
+    assert_eq!(route.repo, "acme/backend");
+    assert!(validate::validate(&config).is_empty());
+}
+
+/// Not a validation error: adding a project and routing it may be two
+/// separate changes. The skip is loud at runtime and reported by `doctor`.
+#[test]
+fn a_project_with_no_route_is_not_a_validation_problem() {
+    let config = parse(
+        "version = 1\n[sentry]\nenabled = true\norg = \"acme\"\nprojects = [\"api\", \"web\"]\n\
+         \n[[sentry.route]]\nproject = \"api\"\nrepo = \"acme/backend\"\n",
+    );
+    assert!(validate::validate(&config).is_empty());
+    assert!(config.sentry.route_for("web").is_none());
+}
+
+#[test]
+fn a_route_repo_that_is_not_owner_slash_name_is_rejected() {
+    let config = parse(
+        "version = 1\n[sentry]\nenabled = true\norg = \"acme\"\nprojects = [\"api\"]\n\
+         \n[[sentry.route]]\nproject = \"api\"\nrepo = \"backend\"\n",
+    );
+    let problems = validate::validate(&config);
+    assert!(
+        problems.iter().any(|p| p.contains("not `owner/name`")),
+        "{problems:#?}"
+    );
+}
+
+#[test]
+fn two_routes_for_one_project_are_rejected() {
+    let config = parse(
+        "version = 1\n[sentry]\nenabled = true\norg = \"acme\"\nprojects = [\"api\"]\n\
+         \n[[sentry.route]]\nproject = \"api\"\nrepo = \"acme/one\"\n\
+         \n[[sentry.route]]\nproject = \"api\"\nrepo = \"acme/two\"\n",
+    );
+    let problems = validate::validate(&config);
+    assert!(
+        problems.iter().any(|p| p.contains("more than once")),
+        "{problems:#?}"
+    );
+}
+
+/// A route for a project nobody sweeps writes to nothing — almost always a
+/// typo in one of the two lists.
+#[test]
+fn a_route_for_an_unswept_project_is_reported() {
+    let config = parse(
+        "version = 1\n[sentry]\nenabled = true\norg = \"acme\"\nprojects = [\"api\"]\n\
+         \n[[sentry.route]]\nproject = \"web\"\nrepo = \"acme/landing\"\n",
+    );
+    let problems = validate::validate(&config);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("not in `sentry.projects`")),
+        "{problems:#?}"
+    );
+}
+
+#[test]
 fn invalid_globs_are_reported_with_their_pattern() {
     let config = parse("version = 1\n[paths]\nignore = [\"src/**/[\"]\n");
     let problems = validate::validate(&config);
