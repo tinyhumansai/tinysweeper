@@ -12,6 +12,7 @@ pub mod knowledge;
 pub mod manifest;
 pub mod model;
 pub mod review_state;
+pub mod sentry;
 
 pub use crate::ports::embed::Embedder;
 pub use crate::ports::forge::{ForgeRead, ForgeWrite};
@@ -21,3 +22,4 @@ pub use crate::ports::knowledge::KnowledgeStore;
 pub use crate::ports::manifest::IndexManifest;
 pub use crate::ports::model::{Message, Model, ModelRequest, ModelResponse, Role, Usage};
 pub use crate::ports::review_state::ReviewStateStore;
+pub use crate::ports::sentry::SentryApi;

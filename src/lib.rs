@@ -32,6 +32,7 @@ pub mod ports;
 pub mod position;
 pub mod retrieve;
 pub mod scan;
+pub mod sentry;
 #[cfg(feature = "serve")]
 pub mod server;
 pub mod state;
