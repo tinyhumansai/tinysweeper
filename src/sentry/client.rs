@@ -68,6 +68,18 @@ impl SentryClient {
             ))
         })?;
 
+        Self::from_parts(config, org, &token)
+    }
+
+    /// Build from an already-resolved token.
+    ///
+    /// Split out of [`Self::from_config`] so the token can be supplied
+    /// directly. `from_config`'s only extra job is reading the environment,
+    /// and a test that wants to assert something about the *client* should not
+    /// have to mutate process-global state to get one — `set_var` races every
+    /// concurrent `getenv` in the process, including ones inside dependencies,
+    /// which is why Rust 2024 made it `unsafe`.
+    fn from_parts(config: &crate::config::types::Sentry, org: &str, token: &str) -> Result<Self> {
         let mut headers = HeaderMap::new();
         let mut value = HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| {
             // Deliberately does not echo the value.
@@ -217,26 +229,25 @@ mod tests {
     /// them would put a bearer token into every `{:?}` of this struct.
     #[test]
     fn debug_output_never_contains_the_token() {
-        const VAR: &str = "TINYSWEEPER_TEST_SENTRY_TOKEN";
         const TOKEN: &str = "sntrys_thisisatesttokenvalue_0123456789";
 
-        // SAFETY: single-threaded test, and the variable is unique to it.
-        unsafe { std::env::set_var(VAR, TOKEN) };
-
+        // Built through `from_parts` rather than `from_config` so this test
+        // mutates no process-global state. `#[test]` functions run in
+        // parallel, and `set_var` is not merely racy with other *tests* — it
+        // races every concurrent `getenv` in the process, including ones
+        // inside dependencies. What is under test is the `Debug` rendering of
+        // the client, which does not care where the token came from.
         let config = Sentry {
             org: Some("acme".into()),
-            token_env: VAR.into(),
             base_url: "https://sentry.io/api/0".into(),
             ..Sentry::default()
         };
-        let client = SentryClient::from_config(&config).expect("builds");
+        let client = SentryClient::from_parts(&config, "acme", TOKEN).expect("builds");
 
         let rendered = format!("{client:?}");
         assert!(
             !rendered.contains(TOKEN),
             "the auth token reached Debug output: {rendered}"
         );
-
-        unsafe { std::env::remove_var(VAR) };
     }
 }

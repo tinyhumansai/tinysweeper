@@ -100,6 +100,10 @@ enum Command {
     /// running it twice promotes nothing twice. Makes no model calls: a Sentry
     /// event payload never reaches one.
     Sentry {
+        /// Path to the config file. Defaults to discovery from the repo root.
+        #[arg(long)]
+        config: Option<std::path::PathBuf>,
+
         /// Report what would be promoted without opening anything.
         #[arg(long)]
         dry_run: bool,
@@ -331,7 +335,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Apply { repo, pr, findings } => run_apply(&repo, pr, &findings).await,
         Command::Triage { repo, pr, findings } => run_triage(&repo, pr, &findings).await,
         Command::Automerge { repo, pr, dry_run } => run_automerge(&repo, pr, dry_run).await,
-        Command::Sentry { dry_run } => run_sentry(dry_run).await,
+        Command::Sentry { config, dry_run } => run_sentry(config, dry_run).await,
         Command::Eval(command) => run_eval(command).await,
         Command::LocalReview {
             base,
@@ -890,12 +894,13 @@ async fn run_automerge(_repo: &str, _pr: u64, _dry_run: bool) -> Result<()> {
 /// against a stable surface, and a build without them says which one is
 /// missing rather than reporting an unknown subcommand.
 #[cfg(all(feature = "sentry", feature = "github"))]
-async fn run_sentry(dry_run: bool) -> Result<()> {
+async fn run_sentry(config_path: Option<std::path::PathBuf>, dry_run: bool) -> Result<()> {
     use tinysweeper::forge::github::{GitHubRead, GitHubWrite};
     use tinysweeper::sentry::client::SentryClient;
     use tinysweeper::sentry::{SweepOutcome, sweep};
 
-    let loaded = tinysweeper::config::load_validated(std::path::Path::new("."), None)?;
+    let loaded =
+        tinysweeper::config::load_validated(std::path::Path::new("."), config_path.as_deref())?;
     let config = &loaded.config;
 
     let sentry = SentryClient::from_config(&config.sentry)?;
@@ -953,11 +958,32 @@ async fn run_sentry(dry_run: bool) -> Result<()> {
     }
     println!("  skipped {} issue(s)", report.skipped.len());
 
+    // A sweep that could not reach a project did not succeed, and the exit
+    // status is the only part of this a scheduler reads. Everything is already
+    // on stdout above; without this a cron step goes green while a project was
+    // unreachable or a route named something that is not `owner/name`, and the
+    // "loud half" above is loud only to a human who happens to look.
+    //
+    // Deliberately after the printing, not instead of it: the operator still
+    // gets the full report on the run that failed.
+    if !report.failed.is_empty() {
+        let names = report
+            .failed
+            .iter()
+            .map(|(project, _)| project.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(tinysweeper::Error::config(format!(
+            "{} project(s) failed to sweep: {names}",
+            report.failed.len()
+        )));
+    }
+
     Ok(())
 }
 
 #[cfg(not(all(feature = "sentry", feature = "github")))]
-async fn run_sentry(_dry_run: bool) -> Result<()> {
+async fn run_sentry(_config_path: Option<std::path::PathBuf>, _dry_run: bool) -> Result<()> {
     // Name the feature that is actually missing. "sentry" first because it is
     // the one a reader of this subcommand expects to need.
     if cfg!(not(feature = "sentry")) {

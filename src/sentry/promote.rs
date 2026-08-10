@@ -219,10 +219,22 @@ fn sentry_link(safe: &SafeIssue) -> String {
     if safe.permalink.is_empty() {
         code_span(&safe.short_id)
     } else {
-        // The short id is Sentry-generated and scrubbed, so it cannot carry
-        // Markdown syntax; the permalink is angle-bracketed so a URL with
-        // parentheses cannot terminate the link early.
-        format!("[{}](<{}>)", safe.short_id, safe.permalink)
+        // Both halves are escaped, and the permalink needs it as much as the
+        // short id. The angle brackets only stop a URL with *parentheses* from
+        // terminating the link early — they do nothing about a `|`, which
+        // shears the table row this lands in, a `>`, which closes the bracket,
+        // or a newline, which ends the row entirely. This was the only table
+        // value bypassing the escaping every other cell gets.
+        //
+        // `collapse_whitespace` also folds the newline case, so the row cannot
+        // be split by one.
+        let label = collapse_whitespace(&safe.short_id)
+            .replace('`', "'")
+            .replace('|', "\\|");
+        let target = collapse_whitespace(&safe.permalink)
+            .replace('|', "\\|")
+            .replace('>', "%3E");
+        format!("[{label}](<{target}>)")
     }
 }
 

@@ -332,6 +332,30 @@ fn truncation_lands_on_a_character_boundary() {
     issue.metadata.value = Some("é".repeat(50_000));
 
     let safe = project(&issue, None, "api", &config());
-    assert!(safe.value.is_char_boundary(safe.value.len()));
+
+    // `is_char_boundary(len())` was the assertion here and it cannot fail: a
+    // `String` is always valid UTF-8 and its length is always a boundary. Had
+    // `truncate_to` sliced mid-character it would have panicked before
+    // reaching any assertion, so the old test proved only "did not panic" —
+    // which is not what its name claims. These are the observable properties.
+    assert!(
+        safe.value.ends_with(ELIDED),
+        "a truncated value must carry the elision marker: {:?}",
+        safe.value
+    );
+    assert!(
+        safe.value
+            .trim_end_matches(ELIDED)
+            .chars()
+            .all(|c| c == 'é'),
+        "truncation must not corrupt the characters it keeps"
+    );
+    // The real boundary claim: every character survived whole, so the kept
+    // prefix is a whole number of two-byte `é`s.
+    assert_eq!(
+        safe.value.trim_end_matches(ELIDED).len() % 'é'.len_utf8(),
+        0,
+        "a kept prefix that is not a multiple of the character width means a split character"
+    );
     assert!(excerpt_bytes(&safe) <= MAX_EXCERPT_BYTES);
 }

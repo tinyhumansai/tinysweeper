@@ -258,17 +258,28 @@ pub struct SafeIssue {
     /// Proof that this value came from [`crate::sentry::redact::project`].
     ///
     /// Skipped in serialization so the key set stays exactly the allow-list.
+    ///
+    /// `pub(super)`, not `pub(crate)`: the point of the token is that a
+    /// `SafeIssue` cannot be built outside this module tree, and a field the
+    /// whole crate can name is a field the whole crate can fill.
     #[serde(skip)]
-    pub(crate) scrubbed: Scrubbed,
+    pub(super) scrubbed: Scrubbed,
 }
 
-/// A zero-sized token only [`crate::sentry::redact`] can mint.
+/// A zero-sized token only the `sentry` module tree can mint.
 ///
 /// This is the whole enforcement mechanism for "a `SafeIssue` has been
 /// scrubbed": the field is private to the `sentry` module tree, so no other
 /// module can name it, and therefore no other module can construct the struct
-/// it sits in.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// it sits in. [`crate::sentry::redact::project`] is the only place that mints
+/// one.
+///
+/// **Do not derive `Default`.** `#[derive(Default)]` on a tuple struct emits a
+/// `Scrubbed::default()` that is as public as the type — which was a crate-wide
+/// mint for a token whose entire value is being unmintable, and made the
+/// paragraph above false. The inner field's `pub(super)` is the only way in,
+/// and it is what confines construction to this tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Scrubbed(pub(super) ());
 
 /// Why one Sentry issue was not promoted.

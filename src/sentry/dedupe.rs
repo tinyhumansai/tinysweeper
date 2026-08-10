@@ -92,10 +92,34 @@ pub async fn find_tracked(
     let needle = marker(org, project, short_id);
     let hits = read.search_issues(repo, short_id).await?;
 
-    Ok(hits
-        .into_iter()
-        .find(|issue| issue.body.contains(&needle))
-        .map_or(Tracked::No, |issue| Tracked::Yes(Box::new(issue))))
+    let Some(indexed) = hits.into_iter().find(|issue| issue.body.contains(&needle)) else {
+        return Ok(Tracked::No);
+    };
+
+    // Re-read the issue before anyone trusts its state.
+    //
+    // Search is an eventually-consistent index, so `indexed.open` is whatever
+    // the index last recorded — and the caller uses it to decide whether to
+    // resolve the Sentry issue. A tracking issue that was closed and then
+    // reopened still reads as closed here for as long as the index lags, and
+    // resolving on that stale answer marks a live error fixed. The extra read
+    // is one API call on the already-tracked path, which is the cheap path.
+    //
+    // A failed re-read falls back to the indexed copy rather than failing the
+    // sweep: dedupe itself only needs the number, which does not go stale, and
+    // refusing to dedupe would promote a duplicate — the worse outcome.
+    match read.issue(repo, indexed.number).await {
+        Ok(fresh) => Ok(Tracked::Yes(Box::new(fresh))),
+        Err(err) => {
+            tracing::warn!(
+                number = indexed.number,
+                error = %err,
+                "could not re-read the tracking issue; using the indexed copy, whose open/closed \
+                 state may be stale"
+            );
+            Ok(Tracked::Yes(Box::new(indexed)))
+        }
+    }
 }
 
 #[cfg(test)]

@@ -117,24 +117,25 @@ pub fn scrub_text(text: &str, extra_patterns: &[String]) -> String {
 
 /// Remove every case-insensitive occurrence of `needle` from `haystack`.
 fn remove_literal_ci(haystack: &str, needle: &str) -> String {
-    let lower_haystack = haystack.to_lowercase();
-    let lower_needle = needle.to_lowercase();
-
-    // `to_lowercase` can change byte length for some scripts, which would make
-    // indices from the lowered string wrong against the original. When that
-    // happens, fall back to the exact-case pass rather than slicing at an
-    // index that no longer means what it did.
-    if lower_haystack.len() != haystack.len() || lower_needle.len() != needle.len() {
-        return haystack.replace(needle, ELIDED);
-    }
-
     let mut out = String::with_capacity(haystack.len());
     let mut cursor = 0usize;
-    while let Some(found) = lower_haystack[cursor..].find(&lower_needle) {
+
+    // Searches the original bytes rather than a lowered copy. Offsets taken
+    // from a lowered string can address a different position in the original
+    // even when the two have the same total length — see the note on
+    // [`pii::find_ascii_ci`]. Here that did not panic (the boundary check
+    // below caught it) but it could elide the *wrong span*: the pattern the
+    // operator asked to remove would survive and unrelated text would go
+    // instead, which is the failing-open direction for a scrubber.
+    //
+    // The old length guard also degraded silently to an exact-case
+    // `replace` for any needle or haystack whose lowercase differs in
+    // length, so a `scrub_patterns` entry quietly stopped being
+    // case-insensitive.
+    while let Some(found) = pii::find_ascii_ci(&haystack[cursor..], needle) {
         let start = cursor + found;
-        let end = start + lower_needle.len();
-        // Defensive: never slice off a char boundary even if the length check
-        // above is ever loosened.
+        let end = start + needle.len();
+        // Defensive only: an ASCII-led needle cannot match off a boundary.
         if !haystack.is_char_boundary(start) || !haystack.is_char_boundary(end) {
             break;
         }
@@ -234,6 +235,20 @@ fn safe_frames(event: &RawEvent, patterns: &[String]) -> Vec<SafeFrame> {
 /// is not. `count`, `user_count` and `lineno` are numbers and cost nothing to
 /// keep.
 fn enforce_budget(safe: &mut SafeIssue) {
+    // The fixed fields are bounded FIRST, so `fixed` below is their real cost.
+    //
+    // These caps used to run at the end of this function, under a comment
+    // claiming a pathological permalink could not blow the budget — which is
+    // precisely what it did: a 5 KB permalink was charged at 5 KB, drove
+    // `budget` to zero and reduced the exception message to the elision
+    // marker, and was only then cut to 512 bytes. Charging a field at a length
+    // it will not be promoted at is the whole defect.
+    truncate_to(&mut safe.short_id, 128);
+    truncate_to(&mut safe.project, 128);
+    truncate_to(&mut safe.permalink, 512);
+    truncate_to(&mut safe.level, 32);
+    truncate_to(&mut safe.kind, 256);
+
     // Ordered least- to most-valuable, which is the order they are sacrificed.
     let fixed = safe.short_id.len()
         + safe.project.len()
@@ -270,19 +285,22 @@ fn enforce_budget(safe: &mut SafeIssue) {
         kept.push(frame);
     }
     safe.frames = kept;
-
-    // The fixed fields are bounded last so a pathological permalink or short
-    // id cannot itself blow the budget.
-    truncate_to(&mut safe.short_id, 128);
-    truncate_to(&mut safe.project, 128);
-    truncate_to(&mut safe.permalink, 512);
-    truncate_to(&mut safe.level, 32);
-    truncate_to(&mut safe.kind, 256);
 }
 
 /// Truncate `text` to at most `max` bytes, on a character boundary.
+///
+/// **At most `max` including the marker.** When there is not room for even the
+/// marker the text is cleared rather than replaced by it: `max.saturating_sub`
+/// bottoms out at zero, so the old code emitted a 3-byte `ELIDED` for a cap of
+/// 0..3 and overshot. Four fields doing that put the total over
+/// [`MAX_EXCERPT_BYTES`], which is the one thing this function exists to
+/// guarantee.
 fn truncate_to(text: &mut String, max: usize) {
     if text.len() <= max {
+        return;
+    }
+    if max < ELIDED.len() {
+        text.clear();
         return;
     }
     // Leave room for the marker so the result still fits the budget.

@@ -3,7 +3,7 @@
 //!
 //! Feature-gated network access only. The pipeline, the redaction boundary and
 //! every policy decision are always compiled and tested offline against
-//! [`crate::ports::sentry::MockSentry`]; the HTTP adapter that actually talks
+//! [`crate::sentry::mock::MockSentry`]; the HTTP adapter that actually talks
 //! to Sentry lives behind the `sentry` feature.
 //!
 //! ## The four steps

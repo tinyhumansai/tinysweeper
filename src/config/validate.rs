@@ -641,8 +641,20 @@ fn validate_automation(config: &Config, problems: &mut Vec<String>) {
 fn validate_sentry(config: &Config, problems: &mut Vec<String>) {
     let sentry = &config.sentry;
 
-    if sentry.base_url.trim().is_empty() {
+    let base_url = sentry.base_url.trim();
+    if base_url.is_empty() {
         problems.push("`sentry.base_url` is empty".into());
+    } else if !base_url.starts_with("https://") {
+        // The client attaches the Sentry token as a default header on every
+        // request, so the scheme decides whether that credential crosses the
+        // network in cleartext. The default is `https://sentry.io/api/0`; this
+        // field exists for self-hosted installations, which is exactly where a
+        // bare `http://` gets typed. Refusing at validation keeps the token
+        // from ever being attached to such a client.
+        problems.push(format!(
+            "`sentry.base_url` must use https:// (found `{base_url}`); the Sentry token is sent \
+             on every request and http:// would transmit it in cleartext"
+        ));
     }
 
     if sentry.token_env.trim().is_empty() {

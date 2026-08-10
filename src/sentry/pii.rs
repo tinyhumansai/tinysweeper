@@ -85,18 +85,39 @@ pub fn redact(text: &str) -> String {
 ///
 /// Case-insensitive on the keyword, because `bearer`, `Bearer` and `BEARER`
 /// all occur in real `Authorization` echoes.
-fn redact_bearer(text: &str) -> String {
-    let lower = text.to_lowercase();
-    if lower.len() != text.len() {
-        // Lowercasing changed the byte length, so offsets from `lower` do not
-        // address `text`. Nothing here is worth an incorrect slice.
-        return text.to_string();
+/// Byte-wise ASCII case-insensitive search, returning an offset into `haystack`.
+///
+/// Exists because `to_lowercase()` is the wrong tool for locating a literal.
+/// It is Unicode-aware, so a character's lowercase form can occupy a different
+/// number of bytes, and an offset found in the lowered copy then addresses a
+/// different position in the original. Comparing `lower.len() != text.len()`
+/// does **not** rule that out: `İİK` is 7 bytes before and after lowercasing
+/// (`İ` grows by one byte twice, the Kelvin sign `K` shrinks by two), and every
+/// internal offset still moves. Attacker-influenced text — which a Sentry
+/// exception message is — could therefore steer a slice.
+///
+/// Searching the original bytes has no such failure mode, and needs no
+/// length guard. A match is always on a character boundary: the needles here
+/// begin with an ASCII byte, and an ASCII byte never appears inside a
+/// multi-byte UTF-8 sequence.
+pub(super) fn find_ascii_ci(haystack: &str, needle: &str) -> Option<usize> {
+    let (hay, pat) = (haystack.as_bytes(), needle.as_bytes());
+    if pat.is_empty() || pat.len() > hay.len() {
+        return None;
     }
+    hay.windows(pat.len())
+        .position(|window| window.eq_ignore_ascii_case(pat))
+}
 
+fn redact_bearer(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut cursor = 0usize;
 
-    while let Some(found) = lower[cursor..].find("bearer ") {
+    // Searches `text` itself rather than a lowered copy, so every offset below
+    // addresses the string being sliced. The previous version bailed out
+    // whenever lowercasing changed the byte length, which meant one `İ`
+    // anywhere in a message silently disabled bearer redaction for all of it.
+    while let Some(found) = find_ascii_ci(&text[cursor..], "bearer ") {
         let keyword_start = cursor + found;
         let token_start = keyword_start + "bearer ".len();
         let token_end = text[token_start..]
@@ -277,11 +298,34 @@ fn push_token(out: &mut String, token: &str, rule: &impl Fn(&str) -> Option<Stri
 /// Whitespace included, which is why [`redact_digit_runs`] does not use
 /// [`rewrite_tokens`]: a space-separated card number would arrive as four
 /// four-digit tokens, none of which is card-shaped.
+///
+/// `:` and `/` are separators because the rules downstream
+/// ([`redact_emails`], [`redact_opaque_tokens`]) require a token to be made
+/// only of their allowed charset, and reject anything else outright. Without
+/// these two, `mailto:alice@example.com`, `to:alice@example.com` and
+/// `session:9f2b7c1e4a8d3f6b0c5e2a9d7f4b1e8c` each arrive as a *single* token
+/// containing a rejected character — so the address and the token pass through
+/// untouched. Splitting on them is what makes the prefix irrelevant instead of
+/// protective.
 fn is_separator(c: char) -> bool {
     c.is_whitespace()
         || matches!(
             c,
-            '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | '<' | '>' | '='
+            '"' | '\''
+                | '`'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | ','
+                | ';'
+                | '<'
+                | '>'
+                | '='
+                | ':'
+                | '/'
         )
 }
 
@@ -329,6 +373,65 @@ mod tests {
     fn bearer_as_prose_is_left_alone() {
         let out = redact("the bearer of this token");
         assert!(out.contains("the bearer of this token"), "{out}");
+    }
+
+    /// A message is attacker-influenced text, so a character that merely
+    /// *lowercases oddly* must not switch redaction off.
+    ///
+    /// The previous implementation searched a `to_lowercase()` copy and gave up
+    /// whenever that changed the byte length — so a single `İ` anywhere in the
+    /// message disabled bearer redaction for the whole of it.
+    #[test]
+    fn a_bearer_token_still_goes_when_the_message_lowercases_to_a_different_length() {
+        let out = redact("İ Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.QUJDREVG.c2lnbmF0dXJl");
+        assert!(!out.contains("eyJhbGciOiJIUzI1NiJ9"), "{out}");
+        assert!(out.contains(BEARER), "{out}");
+    }
+
+    /// The same hazard with the byte length preserved, which the old length
+    /// guard could not catch: `İİK` is 7 bytes before and after lowercasing
+    /// (two `İ` grow by one byte each, the Kelvin sign shrinks by two), while
+    /// every internal offset moves.
+    #[test]
+    fn offsets_are_not_taken_from_a_lowercased_copy() {
+        let out = redact("İİK Bearer eyJhbGciOiJIUzI1NiJ9.QUJDREVG.c2lnbmF0dXJl");
+        assert!(!out.contains("eyJhbGciOiJIUzI1NiJ9"), "{out}");
+        assert!(out.contains(BEARER), "{out}");
+        assert!(
+            out.contains("İİK"),
+            "the surrounding text must survive: {out}"
+        );
+    }
+
+    /// A prefix must not protect an address. Without `:` as a separator the
+    /// whole `mailto:alice@example.com` is one token, and the email rule
+    /// rejects it for containing a character outside its charset — so it
+    /// passed through untouched.
+    #[test]
+    fn an_email_behind_a_prefix_still_goes() {
+        for text in [
+            "to:alice@example.com",
+            "mailto:alice@example.com",
+            "contact=alice@example.com/profile",
+        ] {
+            let out = redact(text);
+            assert!(!out.contains("alice@example.com"), "{text} -> {out}");
+            assert!(out.contains(EMAIL), "{text} -> {out}");
+        }
+    }
+
+    /// The same for an opaque token behind a prefix or in a URL path.
+    #[test]
+    fn an_opaque_token_behind_a_prefix_still_goes() {
+        let token = "9f2b7c1e4a8d3f6b0c5e2a9d7f4b1e8c";
+        for text in [
+            format!("session:{token}"),
+            format!("https://example.com/reset/{token}"),
+        ] {
+            let out = redact(&text);
+            assert!(!out.contains(token), "{text} -> {out}");
+            assert!(out.contains(OPAQUE), "{text} -> {out}");
+        }
     }
 
     #[test]
