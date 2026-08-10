@@ -97,7 +97,7 @@ fn snapshot_of() -> Snapshot {
 fn refusal(config: &AutoMerge, snapshot: &Snapshot) -> Refusal {
     match evaluate(config, snapshot) {
         Decision::Refuse(refusal) => refusal,
-        Decision::Merge => panic!("expected a refusal, got a merge"),
+        Decision::Allow(_) => panic!("expected a refusal, got a merge"),
     }
 }
 
@@ -105,7 +105,45 @@ fn refusal(config: &AutoMerge, snapshot: &Snapshot) -> Refusal {
 
 #[test]
 fn a_small_green_approved_pull_request_qualifies() {
-    assert_eq!(evaluate(&policy(), &snapshot_of()), Decision::Merge);
+    assert!(evaluate(&policy(), &snapshot_of()).is_merge());
+}
+
+/// The type-level precondition, from the caller's side.
+///
+/// An approval exists only where the policy passed, and it names the pull
+/// request it passed for — so `ForgeWrite::merge`, which reads the number out
+/// of the approval rather than taking one, cannot be pointed at a different
+/// pull request than the one that was evaluated.
+///
+/// The other half of the guarantee is not testable and does not need to be:
+/// `MergeApproved` has a private field and no public constructor, so a merge
+/// without a passing evaluation is a compile error rather than a failing
+/// assertion. This test carries the part a test can carry; the compiler
+/// carries the rest.
+///
+/// Moved here from `types.rs`, where the equivalent assertion used to build a
+/// `Decision::Merge` by hand — which is exactly what is now impossible.
+#[test]
+fn an_approval_is_only_obtainable_from_a_passing_evaluation() {
+    let snapshot = snapshot_of();
+    let number = snapshot.pull_request.number;
+
+    let allowed = evaluate(&policy(), &snapshot);
+    assert!(allowed.is_merge());
+    assert!(allowed.refusal().is_none());
+    let approval = allowed.approval().expect("a passing evaluation approves");
+    assert_eq!(
+        approval.number(),
+        number,
+        "the approval names the pull request it was granted for"
+    );
+
+    // And a refusal yields none, so there is nothing to merge with.
+    let mut draft = snapshot_of();
+    draft.pull_request.draft = true;
+    let refused = evaluate(&policy(), &draft);
+    assert!(!refused.is_merge());
+    assert!(refused.approval().is_none());
 }
 
 // --- refusals --------------------------------------------------------------
@@ -255,9 +293,8 @@ fn a_skipped_check_nobody_required_does_not_block() {
             name: "Docker (publish)".into(),
             conclusion: Some(conclusion),
         });
-        assert_eq!(
-            evaluate(&policy(), &snapshot),
-            Decision::Merge,
+        assert!(
+            evaluate(&policy(), &snapshot).is_merge(),
             "{conclusion:?} on an unrequired check blocked the merge"
         );
         snapshot.checks.pop();
@@ -275,7 +312,7 @@ fn a_required_check_that_reports_neutral_is_a_verdict_and_passes() {
             check.conclusion = Some(CheckConclusion::Neutral);
         }
     }
-    assert_eq!(evaluate(&policy(), &snapshot), Decision::Merge);
+    assert!(evaluate(&policy(), &snapshot).is_merge());
 }
 
 #[test]
@@ -472,7 +509,7 @@ fn bump_snapshot() -> Snapshot {
 fn a_verified_dependency_bump_may_touch_manifests_and_lockfiles() {
     // Manifests are sensitive and a lockfile churns thousands of lines, so
     // without the exemption no bump would ever qualify.
-    assert_eq!(evaluate(&policy(), &bump_snapshot()), Decision::Merge);
+    assert!(evaluate(&policy(), &bump_snapshot()).is_merge());
 }
 
 #[test]
@@ -785,7 +822,12 @@ impl crate::ports::forge::ForgeWrite for RefusingForge {
     async fn resolve_review_thread(&self, _repo: &RepoId, _thread_id: &str) -> crate::Result<()> {
         unreachable!("auto-merge resolves no threads")
     }
-    async fn merge(&self, _repo: &RepoId, _number: u64, method: &str) -> crate::Result<()> {
+    async fn merge(
+        &self,
+        _repo: &RepoId,
+        _approval: &crate::automerge::policy::MergeApproved,
+        method: &str,
+    ) -> crate::Result<()> {
         Err(crate::Error::Forge(format!(
             "{method} merges are not allowed on this repository"
         )))

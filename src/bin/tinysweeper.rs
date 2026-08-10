@@ -844,7 +844,7 @@ async fn run_automerge(repo: &str, pr: u64, dry_run: bool) -> Result<()> {
     if dry_run {
         let taken = snapshot(&read, &repo_id, pr).await?;
         match evaluate(config, &taken) {
-            Decision::Merge => println!("#{pr} qualifies; would merge with `{}`", config.method),
+            Decision::Allow(_) => println!("#{pr} qualifies; would merge with `{}`", config.method),
             Decision::Refuse(refusal) => println!("#{pr} not merged: {refusal}"),
         }
         return Ok(());
