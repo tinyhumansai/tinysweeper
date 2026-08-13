@@ -22,6 +22,7 @@ use crate::config::types::LaneId;
 use crate::error::Result;
 use crate::flows::caps::{ChildGraphs, ModelCapability};
 use crate::flows::panel::{self, Call};
+use crate::flows::subagent::{self, Answered};
 use crate::ports::model::Model;
 
 /// What one reviewer said, or why it said nothing.
@@ -102,28 +103,19 @@ fn node_error(output: &Value, node_id: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Ask every reviewer at once, and return one [`Answer`] each, in order.
-///
-/// Never returns `Err` for a single reviewer's failure — that is an [`Answer`]
-/// carrying an `error`. `Err` is reserved for the graph itself not running,
-/// which means no reviewer was asked at all.
-pub async fn ask_all(
-    llm: Arc<ModelCapability>,
+/// Run one round of the council graph and read an answer per call.
+async fn one_round(
+    capabilities: &tinyflows::caps::Capabilities,
     lane: LaneId,
     calls: &[Call],
     schema: &Value,
 ) -> Result<Vec<Answer>> {
-    if calls.is_empty() {
-        return Ok(Vec::new());
-    }
-
     let graph = panel::council_graph(lane, calls, schema);
-    let capabilities = crate::flows::caps::with_llm(llm, ChildGraphs::none());
 
     let compiled = tinyflows::compiler::compile(&graph)
         .map_err(|e| crate::error::Error::Model(format!("council graph did not compile: {e}")))?;
 
-    let outcome = engine::run(&compiled, json!({}), &capabilities)
+    let outcome = engine::run(&compiled, json!({}), capabilities)
         .await
         .map_err(|e| crate::error::Error::Model(e.to_string()))?;
 
@@ -147,6 +139,159 @@ pub async fn ask_all(
             }
         })
         .collect())
+}
+
+/// The questions one answer carried, capped.
+///
+/// The cap is applied here as well as in the schema: a schema is a request, and
+/// under `json_object` the provider is not enforcing it at all. This is the
+/// number of sub-agents that actually get spawned.
+fn read_questions(value: &Value) -> Vec<String> {
+    value
+        .get("questions")
+        .and_then(Value::as_array)
+        .map(|questions| {
+            questions
+                .iter()
+                .filter_map(|q| q.get("question").and_then(Value::as_str))
+                .map(str::trim)
+                .filter(|q| !q.is_empty())
+                .take(subagent::MAX_QUESTIONS_PER_REVIEWER)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Answer one reviewer's questions, one sub-agent each, all at once.
+///
+/// A question that could not be answered is simply absent from the result. It
+/// was a request for more certainty; failing to get it leaves the reviewer
+/// exactly where it would have been without sub-agents.
+async fn answer_questions(
+    capabilities: &tinyflows::caps::Capabilities,
+    model: &str,
+    questions: &[String],
+    evidence: &str,
+) -> Vec<Answered> {
+    let graph = subagent::answers_graph(model, questions, evidence);
+
+    let Ok(compiled) = tinyflows::compiler::compile(&graph) else {
+        return Vec::new();
+    };
+    let Ok(outcome) = engine::run(&compiled, json!({}), capabilities).await else {
+        return Vec::new();
+    };
+
+    questions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, question)| {
+            let (value, _) = node_answer(&outcome.output, &subagent::node_id(index))?;
+
+            Some(Answered {
+                question: question.clone(),
+                answer: value
+                    .get("answer")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                confident: value
+                    .get("confident")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
+/// Ask every reviewer at once, and return one [`Answer`] each, in order.
+///
+/// When `subagent_model` is set, a reviewer may end its turn with questions
+/// rather than a guess; each is answered by a sub-agent and that reviewer is
+/// asked once more with the answers in hand. Exactly one follow-up turn, and
+/// only for reviewers that asked — see [`crate::flows::subagent`] for why the
+/// depth bound is structural rather than a counter.
+///
+/// Never returns `Err` for a single reviewer's failure — that is an [`Answer`]
+/// carrying an `error`. `Err` is reserved for the graph itself not running,
+/// which means no reviewer was asked at all.
+pub async fn ask_all(
+    llm: Arc<ModelCapability>,
+    lane: LaneId,
+    calls: &[Call],
+    schema: &Value,
+    subagent_model: Option<&str>,
+) -> Result<Vec<Answer>> {
+    if calls.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let capabilities = crate::flows::caps::with_llm(llm, ChildGraphs::none());
+
+    // The schema and the instruction travel together: a reviewer told it may
+    // ask, answering a schema with no `questions` key, produces a refusal under
+    // strict mode and a dropped key under `json_object`.
+    let asked = subagent_model.map(|_| subagent::with_questions(schema.clone()));
+    let round_one: Vec<Call> = match subagent_model {
+        Some(_) => calls
+            .iter()
+            .cloned()
+            .map(|mut call| {
+                call.system.push_str(subagent::ASK_INSTRUCTION);
+                call
+            })
+            .collect(),
+        None => calls.to_vec(),
+    };
+
+    let mut answers = one_round(
+        &capabilities,
+        lane,
+        &round_one,
+        asked.as_ref().unwrap_or(schema),
+    )
+    .await?;
+
+    let Some(model) = subagent_model else {
+        return Ok(answers);
+    };
+
+    // Which reviewers asked something, and what.
+    let pending: Vec<(usize, Vec<String>)> = answers
+        .iter()
+        .enumerate()
+        .filter_map(|(index, answer)| {
+            let questions = read_questions(answer.value.as_ref()?);
+            (!questions.is_empty()).then_some((index, questions))
+        })
+        .collect();
+
+    for (index, questions) in pending {
+        let evidence = &calls[index].prompt;
+        let answered = answer_questions(&capabilities, model, &questions, evidence).await;
+
+        // Nothing came back, so a second turn would be the same turn with the
+        // same evidence — one more call that cannot say anything new.
+        if answered.is_empty() {
+            continue;
+        }
+
+        // The final turn answers the plain schema: there is genuinely no turn
+        // after this one, so offering `questions` again would invite a question
+        // nothing will ever answer.
+        let mut again = calls[index].clone();
+        again.prompt.push_str(&subagent::render(&answered));
+
+        if let Ok(round_two) = one_round(&capabilities, lane, std::slice::from_ref(&again), schema).await
+            && let Some(settled) = round_two.into_iter().next()
+            && settled.value.is_some()
+        {
+            answers[index] = settled;
+        }
+    }
+
+    Ok(answers)
 }
 
 #[cfg(test)]
