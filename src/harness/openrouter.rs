@@ -194,7 +194,7 @@ impl GatewayModel {
             ..RunPolicy::default()
         });
 
-        let messages: Vec<TaMessage> = request
+        let mut messages: Vec<TaMessage> = request
             .messages
             .iter()
             .map(|m| match m.role {
@@ -203,6 +203,16 @@ impl GatewayModel {
                 Role::Assistant => TaMessage::assistant(&m.content),
             })
             .collect();
+        // The prompt half of the decision above. Appended as its own system
+        // message rather than folded into the lane prompt: the lane prompts are
+        // shared with the mock and the cassettes, and this text is a property of
+        // how *this* gateway asks for structured output, not of what the lane
+        // wants said.
+        if self.structured_output == StructuredOutput::JsonObject {
+            messages.push(TaMessage::system(&schema::json_mode_instruction(
+                &request.schema,
+            )));
+        }
 
         // `invoke` rather than `invoke_default`, because the run configuration
         // is where the output ceiling lives — see [`run_config`].
