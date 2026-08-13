@@ -529,6 +529,7 @@ mod tests {
     fn models() -> Models {
         Models {
             reasoning_effort: "high".into(),
+            structured_output: StructuredOutput::Schema,
             gateway: "openrouter".into(),
             base_url: "https://openrouter.ai/api/v1".into(),
             api_key_env: "TINYSWEEPER_TEST_KEY_ABSENT".into(),
@@ -643,6 +644,7 @@ mod tests {
     fn debug_never_prints_the_api_key() {
         let model = GatewayModel {
             reasoning_effort: "high".into(),
+            structured_output: StructuredOutput::Schema,
             api_key: "sk-secret-value".into(),
             base_url: "https://openrouter.ai/api/v1".into(),
             fallbacks: vec![],
