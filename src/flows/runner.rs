@@ -80,7 +80,10 @@ pub struct PanelRequest<'a> {
     /// The volatile half of the prompt: the evidence itself.
     pub suffix: &'a str,
     /// Builds the cacheable prefix for one lens. Called once per lens.
-    pub system_of: &'a dyn Fn(&Lens) -> String,
+    ///
+    /// `Sync` because the panel is held across an await inside a lane whose
+    /// future must be `Send`.
+    pub system_of: &'a (dyn Fn(&Lens) -> String + Sync),
 }
 
 /// Read one agent node's structured answer out of a finished run.
