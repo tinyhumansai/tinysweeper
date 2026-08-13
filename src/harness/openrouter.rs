@@ -292,6 +292,7 @@ mod tests {
             api_key_env: "TINYSWEEPER_TEST_KEY_ABSENT".into(),
             scan: "a".into(),
             deep: "b".into(),
+            flash: "c".into(),
             fallback: vec![],
             provider: ProviderRouting::default(),
             max_tokens: 100,
