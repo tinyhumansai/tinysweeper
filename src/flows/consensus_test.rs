@@ -297,3 +297,31 @@ fn resolutions_are_unioned_across_the_panel() {
 
     assert_eq!(titles, vec!["Handle the empty case", "Name the error"]);
 }
+
+#[test]
+fn unquoted_findings_do_not_collapse_into_one() {
+    // `existing_code` is optional. Keying on the quote alone made every
+    // unquoted finding in a file under one rule merge into a single proposal —
+    // silently, because a merge is indistinguishable from agreement. A golden
+    // test in the tests lane is what caught it.
+    let mut first = finding("a.rs", "untested-branch", "", "Cover the new branch", 0.85);
+    first.existing_code = None;
+    let mut second = finding("a.rs", "untested-branch", "", "Something unrelated", 0.8);
+    second.existing_code = None;
+
+    let proposals = propose(&[opinion("coverage", vec![first, second])]);
+
+    assert_eq!(proposals.len(), 2);
+}
+
+#[test]
+fn two_lenses_wording_one_quoted_finding_differently_still_merge() {
+    // The other side of the same rule: with a quote present, the title must
+    // stay irrelevant, or the panel double-reports everything it agrees on.
+    let proposals = propose(&[
+        opinion("a", vec![finding("a.rs", "unwrap", "x.unwrap()", "One wording", 0.5)]),
+        opinion("b", vec![finding("a.rs", "unwrap", "x.unwrap()", "Totally different wording", 0.5)]),
+    ]);
+
+    assert_eq!(proposals.len(), 1);
+}
