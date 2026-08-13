@@ -114,8 +114,18 @@ impl Lane for Tests {
             input.config,
             input.config.models.budget_usd_per_pr,
         );
-        let answers =
-            runner::ask_all(llm.clone(), LaneId::Tests, &calls, &schema::json_schema()).await?;
+        let answers = runner::ask_all(
+            llm.clone(),
+            LaneId::Tests,
+            &calls,
+            &schema::json_schema(),
+            input
+                .config
+                .council
+                .subagents
+                .then_some(input.config.models.flash.as_str()),
+        )
+        .await?;
 
         // Seeded from the capability after the calls return: it is the object
         // every graph call passes through, and the only place their cost is
