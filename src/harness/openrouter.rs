@@ -704,6 +704,7 @@ mod tests {
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
+            structured_output: models.structured_output,
             langfuse: None,
         };
 
