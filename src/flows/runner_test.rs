@@ -221,3 +221,257 @@ async fn reviewers_run_concurrently_rather_than_one_after_another() {
         "the reviewers were asked one at a time"
     );
 }
+
+// --- sub-agents ---------------------------------------------------------
+
+/// A reviewer answer that asks `questions`.
+fn asking(questions: &[&str]) -> Value {
+    json!({
+        "summary": "I need to check something.",
+        "findings": [],
+        "questions": questions
+            .iter()
+            .map(|q| json!({ "question": q, "why": "it decides the finding" }))
+            .collect::<Vec<_>>()
+    })
+}
+
+fn answered(confident: bool) -> Value {
+    json!({ "answer": "The caller validates it at line 10.", "confident": confident })
+}
+
+fn found(title: &str) -> Value {
+    json!({
+        "summary": "Settled.",
+        "findings": [{
+            "path": "a.rs", "existing_code": "x.unwrap()", "rule": "r",
+            "title": title, "body": "b", "severity": "high", "confidence": 0.9
+        }]
+    })
+}
+
+async fn ask_with_subagents(model: MockModel, ids: &[&str]) -> Vec<Answer> {
+    let calls: Vec<Call> = ids.iter().map(|id| call(id)).collect();
+    let llm = lane_llm(Arc::new(model), &config(), 100.0);
+
+    ask_all(
+        llm,
+        LaneId::Critique,
+        &calls,
+        &schema(),
+        Some("vendor/flash"),
+    )
+    .await
+    .expect("the graph runs")
+}
+
+#[tokio::test]
+async fn a_reviewer_that_asks_gets_a_second_turn_with_the_answers() {
+    // The whole point: the verdict taken is the one made *after* the question
+    // was answered, not the hedge that preceded it.
+    let model = MockModel::new()
+        .then(asking(&["Does the caller validate this?"]))
+        .then(answered(true))
+        .then(found("Settled finding"));
+
+    let answers = ask_with_subagents(model, &["a"]).await;
+
+    let value = answers[0].value.as_ref().expect("answered");
+    assert_eq!(value["findings"][0]["title"], json!("Settled finding"));
+}
+
+#[tokio::test]
+async fn the_second_turn_sees_the_answer_and_the_first_turn_does_not() {
+    let model = MockModel::new()
+        .then(asking(&["Does the caller validate this?"]))
+        .then(answered(true))
+        .then(found("Settled finding"));
+
+    let recorded = MockModel::new()
+        .then(asking(&["Does the caller validate this?"]))
+        .then(answered(true))
+        .then(found("Settled finding"));
+    let llm = lane_llm(Arc::new(recorded.clone()), &config(), 100.0);
+
+    ask_all(
+        llm,
+        LaneId::Critique,
+        &[call("a")],
+        &schema(),
+        Some("vendor/flash"),
+    )
+    .await
+    .expect("runs");
+    let _ = model;
+
+    let prompts: Vec<String> = recorded
+        .requests()
+        .iter()
+        .map(|r| r.messages[1].content.clone())
+        .collect();
+
+    assert!(
+        !prompts[0].contains("validates it at line 10"),
+        "the first turn cannot have seen an answer that did not exist yet"
+    );
+    assert!(
+        prompts[2].contains("validates it at line 10"),
+        "the second turn must carry the answer: {}",
+        prompts[2]
+    );
+}
+
+#[tokio::test]
+async fn a_reviewer_with_no_questions_costs_exactly_one_call() {
+    // The common case has to stay free. A follow-up turn for a reviewer that
+    // asked nothing is a second call that cannot say anything the first did not.
+    let model = MockModel::always(json!({ "summary": "s", "findings": [] }));
+    let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
+
+    ask_all(
+        llm,
+        LaneId::Critique,
+        &[call("a")],
+        &schema(),
+        Some("vendor/flash"),
+    )
+    .await
+    .expect("runs");
+
+    assert_eq!(model.calls(), 1);
+}
+
+#[tokio::test]
+async fn no_second_turn_when_every_sub_agent_failed() {
+    // Re-asking with no new evidence is the same turn again, at full price.
+    let model = MockModel::new()
+        .then(asking(&["Does the caller validate this?"]))
+        .then_error("sub-agent down");
+
+    let answers = ask_with_subagents(model, &["a"]).await;
+
+    // The asking turn stands as the reviewer's answer.
+    let value = answers[0].value.as_ref().expect("the first turn survives");
+    assert_eq!(value["summary"], json!("I need to check something."));
+}
+
+#[tokio::test]
+async fn an_unconfident_answer_still_earns_a_second_turn() {
+    // "The evidence does not say" is a real input to a verdict — it is the
+    // difference between a doubt resolved and one that could not be. Hiding it
+    // would let the reviewer read silence as confirmation.
+    let model = MockModel::new()
+        .then(asking(&["Does the caller validate this?"]))
+        .then(answered(false))
+        .then(found("Reported anyway"));
+
+    let answers = ask_with_subagents(model, &["a"]).await;
+
+    let value = answers[0].value.as_ref().expect("answered");
+    assert_eq!(value["findings"][0]["title"], json!("Reported anyway"));
+}
+
+#[tokio::test]
+async fn questions_are_capped_at_the_documented_number() {
+    // The schema asks for a cap; under `json_object` the provider enforces
+    // nothing. This is the number of sub-agents actually spawned.
+    let many: Vec<String> = (0..10).map(|n| format!("question {n}")).collect();
+    let refs: Vec<&str> = many.iter().map(String::as_str).collect();
+
+    let model = MockModel::new()
+        .then(asking(&refs))
+        .then(answered(true))
+        .then(answered(true))
+        .then(answered(true))
+        .then(found("Settled"));
+    let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
+
+    ask_all(
+        llm,
+        LaneId::Critique,
+        &[call("a")],
+        &schema(),
+        Some("vendor/flash"),
+    )
+    .await
+    .expect("runs");
+
+    // One asking turn + the capped sub-agents + one settling turn.
+    assert_eq!(
+        model.calls(),
+        1 + crate::flows::subagent::MAX_QUESTIONS_PER_REVIEWER + 1
+    );
+}
+
+#[tokio::test]
+async fn the_final_turn_is_not_offered_a_way_to_ask_again() {
+    // There is genuinely no turn after the second one, so offering `questions`
+    // there invites a question nothing will ever answer.
+    let model = MockModel::new()
+        .then(asking(&["Does the caller validate this?"]))
+        .then(answered(true))
+        .then(found("Settled"));
+    let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
+
+    ask_all(
+        llm,
+        LaneId::Critique,
+        &[call("a")],
+        &schema(),
+        Some("vendor/flash"),
+    )
+    .await
+    .expect("runs");
+
+    let requests = model.requests();
+    let first = &requests[0];
+    let last = requests.last().expect("a settling turn");
+
+    assert!(
+        first.schema["properties"].get("questions").is_some(),
+        "the asking turn must be able to ask"
+    );
+    assert!(
+        last.schema["properties"].get("questions").is_none(),
+        "the settling turn must not"
+    );
+    assert!(
+        !last.messages[0].content.contains("Asking instead of guessing"),
+        "nor be told it may"
+    );
+}
+
+#[tokio::test]
+async fn sub_agents_off_never_mentions_them_to_the_reviewer() {
+    let model = MockModel::always(json!({ "summary": "s", "findings": [] }));
+    let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
+
+    ask_all(llm, LaneId::Critique, &[call("a")], &schema(), None)
+        .await
+        .expect("runs");
+
+    let requests = model.requests();
+    assert!(!requests[0].messages[0].content.contains("Asking instead"));
+    assert!(requests[0].schema["properties"].get("questions").is_none());
+}
+
+#[tokio::test]
+async fn one_reviewers_questions_do_not_disturb_another_reviewers_answer() {
+    // The follow-up replaces one slot in a parallel vector. Getting the index
+    // wrong would attribute a settled verdict to the reviewer that never asked.
+    let model = MockModel::panel_matching(
+        &[
+            ("system for a", asking(&["Does the caller validate this?"])),
+            ("system for b", found("B untouched")),
+        ],
+        json!({ "summary": "s", "findings": [] }),
+    );
+
+    let answers = ask_with_subagents(model, &["a", "b"]).await;
+
+    assert_eq!(answers[1].id, "b");
+    assert_eq!(
+        answers[1].value.as_ref().unwrap()["findings"][0]["title"],
+        json!("B untouched")
+    );
+}
