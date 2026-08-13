@@ -10,7 +10,7 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::config::types::Config;
+use crate::config::types::{Config, LaneId};
 use crate::config::{self, Loaded};
 use crate::error::{Error, Result};
 
