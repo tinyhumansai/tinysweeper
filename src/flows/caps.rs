@@ -303,8 +303,20 @@ pub fn for_lane(
     children: ChildGraphs,
 ) -> (Capabilities, Arc<ModelCapability>) {
     let llm = Arc::new(ModelCapability::new(model, models.clone()));
+    let capabilities = with_llm(llm.clone(), children);
 
-    let capabilities = Capabilities {
+    (capabilities, llm)
+}
+
+/// Assemble capabilities around an existing [`ModelCapability`].
+///
+/// The panel builds one and reuses it across all three rounds, because the
+/// budget ceiling and the spend tally both live in it — a fresh one per round
+/// would let each round spend the whole ceiling.
+pub fn with_llm(llm: Arc<ModelCapability>, children: ChildGraphs) -> Capabilities {
+    #[allow(clippy::needless_update)]
+    {
+        Capabilities {
         llm: llm.clone() as Arc<dyn LlmProvider>,
         tools: Arc::new(NoTools),
         http: Arc::new(NoHttp),
