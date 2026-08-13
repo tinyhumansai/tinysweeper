@@ -97,6 +97,25 @@ The App needs `checks:write`, `contents:read`, `issues:write`,
 create one with those settings. A Docker image is published from `Dockerfile`
 by CI.
 
+### Kubernetes rollout
+
+`.github/workflows/deploy.yml` is an operator button in the Actions tab: it asks
+the cluster to restart the workload so it re-pulls the published image. It never
+fires on a push or a green CI run — merging publishes an image, and a human
+decides when production takes it. Both settings below can be overridden per run
+from the dispatch form. It needs:
+
+| Name | Kind | Meaning |
+| --- | --- | --- |
+| `KUBE_CONFIG` | secret | Base64 kubeconfig (`base64 -w0 < kubeconfig.yaml`) for a service account that may `patch` deployments in the one namespace. |
+| `K8S_NAMESPACE` | variable | Namespace. Defaults to `tinysweeper`. |
+| `K8S_DEPLOYMENTS` | variable | Comma-separated deployment names. Defaults to `tinysweeper`. |
+
+The restart only deploys new code if the pod template tracks a moving tag
+(`ghcr.io/tinyhumansai/tinysweeper:latest`) with `imagePullPolicy: Always`. For
+digest-pinned manifests, set the image to the commit SHA instead — CI already
+tags every image with `type=sha,format=long`.
+
 The server refuses to start without `TINYSWEEPER_WEBHOOK_SECRET`: an unsigned
 delivery endpoint is a way for anyone to make the bot review anything.
 
