@@ -1004,23 +1004,36 @@ fn helper() {
         ];
         let pr = pull_request();
 
-        let model = MockModel::new()
-            // src/main.rs: unparseable.
-            .then(json!({"summary": "…", "findings": [{"path": "x"}]}))
-            // src/other.rs: a real finding, and a falsifier that keeps it.
-            .then(json!({
-                "summary": "…",
-                "findings": [{
-                    "path": "src/other.rs",
-                    "severity": "high",
-                    "confidence": 0.9,
-                    "rule": "bounds",
-                    "title": "Unchecked index",
-                    "body": "…",
-                    "existing_code": "    let x = items[i];"
-                }]
-            }))
-            .then(json!({"incorrect": []}));
+        // Chosen by file rather than by call order: each file gets its own
+        // panel, and this test is precisely about the two behaving differently.
+        // Keyed on the focus marker rather than the bare path, because every
+        // changed path appears in the shared prefix of both conversations.
+        let model = MockModel::panel_matching(
+            &[
+                // src/main.rs: unparseable, so nothing there can be read.
+                (
+                    "The file is `src/main.rs`",
+                    json!({"summary": "…", "findings": [{"path": "x"}]}),
+                ),
+                // src/other.rs: a real finding.
+                (
+                    "The file is `src/other.rs`",
+                    json!({
+                        "summary": "…",
+                        "findings": [{
+                            "path": "src/other.rs",
+                            "severity": "high",
+                            "confidence": 0.9,
+                            "rule": "bounds",
+                            "title": "Unchecked index",
+                            "body": "…",
+                            "existing_code": "    let x = items[i];"
+                        }]
+                    }),
+                ),
+            ],
+            json!({"summary": "…", "findings": []}),
+        );
 
         let model2 = model.clone();
         let outcome = Critique::new(Arc::new(model))
