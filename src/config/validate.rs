@@ -298,6 +298,18 @@ fn validate_embeddings(config: &Config, problems: &mut Vec<String>) {
         problems.push("`embeddings.batch = 0` would send no texts per call".into());
     }
 
+    // Not an error when zero — that is read as the default, because an
+    // unbounded batch is the failure this ceiling exists to prevent. It is an
+    // error when set so low that a single ordinary chunk cannot fit, since
+    // every call would then be one chunk and a full index would crawl.
+    if embeddings.max_request_tokens > 0 && embeddings.max_request_tokens < 4_000 {
+        problems.push(format!(
+            "`embeddings.max_request_tokens = {}` is below one chunk's worth of tokens; \
+             a batch would carry a single text and indexing would be needlessly slow",
+            embeddings.max_request_tokens
+        ));
+    }
+
     // Same `!is_finite()` guard as the review budget, and for the same reason:
     // nan sails through `<= 0.0` and would leave indexing unbounded.
     if !embeddings.budget_usd_per_index.is_finite() || embeddings.budget_usd_per_index <= 0.0 {

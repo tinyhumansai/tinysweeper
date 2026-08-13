@@ -269,6 +269,14 @@ dimensions = 1536
 api_key_env = "OPENROUTER_API_KEY"
 base_url = ""
 batch = 64
+# The ceiling the provider actually enforces. `batch` bounds how many texts go
+# in a call; this bounds how large they are, which is the limit an embedding
+# API rejects on. Sizing by count alone meant 64 chunks of real source hit
+# OpenAI's 300,000-token request limit at 467,846 tokens, so every large
+# repository indexed nothing and reviewed from the diff alone while small ones
+# looked fine. Counted with the four-bytes-per-token estimate, which is about
+# half the true rate for code — hence 120,000 here against a 300,000 limit.
+max_request_tokens = 120000
 requests_per_minute = 60
 budget_usd_per_index = 5.0
 # Retrieval budgets. `context_tokens` is the number that matters: at roughly

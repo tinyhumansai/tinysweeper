@@ -123,3 +123,46 @@ Two honesty caveats, both deliberate:
 `IndexReport::budget_exhausted`. It does not fail and does not discard what it
 wrote, and it does **not** record the revision — a partial index that claims the
 revision would make the next push skip the work that was never finished.
+
+## A batch is bounded by tokens, not only by count
+
+`embeddings.batch` says how many texts go in one embedding call. It does not
+bound the call, because providers cap a request by **tokens**, and 64 chunks of
+real source are not the same size as 64 chunks of anything else.
+
+That gap was a production bug rather than a theoretical one. Once the gateway's
+credentials were fixed, indexing got far enough to be rejected outright:
+
+```
+openrouter embeddings returned 400 Bad Request:
+  "Requested 467846 tokens, max 300000 tokens per request"
+  code: max_tokens_per_request        repo="tinyhumansai/openhuman"
+```
+
+Large repositories therefore indexed nothing and reviewed from the diff alone,
+while small ones succeeded — which is the worst shape for a bug of this kind,
+because the failure is loudest exactly where retrieval matters most and absent
+where anyone would have noticed it.
+
+`batch_bounds` now closes a batch on whichever ceiling binds first: the count,
+or `embeddings.max_request_tokens`. Two properties are load-bearing and are
+each pinned by a test:
+
+- Every queued chunk lands in **exactly one** batch. A dropped chunk is a file
+  missing from the index that nothing downstream would ever report.
+- A single chunk larger than the ceiling gets a batch of its own rather than
+  being skipped or wedging the loop. The provider will reject that call, but an
+  error naming the limit beats a silent gap or an index that never finishes.
+
+The default is 120,000 estimated tokens against a 300,000-token provider limit,
+and the factor of two is not padding. `estimate_tokens` assumes four bytes per
+token, which is about right for prose and roughly **half** the true rate for
+code. The rejected batch is the measurement: 64 chunks at the chunker's
+14,400-char cap is at most 230,400 *estimated* tokens, and the provider counted
+467,846 real ones. So a ceiling expressed in estimated tokens has to be halved
+before it means anything to the provider enforcing it.
+
+A deployment on a provider with a different limit sets
+`embeddings.max_request_tokens`. Zero is read as the default rather than as
+"unbounded" — an unbounded batch is the bug, so a config typo must not be able
+to switch it back on.

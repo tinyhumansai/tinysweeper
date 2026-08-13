@@ -531,7 +531,25 @@ pub struct Embeddings {
     /// OpenAI-compatible server.
     pub base_url: String,
     /// How many texts go in one embedding call.
+    ///
+    /// A ceiling on count only. `max_request_tokens` is the ceiling a provider
+    /// actually enforces, and whichever binds first ends the batch.
     pub batch: usize,
+    /// Estimated-token ceiling on one embedding call.
+    ///
+    /// Providers cap a request by tokens, not by how many texts it carries, so
+    /// `batch` alone does not bound one. Sizing by count only is what made
+    /// every large repository fail to index with `max_tokens_per_request`
+    /// while small ones succeeded.
+    ///
+    /// Counted with
+    /// [`estimate_tokens`](crate::indexer::cost::estimate_tokens), which
+    /// under-counts code by roughly half, so this sits well under the
+    /// provider's real limit. See
+    /// [`DEFAULT_MAX_BATCH_TOKENS`](crate::indexer::run::DEFAULT_MAX_BATCH_TOKENS)
+    /// for how the default is derived. Zero means the default, not "no
+    /// ceiling".
+    pub max_request_tokens: u64,
     /// Client-side ceiling on provider requests per minute.
     ///
     /// Applied process-wide by the harness adapter. It is not politeness: a
