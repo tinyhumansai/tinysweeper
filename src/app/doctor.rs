@@ -202,6 +202,19 @@ fn print_prose(loaded: &Loaded) {
     // call. Reporting the latter is how this line came to describe a model no
     // review had run on since the lanes became panels.
     for lane in config.enabled_lanes() {
+        // `commits` resolves a reviewer like every other lane and then never
+        // calls it: its verdict is a regular expression's. Naming a model here
+        // would tell an operator they are paying for a lane that spends
+        // nothing, which is the opposite of what this line is for.
+        if lane == LaneId::Commits {
+            println!(
+                "  {:<16} no model call  (fails at {})",
+                lane.as_str(),
+                config.fail_on(lane)
+            );
+            continue;
+        }
+
         let reviewers = crate::council::reviewers(config, lane);
         let models: Vec<&str> = reviewers.iter().map(|r| r.model).collect();
 
