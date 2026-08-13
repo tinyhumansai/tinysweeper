@@ -284,6 +284,15 @@ allow_fallbacks = false
 # is what is being judged.
 [council]
 enabled = false
+# Let a reviewer ask the codebase a question instead of guessing, and answer it
+# with a sub-agent before the reviewer's final turn.
+#
+# Off, for the same reason the council is: it costs calls the operator pays for.
+# The cost is bounded and shaped — a reviewer with no questions costs exactly
+# one call as before, and one that asks costs at most three cheap sub-agent
+# calls plus one more turn. Nothing here can remove a finding; it exists to stop
+# a reviewer hedging when the answer was one question away.
+subagents = false
 corroboration = true
 agents = []
 
