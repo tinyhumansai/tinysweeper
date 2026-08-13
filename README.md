@@ -99,9 +99,11 @@ by CI.
 
 ### Kubernetes rollout
 
-`.github/workflows/deploy.yml` runs after a green CI run on `main` — or on
-demand from the Actions tab — and asks the cluster to restart the workload so
-it re-pulls the freshly published image. It needs:
+`.github/workflows/deploy.yml` is an operator button in the Actions tab: it asks
+the cluster to restart the workload so it re-pulls the published image. It never
+fires on a push or a green CI run — merging publishes an image, and a human
+decides when production takes it. Both settings below can be overridden per run
+from the dispatch form. It needs:
 
 | Name | Kind | Meaning |
 | --- | --- | --- |
