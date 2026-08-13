@@ -419,7 +419,7 @@ mod tests {
 
     #[tokio::test]
     async fn golden_a_command_injection_on_a_changed_line_survives() {
-        let model = MockModel::always(json!({
+        let model = MockModel::panel(json!({
             "summary": "Adds a shell command built from request input.",
             "findings": [
                 {
@@ -466,7 +466,7 @@ mod tests {
         // Otherwise the author gets the same permission problem twice: once
         // from the regular expression that is certain about it, and once from
         // the model that was shown the regular expression's output.
-        let model = MockModel::always(json!({
+        let model = MockModel::panel(json!({
             "summary": "The scanner is right.",
             "findings": [{
                 "path": ".github/workflows/ci.yml", "line": 3,
@@ -490,7 +490,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_model_cannot_talk_the_lane_out_of_a_scanner_finding() {
-        let model = MockModel::always(json!({
+        let model = MockModel::panel(json!({
             "summary": "That permission setting is fine, actually.",
             "findings": []
         }));
@@ -543,8 +543,7 @@ mod tests {
 
     #[tokio::test]
     async fn one_files_failure_leaves_the_other_files_reviewed() {
-        let model = MockModel::new()
-            .then(json!({
+        let model = MockModel::panel(json!({
                 "summary": "Fine.",
                 "findings": [{
                     "path": "src/a.rs", "line": 2, "rule": "r",
@@ -683,7 +682,7 @@ mod tests {
     #[tokio::test]
     async fn a_credential_the_model_quoted_never_reaches_a_finding() {
         let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
-        let model = MockModel::always(json!({
+        let model = MockModel::panel(json!({
             "summary": "…",
             "findings": [{
                 "path": "src/handler.rs", "line": 2,
