@@ -36,8 +36,16 @@ const PANEL_STAGES: &[&str] = &["relocate", "falsify"];
 /// What a panel-aware mock answers each round with.
 #[derive(Debug)]
 struct PanelAnswers {
-    /// The lane response every proposing lens gives.
+    /// The lane response every proposing lens gives, when no `matching` entry
+    /// applies.
     propose: Value,
+    /// Per-file responses, chosen by a substring of the prompt.
+    ///
+    /// A per-file lane runs one panel per file, and some tests are precisely
+    /// about one file behaving differently from another. With one canned
+    /// response that is not expressible, and with a queue it depends on the
+    /// panel's internal call order.
+    matching: Vec<(String, Value)>,
     /// Whether every verifier confirms.
     verdict: bool,
 }
@@ -82,6 +90,26 @@ impl MockModel {
         Self {
             panel: Some(Arc::new(PanelAnswers {
                 propose: response,
+                matching: Vec::new(),
+                verdict: true,
+            })),
+            ..Self::default()
+        }
+    }
+
+    /// A panel that answers each file differently.
+    ///
+    /// The first entry whose key appears anywhere in the request's messages
+    /// wins; `fallback` answers everything else. Written against the prompt
+    /// rather than call order because the panel's ordering is its own business.
+    pub fn panel_matching(matching: &[(&str, Value)], fallback: Value) -> Self {
+        Self {
+            panel: Some(Arc::new(PanelAnswers {
+                propose: fallback,
+                matching: matching
+                    .iter()
+                    .map(|(key, value)| ((*key).to_string(), value.clone()))
+                    .collect(),
                 verdict: true,
             })),
             ..Self::default()
@@ -96,6 +124,7 @@ impl MockModel {
         Self {
             panel: Some(Arc::new(PanelAnswers {
                 propose: response,
+                matching: Vec::new(),
                 verdict: false,
             })),
             ..Self::default()
@@ -195,7 +224,20 @@ impl Model for MockModel {
                 .iter()
                 .all(|stage| !request.schema_name.contains(stage))
             {
-                Some(answers.propose.clone())
+                let prompt = request
+                    .messages
+                    .iter()
+                    .map(|m| m.content.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                Some(
+                    answers
+                        .matching
+                        .iter()
+                        .find(|(key, _)| prompt.contains(key.as_str()))
+                        .map_or_else(|| answers.propose.clone(), |(_, value)| value.clone()),
+                )
             } else {
                 None
             };
