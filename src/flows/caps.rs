@@ -57,17 +57,36 @@ pub struct ModelCapability {
     model: Arc<dyn Model>,
     models: Models,
     spend: Mutex<Spend>,
+    budget_usd: f64,
 }
 
 impl ModelCapability {
     /// Wire a graph's `agent` nodes to `model`, resolving tiers through
     /// `models`.
+    ///
+    /// The budget ceiling is enforced **here** rather than by the caller, and
+    /// that is what lets a lane fan out at all. The previous design serialised
+    /// every file precisely because usage is only known once a call returns, so
+    /// concurrent work could start after the ceiling had already been spent.
+    /// This object sees every call in the run, so it can refuse one no matter
+    /// how many are in flight — which makes the budget a stronger guarantee
+    /// than serialising ever gave, and costs no concurrency to get.
     pub fn new(model: Arc<dyn Model>, models: Models) -> Self {
+        let budget_usd = models.budget_usd_per_pr;
         Self {
             model,
             models,
             spend: Mutex::new(Spend::default()),
+            budget_usd,
         }
+    }
+
+    /// Override the ceiling this capability enforces.
+    ///
+    /// A lane's share, when several lanes run against one pull request budget.
+    pub fn with_budget(mut self, budget_usd: f64) -> Self {
+        self.budget_usd = budget_usd;
+        self
     }
 
     /// What every call through this capability has cost so far.
