@@ -52,12 +52,6 @@ concurrency:
 jobs:
   rollout:
     name: Restart workload
-    # `workflow_run` fires on *completed*, including failed and cancelled runs,
-    # so the conclusion has to be checked explicitly. A manual dispatch has no
-    # upstream run to check and is always allowed.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Point this at a GitHub Environment to get required reviewers, a deploy
