@@ -868,19 +868,19 @@ fn helper() {
                 "the unchanged file is not sent at all"
             );
             assert!(user.contains("src/main.rs"), "the delta is the new work");
+            assert!(
+                system.contains("The file is `src/main.rs`"),
+                "each conversation owns exactly one file: {system}"
+            );
+            assert!(
+                user.contains("Close the socket"),
+                "prior findings are volatile"
+            );
+            assert!(
+                !system.contains("Close the socket"),
+                "prior findings must not enter the cached prefix"
+            );
         }
-        assert!(
-            system.contains("The file is `src/main.rs`"),
-            "each conversation owns exactly one file: {system}"
-        );
-        assert!(
-            user.contains("Close the socket"),
-            "prior findings are volatile"
-        );
-        assert!(
-            !system.contains("Close the socket"),
-            "prior findings must not enter the cached prefix"
-        );
     }
 
     /// One file per conversation, so a forty-file pull request is forty close
