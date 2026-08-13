@@ -115,6 +115,19 @@ impl LlmProvider for ModelCapability {
     /// `nodes::integration::agent`. This crate authors both sides of that
     /// contract, so the keys read here are the keys `flows::panel` writes.
     async fn complete(&self, request: Value, _conn: Option<&str>) -> FlowResult<Value> {
+        // Checked before the call, not after. Refusing a call that has already
+        // been paid for would throw away work and still overspend.
+        let spent = self.spend().cost_usd();
+        if spent >= self.budget_usd {
+            return Err(EngineError::Capability(
+                crate::error::Error::Budget {
+                    spent,
+                    limit: self.budget_usd,
+                }
+                .to_string(),
+            ));
+        }
+
         let tier = Tier::parse(Self::required(&request, "tier")?)
             .map_err(|e| EngineError::Capability(e.to_string()))?;
 
