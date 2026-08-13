@@ -19,4 +19,5 @@
 //! behaviour the golden tests pin.
 
 pub mod caps;
+pub mod consensus;
 pub mod tier;

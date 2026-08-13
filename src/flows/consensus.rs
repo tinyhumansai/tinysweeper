@@ -183,4 +183,5 @@ pub fn resolved(opinions: &[Opinion]) -> Vec<String> {
 }
 
 #[cfg(test)]
+#[path = "consensus_test.rs"]
 mod tests;
