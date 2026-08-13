@@ -24,6 +24,18 @@ pub struct MockModel {
     requests: Arc<Mutex<Vec<ModelRequest>>>,
     usage: Usage,
     answers_as: Option<String>,
+    /// When set, the panel's own rounds are answered from their `schema_name`
+    /// rather than from the queue — see [`MockModel::panel`].
+    panel: Option<Arc<PanelAnswers>>,
+}
+
+/// What a panel-aware mock answers each round with.
+#[derive(Debug)]
+struct PanelAnswers {
+    /// The lane response every proposing lens gives.
+    propose: Value,
+    /// Whether every verifier confirms.
+    verdict: bool,
 }
 
 impl MockModel {
@@ -46,6 +58,43 @@ impl MockModel {
     /// A model that reports no findings.
     pub fn silent() -> Self {
         Self::always(json!({"summary": "Nothing to report.", "findings": []}))
+    }
+
+    /// A model that answers a whole panel from one lane response.
+    ///
+    /// A panel is three rounds of differently-shaped calls, so a queue of
+    /// canned values makes a golden test depend on call *order* — which is the
+    /// panel's internal business and changes whenever a lens is added. This
+    /// dispatches on the schema each round asks for instead: every proposing
+    /// lens gets `response`, every verifier confirms, and every sub-agent
+    /// answers unhelpfully (a golden test asserting on filtering should not
+    /// also be asserting on what sub-agents said).
+    ///
+    /// The effect is that a golden test still reads "given a model that says
+    /// exactly this, the lane must post exactly that" — which is the property
+    /// these tests exist to pin.
+    pub fn panel(response: Value) -> Self {
+        Self {
+            panel: Some(Arc::new(PanelAnswers {
+                propose: response,
+                verdict: true,
+            })),
+            ..Self::default()
+        }
+    }
+
+    /// A panel whose verifiers refute everything the lenses propose.
+    ///
+    /// The other half of the contract: proving a lane publishes nothing when
+    /// the verify round rejects it.
+    pub fn panel_refuting(response: Value) -> Self {
+        Self {
+            panel: Some(Arc::new(PanelAnswers {
+                propose: response,
+                verdict: false,
+            })),
+            ..Self::default()
+        }
     }
 
     /// Queue one response. Responses are consumed in order.
@@ -124,6 +173,24 @@ impl Model for MockModel {
             .answers_as
             .clone()
             .unwrap_or_else(|| request.model.clone());
+        // A panel-aware mock answers from the round rather than the queue.
+        if let Some(answers) = self.panel.clone() {
+            let value = if request.schema_name.ends_with("_verify") {
+                json!({ "real": answers.verdict, "why": "canned" })
+            } else if request.schema_name.ends_with("_answer") {
+                json!({ "answer": "The evidence does not say.", "confident": false })
+            } else {
+                answers.propose.clone()
+            };
+
+            self.requests.lock().expect("mock model lock").push(request);
+            return Ok(ModelResponse {
+                value,
+                model,
+                usage: self.usage,
+            });
+        }
+
         self.requests.lock().expect("mock model lock").push(request);
 
         let queued = {
