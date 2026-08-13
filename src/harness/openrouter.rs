@@ -15,7 +15,7 @@ use tinyagents::harness::model::ResponseFormat;
 use tinyagents::harness::providers::openai::OpenAiModel;
 use tinyagents::harness::runtime::{AgentHarness, RunPolicy};
 
-use crate::config::types::Models;
+use crate::config::types::{Models, ProviderRouting};
 use crate::error::{Error, Result};
 use crate::harness::pricing;
 use crate::ports::model::{Model, ModelRequest, ModelResponse, Role, Usage};
@@ -29,6 +29,7 @@ pub struct GatewayModel {
     base_url: String,
     fallbacks: Vec<String>,
     reasoning_effort: String,
+    provider: ProviderRouting,
 }
 
 impl std::fmt::Debug for GatewayModel {
@@ -36,6 +37,7 @@ impl std::fmt::Debug for GatewayModel {
         f.debug_struct("GatewayModel")
             .field("base_url", &self.base_url)
             .field("fallbacks", &self.fallbacks)
+            .field("provider", &self.provider)
             .field("api_key", &"<redacted>")
             .finish()
     }
@@ -119,6 +121,7 @@ impl GatewayModel {
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
+            provider: models.provider.clone(),
         })
     }
 
@@ -148,7 +151,14 @@ impl GatewayModel {
             //
             // `models.reasoning_effort = "off"` restores the old behaviour for
             // a deployment that puts a thinking-heavy model back.
-            .with_default_provider_options(reasoning_options(&self.reasoning_effort))
+            //
+            // The `provider` pin rides in the same object; see
+            // [`request_options`] for why the two are merged rather than set
+            // separately.
+            .with_default_provider_options(request_options(
+                &self.reasoning_effort,
+                &self.provider,
+            ))
             // Identifies us to OpenRouter, which is how per-application usage
             // shows up separately in their dashboard.
             .with_header(
