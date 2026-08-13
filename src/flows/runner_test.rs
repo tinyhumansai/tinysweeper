@@ -31,7 +31,7 @@ async fn ask(model: MockModel, ids: &[&str], budget: f64) -> Vec<Answer> {
     let calls: Vec<Call> = ids.iter().map(|id| call(id)).collect();
     let llm = lane_llm(Arc::new(model), &config(), budget);
 
-    ask_all(llm, LaneId::Critique, &calls, &schema())
+    ask_all(llm, LaneId::Critique, &calls, &schema(), None)
         .await
         .expect("the graph runs")
 }
@@ -116,7 +116,7 @@ async fn no_reviewers_is_no_calls() {
     let model = MockModel::new();
     let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
 
-    let answers = ask_all(llm, LaneId::Critique, &[], &schema())
+    let answers = ask_all(llm, LaneId::Critique, &[], &schema(), None)
         .await
         .expect("an empty council is not an error");
 
@@ -130,7 +130,7 @@ async fn each_reviewer_is_asked_with_its_own_prompt() {
     let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
     let calls = vec![call("a"), call("b")];
 
-    ask_all(llm, LaneId::Critique, &calls, &schema())
+    ask_all(llm, LaneId::Critique, &calls, &schema(), None)
         .await
         .expect("runs");
 
@@ -159,7 +159,7 @@ async fn a_reviewer_id_that_is_not_a_legal_node_id_still_gets_its_answer() {
         100.0,
     );
 
-    let answers = ask_all(llm, LaneId::Critique, &[awkward], &schema())
+    let answers = ask_all(llm, LaneId::Critique, &[awkward], &schema(), None)
         .await
         .expect("runs");
 
@@ -211,7 +211,7 @@ async fn reviewers_run_concurrently_rather_than_one_after_another() {
     let llm = lane_llm(model.clone(), &config(), 100.0);
     let calls: Vec<Call> = ["a", "b", "c"].iter().map(|id| call(id)).collect();
 
-    ask_all(llm, LaneId::Critique, &calls, &schema())
+    ask_all(llm, LaneId::Critique, &calls, &schema(), None)
         .await
         .expect("runs");
 

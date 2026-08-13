@@ -47,7 +47,7 @@ fn the_question_schema_caps_how_many_may_be_asked() {
     // exploring the repository, and the answers arrive too late to be worth it.
     assert_eq!(
         questions_schema()["maxItems"],
-        json!(MAX_QUESTIONS_PER_LENS)
+        json!(MAX_QUESTIONS_PER_REVIEWER)
     );
 }
 
