@@ -728,7 +728,11 @@ mod tests {
             .into_iter()
             .map(|r| r.messages[1].content.clone())
             .collect();
-        assert_eq!(paths.len(), 1, "one call, for the file that changed");
+        assert_eq!(
+            paths.len(),
+            crate::flows::panel::lenses(LaneId::Security).len(),
+            "one panel, for the file that changed"
+        );
         assert!(
             paths[0].contains("src/other.rs") && !paths[0].contains("src/handler.rs"),
             "{paths:?}"
