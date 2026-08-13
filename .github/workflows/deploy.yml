@@ -1,0 +1,100 @@
+# Roll the deployed server onto the image CI just published.
+#
+# There is no registry push here and no build: `ci.yml` publishes to GHCR, and
+# the cluster pulls from GHCR itself. This workflow is a *button* in the same
+# sense as `manual-review.yml` — it authenticates to the cluster and asks the
+# workload to restart, which makes the kubelet re-pull the tag the deployment
+# already references. It holds a cluster credential and nothing else: no model
+# credential, no GitHub write token, no checkout of the repository.
+#
+# That the restart is enough depends on two properties of the deployment
+# manifest, which live in the cluster and not in this repository:
+#
+#   * the pod template references a moving tag (`:latest` or `:main`), and
+#   * `imagePullPolicy: Always`.
+#
+# With a pinned digest a restart re-creates the same pods and deploys nothing.
+# If you move to pinned tags, replace the restart with a `kubectl set image`
+# against `${{ github.sha }}` — the CI publish already tags every image with
+# `type=sha,format=long`.
+name: Deploy
+
+on:
+  # Chained off CI rather than off `push` so a deploy can only ever follow a
+  # green run that actually published an image.
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  # The manual escape hatch: re-roll the cluster without waiting for a commit.
+  workflow_dispatch:
+
+# Nothing here touches the GitHub API. The cluster credential is a secret, not
+# a permission, so the job's own token is given nothing.
+permissions: {}
+
+# Deploys are serialised and never cancelled: interrupting a rollout mid-flight
+# leaves the cluster in a state neither this run nor the next one described.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  rollout:
+    name: Restart workload
+    # `workflow_run` fires on *completed*, including failed and cancelled runs,
+    # so the conclusion has to be checked explicitly. A manual dispatch has no
+    # upstream run to check and is always allowed.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Point this at a GitHub Environment to get required reviewers, a deploy
+    # log, and environment-scoped secrets. Delete the two lines if you would
+    # rather keep the credential at repository scope.
+    environment:
+      name: production
+      url: ${{ vars.TINYSWEEPER_SERVER_URL }}
+    steps:
+      - uses: azure/setup-kubectl@v4
+
+      - name: Roll the workload
+        env:
+          # A full kubeconfig for a service account scoped to this namespace,
+          # base64-encoded so newlines survive the secret store:
+          #   base64 -w0 < kubeconfig.yaml
+          # It needs no more than `get`/`list`/`watch`/`patch` on deployments
+          # in the one namespace — do not paste a cluster-admin config here.
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+          NAMESPACE: ${{ vars.K8S_NAMESPACE || 'tinysweeper' }}
+          # Comma-separated, so a deployment plus its worker can roll together.
+          WORKLOADS: ${{ vars.K8S_DEPLOYMENTS || 'tinysweeper' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${KUBE_CONFIG:-}" ]; then
+            echo "::error::The KUBE_CONFIG secret is not set, so there is no cluster to talk to."
+            exit 1
+          fi
+
+          # The kubeconfig is written to the runner's own temp dir at 0600 and
+          # passed by environment variable. It never becomes a command-line
+          # argument, which would be visible in the process table.
+          kubeconfig="$RUNNER_TEMP/kubeconfig"
+          umask 077
+          printf '%s' "$KUBE_CONFIG" | base64 -d > "$kubeconfig"
+          export KUBECONFIG="$kubeconfig"
+
+          IFS=',' read -ra workloads <<< "$WORKLOADS"
+          for raw in "${workloads[@]}"; do
+            workload="$(printf '%s' "$raw" | tr -d '[:space:]')"
+            [ -n "$workload" ] || continue
+
+            echo "::group::rollout $workload"
+            kubectl -n "$NAMESPACE" rollout restart "deployment/$workload"
+            # Without this the job goes green the instant the patch lands, and
+            # a crash-looping image would look like a successful deploy.
+            kubectl -n "$NAMESPACE" rollout status "deployment/$workload" --timeout=10m
+            echo "::endgroup::"
+          done
