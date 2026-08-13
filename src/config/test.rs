@@ -170,7 +170,7 @@ fn a_sub_table_never_swallows_the_model_scalars() {
     let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
 
     assert_eq!(config.models.max_tokens, 16_000);
-    assert_eq!(config.models.reasoning_effort, "high");
+    assert_eq!(config.models.reasoning_effort, "medium");
     assert!((config.models.budget_usd_per_pr - 1.0).abs() < f64::EPSILON);
 }
 
