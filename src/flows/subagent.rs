@@ -6,10 +6,16 @@
 //! uncertainty had nowhere to go and came out as a hedged finding — the kind a
 //! human has to go and check, which is the work the review was supposed to do.
 //!
-//! So a lens may end its turn with **questions** instead of guessing. Each one
-//! is dispatched to a child workflow that answers it against the evidence
-//! already gathered, and the answers are handed to the verify round, which is
-//! where a claim actually lives or dies.
+//! So a reviewer may end its turn with **questions** instead of guessing. Each
+//! one is dispatched to a child workflow that answers it against the evidence
+//! already gathered, and the reviewer then gets **one** more turn with those
+//! answers in hand. What it says on that turn is what counts.
+//!
+//! The direction matters. This makes a reviewer *find more* — it is the same
+//! argument `src/council` makes for a second reviewer, and the opposite of
+//! asking a second model whether the first was right, which `src/falsify`
+//! explains at length deletes the findings that needed context to notice.
+//! Nothing here can remove a finding; removal stays falsify's job.
 //!
 //! ## The depth bound is structural, not a counter
 //!
@@ -21,33 +27,45 @@
 //! node to reach for and no registry entry it could name if it had one. The
 //! test at the bottom of this file is what keeps that true.
 //!
-//! The reason for the bound is cost, and it compounds rather than adds: N files
-//! times M lenses times Q questions is already the widest part of a review, and
+//! The reason for the bound is cost, and it compounds rather than adds: files
+//! times reviewers times questions is already the widest part of a review, and
 //! a second level multiplies it again for answers that are, by then, about
 //! evidence nobody has looked at directly.
+//!
+//! ## Nothing is spent when nothing is asked
+//!
+//! A reviewer with no questions costs exactly what it cost before: one call.
+//! The follow-up turn happens only for reviewers that asked, and only when at
+//! least one answer came back — re-asking with no new evidence is a second call
+//! that cannot say anything the first did not.
 
 use serde_json::{Value, json};
 use tinyflows::model::{Edge, Node, NodeKind, WorkflowGraph};
 
-/// How many questions one lens may ask.
+/// How many questions one reviewer may ask.
 ///
 /// A cap rather than a budget line because the failure it prevents is not
-/// expense but drift: a panellist that asks twenty questions has stopped
+/// expense but drift: a reviewer that asks twenty questions has stopped
 /// reviewing the diff and started exploring the repository, and the answers
 /// arrive too late in the run to be worth that.
-pub const MAX_QUESTIONS_PER_LENS: usize = 3;
+pub const MAX_QUESTIONS_PER_REVIEWER: usize = 3;
 
-/// The workflow id a lens's questions are dispatched to.
-pub const ANSWER_WORKFLOW: &str = "tinysweeper.subagent.answer";
-
-/// The schema a lens's questions are reported under.
+/// The instruction that tells a reviewer it may ask instead of guessing.
 ///
-/// Additive to the lane response schema: a lens that has nothing to ask omits
+/// Appended to the *end of the cacheable prefix* rather than the evidence: it
+/// is a constant, so the prefix stays byte-identical run to run and the cache
+/// still hits. It also has to answer the schema's own "there is no second
+/// turn" line, which is true of the last turn and false of this one.
+pub const ASK_INSTRUCTION: &str = "\n\n## Asking instead of guessing\n\nIf something you cannot see would change your verdict — whether a caller already validates this argument, whether the helper being called behaves as the code assumes — put it in `questions` rather than reporting a hedged finding. Each question is answered from the repository and you are asked once more with the answers, which is the turn your verdict is taken from. Ask only what would change what you report: a question whose answer you would ignore costs a call and buys nothing. If nothing is in doubt, omit the key.";
+
+/// The schema a reviewer's questions are reported under.
+///
+/// Additive to the lane response schema: a reviewer with nothing to ask omits
 /// the key entirely, which is why it is not required.
 pub fn questions_schema() -> Value {
     json!({
         "type": "array",
-        "maxItems": MAX_QUESTIONS_PER_LENS,
+        "maxItems": MAX_QUESTIONS_PER_REVIEWER,
         "items": {
             "type": "object",
             "additionalProperties": false,
@@ -86,6 +104,96 @@ pub fn answer_schema() -> Value {
             }
         }
     })
+}
+
+/// Add the `questions` key to a lane's response schema.
+///
+/// Not optional plumbing: the lane schema is `additionalProperties: false`, so
+/// a reviewer answering with a key the schema does not declare is a refusal
+/// under strict mode and a parse failure under `json_object`. It stays out of
+/// `required` so a reviewer with nothing to ask answers exactly the schema it
+/// always did.
+pub fn with_questions(mut schema: Value) -> Value {
+    if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+        properties.insert("questions".into(), questions_schema());
+    }
+    schema
+}
+
+/// The node id one question's answer lands under.
+pub fn node_id(index: usize) -> String {
+    format!("answer_{index}")
+}
+
+/// The child graph a batch of questions is answered by.
+///
+/// One `agent` node per question, all concurrent. Still nothing but a trigger
+/// and agents: everything this module promises about depth rests on there being
+/// no node here that could run another graph.
+pub fn answers_graph(model: &str, questions: &[String], evidence: &str) -> WorkflowGraph {
+    let mut nodes = vec![Node {
+        id: "trigger".into(),
+        kind: NodeKind::Trigger,
+        type_version: 1,
+        name: "questions".into(),
+        config: Value::Null,
+        ports: Vec::new(),
+        position: None,
+    }];
+    let mut edges = Vec::new();
+
+    for (index, question) in questions.iter().enumerate() {
+        let id = node_id(index);
+
+        nodes.push(Node {
+            id: id.clone(),
+            kind: NodeKind::Agent,
+            type_version: 1,
+            name: "tinysweeper_subagent_answer".into(),
+            config: json!({
+                "model": model,
+                "system": ANSWER_SYSTEM,
+                "prompt": format!("{evidence}\n\nThe question:\n{question}\n"),
+                "schema": answer_schema(),
+                "schema_name": "tinysweeper_subagent_answer",
+                // A question that cannot be answered is a question left
+                // unanswered, never a failed review.
+                "on_error": "continue",
+            }),
+            ports: Vec::new(),
+            position: None,
+        });
+
+        edges.push(Edge {
+            from_node: "trigger".into(),
+            from_port: "main".into(),
+            to_node: id.clone(),
+            to_port: "main".into(),
+        });
+        edges.push(Edge {
+            from_node: id,
+            from_port: "main".into(),
+            to_node: "answers".into(),
+            to_port: "main".into(),
+        });
+    }
+
+    nodes.push(Node {
+        id: "answers".into(),
+        kind: NodeKind::Merge,
+        type_version: 1,
+        name: "answers".into(),
+        config: json!({ "mode": "append" }),
+        ports: Vec::new(),
+        position: None,
+    });
+
+    WorkflowGraph {
+        name: "subagent-answers".into(),
+        nodes,
+        edges,
+        ..WorkflowGraph::default()
+    }
 }
 
 /// The child graph one question is answered by.
@@ -139,9 +247,10 @@ pub fn answer_graph(model: &str, system: &str, prompt: &str) -> WorkflowGraph {
 /// The system prompt a sub-agent answers under.
 ///
 /// It is told it may not conclude anything about the review. A sub-agent that
-/// reports findings would be a panellist nobody voted on — its output reaches
-/// the verify round as *evidence*, and evidence that has already made up its
-/// mind is worth less than none.
+/// reported findings would be a reviewer nobody configured, answering a
+/// question the lane never asked — its output reaches the reviewer's second
+/// turn as *evidence*, and evidence that has already made up its mind is worth
+/// less than none.
 pub const ANSWER_SYSTEM: &str = "\
 You answer one narrow, factual question about a codebase, using only the \
 evidence supplied below. You are not reviewing anything: do not report \
@@ -150,10 +259,10 @@ justified. If the evidence does not settle the question, set `confident` to \
 false and say what is missing. A wrong confident answer is far worse than an \
 honest \"the evidence does not say\".";
 
-/// One question a lens asked, and what came back.
+/// One question a reviewer asked, and what came back.
 #[derive(Debug, Clone)]
 pub struct Answered {
-    /// The question, as the lens phrased it.
+    /// The question, as the reviewer phrased it.
     pub question: String,
     /// The sub-agent's answer.
     pub answer: String,
@@ -161,12 +270,12 @@ pub struct Answered {
     pub confident: bool,
 }
 
-/// Render answered questions for the verify round's prompt.
+/// Render answered questions for the reviewer's second turn.
 ///
 /// Unconfident answers are kept rather than dropped, and labelled. "The
-/// evidence does not say" is a real input to whether a finding survives — it is
-/// the difference between a verifier confirming a claim and a verifier having
-/// no way to check it.
+/// evidence does not say" is a real input to a reviewer's verdict: it is the
+/// difference between a doubt that was resolved and one that could not be, and
+/// hiding the latter would let the reviewer read silence as confirmation.
 pub fn render(answers: &[Answered]) -> String {
     if answers.is_empty() {
         return String::new();
