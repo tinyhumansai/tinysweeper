@@ -183,14 +183,42 @@ fn print_prose(loaded: &Loaded) {
     println!("  base url         {}", config.models.base_url);
     println!("  scan tier        {}", config.models.scan);
     println!("  deep tier        {}", config.models.deep);
-    println!("  budget per PR    ${:.2}", config.models.budget_usd_per_pr);
-    for lane in config.enabled_lanes() {
+    println!("  flash tier       {}", config.models.flash);
+    if !config.models.provider.is_empty() {
         println!(
-            "  {:<16} {}  (fails at {})",
-            lane.as_str(),
-            config.model_for(lane),
-            config.fail_on(lane)
+            "  provider         {}{}",
+            config.models.provider.order.join(", "),
+            if config.models.provider.allow_fallbacks {
+                "  (the gateway may route elsewhere)"
+            } else {
+                "  (pinned)"
+            }
         );
+    }
+    println!("  budget per PR    ${:.2}", config.models.budget_usd_per_pr);
+
+    // The model a lane actually calls, which is the panel's tier — not
+    // `model_for`, which names the tier the lane *would* use for a single
+    // call. Reporting the latter is how this line came to describe a model no
+    // review had run on since the lanes became panels.
+    for lane in config.enabled_lanes() {
+        let panel = crate::flows::panel::lenses(lane);
+        if panel.is_empty() {
+            println!(
+                "  {:<16} no model call  (fails at {})",
+                lane.as_str(),
+                config.fail_on(lane)
+            );
+        } else {
+            println!(
+                "  {:<16} {}  ({} lenses + {} verifiers, fails at {})",
+                lane.as_str(),
+                config.models.flash,
+                panel.len(),
+                crate::flows::panel::VERIFIERS,
+                config.fail_on(lane)
+            );
+        }
     }
 
     // A model with no price is billed at the ceiling, so it will not escape the
@@ -201,7 +229,14 @@ fn print_prose(loaded: &Loaded) {
         .enabled_lanes()
         .into_iter()
         .map(|lane| config.model_for(lane))
-        .chain([config.models.scan.as_str(), config.models.deep.as_str()])
+        .chain([
+            config.models.scan.as_str(),
+            config.models.deep.as_str(),
+            // The tier every panel actually runs on. Leaving it out meant the
+            // one model every review calls was the one model whose price was
+            // never checked.
+            config.models.flash.as_str(),
+        ])
         .chain(config.models.fallback.iter().map(String::as_str))
         .collect();
     let unpriced = crate::harness::pricing::unpriced(configured);
