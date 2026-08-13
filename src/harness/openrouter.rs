@@ -296,9 +296,67 @@ mod tests {
             scan: "a".into(),
             deep: "b".into(),
             fallback: vec![],
+            provider: ProviderRouting::default(),
             max_tokens: 100,
             budget_usd_per_pr: 1.0,
         }
+    }
+
+    fn pinned(order: &[&str], allow_fallbacks: bool) -> ProviderRouting {
+        ProviderRouting {
+            order: order.iter().map(|p| (*p).to_string()).collect(),
+            allow_fallbacks,
+        }
+    }
+
+    #[test]
+    fn an_unpinned_config_sends_no_provider_block() {
+        // Absence matters: sending `provider: {order: []}` is not the same as
+        // sending nothing, and the empty list is the shape that would pin the
+        // gateway to no provider at all.
+        let options = request_options("high", &ProviderRouting::default());
+        assert!(options.get("provider").is_none());
+        assert_eq!(options["reasoning"]["effort"], json!("high"));
+    }
+
+    #[test]
+    fn the_pin_and_the_reasoning_block_both_survive_the_merge() {
+        // The regression this guards: both are top-level body keys set through
+        // one `with_default_provider_options` call, so building them
+        // separately silently drops whichever is written second.
+        let options = request_options("high", &pinned(&["deepseek"], false));
+
+        assert_eq!(options["reasoning"]["effort"], json!("high"));
+        assert_eq!(options["provider"]["order"], json!(["deepseek"]));
+        assert_eq!(options["provider"]["allow_fallbacks"], json!(false));
+    }
+
+    #[test]
+    fn a_pin_survives_reasoning_being_turned_off() {
+        // `off` takes a different branch of `reasoning_options`, which returns a
+        // differently-shaped object. The pin has to ride along on both.
+        let options = request_options("off", &pinned(&["deepseek"], false));
+
+        assert_eq!(options["reasoning"]["enabled"], json!(false));
+        assert_eq!(options["provider"]["order"], json!(["deepseek"]));
+    }
+
+    #[test]
+    fn blank_provider_names_are_dropped_rather_than_sent() {
+        // With `allow_fallbacks = false` an unmatchable name is not a cosmetic
+        // problem: it fails every request the deployment makes.
+        let options = request_options("high", &pinned(&["", "  ", "deepseek"], false));
+        assert_eq!(options["provider"]["order"], json!(["deepseek"]));
+    }
+
+    #[test]
+    fn a_routing_block_of_only_blanks_counts_as_unpinned() {
+        assert!(pinned(&["", "   "], false).is_empty());
+        assert!(
+            request_options("high", &pinned(&[""], false))
+                .get("provider")
+                .is_none()
+        );
     }
 
     fn request(max_tokens: u32) -> ModelRequest {
