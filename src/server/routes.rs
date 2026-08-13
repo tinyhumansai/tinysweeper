@@ -24,6 +24,7 @@ use crate::index::mongo::MongoIndex;
 use crate::ports::knowledge::KnowledgeStore;
 use crate::server::admin::{self, AdminAuth};
 use crate::server::auth::AppAuth;
+use crate::server::failure;
 use crate::server::indexing::{IndexBackend, index_in_background};
 use crate::server::manual::{self, FullReviews, MergeReport, Merges};
 use crate::server::store::{Store, Trust};
@@ -725,6 +726,12 @@ fn config_for(base: &Config, mode: Mode) -> std::borrow::Cow<'_, Config> {
 }
 
 /// Review one pull request, off the request path.
+///
+/// A failed review must not take the server with it — one pull request going
+/// wrong is not an outage — but it must also not be *invisible*. A transient
+/// failure is retried a few times, and a review that still cannot run says so
+/// on the pull request through a blocking check. See `server::failure` for why
+/// the log line alone was not enough.
 async fn handle_review(
     state: AppState,
     repo: String,
@@ -733,11 +740,69 @@ async fn handle_review(
     installation: u64,
     mode: Mode,
 ) {
-    if let Err(err) = review_inner(&state, &repo, number, &author, installation, mode).await {
-        // A failed review must not take the server with it. One pull request
-        // going wrong is a log line, not an outage.
-        tracing::error!(%err, %repo, number, "review failed");
+    let mut attempt = 1;
+    let err = loop {
+        match review_inner(&state, &repo, number, &author, installation, mode).await {
+            Ok(()) => return,
+            Err(err) => {
+                // The lease is released inside `review_inner` on every path,
+                // including this one, so a retry re-claims it rather than
+                // colliding with itself and returning a silent `Ok`.
+                if attempt < failure::MAX_ATTEMPTS && failure::is_transient(&err) {
+                    let wait = failure::backoff_ms(attempt);
+                    tracing::warn!(
+                        %err, %repo, number, attempt, wait_ms = wait,
+                        "review failed; retrying"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+                    attempt += 1;
+                    continue;
+                }
+                break err;
+            }
+        }
+    };
+
+    tracing::error!(%err, %repo, number, attempts = attempt, "review failed");
+    if let Err(report) = report_failure(&state, &repo, number, installation, &err).await {
+        // Reporting is best-effort by necessity: the most likely reason it
+        // fails is the same forge outage that failed the review. Log both, so
+        // the pod still carries the whole story even when GitHub does not.
+        tracing::error!(%report, %repo, number, "could not report the failed review");
     }
+}
+
+/// Publish the check that says this pull request was not reviewed.
+///
+/// Deliberately mints its own write token rather than receiving one: the
+/// security boundary keeps write credentials out of everything that runs
+/// before or alongside a model call, and this runs strictly after the review
+/// has finished failing.
+async fn report_failure(
+    state: &AppState,
+    repo: &str,
+    number: u64,
+    installation: u64,
+    err: &Error,
+) -> Result<()> {
+    use crate::ports::forge::{ForgeRead, ForgeWrite};
+
+    let repo_id =
+        RepoId::parse(repo).ok_or_else(|| Error::Forge(format!("`{repo}` is not owner/name")))?;
+
+    // The check is pinned to a SHA, so the head has to be read even though the
+    // review just failed to read it. When *that* read is what is broken there
+    // is nothing to pin the check to, and the error propagates to the caller.
+    let token = state.auth.installation_token(installation).await?;
+    let head_sha = crate::forge::github::GitHubRead::new(&token)?
+        .pull_request(&repo_id, number)
+        .await?
+        .head_sha;
+
+    let write = crate::forge::github::GitHubWrite::new(&token)?;
+    write
+        .publish_check(&repo_id, failure::check_run(&head_sha, err))
+        .await
 }
 
 async fn review_inner(

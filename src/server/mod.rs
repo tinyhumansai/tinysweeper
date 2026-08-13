@@ -25,6 +25,7 @@
 
 pub mod admin;
 pub mod auth;
+pub mod failure;
 pub mod indexing;
 pub mod manual;
 pub mod routes;
