@@ -74,16 +74,29 @@ pub struct Verdict {
 /// what distinguishes two findings in one file under one rule is *which* code,
 /// and the opening of the quote carries that.
 fn identity(finding: &RawFinding) -> (String, String, String) {
-    let anchor = finding
-        .existing_code
-        .as_deref()
-        .unwrap_or_default()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(120)
-        .collect::<String>();
+    let normalise = |text: &str| {
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(120)
+            .collect::<String>()
+    };
+
+    let quoted = normalise(finding.existing_code.as_deref().unwrap_or_default());
+
+    // `existing_code` is optional, and when it is missing the title is the only
+    // thing left that distinguishes two findings. Keying on the quote alone
+    // collapsed every unquoted finding in a file under one rule into a single
+    // proposal — silently, since a merge looks exactly like agreement. Two
+    // *quoted* findings still key on the quote, so the wording of a shared
+    // finding stays irrelevant, which is the property this whole function is
+    // for.
+    let anchor = if quoted.is_empty() {
+        normalise(&finding.title.to_lowercase())
+    } else {
+        quoted
+    };
 
     (
         finding.path.trim().to_string(),
