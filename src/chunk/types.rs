@@ -35,20 +35,49 @@ pub struct SourceChunk {
 
 /// How big a chunk may get, and when a definition stops being kept whole.
 ///
-/// Two limits rather than one because they answer different questions.
+/// Three limits, because they answer three different questions.
+///
 /// `target_chars` is the size a chunk is aimed at — small enough that a hit is
 /// specific, large enough to carry a function and its doc comment.
+///
 /// `max_chars` is the point past which keeping a definition whole stops being
-/// worth it: an embedder truncates its input silently, so a definition larger
-/// than this is split on lines and *says* so, rather than being stored as a
-/// parsed chunk whose tail was never embedded.
+/// worth it: a definition larger than this is split on lines and *says* so,
+/// rather than being stored as one enormous parsed chunk.
+///
+/// `max_embed_bytes` is not a preference at all — it is the provider's own
+/// per-input limit, and exceeding it fails the call. It is separate from
+/// `max_chars` because the two are answerable by different people: `max_chars`
+/// is a retrieval-quality judgement a deployment may tune, while this one is
+/// dictated by whichever embedding model is configured.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChunkOptions {
     /// The size a chunk is aimed at, in characters.
     pub target_chars: usize,
     /// The hard ceiling past which even a single definition is split on lines.
     pub max_chars: usize,
+    /// Hard ceiling on one chunk's bytes, from the embedder's per-input limit.
+    ///
+    /// See [`DEFAULT_MAX_EMBED_BYTES`].
+    pub max_embed_bytes: usize,
 }
+
+/// Hard ceiling on one chunk's bytes, from the embedding provider's per-input
+/// token limit.
+///
+/// An earlier version of this module assumed an embedder "truncates its input
+/// silently". It does not: OpenAI rejects the whole request with
+/// `Invalid 'input[19]': maximum input length is 8192 tokens`, which fails the
+/// entire batch and leaves the repository unindexed. That is how the largest
+/// repository in the fleet kept reviewing from the diff alone after the
+/// batch-level token ceiling was already fixed.
+///
+/// The provider's limit is 8,192 tokens **per input**. Dense code measured at
+/// roughly 1.8 bytes per token — the same measurement behind
+/// [`DEFAULT_MAX_BATCH_TOKENS`](crate::indexer::run::DEFAULT_MAX_BATCH_TOKENS)
+/// — putting 8,192 tokens at about 14,700 bytes. 12,000 leaves room for source
+/// denser still, which is exactly the kind of file that trips this: minified
+/// bundles, generated code, and long embedded literals.
+pub const DEFAULT_MAX_EMBED_BYTES: usize = 12_000;
 
 impl Default for ChunkOptions {
     fn default() -> Self {
@@ -59,18 +88,33 @@ impl Default for ChunkOptions {
             // Eight times the target. A definition that big is rare and
             // pathological; below it, keeping the body whole always wins.
             max_chars: 14_400,
+            max_embed_bytes: DEFAULT_MAX_EMBED_BYTES,
         }
     }
 }
 
 impl ChunkOptions {
     /// Options with a caller-chosen target, keeping the ceiling proportional.
+    ///
+    /// `max_embed_bytes` is deliberately *not* scaled with the target: it
+    /// describes the provider, not the caller's taste, so a caller asking for
+    /// bigger chunks does not get permission to exceed the provider's limit.
     pub fn with_target(target_chars: usize) -> Self {
         let target_chars = target_chars.max(1);
         Self {
             target_chars,
             max_chars: target_chars.saturating_mul(8),
+            max_embed_bytes: DEFAULT_MAX_EMBED_BYTES,
         }
+    }
+
+    /// The size past which a span must be broken up, whatever the reason.
+    ///
+    /// Whichever ceiling is lower wins: a deployment that raises `max_chars`
+    /// above the provider's per-input limit must not thereby produce chunks
+    /// the provider will reject.
+    pub fn split_ceiling(&self) -> usize {
+        self.max_chars.min(self.max_embed_bytes)
     }
 }
 

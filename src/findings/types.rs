@@ -86,6 +86,23 @@ pub struct Finding {
     /// publishes.
     #[serde(default)]
     pub identity: Option<String>,
+    /// How many reviewers independently raised this.
+    ///
+    /// One for everything a single reviewer produced, which is why the default
+    /// is one rather than zero — a proposal written before the council existed
+    /// deserializes as "one reviewer said so", not "nobody did".
+    ///
+    /// It only ever breaks ties. Agreement raises confidence and survives the
+    /// `max_comments` truncation first; it is never a gate, because the
+    /// reviewer best placed to find something is often the only one who can
+    /// see it. See `src/council/merge.rs`.
+    #[serde(default = "one")]
+    pub corroboration: u8,
+}
+
+/// The corroboration a finding nobody merged carries.
+fn one() -> u8 {
+    1
 }
 
 impl Finding {
@@ -173,6 +190,7 @@ impl From<ScanFinding> for Finding {
             applicable: None,
             late: false,
             identity: None,
+            corroboration: 1,
         }
     }
 }
@@ -197,6 +215,7 @@ mod tests {
             applicable: None,
             late: false,
             identity: None,
+            corroboration: 1,
         }
     }
 

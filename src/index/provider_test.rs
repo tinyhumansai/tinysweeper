@@ -18,6 +18,7 @@ fn config(provider: &str, model: &str, dims: usize) -> Embeddings {
         api_key_env: "TINYSWEEPER_TEST_KEY_ABSENT".into(),
         base_url: String::new(),
         batch: 8,
+        max_request_tokens: 0,
         requests_per_minute: 0,
         budget_usd_per_index: 1.0,
     }

@@ -1,0 +1,17 @@
+{
+  "key": "4ab89b29c04e3569",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3461,
+    "output_tokens": 4206,
+    "cached_tokens": 1024,
+    "embed_tokens": 0,
+    "cost_usd": 0.004723027
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change swaps the default OpenRouter models and adds a `reasoning_effort` setting with explanatory comments. The TOML syntax and values look valid for this config file; no correctness issues are apparent from the diff."
+  }
+}

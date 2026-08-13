@@ -6,7 +6,7 @@ use super::*;
 fn a_sub_agent_has_no_way_to_spawn_another() {
     // This is the depth bound. Not a counter that a future edit forgets to
     // thread through, but the absence of any node kind that could recurse.
-    let graph = answer_graph("system", "prompt");
+    let graph = answer_graph("vendor/flash", "system", "prompt");
 
     for node in &graph.nodes {
         assert!(
@@ -20,7 +20,7 @@ fn a_sub_agent_has_no_way_to_spawn_another() {
 fn the_child_graph_is_only_a_trigger_and_one_agent() {
     // Anything else in here is a new capability a sub-agent has, and every
     // capability is something the security boundary has to re-argue.
-    let graph = answer_graph("system", "prompt");
+    let graph = answer_graph("vendor/flash", "system", "prompt");
     assert_eq!(graph.nodes.len(), 2);
 
     let kinds: Vec<_> = graph.nodes.iter().map(|n| &n.kind).collect();
@@ -30,14 +30,15 @@ fn the_child_graph_is_only_a_trigger_and_one_agent() {
 
 #[test]
 fn the_child_graph_compiles() {
-    tinyflows::compiler::compile(&answer_graph("system", "prompt")).expect("child graph");
+    tinyflows::compiler::compile(&answer_graph("vendor/flash", "system", "prompt"))
+        .expect("child graph");
 }
 
 #[test]
-fn a_sub_agent_runs_on_the_cheapest_tier() {
-    let graph = answer_graph("system", "prompt");
+fn a_sub_agent_runs_on_the_model_it_was_given() {
+    let graph = answer_graph("vendor/flash", "system", "prompt");
     let agent = graph.nodes.iter().find(|n| n.id == "answer").unwrap();
-    assert_eq!(agent.config["tier"], json!("flash"));
+    assert_eq!(agent.config["model"], json!("vendor/flash"));
 }
 
 #[test]

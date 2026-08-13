@@ -8,11 +8,13 @@
 - `src/bin/tinysweeper.rs` — the CLI. Every subcommand is declared even when its
   milestone has not landed, so scripts and runbooks can be written against a
   stable surface. `src/server/` is the only production surface: tinysweeper is
-  not distributed or run as a GitHub Action. The single, deliberate exception is
-  `.github/workflows/manual-review.yml` in *this* repository — an operator
-  button that POSTs to the deployed server's `/admin/reviews` route. It builds
-  nothing, runs no lane, and holds no model or write credential; anything that
-  would need one belongs in `src/server/`, not in a workflow.
+  not distributed or run as a GitHub Action. The two deliberate exceptions are
+  operator buttons in *this* repository: `.github/workflows/manual-review.yml`,
+  which POSTs to the deployed server's `/admin/reviews` route, and
+  `.github/workflows/deploy.yml`, which restarts the cluster workload so it
+  re-pulls the published image. Neither builds anything, runs a lane, or holds a
+  model or GitHub write credential; anything that would need one belongs in
+  `src/server/`, not in a workflow.
 - `presets/` — review policy as **data**, not code. A preset is a folder with a
   `preset.toml`, a `README.md`, and optional prompt overrides. Adding a preset
   is a new folder, never a new module.

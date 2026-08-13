@@ -1,34 +1,39 @@
-//! The panel: what graph a lane actually runs.
+//! The graph a lane's reviewers run as.
 //!
-//! One review unit — a file for `critique` and `security`, the whole pull
-//! request for `tests` and `description` — becomes this shape:
+//! `src/council` decides *who* reviews and what becomes of their findings. This
+//! module is *how they run*: one `agent` node per reviewer, all of them
+//! concurrent successors of the trigger, joined by a `merge` barrier.
 //!
 //! ```text
-//!   trigger
-//!     ├─ agent lens:<a> ─┐
-//!     ├─ agent lens:<b> ─┼─ merge ─► (proposals settled in Rust)
-//!     └─ agent lens:<c> ─┘
+//!   evidence ─┬─ agent: reviewer-a ─┐
+//!             ├─ agent: reviewer-b ─┼─ merge ─► one answer per reviewer
+//!             └─ agent: reviewer-c ─┘
 //! ```
 //!
-//! The lenses are concurrent successors of one port, which is tinyflows' graph
-//! fan-out, and `merge` is the fan-in barrier that waits for all of them. The
-//! verify round is a second graph over the proposals — built once their number
-//! is known, which is why it cannot be one graph with the propose round.
+//! ## Why a graph rather than a loop
 //!
-//! ## Why the lens set is per-lane data
+//! A council multiplies calls: files × reviewers. Run serially — which is what
+//! it was, because a budget can only be checked once a call has returned — a
+//! three-agent council on a twenty-file pull request is sixty round trips end
+//! to end. The ceiling now lives in [`crate::flows::caps::ModelCapability`],
+//! which refuses a call however many are in flight, so the width is free to be
+//! real.
 //!
-//! A lane's lenses are the lane's subject matter split into readings that do
-//! not overlap. Getting that split wrong is expensive in both directions: two
-//! lenses that overlap pay twice for one opinion, and a gap between them is a
-//! blind spot nothing reports. So they live beside the lane's prompt rather
-//! than being generated, and each carries the sentence that tells the model
-//! what it alone is responsible for.
+//! ## What is deliberately *not* here
+//!
+//! There is no verification round. An earlier version of this module ran one:
+//! every finding put to independent judges, majority keeps it. `src/falsify`
+//! argues at length why that shape is wrong — a checker that sees less than the
+//! reviewer did rejects whatever it cannot confirm, which deletes exactly the
+//! findings that needed context to notice — and it is right. Removal is
+//! `falsify`'s job, it rejects only what it can *prove* wrong, and it fails
+//! open. Agreement between reviewers is a ranking signal, handled by
+//! `council::merge`, and it never removes anything here.
 
 use serde_json::{Value, json};
 use tinyflows::model::{Edge, Node, NodeKind, WorkflowGraph};
 
 use crate::config::types::LaneId;
-use crate::flows::tier::Tier;
 
 /// How many files a lane reviews at once.
 ///
@@ -37,146 +42,48 @@ use crate::flows::tier::Tier;
 /// model.
 pub const MAX_CONCURRENT_FILES: usize = 8;
 
-/// How many verifiers judge one proposal.
+/// One model call the graph should make.
 ///
-/// Odd, so a majority always exists — see `consensus::settle`, where a tie
-/// drops the finding. Three is the smallest odd number greater than one, and
-/// each is a `flash` call against a single proposal, so the round costs a small
-/// fraction of the propose round it is filtering.
-pub const VERIFIERS: usize = 3;
-
-/// One reading of the evidence.
-pub struct Lens {
-    /// Short, stable id. Appears in node ids and in finding attribution, so it
-    /// is part of the golden tests' surface.
-    pub id: &'static str,
-    /// What this lens alone is responsible for noticing. Appended to the lane's
-    /// system prompt.
-    pub charter: &'static str,
+/// Assembled by the lane, because prompt layering is the lane's business and
+/// which half of it is cacheable is `harness::prompt`'s — see its module docs
+/// before moving anything between `system` and `prompt`.
+#[derive(Debug, Clone)]
+pub struct Call {
+    /// The reviewer's id. Becomes the node id, so it is what a failure names.
+    pub id: String,
+    /// The model id, already resolved from tier by `council::reviewers`.
+    pub model: String,
+    /// The cacheable prefix.
+    pub system: String,
+    /// The volatile suffix: the evidence.
+    pub prompt: String,
+    /// The schema name this answer is reported under.
+    pub schema_name: String,
 }
 
-/// The lenses a lane's panel is split into.
+/// The node id one call's answer lands under.
 ///
-/// Every set below partitions its lane's subject matter: no two lenses are
-/// asked to look for the same thing, because a panel that agrees by
-/// construction has bought nothing.
-pub fn lenses(lane: LaneId) -> &'static [Lens] {
-    match lane {
-        LaneId::Critique => &[
-            Lens {
-                id: "correctness",
-                charter: "You are reading for logic that is wrong: an off-by-one, an inverted \
-                          condition, a case the code does not handle, a value that can be null \
-                          or empty where the code assumes it cannot. Ignore style, naming, \
-                          performance and test coverage entirely — other reviewers own those.",
-            },
-            Lens {
-                id: "contracts",
-                charter: "You are reading for broken agreements between callers and callees: a \
-                          changed signature whose callers were not updated, an error now \
-                          swallowed, a return value whose meaning shifted, a resource acquired \
-                          and not released. Ignore internal logic, style and tests entirely — \
-                          other reviewers own those.",
-            },
-            Lens {
-                id: "concurrency",
-                charter: "You are reading for state that two things can touch at once, and for \
-                          ordering the code assumes but does not enforce: a check separated \
-                          from the action it guards, a lock not held across a read-then-write, \
-                          state shared across an await point. If the change has no concurrency, \
-                          report nothing rather than reaching.",
-            },
-        ],
-        LaneId::Security => &[
-            Lens {
-                id: "input",
-                charter: "You are reading for untrusted input reaching a dangerous sink: a \
-                          query, a command, a path, a deserializer, a template. Trace where the \
-                          value came from before deciding it is safe.",
-            },
-            Lens {
-                id: "authz",
-                charter: "You are reading for who is allowed to do what: an authorisation check \
-                          that moved, weakened or disappeared, a permission widened, a secret \
-                          or token handled somewhere it was not before.",
-            },
-            Lens {
-                id: "adjudicate",
-                charter: "You are adjudicating the deterministic scanner findings supplied as \
-                          evidence: for each, say whether it is real in this context and why. \
-                          You may not remove one — a scanner match is a fact and your verdict \
-                          adds context to it. Report new findings only where you see something \
-                          the scanners could not.",
-            },
-        ],
-        LaneId::Tests => &[
-            Lens {
-                id: "coverage",
-                charter: "You are reading for changed behaviour that no test exercises: a new \
-                          branch, a new error path, a boundary the change introduced.",
-            },
-            Lens {
-                id: "honesty",
-                charter: "You are reading the tests themselves for assertions that would pass \
-                          whatever the code did: a test asserting on a mock it configured, an \
-                          assertion on a value the test computed the same way the code does, a \
-                          test with no assertion at all.",
-            },
-        ],
-        LaneId::Description => &[Lens {
-            id: "description",
-            charter: "You are judging whether the pull request's own description accounts for \
-                      what the diff actually does.",
-        }],
-        // `commits` makes no model call at all — its verdict is a regular
-        // expression's. It has no panel, and asking for one is a bug in the
-        // caller rather than something to paper over with a default lens.
-        LaneId::Commits => &[],
-    }
+/// A reviewer id is operator-supplied config, so it is not assumed to be a
+/// legal node id: anything outside `[a-z0-9_]` becomes `_`. Collisions are not
+/// a concern because `config::validate` rejects a council with duplicate agent
+/// ids, and a graph with two nodes of one id would fail to compile anyway.
+pub fn node_id(reviewer_id: &str) -> String {
+    let cleaned: String = reviewer_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+
+    format!("reviewer_{cleaned}")
 }
 
-/// Build one `agent` node.
-///
-/// `config` is handed to [`crate::flows::caps::ModelCapability`] verbatim — this
-/// crate authors both ends of that contract, so the keys written here are the
-/// keys read there.
-fn agent_node(id: &str, tier: Tier, system: &str, prompt: &str, schema: Value, name: &str) -> Node {
-    Node {
-        id: id.to_string(),
-        kind: NodeKind::Agent,
-        type_version: 1,
-        name: name.to_string(),
-        config: json!({
-            "tier": tier.as_str(),
-            "system": system,
-            "prompt": prompt,
-            "schema": schema,
-            "schema_name": name,
-            // A panellist that fails must not fail the panel. The engine's
-            // default is `stop`, which would make one provider timeout return a
-            // whole lane's worth of nothing — and a lane that reports nothing
-            // is indistinguishable from a lane that found nothing. The runner
-            // notices the missing node output and records it as a failure, so
-            // the summary says which reader was lost.
-            "on_error": "continue",
-        }),
-        ports: Vec::new(),
-        position: None,
-    }
-}
-
-/// The propose round: every lens over one unit of evidence, concurrently.
-///
-/// `system_of` is called once per lens to compose the lane's own prompt prefix
-/// with that lens's charter. It takes the lens rather than a pre-built string so
-/// the cacheable prefix is assembled by `harness::prompt`, which is the only
-/// thing that knows what is safe to put in it.
-pub fn propose_graph(
-    lane: LaneId,
-    schema: Value,
-    suffix: &str,
-    mut system_of: impl FnMut(&Lens) -> String,
-) -> WorkflowGraph {
+/// Build the graph that asks every reviewer at once.
+pub fn council_graph(lane: LaneId, calls: &[Call], schema: &Value) -> WorkflowGraph {
     let mut nodes = vec![Node {
         id: "trigger".into(),
         kind: NodeKind::Trigger,
@@ -188,19 +95,31 @@ pub fn propose_graph(
     }];
     let mut edges = Vec::new();
 
-    for lens in lenses(lane) {
-        let id = format!("lens_{}", lens.id);
-        nodes.push(agent_node(
-            &id,
-            // Every panellist runs on `flash`. The panel is the quality
-            // mechanism now; paying `deep` prices for each member would make it
-            // strictly more expensive than the single call it replaced.
-            Tier::Flash,
-            &system_of(lens),
-            suffix,
-            schema.clone(),
-            &format!("tinysweeper_{}_{}", lane_slug(lane), lens.id),
-        ));
+    for call in calls {
+        let id = node_id(&call.id);
+
+        nodes.push(Node {
+            id: id.clone(),
+            kind: NodeKind::Agent,
+            type_version: 1,
+            name: call.schema_name.clone(),
+            config: json!({
+                "model": call.model,
+                "system": call.system,
+                "prompt": call.prompt,
+                "schema": schema,
+                "schema_name": call.schema_name,
+                // A reviewer that fails must not fail the council. The engine's
+                // default is `stop`, which would lose every other reviewer's
+                // work to one provider timeout — and a lane that returns
+                // nothing is indistinguishable from a lane that found nothing.
+                // The runner notices the missing output and reports it.
+                "on_error": "continue",
+            }),
+            ports: Vec::new(),
+            position: None,
+        });
+
         edges.push(Edge {
             from_node: "trigger".into(),
             from_port: "main".into(),
@@ -210,100 +129,30 @@ pub fn propose_graph(
         edges.push(Edge {
             from_node: id,
             from_port: "main".into(),
-            to_node: "panel".into(),
+            to_node: "council".into(),
             to_port: "main".into(),
         });
     }
 
-    // The fan-in barrier. Present even for a one-lens lane so the node a run
-    // reads its results from has one name across every lane.
+    // The fan-in barrier. Present even for a single reviewer so the shape of a
+    // solo run and a council run is the same one — which is the same reason
+    // `council::reviewers` always returns at least one reviewer rather than
+    // branching.
     nodes.push(Node {
-        id: "panel".into(),
+        id: "council".into(),
         kind: NodeKind::Merge,
         type_version: 1,
-        name: "panel".into(),
+        name: "council".into(),
         config: json!({ "mode": "append" }),
         ports: Vec::new(),
         position: None,
     });
 
     WorkflowGraph {
-        name: format!("{}-propose", lane_slug(lane)),
+        name: format!("{}-council", lane.as_str()),
         nodes,
         edges,
         ..WorkflowGraph::default()
-    }
-}
-
-/// The verify round: independent judges over one proposal.
-///
-/// Deliberately a separate graph. The number of proposals is not known until
-/// the propose round has finished, and a graph whose width depends on an
-/// earlier node's output is exactly the case `execution: per_item` exists for —
-/// but each verifier needs the *proposal text* in its prompt, which is prompt
-/// assembly rather than item mapping, so it is built here instead.
-pub fn verify_graph(lane: LaneId, schema: Value, system: &str, prompt: &str) -> WorkflowGraph {
-    let mut nodes = vec![Node {
-        id: "trigger".into(),
-        kind: NodeKind::Trigger,
-        type_version: 1,
-        name: "proposal".into(),
-        config: Value::Null,
-        ports: Vec::new(),
-        position: None,
-    }];
-    let mut edges = Vec::new();
-
-    for n in 0..VERIFIERS {
-        let id = format!("verifier_{n}");
-        nodes.push(agent_node(
-            &id,
-            Tier::Flash,
-            system,
-            prompt,
-            schema.clone(),
-            &format!("tinysweeper_{}_verify", lane_slug(lane)),
-        ));
-        edges.push(Edge {
-            from_node: "trigger".into(),
-            from_port: "main".into(),
-            to_node: id.clone(),
-            to_port: "main".into(),
-        });
-        edges.push(Edge {
-            from_node: id,
-            from_port: "main".into(),
-            to_node: "panel".into(),
-            to_port: "main".into(),
-        });
-    }
-
-    nodes.push(Node {
-        id: "panel".into(),
-        kind: NodeKind::Merge,
-        type_version: 1,
-        name: "panel".into(),
-        config: json!({ "mode": "append" }),
-        ports: Vec::new(),
-        position: None,
-    });
-
-    WorkflowGraph {
-        name: format!("{}-verify", lane_slug(lane)),
-        nodes,
-        edges,
-        ..WorkflowGraph::default()
-    }
-}
-
-/// The lane's wire name, used in node and schema names.
-fn lane_slug(lane: LaneId) -> &'static str {
-    match lane {
-        LaneId::Critique => "critique",
-        LaneId::Security => "security",
-        LaneId::Tests => "tests",
-        LaneId::Description => "description",
-        LaneId::Commits => "commits",
     }
 }
 

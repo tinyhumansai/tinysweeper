@@ -1,4 +1,4 @@
-//! The change map: what this pull request touches, drawn.
+//! The change flow: how edited behaviours connect to the surrounding system.
 //!
 //! Always compiled. It reads a diff, an optional graph neighbourhood and the
 //! findings the review already produced, and returns a [`ChangeMap`] that
@@ -21,12 +21,10 @@
 //!   letting an absent code graph read as a change that reaches nothing. Same
 //!   rule as [`crate::retrieve`].
 //!
-//! The unit of the picture is a *directory*, chosen at the deepest level that
-//! still fits — see [`group`]. Asking a model to name the "real" components
-//! would produce better names and a worse artefact: unreproducible, and paid
-//! for on every push.
+//! The unit of the picture is a named symbol already present in the repository
+//! graph. Hunk headings identify which symbols changed; typed graph edges say
+//! whether surrounding behaviour calls, uses, implements, or tests them.
 
-pub mod group;
 pub mod mermaid;
 pub mod render;
 pub mod types;
@@ -39,7 +37,7 @@ use crate::findings::types::Finding;
 use crate::index::types::{EdgeKind, Neighbourhood};
 
 pub use crate::overview::render::{MARKER, comment};
-pub use crate::overview::types::{ChangeMap, Component, GraphStatus, Link, Role};
+pub use crate::overview::types::{ChangeMap, Component, FlowRelation, GraphStatus, Link, Role};
 
 /// What the caller was able to get out of the code graph.
 ///
@@ -69,35 +67,26 @@ pub fn build(
     view: GraphView<'_>,
     limits: &Overview,
 ) -> ChangeMap {
-    let changed_paths: BTreeSet<String> = diffs.iter().map(|d| d.path.clone()).collect();
-
-    // Depth comes from the *changed* paths alone. Letting the neighbourhood
-    // vote would mean the same commit is drawn at a different grain depending
-    // on how warm the index is, which makes two reviews of one commit
-    // disagree about what its components are.
-    let depth = group::choose_depth(&changed_paths, limits.max_components);
-
-    let mut changed = changed_components(diffs, depth, limits.max_paths_per_component);
-    mark_findings(&mut changed, findings, depth);
+    let changed_ids: BTreeSet<String> = crate::retrieve::seeds(diffs)
+        .into_iter()
+        .filter(|seed| seed.contains('#'))
+        .collect();
+    let mut changed = changed_components(&changed_ids);
+    mark_findings(&mut changed, findings);
 
     let (impacted, graph) = match view {
-        GraphView::Walked(walk) => (
-            impacted_components(walk, &changed_paths, depth),
-            status(walk),
-        ),
+        GraphView::Walked(walk) => (impacted_components(walk, &changed_ids), status(walk)),
         GraphView::Absent => (BTreeMap::new(), GraphStatus::Off),
         GraphView::Unavailable => (BTreeMap::new(), GraphStatus::Unavailable),
     };
 
-    // Ranked before capping, and the two halves are ranked by different
-    // things: a changed component matters in proportion to how much of it
-    // moved, an impacted one in proportion to how much of it is exposed.
+    // Stable ordering keeps the same commit byte-identical between runs.
     let mut changed: Vec<Component> = changed.into_values().collect();
-    changed.sort_by(|a, b| b.churn().cmp(&a.churn()).then(a.name.cmp(&b.name)));
+    changed.sort_by(|a, b| a.name.cmp(&b.name));
     let mut impacted: Vec<Component> = impacted.into_values().collect();
     impacted.sort_by(|a, b| b.files.cmp(&a.files).then(a.name.cmp(&b.name)));
 
-    let folded = changed.len().saturating_sub(limits.max_components)
+    let mut folded = changed.len().saturating_sub(limits.max_components)
         + impacted.len().saturating_sub(limits.max_impacted);
     changed.truncate(limits.max_components);
     impacted.truncate(limits.max_impacted);
@@ -108,9 +97,12 @@ pub fn build(
     components.extend(impacted);
 
     let links = match view {
-        GraphView::Walked(walk) => links(walk, &components, depth, limits.max_links),
+        GraphView::Walked(walk) => links(walk, &components, limits.max_links),
         GraphView::Absent | GraphView::Unavailable => Vec::new(),
     };
+    let (kept, links, unlinked) = connected_only(components, links);
+    components = kept;
+    folded += unlinked;
 
     ChangeMap {
         files: diffs.len(),
@@ -123,124 +115,144 @@ pub fn build(
     }
 }
 
-/// Fold the diff into one component per directory prefix.
-fn changed_components(
-    diffs: &[FileDiff],
-    depth: usize,
-    max_paths: usize,
-) -> BTreeMap<String, Component> {
-    let mut components: BTreeMap<String, Component> = BTreeMap::new();
-    for diff in diffs {
-        let name = group::component_of(&diff.path, depth);
-        let component = components.entry(name.clone()).or_insert_with(|| Component {
-            name,
-            role: Role::Changed,
-            files: 0,
-            additions: 0,
-            deletions: 0,
-            findings: 0,
-            worst: None,
-            paths: Vec::new(),
-        });
-        component.files += 1;
-        component.additions += diff.additions();
-        component.deletions += diff.deletions();
-        // `files` keeps counting past the cap, so the table can say "3 of 40"
-        // rather than claiming the component holds three files.
-        if component.paths.len() < max_paths {
-            component.paths.push(diff.path.clone());
+/// Remove names that survived a node cap but no surviving relationship uses.
+///
+/// A box without an arrow is an inventory item, not part of a flow. Link caps
+/// can otherwise strand nodes after their only relationship is truncated.
+fn connected_only(
+    components: Vec<Component>,
+    mut links: Vec<Link>,
+) -> (Vec<Component>, Vec<Link>, usize) {
+    let mut used = vec![false; components.len()];
+    for link in &links {
+        used[link.from] = true;
+        used[link.to] = true;
+    }
+
+    let mut remap = vec![None; components.len()];
+    let mut kept = Vec::new();
+    for (old, component) in components.into_iter().enumerate() {
+        if used[old] {
+            remap[old] = Some(kept.len());
+            kept.push(component);
         }
+    }
+    for link in &mut links {
+        link.from = remap[link.from].expect("a link marks its source as used");
+        link.to = remap[link.to].expect("a link marks its target as used");
+    }
+    let removed = used.iter().filter(|&&is_used| !is_used).count();
+    (kept, links, removed)
+}
+
+/// Turn changed symbol seeds into the green nodes in the flow.
+fn changed_components(changed_ids: &BTreeSet<String>) -> BTreeMap<String, Component> {
+    let mut components: BTreeMap<String, Component> = BTreeMap::new();
+    for id in changed_ids {
+        let path = file_of(id).to_string();
+        components.insert(
+            id.clone(),
+            Component {
+                name: id.clone(),
+                role: Role::Changed,
+                files: 1,
+                additions: 0,
+                deletions: 0,
+                findings: 0,
+                worst: None,
+                paths: vec![path],
+            },
+        );
     }
     components
 }
 
-/// Attribute findings to the component whose file they name.
-fn mark_findings(components: &mut BTreeMap<String, Component>, findings: &[Finding], depth: usize) {
+/// Attribute findings to changed behaviours in the file they name.
+fn mark_findings(components: &mut BTreeMap<String, Component>, findings: &[Finding]) {
     for finding in findings {
-        // A finding whose path names no changed file — the description lane's
-        // `(pull request description)`, say — belongs to no component, and
-        // inventing one for it would put a box on the diagram that no file is
-        // in.
-        let Some(component) = components.get_mut(&group::component_of(&finding.path, depth)) else {
-            continue;
-        };
-        component.findings += 1;
-        component.worst = Some(match component.worst {
-            Some(worst) => worst.max(finding.severity),
-            None => finding.severity,
-        });
+        for component in components
+            .values_mut()
+            .filter(|component| component.paths.iter().any(|path| path == &finding.path))
+        {
+            component.findings += 1;
+            component.worst = Some(match component.worst {
+                Some(worst) => worst.max(finding.severity),
+                None => finding.severity,
+            });
+        }
     }
 }
 
-/// Fold the walked nodes the change did *not* touch into components.
+/// Collect untouched symbols connected to the changed behaviours.
 fn impacted_components(
     walk: &Neighbourhood,
-    changed_paths: &BTreeSet<String>,
-    depth: usize,
+    changed_ids: &BTreeSet<String>,
 ) -> BTreeMap<String, Component> {
-    // Distinct files, not nodes: a file with forty symbols in the walk is one
-    // file's worth of exposure, and counting its symbols would make whichever
-    // file happens to be most densely parsed look like the biggest risk.
-    let mut files_by_component: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let connected: BTreeSet<&str> = walk
+        .edges
+        .iter()
+        .filter(|edge| relation(edge.kind).is_some())
+        .flat_map(|edge| [edge.from.as_str(), edge.to.as_str()])
+        .collect();
+    let mut components = BTreeMap::new();
     for node in &walk.nodes {
-        if changed_paths.contains(&node.path) {
+        if node.kind != crate::index::types::NodeKind::Symbol
+            || changed_ids.contains(&node.id)
+            || !connected.contains(node.id.as_str())
+        {
             continue;
         }
-        files_by_component
-            .entry(group::component_of(&node.path, depth))
-            .or_default()
-            .insert(node.path.clone());
+        let degree = walk
+            .edges
+            .iter()
+            .filter(|edge| edge.from == node.id || edge.to == node.id)
+            .filter(|edge| relation(edge.kind).is_some())
+            .count();
+        components.insert(
+            node.id.clone(),
+            Component {
+                name: node.id.clone(),
+                role: Role::Impacted,
+                files: degree,
+                additions: 0,
+                deletions: 0,
+                findings: 0,
+                worst: None,
+                paths: vec![node.path.clone()],
+            },
+        );
     }
-
-    files_by_component
-        .into_iter()
-        .map(|(name, files)| {
-            (
-                name.clone(),
-                Component {
-                    name,
-                    role: Role::Impacted,
-                    files: files.len(),
-                    additions: 0,
-                    deletions: 0,
-                    findings: 0,
-                    worst: None,
-                    paths: Vec::new(),
-                },
-            )
-        })
-        .collect()
+    components
 }
 
-/// Aggregate the walked edges into arrows between drawn components.
-fn links(walk: &Neighbourhood, components: &[Component], depth: usize, max: usize) -> Vec<Link> {
+/// Aggregate typed symbol relationships into human-readable flow arrows.
+fn links(walk: &Neighbourhood, components: &[Component], max: usize) -> Vec<Link> {
     let index: BTreeMap<&str, usize> = components
         .iter()
         .enumerate()
         .map(|(i, c)| (c.name.as_str(), i))
         .collect();
 
-    let mut weights: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+    let mut weights: BTreeMap<(usize, usize, FlowRelation), usize> = BTreeMap::new();
     for edge in &walk.edges {
-        // `Defines` runs from a file to its own symbol, so it is a self-link by
-        // construction and carries no information about what reaches what.
-        if edge.kind == EdgeKind::Defines {
-            continue;
-        }
-        let from = group::component_of(file_of(&edge.from), depth);
-        let to = group::component_of(file_of(&edge.to), depth);
-        if from == to {
-            continue;
-        }
-        let (Some(&from), Some(&to)) = (index.get(from.as_str()), index.get(to.as_str())) else {
+        let Some(relation) = relation(edge.kind) else {
             continue;
         };
-        *weights.entry((from, to)).or_default() += 1;
+        let (Some(&from), Some(&to)) = (index.get(edge.from.as_str()), index.get(edge.to.as_str()))
+        else {
+            continue;
+        };
+        *weights.entry((from, to, relation)).or_default() += 1;
     }
 
     let mut links: Vec<Link> = weights
         .into_iter()
-        .map(|((from, to), weight)| Link { from, to, weight })
+        .map(|((from, to, relation), weight)| Link {
+            from,
+            to,
+            relation,
+            weight,
+        })
         .collect();
     // Heaviest first, so capping keeps the arrows that carry the most.
     links.sort_by(|a, b| {
@@ -251,6 +263,17 @@ fn links(walk: &Neighbourhood, components: &[Component], depth: usize, max: usiz
     });
     links.truncate(max);
     links
+}
+
+/// Graph relationships that describe behaviour rather than file layout.
+fn relation(kind: EdgeKind) -> Option<FlowRelation> {
+    match kind {
+        EdgeKind::Calls => Some(FlowRelation::Calls),
+        EdgeKind::References => Some(FlowRelation::Uses),
+        EdgeKind::Extends => Some(FlowRelation::Implements),
+        EdgeKind::Tests => Some(FlowRelation::Tests),
+        EdgeKind::Imports | EdgeKind::Defines => None,
+    }
 }
 
 /// The file half of a node id: `src/a.rs#foo` is a symbol in `src/a.rs`.

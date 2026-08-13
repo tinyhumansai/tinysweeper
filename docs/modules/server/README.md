@@ -62,6 +62,39 @@ the lease release below it. Leases also carry a TTL in Mongo, which is the only
 thing that covers a killed process — a stranded lease would otherwise mean that
 pull request can never be reviewed again.
 
+### A failed review is never silent
+
+`server::failure` exists because the paragraph above was, for a while, the
+whole story: a review that could not run logged an error and stopped. Nothing
+reached the pull request, so a total model outage and a clean bill of health
+rendered identically on GitHub — and the auto-merge gate read the absence of a
+review as nothing to object to.
+
+Two things now happen instead.
+
+A **transient** failure is retried up to `failure::MAX_ATTEMPTS` times with an
+exponential backoff capped at eight seconds. Only `Error::Model` and
+`Error::Forge` qualify; everything else is deterministic, and `Error::Budget`
+in particular must never be retried, because the run has already spent its
+ceiling. The retry is safe against the lease because `review_inner` releases it
+on every exit path, so the next attempt re-claims it rather than colliding with
+itself and returning a silent `Ok`.
+
+A review that still cannot run publishes a **`tinysweeper/review`** check with
+conclusion `ActionRequired`. That conclusion is the load-bearing choice:
+`CheckConclusion::blocks` is true for it, and `automerge::policy::check_refusal`
+refuses on the first failing check it sees regardless of `require_checks`, so
+an unreviewed pull request now stops the gate without any repository having to
+opt in. `Skipped` would read better in English and would have preserved the
+exact bug, since it does not block; `Failure` would claim tinysweeper found
+something disqualifying in the code, when it never got to look.
+
+The summary says, in its first line, that no code was reviewed and that the
+check is not a finding about the change — a red check reads as an accusation
+otherwise. Error text is scrubbed before it is published: the gateway's quota
+error embeds a key-management URL ending in the key's id, and per the security
+boundary that must not reach a check-run summary.
+
 ## The admin API
 
 Everything under `/admin` requires `Authorization: Bearer <token>` matching

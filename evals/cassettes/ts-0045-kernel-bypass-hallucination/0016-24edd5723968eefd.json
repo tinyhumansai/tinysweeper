@@ -1,0 +1,18 @@
+{
+  "key": "24edd5723968eefd",
+  "model_requested": "z-ai/glm-5.2",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 1638,
+    "output_tokens": 153,
+    "cached_tokens": 1425,
+    "embed_tokens": 0,
+    "cost_usd": 0.000067095
+  },
+  "value": {
+    "findings": [],
+    "resolved": [],
+    "summary": "The change adds a `pub mod summarise;` declaration to `src/findings/mod.rs`. This introduces no untrusted input handling, dangerous sinks, authentication/authorization changes, network or subprocess calls, deserialization, path traversal, secret exposure, dependency changes, or CI permission widening. No security concerns."
+  }
+}

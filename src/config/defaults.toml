@@ -66,47 +66,75 @@ human_review = "tinysweeper:human-review"
 manual_only = "tinysweeper:manual-only"
 
 # Model tiers. Prices below are per million tokens, verified against
-# openrouter.ai/api/v1/models on 2026-08-08 — re-check before assuming they
-# still hold, the catalogue moves fast.
+# openrouter.ai/api/v1/models on 2026-08-08, DeepSeek re-checked 2026-08-13 —
+# re-check before assuming they still hold, the catalogue moves fast.
 #
-#   minimax/minimax-m3        1,048,576 ctx   $0.30 / $1.20
-#   moonshotai/kimi-k3        1,048,576 ctx   $3.00 / $15.00
-#   moonshotai/kimi-k2.7-code   262,144 ctx   $0.70 / $3.50
+#   deepseek/deepseek-v4-pro-0813  1,048,576 ctx   $0.435 / $0.87
+#   z-ai/glm-5.2                   1,048,576 ctx   $0.753 / $2.367
+#   minimax/minimax-m3             1,048,576 ctx   $0.30  / $1.20
+#   moonshotai/kimi-k3             1,048,576 ctx   $3.00  / $15.00
+#   moonshotai/kimi-k2.7-code        262,144 ctx   $0.70  / $3.50
 #
-# The scan tier is m3 rather than the cheaper-looking m2.1 because they cost the
-# same and m3 carries five times the context — and context is exactly what a
-# reviewer that pulls in surrounding code runs out of first.
+# The GLM row was $0.07 / $0.22 until 2026-08-13 and was wrong by ten times —
+# no endpoint has ever served it that cheaply. Two conclusions in this file
+# rested on it and do not survive: DeepSeek is **cheaper per token** than GLM on
+# output, not several times dearer, and GLM was already spending past the eval
+# corpus's $0.02-per-case budget before any model changed.
+#
+# Everything in that list carries a million-token context except the last, and
+# context is exactly what a reviewer that pulls in surrounding code runs out of
+# first — it is a floor for anything considered here, not a tiebreaker.
 [models]
 gateway = "openrouter"
 base_url = "https://openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
 # Both tiers on one model, and the tiering kept rather than collapsed.
 #
-# GLM 5.2 was the cheapest model measured that answers a strict JSON schema
-# reliably and caches well: 5/5 clean runs, ~1,270 of ~1,600 prompt tokens
-# served from cache every time, and $0.0001-$0.0002 for a review call where
-# `kimi-k3` cost $0.0056 and `qwen3.8-max` $0.0060 — around 40x.
+# DeepSeek V4 Pro, pinned to the dated `0813` GA snapshot rather than the
+# floating `deepseek/deepseek-v4-pro` alias. The alias is a different, older
+# build and moves without a config change; a reviewer whose output shape is a
+# strict JSON schema should not have its model swapped underneath it silently.
+#
+# **This snapshot is served only by DeepSeek first-party.** An OpenRouter
+# account whose allowed-providers list excludes `deepseek` gets a 404 —
+# "No allowed providers are available for the selected model" — on every call,
+# and every review falls through to the chain below. If reviews are quietly
+# still coming back as GLM, that is the cause: fix it at
+# https://openrouter.ai/settings/privacy, not here.
 #
 # The two keys stay separate because the *shape* of the decision is worth
 # keeping: `scan` is mechanical work run often, `deep` reads code closely. A
 # deployment that wants a stronger deep tier changes one line, and the cost of
 # doing so is visible — the previous deep model's $3.00/M input against 83k
 # input tokens per security-lane call was where the bill actually came from.
-scan = "deepseek/deepseek-v4-flash"
-deep = "deepseek/deepseek-v4-pro"
-# The consensus panel's tier. Several of these replace one `deep` call, so what
-# matters is the aggregate, and on the pinned DeepSeek endpoint that arithmetic
-# works out: blended against the ~80% prompt-cache hit this layout achieves,
-# flash costs $0.030/M where pro costs $0.090/M. Three independent opinions for
-# the price of one, and the panel only reports what more than one of them saw —
-# which is the noise control `deep` was buying by being expensive.
+scan = "deepseek/deepseek-v4-pro-0813"
+deep = "deepseek/deepseek-v4-pro-0813"
+# The tier a council of reviewers runs on, when one is configured.
+#
+# Separate from `scan` because the two are cheap for different reasons: `scan`
+# is one mechanical call, `flash` is one of N concurrent opinions whose
+# *aggregate* has to stay under the price of the single `deep` call it stands
+# in for. Blended against the ~80% prompt-cache hit this prompt layout achieves,
+# and on the same pinned DeepSeek endpoint as the tiers above, flash costs
+# $0.030/M where the pro snapshot costs $0.090/M — so three reviewers cost
+# roughly what one did.
+#
+# Same `json_object` caveat as everything else in this block: the flash endpoint
+# refuses a strict schema request exactly as the pro snapshot does.
 flash = "deepseek/deepseek-v4-flash"
 # Tried in order when the selected model fails. Both were measured against the
-# reasoning setting below and both answer a strict JSON schema cleanly; the
-# previous first fallback did not, and refused every request with "Reasoning is
+# reasoning setting below and both answer a strict JSON schema cleanly; a
+# previous entry did not, and refused every request with "Reasoning is
 # mandatory for this endpoint", which made the whole chain a guaranteed failure
 # rather than a safety net.
-fallback = ["deepseek/deepseek-v4-pro", "minimax/minimax-m3"]
+#
+# GLM 5.2 leads because it is the model this deployment ran as its primary
+# until now, on 5/5 clean structured-output runs — a safety net is worth more
+# when it is the thing you just came off. The V4 Pro alias is deliberately
+# *not* here: it is reachable when the pinned snapshot is not, so including it
+# would turn a provider misconfiguration into a silent downgrade to the older
+# build instead of a visible one.
+fallback = ["z-ai/glm-5.2", "minimax/minimax-m3"]
 # A ceiling, not a purchase: tokens are billed as produced, so raising this
 # costs nothing on the calls that finish early and buys headroom on the ones
 # that would otherwise be cut off. It was 8000, which is the same budget the
@@ -119,53 +147,127 @@ fallback = ["deepseek/deepseek-v4-pro", "minimax/minimax-m3"]
 # the findings that arrived and the rest are simply never seen, which reads
 # exactly like a clean review. That is the failure this number is set against.
 max_tokens = 16000
-# Reasoning is billed against `max_tokens`. It was off entirely because
-# `kimi-k3` spent all 8000 tokens thinking and returned empty content; measured
-# on `deepseek-v4-pro` at `high`, the same prompt uses 416 reasoning tokens and
-# finishes cleanly. Set to `off` if you put a thinking-heavy model back.
+# Reasoning is billed against `max_tokens`, and this key does **not** bound it.
+#
+# The 416-token figure that used to be recorded here was measured on a toy
+# prompt and did not survive contact with a real one. Re-measured against a
+# 23k-token diff with a demanding system prompt, both configured models spend
+# reasoning like this:
+#
+# `max_tokens` below is the ceiling each *run* was given, not the shipped
+# budget. The shipped value — 16000, set at the bottom of this block — clears
+# the 12000 floor this change validates against; the 8000 rows show the budget
+# that fails, the 32000 rows the one that clears.
+#
+#   model               effort  max_tokens  reasoning  content
+#   z-ai/glm-5.2        high      8000        8000     empty, finish=length
+#   z-ai/glm-5.2        low       8000        8000     empty, finish=length
+#   z-ai/glm-5.2        off       8000           0     2572 tokens, 13 findings
+#   z-ai/glm-5.2        high     32000           8     7429 tokens, 23 findings
+#   deepseek-v4-pro     high      8000        8000     empty, finish=length
+#   deepseek-v4-pro     low       8000        8000     empty, finish=length
+#   deepseek-v4-pro     off       8000           0      966 tokens
+#   deepseek-v4-pro     high     32000        8152     9246 tokens
+#
+# Those `deepseek-v4-pro` rows were measured on the floating alias, which is a
+# different and older build than the `-0813` snapshot now selected above. They
+# are kept because the shape of the finding is what matters and it held across
+# two unrelated models — but `-0813` itself has not been put through this
+# table. Treat its reasoning spend as unmeasured rather than as inherited, and
+# re-run the sweep before trusting `high` on a harder prompt than production
+# has already shown it.
+#
+# Two things in that table are worth keeping. First, `low` is not a smaller
+# `high`: both models burned the *entire* allowance thinking at either setting,
+# so turning the dial down is not a way to bound spend — only `off` is. Second,
+# the failure is bimodal rather than gradual. There is no setting at which the
+# model thinks a bit and answers a bit; either reasoning fits and the answer is
+# whole, or reasoning takes everything and the content is empty.
+#
+# `high` is kept because `max_tokens` above is now 16000, which cleared it in
+# production — no structured-output failure and no fallback in the hours after
+# the deploy. 16000 itself was never measured; the table brackets it with the
+# ceiling that fails (8000) and the one that stays safe (32000), where
+# `deepseek-v4-pro` spent 8152 of the allowance on reasoning before it
+# answered. A harder prompt is one step from the same cliff. If this starts
+# failing again, `off` is the fix that is *proven* rather than the one that
+# buys room, and it costs 13 findings against 23.
 reasoning_effort = "high"
+# Who enforces the response schema, and the reason the model above is usable at
+# all.
+#
+# `schema` is the strong setting and the default: the provider is handed the
+# JSON schema and cannot generate anything that does not fit it. It is not an
+# option here. `deepseek-v4-pro-0813` answers a strict schema request with
+#
+#   400 — "This response_format type is unavailable now"
+#
+# on every call, so a deployment on `schema` never reaches DeepSeek at all: it
+# fails, falls through to GLM, and looks like it is working. That was measured,
+# not inferred — a corpus re-record produced 29 of 29 answers from the fallback.
+#
+# `json_object` is DeepSeek's own JSON mode. The provider guarantees the answer
+# is well-formed json and nothing about its shape; the schema travels in the
+# system prompt instead, and `harness::schema::parse` rejects a mismatch. Be
+# clear about what that trades: a wrong *shape* is now caught by us rather than
+# prevented by them. It is still never prose — the answer is always parseable
+# json or a hard error — but it is weaker than `schema`, and a deployment whose
+# models all support strict schemas should stay on `schema`.
+#
+# The setting applies to the whole chain, fallbacks included, because any model
+# in it can answer a given review and the prompt is built before the answering
+# model is known. GLM 5.2 and MiniMax M3 both accept `json_object`, so the
+# safety net still works.
+structured_output = "json_object"
 budget_usd_per_pr = 1.0
 
-# Pin the upstream provider. This is a correctness setting before it is a cost
-# one, and it was arrived at by running it rather than by reading the catalogue.
+# Pin the upstream provider, so the price this repository records is the price
+# it is charged.
 #
-# OpenRouter serves one model id from ~18 providers and load-balances between
-# them, at prices spanning 4x. Unpinned, `harness::pricing` — which holds one
-# price per model id — describes whichever provider happened to answer, so the
-# cost line and `budget_usd_per_pr` stop bounding anything real.
+# OpenRouter serves a floating model id from ~18 providers at prices spanning 4x
+# and load-balances between them, while `harness::pricing` holds one price per
+# model id. Unpinned, the cost line describes whichever provider answered and
+# `budget_usd_per_pr` stops bounding a real bill. `scan`/`deep` above are
+# already single-provider by virtue of the dated snapshot; `flash` is not, and
+# is the tier a council multiplies.
 #
-# The providers below are the cheap ones that support **strict** JSON schema
-# (`structured_outputs`), and that qualifier is the whole story. Structured
-# output is not optional here (see `harness::schema`), and the cheapest
-# providers do not support it:
+# `deepseek` is both the cheapest endpoint and — see `structured_output` below —
+# the reason this deployment is on `json_object` at all. Pinning it is only
+# viable *because* of that setting: measured against the live API, the DeepSeek
+# endpoint refuses a strict-schema request, so a deployment that pins this
+# provider while asking for `schema` gets `404 No endpoints found` on every
+# call, for every model. That combination was shipped once and every lane went
+# neutral against a real pull request before anything caught it, which is why
+# the two keys are documented together.
 #
-#   provider     flash in $/M   cache read $/M   strict json
-#   DeepSeek     0.140          0.0028           NO   <- cheapest, unusable
-#   StreamLake   0.0671         0.01341          yes  <- pinned first
-#   Baidu        0.0672         0.01344          advertised, but 404s
-#   DeepInfra    0.090          0.018            yes  <- pinned second
-#
-# DeepSeek's own endpoint is by far the cheapest on cache reads and cannot
-# answer a strict schema at all: pinning it returned `404 No endpoints found`
-# for every model, on every call, which is exactly what `allow_fallbacks =
-# false` is supposed to do when nothing matches. Baidu advertises
-# `structured_outputs` and still 404s under a strict request, so this list is
-# the set that was *verified by calling it*, not the set that claims support.
-#
-# Two entries rather than one so a single provider's outage is survivable while
-# every entry is still priced and still strict-capable. `models.fallback` is the
-# next line of defence and switches model rather than provider.
-#
-# This is also why `scan` and `deep` moved off `z-ai/glm-5.2`: it is $0.07/M on
-# the route that cannot do strict JSON and $0.75/M on the cheapest one that can,
-# which is more than ten times the price of the flash tier the panels run on.
+# `allow_fallbacks = false` makes the pin a guarantee rather than a preference;
+# `models.fallback` is the safety net, and it switches model rather than
+# provider. Note this is a *routing* pin and does not fix an account whose
+# allowed-providers list excludes DeepSeek — that failure is the one the `scan`
+# comment above describes, and it is fixed at openrouter.ai/settings/privacy.
 #
 # This table must stay *below* every scalar key in `[models]`: a TOML sub-table
 # ends the parent table, so anything written after it is parsed as a key of
 # `models.provider` instead.
 [models.provider]
-order = ["streamlake", "deepinfra"]
+order = ["deepseek"]
 allow_fallbacks = false
+
+# Several reviewers on one lane's evidence, folded into one review.
+#
+# Off, and off is the honest default: a second reviewer doubles the calls for
+# that lane, and whether it is worth the money is a question `tinysweeper eval`
+# answers rather than one anybody should guess. `[council]` is also on the *not
+# overridable* list in `src/config/remote` — every key here spends the
+# operator's money, which is the same line drawn around `[models]`.
+#
+# `corroboration` is a separate switch on purpose. With one agent the merge is
+# a provable no-op, so it can be turned on and measured before a second agent
+# is what is being judged.
+[council]
+enabled = false
+corroboration = true
+agents = []
 
 # The knowledge centre. `files` are read from the pull request's head commit
 # through the forge and are untrusted input — they are put through a sandboxed
@@ -212,6 +314,14 @@ dimensions = 1536
 api_key_env = "OPENROUTER_API_KEY"
 base_url = ""
 batch = 64
+# The ceiling the provider actually enforces. `batch` bounds how many texts go
+# in a call; this bounds how large they are, which is the limit an embedding
+# API rejects on. Sizing by count alone meant 64 chunks of real source hit
+# OpenAI's 300,000-token request limit at 467,846 tokens, so every large
+# repository indexed nothing and reviewed from the diff alone while small ones
+# looked fine. Counted with the four-bytes-per-token estimate, which is about
+# half the true rate for code — hence 120,000 here against a 300,000 limit.
+max_request_tokens = 120000
 requests_per_minute = 60
 budget_usd_per_index = 5.0
 # Retrieval budgets. `context_tokens` is the number that matters: at roughly
@@ -398,6 +508,16 @@ max_per_run = 10
 annotate_sentry = true
 resolve_when_tracked = false
 scrub_patterns = []
+
+# Which repository each project promotes into. Empty by default, because there
+# is no defensible default: guessing a repository from a project slug is how
+# issues get opened in someone else's tracker. A project in `projects` with no
+# route here is skipped and logged, never guessed.
+#
+# [[sentry.route]]
+# project = "api"
+# repo    = "tinyhumansai/backend"
+# labels  = ["area: sentry"]
 
 [threads]
 # Close a conversation the review agent confirms the new code fixed.

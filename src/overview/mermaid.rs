@@ -7,19 +7,17 @@
 //!
 //! # Labels are untrusted
 //!
-//! Every label in the diagram is a repository path, and a contributor picks
-//! their own filenames. A path is therefore treated exactly like a diff: data,
-//! never syntax. Two rules enforce it, and both are needed.
+//! Every label comes from a repository symbol, and contributor code controls
+//! those names. A symbol is therefore treated exactly like a diff: data, never
+//! syntax. Two rules enforce it, and both are needed.
 //!
 //! - **Node ids are generated here** (`n0`, `n1`, …) and never derived from a
 //!   path. An id is unquoted Mermaid syntax, so a path could otherwise close
 //!   the statement it sits in.
 //! - **Label text is filtered to a safe alphabet** by [`label`], not escaped.
 //!   Escaping is a guess about a renderer's parser; an allow-list is a
-//!   statement about what can appear. A file named `x"] click n0 "javascript:…`
-//!   loses its punctuation and draws a box, which is the correct outcome — the
-//!   diagram is not the place to relay a hostile filename verbatim, and the
-//!   file list below the diagram shows it escaped as markdown anyway.
+//!   statement about what can appear. A hostile symbol loses its punctuation
+//!   and draws an ordinary box rather than becoming Mermaid syntax.
 
 use std::fmt::Write as _;
 
@@ -53,8 +51,7 @@ pub fn label(text: &str) -> String {
     if trimmed.chars().count() <= MAX_LABEL {
         return trimmed.to_string();
     }
-    // Cut from the left: the tail of a path is the part that distinguishes it,
-    // and every sibling component shares the head.
+    // Cut from the left: qualified symbol names keep their distinguishing tail.
     let tail: String = trimmed
         .chars()
         .skip(trimmed.chars().count() - (MAX_LABEL - 3))
@@ -70,8 +67,8 @@ pub fn flowchart(map: &ChangeMap) -> Option<String> {
     }
 
     let mut out = String::with_capacity(512);
-    // Left-to-right, so the change is on the left and what it reaches is on
-    // the right — the direction a reviewer reads a blast radius in.
+    // Left-to-right follows call/data flow. Inbound callers and tests naturally
+    // sit before the changed behaviour; its callees sit after it.
     out.push_str("```mermaid\nflowchart LR\n");
 
     for (index, component) in map.components.iter().enumerate() {
@@ -84,20 +81,13 @@ pub fn flowchart(map: &ChangeMap) -> Option<String> {
     }
 
     for link in &map.links {
-        // The weight rides on the arrow rather than in a legend: an arrow
-        // standing for one import and one standing for thirty are different
-        // facts, and the diagram is the only place they can be compared.
-        let _ = writeln!(
-            out,
-            "  n{} -->|{}| n{}",
-            link.from,
-            if link.weight == 1 {
-                "1 ref".to_string()
-            } else {
-                format!("{} refs", link.weight)
-            },
-            link.to
-        );
+        let relation = link.relation.as_str();
+        let edge_label = if link.weight == 1 {
+            relation.to_string()
+        } else {
+            format!("{relation} x{}", link.weight)
+        };
+        let _ = writeln!(out, "  n{} -->|{}| n{}", link.from, edge_label, link.to);
     }
 
     out.push_str(CLASS_DEFS);
@@ -105,7 +95,7 @@ pub fn flowchart(map: &ChangeMap) -> Option<String> {
     Some(out)
 }
 
-/// The style for each role, and for a component the review has findings in.
+/// The style for each role, and for a behaviour the review has findings in.
 ///
 /// Colours are stated as fills with explicit stroke and text colours rather
 /// than left to Mermaid's theme: a diagram whose text vanishes in dark mode is
@@ -116,7 +106,7 @@ const CLASS_DEFS: &str = "  classDef changed fill:#0d4429,stroke:#238636,color:#
      classDef flagged fill:#5a1e02,stroke:#d93f0b,color:#ffffff\n  \
      classDef blocking fill:#67060c,stroke:#f85149,color:#ffffff\n";
 
-/// Which class a component draws in.
+/// Which class a behaviour draws in.
 fn class_of(component: &Component) -> &'static str {
     match (component.role, component.worst) {
         // Blocking severity gets its own colour rather than sharing the
@@ -130,19 +120,16 @@ fn class_of(component: &Component) -> &'static str {
     }
 }
 
-/// A component's label: what it is, then how much of it moved.
+/// A behaviour's label, without its file-qualified graph id.
 fn node_label(component: &Component) -> String {
-    let mut out = label(&component.name);
+    let semantic_name = component
+        .name
+        .split_once('#')
+        .map_or(component.name.as_str(), |(_, symbol)| symbol);
+    let mut out = label(semantic_name);
     match component.role {
         Role::Changed => {
-            let _ = write!(
-                out,
-                "<br/>{} file{} +{} -{}",
-                component.files,
-                if component.files == 1 { "" } else { "s" },
-                component.additions,
-                component.deletions
-            );
+            out.push_str("<br/>changed");
             if component.findings > 0 {
                 let _ = write!(
                     out,
@@ -152,14 +139,7 @@ fn node_label(component: &Component) -> String {
                 );
             }
         }
-        Role::Impacted => {
-            let _ = write!(
-                out,
-                "<br/>{} file{} reached",
-                component.files,
-                if component.files == 1 { "" } else { "s" }
-            );
-        }
+        Role::Impacted => {}
     }
     out
 }

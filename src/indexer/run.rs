@@ -31,7 +31,7 @@ use crate::chunk::types::{SkipReason, SkippedFile};
 use crate::chunk::{Chunker, Selector};
 use crate::error::{Error, Result};
 use crate::index::types::{Chunk, EmbedSignature, EmbeddedChunk};
-use crate::indexer::cost::EmbedUsage;
+use crate::indexer::cost::{EmbedUsage, estimate_tokens};
 use crate::indexer::types::{Claim, IndexLease, IndexOutcome, IndexReport, IndexedFile, Settled};
 use crate::ports::embed::Embedder;
 use crate::ports::index::ChunkIndex;
@@ -41,8 +41,33 @@ use crate::ports::manifest::IndexManifest;
 ///
 /// Large enough that per-call latency stops dominating a full index, small
 /// enough that a provider's per-request size limit is not the thing that
-/// discovers the number for us.
+/// discovers the number for us. It is a ceiling on *count* only — see
+/// [`DEFAULT_MAX_BATCH_TOKENS`], which is the ceiling that actually binds.
 pub const DEFAULT_BATCH: usize = 64;
+
+/// Estimated-token ceiling on one embedding call, by default.
+///
+/// A count alone does not bound a request, and assuming it did is what broke
+/// indexing in production: 64 chunks of real source were rejected with
+/// `max_tokens_per_request` — 467,846 tokens against OpenAI's ceiling of
+/// 300,000 — so every large repository silently degraded to a diff-only
+/// review while small ones indexed fine.
+///
+/// The number carries two corrections on top of that 300,000.
+///
+/// [`estimate_tokens`](crate::indexer::cost::estimate_tokens) assumes four
+/// bytes to a token, which holds for prose and is roughly **half** the true
+/// rate for code, where punctuation is dense. The rejected batch is the
+/// measurement: 64 chunks capped at 14,400 chars is at most 230,400 estimated
+/// tokens, and the provider counted 467,846 — a little over 2x. So a budget
+/// expressed in estimated tokens must be halved before it means anything to a
+/// provider counting real ones.
+///
+/// 120,000 estimated tokens is therefore ~240,000 real ones at that ratio,
+/// leaving room under 300,000 for source denser than the sample. Deployments
+/// on a provider with a different ceiling set `embeddings.max_request_tokens`
+/// rather than editing this.
+pub const DEFAULT_MAX_BATCH_TOKENS: u64 = 120_000;
 
 /// How many files are carried in memory at once.
 ///
@@ -60,6 +85,7 @@ pub struct Indexer<'a> {
     chunker: Chunker,
     selector: Selector,
     batch: usize,
+    max_batch_tokens: u64,
     group: usize,
     budget_usd: Option<f64>,
     holder: String,
@@ -79,6 +105,7 @@ impl<'a> Indexer<'a> {
             chunker: Chunker::new(),
             selector: Selector::new(&[])?,
             batch: DEFAULT_BATCH,
+            max_batch_tokens: DEFAULT_MAX_BATCH_TOKENS,
             group: DEFAULT_GROUP,
             budget_usd: None,
             holder: format!("pid-{}", std::process::id()),
@@ -98,9 +125,22 @@ impl<'a> Indexer<'a> {
         self
     }
 
-    /// Set the embedding batch size.
+    /// Set the embedding batch size, in texts per call.
     pub fn with_batch(mut self, batch: usize) -> Self {
         self.batch = batch.max(1);
+        self
+    }
+
+    /// Set the estimated-token ceiling on one embedding call.
+    ///
+    /// Zero is read as [`DEFAULT_MAX_BATCH_TOKENS`] rather than as "no limit":
+    /// an unbounded batch is the bug this ceiling exists to prevent, so it is
+    /// not something a config typo should be able to switch back on.
+    pub fn with_max_batch_tokens(mut self, max_batch_tokens: u64) -> Self {
+        self.max_batch_tokens = match max_batch_tokens {
+            0 => DEFAULT_MAX_BATCH_TOKENS,
+            n => n,
+        };
         self
     }
 
@@ -416,7 +456,8 @@ impl<'a> Indexer<'a> {
         }
 
         let mut written = 0_usize;
-        for batch in queue.chunks(self.batch) {
+        for (start, end) in batch_bounds(&queue, self.batch, self.max_batch_tokens) {
+            let batch = &queue[start..end];
             let texts: Vec<String> = batch.iter().map(|(_, chunk)| chunk.text.clone()).collect();
             let usage = EmbedUsage::of_call(&signature.key(), &texts);
 
@@ -494,6 +535,50 @@ impl<'a> Indexer<'a> {
         self.manifest.record(repo_id, signature, &finalized).await?;
         Ok(())
     }
+}
+
+/// Split `queue` into `[start, end)` batches that respect both ceilings.
+///
+/// Two ceilings rather than one because they bound different things.
+/// `max_items` bounds how much work a single failure loses and keeps a
+/// response small enough to hold in memory; `max_tokens` is the one the
+/// provider enforces, and the one whose absence produced
+/// `max_tokens_per_request` on every large repository.
+///
+/// A chunk that exceeds `max_tokens` on its own gets a batch to itself rather
+/// than being skipped or wedged. That call will very likely be rejected — but
+/// the chunker caps a chunk far below any sane ceiling, so reaching this means
+/// the configuration is wrong, and a provider error naming the limit is a much
+/// better outcome than a silently missing file or a loop that never advances.
+/// The invariant that matters is that every chunk lands in exactly one batch.
+fn batch_bounds(
+    queue: &[(usize, &Chunk)],
+    max_items: usize,
+    max_tokens: u64,
+) -> Vec<(usize, usize)> {
+    let max_items = max_items.max(1);
+    let mut bounds = Vec::new();
+    let mut start = 0_usize;
+    let mut tokens = 0_u64;
+
+    for (position, (_, chunk)) in queue.iter().enumerate() {
+        let cost = estimate_tokens(&chunk.text);
+        let full = position - start >= max_items;
+        // `position > start` keeps an oversized lone chunk from closing an
+        // empty batch, which would emit `(start, start)` forever.
+        let over = position > start && tokens + cost > max_tokens;
+        if full || over {
+            bounds.push((start, position));
+            start = position;
+            tokens = 0;
+        }
+        tokens += cost;
+    }
+
+    if start < queue.len() {
+        bounds.push((start, queue.len()));
+    }
+    bounds
 }
 
 /// One file's plan for this run.

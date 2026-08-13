@@ -36,16 +36,19 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::config::types::{Config, LaneId};
+use crate::council;
 use crate::error::Result;
 use crate::evidence::diff::FileDiff;
 use crate::evidence::replay;
 use crate::falsify::{Falsifier, Rejection};
-use crate::flows::runner::{self, PanelRequest};
+use crate::findings::types::Finding;
+use crate::flows::panel::Call;
+use crate::flows::runner;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema::{self, RawFinding};
 use crate::lanes::fanout::{FileReview, per_file};
 use crate::lanes::{Lane, LaneInput, LaneOutcome};
-use crate::ports::model::Model;
+use crate::ports::model::{Model, Spend};
 use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
 
 /// The correctness lane.
@@ -94,12 +97,11 @@ impl Lane for Critique {
         let paths: Vec<String> = fresh.iter().map(|diff| diff.path.clone()).collect();
 
         let changed_paths = input.changed_paths();
-
         // One capability for the whole lane, so the pull-request budget is
-        // enforced across every file and every panel round at once. That is
-        // what lets the files run concurrently again: this lane used to review
-        // them one at a time purely because spend is only known after a call
-        // returns, and there was nowhere else to check it.
+        // enforced across every file and every reviewer at once. That is what
+        // lets the files run concurrently: this lane reviewed them one at a
+        // time only because spend is known after a call returns, and there was
+        // nowhere else to check it.
         let llm = runner::lane_llm(
             self.model.clone(),
             input.config,
@@ -121,7 +123,13 @@ impl Lane for Critique {
         })
         .await;
 
-        Ok(outcome.into_outcome())
+        // The graph's own calls are tallied inside the capability, which is the
+        // only object every one of them passes through. Folded in once here
+        // rather than per file: `llm` is shared across the fan-out, so adding
+        // it per file would multiply the bill by the file count.
+        let mut outcome = outcome.into_outcome();
+        outcome.spend.merge(llm.spend());
+        Ok(outcome)
     }
 }
 
@@ -141,12 +149,147 @@ async fn review_file(
 ) -> Result<FileReview> {
     let config: &Config = input.config;
     let evidence = replay::render(std::slice::from_ref(diff));
+    let reviewers = council::reviewers(config, LaneId::Critique);
 
-    let built = prompt::build(&PromptInputs {
+    // Every reviewer at once, as one graph. `ask_all` returns one answer per
+    // reviewer in the order asked, and reports a reviewer it could not reach
+    // rather than failing the council for it.
+    let calls: Vec<Call> = reviewers
+        .iter()
+        .map(|reviewer| {
+            let built = build_prompt(input, changed_paths, diff, &evidence, reviewer);
+            Call {
+                id: reviewer.id.to_string(),
+                model: reviewer.model.to_string(),
+                system: built.prefix().to_string(),
+                prompt: built.suffix().to_string(),
+                schema_name: "tinysweeper_critique".into(),
+            }
+        })
+        .collect();
+
+    let answers = runner::ask_all(
+        llm.clone(),
+        LaneId::Critique,
+        &calls,
+        &schema::json_schema(),
+    )
+    .await?;
+
+    let mut spend = Spend::default();
+    let mut per_reviewer: Vec<Vec<Finding>> = Vec::with_capacity(reviewers.len());
+    let mut summary = String::new();
+    let mut resolved: Vec<String> = Vec::new();
+    let mut unanchored = 0usize;
+    let mut discarded = 0usize;
+
+    for (reviewer, answer) in reviewers.iter().zip(&answers) {
+        let Some(value) = answer.value.clone() else {
+            // One reviewer's failure is not the lane's. With a council
+            // configured, losing one angle should cost that angle and nothing
+            // else — the same rule `lanes::fanout` applies to a file.
+            tracing::warn!(
+                agent = reviewer.id,
+                err = answer.error.as_deref().unwrap_or("no answer"),
+                "a council reviewer failed"
+            );
+            continue;
+        };
+
+        spend.note(&answer.model);
+
+        // One reviewer answering off-schema is that reviewer lost, not the
+        // file. With a solo council there is nothing else, so it is fatal —
+        // which is what `per_reviewer.is_empty()` below turns it into.
+        let asked = match place(llm.clone(), input, diff, &evidence, value).await {
+            Ok(asked) => asked,
+            Err(err) if reviewers.len() > 1 => {
+                tracing::warn!(agent = reviewer.id, %err, "a council reviewer failed");
+                continue;
+            }
+            Err(err) => return Err(err),
+        };
+
+        spend.merge(asked.spend);
+        unanchored += asked.unanchored;
+        discarded += asked.discarded;
+        // The first reviewer's prose, taken whole. Blending N summaries would
+        // author text no reviewer wrote, which is the objection `src/falsify`
+        // raises to a filter that can return findings of its own.
+        if summary.is_empty() {
+            summary = asked.summary;
+            resolved = asked.resolved;
+        }
+        per_reviewer.push(asked.findings);
+    }
+
+    if per_reviewer.is_empty() {
+        return Err(crate::error::Error::lane(
+            "critique",
+            format!("every reviewer failed on {}", diff.path),
+        ));
+    }
+
+    // Corroboration is a separate switch from the council itself, so the merge
+    // can be measured before a second agent is what is being judged. Off, the
+    // findings are concatenated exactly as the reviewers produced them.
+    let findings: Vec<Finding> = if config.council.corroboration {
+        council::merge(per_reviewer)
+    } else {
+        per_reviewer.into_iter().flatten().collect()
+    };
+
+    // Step 5, once over the merged set rather than once per reviewer. The
+    // filter can only reject, so more inputs in one pass is identical semantics
+    // at a fraction of the calls.
+    let filtered = Falsifier::new(llm.model().as_ref(), config)
+        .filter(LaneId::Critique, findings, &evidence)
+        .await;
+    spend.merge(filtered.spend);
+
+    Ok(FileReview {
+        summary: summarise(
+            summary.trim(),
+            unanchored,
+            discarded,
+            &filtered.rejected,
+            filtered.findings.len(),
+        ),
+        findings: filtered.findings,
+        resolved,
+        spend,
+    })
+}
+
+/// What one reviewer said about one file.
+struct Asked {
+    summary: String,
+    resolved: Vec<String>,
+    findings: Vec<Finding>,
+    spend: Spend,
+    unanchored: usize,
+    discarded: usize,
+}
+
+/// Build one reviewer's prompt for one file.
+///
+/// Split from [`place`] so every reviewer's prompt is assembled before any call
+/// is made: the graph asks them all at once, and a builder that ran inside the
+/// call would serialise them again.
+fn build_prompt<'a>(
+    input: &'a LaneInput<'_>,
+    changed_paths: &'a [String],
+    diff: &'a FileDiff,
+    evidence: &'a str,
+    reviewer: &council::Reviewer<'_>,
+) -> prompt::Prompt {
+    let config: &Config = input.config;
+
+    prompt::build(&PromptInputs {
         repo_policy: input.repo_policy,
         extracted_rules: input.extracted_rules,
         prior_findings: input.prior_findings,
-        new_evidence: &evidence,
+        new_evidence: evidence,
         // Every path the pull request touched, not just this one. This selects
         // which `path_instructions` are injected, and narrowing it to the focus
         // file would silently drop the rules for every other changed path from
@@ -154,50 +297,30 @@ async fn review_file(
         // well as the rules.
         changed_paths,
         focus_path: Some(&diff.path),
+        persona: reviewer.persona,
         retrieved_context: input.retrieved_context,
         ..PromptInputs::new(LaneId::Critique, config)
-    });
+    })
+}
 
-    // The prefix goes in the system message and the suffix in the user
-    // message. Providers cache on the serialised prefix, and a system
-    // message is the one part guaranteed to be sent first. Each lens gets the
-    // same prefix with its own charter appended, so the shared half stays
-    // byte-identical across the panel and is cached once for all of them.
-    let panel = runner::run_with_llm(
-        llm.clone(),
-        PanelRequest {
-            lane: LaneId::Critique,
-            schema: runner::schema_with_questions(schema::json_schema()),
-            suffix: built.suffix(),
-            system_of: &|lens| runner::system_with_charter(built.prefix(), lens),
-        },
-    )
-    .await;
+/// Place what one reviewer said against the file it reviewed.
+async fn place(
+    llm: std::sync::Arc<crate::flows::caps::ModelCapability>,
+    input: &LaneInput<'_>,
+    diff: &FileDiff,
+    evidence: &str,
+    value: serde_json::Value,
+) -> Result<Asked> {
+    let config: &Config = input.config;
 
-    // A file whose every panellist failed is a file nobody read, and it must
-    // not come back as a clean review. Failing here is what puts it in the
-    // fan-out's failure list, where the summary names it — the alternative is
-    // an unreviewed file that branch protection would approve.
-    if panel.nothing_was_read() {
-        return Err(crate::error::Error::lane(
-            LaneId::Critique.as_str(),
-            format!(
-                "no panellist could review {}: {}",
-                diff.path,
-                panel
-                    .failures
-                    .iter()
-                    .map(|(who, why)| format!("{who}: {why}"))
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ),
-        ));
-    }
+    // The call's own cost is already tallied inside the capability; what is
+    // counted here is only what *placement* adds, which is a relocation call
+    // per finding the quote could not anchor.
+    let mut spend = Spend::default();
+    let parsed = schema::parse(LaneId::Critique, value)?;
 
-    let mut spend = panel.spend.clone();
-    let parsed = runner::into_response(&panel);
-
-    let positioner = Positioner::new(llm.model().as_ref(), config);
+    let model = llm.model().as_ref();
+    let positioner = Positioner::new(model, config);
     let mut findings = Vec::new();
     let mut unanchored = 0usize;
     let mut discarded = 0usize;
@@ -233,7 +356,7 @@ async fn review_file(
                     diff: Some(diff),
                     file: input.file_contents.get(&raw.path).map(String::as_str),
                     comment: &comment,
-                    rendered_diff: &evidence,
+                    rendered_diff: evidence,
                 },
                 &mut spend,
             )
@@ -263,24 +386,16 @@ async fn review_file(
         findings.push(finding);
     }
 
-    // Step 5, on the findings that survived positioning. It sees only the
-    // diff, and it can only remove.
-    let filtered = Falsifier::new(llm.model().as_ref(), config)
-        .filter(LaneId::Critique, findings, &evidence)
-        .await;
-    spend.merge(filtered.spend);
-
-    Ok(FileReview {
-        summary: summarise(
-            parsed.summary.trim(),
-            unanchored,
-            discarded,
-            &filtered.rejected,
-            filtered.findings.len(),
-        ),
-        findings: filtered.findings,
+    // Falsification is deliberately *not* here: it runs once over the merged
+    // set in `review_file`, because a reject-only filter given more inputs in
+    // one pass has identical semantics at a fraction of the calls.
+    Ok(Asked {
+        summary: parsed.summary,
         resolved: parsed.resolved,
+        findings,
         spend,
+        unanchored,
+        discarded,
     })
 }
 
@@ -482,7 +597,7 @@ fn helper() {
 
     #[tokio::test]
     async fn a_finding_on_a_changed_line_survives() {
-        let model = MockModel::panel(json!({
+        let model = MockModel::new().then(json!({
             "summary": "Adds an unchecked index.",
             "findings": [finding_at(2)]
         }));
@@ -497,7 +612,7 @@ fn helper() {
     async fn a_quoted_snippet_is_what_places_the_finding() {
         // The model quotes the code with the indentation it felt like using and
         // never names a line. Line 2 is where that code actually is.
-        let model = MockModel::panel(json!({
+        let model = MockModel::new().then(json!({
             "summary": "Adds an unchecked index.",
             "findings": [finding_quoting("let x = items[i];")]
         }));
@@ -509,7 +624,7 @@ fn helper() {
 
     #[tokio::test]
     async fn a_leaked_diff_marker_in_the_quote_does_not_lose_the_finding() {
-        let model = MockModel::panel(json!({
+        let model = MockModel::new().then(json!({
             "summary": "…",
             "findings": [finding_quoting("+    let x = items[i];")]
         }));
@@ -520,7 +635,7 @@ fn helper() {
 
     #[tokio::test]
     async fn a_multi_line_quote_becomes_a_range() {
-        let model = MockModel::panel(json!({
+        let model = MockModel::new().then(json!({
             "summary": "…",
             "findings": [finding_quoting("let x = items[i];\n\nprintln!(\"{x}\");")]
         }));
@@ -538,7 +653,7 @@ fn helper() {
         // did to it.
         let mut files = BTreeMap::new();
         files.insert("src/main.rs".to_string(), FILE.to_string());
-        let model = MockModel::panel(json!({
+        let model = MockModel::new().then(json!({
             "summary": "…",
             "findings": [finding_quoting("    let cfg = load();")]
         }));
@@ -556,7 +671,7 @@ fn helper() {
 
     #[tokio::test]
     async fn a_quote_that_matches_nothing_leaves_the_finding_unanchored() {
-        let model = MockModel::panel(json!({
+        let model = MockModel::new().then(json!({
             "summary": "…",
             "findings": [finding_quoting("let y = somewhere_else();")]
         }));
@@ -568,12 +683,13 @@ fn helper() {
 
     #[tokio::test]
     async fn a_hopeless_quote_is_recovered_by_the_relocation_call() {
-        let model = MockModel::panel(json!({
-            "summary": "…",
-            "findings": [finding_quoting("the loop that indexes without checking")]
-        }))
-        .then(json!({"existing_code": "    let x = items[i];"}))
-        .then(json!({"incorrect": []}));
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_quoting("the loop that indexes without checking")]
+            }))
+            .then(json!({"existing_code": "    let x = items[i];"}))
+            .then(json!({"incorrect": []}));
 
         let outcome = run_with(model, &config(), &diffs()).await;
 
@@ -582,13 +698,14 @@ fn helper() {
 
     #[tokio::test]
     async fn the_falsification_pass_drops_what_the_diff_disproves() {
-        let model = MockModel::panel(json!({
-            "summary": "…",
-            "findings": [finding_quoting("let x = items[i];")]
-        }))
-        .then(json!({
-            "incorrect": [{"index": 1, "reason": "the diff bounds-checks `i` above"}]
-        }));
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_quoting("let x = items[i];")]
+            }))
+            .then(json!({
+                "incorrect": [{"index": 1, "reason": "the diff bounds-checks `i` above"}]
+            }));
 
         let outcome = run_with(model, &config(), &diffs()).await;
 
@@ -613,13 +730,14 @@ fn helper() {
     /// filter empties the finding list the prose is describing nothing.
     #[tokio::test]
     async fn a_summary_never_asserts_a_bug_the_falsifier_removed() {
-        let model = MockModel::panel(json!({
-            "summary": "One real bug: the coverage edge is never stored.",
-            "findings": [finding_quoting("let x = items[i];")]
-        }))
-        .then(json!({
-            "incorrect": [{"index": 1, "reason": "the diff stores it two lines above"}]
-        }));
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "One real bug: the coverage edge is never stored.",
+                "findings": [finding_quoting("let x = items[i];")]
+            }))
+            .then(json!({
+                "incorrect": [{"index": 1, "reason": "the diff stores it two lines above"}]
+            }));
 
         let outcome = run_with(model, &config(), &diffs()).await;
 
@@ -638,11 +756,12 @@ fn helper() {
 
     #[tokio::test]
     async fn a_broken_falsification_pass_never_deletes_a_review() {
-        let model = MockModel::panel(json!({
-            "summary": "…",
-            "findings": [finding_quoting("let x = items[i];")]
-        }))
-        .then_error("upstream exploded");
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_quoting("let x = items[i];")]
+            }))
+            .then_error("upstream exploded");
 
         let outcome = run_with(model, &config(), &diffs()).await;
 
@@ -658,7 +777,7 @@ fn helper() {
     async fn a_finding_quoting_a_line_the_model_did_not_change_is_still_postable() {
         // Line 1 is context inside the hunk. The model quoted it, so it read
         // it, and GitHub will take a comment there.
-        let model = MockModel::panel(json!({
+        let model = MockModel::new().then(json!({
             "summary": "…",
             "findings": [finding_quoting("fn main() {")]
         }));
@@ -671,7 +790,7 @@ fn helper() {
     async fn a_legacy_response_with_a_line_and_no_quote_still_anchors() {
         // Migration: a proposal or a fine-tune still answering with the old
         // schema keeps working, because its number is better than nothing.
-        let model = MockModel::panel(json!({
+        let model = MockModel::new().then(json!({
             "summary": "…",
             "findings": [finding_at(2)]
         }));
@@ -682,7 +801,7 @@ fn helper() {
 
     #[tokio::test]
     async fn a_legacy_line_outside_every_hunk_is_not_trusted() {
-        let model = MockModel::panel(json!({
+        let model = MockModel::new().then(json!({
             "summary": "…",
             "findings": [finding_at(99)]
         }));
@@ -693,7 +812,7 @@ fn helper() {
 
     #[tokio::test]
     async fn a_finding_in_a_file_the_pull_request_never_touched_is_discarded() {
-        let model = MockModel::panel(json!({
+        let model = MockModel::new().then(json!({
             "summary": "…",
             "findings": [{
                 "path": "src/elsewhere.rs",
@@ -715,7 +834,7 @@ fn helper() {
     async fn a_late_finding_may_sit_on_unchanged_lines_of_a_touched_file() {
         let mut late = finding_at(1);
         late["late"] = json!(true);
-        let model = MockModel::panel(json!({"summary": "…", "findings": [late]}));
+        let model = MockModel::new().then(json!({"summary": "…", "findings": [late]}));
 
         let outcome = run_with(model, &config(), &diffs()).await;
         assert_eq!(outcome.findings.len(), 1);
@@ -728,7 +847,7 @@ fn helper() {
         // request changed. A finding that lands on a context line is therefore
         // about code the author did not touch, and the reader has to be able to
         // tell — the model did not say `late`, the diff did.
-        let model = MockModel::panel(json!({
+        let model = MockModel::new().then(json!({
             "summary": "…",
             "findings": [finding_quoting("fn main() {")]
         }));
@@ -745,7 +864,7 @@ fn helper() {
 
     #[tokio::test]
     async fn a_finding_quoting_an_added_line_is_not_marked_pre_existing() {
-        let model = MockModel::panel(json!({
+        let model = MockModel::new().then(json!({
             "summary": "…",
             "findings": [finding_quoting("    let x = items[i];")]
         }));
@@ -822,17 +941,12 @@ fn helper() {
 
     #[tokio::test]
     async fn the_configured_tier_is_the_model_actually_called() {
-        // The panel runs on `models.flash`, not `models.deep`. That is the
-        // change: several cheap readers replaced one expensive one, and the
-        // tier a lane resolves is the visible half of that decision.
         let mut config = config();
-        config.models.flash = "some/flash-model".into();
+        config.models.deep = "some/deep-model".into();
         let model = MockModel::silent();
         run_with(model.clone(), &config, &diffs()).await;
 
-        for request in model.requests() {
-            assert_eq!(request.model, "some/flash-model");
-        }
+        assert_eq!(model.requests()[0].model, "some/deep-model");
     }
 
     /// A per-file lane can do better than replaying an already-reviewed file
@@ -869,34 +983,28 @@ fn helper() {
             .expect("runs");
 
         let requests = model.requests();
-        assert_eq!(
-            requests.len(),
-            crate::flows::panel::lenses(LaneId::Critique).len(),
-            "one panel, for the one unreviewed file"
+        assert_eq!(requests.len(), 1, "one call, for the one unreviewed file");
+
+        let system = &requests[0].messages[0].content;
+        let user = &requests[0].messages[1].content;
+
+        assert!(
+            !system.contains("+earlier") && !user.contains("+earlier"),
+            "the unchanged file is not sent at all"
         );
-
-        for request in &requests {
-            let system = &request.messages[0].content;
-            let user = &request.messages[1].content;
-
-            assert!(
-                !system.contains("+earlier") && !user.contains("+earlier"),
-                "the unchanged file is not sent at all"
-            );
-            assert!(user.contains("src/main.rs"), "the delta is the new work");
-            assert!(
-                system.contains("The file is `src/main.rs`"),
-                "each conversation owns exactly one file: {system}"
-            );
-            assert!(
-                user.contains("Close the socket"),
-                "prior findings are volatile"
-            );
-            assert!(
-                !system.contains("Close the socket"),
-                "prior findings must not enter the cached prefix"
-            );
-        }
+        assert!(user.contains("src/main.rs"), "the delta is the new work");
+        assert!(
+            system.contains("The file is `src/main.rs`"),
+            "each conversation owns exactly one file: {system}"
+        );
+        assert!(
+            user.contains("Close the socket"),
+            "prior findings are volatile"
+        );
+        assert!(
+            !system.contains("Close the socket"),
+            "prior findings must not enter the cached prefix"
+        );
     }
 
     /// One file per conversation, so a forty-file pull request is forty close
@@ -930,27 +1038,16 @@ fn helper() {
             .expect("runs");
 
         let requests = model.requests();
-        assert_eq!(
-            requests.len(),
-            3 * crate::flows::panel::lenses(LaneId::Critique).len(),
-            "one conversation per changed file, per panellist"
-        );
+        assert_eq!(requests.len(), 3, "one conversation per changed file");
 
-        // Every file is still reviewed in isolation — the panel widened how
-        // many readers each file gets, not what any of them is shown.
-        for path in ["src/main.rs", "src/other.rs", "src/third.rs"] {
-            let scoped = requests
-                .iter()
-                .filter(|r| {
-                    r.messages[0]
-                        .content
-                        .contains(&format!("The file is `{path}`"))
-                })
-                .count();
-            assert_eq!(
-                scoped,
-                crate::flows::panel::lenses(LaneId::Critique).len(),
-                "every panellist for {path} is scoped to it"
+        for (request, path) in requests
+            .iter()
+            .zip(["src/main.rs", "src/other.rs", "src/third.rs"])
+        {
+            let system = &request.messages[0].content;
+            assert!(
+                system.contains(&format!("The file is `{path}`")),
+                "each conversation is scoped to its own file: {system}"
             );
         }
     }
@@ -963,7 +1060,7 @@ fn helper() {
     /// depends on.
     #[tokio::test]
     async fn malformed_model_output_is_reported_rather_than_posted_as_nonsense() {
-        let model = MockModel::panel(json!({"summary": "…", "findings": [{"path": "x"}]}));
+        let model = MockModel::new().then(json!({"summary": "…", "findings": [{"path": "x"}]}));
         let pr = pull_request();
         let config = config();
         let diffs = diffs();
@@ -1009,36 +1106,23 @@ fn helper() {
         ];
         let pr = pull_request();
 
-        // Chosen by file rather than by call order: each file gets its own
-        // panel, and this test is precisely about the two behaving differently.
-        // Keyed on the focus marker rather than the bare path, because every
-        // changed path appears in the shared prefix of both conversations.
-        let model = MockModel::panel_matching(
-            &[
-                // src/main.rs: unparseable, so nothing there can be read.
-                (
-                    "The file is `src/main.rs`",
-                    json!({"summary": "…", "findings": [{"path": "x"}]}),
-                ),
-                // src/other.rs: a real finding.
-                (
-                    "The file is `src/other.rs`",
-                    json!({
-                        "summary": "…",
-                        "findings": [{
-                            "path": "src/other.rs",
-                            "severity": "high",
-                            "confidence": 0.9,
-                            "rule": "bounds",
-                            "title": "Unchecked index",
-                            "body": "…",
-                            "existing_code": "    let x = items[i];"
-                        }]
-                    }),
-                ),
-            ],
-            json!({"summary": "…", "findings": []}),
-        );
+        let model = MockModel::new()
+            // src/main.rs: unparseable.
+            .then(json!({"summary": "…", "findings": [{"path": "x"}]}))
+            // src/other.rs: a real finding, and a falsifier that keeps it.
+            .then(json!({
+                "summary": "…",
+                "findings": [{
+                    "path": "src/other.rs",
+                    "severity": "high",
+                    "confidence": 0.9,
+                    "rule": "bounds",
+                    "title": "Unchecked index",
+                    "body": "…",
+                    "existing_code": "    let x = items[i];"
+                }]
+            }))
+            .then(json!({"incorrect": []}));
 
         let outcome = Critique::new(Arc::new(model))
             .run(LaneInput {
@@ -1072,7 +1156,7 @@ fn helper() {
 
     #[tokio::test]
     async fn resolved_findings_are_carried_through() {
-        let model = MockModel::panel(json!({
+        let model = MockModel::new().then(json!({
             "summary": "Earlier issue is fixed.",
             "findings": [],
             "resolved": ["Guard the index before dereferencing"]

@@ -155,6 +155,10 @@ impl IndexBackend {
         )?
         .with_selector(selector)
         .with_batch(config.embeddings.batch)
+        // The count ceiling above does not bound a request; this does. Without
+        // it a large repository's batches are rejected outright and the review
+        // silently degrades to diff-only.
+        .with_max_batch_tokens(config.embeddings.max_request_tokens)
         // The ceiling is per repository per run. Without it, one monorepo is an
         // unbounded bill discovered on an invoice.
         .with_budget(config.embeddings.budget_usd_per_index)

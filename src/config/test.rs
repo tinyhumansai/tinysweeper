@@ -7,7 +7,7 @@ use std::path::Path;
 
 use tempfile::TempDir;
 
-use crate::config::types::{Config, LaneId, Severity};
+use crate::config::types::{Config, LaneId, Severity, StructuredOutput};
 use crate::config::{DEFAULTS, Layer, load, load_validated, validate};
 
 /// Build a repository skeleton with an optional config file and preset.
@@ -61,6 +61,82 @@ fn parse(text: &str) -> Config {
 }
 
 #[test]
+fn reasoning_with_too_small_a_budget_is_rejected() {
+    // The production failure this exists to stop: reasoning and the answer are
+    // drawn from one allowance, and at 8000 both configured models — the
+    // z-ai/glm-5.2 deep tier and the deepseek-v4-pro fallback — spent the whole
+    // of it thinking and returned empty content, `finish_reason = "length"`.
+    // Every review then failed over to the last model in the fallback chain,
+    // silently. The measured rows live in `config/defaults.toml`.
+    //
+    // 8000 here is deliberately a failing budget, not the shipped one. The
+    // defaults ship `max_tokens = 16000`, above the 12000 floor, and
+    // `the_built_in_defaults_are_valid` below asserts DEFAULTS runs clean
+    // through `validate::validate` — so the floor and the shipped defaults
+    // cannot disagree.
+    let config = parse("version = 1\n[models]\nmax_tokens = 8000\nreasoning_effort = \"high\"\n");
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("models.max_tokens = 8000"), "{joined}");
+    assert!(joined.contains("reasoning_effort"), "{joined}");
+}
+
+#[test]
+fn lowering_the_effort_does_not_satisfy_the_budget_floor() {
+    // Measured at both settings: the table in `config/defaults.toml` lists
+    // `low` rows for each configured model and they burn the entire allowance
+    // exactly as the `high` rows do. This key picks a style of thinking, never
+    // an amount, so treating `low` as a smaller `high` would reintroduce the
+    // failure while looking like a fix for it.
+    let config = parse("version = 1\n[models]\nmax_tokens = 8000\nreasoning_effort = \"low\"\n");
+    assert!(
+        validate::validate(&config)
+            .join("\n")
+            .contains("models.max_tokens = 8000"),
+        "`low` was accepted at a budget that cannot work"
+    );
+}
+
+#[test]
+fn reasoning_is_accepted_at_exactly_the_floor() {
+    // The boundary the other three tests bracket. A regression from
+    // `< REASONING_FLOOR` to `<= REASONING_FLOOR` would reject the floor itself,
+    // and no test today would notice — 12000 is the largest budget never
+    // checked. It is also the smallest budget the validation accepts, so it is
+    // the value a traced regression would land on.
+    let config = parse("version = 1\n[models]\nmax_tokens = 12000\nreasoning_effort = \"high\"\n");
+    let problems = validate::validate(&config);
+    assert!(
+        !problems.iter().any(|p| p.contains("reasoning_effort")),
+        "12000 is the floor and must be accepted: {problems:#?}"
+    );
+}
+
+#[test]
+fn one_token_below_the_floor_is_rejected() {
+    // A hair under the boundary is still under it; this pins the cut to the
+    // exact value rather than a range.
+    let config = parse("version = 1\n[models]\nmax_tokens = 11999\nreasoning_effort = \"high\"\n");
+    let joined = validate::validate(&config).join("\n");
+    assert!(
+        joined.contains("reasoning_effort"),
+        "11999 is below the floor and must be rejected: {joined}"
+    );
+}
+
+#[test]
+fn turning_reasoning_off_makes_a_small_budget_fine() {
+    // The escape hatch has to actually work, or the floor is just a wall: with
+    // no reasoning the whole allowance goes to the answer, and 8000 was
+    // measured as ample — 2572 tokens and 13 findings on a 23k-token diff.
+    let config = parse("version = 1\n[models]\nmax_tokens = 8000\nreasoning_effort = \"off\"\n");
+    let problems = validate::validate(&config);
+    assert!(
+        problems.is_empty(),
+        "`off` should not be held to the reasoning floor: {problems:#?}"
+    );
+}
+
+#[test]
 fn the_built_in_defaults_are_valid() {
     let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
     let problems = validate::validate(&config);
@@ -96,6 +172,54 @@ fn a_sub_table_never_swallows_the_model_scalars() {
     assert_eq!(config.models.max_tokens, 16_000);
     assert_eq!(config.models.reasoning_effort, "high");
     assert!((config.models.budget_usd_per_pr - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn a_provider_pin_is_only_shipped_alongside_a_mode_that_provider_accepts() {
+    // The two keys are one decision, and getting it wrong is silent in the
+    // worst way. Pinning `deepseek` while asking for a strict schema yields
+    // `404 No endpoints found` on *every* model and *every* call — the whole
+    // review goes neutral and nothing in the check output says why. That was
+    // shipped once and only a live run against a real pull request caught it.
+    let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
+
+    if config.models.provider.order.iter().any(|p| p == "deepseek") {
+        assert_eq!(
+            config.models.structured_output,
+            StructuredOutput::JsonObject,
+            "a DeepSeek pin cannot serve a strict-schema request"
+        );
+    }
+}
+
+#[test]
+fn the_defaults_pair_the_selected_model_with_a_mode_it_can_answer() {
+    // These two keys are one decision. `deepseek-v4-pro-0813` returns 400
+    // "This response_format type is unavailable now" for a strict schema, so
+    // selecting it while leaving `structured_output = "schema"` produces a
+    // deployment where every single review fails over to the fallback and looks
+    // healthy doing it. Measured: 29 of 29 corpus recordings answered by GLM.
+    let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
+
+    if config.models.scan.contains("deepseek-v4-pro-0813")
+        || config.models.deep.contains("deepseek-v4-pro-0813")
+    {
+        assert_eq!(
+            config.models.structured_output,
+            StructuredOutput::JsonObject,
+            "the pinned DeepSeek snapshot cannot answer a strict schema request"
+        );
+    }
+}
+
+#[test]
+fn structured_output_defaults_to_the_strong_setting() {
+    // Absent from a repository's own config, the mode must be the one that lets
+    // the provider refuse a bad shape outright. A weaker default would silently
+    // downgrade every deployment that never heard of this key.
+    let models: crate::config::types::Models = toml::from_str("").expect("empty table");
+
+    assert_eq!(models.structured_output, StructuredOutput::Schema);
 }
 
 #[test]
@@ -476,6 +600,74 @@ fn enabling_sentry_requires_an_org_and_a_project() {
     let problems = validate::validate(&config);
     assert!(problems.iter().any(|p| p.contains("requires `sentry.org`")));
     assert!(problems.iter().any(|p| p.contains("sentry.projects")));
+}
+
+#[test]
+fn a_sentry_route_parses_as_a_table_array() {
+    let config = parse(
+        "version = 1\n[sentry]\nenabled = true\norg = \"acme\"\nprojects = [\"api\"]\n\
+         \n[[sentry.route]]\nproject = \"api\"\nrepo = \"acme/backend\"\nlabels = [\"area: sentry\"]\n",
+    );
+
+    let route = config.sentry.route_for("api").expect("a route");
+    assert_eq!(route.repo, "acme/backend");
+    assert!(validate::validate(&config).is_empty());
+}
+
+/// Not a validation error: adding a project and routing it may be two
+/// separate changes. The skip is loud at runtime and reported by `doctor`.
+#[test]
+fn a_project_with_no_route_is_not_a_validation_problem() {
+    let config = parse(
+        "version = 1\n[sentry]\nenabled = true\norg = \"acme\"\nprojects = [\"api\", \"web\"]\n\
+         \n[[sentry.route]]\nproject = \"api\"\nrepo = \"acme/backend\"\n",
+    );
+    assert!(validate::validate(&config).is_empty());
+    assert!(config.sentry.route_for("web").is_none());
+}
+
+#[test]
+fn a_route_repo_that_is_not_owner_slash_name_is_rejected() {
+    let config = parse(
+        "version = 1\n[sentry]\nenabled = true\norg = \"acme\"\nprojects = [\"api\"]\n\
+         \n[[sentry.route]]\nproject = \"api\"\nrepo = \"backend\"\n",
+    );
+    let problems = validate::validate(&config);
+    assert!(
+        problems.iter().any(|p| p.contains("not `owner/name`")),
+        "{problems:#?}"
+    );
+}
+
+#[test]
+fn two_routes_for_one_project_are_rejected() {
+    let config = parse(
+        "version = 1\n[sentry]\nenabled = true\norg = \"acme\"\nprojects = [\"api\"]\n\
+         \n[[sentry.route]]\nproject = \"api\"\nrepo = \"acme/one\"\n\
+         \n[[sentry.route]]\nproject = \"api\"\nrepo = \"acme/two\"\n",
+    );
+    let problems = validate::validate(&config);
+    assert!(
+        problems.iter().any(|p| p.contains("more than once")),
+        "{problems:#?}"
+    );
+}
+
+/// A route for a project nobody sweeps writes to nothing — almost always a
+/// typo in one of the two lists.
+#[test]
+fn a_route_for_an_unswept_project_is_reported() {
+    let config = parse(
+        "version = 1\n[sentry]\nenabled = true\norg = \"acme\"\nprojects = [\"api\"]\n\
+         \n[[sentry.route]]\nproject = \"web\"\nrepo = \"acme/landing\"\n",
+    );
+    let problems = validate::validate(&config);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("not in `sentry.projects`")),
+        "{problems:#?}"
+    );
 }
 
 #[test]

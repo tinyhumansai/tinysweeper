@@ -141,6 +141,14 @@ pub struct PromptInputs<'a> {
     /// The single file this prompt is scoped to, when the lane fans out one
     /// conversation per changed file.
     pub focus_path: Option<&'a str>,
+    /// The reviewing angle this conversation is given, when a council is
+    /// running several reviewers over the same evidence.
+    ///
+    /// A `&'static str` chosen by name in `council::persona` — never text from
+    /// configuration, and never anything a reviewed repository can set. It sits
+    /// in the prefix because it is constant for the whole conversation, which
+    /// means each agent gets its own cache stream rather than sharing one.
+    pub persona: &'static str,
     /// Findings the deterministic scanners already produced, rendered for
     /// adjudication. Untrusted only in the sense that it quotes paths, but
     /// fenced like everything else.
@@ -178,6 +186,8 @@ impl<'a> PromptInputs<'a> {
             evidence_label: "diff",
             changed_paths: &[],
             focus_path: None,
+            // No council: the lane's own instructions, unmodified.
+            persona: crate::council::persona::NONE,
             scanner_evidence: "",
             pull_request_text: "",
             retrieved_context: "",
@@ -191,6 +201,11 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
 
     // Layer 1 — lane instructions. Never varies.
     prefix.push_str(instructions(inputs.lane));
+    // Layer 1a — the council persona, before the shared rules so it reads as
+    // part of the job rather than as an afterthought to it. Empty for every
+    // caller that is not running a council, which is what keeps the prompt
+    // byte-identical to the pre-council one.
+    prefix.push_str(inputs.persona);
     prefix.push_str(SHARED_RULES);
 
     // Layer 1b — the per-file isolation clause, for lanes that fan out one

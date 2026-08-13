@@ -1,0 +1,17 @@
+{
+  "key": "d4663b5b7171ece8",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2815,
+    "output_tokens": 4451,
+    "cached_tokens": 1024,
+    "embed_tokens": 0,
+    "cost_usd": 0.004655167
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a configuration section enabling OpenRouter-based embeddings and names an environment variable for the API key; it introduces no secret values, permission changes, or security-sensitive behavior in this file."
+  }
+}

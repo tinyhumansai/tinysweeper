@@ -24,3 +24,4 @@ worktrees/
 # GitHub App credentials from scripts/create-github-app.sh. Contains a private
 # key: move it to a secret store and delete the local copy.
 .tinysweeper-app.json
+evals/runs/

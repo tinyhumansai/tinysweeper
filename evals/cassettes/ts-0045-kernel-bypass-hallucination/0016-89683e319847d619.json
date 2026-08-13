@@ -1,0 +1,52 @@
+{
+  "key": "89683e319847d619",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 5685,
+    "output_tokens": 13473,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.014194485
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "`shorten` promises at most `limit` characters, but when the first `limit` characters contain no ASCII space the `None` branch appends an ellipsis to the full `limit`-character `head`, returning `limit + 1` characters (and cutting mid-word). The multibyte test asserts `<= 21` for `limit = 20`, so it accepts this violation. Take only `limit - 1` characters in that branch (and return an empty string for `limit == 0`) so the result stays within the limit.",
+        "confidence": 0.95,
+        "existing_code": "    let head: String = text.chars().take(limit).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),\n    }",
+        "late": false,
+        "path": "src/findings/summarise.rs",
+        "rule": "incorrect-truncation-limit",
+        "severity": "low",
+        "suggestion": "    let head: String = text.chars().take(limit).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{}…\", head.chars().take(limit.saturating_sub(1)).collect::<String>()),\n    }",
+        "title": "Honor the character limit when no word boundary exists"
+      },
+      {
+        "body": "These assertions only require a trailing ellipsis and a byte length at most one over the limit. A regression that cut mid-word, such as `\"Guard the index befo…\"`, would pass. Assert the exact expected string (`\"Guard the index…\"`) so the word-boundary behaviour is actually pinned.",
+        "confidence": 0.9,
+        "existing_code": "        let out = shorten(\"Guard the index before dereferencing the slice\", 20);\n        assert!(out.ends_with('…'), \"{out}\");\n        assert!(out.len() <= 21, \"{out}\");",
+        "late": false,
+        "path": "src/findings/summarise.rs",
+        "rule": "weak-test",
+        "severity": "low",
+        "suggestion": "        assert_eq!(shorten(\"Guard the index before dereferencing the slice\", 20), \"Guard the index…\");",
+        "title": "Pin the word-boundary test to the expected truncation"
+      },
+      {
+        "body": "The repository rule requires one document per `src/` module at `docs/modules/<module>/README.md`. The new `summarise` module has only an inline `//!` comment; add `docs/modules/findings/summarise/README.md` describing its role and any feature gating.",
+        "confidence": 0.75,
+        "existing_code": "pub mod summarise;",
+        "late": false,
+        "path": "src/findings/mod.rs",
+        "rule": "missing-docs",
+        "severity": "low",
+        "suggestion": null,
+        "title": "Add the required module README for summarise"
+      }
+    ],
+    "resolved": [],
+    "summary": "The change adds deployment configuration and a text-summarisation helper, but the helper has a truncation bug and an under-asserting test; merge after addressing the findings."
+  }
+}

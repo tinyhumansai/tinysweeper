@@ -1,0 +1,17 @@
+{
+  "key": "8f032c383f3cd7ce",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3001,
+    "output_tokens": 271,
+    "cached_tokens": 1024,
+    "embed_tokens": 0,
+    "cost_usd": 0.001099477
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds documentation and a new `reasoning_effort` field to the model configuration type; it introduces no security-sensitive behavior in this file."
+  }
+}

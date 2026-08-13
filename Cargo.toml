@@ -114,6 +114,11 @@ default = ["treesitter"]
 harness = ["dep:tinyagents", "dep:reqwest"]
 # The real GitHub adapter behind the `Forge` port.
 github = ["dep:octocrab", "dep:reqwest"]
+# The real Sentry adapter behind the `SentryApi` port. Sweeping polls sentry.io,
+# so it is network and therefore gated; the whole promotion pipeline — the
+# redaction boundary, the four steps, every policy decision — is always
+# compiled and tested offline against `MockSentry`.
+sentry = ["dep:reqwest"]
 # The webhook server: `tinysweeper serve`.
 serve = [
     "dep:axum",
@@ -132,7 +137,7 @@ serve = [
 # grammar named its enclosing symbol.
 treesitter = []
 # Everything a production run turns on.
-all = ["harness", "github", "serve", "treesitter"]
+all = ["harness", "github", "sentry", "serve", "treesitter"]
 
 [dev-dependencies]
 tempfile = "3"

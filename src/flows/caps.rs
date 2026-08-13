@@ -33,7 +33,6 @@ use tinyflows::error::{EngineError, Result as FlowResult};
 use tinyflows::model::WorkflowGraph;
 
 use crate::config::types::Models;
-use crate::flows::tier::Tier;
 use crate::ports::model::{Message, Model, ModelRequest, Spend};
 
 /// Refuse a capability, naming the boundary rather than the missing wire.
@@ -138,8 +137,11 @@ impl LlmProvider for ModelCapability {
             ));
         }
 
-        let tier = Tier::parse(Self::required(&request, "tier")?)
-            .map_err(|e| EngineError::Capability(e.to_string()))?;
+        // The model id, already resolved from tier by `council::reviewers`.
+        // Resolution stays there rather than here so there is exactly one
+        // answer to "what did this call run on", and it is the one the cost
+        // line reports.
+        let model_id = Self::required(&request, "model")?;
 
         let system = Self::required(&request, "system")?;
         let user = Self::required(&request, "prompt")?;
@@ -163,7 +165,7 @@ impl LlmProvider for ModelCapability {
         let response = self
             .model
             .complete(ModelRequest {
-                model: tier.model_id(&self.models).to_string(),
+                model: model_id.to_string(),
                 messages: vec![Message::system(system), Message::user(user)],
                 schema,
                 schema_name: schema_name.to_string(),
@@ -361,9 +363,9 @@ mod tests {
         }
     }
 
-    fn request(tier: &str) -> Value {
+    fn request(model: &str) -> Value {
         json!({
-            "tier": tier,
+            "model": model,
             "system": "s",
             "prompt": "p",
             "schema": { "type": "object" },
@@ -389,12 +391,12 @@ mod tests {
 
         // The first call is allowed: nothing had been spent when it started.
         capability
-            .complete(request("flash"), None)
+            .complete(request("vendor/flash"), None)
             .await
             .expect("first");
 
         let refused = capability
-            .complete(request("flash"), None)
+            .complete(request("vendor/flash"), None)
             .await
             .expect_err("the ceiling was already exceeded");
         assert!(
@@ -407,7 +409,7 @@ mod tests {
     async fn spend_is_attributed_to_the_model_that_answered() {
         let capability = capability(0.25, 10.0);
         capability
-            .complete(request("flash"), None)
+            .complete(request("vendor/flash"), None)
             .await
             .expect("call");
 
@@ -423,11 +425,11 @@ mod tests {
         let model = Arc::new(MockModel::always(json!({})));
         let capability = ModelCapability::new(model.clone(), models());
 
-        let mut raised = request("flash");
+        let mut raised = request("vendor/flash");
         raised["max_tokens"] = json!(999_999);
         capability.complete(raised, None).await.expect("call");
 
-        let mut lowered = request("flash");
+        let mut lowered = request("vendor/flash");
         lowered["max_tokens"] = json!(10);
         capability.complete(lowered, None).await.expect("call");
 
@@ -465,12 +467,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unknown_tier_fails_the_call_rather_than_picking_one() {
+    async fn a_call_naming_no_model_is_refused_rather_than_defaulted() {
+        // The graph is data. A node that names no model must not silently
+        // inherit one — which tier it inherited would decide both the quality
+        // and the bill, invisibly.
         let capability = capability(0.0, 10.0);
-        let err = capability
-            .complete(request("turbo"), None)
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("turbo"), "{err}");
+        let mut anonymous = request("vendor/flash");
+        anonymous.as_object_mut().unwrap().remove("model");
+
+        let err = capability.complete(anonymous, None).await.unwrap_err();
+        assert!(err.to_string().contains("`model`"), "{err}");
     }
 }

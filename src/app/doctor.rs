@@ -202,23 +202,17 @@ fn print_prose(loaded: &Loaded) {
     // call. Reporting the latter is how this line came to describe a model no
     // review had run on since the lanes became panels.
     for lane in config.enabled_lanes() {
-        let panel = crate::flows::panel::lenses(lane);
-        if panel.is_empty() {
-            println!(
-                "  {:<16} no model call  (fails at {})",
-                lane.as_str(),
-                config.fail_on(lane)
-            );
-        } else {
-            println!(
-                "  {:<16} {}  ({} lenses + {} verifiers, fails at {})",
-                lane.as_str(),
-                config.models.flash,
-                panel.len(),
-                crate::flows::panel::VERIFIERS,
-                config.fail_on(lane)
-            );
-        }
+        let reviewers = crate::council::reviewers(config, lane);
+        let models: Vec<&str> = reviewers.iter().map(|r| r.model).collect();
+
+        println!(
+            "  {:<16} {}  ({} reviewer{}, fails at {})",
+            lane.as_str(),
+            models.join(", "),
+            reviewers.len(),
+            if reviewers.len() == 1 { "" } else { "s" },
+            config.fail_on(lane)
+        );
     }
 
     // A model with no price is billed at the ceiling, so it will not escape the
@@ -257,6 +251,26 @@ fn print_prose(loaded: &Loaded) {
         ("sentry promotion", config.sentry.enabled),
     ] {
         println!("  {:<16} {}", name, if enabled { "on" } else { "off" });
+    }
+
+    // Routing is reported here rather than as a validation problem, because an
+    // unrouted project is a loud runtime skip and not a refusal to start. But
+    // it is exactly the "looks applied and is not" defect `doctor` exists to
+    // surface: a project that sweeps into nowhere is invisible otherwise.
+    if config.sentry.enabled {
+        println!("\nsentry routing");
+        if config.sentry.projects.is_empty() {
+            println!("  <no projects configured>");
+        }
+        for project in &config.sentry.projects {
+            match config.sentry.route_for(project) {
+                Some(route) => println!("  {:<24} -> {}", project, route.repo),
+                None => println!(
+                    "  {:<24} NO ROUTE — this project is skipped; add a [[sentry.route]] for it",
+                    project
+                ),
+            }
+        }
     }
 
     println!("\ncredentials");

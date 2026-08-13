@@ -1,0 +1,17 @@
+{
+  "key": "0fdeb27f432cc6dd",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3514,
+    "output_tokens": 1410,
+    "cached_tokens": 1024,
+    "embed_tokens": 0,
+    "cost_usd": 0.002313562
+  },
+  "value": {
+    "findings": [],
+    "summary": "This adds `shorten` and `first_sentence` helpers for truncating model-authored text at character boundaries, with unit tests. The code handles multibyte input safely and introduces no security issues."
+  }
+}

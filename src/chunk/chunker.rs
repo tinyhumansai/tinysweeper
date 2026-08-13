@@ -191,4 +191,36 @@ mod tests {
         assert_eq!(chunks[0].chunked_by, ChunkMethod::Parsed);
         assert_eq!(chunks[0].symbol.as_deref(), Some("only"));
     }
+
+    #[test]
+    fn no_chunk_from_any_path_can_exceed_the_embed_ceiling() {
+        // The invariant that actually matters, asserted at the level the
+        // indexer uses rather than on either splitter alone. Both the parsed
+        // path and the line path feed the same embedding call, so a ceiling
+        // honoured by only one of them is not a ceiling.
+        //
+        // The fixture is the shape that broke production: a file whose content
+        // is one enormous line, which no grammar can helpfully divide.
+        let options = ChunkOptions::default();
+        let blob = "z".repeat(200_000);
+        let sources = [
+            format!("const DATA = \"{blob}\";\n"),
+            format!("fn huge() {{\n    let s = \"{blob}\";\n}}\n"),
+            format!("{blob}\n"),
+        ];
+
+        for (index, source) in sources.iter().enumerate() {
+            let chunks =
+                Chunker::with_options(options).chunk("owner/repo", "src/generated.rs", source);
+            assert!(!chunks.is_empty(), "fixture {index} produced nothing");
+            for chunk in &chunks {
+                assert!(
+                    chunk.text.len() <= options.max_embed_bytes,
+                    "fixture {index}: a {} byte chunk exceeds the {} byte ceiling",
+                    chunk.text.len(),
+                    options.max_embed_bytes
+                );
+            }
+        }
+    }
 }

@@ -1,0 +1,18 @@
+{
+  "key": "0a29688e1cc61e19",
+  "model_requested": "z-ai/glm-5.2",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3415,
+    "output_tokens": 4693,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00127151
+  },
+  "value": {
+    "findings": [],
+    "resolved": [],
+    "summary": "The change adds four model price entries to `MODEL_PRICES` and four tests to `src/harness/pricing.rs`. The prices are data sourced (per the doc comment) from OpenRouter, and the tests are internally consistent with those values: `the_new_deep_tier_costs_what_the_table_says` computes `82914*0.07 + 842*0.22` per million tokens ≈ $0.00599, which lands inside the asserted `[0.005, 0.007]` band; the argument-ordering tests distinguish cached-token vs. output pricing correctly given GLM 5.2's output rate ($0.22) is far above its cache rate ($0.013); and the defaults-coverage test only requires the *selected* models to be priced, so the deliberately-unselected entries don't cause false failures. I could not see the body of `completion_cost` or `unpriced`, so I cannot certify the exact pricing formula, but the assertions the author wrote hold under the natural reading of the function and are mutually consistent. No bugs introduced."
+  }
+}

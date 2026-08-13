@@ -1,7 +1,4 @@
-//! End-to-end panel behaviour, against a canned model.
-//!
-//! These are the tests that pin the three-round contract: what reaches a
-//! contributor, what is suppressed, and what a failure looks like from outside.
+//! What `ask_all` must guarantee to the lanes that build on it.
 
 use super::*;
 use crate::config::types::Config;
@@ -9,279 +6,163 @@ use crate::harness::mock::MockModel;
 use crate::ports::model::Usage;
 
 fn config() -> Config {
-    let defaults = crate::config::DEFAULTS;
-    defaults
+    crate::config::DEFAULTS
         .parse::<toml::Table>()
         .unwrap()
         .try_into()
         .expect("defaults load")
 }
 
-fn finding_json(rule: &str, title: &str) -> Value {
-    json!({
-        "path": "a.rs",
-        "existing_code": "x.unwrap()",
-        "rule": rule,
-        "title": title,
-        "body": "it can panic",
-        "severity": "high",
-        "confidence": 0.9
-    })
+fn call(id: &str) -> Call {
+    Call {
+        id: id.into(),
+        model: "vendor/flash".into(),
+        system: format!("system for {id}"),
+        prompt: "the evidence".into(),
+        schema_name: "tinysweeper_critique".into(),
+    }
 }
 
-/// A response every lens gives: one finding.
-fn proposing(rule: &str, title: &str) -> Value {
-    json!({
-        "summary": "Looked at the diff.",
-        "findings": [finding_json(rule, title)],
-        "resolved": []
-    })
+fn schema() -> Value {
+    json!({ "type": "object" })
 }
 
-fn silent() -> Value {
-    json!({ "summary": "Nothing to report.", "findings": [], "resolved": [] })
+async fn ask(model: MockModel, ids: &[&str], budget: f64) -> Vec<Answer> {
+    let calls: Vec<Call> = ids.iter().map(|id| call(id)).collect();
+    let llm = lane_llm(Arc::new(model), &config(), budget);
+
+    ask_all(llm, LaneId::Critique, &calls, &schema())
+        .await
+        .expect("the graph runs")
 }
 
-fn verdict(real: bool) -> Value {
-    json!({ "real": real, "why": "because" })
-}
-
-async fn run_panel(model: MockModel, lane: LaneId, budget: f64) -> PanelOutcome {
-    let config = config();
-    let schema = json!({ "type": "object", "properties": {} });
-
-    run(
-        Arc::new(model),
-        &config,
-        budget,
-        PanelRequest {
-            lane,
-            schema,
-            suffix: "the diff",
-            system_of: &|lens: &Lens| format!("system {}", lens.id),
-        },
+#[tokio::test]
+async fn every_reviewer_gets_an_answer_in_the_order_asked() {
+    // Lanes zip this against their reviewer list, so a reordering here would
+    // attribute one reviewer's findings to another silently.
+    let answers = ask(
+        MockModel::always(json!({ "summary": "s", "findings": [] })),
+        &["a", "b", "c"],
+        100.0,
     )
-    .await
+    .await;
+
+    let ids: Vec<&str> = answers.iter().map(|a| a.id.as_str()).collect();
+    assert_eq!(ids, vec!["a", "b", "c"]);
+    assert!(answers.iter().all(|a| a.value.is_some()));
 }
 
 #[tokio::test]
-async fn a_finding_every_verifier_confirms_survives() {
-    // `tests` has two lenses, then three verifiers for the one deduped
-    // proposal.
-    let model = MockModel::new()
-        .then(proposing("unwrap", "Avoid unwrap"))
-        .then(proposing("unwrap", "Avoid unwrap"))
-        .then(verdict(true))
-        .then(verdict(true))
-        .then(verdict(true));
-
-    let outcome = run_panel(model, LaneId::Tests, 100.0).await;
-
-    assert_eq!(outcome.findings.len(), 1);
-    assert_eq!(outcome.findings[0].title, "Avoid unwrap");
-}
-
-#[tokio::test]
-async fn a_finding_the_verifiers_refute_never_reaches_a_contributor() {
-    // The whole point of the verify round. Both lenses proposed it and it is
-    // still dropped, because agreement between proposers is not evidence.
-    let model = MockModel::new()
-        .then(proposing("unwrap", "Avoid unwrap"))
-        .then(proposing("unwrap", "Avoid unwrap"))
-        .then(verdict(false))
-        .then(verdict(false))
-        .then(verdict(true));
-
-    let outcome = run_panel(model, LaneId::Tests, 100.0).await;
-
-    assert!(outcome.findings.is_empty());
-}
-
-#[tokio::test]
-async fn one_lens_failing_does_not_fail_the_panel() {
-    // A panel that fails whole because one member timed out is a review that
-    // reports "all clear" for an infrastructure reason.
+async fn one_reviewer_failing_leaves_the_others_answered() {
+    // A council that returns nothing because one member timed out is a review
+    // that reads "all clear" for an infrastructure reason.
     let model = MockModel::new()
         .then_error("provider exploded")
-        .then(proposing("unwrap", "Avoid unwrap"))
-        .then(verdict(true))
-        .then(verdict(true))
-        .then(verdict(true));
+        .then(json!({ "summary": "s", "findings": [] }))
+        .then(json!({ "summary": "s", "findings": [] }));
 
-    let outcome = run_panel(model, LaneId::Tests, 100.0).await;
+    let answers = ask(model, &["a", "b", "c"], 100.0).await;
 
-    assert_eq!(outcome.findings.len(), 1);
-    assert!(!outcome.failures.is_empty(), "the failure must be reported");
+    let answered = answers.iter().filter(|a| a.value.is_some()).count();
+    let failed = answers.iter().filter(|a| a.error.is_some()).count();
+
+    assert_eq!(answered, 2);
+    assert_eq!(failed, 1);
 }
 
 #[tokio::test]
-async fn a_lens_answering_off_schema_is_dropped_rather_than_guessed_at() {
-    let model = MockModel::new()
-        // `findings` must be an array; a string genuinely fails to deserialize.
-        // (An answer that merely omits keys does not: every `LaneResponse`
-        // field carries `serde(default)`, so `{}` is a valid empty review.)
-        .then(json!({ "summary": "s", "findings": "not an array" }))
-        .then(proposing("unwrap", "Avoid unwrap"))
-        .then(verdict(true))
-        .then(verdict(true))
-        .then(verdict(true));
+async fn a_failure_is_reported_rather_than_returned_as_an_empty_answer() {
+    // The distinction the lanes depend on: `value: None` means nobody read it,
+    // and an empty response means somebody read it and found nothing.
+    // Collapsing the two is how an unreviewed file comes back clean.
+    let answers = ask(MockModel::new().then_error("down"), &["a"], 100.0).await;
 
-    let outcome = run_panel(model, LaneId::Tests, 100.0).await;
-
-    assert_eq!(outcome.findings.len(), 1);
-    assert!(!outcome.failures.is_empty());
+    assert!(answers[0].value.is_none());
+    assert!(answers[0].error.is_some());
 }
 
 #[tokio::test]
-async fn a_panel_that_finds_nothing_reports_nothing_and_costs_two_calls() {
-    let model = MockModel::new().then(silent()).then(silent());
+async fn the_model_that_answered_is_reported_not_the_one_requested() {
+    // A fallback taking over is exactly the case worth surfacing, and it is
+    // invisible by the time findings reach the merge.
+    let model = MockModel::always(json!({ "summary": "s", "findings": [] }))
+        .answering_as("vendor/fallback");
 
-    let outcome = run_panel(model, LaneId::Tests, 100.0).await;
-
-    assert!(outcome.findings.is_empty());
-    assert!(outcome.failures.is_empty());
+    let answers = ask(model, &["a"], 100.0).await;
+    assert_eq!(answers[0].model, "vendor/fallback");
 }
 
 #[tokio::test]
-async fn every_lens_failing_leaves_a_summary_that_says_so() {
-    // Not an empty clean-looking result. A human reading the check has to be
-    // able to tell "nothing was wrong" from "nothing was looked at".
-    let model = MockModel::new()
-        .then_error("down")
-        .then_error("down")
-        .then_error("down");
-
-    let outcome = run_panel(model, LaneId::Tests, 100.0).await;
-
-    assert!(outcome.findings.is_empty());
-    assert!(
-        outcome.summary.contains("No panellist"),
-        "{}",
-        outcome.summary
-    );
-}
-
-#[tokio::test]
-async fn the_budget_stops_a_panel_partway_rather_than_after() {
-    // Enforced inside the capability, so it holds however many calls are in
-    // flight — which is what let the fan-out stop being serial.
-    let model = MockModel::always(proposing("unwrap", "Avoid unwrap")).with_usage(Usage {
+async fn the_budget_refuses_reviewers_once_the_ceiling_is_reached() {
+    // Enforced in the capability, so it holds however many calls are in flight
+    // — which is what let the fan-out stop being serial.
+    let model = MockModel::always(json!({ "summary": "s", "findings": [] })).with_usage(Usage {
         cost_usd: 10.0,
         ..Usage::default()
     });
 
-    let outcome = run_panel(model, LaneId::Tests, 1.0).await;
+    let answers = ask(model, &["a", "b", "c"], 1.0).await;
 
-    // The first call lands (nothing was spent when it started); every later one
-    // is refused, so no proposal is ever verified and none survives.
-    assert!(outcome.findings.is_empty());
-    assert!(outcome.spend.cost_usd() <= 10.0);
-}
-
-#[tokio::test]
-async fn the_panels_spend_counts_every_round() {
-    let model = MockModel::always(json!({
-        "summary": "s", "findings": [], "resolved": []
-    }))
-    .with_usage(Usage {
-        input_tokens: 100,
-        cost_usd: 0.001,
-        ..Usage::default()
-    });
-
-    let outcome = run_panel(model, LaneId::Tests, 100.0).await;
-
-    // Two lenses, no proposals, so no verify round: two calls.
-    assert_eq!(outcome.spend.usage.input_tokens, 200);
-}
-
-#[tokio::test]
-async fn a_lane_with_no_panel_makes_no_call_at_all() {
-    // `commits` has no lenses. Running one would be spending money on a lane
-    // whose verdict is a regular expression's.
-    let outcome = run_panel(MockModel::new(), LaneId::Commits, 100.0).await;
-
-    assert!(outcome.findings.is_empty());
-    assert_eq!(outcome.spend.cost_usd(), 0.0);
-}
-
-#[tokio::test]
-async fn resolutions_survive_to_the_outcome() {
-    let model = MockModel::new()
-        .then(json!({
-            "summary": "s",
-            "findings": [],
-            "resolved": ["Handle the empty case"]
-        }))
-        .then(silent());
-
-    let outcome = run_panel(model, LaneId::Tests, 100.0).await;
-
-    assert_eq!(outcome.resolved, vec!["Handle the empty case"]);
-}
-
-#[test]
-fn the_verify_prompt_asks_for_refutation_not_assessment() {
-    // A model asked "is this right?" agrees. A model asked "show this is
-    // wrong" goes and looks.
-    assert!(VERIFY_SYSTEM.contains("refute"));
+    // Concurrent calls may all start before any has returned, so the guarantee
+    // is that the ceiling refuses *some* of them, not exactly which.
     assert!(
-        VERIFY_SYSTEM.contains("set it to false"),
-        "the tie-break has to default to dropping the finding"
+        answers.iter().any(|a| a.error.is_some()),
+        "the ceiling refused nothing"
     );
 }
 
-#[test]
-fn the_questions_key_is_optional_so_existing_responses_still_validate() {
-    let schema = schema_with_questions(json!({
-        "type": "object",
-        "required": ["summary"],
-        "properties": { "summary": { "type": "string" } }
-    }));
+#[tokio::test]
+async fn no_reviewers_is_no_calls() {
+    let model = MockModel::new();
+    let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
 
-    assert!(schema["properties"]["questions"].is_object());
-    assert_eq!(schema["required"], json!(["summary"]));
+    let answers = ask_all(llm, LaneId::Critique, &[], &schema())
+        .await
+        .expect("an empty council is not an error");
+
+    assert!(answers.is_empty());
+    assert_eq!(model.calls(), 0);
 }
 
-#[test]
-fn a_lens_charter_tells_it_to_ask_rather_than_guess() {
-    let composed = system_with_charter(
-        "PREFIX",
-        &Lens {
-            id: "x",
-            charter: "CHARTER",
-        },
+#[tokio::test]
+async fn each_reviewer_is_asked_with_its_own_prompt() {
+    let model = MockModel::always(json!({ "summary": "s", "findings": [] }));
+    let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
+    let calls = vec![call("a"), call("b")];
+
+    ask_all(llm, LaneId::Critique, &calls, &schema())
+        .await
+        .expect("runs");
+
+    let systems: Vec<String> = model
+        .requests()
+        .iter()
+        .map(|r| r.messages[0].content.clone())
+        .collect();
+
+    assert!(systems.iter().any(|s| s == "system for a"));
+    assert!(systems.iter().any(|s| s == "system for b"));
+}
+
+#[tokio::test]
+async fn a_reviewer_id_that_is_not_a_legal_node_id_still_gets_its_answer() {
+    // Agent ids are operator config. If `panel::node_id` and the lookup ever
+    // disagree the answer is silently lost and the reviewer reads as failed.
+    let awkward = Call {
+        id: "security-focused reviewer!".into(),
+        ..call("ignored")
+    };
+
+    let llm = lane_llm(
+        Arc::new(MockModel::always(json!({ "summary": "s", "findings": [] }))),
+        &config(),
+        100.0,
     );
 
-    assert!(composed.starts_with("PREFIX"));
-    assert!(composed.contains("CHARTER"));
-    assert!(composed.contains("questions"));
-}
+    let answers = ask_all(llm, LaneId::Critique, &[awkward], &schema())
+        .await
+        .expect("runs");
 
-#[test]
-fn only_the_capped_number_of_questions_is_dispatched() {
-    // The schema asks for a cap; a provider may honour it loosely. This is the
-    // number of sub-agents that actually get spawned.
-    let value = json!({
-        "questions": (0..10)
-            .map(|n| json!({ "question": format!("q{n}"), "why": "w" }))
-            .collect::<Vec<_>>()
-    });
-
-    assert_eq!(
-        read_questions(&value).len(),
-        subagent::MAX_QUESTIONS_PER_LENS
-    );
-}
-
-#[test]
-fn a_blank_question_is_not_dispatched() {
-    let value = json!({
-        "questions": [
-            { "question": "   ", "why": "w" },
-            { "question": "real question", "why": "w" }
-        ]
-    });
-
-    assert_eq!(read_questions(&value), vec!["real question"]);
+    assert!(answers[0].value.is_some(), "{:?}", answers[0].error);
+    assert_eq!(answers[0].id, "security-focused reviewer!");
 }

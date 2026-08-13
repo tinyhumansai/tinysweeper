@@ -27,16 +27,18 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::config::types::LaneId;
+use crate::council;
 use crate::error::Result;
 use crate::evidence::diff::{FileDiff, render as render_diffs};
 use crate::findings::types::Finding;
-use crate::flows::runner::{self, PanelRequest};
+use crate::flows::panel::Call;
+use crate::flows::runner;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
 use crate::lanes::fanout::{FileReview, per_file};
 use crate::lanes::triage::triage;
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
-use crate::ports::model::Model;
+use crate::ports::model::{Model, Spend};
 use crate::scan::types::{Finding as ScanFinding, ScanKind};
 
 /// The scanner findings this lane owns.
@@ -120,9 +122,9 @@ impl Lane for Security {
             )));
         }
 
-        // One capability for the whole lane, so the pull-request budget is
-        // enforced across every file and every panel round at once — which is
-        // what lets the files run concurrently rather than one at a time.
+        // One capability for the whole lane, so the pull-request budget holds
+        // across every file and every reviewer at once — which is what lets the
+        // files run concurrently rather than one at a time.
         let llm = runner::lane_llm(
             self.model.clone(),
             input.config,
@@ -159,6 +161,10 @@ impl Lane for Security {
         .await;
 
         let mut outcome = outcome.into_outcome();
+        // Tallied inside the capability, which every graph call passes through.
+        // Folded in once rather than per file: `llm` is shared across the
+        // fan-out, so per-file would multiply the bill by the file count.
+        outcome.spend.merge(llm.spend());
         outcome.summary.push_str(&skip_note(&triaged.skipped));
         merge_scanner_findings(&mut outcome, &scanner);
         Ok(outcome)
@@ -196,54 +202,91 @@ async fn review_file(
         ..PromptInputs::new(LaneId::Security, config)
     });
 
-    // A panel rather than one call. The lenses partition this lane's subject:
-    // where untrusted input can reach, who is allowed to do what, and the
-    // adjudication of what the deterministic scanners already found. The last
-    // is a lens rather than a separate call because a scanner match is context
-    // the other two readings want anyway.
-    let panel = runner::run_with_llm(
-        llm,
-        PanelRequest {
-            lane: LaneId::Security,
-            schema: runner::schema_with_questions(schema::json_schema()),
-            suffix: built.suffix(),
-            system_of: &|lens| runner::system_with_charter(built.prefix(), lens),
-        },
-    )
-    .await;
+    // Every reviewer at once, as one graph. With no council configured this is
+    // the single default reviewer on the lane's own model, so a solo run and a
+    // council run are one code path.
+    let reviewers = council::reviewers(config, LaneId::Security);
+    let calls: Vec<Call> = reviewers
+        .iter()
+        .map(|reviewer| Call {
+            id: reviewer.id.to_string(),
+            model: reviewer.model.to_string(),
+            system: built.prefix().to_string(),
+            prompt: built.suffix().to_string(),
+            schema_name: "tinysweeper_security".into(),
+        })
+        .collect();
 
-    // A file whose every panellist failed is a file nobody read. It must reach
-    // the fan-out's failure list rather than come back as a clean review — an
-    // unreviewed file that reads as clean is what branch protection approves.
-    if panel.nothing_was_read() {
-        return Err(crate::error::Error::lane(
-            LaneId::Security.as_str(),
-            format!(
-                "no panellist could review {}: {}",
-                diff.path,
-                panel
-                    .failures
-                    .iter()
-                    .map(|(who, why)| format!("{who}: {why}"))
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ),
-        ));
+    let answers = runner::ask_all(
+        llm.clone(),
+        LaneId::Security,
+        &calls,
+        &schema::json_schema(),
+    )
+    .await?;
+
+    let mut spend = Spend::default();
+    let mut per_reviewer: Vec<Vec<crate::findings::types::Finding>> = Vec::new();
+    let mut first: Option<LaneOutcome> = None;
+
+    for (reviewer, answer) in reviewers.iter().zip(&answers) {
+        let Some(value) = answer.value.clone() else {
+            tracing::warn!(
+                agent = reviewer.id,
+                err = answer.error.as_deref().unwrap_or("no answer"),
+                "a council reviewer failed"
+            );
+            continue;
+        };
+
+        spend.note(&answer.model);
+
+        let parsed = match schema::parse(LaneId::Security, value) {
+            Ok(parsed) => parsed,
+            Err(err) if reviewers.len() > 1 => {
+                tracing::warn!(agent = reviewer.id, %err, "a council reviewer failed");
+                continue;
+            }
+            Err(err) => return Err(err),
+        };
+
+        // Anchored per reviewer, before merging: anchoring resolves a quoted
+        // snippet against this file's diff and drops what it cannot place, and
+        // both are per-answer facts.
+        let anchored = LaneOutcome::from_response(
+            LaneId::Security,
+            parsed,
+            std::slice::from_ref(diff),
+            Anchoring::Strict,
+            Spend::default(),
+        );
+
+        per_reviewer.push(anchored.findings.clone());
+        if first.is_none() {
+            first = Some(anchored);
+        }
     }
 
-    let spend = panel.spend.clone();
-    let parsed = runner::into_response(&panel);
-    let outcome = LaneOutcome::from_response(
-        LaneId::Security,
-        parsed,
-        std::slice::from_ref(diff),
-        Anchoring::Strict,
-        spend,
-    );
+    // A file whose every reviewer failed is a file nobody read. Failing here is
+    // what puts it in the fan-out's failure list, where the summary names it —
+    // the alternative is an unreviewed file that reads as clean.
+    let Some(outcome) = first else {
+        return Err(crate::error::Error::lane(
+            LaneId::Security.as_str(),
+            format!("no reviewer could review {}", diff.path),
+        ));
+    };
+
+    // Agreement ranks, it never removes — see `src/council`.
+    let merged = if config.council.corroboration {
+        council::merge(per_reviewer)
+    } else {
+        per_reviewer.into_iter().flatten().collect()
+    };
 
     Ok(FileReview {
         summary: outcome.summary,
-        findings: outcome.findings,
+        findings: merged,
         resolved: outcome.resolved,
         spend: outcome.spend,
     })
@@ -416,7 +459,7 @@ mod tests {
 
     #[tokio::test]
     async fn golden_a_command_injection_on_a_changed_line_survives() {
-        let model = MockModel::panel(json!({
+        let model = MockModel::always(json!({
             "summary": "Adds a shell command built from request input.",
             "findings": [
                 {
@@ -463,7 +506,7 @@ mod tests {
         // Otherwise the author gets the same permission problem twice: once
         // from the regular expression that is certain about it, and once from
         // the model that was shown the regular expression's output.
-        let model = MockModel::panel(json!({
+        let model = MockModel::always(json!({
             "summary": "The scanner is right.",
             "findings": [{
                 "path": ".github/workflows/ci.yml", "line": 3,
@@ -487,7 +530,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_model_cannot_talk_the_lane_out_of_a_scanner_finding() {
-        let model = MockModel::panel(json!({
+        let model = MockModel::always(json!({
             "summary": "That permission setting is fine, actually.",
             "findings": []
         }));
@@ -524,10 +567,7 @@ mod tests {
         ];
         run_with(model.clone(), &config(), &diffs, &[]).await;
 
-        assert_eq!(
-            model.calls(),
-            2 * crate::flows::panel::lenses(LaneId::Security).len()
-        );
+        assert_eq!(model.calls(), 2);
         let prompts: Vec<String> = model
             .requests()
             .iter()
@@ -543,31 +583,16 @@ mod tests {
 
     #[tokio::test]
     async fn one_files_failure_leaves_the_other_files_reviewed() {
-        // One file reviewable, the other not, chosen by which file the
-        // conversation is scoped to rather than by call order — each file gets
-        // its own panel, and this test is about the two behaving differently.
-        let model = MockModel::panel_matching(
-            &[
-                (
-                    "The file is `src/a.rs`",
-                    json!({
-                        "summary": "Fine.",
-                        "findings": [{
-                            "path": "src/a.rs", "line": 2, "rule": "r",
-                            "title": "t", "body": "b",
-                            "severity": "high", "confidence": 0.9
-                        }]
-                    }),
-                ),
-                // Unparseable: every panellist on this file returns something
-                // the schema rejects, so nothing about it was read.
-                (
-                    "The file is `src/b.rs`",
-                    json!({"summary": "…", "findings": [{"path": "src/b.rs"}]}),
-                ),
-            ],
-            json!({"summary": "…", "findings": []}),
-        );
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "Fine.",
+                "findings": [{
+                    "path": "src/a.rs", "line": 2, "rule": "r",
+                    "title": "t", "body": "b",
+                    "severity": "high", "confidence": 0.9
+                }]
+            }))
+            .then_error("upstream exploded");
         let diffs = vec![
             parse_file_patch("src/a.rs", "@@ -1 +1,2 @@\n a\n+b\n"),
             parse_file_patch("src/b.rs", "@@ -1 +1,2 @@\n a\n+b\n"),
@@ -593,11 +618,7 @@ mod tests {
         ];
         let outcome = run_with(model.clone(), &config(), &diffs, &[]).await;
 
-        assert_eq!(
-            model.calls(),
-            crate::flows::panel::lenses(LaneId::Security).len(),
-            "only the source file is worth a panel"
-        );
+        assert_eq!(model.calls(), 1, "only the source file is worth a call");
         let prompt = model.last_prompt().expect("recorded");
         assert!(prompt.contains("`src/handler.rs`"), "{prompt}");
         assert!(
@@ -643,11 +664,7 @@ mod tests {
         );
         run_with(model.clone(), &config(), &diffs, &[dependency]).await;
 
-        assert_eq!(
-            model.calls(),
-            crate::flows::panel::lenses(LaneId::Security).len(),
-            "a scanner match is worth adjudicating"
-        );
+        assert_eq!(model.calls(), 1, "a scanner match is worth adjudicating");
     }
 
     #[tokio::test]
@@ -706,7 +723,7 @@ mod tests {
     #[tokio::test]
     async fn a_credential_the_model_quoted_never_reaches_a_finding() {
         let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
-        let model = MockModel::panel(json!({
+        let model = MockModel::always(json!({
             "summary": "…",
             "findings": [{
                 "path": "src/handler.rs", "line": 2,
@@ -744,11 +761,7 @@ mod tests {
             .into_iter()
             .map(|r| r.messages[1].content.clone())
             .collect();
-        assert_eq!(
-            paths.len(),
-            crate::flows::panel::lenses(LaneId::Security).len(),
-            "one panel, for the file that changed"
-        );
+        assert_eq!(paths.len(), 1, "one call, for the file that changed");
         assert!(
             paths[0].contains("src/other.rs") && !paths[0].contains("src/handler.rs"),
             "{paths:?}"

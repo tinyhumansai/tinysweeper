@@ -13,7 +13,9 @@ pub mod app;
 pub mod automerge;
 pub mod chunk;
 pub mod config;
+pub mod council;
 pub mod error;
+pub mod eval;
 pub mod evidence;
 pub mod falsify;
 pub mod findings;
@@ -31,6 +33,7 @@ pub mod ports;
 pub mod position;
 pub mod retrieve;
 pub mod scan;
+pub mod sentry;
 #[cfg(feature = "serve")]
 pub mod server;
 pub mod state;

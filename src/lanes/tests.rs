@@ -20,13 +20,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::config::types::LaneId;
+use crate::council;
 use crate::error::Result;
 use crate::evidence::diff::{FileDiff, render as render_diffs};
-use crate::flows::runner::{self, PanelRequest};
+use crate::flows::panel::Call;
+use crate::flows::runner;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
-use crate::ports::model::Model;
+use crate::ports::model::{Model, Spend};
 
 /// The tests lane.
 pub struct Tests {
@@ -91,52 +93,100 @@ impl Lane for Tests {
             ..PromptInputs::new(LaneId::Tests, input.config)
         });
 
-        // One panel over the whole pull request, rather than one call. The
-        // lenses split this lane's subject in two — whether the change is
-        // covered, and whether the tests that cover it could ever fail — and
-        // neither reading is much use without the other.
-        let panel = runner::run(
+        // Every reviewer at once, as one graph. With no council configured
+        // this is the single default reviewer on the lane's own model, so the
+        // shape of a solo run and a council run is one code path rather than
+        // two that drift.
+        let reviewers = council::reviewers(input.config, LaneId::Tests);
+        let calls: Vec<Call> = reviewers
+            .iter()
+            .map(|reviewer| Call {
+                id: reviewer.id.to_string(),
+                model: reviewer.model.to_string(),
+                system: built.prefix().to_string(),
+                prompt: built.suffix().to_string(),
+                schema_name: "tinysweeper_tests".into(),
+            })
+            .collect();
+
+        let llm = runner::lane_llm(
             self.model.clone(),
             input.config,
             input.config.models.budget_usd_per_pr,
-            PanelRequest {
-                lane: LaneId::Tests,
-                schema: runner::schema_with_questions(schema::json_schema()),
-                suffix: built.suffix(),
-                system_of: &|lens| runner::system_with_charter(built.prefix(), lens),
-            },
-        )
-        .await;
+        );
+        let answers =
+            runner::ask_all(llm.clone(), LaneId::Tests, &calls, &schema::json_schema()).await?;
 
-        // Nothing was read. A whole-pull-request lane has no fan-out to record
-        // the failure in, so without this it returns an empty-but-successful
-        // review — and an unreviewed lane that reports Success is exactly what
-        // branch protection approves. A live run against a real pull request is
-        // what surfaced this: every panellist 404'd and the check still went
-        // green.
-        if panel.nothing_was_read() {
+        // Seeded from the capability after the calls return: it is the object
+        // every graph call passes through, and the only place their cost is
+        // counted.
+        let mut spend = Spend::default();
+        let mut per_reviewer: Vec<Vec<crate::findings::types::Finding>> = Vec::new();
+        let mut first: Option<LaneOutcome> = None;
+
+        for (reviewer, answer) in reviewers.iter().zip(&answers) {
+            let Some(value) = answer.value.clone() else {
+                tracing::warn!(
+                    agent = reviewer.id,
+                    err = answer.error.as_deref().unwrap_or("no answer"),
+                    "a council reviewer failed"
+                );
+                continue;
+            };
+
+            spend.note(&answer.model);
+
+            let parsed = match schema::parse(LaneId::Tests, value) {
+                Ok(parsed) => parsed,
+                Err(err) if reviewers.len() > 1 => {
+                    tracing::warn!(agent = reviewer.id, %err, "a council reviewer failed");
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
+
+            // Anchored per reviewer, before merging. Anchoring resolves a
+            // quoted snippet against the diff and drops what it cannot place,
+            // and both are per-answer facts — merging first would lose the
+            // discard count and hand `council::merge` findings with no lines.
+            let anchored = LaneOutcome::from_response(
+                LaneId::Tests,
+                parsed,
+                input.diffs,
+                Anchoring::Strict,
+                Spend::default(),
+            );
+
+            per_reviewer.push(anchored.findings.clone());
+            if first.is_none() {
+                first = Some(anchored);
+            }
+        }
+
+        spend.merge(llm.spend());
+
+        // Nothing was read. Without this the lane returns an empty *successful*
+        // review, and an unreviewed lane that reports Success is what branch
+        // protection approves — a live run against a real pull request is what
+        // surfaced it, with every reviewer 404ing and the check still green.
+        let Some(mut outcome) = first else {
             return Ok(LaneOutcome {
-                summary: format!(
-                    "No reviewer could be consulted.{}",
-                    panel.failure_note()
-                ),
-                spend: panel.spend.clone(),
+                summary: "No reviewer could be consulted.".into(),
+                spend,
                 skipped: Some(
-                    "No reviewer could be consulted; see the listed provider failures."
-                        .into(),
+                    "No reviewer could be consulted; see the provider errors in the log.".into(),
                 ),
                 ..LaneOutcome::default()
             });
-        }
+        };
 
-        let mut outcome = LaneOutcome::from_response(
-            LaneId::Tests,
-            runner::into_response(&panel),
-            input.diffs,
-            Anchoring::Strict,
-            panel.spend.clone(),
-        );
-        outcome.summary.push_str(&panel.failure_note());
+        // Agreement ranks, it never removes — see `src/council`.
+        outcome.findings = if input.config.council.corroboration {
+            council::merge(per_reviewer)
+        } else {
+            per_reviewer.into_iter().flatten().collect()
+        };
+        outcome.spend = spend;
         Ok(outcome)
     }
 }
@@ -390,7 +440,7 @@ mod lane_tests {
 
     #[tokio::test]
     async fn golden_an_untested_new_branch_is_reported() {
-        let model = MockModel::panel(json!({
+        let model = MockModel::always(json!({
             "summary": "A new early-return branch has no test.",
             "findings": [
                 {
@@ -493,13 +543,7 @@ mod lane_tests {
         assert!(inventory.tests.is_empty());
 
         run_with(model.clone(), &config(), &[diff]).await;
-        // One call per lens: the panel replaced the single call this lane used
-        // to make, so the assertion is that it ran at all, at the panel's width.
-        assert_eq!(
-            model.calls(),
-            crate::flows::panel::lenses(LaneId::Tests).len(),
-            "mixed edits must be reviewed"
-        );
+        assert_eq!(model.calls(), 1, "mixed edits must be reviewed");
         assert!(
             model
                 .last_prompt()

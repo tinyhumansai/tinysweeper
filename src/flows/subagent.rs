@@ -29,8 +29,6 @@
 use serde_json::{Value, json};
 use tinyflows::model::{Edge, Node, NodeKind, WorkflowGraph};
 
-use crate::flows::tier::Tier;
-
 /// How many questions one lens may ask.
 ///
 /// A cap rather than a budget line because the failure it prevents is not
@@ -95,7 +93,7 @@ pub fn answer_schema() -> Value {
 /// A single `agent` node and a trigger. Deliberately the smallest graph that
 /// can exist: everything this module promises about depth rests on there being
 /// nothing else in here.
-pub fn answer_graph(system: &str, prompt: &str) -> WorkflowGraph {
+pub fn answer_graph(model: &str, system: &str, prompt: &str) -> WorkflowGraph {
     WorkflowGraph {
         name: "subagent-answer".into(),
         nodes: vec![
@@ -114,10 +112,11 @@ pub fn answer_graph(system: &str, prompt: &str) -> WorkflowGraph {
                 type_version: 1,
                 name: "tinysweeper_subagent_answer".into(),
                 config: json!({
-                    // The cheapest tier there is. A sub-agent answers one
-                    // narrow factual question against evidence already in
-                    // hand, which is the least demanding call a review makes.
-                    "tier": Tier::Flash.as_str(),
+                    // Whatever tier the caller picked, which should be the
+                    // cheapest available: a sub-agent answers one narrow
+                    // factual question against evidence already in hand, the
+                    // least demanding call a review makes.
+                    "model": model,
                     "system": system,
                     "prompt": prompt,
                     "schema": answer_schema(),
