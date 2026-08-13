@@ -170,9 +170,9 @@ pub async fn apply(
 /// alternative — a fresh comment per push — turns a diagram into a scroll bar,
 /// and the diagram of a two-push-old head is not a diagram of the pull request.
 ///
-/// Writes nothing at all when the map says nothing worth saying: a single
-/// component with nothing reaching out of it is a box, and a comment containing
-/// one box is noise with a picture in it.
+/// Writes nothing at all when the map has no relationship worth explaining:
+/// disconnected names are not a flow, and a comment containing only those
+/// names is noise with a picture in it.
 async fn publish_overview(
     read: &dyn ForgeRead,
     write: &dyn ForgeWrite,
@@ -1155,20 +1155,33 @@ mod tests {
     }
     // --- the change map ----------------------------------------------------
 
-    /// A proposal carrying a two-component map, which is the smallest one
-    /// worth drawing.
+    /// A proposal carrying one changed behaviour and its caller.
     fn proposal_with_map(head: &str) -> Proposal {
         use crate::evidence::diff::parse_file_patch;
+        use crate::index::types::{EdgeKind, GraphEdge, GraphNode, Neighbourhood};
 
-        let diffs = [
-            parse_file_patch("src/lanes/critique.rs", "@@ -1,1 +1,2 @@\n x\n+y\n"),
-            parse_file_patch("docs/readme.md", "@@ -1,1 +1,2 @@\n x\n+y\n"),
-        ];
+        let diffs = [parse_file_patch(
+            "src/lanes/critique.rs",
+            "@@ -1,1 +1,2 @@ fn review() {\n x\n+y\n",
+        )];
+        let walk = Neighbourhood {
+            nodes: vec![
+                GraphNode::symbol("o/r", "src/lanes/critique.rs", "review"),
+                GraphNode::symbol("o/r", "src/app/run.rs", "run"),
+            ],
+            edges: vec![GraphEdge::new(
+                "o/r",
+                "src/app/run.rs#run",
+                "src/lanes/critique.rs#review",
+                EdgeKind::Calls,
+                "src/app/run.rs",
+            )],
+        };
         Proposal {
             overview: Some(crate::overview::build(
                 &diffs,
                 &[],
-                crate::overview::GraphView::Absent,
+                crate::overview::GraphView::Walked(&walk),
                 &config().overview,
             )),
             ..proposal(head, vec![])
