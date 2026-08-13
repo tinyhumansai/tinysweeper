@@ -153,10 +153,7 @@ async fn base_branch_commits_are_not_reviewed_as_this_ranges_work() {
     // A finding against a file only the *base* branch changed. If the range
     // were a two-dot diff, the file would be in it and the finding would post
     // against work this branch's author never did.
-    let model = Arc::new(MockModel::panel(finding(
-        "src/theirs.rs",
-        "fn theirs() {}",
-    )));
+    let model = Arc::new(MockModel::panel(finding("src/theirs.rs", "fn theirs() {}")));
     let input = LocalInput {
         range: Range {
             base: "main".to_string(),

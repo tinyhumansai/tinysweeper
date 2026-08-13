@@ -205,7 +205,6 @@ mod tests {
         assert!(outcome.skipped.is_some());
     }
 
-
     #[tokio::test]
     async fn concurrency_is_bounded() {
         // A lane fanning out over a large pull request with no cap is an

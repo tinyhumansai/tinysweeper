@@ -388,19 +388,28 @@ mod tests {
         let capability = capability(2.0, 1.0);
 
         // The first call is allowed: nothing had been spent when it started.
-        capability.complete(request("flash"), None).await.expect("first");
+        capability
+            .complete(request("flash"), None)
+            .await
+            .expect("first");
 
         let refused = capability
             .complete(request("flash"), None)
             .await
             .expect_err("the ceiling was already exceeded");
-        assert!(refused.to_string().contains("budget exhausted"), "{refused}");
+        assert!(
+            refused.to_string().contains("budget exhausted"),
+            "{refused}"
+        );
     }
 
     #[tokio::test]
     async fn spend_is_attributed_to_the_model_that_answered() {
         let capability = capability(0.25, 10.0);
-        capability.complete(request("flash"), None).await.expect("call");
+        capability
+            .complete(request("flash"), None)
+            .await
+            .expect("call");
 
         let spend = capability.spend();
         assert_eq!(spend.models, vec!["vendor/flash".to_string()]);
@@ -451,10 +460,7 @@ mod tests {
     async fn an_unregistered_child_workflow_is_refused() {
         // The other half of the depth bound: a `sub_workflow` node can only
         // reach a graph this crate put in the registry.
-        let err = ChildGraphs::none()
-            .resolve("anything")
-            .await
-            .unwrap_err();
+        let err = ChildGraphs::none().resolve("anything").await.unwrap_err();
         assert!(err.to_string().contains("anything"), "{err}");
     }
 
