@@ -128,11 +128,36 @@ async fn run_graph(
     Ok(outcome.output)
 }
 
+/// The model capability a whole lane shares.
+///
+/// A per-file lane builds one of these and hands it to every file's panel, so
+/// the budget is a *lane* ceiling rather than a per-file one. That is what lets
+/// files run concurrently: the previous design serialised them precisely
+/// because there was nowhere else to enforce the limit.
+pub fn lane_llm(
+    model: Arc<dyn Model>,
+    config: &crate::config::types::Config,
+    budget_usd: f64,
+) -> Arc<ModelCapability> {
+    Arc::new(ModelCapability::new(model, config.models.clone()).with_budget(budget_usd))
+}
+
 /// Run a full panel: propose, answer, verify.
 pub async fn run(
     model: Arc<dyn Model>,
     config: &crate::config::types::Config,
     budget_usd: f64,
+    request: PanelRequest<'_>,
+) -> PanelOutcome {
+    run_with_llm(lane_llm(model, config, budget_usd), request).await
+}
+
+/// Run a panel against a capability the caller owns.
+///
+/// The three rounds share it, so the budget is enforced across all of them —
+/// three rounds each staying under the ceiling would spend three times it.
+pub async fn run_with_llm(
+    llm: Arc<ModelCapability>,
     request: PanelRequest<'_>,
 ) -> PanelOutcome {
     let lenses = panel::lenses(request.lane);
@@ -142,12 +167,6 @@ pub async fn run(
         return outcome;
     }
 
-    // One capability object for the whole panel, so the budget is enforced
-    // across every round rather than per round — three rounds each staying
-    // under the ceiling would spend three times it.
-    let llm = Arc::new(
-        ModelCapability::new(model, config.models.clone()).with_budget(budget_usd),
-    );
     let capabilities = crate::flows::caps::with_llm(llm.clone(), ChildGraphs::none());
 
     // --- round one: propose -------------------------------------------------
