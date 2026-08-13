@@ -563,6 +563,52 @@ mod tests {
     }
 
     #[test]
+    fn schema_mode_leaves_the_conversation_alone() {
+        // Under `schema` the provider holds the schema, so adding it to the
+        // prompt as well would spend input tokens on every call of every lane
+        // to say something the wire format already said.
+        let mut req = request(100);
+        req.messages = vec![CrateMessage::system("review this")];
+
+        let wire = wire_messages(&req, StructuredOutput::Schema);
+
+        assert_eq!(wire.len(), 1, "schema mode must not touch the prompt");
+    }
+
+    #[test]
+    fn json_object_mode_carries_the_schema_in_the_prompt() {
+        // The other half of the same decision. `ResponseFormat::JsonObject`
+        // tells the provider "any json object", so the shape has to arrive in
+        // the prompt or the model is guessing at the contract.
+        let mut req = request(100);
+        req.messages = vec![CrateMessage::system("review this")];
+        req.schema = crate::harness::schema::json_schema();
+
+        let wire = wire_messages(&req, StructuredOutput::JsonObject);
+
+        assert_eq!(wire.len(), 2, "the schema instruction must be appended");
+        assert!(matches!(wire[1].role, Role::System));
+        assert!(
+            wire[1].content.contains("existing_code"),
+            "the appended message must actually carry the schema"
+        );
+    }
+
+    #[test]
+    fn the_json_mode_instruction_says_the_word_json() {
+        // Not a style assertion. DeepSeek's JSON mode **rejects** a request
+        // whose prompt never says "json", so a well-meaning reword that drops
+        // the word turns every call into a 400 — and the fallback chain then
+        // hides it behind a working review from a different model.
+        let text = crate::harness::schema::json_mode_instruction(&json!({"type": "object"}));
+
+        assert!(
+            text.to_lowercase().contains("json"),
+            "DeepSeek's JSON mode requires the literal word in the prompt"
+        );
+    }
+
+    #[test]
     fn the_configured_ceiling_reaches_the_run_the_provider_is_called_from() {
         // `models.max_tokens` was accepted, validated, documented as the
         // ceiling on a response — and then dropped on the floor, so the
