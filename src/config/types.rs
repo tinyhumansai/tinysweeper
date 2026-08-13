@@ -396,6 +396,41 @@ pub struct Labels {
     pub manual_only: String,
 }
 
+/// Which upstream providers the gateway may route a call to.
+///
+/// OpenRouter serves one model id from many providers at prices that differ by
+/// more than 4x, and it load-balances between them. Leaving that unpinned makes
+/// the cost line fiction: `harness::pricing` holds one price per model id, so a
+/// call served by a pricier provider is under-reported and
+/// `models.budget_usd_per_pr` stops bounding anything real.
+///
+/// Cache reads are the reason the *cheapest headline* provider is not
+/// automatically the right pin — see `defaults.toml`, where the choice is
+/// argued against measured numbers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProviderRouting {
+    /// Providers to try, in order, by their gateway-side name. Empty leaves
+    /// routing entirely to the gateway.
+    pub order: Vec<String>,
+    /// Whether the gateway may fall outside `order` when those providers are
+    /// unavailable.
+    ///
+    /// `false` is the setting that makes the pin a guarantee rather than a
+    /// preference: with it `true`, an outage silently reroutes to a provider
+    /// whose price is not the one being billed against the budget. The safety
+    /// net for a genuine outage is `models.fallback`, which switches *model*
+    /// and is priced accordingly.
+    pub allow_fallbacks: bool,
+}
+
+impl ProviderRouting {
+    /// Whether any pin is expressed at all.
+    pub fn is_empty(&self) -> bool {
+        self.order.iter().all(|p| p.trim().is_empty())
+    }
+}
+
 /// The model gateway and the two tiers lanes select between.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
