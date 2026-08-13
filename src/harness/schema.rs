@@ -116,6 +116,31 @@ pub fn parse(lane: LaneId, value: Value) -> Result<LaneResponse> {
     })
 }
 
+/// The schema, restated for the model that will not be handed one.
+///
+/// Under [`StructuredOutput::JsonObject`](crate::config::types::StructuredOutput)
+/// the provider guarantees well-formed JSON and nothing about its shape, so the
+/// shape has to reach the model some other way. This is that way: appended to
+/// the system prompt, it is the *only* description of the contract the model
+/// gets.
+///
+/// Two details are load-bearing rather than stylistic. The literal word "json"
+/// must appear in the prompt — DeepSeek's JSON mode rejects a request without
+/// it, so removing it breaks every call rather than degrading quality. And the
+/// worked example is required by the same documentation; a schema alone is
+/// measurably weaker at pinning the top-level shape.
+pub fn json_mode_instruction(schema: &Value) -> String {
+    format!(
+        "Answer with a single json object and nothing else — no prose before or \
+         after it, no markdown fence around it.\n\n\
+         The json object must validate against this json schema:\n\
+         {schema}\n\n\
+         An answer with no findings is valid and common; it looks like this json:\n\
+         {{\"summary\": \"...\", \"findings\": []}}",
+        schema = serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string()),
+    )
+}
+
 /// The JSON schema attached to every lane request.
 pub fn json_schema() -> Value {
     json!({
