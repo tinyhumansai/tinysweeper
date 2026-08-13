@@ -228,6 +228,29 @@ fn print_prose(loaded: &Loaded) {
         );
     }
 
+    // Reasoning on the flash tier is the one configuration that makes the
+    // cheap tier cost more than the expensive one. Measured: a two-reviewer
+    // flash council on one pull request spent 134,704 output tokens over 11
+    // minutes at `medium`, against 940 tokens in 24 seconds at `off`, with one
+    // call hitting the ceiling and retrying. The key is global, so a council
+    // inherits whatever the deep tier wanted — which is why this is worth
+    // saying out loud here rather than leaving to whoever reads the bill.
+    let reasoning_on = !matches!(config.models.reasoning_effort.trim(), "off" | "");
+    let on_flash = config
+        .enabled_lanes()
+        .into_iter()
+        .flat_map(|lane| crate::council::reviewers(config, lane))
+        .any(|reviewer| reviewer.model == config.models.flash);
+
+    if reasoning_on && (on_flash || config.council.subagents) {
+        println!(
+            "  reasoning        `{}` on the flash tier — measured bimodal: it spends the whole \n\
+             \x20                 output budget thinking. Set `models.reasoning_effort = \"off\"` \n\
+             \x20                 for a council or sub-agent deployment.",
+            config.models.reasoning_effort
+        );
+    }
+
     // A model with no price is billed at the ceiling, so it will not escape the
     // budget — but it will over-report, and the fix is a one-line table entry.
     // Saying so here is what makes a stale price table visible before a review
