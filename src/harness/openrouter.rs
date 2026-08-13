@@ -53,6 +53,52 @@ fn reasoning_options(effort: &str) -> serde_json::Value {
     }
 }
 
+/// The `provider` block sent with every request, or `Null` when unpinned.
+///
+/// OpenRouter reads this at the top level of the body to choose which upstream
+/// serves the call. Empty names are dropped rather than sent: an accidental
+/// `""` in the list would otherwise become a provider the gateway cannot match,
+/// and with `allow_fallbacks = false` that is a hard failure on every request.
+fn provider_options(routing: &ProviderRouting) -> serde_json::Value {
+    if routing.is_empty() {
+        return serde_json::Value::Null;
+    }
+
+    let order: Vec<&str> = routing
+        .order
+        .iter()
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .collect();
+
+    json!({
+        "provider": {
+            "order": order,
+            "allow_fallbacks": routing.allow_fallbacks,
+        }
+    })
+}
+
+/// Merge the `reasoning` and `provider` blocks into one options object.
+///
+/// Both are top-level body keys, and `with_default_provider_options` takes a
+/// single value, so they are combined here rather than set twice — the second
+/// call would replace the first outright.
+fn request_options(effort: &str, routing: &ProviderRouting) -> serde_json::Value {
+    let mut options = reasoning_options(effort);
+
+    if let (Some(target), Some(provider)) = (
+        options.as_object_mut(),
+        provider_options(routing).as_object(),
+    ) {
+        for (key, value) in provider {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+
+    options
+}
+
 impl GatewayModel {
     /// Build from the `[models]` config, reading the key from the environment
     /// variable the config names.
