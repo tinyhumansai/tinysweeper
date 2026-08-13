@@ -162,8 +162,14 @@ impl fmt::Display for Severity {
 pub struct ModelRef(pub String);
 
 impl ModelRef {
-    /// The two tier names that resolve against `[models]`.
-    pub const TIERS: [&'static str; 2] = ["scan", "deep"];
+    /// The tier names that resolve against `[models]`.
+    ///
+    /// `flash` is here because a council selects it: several reviewers on one
+    /// file only pay for themselves at a tier cheaper than the single call they
+    /// stand in for, and a name that `is_tier` did not recognise was passed
+    /// through as a literal model id — so `model = "flash"` reached the gateway
+    /// as the model `flash`, which exists nowhere.
+    pub const TIERS: [&'static str; 3] = ["scan", "deep", "flash"];
 
     /// Whether this reference names a tier rather than a raw model id.
     pub fn is_tier(&self) -> bool {
@@ -1102,6 +1108,7 @@ impl Config {
         match agent.model.as_ref().map(|r| r.0.as_str()) {
             Some("deep") => &self.models.deep,
             Some("scan") => &self.models.scan,
+            Some("flash") => &self.models.flash,
             Some(explicit) => explicit,
             None => self.model_for(lane),
         }
