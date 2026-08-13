@@ -314,18 +314,16 @@ pub fn for_lane(
 /// budget ceiling and the spend tally both live in it — a fresh one per round
 /// would let each round spend the whole ceiling.
 pub fn with_llm(llm: Arc<ModelCapability>, children: ChildGraphs) -> Capabilities {
-    #[allow(clippy::needless_update)]
-    {
-        Capabilities {
-        llm: llm.clone() as Arc<dyn LlmProvider>,
+    Capabilities {
+        llm: llm as Arc<dyn LlmProvider>,
         tools: Arc::new(NoTools),
         http: Arc::new(NoHttp),
         code: Arc::new(NoCode),
         state: Arc::new(RunState::default()),
         resolver: Arc::new(children),
         // No agent registry: an `agent` node here *is* one completion, not a
-        // host-owned tool loop. Sub-agents are `sub_workflow` nodes, which is
-        // what bounds their depth structurally.
+        // host-owned tool loop. Sub-agents are child workflows, which is what
+        // bounds their depth structurally — see `flows::subagent`.
         agent: None,
         // Absent rather than refusing. A `shell` node fails with the engine's
         // own capability error, and there is no implementation in the tree that
@@ -333,7 +331,5 @@ pub fn with_llm(llm: Arc<ModelCapability>, children: ChildGraphs) -> Capabilitie
         shell: None,
         memory: None,
         tasks: None,
-    };
-
-    (capabilities, llm)
+    }
 }

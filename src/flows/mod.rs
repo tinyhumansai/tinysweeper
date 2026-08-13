@@ -21,5 +21,6 @@
 pub mod caps;
 pub mod consensus;
 pub mod panel;
+pub mod runner;
 pub mod subagent;
 pub mod tier;
