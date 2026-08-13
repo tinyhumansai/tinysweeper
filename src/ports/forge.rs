@@ -5,9 +5,15 @@
 //! [`ForgeWrite`]. A lane therefore *cannot* mutate a pull request even by
 //! mistake, because it never holds a handle that could — the security boundary
 //! in `AGENTS.md` is enforced by the type system rather than by discipline.
+//!
+//! [`ForgeWrite::merge`] carries the same idea one level further: it takes a
+//! [`MergeApproved`] that only the auto-merge policy can mint, so the one
+//! operation that can put code on the default branch unattended cannot be
+//! called at all without a passing gate.
 
 use async_trait::async_trait;
 
+use crate::automerge::policy::MergeApproved;
 use crate::error::Result;
 use crate::forge::types::{
     ChangedFile, CheckRun, CheckStatus, Commit, Issue, IssueComment, PullRequest,
@@ -114,6 +120,22 @@ pub trait ForgeRead: Send + Sync {
     /// means triage sets no type at all.
     async fn issue_types(&self, repo: &RepoId) -> Result<Vec<String>>;
 
+    /// Search issues in one repository, in GitHub issue-search syntax.
+    ///
+    /// The adapter scopes the query to `repo`; callers pass only the terms.
+    ///
+    /// **Open *and* closed issues are returned** unless the query narrows it.
+    /// The Sentry dedupe path depends on that: a promoted issue somebody has
+    /// since fixed and closed must still be found, or every sweep after the
+    /// fix reopens the same report. That is also why this is a search rather
+    /// than a filter over [`Self::open_issues`].
+    ///
+    /// Search is best-effort by nature — GitHub's index is eventually
+    /// consistent and its own rate limit is separate and low. A caller that
+    /// must not act on a stale answer should verify the hit it gets, and the
+    /// dedupe path does exactly that against the full issue body.
+    async fn search_issues(&self, repo: &RepoId, query: &str) -> Result<Vec<Issue>>;
+
     /// Fetch everything a lane needs about a pull request in one go.
     ///
     /// Default-implemented in terms of the calls above so an adapter only has
@@ -203,9 +225,38 @@ pub trait ForgeWrite: Send + Sync {
     /// is taken by deterministic policy in `crate::threads`.
     async fn resolve_review_thread(&self, repo: &RepoId, thread_id: &str) -> Result<()>;
 
-    /// Merge a pull request.
+    /// Merge the pull request `approval` was granted for.
     ///
-    /// Callers must have already re-validated live state; this method does no
-    /// policy checking of its own.
-    async fn merge(&self, repo: &RepoId, number: u64, method: &str) -> Result<()>;
+    /// ## The approval is the precondition, in the type system
+    ///
+    /// [`MergeApproved`] can only be minted by
+    /// [`automerge::policy::evaluate`](crate::automerge::policy::evaluate)
+    /// returning `Allow`, so a merge without a passing gate does not compile.
+    /// Before this, the guarantee was that the only call site in the tree sat
+    /// behind two evaluations — true, but discipline rather than structure,
+    /// and exactly the distinction `AGENTS.md` is making when it separates
+    /// `ForgeRead` from `ForgeWrite`. This is that argument one level down, on
+    /// the one operation that can put code on the default branch with nobody
+    /// watching.
+    ///
+    /// The number comes from `approval` rather than from a parameter of its
+    /// own, so approving one pull request and merging another is not an
+    /// expressible operation.
+    ///
+    /// ## What it still does not promise
+    ///
+    /// That the approval is *current*. A witness records that the policy
+    /// passed against some snapshot, not that the snapshot still holds, so
+    /// callers must still re-validate live state — `automerge::merge_snapshot`
+    /// re-reads and re-evaluates, and compares head SHAs, before it gets here.
+    /// This method does no policy checking of its own.
+    ///
+    /// ## Why this trait names an `automerge` type
+    ///
+    /// The dependency looks inverted, and is deliberate: a private field
+    /// restricts minting to the defining module, so the witness has to be
+    /// declared where the decision is made. Declaring it here instead would
+    /// mean any module in the crate could construct one, which is the property
+    /// being bought.
+    async fn merge(&self, repo: &RepoId, approval: &MergeApproved, method: &str) -> Result<()>;
 }

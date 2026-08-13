@@ -31,6 +31,7 @@ fn finding(line: Option<u64>, end_line: Option<u64>, suggestion: Option<&str>) -
         applicable: None,
         late: false,
         identity: None,
+        corroboration: 1,
     }
 }
 

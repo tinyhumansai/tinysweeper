@@ -1,0 +1,28 @@
+{
+  "key": "3ef1e4ebacbe0381",
+  "model_requested": "z-ai/glm-5.2",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 2519,
+    "output_tokens": 2466,
+    "cached_tokens": 2267,
+    "embed_tokens": 0,
+    "cost_usd": 0.000589631
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The doc comment promises `Shorten text to at most limit characters`, but the truncation path can return `limit + 1` characters: `head` is built from `text.chars().take(limit)` (up to `limit` chars) and then an ellipsis character is appended. When there is no space in `head`, `format!(\"{head}…\")` yields exactly `limit + 1` chars; when there is a space the prefix is shorter, so it usually fits, but the no-space branch does not. The test at `a_long_string_stops_on_a_word_boundary` even asserts `out.len() <= 21` for `limit = 20`, so the +1 is baked in. Because the stated purpose is fitting under a hard GitHub ceiling, a caller passing that ceiling as `limit` can produce a title one character over. Either reserve one character for the ellipsis (`take(limit.saturating_sub(1))`) or fix the doc to say `limit + 1`.",
+        "confidence": 0.82,
+        "existing_code": "    let head: String = text.chars().take(limit).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),\n    }",
+        "path": "src/findings/summarise.rs",
+        "rule": "Return Result<T> using the crate error type",
+        "severity": "medium",
+        "title": "shorten can return limit+1 characters, breaking its own contract"
+      }
+    ],
+    "resolved": [],
+    "summary": "The multibyte-slicing fix in `shorten` is sound and `first_sentence` is safe, but `shorten` violates its own `at most limit characters` contract on the no-space branch by appending an ellipsis to a `limit`-character head, yielding `limit + 1` characters — a problem when `limit` is a real ceiling such as GitHub's check-run title cap. The test even encodes the +1. No other issues found in this file."
+  }
+}

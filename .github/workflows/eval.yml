@@ -1,0 +1,97 @@
+# Review quality, measured against the labelled corpus in `evals/`.
+#
+# The offline half already runs in `ci.yml`: `cargo test --locked` replays the
+# committed cassettes and asserts both regressions still hold, for free. This
+# workflow is the *live* half — it re-records against the real model, which
+# costs money and needs a key.
+#
+# Deliberately **not** a required check. Run-to-run variance has not been
+# measured yet: the gateway routes where it likes, no `seed` is honoured, and
+# gating merges on a noisy metric teaches people to re-run CI rather than to
+# read it. Make it required once the spread across repeats is known.
+name: eval
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_cost_usd:
+        description: Hard ceiling for the whole run, in dollars.
+        default: "5.00"
+  schedule:
+    # Weekly, so drift in the model behind the same id is noticed without
+    # anybody remembering to look.
+    - cron: "0 6 * * 1"
+  pull_request:
+    # Only what can move a score. A change to the server or the automerge gate
+    # cannot, and paying for a corpus run on one is waste.
+    paths:
+      - "src/lanes/**"
+      - "src/harness/prompt.rs"
+      - "src/harness/schema.rs"
+      - "src/falsify/**"
+      - "src/eval/**"
+      - "presets/**"
+      - "evals/**"
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    # A fork must never reach OPENROUTER_API_KEY. `pull_request` gives a
+    # read-only token, but repository *secrets* are the thing being guarded and
+    # this is the only condition that keeps them off a fork's branch.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          # The recorded corpus runs the engine, whose build scripts and binary
+          # must never be able to read a GITHUB_TOKEN out of the checkout's git
+          # config. The workflow needs no authenticated git at all.
+          persist-credentials: false
+
+      # Pinned to commit SHAs rather than `@stable` / `@v2`, because this
+      # workflow's shell steps run with OPENROUTER_API_KEY set. A moving tag
+      # could be repointed to code none of us has reviewed; Dependabot bumps
+      # these pins.
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+
+      - name: Record the corpus
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # The ceiling is operator input at workflow_dispatch. It crosses into
+          # a shell step that holds the key, so it goes through an environment
+          # variable rather than being interpolated as shell syntax: whatever
+          # the value is, the shell only ever reads `$MAX_COST_USD` as a string
+          # argument, never as commands to run.
+          MAX_COST_USD: ${{ inputs.max_cost_usd || '5.00' }}
+        run: |
+          cargo run --locked --features harness,github -- \
+            eval run --record --max-cost-usd "$MAX_COST_USD"
+
+      # `eval run --record` scores inline as it goes, but the documented
+      # pipeline keeps scoring separate for exactly the case here: re-reading
+      # the proposals on disk under the current matching rule before reporting,
+      # so a rule edit between records never reports off a stale scorecard.
+      - name: Score the corpus
+        run: |
+          cargo run --locked --features harness,github -- \
+            eval score
+
+      - name: Compare against the committed baseline
+        run: |
+          cargo run --locked --features harness,github -- \
+            eval report --baseline evals/baselines/current.json \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the scorecard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorecard
+          path: evals/runs/latest/

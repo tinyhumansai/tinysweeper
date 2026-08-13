@@ -439,6 +439,30 @@ impl ForgeRead for MockForge {
         let state = self.state.lock().expect("mock state lock");
         Ok(state.issue_types.clone())
     }
+
+    /// Substring search over title and body, across open **and** closed
+    /// issues.
+    ///
+    /// Not an emulation of GitHub's tokenised index, and deliberately so: a
+    /// mock that reproduced GitHub's tokenisation would let a caller depend on
+    /// it, and the real index is eventually consistent anyway. Matching
+    /// literally makes the mock strictly *more* likely to find a hit than
+    /// GitHub is, so a dedupe test that passes here is not proving something
+    /// production cannot do.
+    async fn search_issues(&self, _repo: &RepoId, query: &str) -> Result<Vec<Issue>> {
+        let state = self.state.lock().expect("mock state lock");
+        let needle = query.trim().to_lowercase();
+        Ok(state
+            .issues
+            .values()
+            .filter(|issue| {
+                needle.is_empty()
+                    || issue.title.to_lowercase().contains(&needle)
+                    || issue.body.to_lowercase().contains(&needle)
+            })
+            .cloned()
+            .collect())
+    }
 }
 
 #[async_trait]
@@ -643,9 +667,14 @@ impl ForgeWrite for MockForge {
         Ok(())
     }
 
-    async fn merge(&self, _repo: &RepoId, number: u64, method: &str) -> Result<()> {
+    async fn merge(
+        &self,
+        _repo: &RepoId,
+        approval: &crate::automerge::policy::MergeApproved,
+        method: &str,
+    ) -> Result<()> {
         self.record(Write::Merged {
-            number,
+            number: approval.number(),
             method: method.to_string(),
         });
         Ok(())

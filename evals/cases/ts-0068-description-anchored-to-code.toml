@@ -1,0 +1,49 @@
+schema = 1
+id = "ts-0068-description-anchored-to-code"
+title = "A description finding must not anchor to implementation code"
+fixture = "../fixtures/ts-0068-description-anchored-to-code.json"
+labels = ["regression", "anchoring", "description"]
+
+[provenance]
+repo = "tinyhumansai/tinysweeper"
+pr = 68
+# PR #72 ("fix(description): keep findings out of code comments") was opened
+# because reviewing *this* pull request produced a description-lane finding
+# attached to a line of the pricing table. Its stated reason: "PR #68 showed a
+# description finding attached to a pricing-table line, even though the concern
+# was about the PR body. PR-scoped findings do not have a code location."
+evidence = "https://github.com/tinyhumansai/tinysweeper/pull/72"
+labelled_by = "enamakel"
+labelled_on = "2026-08-09"
+
+# Structural, not textual. What was wrong was never the wording — it was that a
+# pull-request-scoped observation acquired a line number in a file it was not
+# about. No keyword expresses that, which is why the entry is scoped by lane.
+
+[[forbidden]]
+id = "F1"
+path = "src/harness/pricing.rs"
+lanes = ["description"]
+reason = """
+The description lane's subject is the title and body. It has no code location,
+so anchoring it to the pricing table puts an inline comment about the PR
+description on a line of unrelated implementation code. `lanes::anchor` calls
+this rule Demote: the bad anchor is removed and the finding is rendered into the
+check-run summary instead of being dropped or posted inline.
+"""
+
+[[forbidden]]
+id = "F2"
+path = "src/config/defaults.toml"
+lanes = ["description"]
+reason = """
+Same defect, other file the pull request touched. Listed separately rather than
+as `path = \"*\"` so a future reader can see which files were actually in the
+diff when this was labelled.
+"""
+
+[[forbidden]]
+id = "F3"
+path = "src/harness/openrouter.rs"
+lanes = ["description"]
+reason = "Same defect; the third code file in this pull request."

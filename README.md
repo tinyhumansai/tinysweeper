@@ -100,6 +100,24 @@ by CI.
 The server refuses to start without `TINYSWEEPER_WEBHOOK_SECRET`: an unsigned
 delivery endpoint is a way for anyone to make the bot review anything.
 
+### Langfuse observability
+
+The vendored TinyAgents LangGraph-style runtime exports each model run to
+Langfuse when all three variables below are set. The exporter is best effort:
+an unavailable Langfuse service is logged but does not fail a review. Prompt
+and model-response payloads are included in these traces, so set the variables
+only in the server's secret environment, never in a repository or committed
+`.env` file.
+
+```sh
+LANGFUSE_BASE_URL=https://fuse.tinyhumans.ai
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+```
+
+`LANGFUSE_ENVIRONMENT` is optional and labels the resulting traces. Leaving
+the Langfuse variables unset keeps the existing behaviour.
+
 Configure per-repository behaviour with a `.tinysweeper.toml` at the repository
 root, and validate it with `tinysweeper check`. See
 [docs/triggers.md](docs/triggers.md) for what fires when — including the things
@@ -145,6 +163,23 @@ pull request, so commits that landed on the base branch meanwhile are not
 reviewed as your work. Nothing is written anywhere — there is no `ForgeWrite` on
 this path at all. See [docs/modules/app/README.md](docs/modules/app/README.md)
 for the rest of its behaviour.
+
+### Measure whether a change helped
+
+`eval` scores the review against the labelled corpus in `evals/`. Running costs
+money; scoring and reporting are free and offline, because a matching rule gets
+rewritten many times before it is right.
+
+```sh
+tinysweeper eval run --record   # live, writes cassettes and proposals
+tinysweeper eval score          # free, re-reads the proposals on disk
+tinysweeper eval report --baseline evals/baselines/current.json
+```
+
+`cargo test` replays the committed cassettes on every run, so a prompt change
+that nobody re-recorded fails offline and for free. See
+[evals/README.md](evals/README.md) for the labelling contract — including what
+the corpus does not measure yet.
 
 ## Built on
 

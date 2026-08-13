@@ -466,3 +466,35 @@ async fn a_fetched_config_is_filtered_exactly_as_a_parsed_one_is() {
     assert!(!overlaid.config.automerge.enabled);
     assert_eq!(overlaid.ignored, vec!["automerge.enabled".to_string()]);
 }
+
+#[test]
+fn council_keys_are_not_overridable_by_a_reviewed_repository() {
+    // Every key under `[council]` either spends the operator's money — a second
+    // reviewer is a second call per file — or decides what a model is told. That
+    // is the same line already drawn around `[models]`, and a pull request that
+    // could add reviewers to its own review would be no gate at all.
+    for key in [
+        "council.enabled",
+        "council.corroboration",
+        "council.agents",
+        "council.agents.persona",
+    ] {
+        assert!(!overridable(key), "`{key}` must not be repo-settable");
+    }
+}
+
+#[test]
+fn a_repository_cannot_convene_a_council_about_itself() {
+    // The base config has the council off. A document that turns it on must
+    // change nothing and say that it was ignored.
+    let (config, ignored) = applied(
+        "[council]\nenabled = true\ncorroboration = false\n\n[[council.agents]]\nid = \"mine\"\n",
+    );
+
+    assert!(!config.council.enabled, "the council stayed off");
+    assert!(config.council.agents.is_empty(), "no agent was added");
+    assert!(
+        ignored.iter().any(|key| key.starts_with("council")),
+        "the drop has to be reported, not silent: {ignored:?}"
+    );
+}
