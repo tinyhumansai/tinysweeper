@@ -212,7 +212,7 @@ pub async fn run_with_llm(
         let node_id = format!("lens_{}", lens.id);
 
         if std::env::var("TS_DEBUG").is_ok() {
-            eprintln!("DBG nodes={}", serde_json::to_string(&output.get("nodes").map(|n| n.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()))).unwrap_or_default());
+            eprintln!("DBG {node_id} item={}", serde_json::to_string(&output["nodes"][&node_id]).unwrap_or_default());
         }
         let Some((value, model_id)) = node_answer(&output, &node_id) else {
             outcome
