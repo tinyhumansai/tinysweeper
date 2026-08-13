@@ -180,7 +180,7 @@ async fn review_file(
     // an unreviewed file that branch protection would approve.
     if panel.nothing_was_read() {
         return Err(crate::error::Error::lane(
-            LaneId::Critique,
+            LaneId::Critique.as_str(),
             format!(
                 "no panellist could review {}: {}",
                 diff.path,
