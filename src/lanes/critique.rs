@@ -806,12 +806,17 @@ fn helper() {
 
     #[tokio::test]
     async fn the_configured_tier_is_the_model_actually_called() {
+        // The panel runs on `models.flash`, not `models.deep`. That is the
+        // change: several cheap readers replaced one expensive one, and the
+        // tier a lane resolves is the visible half of that decision.
         let mut config = config();
-        config.models.deep = "some/deep-model".into();
+        config.models.flash = "some/flash-model".into();
         let model = MockModel::silent();
         run_with(model.clone(), &config, &diffs()).await;
 
-        assert_eq!(model.requests()[0].model, "some/deep-model");
+        for request in model.requests() {
+            assert_eq!(request.model, "some/flash-model");
+        }
     }
 
     /// A per-file lane can do better than replaying an already-reviewed file
@@ -848,16 +853,22 @@ fn helper() {
             .expect("runs");
 
         let requests = model.requests();
-        assert_eq!(requests.len(), 1, "one call, for the one unreviewed file");
-
-        let system = &requests[0].messages[0].content;
-        let user = &requests[0].messages[1].content;
-
-        assert!(
-            !system.contains("+earlier") && !user.contains("+earlier"),
-            "the unchanged file is not sent at all"
+        assert_eq!(
+            requests.len(),
+            crate::flows::panel::lenses(LaneId::Critique).len(),
+            "one panel, for the one unreviewed file"
         );
-        assert!(user.contains("src/main.rs"), "the delta is the new work");
+
+        for request in &requests {
+            let system = &request.messages[0].content;
+            let user = &request.messages[1].content;
+
+            assert!(
+                !system.contains("+earlier") && !user.contains("+earlier"),
+                "the unchanged file is not sent at all"
+            );
+            assert!(user.contains("src/main.rs"), "the delta is the new work");
+        }
         assert!(
             system.contains("The file is `src/main.rs`"),
             "each conversation owns exactly one file: {system}"
@@ -903,16 +914,22 @@ fn helper() {
             .expect("runs");
 
         let requests = model.requests();
-        assert_eq!(requests.len(), 3, "one conversation per changed file");
+        assert_eq!(
+            requests.len(),
+            3 * crate::flows::panel::lenses(LaneId::Critique).len(),
+            "one conversation per changed file, per panellist"
+        );
 
-        for (request, path) in requests
-            .iter()
-            .zip(["src/main.rs", "src/other.rs", "src/third.rs"])
-        {
-            let system = &request.messages[0].content;
-            assert!(
-                system.contains(&format!("The file is `{path}`")),
-                "each conversation is scoped to its own file: {system}"
+        // Every file is still reviewed in isolation — the panel widened how
+        // many readers each file gets, not what any of them is shown.
+        for path in ["src/main.rs", "src/other.rs", "src/third.rs"] {
+            let scoped = requests
+                .iter()
+                .filter(|r| r.messages[0].content.contains(&format!("The file is `{path}`")))
+                .count();
+            assert_eq!(
+                scoped, crate::flows::panel::lenses(LaneId::Critique).len(),
+                "every panellist for {path} is scoped to it"
             );
         }
     }
