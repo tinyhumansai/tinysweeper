@@ -445,6 +445,13 @@ pub struct Models {
     pub scan: String,
     /// The expensive tier used for deep review.
     pub deep: String,
+    /// The tier a consensus panel runs on.
+    ///
+    /// Separate from `scan` because the two are cheap for different reasons and
+    /// move independently: `scan` is a mechanical single call, `flash` is one of
+    /// N concurrent opinions whose *aggregate* has to stay under the price of
+    /// the one `deep` call it replaces. See `flows::panel` for the arithmetic.
+    pub flash: String,
     /// Tried in order when the selected model fails.
     pub fallback: Vec<String>,
     /// Which upstream providers the gateway may serve these models from.
