@@ -162,8 +162,7 @@ async fn every_lens_failing_leaves_a_summary_that_says_so() {
 async fn the_budget_stops_a_panel_partway_rather_than_after() {
     // Enforced inside the capability, so it holds however many calls are in
     // flight — which is what let the fan-out stop being serial.
-    let model = MockModel::new()
-        .repeating(proposing("unwrap", "Avoid unwrap"))
+    let model = MockModel::always(proposing("unwrap", "Avoid unwrap"))
         .with_usage(Usage {
             cost_usd: 10.0,
             ..Usage::default()
@@ -179,8 +178,7 @@ async fn the_budget_stops_a_panel_partway_rather_than_after() {
 
 #[tokio::test]
 async fn the_panels_spend_counts_every_round() {
-    let model = MockModel::new()
-        .repeating(json!({
+    let model = MockModel::always(json!({
             "summary": "s", "findings": [], "resolved": []
         }))
         .with_usage(Usage {
