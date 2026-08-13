@@ -1,9 +1,18 @@
 //! The structured-output schema every lane answers with.
 //!
-//! Lanes never parse prose. The model is constrained to this JSON schema, and
-//! anything that does not fit is a hard error rather than a best-effort parse —
-//! a review bot that guesses at malformed output is a review bot that posts
-//! nonsense on someone's pull request.
+//! Lanes never parse prose. Anything that does not fit this schema is a hard
+//! error rather than a best-effort parse — a review bot that guesses at
+//! malformed output is a review bot that posts nonsense on someone's pull
+//! request.
+//!
+//! *How* the schema is imposed depends on
+//! [`models.structured_output`](crate::config::types::StructuredOutput). Under
+//! `schema` the provider is handed this document and cannot generate anything
+//! that violates it. Under `json_object` the provider guarantees only that the
+//! answer is well-formed JSON; the schema reaches the model through
+//! [`json_mode_instruction`] and [`parse`] is what actually enforces it. The
+//! sentence above holds either way — the difference is whether a bad shape is
+//! impossible or merely rejected.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
