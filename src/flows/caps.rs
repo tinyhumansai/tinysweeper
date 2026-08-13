@@ -26,8 +26,8 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use tinyflows::caps::{
-    Capabilities, CodeLanguage, CodeOutcome, CodeRunner, HttpClient, LlmProvider, StateStore,
-    ToolInvoker, WorkflowResolver,
+    Capabilities, CodeLanguage, CodeRunner, HttpClient, LlmProvider, StateStore, ToolInvoker,
+    WorkflowResolver,
 };
 use tinyflows::error::{EngineError, Result as FlowResult};
 use tinyflows::model::WorkflowGraph;
@@ -182,7 +182,7 @@ pub struct NoCode;
 
 #[async_trait]
 impl CodeRunner for NoCode {
-    async fn run(&self, _language: CodeLanguage, _source: &str, _input: Value) -> FlowResult<CodeOutcome> {
+    async fn run(&self, _language: CodeLanguage, _source: &str, _input: Value) -> FlowResult<Value> {
         Err(refused(
             "code",
             "contributor code is never executed — we read the diff and the tree, and build nothing",
@@ -201,7 +201,7 @@ pub struct RunState {
 
 #[async_trait]
 impl StateStore for RunState {
-    async fn get(&self, key: &str) -> FlowResult<Option<Value>> {
+    async fn load(&self, key: &str) -> FlowResult<Option<Value>> {
         Ok(self
             .entries
             .lock()
@@ -210,7 +210,7 @@ impl StateStore for RunState {
             .cloned())
     }
 
-    async fn set(&self, key: &str, value: Value) -> FlowResult<()> {
+    async fn store(&self, key: &str, value: Value) -> FlowResult<()> {
         self.entries
             .lock()
             .map_err(|_| refused("state", "the run's state lock was poisoned"))?
