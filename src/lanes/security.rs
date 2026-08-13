@@ -527,7 +527,7 @@ mod tests {
         ];
         run_with(model.clone(), &config(), &diffs, &[]).await;
 
-        assert_eq!(model.calls(), 2);
+        assert_eq!(model.calls(), 2 * crate::flows::panel::lenses(LaneId::Security).len());
         let prompts: Vec<String> = model
             .requests()
             .iter()
@@ -577,7 +577,11 @@ mod tests {
         ];
         let outcome = run_with(model.clone(), &config(), &diffs, &[]).await;
 
-        assert_eq!(model.calls(), 1, "only the source file is worth a call");
+        assert_eq!(
+            model.calls(),
+            crate::flows::panel::lenses(LaneId::Security).len(),
+            "only the source file is worth a panel"
+        );
         let prompt = model.last_prompt().expect("recorded");
         assert!(prompt.contains("`src/handler.rs`"), "{prompt}");
         assert!(
@@ -623,7 +627,11 @@ mod tests {
         );
         run_with(model.clone(), &config(), &diffs, &[dependency]).await;
 
-        assert_eq!(model.calls(), 1, "a scanner match is worth adjudicating");
+        assert_eq!(
+            model.calls(),
+            crate::flows::panel::lenses(LaneId::Security).len(),
+            "a scanner match is worth adjudicating"
+        );
     }
 
     #[tokio::test]
