@@ -117,7 +117,10 @@ async fn one_lens_failing_does_not_fail_the_panel() {
 #[tokio::test]
 async fn a_lens_answering_off_schema_is_dropped_rather_than_guessed_at() {
     let model = MockModel::new()
-        .then(json!({ "not": "a lane response" }))
+        // `findings` must be an array; a string genuinely fails to deserialize.
+        // (An answer that merely omits keys does not: every `LaneResponse`
+        // field carries `serde(default)`, so `{}` is a valid empty review.)
+        .then(json!({ "summary": "s", "findings": "not an array" }))
         .then(proposing("unwrap", "Avoid unwrap"))
         .then(verdict(true))
         .then(verdict(true))
