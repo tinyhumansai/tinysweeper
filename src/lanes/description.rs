@@ -260,7 +260,7 @@ mod tests {
 
     #[tokio::test]
     async fn golden_a_body_contradicted_by_the_diff_is_reported_without_an_anchor() {
-        let model = MockModel::always(json!({
+        let model = MockModel::panel(json!({
             "summary": "The body claims a documentation change; the diff edits code.",
             "findings": [{
                 "path": "src/main.rs", "line": 900,
@@ -334,7 +334,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_matched_code_quote_stays_summary_only() {
-        let model = MockModel::always(json!({
+        let model = MockModel::panel(json!({
             "summary": "…",
             "findings": [{
                 "path": "src/main.rs", "existing_code": "    let x = 1;",
@@ -363,7 +363,7 @@ mod tests {
     #[tokio::test]
     async fn a_credential_in_the_body_never_reaches_a_finding() {
         let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
-        let model = MockModel::always(json!({
+        let model = MockModel::panel(json!({
             "summary": "…",
             "findings": [{
                 "path": "src/main.rs", "line": 2,
