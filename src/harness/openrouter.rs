@@ -337,11 +337,33 @@ impl GatewayModel {
         // Structured output is not optional: a lane that falls back to parsing
         // prose posts nonsense the first time a model phrases something
         // differently.
-        let value = run.structured.ok_or_else(|| {
-            Error::Model(format!(
-                "{model} returned no structured output; the response did not satisfy the schema"
-            ))
-        })?;
+        //
+        // `run.structured` is populated only when the harness was given a schema
+        // to extract against, which is the `schema` mode. Under `json_object`
+        // there is no schema on the wire, so the harness has nothing to extract
+        // with and leaves it empty — the answer arrives as the run's text. That
+        // is *not* a licence to parse prose: `serde_json::from_str` either
+        // yields a JSON value or fails, and `schema::parse` downstream rejects
+        // any value of the wrong shape. Both modes end at the same guarantee;
+        // only the enforcer differs.
+        let value = match (run.structured, self.structured_output) {
+            (Some(value), _) => value,
+            (None, StructuredOutput::JsonObject) => {
+                let text = run.text().unwrap_or_default();
+                serde_json::from_str(text.trim()).map_err(|err| {
+                    Error::Model(format!(
+                        "{model} answered in `json_object` mode with something that is not \
+                         JSON: {err}"
+                    ))
+                })?
+            }
+            (None, StructuredOutput::Schema) => {
+                return Err(Error::Model(format!(
+                    "{model} returned no structured output; the response did not satisfy the \
+                     schema"
+                )));
+            }
+        };
 
         let usage = Usage {
             input_tokens: totals.input_tokens,
