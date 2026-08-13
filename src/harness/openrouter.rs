@@ -346,7 +346,7 @@ impl GatewayModel {
         // yields a JSON value or fails, and `schema::parse` downstream rejects
         // any value of the wrong shape. Both modes end at the same guarantee;
         // only the enforcer differs.
-        let value = match (run.structured, self.structured_output) {
+        let value = match (run.structured.clone(), self.structured_output) {
             (Some(value), _) => value,
             (None, StructuredOutput::JsonObject) => {
                 let text = run.text().unwrap_or_default();
