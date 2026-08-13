@@ -70,10 +70,16 @@ manual_only = "tinysweeper:manual-only"
 # re-check before assuming they still hold, the catalogue moves fast.
 #
 #   deepseek/deepseek-v4-pro-0813  1,048,576 ctx   $0.435 / $0.87
-#   z-ai/glm-5.2                   1,048,576 ctx   $0.07  / $0.22
+#   z-ai/glm-5.2                   1,048,576 ctx   $0.753 / $2.367
 #   minimax/minimax-m3             1,048,576 ctx   $0.30  / $1.20
 #   moonshotai/kimi-k3             1,048,576 ctx   $3.00  / $15.00
 #   moonshotai/kimi-k2.7-code        262,144 ctx   $0.70  / $3.50
+#
+# The GLM row was $0.07 / $0.22 until 2026-08-13 and was wrong by ten times —
+# no endpoint has ever served it that cheaply. Two conclusions in this file
+# rested on it and do not survive: DeepSeek is **cheaper per token** than GLM on
+# output, not several times dearer, and GLM was already spending past the eval
+# corpus's $0.02-per-case budget before any model changed.
 #
 # Everything in that list carries a million-token context except the last, and
 # context is exactly what a reviewer that pulls in surrounding code runs out of

@@ -64,11 +64,27 @@ const MODEL_PRICES: &[(&str, Price)] = &[
         },
     ),
     (
+        // Corrected 2026-08-13; the previous row was $0.07 / $0.22 / $0.013 and
+        // understated the real bill by roughly **ten times**. No endpoint has
+        // ever served GLM 5.2 at those rates: the cheapest of the thirty-three
+        // on the gateway is Baidu at $0.392 / $1.232, and this deployment routes
+        // to StreamLake at $0.753 / $2.367 / $0.1399.
+        //
+        // It mattered in two places, both quiet. `budget_usd_per_pr` is a hard
+        // stop on a real bill enforced through this table, so it was failing
+        // open by an order of magnitude. And the eval corpus records a cost per
+        // case from here whenever the gateway reports none, which made every
+        // GLM scorecard look ten times cheaper than the run really was —
+        // including the baseline a model change gets compared against.
+        //
+        // Priced at the worst of the providers this account can reach
+        // (DeepInfra $0.750, StreamLake $0.753, DigitalOcean $0.630 input), so
+        // the ceiling errs toward stopping early rather than overspending.
         "z-ai/glm-5.2",
         Price {
-            input: 0.07,
-            output: 0.22,
-            cached: 0.013,
+            input: 0.753,
+            output: 2.400,
+            cached: 0.140,
         },
     ),
     (
@@ -398,6 +414,30 @@ mod tests {
         assert!(
             (0.035..0.039).contains(&cost),
             "expected roughly $0.037 for the 83k-token security call, got {cost:.5}"
+        );
+    }
+
+    #[test]
+    fn no_model_is_priced_below_what_any_endpoint_actually_charges() {
+        // The GLM 5.2 row sat at $0.07 / $0.22 for months. Nothing caught it,
+        // because every test here compares this table against itself: a row can
+        // be wrong by any factor and still be internally consistent.
+        //
+        // A floor is the one property checkable offline. The cheapest endpoint
+        // serving any model this table lists is $0.392 per million input
+        // tokens; a row below $0.10 is therefore not a cheap model but a
+        // mistake, and it is the direction that matters — an underpriced row
+        // makes `budget_usd_per_pr` fail open and lets a real bill run past a
+        // ceiling that thinks it has room.
+        let too_cheap: Vec<_> = MODEL_PRICES
+            .iter()
+            .filter(|(_, price)| price.input < 0.10 || price.output < 0.10)
+            .map(|(name, _)| *name)
+            .collect();
+
+        assert!(
+            too_cheap.is_empty(),
+            "priced below any real endpoint, so the budget ceiling fails open: {too_cheap:?}"
         );
     }
 
