@@ -70,6 +70,15 @@ tree-sitter-typescript = "0.23"
 # only `harness::model::TinyAgentsModel` needs it.
 tinyagents = { path = "vendor/tinyagents", optional = true }
 
+# --- the orchestration graph ---
+# Not optional, and that is the point: with default features tinyflows links no
+# HTTP client (its `reqwest` is gated behind `chrome-extension`/`host-caps`,
+# neither of which is enabled), so lane orchestration compiles and is tested in
+# the offline default build. Every outside-world call it makes goes through a
+# capability trait this crate implements in `src/flows/caps.rs`, so the model
+# still reaches the network through exactly one adapter.
+tinyflows = { path = "vendor/tinyflows", default-features = false }
+
 # --- optional: the webhook server ---
 # Reversed an earlier decision to go Actions-only. The arguments that changed
 # it: a contributor/whitelist database has nowhere to live in a stateless
