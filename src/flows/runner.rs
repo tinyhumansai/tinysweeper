@@ -59,12 +59,17 @@ pub struct PanelRequest<'a> {
 
 /// Read one agent node's structured answer out of a finished run.
 ///
-/// The path is the engine's envelope — `nodes.<id>.items[0].json` — wrapping
-/// this crate's own `{json, model}` payload from
-/// [`crate::flows::caps::ModelCapability`].
+/// Two envelopes, not one, and the difference is easy to get wrong in a way
+/// nothing reports. The engine wraps a node's result as
+/// `nodes.<id>.items[0].{json, raw, text}`, and the `json` there is whatever
+/// [`crate::flows::caps::ModelCapability`] returned — which is this crate's own
+/// `{json, model}` pair. So the model's structured answer is two `json` hops
+/// down, and stopping one hop early yields `{json, model}`, which deserializes
+/// into an *empty* [`LaneResponse`] rather than failing. That reads exactly
+/// like a panellist that found nothing.
 fn node_answer(output: &Value, node_id: &str) -> Option<(Value, String)> {
     let envelope = output.get("nodes")?.get(node_id)?.get("items")?.get(0)?;
-    let payload = envelope.get("json")?;
+    let payload = envelope.get("json")?.get("json")?;
 
     Some((
         payload.get("json")?.clone(),
