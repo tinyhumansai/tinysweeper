@@ -462,6 +462,12 @@ pub struct Models {
     /// deployment whose model reasons past `max_tokens` and answers with
     /// nothing, which is a real failure this repository has measured.
     pub reasoning_effort: String,
+    /// Who enforces the response schema — see [`StructuredOutput`].
+    ///
+    /// Applies to the whole chain, `fallback` included, because a single review
+    /// can be answered by any model in it and a prompt that carries its own
+    /// schema has to be built before the answering model is known.
+    pub structured_output: StructuredOutput,
     /// Hard USD ceiling for a single pull request's review.
     pub budget_usd_per_pr: f64,
 }
