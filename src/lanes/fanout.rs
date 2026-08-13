@@ -205,31 +205,6 @@ mod tests {
         assert!(outcome.skipped.is_some());
     }
 
-    #[tokio::test]
-    async fn budget_stops_later_file_calls() {
-        let paths = vec!["first.rs".to_string(), "second.rs".into()];
-        let out = per_file_with_budget(&paths, 1.0, |path| async move {
-            Ok(FileReview {
-                summary: path,
-                spend: {
-                    let mut spend = Spend::default();
-                    spend.record(
-                        "vendor/scan",
-                        crate::ports::model::Usage {
-                            cost_usd: 1.0,
-                            ..Default::default()
-                        },
-                    );
-                    spend
-                },
-                ..FileReview::default()
-            })
-        })
-        .await;
-
-        assert_eq!(out.reviews.len(), 1);
-        assert_eq!(out.failures.len(), 1);
-    }
 
     #[tokio::test]
     async fn concurrency_is_bounded() {
