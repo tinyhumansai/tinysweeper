@@ -42,7 +42,8 @@ use crate::evidence::replay;
 use crate::falsify::{Falsifier, Rejection};
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema::{self, RawFinding};
-use crate::lanes::fanout::{FileReview, per_file_with_budget};
+use crate::flows::runner::{self, PanelRequest};
+use crate::lanes::fanout::{FileReview, per_file};
 use crate::lanes::{Lane, LaneInput, LaneOutcome};
 use crate::ports::model::{Message, Model, ModelRequest, Spend};
 use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
@@ -93,8 +94,20 @@ impl Lane for Critique {
         let paths: Vec<String> = fresh.iter().map(|diff| diff.path.clone()).collect();
 
         let changed_paths = input.changed_paths();
-        let outcome = per_file_with_budget(&paths, input.config.models.budget_usd_per_pr, |path| {
-            let model = self.model.clone();
+
+        // One capability for the whole lane, so the pull-request budget is
+        // enforced across every file and every panel round at once. That is
+        // what lets the files run concurrently again: this lane used to review
+        // them one at a time purely because spend is only known after a call
+        // returns, and there was nowhere else to check it.
+        let llm = runner::lane_llm(
+            self.model.clone(),
+            input.config,
+            input.config.models.budget_usd_per_pr,
+        );
+
+        let outcome = per_file(&paths, |path| {
+            let llm = llm.clone();
             let input = &input;
             let changed_paths = &changed_paths;
             async move {
@@ -103,7 +116,7 @@ impl Lane for Critique {
                     .iter()
                     .find(|d| d.path == path)
                     .expect("the path came from the diff list");
-                review_file(model.as_ref(), input, changed_paths, diff).await
+                review_file(llm, input, changed_paths, diff).await
             }
         })
         .await;
@@ -121,7 +134,7 @@ impl Lane for Critique {
 /// is nothing to filter, so the number of falsify calls is the number of files
 /// that actually produced a finding.
 async fn review_file(
-    model: &dyn Model,
+    llm: std::sync::Arc<crate::flows::caps::ModelCapability>,
     input: &LaneInput<'_>,
     changed_paths: &[String],
     diff: &FileDiff,
@@ -147,24 +160,22 @@ async fn review_file(
 
     // The prefix goes in the system message and the suffix in the user
     // message. Providers cache on the serialised prefix, and a system
-    // message is the one part guaranteed to be sent first.
-    let response = model
-        .complete(ModelRequest {
-            model: config.model_for(LaneId::Critique).to_string(),
-            messages: vec![
-                Message::system(built.prefix()),
-                Message::user(built.suffix()),
-            ],
-            schema: schema::json_schema(),
-            schema_name: "tinysweeper_critique".into(),
-            max_tokens: config.models.max_tokens,
-        })
-        .await?;
+    // message is the one part guaranteed to be sent first. Each lens gets the
+    // same prefix with its own charter appended, so the shared half stays
+    // byte-identical across the panel and is cached once for all of them.
+    let panel = runner::run_with_llm(
+        llm.clone(),
+        PanelRequest {
+            lane: LaneId::Critique,
+            schema: runner::schema_with_questions(schema::json_schema()),
+            suffix: built.suffix(),
+            system_of: &|lens| runner::system_with_charter(built.prefix(), lens),
+        },
+    )
+    .await;
 
-    // Taken before the value is moved out: the spend belongs to the model
-    // that answered, whether or not its answer parses.
-    let mut spend = Spend::of(&response);
-    let parsed = schema::parse(LaneId::Critique, response.value)?;
+    let mut spend = panel.spend.clone();
+    let parsed = runner::into_response(&panel);
 
     let positioner = Positioner::new(model, config);
     let mut findings = Vec::new();
