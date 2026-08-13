@@ -369,7 +369,7 @@ mod lane_tests {
 
     #[tokio::test]
     async fn golden_an_untested_new_branch_is_reported() {
-        let model = MockModel::always(json!({
+        let model = MockModel::panel(json!({
             "summary": "A new early-return branch has no test.",
             "findings": [
                 {
@@ -472,7 +472,13 @@ mod lane_tests {
         assert!(inventory.tests.is_empty());
 
         run_with(model.clone(), &config(), &[diff]).await;
-        assert_eq!(model.calls(), 1, "mixed edits must be reviewed");
+        // One call per lens: the panel replaced the single call this lane used
+        // to make, so the assertion is that it ran at all, at the panel's width.
+        assert_eq!(
+            model.calls(),
+            crate::flows::panel::lenses(LaneId::Tests).len(),
+            "mixed edits must be reviewed"
+        );
         assert!(
             model
                 .last_prompt()
