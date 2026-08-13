@@ -45,7 +45,7 @@ use crate::harness::schema::{self, RawFinding};
 use crate::flows::runner::{self, PanelRequest};
 use crate::lanes::fanout::{FileReview, per_file};
 use crate::lanes::{Lane, LaneInput, LaneOutcome};
-use crate::ports::model::{Message, Model, ModelRequest, Spend};
+use crate::ports::model::Model;
 use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
 
 /// The correctness lane.
