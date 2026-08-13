@@ -7,27 +7,9 @@ hand-written concurrency. This document is why, and what the shape buys.
 
 ## The change in one line
 
-One expensive model call per file became a **panel** of cheap ones that propose,
-then a round of independent judges that verify — and only what survives
-verification reaches a contributor.
-
-## Why a panel is cheaper *and* quieter
-
-The deep tier was buying two different things at once: a better reader, and a
-noise filter. Splitting them is what makes this work.
-
-Measured against the pinned DeepSeek endpoint (see `config/defaults.toml`),
-blended at the ~80% prompt-cache hit rate this prompt layout achieves:
-
-| tier | input $/M | cache read $/M | blended |
-|---|---|---|---|
-| `deep` (`deepseek-v4-pro`) | 0.435 | 0.003625 | $0.090 |
-| `flash` (`deepseek-v4-flash`) | 0.14 | 0.0028 | $0.030 |
-
-Three flash opinions cost roughly what one pro call cost. The noise filter is
-no longer "the model was good enough not to say something silly" but "the claim
-survived three attempts to refute it", which is a property this crate can test
-offline.
+A lane's reviewers stopped running one after another. They run as a graph — all
+at once, with the budget enforced somewhere that does not require serialising
+them — and a reviewer may now ask the codebase a question instead of guessing.
 
 ## What runs
 
@@ -119,17 +101,23 @@ lane, so it can refuse one however many are in flight.
 | file | role |
 |---|---|
 | `caps.rs` | the capability seam, budget, spend tally, and every refusal |
-| `tier.rs` | `scan` / `deep` / `flash` → a configured model id |
-| `panel.rs` | the lens sets, and the propose/verify graph builders |
-| `consensus.rs` | dedupe by anchor, and the majority rule |
-| `subagent.rs` | the child graph, and the depth bound |
-| `runner.rs` | drives the three rounds and assembles the outcome |
+| `panel.rs` | one `agent` node per reviewer, and the fan-in barrier |
+| `subagent.rs` | the child graph, the question schema, and the depth bound |
+| `runner.rs` | runs the rounds and returns one answer per reviewer |
 
 ## Testing
 
-Everything here is offline. `MockModel::panel` answers a whole panel from one
-lane response — dispatching on the schema each round asks for, so a golden test
+Everything here is offline. `MockModel::panel` answers a whole council from one
+lane response, dispatching on the schema each call asks for, so a golden test
 still reads "given a model that says exactly this, the lane must post exactly
-that" without depending on the panel's internal call order.
-`MockModel::panel_matching` answers per file, for the tests that are about two
-files behaving differently.
+that" without depending on call order. `MockModel::panel_matching` answers per
+file or per reviewer, for the tests that are about two of them behaving
+differently.
+
+Two properties are asserted rather than assumed, because both are invisible
+when they break:
+
+- **Concurrency** is measured by peak in-flight calls, not wall clock. A serial
+  runner never exceeds one; the test asserts it reached the reviewer count.
+- **Cost shape** for sub-agents is pinned by call count: one call when nothing
+  is asked, and `1 + MAX_QUESTIONS_PER_REVIEWER + 1` when the cap is exceeded.
