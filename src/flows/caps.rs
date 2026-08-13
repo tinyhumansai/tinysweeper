@@ -343,3 +343,128 @@ pub fn with_llm(llm: Arc<ModelCapability>, children: ChildGraphs) -> Capabilitie
         tasks: None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::harness::mock::MockModel;
+    use crate::ports::model::Usage;
+
+    fn models() -> Models {
+        Models {
+            flash: "vendor/flash".into(),
+            scan: "vendor/scan".into(),
+            deep: "vendor/deep".into(),
+            max_tokens: 1_000,
+            budget_usd_per_pr: 1.0,
+            ..Models::default()
+        }
+    }
+
+    fn request(tier: &str) -> Value {
+        json!({
+            "tier": tier,
+            "system": "s",
+            "prompt": "p",
+            "schema": { "type": "object" },
+            "schema_name": "tinysweeper_test",
+        })
+    }
+
+    fn capability(cost: f64, budget: f64) -> ModelCapability {
+        let model = MockModel::always(json!({ "summary": "ok" })).with_usage(Usage {
+            cost_usd: cost,
+            ..Usage::default()
+        });
+
+        ModelCapability::new(Arc::new(model), models()).with_budget(budget)
+    }
+
+    #[tokio::test]
+    async fn a_call_is_refused_once_the_ceiling_is_reached() {
+        // The safety property that used to be bought by reviewing files one at
+        // a time. It lives here now, which is what let the fan-out become
+        // concurrent again — so this is the test that keeps the budget real.
+        let capability = capability(2.0, 1.0);
+
+        // The first call is allowed: nothing had been spent when it started.
+        capability.complete(request("flash"), None).await.expect("first");
+
+        let refused = capability
+            .complete(request("flash"), None)
+            .await
+            .expect_err("the ceiling was already exceeded");
+        assert!(refused.to_string().contains("budget exhausted"), "{refused}");
+    }
+
+    #[tokio::test]
+    async fn spend_is_attributed_to_the_model_that_answered() {
+        let capability = capability(0.25, 10.0);
+        capability.complete(request("flash"), None).await.expect("call");
+
+        let spend = capability.spend();
+        assert_eq!(spend.models, vec!["vendor/flash".to_string()]);
+        assert!((spend.cost_usd() - 0.25).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn a_node_may_lower_the_token_ceiling_but_never_raise_it() {
+        // A graph is data a repository can edit; `models.max_tokens` is a
+        // budget decision that a graph must not be able to overrule.
+        let model = Arc::new(MockModel::always(json!({})));
+        let capability = ModelCapability::new(model.clone(), models());
+
+        let mut raised = request("flash");
+        raised["max_tokens"] = json!(999_999);
+        capability.complete(raised, None).await.expect("call");
+
+        let mut lowered = request("flash");
+        lowered["max_tokens"] = json!(10);
+        capability.complete(lowered, None).await.expect("call");
+
+        let requests = model.requests();
+        assert_eq!(requests[0].max_tokens, 1_000, "the config ceiling holds");
+        assert_eq!(requests[1].max_tokens, 10, "a node may ask for less");
+    }
+
+    #[tokio::test]
+    async fn every_capability_a_review_must_not_have_refuses_by_name() {
+        // Each message names the invariant rather than the missing wire: "not
+        // wired" reads like an oversight somebody should fix.
+        let tools = NoTools.invoke("shell", json!({}), None).await.unwrap_err();
+        assert!(tools.to_string().contains("only `src/apply`"), "{tools}");
+
+        let http = NoHttp
+            .request(json!({ "url": "https://example.com" }), None)
+            .await
+            .unwrap_err();
+        assert!(http.to_string().contains("https://example.com"), "{http}");
+
+        let code = NoCode
+            .run(CodeLanguage::Python, "print(1)", json!({}))
+            .await
+            .unwrap_err();
+        assert!(code.to_string().contains("never executed"), "{code}");
+    }
+
+    #[tokio::test]
+    async fn an_unregistered_child_workflow_is_refused() {
+        // The other half of the depth bound: a `sub_workflow` node can only
+        // reach a graph this crate put in the registry.
+        let err = ChildGraphs::none()
+            .resolve("anything")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("anything"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_tier_fails_the_call_rather_than_picking_one() {
+        let capability = capability(0.0, 10.0);
+        let err = capability
+            .complete(request("turbo"), None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("turbo"), "{err}");
+    }
+}
