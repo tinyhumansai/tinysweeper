@@ -436,7 +436,9 @@ async fn the_final_turn_is_not_offered_a_way_to_ask_again() {
         "the settling turn must not"
     );
     assert!(
-        !last.messages[0].content.contains("Asking instead of guessing"),
+        !last.messages[0]
+            .content
+            .contains("Asking instead of guessing"),
         "nor be told it may"
     );
 }

@@ -173,7 +173,10 @@ async fn review_file(
         LaneId::Critique,
         &calls,
         &schema::json_schema(),
-        config.council.subagents.then_some(config.models.flash.as_str()),
+        config
+            .council
+            .subagents
+            .then_some(config.models.flash.as_str()),
     )
     .await?;
 

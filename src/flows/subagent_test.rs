@@ -125,7 +125,11 @@ fn widening_a_schema_leaves_its_own_contract_alone() {
 
 #[test]
 fn a_batch_of_questions_is_one_concurrent_graph() {
-    let graph = answers_graph("vendor/flash", &["a".into(), "b".into(), "c".into()], "diff");
+    let graph = answers_graph(
+        "vendor/flash",
+        &["a".into(), "b".into(), "c".into()],
+        "diff",
+    );
 
     let fan_out = graph
         .edges

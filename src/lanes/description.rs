@@ -119,8 +119,12 @@ impl Lane for Description {
             LaneId::Description,
             &calls,
             &schema::json_schema(),
-        input.config.council.subagents.then_some(input.config.models.flash.as_str()),
-    )
+            input
+                .config
+                .council
+                .subagents
+                .then_some(input.config.models.flash.as_str()),
+        )
         .await?;
 
         // Seeded from the capability after the calls return: it is the object

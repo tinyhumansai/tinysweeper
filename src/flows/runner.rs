@@ -283,7 +283,8 @@ pub async fn ask_all(
         let mut again = calls[index].clone();
         again.prompt.push_str(&subagent::render(&answered));
 
-        if let Ok(round_two) = one_round(&capabilities, lane, std::slice::from_ref(&again), schema).await
+        if let Ok(round_two) =
+            one_round(&capabilities, lane, std::slice::from_ref(&again), schema).await
             && let Some(settled) = round_two.into_iter().next()
             && settled.value.is_some()
         {
