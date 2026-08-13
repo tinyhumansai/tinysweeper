@@ -543,15 +543,31 @@ mod tests {
 
     #[tokio::test]
     async fn one_files_failure_leaves_the_other_files_reviewed() {
-        let model = MockModel::panel(json!({
-                "summary": "Fine.",
-                "findings": [{
-                    "path": "src/a.rs", "line": 2, "rule": "r",
-                    "title": "t", "body": "b",
-                    "severity": "high", "confidence": 0.9
-                }]
-            }))
-            .then_error("upstream exploded");
+        // One file reviewable, the other not, chosen by which file the
+        // conversation is scoped to rather than by call order — each file gets
+        // its own panel, and this test is about the two behaving differently.
+        let model = MockModel::panel_matching(
+            &[
+                (
+                    "The file is `src/a.rs`",
+                    json!({
+                        "summary": "Fine.",
+                        "findings": [{
+                            "path": "src/a.rs", "line": 2, "rule": "r",
+                            "title": "t", "body": "b",
+                            "severity": "high", "confidence": 0.9
+                        }]
+                    }),
+                ),
+                // Unparseable: every panellist on this file returns something
+                // the schema rejects, so nothing about it was read.
+                (
+                    "The file is `src/b.rs`",
+                    json!({"summary": "…", "findings": [{"path": "src/b.rs"}]}),
+                ),
+            ],
+            json!({"summary": "…", "findings": []}),
+        );
         let diffs = vec![
             parse_file_patch("src/a.rs", "@@ -1 +1,2 @@\n a\n+b\n"),
             parse_file_patch("src/b.rs", "@@ -1 +1,2 @@\n a\n+b\n"),
