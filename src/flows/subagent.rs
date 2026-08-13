@@ -114,8 +114,19 @@ pub fn answer_schema() -> Value {
 /// `required` so a reviewer with nothing to ask answers exactly the schema it
 /// always did.
 pub fn with_questions(mut schema: Value) -> Value {
-    if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
-        properties.insert("questions".into(), questions_schema());
+    // `properties` is created when absent rather than skipped. Returning the
+    // schema unchanged would be the worst outcome available: the reviewer is
+    // still told it may ask (the instruction and the schema are set together),
+    // and it would be answering a schema with nowhere to put the question —
+    // rejected outright under strict mode, silently dropped under
+    // `json_object`. Either way the follow-up turn never happens and nothing
+    // reports why.
+    if let Some(object) = schema.as_object_mut() {
+        object
+            .entry("properties")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .map(|properties| properties.insert("questions".into(), questions_schema()));
     }
     schema
 }

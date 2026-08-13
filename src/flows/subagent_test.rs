@@ -97,3 +97,57 @@ fn nothing_asked_renders_to_nothing() {
     // lane's whole caching story is about what the suffix contains.
     assert!(render(&[]).is_empty());
 }
+
+#[test]
+fn a_schema_with_no_properties_still_gains_the_questions_key() {
+    // The silent-no-op case. The instruction and the schema are set together,
+    // so a schema returned unchanged means a reviewer invited to ask a question
+    // it has nowhere to write — rejected under strict mode, dropped under
+    // `json_object`, and in both cases the follow-up turn never happens.
+    let widened = with_questions(json!({ "type": "object" }));
+    assert!(widened["properties"]["questions"].is_object());
+}
+
+#[test]
+fn widening_a_schema_leaves_its_own_contract_alone() {
+    let widened = with_questions(json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["summary"],
+        "properties": { "summary": { "type": "string" } }
+    }));
+
+    // Optional: a reviewer with nothing to ask answers the schema it always did.
+    assert_eq!(widened["required"], json!(["summary"]));
+    assert!(widened["properties"]["summary"].is_object());
+    assert!(widened["properties"]["questions"].is_object());
+}
+
+#[test]
+fn a_batch_of_questions_is_one_concurrent_graph() {
+    let graph = answers_graph("vendor/flash", &["a".into(), "b".into(), "c".into()], "diff");
+
+    let fan_out = graph
+        .edges
+        .iter()
+        .filter(|e| e.from_node == "trigger")
+        .count();
+    assert_eq!(fan_out, 3);
+
+    // And still nothing that could run another graph.
+    for node in &graph.nodes {
+        assert!(!matches!(node.kind, NodeKind::SubWorkflow), "{}", node.id);
+    }
+    tinyflows::compiler::compile(&graph).expect("the batch graph compiles");
+}
+
+#[test]
+fn one_question_failing_leaves_the_others_answerable() {
+    for node in answers_graph("vendor/flash", &["a".into(), "b".into()], "diff")
+        .nodes
+        .iter()
+        .filter(|n| n.id.starts_with("answer_"))
+    {
+        assert_eq!(node.config["on_error"], json!("continue"), "{}", node.id);
+    }
+}
