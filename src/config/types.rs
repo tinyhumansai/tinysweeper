@@ -398,6 +398,42 @@ pub struct Labels {
     pub manual_only: String,
 }
 
+/// How a lane's structured answer is obtained from the model.
+///
+/// Not a performance dial. It selects *who enforces the schema*, and the two
+/// answers are not equally strong — see each variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StructuredOutput {
+    /// The provider is handed the JSON Schema and constrains generation to it.
+    ///
+    /// The strong form, and the default: a response that does not fit the
+    /// schema is not generated in the first place.
+    #[default]
+    Schema,
+    /// The provider guarantees only that the answer is *some* JSON object.
+    ///
+    /// The schema travels in the prompt instead, and enforcement moves to
+    /// [`crate::harness::schema::parse`], which rejects a mismatch loudly. This
+    /// is strictly weaker than [`StructuredOutput::Schema`] — the model can
+    /// return well-formed JSON of the wrong shape, and only our own validation
+    /// catches it. It exists because some models answer a strict schema request
+    /// with a hard error rather than an answer: `deepseek-v4-pro-0813` returns
+    /// "This response_format type is unavailable now", which turns every review
+    /// into a fallback.
+    JsonObject,
+}
+
+impl StructuredOutput {
+    /// The mode's stable id, as written in config.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StructuredOutput::Schema => "schema",
+            StructuredOutput::JsonObject => "json_object",
+        }
+    }
+}
+
 /// The model gateway and the two tiers lanes select between.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
