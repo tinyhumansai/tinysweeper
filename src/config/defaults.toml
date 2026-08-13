@@ -66,40 +66,56 @@ human_review = "tinysweeper:human-review"
 manual_only = "tinysweeper:manual-only"
 
 # Model tiers. Prices below are per million tokens, verified against
-# openrouter.ai/api/v1/models on 2026-08-08 — re-check before assuming they
-# still hold, the catalogue moves fast.
+# openrouter.ai/api/v1/models on 2026-08-08, DeepSeek re-checked 2026-08-13 —
+# re-check before assuming they still hold, the catalogue moves fast.
 #
-#   minimax/minimax-m3        1,048,576 ctx   $0.30 / $1.20
-#   moonshotai/kimi-k3        1,048,576 ctx   $3.00 / $15.00
-#   moonshotai/kimi-k2.7-code   262,144 ctx   $0.70 / $3.50
+#   deepseek/deepseek-v4-pro-0813  1,048,576 ctx   $0.435 / $0.87
+#   z-ai/glm-5.2                   1,048,576 ctx   $0.07  / $0.22
+#   minimax/minimax-m3             1,048,576 ctx   $0.30  / $1.20
+#   moonshotai/kimi-k3             1,048,576 ctx   $3.00  / $15.00
+#   moonshotai/kimi-k2.7-code        262,144 ctx   $0.70  / $3.50
 #
-# The scan tier is m3 rather than the cheaper-looking m2.1 because they cost the
-# same and m3 carries five times the context — and context is exactly what a
-# reviewer that pulls in surrounding code runs out of first.
+# Everything in that list carries a million-token context except the last, and
+# context is exactly what a reviewer that pulls in surrounding code runs out of
+# first — it is a floor for anything considered here, not a tiebreaker.
 [models]
 gateway = "openrouter"
 base_url = "https://openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
 # Both tiers on one model, and the tiering kept rather than collapsed.
 #
-# GLM 5.2 was the cheapest model measured that answers a strict JSON schema
-# reliably and caches well: 5/5 clean runs, ~1,270 of ~1,600 prompt tokens
-# served from cache every time, and $0.0001-$0.0002 for a review call where
-# `kimi-k3` cost $0.0056 and `qwen3.8-max` $0.0060 — around 40x.
+# DeepSeek V4 Pro, pinned to the dated `0813` GA snapshot rather than the
+# floating `deepseek/deepseek-v4-pro` alias. The alias is a different, older
+# build and moves without a config change; a reviewer whose output shape is a
+# strict JSON schema should not have its model swapped underneath it silently.
+#
+# **This snapshot is served only by DeepSeek first-party.** An OpenRouter
+# account whose allowed-providers list excludes `deepseek` gets a 404 —
+# "No allowed providers are available for the selected model" — on every call,
+# and every review falls through to the chain below. If reviews are quietly
+# still coming back as GLM, that is the cause: fix it at
+# https://openrouter.ai/settings/privacy, not here.
 #
 # The two keys stay separate because the *shape* of the decision is worth
 # keeping: `scan` is mechanical work run often, `deep` reads code closely. A
 # deployment that wants a stronger deep tier changes one line, and the cost of
 # doing so is visible — the previous deep model's $3.00/M input against 83k
 # input tokens per security-lane call was where the bill actually came from.
-scan = "z-ai/glm-5.2"
-deep = "z-ai/glm-5.2"
+scan = "deepseek/deepseek-v4-pro-0813"
+deep = "deepseek/deepseek-v4-pro-0813"
 # Tried in order when the selected model fails. Both were measured against the
-# reasoning setting below and both answer a strict JSON schema cleanly; the
-# previous first fallback did not, and refused every request with "Reasoning is
+# reasoning setting below and both answer a strict JSON schema cleanly; a
+# previous entry did not, and refused every request with "Reasoning is
 # mandatory for this endpoint", which made the whole chain a guaranteed failure
 # rather than a safety net.
-fallback = ["deepseek/deepseek-v4-pro", "minimax/minimax-m3"]
+#
+# GLM 5.2 leads because it is the model this deployment ran as its primary
+# until now, on 5/5 clean structured-output runs — a safety net is worth more
+# when it is the thing you just came off. The V4 Pro alias is deliberately
+# *not* here: it is reachable when the pinned snapshot is not, so including it
+# would turn a provider misconfiguration into a silent downgrade to the older
+# build instead of a visible one.
+fallback = ["z-ai/glm-5.2", "minimax/minimax-m3"]
 # A ceiling, not a purchase: tokens are billed as produced, so raising this
 # costs nothing on the calls that finish early and buys headroom on the ones
 # that would otherwise be cut off. It was 8000, which is the same budget the
@@ -114,8 +130,10 @@ fallback = ["deepseek/deepseek-v4-pro", "minimax/minimax-m3"]
 max_tokens = 16000
 # Reasoning is billed against `max_tokens`. It was off entirely because
 # `kimi-k3` spent all 8000 tokens thinking and returned empty content; measured
-# on `deepseek-v4-pro` at `high`, the same prompt uses 416 reasoning tokens and
-# finishes cleanly. Set to `off` if you put a thinking-heavy model back.
+# on V4 Pro at `high`, the same shape of prompt uses 400-950 reasoning tokens
+# and finishes cleanly on `finish_reason = "stop"`. That spread is why the
+# ceiling above is 16000 and not 8000. Set to `off` if you put a
+# thinking-heavy model back.
 reasoning_effort = "high"
 budget_usd_per_pr = 1.0
 

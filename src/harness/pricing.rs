@@ -41,7 +41,9 @@ pub struct Price {
     pub cached: f64,
 }
 
-/// Per-million-token prices, verified against openrouter.ai on 2026-08-09.
+/// Per-million-token prices, verified against openrouter.ai on 2026-08-09;
+/// the two DeepSeek V4 Pro rows re-verified against the endpoint listing on
+/// 2026-08-13.
 ///
 /// tinyagents reports tokens but not cost, and the budget ceiling is
 /// denominated in dollars, so the conversion happens here.
@@ -70,12 +72,31 @@ const MODEL_PRICES: &[(&str, Price)] = &[
         },
     ),
     (
-        "deepseek/deepseek-v4-pro",
+        // The selected model. Priced at the DeepSeek first-party endpoint,
+        // which is not a guess about routing: this snapshot is the one V4 Pro
+        // build DeepSeek serves alone, so there is exactly one endpoint and
+        // exactly one price. See `models.scan` in `defaults.toml`.
+        "deepseek/deepseek-v4-pro-0813",
         Price {
             input: 0.435,
             output: 0.87,
             // Cache reads are a *hundredth* of the input price here, against a
             // tenth on kimi-k3. On a re-review that is most of the bill.
+            cached: 0.003625,
+        },
+    ),
+    (
+        // Not selected, and **known to under-price**: left as-is deliberately.
+        // These are DeepSeek's own endpoint prices, but the floating alias is
+        // served by eighteen providers spanning $0.42-$1.74 per million input
+        // tokens and $0.0036-$0.33 per million cache reads, and the gateway
+        // picks among whichever the account permits. A deployment that selects
+        // this alias should re-derive the row from
+        // `/api/v1/models/deepseek/deepseek-v4-pro/endpoints` first.
+        "deepseek/deepseek-v4-pro",
+        Price {
+            input: 0.435,
+            output: 0.87,
             cached: 0.003625,
         },
     ),
@@ -361,19 +382,22 @@ mod tests {
     }
 
     #[test]
-    fn the_new_deep_tier_costs_what_the_table_says() {
-        // Anchored on the real figure this change was made against: PR #62's
-        // security lane sent 82,914 input and 842 output tokens and cost
-        // $0.2614 on the outgoing model. The same call on this one is the whole
-        // argument for the switch, so it is pinned rather than asserted vaguely.
+    fn the_deep_tier_costs_what_the_table_says() {
+        // Anchored on the same real figure every deep-tier change has been
+        // measured against: PR #62's security lane sent 82,914 input and 842
+        // output tokens. That call cost $0.2614 on kimi-k3 and $0.0061 on GLM
+        // 5.2; on the model selected now it is pinned below rather than
+        // asserted vaguely, because the price of the *selected* tier is what
+        // the budget ceiling is actually spent through.
+        //
         // Note the argument order: input, **cached**, output. Getting it wrong
         // is silent — every argument is a `u64` — and I did exactly that while
         // writing this test, which is why the ordering is now pinned below.
-        let cost = completion_cost("z-ai/glm-5.2", 82_914, 0, 842);
+        let cost = completion_cost("deepseek/deepseek-v4-pro-0813", 82_914, 0, 842);
 
         assert!(
-            (0.005..0.007).contains(&cost),
-            "expected roughly $0.006 for the 83k-token security call, got {cost:.5}"
+            (0.035..0.039).contains(&cost),
+            "expected roughly $0.037 for the 83k-token security call, got {cost:.5}"
         );
     }
 
