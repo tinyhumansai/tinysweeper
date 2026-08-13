@@ -22,7 +22,7 @@ use tinyagents::{
 use crate::config::types::{Models, StructuredOutput};
 use crate::error::{Error, Result};
 use crate::harness::{pricing, schema};
-use crate::ports::model::{Model, ModelRequest, ModelResponse, Role, Usage};
+use crate::ports::model::{Message as CrateMessage, Model, ModelRequest, ModelResponse, Role, Usage};
 
 /// A model reached through an OpenAI-compatible gateway.
 ///
@@ -101,10 +101,9 @@ fn wire_messages(request: &ModelRequest, mode: StructuredOutput) -> Vec<CrateMes
     // this text is a property of how *this* gateway asks for structured output,
     // not of what the lane wants said.
     if mode == StructuredOutput::JsonObject {
-        messages.push(CrateMessage {
-            role: Role::System,
-            content: schema::json_mode_instruction(&request.schema),
-        });
+        messages.push(CrateMessage::system(schema::json_mode_instruction(
+            &request.schema,
+        )));
     }
     messages
 }
