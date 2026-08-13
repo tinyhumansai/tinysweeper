@@ -145,7 +145,18 @@ budget_usd_per_pr = 1.0
 #
 # Pinning also keeps structured output working: `BaseTen` and `Cloudflare` do
 # not advertise `response_format`, and a lane that cannot get strict JSON is a
-# lane that fails. `allow_fallbacks = false`
+# lane that fails. `allow_fallbacks = false` makes the pin a guarantee; the
+# safety net for a DeepSeek outage is `fallback` above, which switches model and
+# is priced accordingly.
+#
+# This table must stay *below* every scalar key in `[models]`: a TOML sub-table
+# ends the parent table, so anything written after it is parsed as a key of
+# `models.provider` instead. That mistake makes the whole config fail to load
+# with an error naming an unrelated key.
+[models.provider]
+order = ["deepseek"]
+allow_fallbacks = false
+
 # The knowledge centre. `files` are read from the pull request's head commit
 # through the forge and are untrusted input — they are put through a sandboxed
 # extraction pass rather than injected. Plain filenames only: a name containing
