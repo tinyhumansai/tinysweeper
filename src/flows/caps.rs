@@ -165,7 +165,7 @@ pub struct NoHttp;
 
 #[async_trait]
 impl HttpClient for NoHttp {
-    async fn request(&self, spec: Value) -> FlowResult<Value> {
+    async fn request(&self, spec: Value, _conn: Option<&str>) -> FlowResult<Value> {
         let url = spec.get("url").and_then(Value::as_str).unwrap_or("<unset>");
         Err(refused(
             "http_request",
