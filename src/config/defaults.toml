@@ -210,6 +210,31 @@ max_tokens = 16000
 # costs findings — 13 against 23 on the model that was measured that way. The
 # reason not to reach for it here is that `medium` never came close to the
 # ceiling on a real review, where `high` went over it.
+#
+# ## `flash` is bimodal where `-0813` is gradual, and this key is global
+#
+# Everything above is about the tier `scan`/`deep` name. `models.flash` — the
+# tier a council and its sub-agents run on — behaves like the *original* table,
+# not like `-0813`, and this key cannot be set per tier. Measured on one pull
+# request (openhuman#5521, two files), same council of two flash reviewers with
+# `council.subagents` on, only this key moved:
+#
+#   effort   wall clock   cost      output tokens   worst call
+#   medium    11m 11s     $0.0267      134704       48000 reasoning, finish=length
+#   off          24s      $0.0031         940          34-185 tokens, no retry
+#
+# 143x the output tokens for 28x the wall clock. Three of the flash calls spent
+# 33853, 41273 and 48000 tokens reasoning; the last hit the ceiling and had to
+# be retried. At `off` the same calls answered in 34 to 185 tokens. There is no
+# middle setting on this model — it is the cliff the paragraphs above describe,
+# and `-0813` not having it does not generalise.
+#
+# So a council or sub-agent deployment on `flash` wants `reasoning_effort =
+# "off"`, and pays for that in findings: the run above reported one finding at
+# `medium` and none at `off`. That is one sample and not a measurement of
+# quality. What it does establish is that leaving this at `medium` makes the
+# cheap tier cost more than the expensive one, which is the entire reason the
+# tier exists. `tinysweeper doctor` warns when the two are configured together.
 reasoning_effort = "medium"
 # Who enforces the response schema, and the reason the model above is usable at
 # all.
