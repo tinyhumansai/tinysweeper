@@ -29,61 +29,74 @@ no longer "the model was good enough not to say something silly" but "the claim
 survived three attempts to refute it", which is a property this crate can test
 offline.
 
-## The three rounds
+## What runs
+
+`src/council` decides **who** reviews — agents, personas, and what becomes of
+their findings. This module is **how they run**: one `agent` node per reviewer,
+concurrent, joined by a merge barrier.
 
 ```
-                    ┌─ lens: input ───┐
-  evidence ─────────┼─ lens: authz ───┼─ merge ─┐
-                    └─ lens: adjudicate ┘       │
-                                                ▼
-                                     consensus::propose  (union, deduped)
-                                                │
-                          questions ─► sub-agents (one level deep)
-                                                │
-                                                ▼
-                        each proposal ─┬─ verifier 1 ─┐
-                                       ├─ verifier 2 ─┼─ majority ─► findings
-                                       └─ verifier 3 ─┘
+  evidence ─┬─ agent: reviewer-a ─┐
+            ├─ agent: reviewer-b ─┼─ merge ─► one answer per reviewer
+            └─ agent: reviewer-c ─┘
 ```
 
-1. **Propose.** Each lens reads the same evidence with a different charter, in
-   parallel. Output is **unioned**, not voted on.
-2. **Answer.** A lens that could not settle something asks instead of guessing;
-   each question goes to one sub-agent.
-3. **Verify.** Every proposal faces independent judges asked to *refute* it. A
-   majority keeps it; a tie or worse drops it.
+Placement, merging and removal stay where they were — in the lane, in
+`council::merge`, and in `falsify` respectively. Those are the steps the golden
+tests pin, and moving them into a graph would buy nothing and cost the tests.
 
-### Why the propose round is not a vote
+## What is deliberately absent: a verification round
 
-This is the design decision most worth understanding. A panellist reading for
-missing test coverage is not competent to notice a widened trust boundary. If
-findings needed agreement to survive, specialisation would destroy exactly the
-findings it exists to produce. Majority voting only means anything when the
-voters were asked the same question — which is true in round three and false in
-round one.
+An earlier version ran one — every finding put to independent judges, majority
+keeps it. `src/falsify` argues that a checker seeing less than the reviewer did
+rejects whatever it cannot confirm, which deletes exactly the findings that
+needed context to notice. That argument is right, and the round is gone.
+Removal is falsify's job; it rejects only what it can *prove* wrong from the
+diff, and it fails open. Agreement between reviewers only ever ranks.
 
-`consensus.rs::a_specialists_lone_finding_is_not_discarded_for_lack_of_agreement`
-is the test that pins this.
+## Sub-agents: asking instead of guessing
 
-### Why verification defaults to dropping
+Off by default (`council.subagents`). A reviewer may end its turn with
+**questions** rather than a hedged finding; each is answered by a sub-agent
+against the same evidence, and that reviewer is asked **once** more with the
+answers in hand. What it says on that turn is what counts.
 
-A verifier that cannot tell answers `false`. Arguing with a contributor about a
-problem that is not there costs far more than missing one finding — and an
-unverified proposal is dropped rather than trusted, so a verifier outage makes
-the review quieter, never louder.
+```
+  reviewer ──asks──► ┌─ sub-agent: q1 ─┐
+                     ├─ sub-agent: q2 ─┼─► answers ──► reviewer, once more
+                     └─ sub-agent: q3 ─┘
+```
 
-## Sub-agents, and the one level of depth
+This makes a reviewer *find more* — the same direction `council` argues for a
+second reviewer, and the opposite of asking whether the first was right.
+Nothing here can remove a finding.
 
-The bound is **structural, not a counter**. `subagent::answer_graph` contains a
-trigger and one `agent` node, and `caps::ChildGraphs` is populated only with
-graphs this crate builds. A sub-agent therefore has no `sub_workflow` node to
-reach for and no registry entry it could name if it had one. A depth integer
-threaded through the run is a bound a future edit removes by accident; this one
-fails to compile a recursion into existence.
+Cost is shaped rather than merely capped:
 
-Cost is the reason: files × lenses × questions is already the widest part of a
-review, and a second level multiplies it again for answers about evidence
-nobody has looked at directly.
+- A reviewer with **no questions costs exactly one call**, as before.
+- One that asks costs at most three cheap sub-agent calls plus one more turn.
+- If **every** sub-agent fails, there is no second turn — re-asking with no new
+  evidence is the same turn at full price.
+
+### The depth bound is structural, not a counter
+
+Exactly one level. `subagent::answers_graph` contains a trigger and `agent`
+nodes, nothing else, and `caps::ChildGraphs` is populated only with graphs this
+crate builds. A sub-agent has no `sub_workflow` node to reach for and no
+registry entry it could name if it had one. A depth integer threaded through the
+run is a bound a future edit deletes by accident; this one cannot compile a
+recursion into existence.
+
+### Two couplings that fail silently if broken
+
+- **The instruction and the schema travel together.** A reviewer told it may ask,
+  answering a schema with no `questions` key, is rejected under strict mode and
+  silently truncated under `json_object`. `with_questions` therefore creates
+  `properties` when a schema lacks it rather than returning the schema
+  unchanged.
+- **The final turn is not offered a way to ask again.** There is genuinely no
+  turn after it, so leaving `questions` in its schema invites a question nothing
+  will ever answer.
 
 ## What the graph is *not* allowed to do
 
