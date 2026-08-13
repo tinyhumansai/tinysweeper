@@ -92,8 +92,8 @@ api_key_env = "OPENROUTER_API_KEY"
 # deployment that wants a stronger deep tier changes one line, and the cost of
 # doing so is visible — the previous deep model's $3.00/M input against 83k
 # input tokens per security-lane call was where the bill actually came from.
-scan = "z-ai/glm-5.2"
-deep = "z-ai/glm-5.2"
+scan = "deepseek/deepseek-v4-flash"
+deep = "deepseek/deepseek-v4-pro"
 # The consensus panel's tier. Several of these replace one `deep` call, so what
 # matters is the aggregate, and on the pinned DeepSeek endpoint that arithmetic
 # works out: blended against the ~80% prompt-cache hit this layout achieves,
@@ -126,33 +126,46 @@ max_tokens = 16000
 reasoning_effort = "high"
 budget_usd_per_pr = 1.0
 
-# Pin the upstream provider. This is a cost-correctness setting, not a
-# preference: OpenRouter serves one model id from eighteen providers at prices
-# spanning 4x and load-balances between them, while `harness::pricing` holds a
-# single price per model id. Unpinned, the cost line reports whatever DeepSeek
-# charges no matter who actually answered, and `budget_usd_per_pr` bounds
-# nothing — `deepseek-v4-pro` defaults to Novita at $1.168/M input against the
-# $0.435/M this repository prices it at, a 2.7x under-report.
+# Pin the upstream provider. This is a correctness setting before it is a cost
+# one, and it was arrived at by running it rather than by reading the catalogue.
 #
-# DeepSeek rather than the cheapest headline, because this harness is built
-# around cache reads (see `harness::prompt`) and that is where the providers
-# actually differ. Measured against openrouter.ai/api/v1/models/.../endpoints on
-# 2026-08-14, per million tokens:
+# OpenRouter serves one model id from ~18 providers and load-balances between
+# them, at prices spanning 4x. Unpinned, `harness::pricing` — which holds one
+# price per model id — describes whichever provider happened to answer, so the
+# cost line and `budget_usd_per_pr` stop bounding anything real.
 #
-#                    input     cache read
-#   DeepSeek         $0.435    $0.003625     <- pinned
-#   Baidu            $0.4225   $0.035
-#   StreamLake       $0.522    $0.0435
-#   Novita (default) $1.168    $0.09855
+# The providers below are the cheap ones that support **strict** JSON schema
+# (`structured_outputs`), and that qualifier is the whole story. Structured
+# output is not optional here (see `harness::schema`), and the cheapest
+# providers do not support it:
 #
-# Baidu is 3% cheaper on fresh input and ~10x more expensive on a cache read.
-# At the ~80% hit rate this prompt layout achieves, the blended prices are
-# $0.090/M on DeepSeek against $0.113/M on Baidu — so the provider with the
-# higher sticker price is 25% cheaper on the workload this actually runs.
+#   provider     flash in $/M   cache read $/M   strict json
+#   DeepSeek     0.140          0.0028           NO   <- cheapest, unusable
+#   StreamLake   0.0671         0.01341          yes  <- pinned first
+#   Baidu        0.0672         0.01344          advertised, but 404s
+#   DeepInfra    0.090          0.018            yes  <- pinned second
 #
-# Pinning also keeps structured output working: `BaseTen` and `Cloudflare` do
-# not advertise `response_format`, and a lane that cannot get strict JSON is a
-# lane that fails. `allow_fallbacks = false` makes the pin a guarantee; the
+# DeepSeek's own endpoint is by far the cheapest on cache reads and cannot
+# answer a strict schema at all: pinning it returned `404 No endpoints found`
+# for every model, on every call, which is exactly what `allow_fallbacks =
+# false` is supposed to do when nothing matches. Baidu advertises
+# `structured_outputs` and still 404s under a strict request, so this list is
+# the set that was *verified by calling it*, not the set that claims support.
+#
+# Two entries rather than one so a single provider's outage is survivable while
+# every entry is still priced and still strict-capable. `models.fallback` is the
+# next line of defence and switches model rather than provider.
+#
+# This is also why `scan` and `deep` moved off `z-ai/glm-5.2`: it is $0.07/M on
+# the route that cannot do strict JSON and $0.75/M on the cheapest one that can,
+# which is more than ten times the price of the flash tier the panels run on.
+#
+# This table must stay *below* every scalar key in `[models]`: a TOML sub-table
+# ends the parent table, so anything written after it is parsed as a key of
+# `models.provider` instead.
+[models.provider]
+order = ["streamlake", "deepinfra"]
+allow_fallbacks = false` makes the pin a guarantee; the
 # safety net for a DeepSeek outage is `fallback` above, which switches model and
 # is priced accordingly.
 #
