@@ -1,4 +1,9 @@
-# Roll the deployed server onto the image CI just published.
+# Roll the deployed server onto the latest published image, on request.
+#
+# Deliberately manual: this fires only from the Actions tab, never off a push or
+# a green CI run. Landing on `main` publishes an image; a human decides when the
+# cluster takes it. That keeps the deploy an operator action with a name against
+# it, and keeps a merge from being a production event.
 #
 # There is no registry push here and no build: `ci.yml` publishes to GHCR, and
 # the cluster pulls from GHCR itself. This workflow is a *button* in the same
