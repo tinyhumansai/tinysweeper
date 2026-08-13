@@ -21,6 +21,7 @@ use crate::evidence::diff::render as render_diffs;
 use crate::findings::types::Finding;
 use crate::forge::types::PullRequest;
 use crate::harness::prompt::{self, PromptInputs};
+use crate::flows::runner::{self, PanelRequest};
 use crate::harness::schema;
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
 use crate::ports::model::{Message, Model, ModelRequest, Spend};
@@ -90,24 +91,27 @@ impl Lane for Description {
             ..PromptInputs::new(LaneId::Description, input.config)
         });
 
-        let response = self
-            .model
-            .complete(ModelRequest {
-                model: input.config.model_for(LaneId::Description).to_string(),
-                messages: vec![
-                    Message::system(built.prefix()),
-                    Message::user(built.suffix()),
-                ],
-                schema: schema::json_schema(),
-                schema_name: "tinysweeper_description".into(),
-                max_tokens: input.config.models.max_tokens,
-            })
-            .await?;
+        // A single-lens panel. This lane's subject does not split into
+        // independent readings — there is one question, and it is whether the
+        // description accounts for the diff — so the propose round has one
+        // member. The verify round still runs, and that is the half worth
+        // having here: "the description does not mention X" is exactly the
+        // claim that is wrong when X is in fact mentioned two paragraphs down.
+        let panel = runner::run(
+            self.model.clone(),
+            input.config,
+            input.config.models.budget_usd_per_pr,
+            PanelRequest {
+                lane: LaneId::Description,
+                schema: runner::schema_with_questions(schema::json_schema()),
+                suffix: built.suffix(),
+                system_of: &|lens| runner::system_with_charter(built.prefix(), lens),
+            },
+        )
+        .await;
 
-        // Taken before the value is moved out: the spend belongs to the model
-        // that answered, whether or not its answer parses.
-        let spend = Spend::of(&response);
-        let parsed = schema::parse(LaneId::Description, response.value)?;
+        let spend = panel.spend.clone();
+        let parsed = runner::into_response(&panel);
 
         // `Demote`, not `Strict`: a finding about the description has no line
         // to sit on, and dropping every unanchored one would silence the lane.
@@ -129,6 +133,7 @@ impl Lane for Description {
             finding.end_line = None;
         }
 
+        outcome.summary.push_str(&panel.failure_note());
         Ok(outcome)
     }
 }
