@@ -548,8 +548,7 @@ fn helper() {
 
     #[tokio::test]
     async fn a_hopeless_quote_is_recovered_by_the_relocation_call() {
-        let model = MockModel::new()
-            .then(json!({
+        let model = MockModel::panel(json!({
                 "summary": "…",
                 "findings": [finding_quoting("the loop that indexes without checking")]
             }))
@@ -563,8 +562,7 @@ fn helper() {
 
     #[tokio::test]
     async fn the_falsification_pass_drops_what_the_diff_disproves() {
-        let model = MockModel::new()
-            .then(json!({
+        let model = MockModel::panel(json!({
                 "summary": "…",
                 "findings": [finding_quoting("let x = items[i];")]
             }))
@@ -595,8 +593,7 @@ fn helper() {
     /// filter empties the finding list the prose is describing nothing.
     #[tokio::test]
     async fn a_summary_never_asserts_a_bug_the_falsifier_removed() {
-        let model = MockModel::new()
-            .then(json!({
+        let model = MockModel::panel(json!({
                 "summary": "One real bug: the coverage edge is never stored.",
                 "findings": [finding_quoting("let x = items[i];")]
             }))
@@ -621,8 +618,7 @@ fn helper() {
 
     #[tokio::test]
     async fn a_broken_falsification_pass_never_deletes_a_review() {
-        let model = MockModel::new()
-            .then(json!({
+        let model = MockModel::panel(json!({
                 "summary": "…",
                 "findings": [finding_quoting("let x = items[i];")]
             }))
