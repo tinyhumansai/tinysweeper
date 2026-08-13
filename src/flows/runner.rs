@@ -72,11 +72,7 @@ impl PanelOutcome {
             return String::new();
         }
 
-        let names: Vec<&str> = self
-            .failures
-            .iter()
-            .map(|(who, _)| who.as_str())
-            .collect();
+        let names: Vec<&str> = self.failures.iter().map(|(who, _)| who.as_str()).collect();
 
         format!(
             " {} reader{} could not be consulted: {}.",
@@ -172,10 +168,7 @@ pub async fn run(
 ///
 /// The three rounds share it, so the budget is enforced across all of them —
 /// three rounds each staying under the ceiling would spend three times it.
-pub async fn run_with_llm(
-    llm: Arc<ModelCapability>,
-    request: PanelRequest<'_>,
-) -> PanelOutcome {
+pub async fn run_with_llm(llm: Arc<ModelCapability>, request: PanelRequest<'_>) -> PanelOutcome {
     let lenses = panel::lenses(request.lane);
     let mut outcome = PanelOutcome::default();
 
@@ -232,7 +225,9 @@ pub async fn run_with_llm(
                     response,
                 });
             }
-            Err(err) => outcome.failures.push((lens.id.to_string(), err.to_string())),
+            Err(err) => outcome
+                .failures
+                .push((lens.id.to_string(), err.to_string())),
         }
     }
 

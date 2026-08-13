@@ -165,11 +165,10 @@ async fn every_lens_failing_leaves_a_summary_that_says_so() {
 async fn the_budget_stops_a_panel_partway_rather_than_after() {
     // Enforced inside the capability, so it holds however many calls are in
     // flight — which is what let the fan-out stop being serial.
-    let model = MockModel::always(proposing("unwrap", "Avoid unwrap"))
-        .with_usage(Usage {
-            cost_usd: 10.0,
-            ..Usage::default()
-        });
+    let model = MockModel::always(proposing("unwrap", "Avoid unwrap")).with_usage(Usage {
+        cost_usd: 10.0,
+        ..Usage::default()
+    });
 
     let outcome = run_panel(model, LaneId::Tests, 1.0).await;
 
@@ -182,13 +181,13 @@ async fn the_budget_stops_a_panel_partway_rather_than_after() {
 #[tokio::test]
 async fn the_panels_spend_counts_every_round() {
     let model = MockModel::always(json!({
-            "summary": "s", "findings": [], "resolved": []
-        }))
-        .with_usage(Usage {
-            input_tokens: 100,
-            cost_usd: 0.001,
-            ..Usage::default()
-        });
+        "summary": "s", "findings": [], "resolved": []
+    }))
+    .with_usage(Usage {
+        input_tokens: 100,
+        cost_usd: 0.001,
+        ..Usage::default()
+    });
 
     let outcome = run_panel(model, LaneId::Tests, 100.0).await;
 
@@ -246,10 +245,13 @@ fn the_questions_key_is_optional_so_existing_responses_still_validate() {
 
 #[test]
 fn a_lens_charter_tells_it_to_ask_rather_than_guess() {
-    let composed = system_with_charter("PREFIX", &Lens {
-        id: "x",
-        charter: "CHARTER",
-    });
+    let composed = system_with_charter(
+        "PREFIX",
+        &Lens {
+            id: "x",
+            charter: "CHARTER",
+        },
+    );
 
     assert!(composed.starts_with("PREFIX"));
     assert!(composed.contains("CHARTER"));
@@ -283,4 +285,3 @@ fn a_blank_question_is_not_dispatched() {
 
     assert_eq!(read_questions(&value), vec!["real question"]);
 }
-

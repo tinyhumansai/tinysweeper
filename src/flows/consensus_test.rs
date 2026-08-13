@@ -319,8 +319,20 @@ fn two_lenses_wording_one_quoted_finding_differently_still_merge() {
     // The other side of the same rule: with a quote present, the title must
     // stay irrelevant, or the panel double-reports everything it agrees on.
     let proposals = propose(&[
-        opinion("a", vec![finding("a.rs", "unwrap", "x.unwrap()", "One wording", 0.5)]),
-        opinion("b", vec![finding("a.rs", "unwrap", "x.unwrap()", "Totally different wording", 0.5)]),
+        opinion(
+            "a",
+            vec![finding("a.rs", "unwrap", "x.unwrap()", "One wording", 0.5)],
+        ),
+        opinion(
+            "b",
+            vec![finding(
+                "a.rs",
+                "unwrap",
+                "x.unwrap()",
+                "Totally different wording",
+                0.5,
+            )],
+        ),
     ]);
 
     assert_eq!(proposals.len(), 1);

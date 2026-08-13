@@ -40,9 +40,9 @@ use crate::error::Result;
 use crate::evidence::diff::FileDiff;
 use crate::evidence::replay;
 use crate::falsify::{Falsifier, Rejection};
+use crate::flows::runner::{self, PanelRequest};
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema::{self, RawFinding};
-use crate::flows::runner::{self, PanelRequest};
 use crate::lanes::fanout::{FileReview, per_file};
 use crate::lanes::{Lane, LaneInput, LaneOutcome};
 use crate::ports::model::Model;
@@ -569,11 +569,11 @@ fn helper() {
     #[tokio::test]
     async fn a_hopeless_quote_is_recovered_by_the_relocation_call() {
         let model = MockModel::panel(json!({
-                "summary": "…",
-                "findings": [finding_quoting("the loop that indexes without checking")]
-            }))
-            .then(json!({"existing_code": "    let x = items[i];"}))
-            .then(json!({"incorrect": []}));
+            "summary": "…",
+            "findings": [finding_quoting("the loop that indexes without checking")]
+        }))
+        .then(json!({"existing_code": "    let x = items[i];"}))
+        .then(json!({"incorrect": []}));
 
         let outcome = run_with(model, &config(), &diffs()).await;
 
@@ -583,12 +583,12 @@ fn helper() {
     #[tokio::test]
     async fn the_falsification_pass_drops_what_the_diff_disproves() {
         let model = MockModel::panel(json!({
-                "summary": "…",
-                "findings": [finding_quoting("let x = items[i];")]
-            }))
-            .then(json!({
-                "incorrect": [{"index": 1, "reason": "the diff bounds-checks `i` above"}]
-            }));
+            "summary": "…",
+            "findings": [finding_quoting("let x = items[i];")]
+        }))
+        .then(json!({
+            "incorrect": [{"index": 1, "reason": "the diff bounds-checks `i` above"}]
+        }));
 
         let outcome = run_with(model, &config(), &diffs()).await;
 
@@ -614,12 +614,12 @@ fn helper() {
     #[tokio::test]
     async fn a_summary_never_asserts_a_bug_the_falsifier_removed() {
         let model = MockModel::panel(json!({
-                "summary": "One real bug: the coverage edge is never stored.",
-                "findings": [finding_quoting("let x = items[i];")]
-            }))
-            .then(json!({
-                "incorrect": [{"index": 1, "reason": "the diff stores it two lines above"}]
-            }));
+            "summary": "One real bug: the coverage edge is never stored.",
+            "findings": [finding_quoting("let x = items[i];")]
+        }))
+        .then(json!({
+            "incorrect": [{"index": 1, "reason": "the diff stores it two lines above"}]
+        }));
 
         let outcome = run_with(model, &config(), &diffs()).await;
 
@@ -639,10 +639,10 @@ fn helper() {
     #[tokio::test]
     async fn a_broken_falsification_pass_never_deletes_a_review() {
         let model = MockModel::panel(json!({
-                "summary": "…",
-                "findings": [finding_quoting("let x = items[i];")]
-            }))
-            .then_error("upstream exploded");
+            "summary": "…",
+            "findings": [finding_quoting("let x = items[i];")]
+        }))
+        .then_error("upstream exploded");
 
         let outcome = run_with(model, &config(), &diffs()).await;
 
@@ -941,10 +941,15 @@ fn helper() {
         for path in ["src/main.rs", "src/other.rs", "src/third.rs"] {
             let scoped = requests
                 .iter()
-                .filter(|r| r.messages[0].content.contains(&format!("The file is `{path}`")))
+                .filter(|r| {
+                    r.messages[0]
+                        .content
+                        .contains(&format!("The file is `{path}`"))
+                })
                 .count();
             assert_eq!(
-                scoped, crate::flows::panel::lenses(LaneId::Critique).len(),
+                scoped,
+                crate::flows::panel::lenses(LaneId::Critique).len(),
                 "every panellist for {path} is scoped to it"
             );
         }

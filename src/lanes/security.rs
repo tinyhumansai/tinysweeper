@@ -30,9 +30,9 @@ use crate::config::types::LaneId;
 use crate::error::Result;
 use crate::evidence::diff::{FileDiff, render as render_diffs};
 use crate::findings::types::Finding;
+use crate::flows::runner::{self, PanelRequest};
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
-use crate::flows::runner::{self, PanelRequest};
 use crate::lanes::fanout::{FileReview, per_file};
 use crate::lanes::triage::triage;
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
@@ -129,36 +129,33 @@ impl Lane for Security {
             input.config.models.budget_usd_per_pr,
         );
 
-        let outcome = per_file(
-            &triaged.review,
-            |path| {
-                let llm = llm.clone();
-                let config = input.config;
-                let repo_policy = input.repo_policy;
-                let extracted_rules = input.extracted_rules;
-                let prior_findings = input.prior_findings;
-                let retrieved_context = input.retrieved_context;
-                let diffs = input.diffs;
-                let scanner = &scanner;
-                async move {
-                    let diff = diffs
-                        .iter()
-                        .find(|d| d.path == path)
-                        .expect("the path came from the diff list");
-                    review_file(
-                        llm,
-                        config,
-                        repo_policy,
-                        extracted_rules,
-                        prior_findings,
-                        retrieved_context,
-                        diff,
-                        scanner,
-                    )
-                    .await
-                }
-            },
-        )
+        let outcome = per_file(&triaged.review, |path| {
+            let llm = llm.clone();
+            let config = input.config;
+            let repo_policy = input.repo_policy;
+            let extracted_rules = input.extracted_rules;
+            let prior_findings = input.prior_findings;
+            let retrieved_context = input.retrieved_context;
+            let diffs = input.diffs;
+            let scanner = &scanner;
+            async move {
+                let diff = diffs
+                    .iter()
+                    .find(|d| d.path == path)
+                    .expect("the path came from the diff list");
+                review_file(
+                    llm,
+                    config,
+                    repo_policy,
+                    extracted_rules,
+                    prior_findings,
+                    retrieved_context,
+                    diff,
+                    scanner,
+                )
+                .await
+            }
+        })
         .await;
 
         let mut outcome = outcome.into_outcome();
@@ -527,7 +524,10 @@ mod tests {
         ];
         run_with(model.clone(), &config(), &diffs, &[]).await;
 
-        assert_eq!(model.calls(), 2 * crate::flows::panel::lenses(LaneId::Security).len());
+        assert_eq!(
+            model.calls(),
+            2 * crate::flows::panel::lenses(LaneId::Security).len()
+        );
         let prompts: Vec<String> = model
             .requests()
             .iter()

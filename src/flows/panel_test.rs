@@ -30,11 +30,7 @@ fn every_lens_feeds_the_barrier_so_none_is_read_early() {
     // to the output would have its findings read while others were still
     // running, which is a partial review that reads like a complete one.
     let graph = propose(LaneId::Critique);
-    let into_panel = graph
-        .edges
-        .iter()
-        .filter(|e| e.to_node == "panel")
-        .count();
+    let into_panel = graph.edges.iter().filter(|e| e.to_node == "panel").count();
 
     assert_eq!(into_panel, lenses(LaneId::Critique).len());
 }
