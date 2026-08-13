@@ -100,12 +100,6 @@ deep = "z-ai/glm-5.2"
 # mandatory for this endpoint", which made the whole chain a guaranteed failure
 # rather than a safety net.
 fallback = ["deepseek/deepseek-v4-pro", "minimax/minimax-m3"]
- makes the pin a guarantee; the
-# safety net for a DeepSeek outage is `fallback` above, which switches model and
-# is priced accordingly.
-[models.provider]
-order = ["deepseek"]
-allow_fallbacks = false
 # A ceiling, not a purchase: tokens are billed as produced, so raising this
 # costs nothing on the calls that finish early and buys headroom on the ones
 # that would otherwise be cut off. It was 8000, which is the same budget the
