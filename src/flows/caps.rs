@@ -89,6 +89,16 @@ impl ModelCapability {
         self
     }
 
+    /// The underlying model.
+    ///
+    /// For the stages that are not panels — positioning a finding, falsifying
+    /// one — which call the port directly and account for their own spend. They
+    /// go through the port rather than the graph because neither is a review:
+    /// they are arithmetic over a finding that already exists.
+    pub fn model(&self) -> &Arc<dyn Model> {
+        &self.model
+    }
+
     /// What every call through this capability has cost so far.
     ///
     /// A poisoned lock yields an empty spend rather than panicking: losing the

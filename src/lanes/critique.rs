@@ -177,7 +177,7 @@ async fn review_file(
     let mut spend = panel.spend.clone();
     let parsed = runner::into_response(&panel);
 
-    let positioner = Positioner::new(model, config);
+    let positioner = Positioner::new(llm.model().as_ref(), config);
     let mut findings = Vec::new();
     let mut unanchored = 0usize;
     let mut discarded = 0usize;
@@ -245,7 +245,7 @@ async fn review_file(
 
     // Step 5, on the findings that survived positioning. It sees only the
     // diff, and it can only remove.
-    let filtered = Falsifier::new(model, config)
+    let filtered = Falsifier::new(llm.model().as_ref(), config)
         .filter(LaneId::Critique, findings, &evidence)
         .await;
     spend.merge(filtered.spend);
