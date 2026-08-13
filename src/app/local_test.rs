@@ -97,7 +97,7 @@ async fn a_finding_on_a_local_range_is_anchored_the_same_way_a_pull_request_is()
         "fn first(items: &[u8]) -> u8 {\n    items[0]\n}\n",
     );
 
-    let model = Arc::new(MockModel::always(finding("src/lib.rs", "items[0]")));
+    let model = Arc::new(MockModel::panel(finding("src/lib.rs", "items[0]")));
     let (proposal, context) = local_review(repo.path(), &worktree(), model, &critique_only())
         .await
         .expect("reviews");
@@ -153,7 +153,7 @@ async fn base_branch_commits_are_not_reviewed_as_this_ranges_work() {
     // A finding against a file only the *base* branch changed. If the range
     // were a two-dot diff, the file would be in it and the finding would post
     // against work this branch's author never did.
-    let model = Arc::new(MockModel::always(finding(
+    let model = Arc::new(MockModel::panel(finding(
         "src/theirs.rs",
         "fn theirs() {}",
     )));
@@ -195,7 +195,7 @@ async fn the_repository_rules_are_read_from_the_working_tree_the_diff_came_from(
     // One answer that satisfies every schema in the run: what is being asserted
     // is which bytes reached the extraction prompt, not how many calls it took
     // to get there.
-    let model = Arc::new(MockModel::always(
+    let model = Arc::new(MockModel::panel(
         json!({"summary": "Nothing to report.", "findings": [], "rules": [], "rejected": []}),
     ));
     let recorder = model.clone();
@@ -250,7 +250,7 @@ async fn an_explicit_description_reaches_the_description_lane() {
     let mut config = config();
     config.review.lanes = vec!["description".to_string()];
     // The knowledge pass runs first even with one lane enabled.
-    let model = Arc::new(MockModel::always(
+    let model = Arc::new(MockModel::panel(
         json!({"summary": "Accurate.", "findings": [], "rules": [], "rejected": []}),
     ));
     let recorder = model.clone();
