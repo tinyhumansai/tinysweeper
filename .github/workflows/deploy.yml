@@ -71,9 +71,9 @@ jobs:
           # It needs no more than `get`/`list`/`watch`/`patch` on deployments
           # in the one namespace — do not paste a cluster-admin config here.
           KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
-          NAMESPACE: ${{ vars.K8S_NAMESPACE || 'tinysweeper' }}
+          NAMESPACE: ${{ inputs.namespace || vars.K8S_NAMESPACE || 'tinysweeper' }}
           # Comma-separated, so a deployment plus its worker can roll together.
-          WORKLOADS: ${{ vars.K8S_DEPLOYMENTS || 'tinysweeper' }}
+          WORKLOADS: ${{ inputs.deployments || vars.K8S_DEPLOYMENTS || 'tinysweeper' }}
         run: |
           set -euo pipefail
 
