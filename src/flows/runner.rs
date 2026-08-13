@@ -45,6 +45,32 @@ pub struct PanelOutcome {
     pub failures: Vec<(String, String)>,
 }
 
+impl PanelOutcome {
+    /// A sentence naming what could not be read, or nothing.
+    ///
+    /// Appended to every lane's summary. A partial review that reads like a
+    /// complete one is worse than no review at all, because a human stops
+    /// looking — so a lost panellist is stated rather than absorbed.
+    pub fn failure_note(&self) -> String {
+        if self.failures.is_empty() {
+            return String::new();
+        }
+
+        let names: Vec<&str> = self
+            .failures
+            .iter()
+            .map(|(who, _)| who.as_str())
+            .collect();
+
+        format!(
+            " {} reader{} could not be consulted: {}.",
+            self.failures.len(),
+            if self.failures.len() == 1 { "" } else { "s" },
+            names.join(", ")
+        )
+    }
+}
+
 /// Everything a panel needs that is not the graph.
 pub struct PanelRequest<'a> {
     /// Which lane's lenses to run.
