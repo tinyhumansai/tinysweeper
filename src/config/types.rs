@@ -447,6 +447,8 @@ pub struct Models {
     pub deep: String,
     /// Tried in order when the selected model fails.
     pub fallback: Vec<String>,
+    /// Which upstream providers the gateway may serve these models from.
+    pub provider: ProviderRouting,
     /// Cap on tokens generated per model call.
     ///
     /// Reasoning is billed against this same ceiling, so a thinking-heavy model
