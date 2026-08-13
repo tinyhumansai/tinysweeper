@@ -170,11 +170,19 @@ impl GatewayModel {
 
     async fn call(&self, model: &str, request: &ModelRequest, cap: u32) -> Result<CallOutcome> {
         let mut harness = self.harness(model)?;
+        // Who enforces the schema. These two arms are one decision, not two
+        // independent settings: `JsonObject` asks the provider for *some* JSON
+        // and therefore has to carry the schema in the prompt itself, and the
+        // prompt half is added below. Changing one arm without the other either
+        // sends a schema nobody reads or asks for a shape nobody described.
+        let response_format = match self.structured_output {
+            StructuredOutput::Schema => {
+                ResponseFormat::json_schema(&request.schema_name, request.schema.clone())
+            }
+            StructuredOutput::JsonObject => ResponseFormat::JsonObject,
+        };
         harness.with_policy(RunPolicy {
-            default_response_format: Some(ResponseFormat::json_schema(
-                &request.schema_name,
-                request.schema.clone(),
-            )),
+            default_response_format: Some(response_format),
             capture: if self.langfuse.is_some() {
                 PayloadCapture {
                     model_io: true,
