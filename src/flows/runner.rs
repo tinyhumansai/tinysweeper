@@ -211,6 +211,9 @@ pub async fn run_with_llm(
     for lens in lenses {
         let node_id = format!("lens_{}", lens.id);
 
+        if std::env::var("TS_DEBUG").is_ok() {
+            eprintln!("DBG nodes={}", serde_json::to_string(&output.get("nodes").map(|n| n.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()))).unwrap_or_default());
+        }
         let Some((value, model_id)) = node_answer(&output, &node_id) else {
             outcome
                 .failures
