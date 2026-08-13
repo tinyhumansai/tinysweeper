@@ -17,6 +17,7 @@ pub mod error;
 pub mod evidence;
 pub mod falsify;
 pub mod findings;
+pub mod flows;
 pub mod forge;
 pub mod graph;
 pub mod harness;
