@@ -73,7 +73,7 @@ where
     for (path, result) in futures::future::join_all(tasks).await {
         match result {
             Ok(review) => out.reviews.push(review),
-            Err(err) => out.failures.push((path, err)),
+            Err(err) => { println!("FANOUT_FAIL {path}: {err}"); out.failures.push((path, err)) },
         }
     }
     out

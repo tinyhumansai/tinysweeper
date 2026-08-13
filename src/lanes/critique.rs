@@ -1039,6 +1039,7 @@ fn helper() {
             })
             .await
             .expect("runs");
+        println!("FAILNOTE: {}", outcome.summary);
 
         for r in model2.requests() {
             if r.schema_name.contains("critique") && !r.schema_name.contains("verify") {
