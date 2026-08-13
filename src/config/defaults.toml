@@ -165,16 +165,6 @@ budget_usd_per_pr = 1.0
 # `models.provider` instead.
 [models.provider]
 order = ["streamlake", "deepinfra"]
-allow_fallbacks = false` makes the pin a guarantee; the
-# safety net for a DeepSeek outage is `fallback` above, which switches model and
-# is priced accordingly.
-#
-# This table must stay *below* every scalar key in `[models]`: a TOML sub-table
-# ends the parent table, so anything written after it is parsed as a key of
-# `models.provider` instead. That mistake makes the whole config fail to load
-# with an error naming an unrelated key.
-[models.provider]
-order = ["deepseek"]
 allow_fallbacks = false
 
 # The knowledge centre. `files` are read from the pull request's head commit
