@@ -1039,6 +1039,8 @@ fn helper() {
             .await
             .expect("runs");
 
+        println!("SUMMARY: {}", outcome.summary);
+        println!("FINDINGS: {:#?}", outcome.findings);
         assert_eq!(
             outcome.findings.len(),
             1,
