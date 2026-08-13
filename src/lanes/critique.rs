@@ -1043,7 +1043,11 @@ fn helper() {
         for r in model2.requests() {
             if r.schema_name.contains("critique") && !r.schema_name.contains("verify") {
                 println!("--- {} ---", r.schema_name);
-                println!("{}", &r.messages[0].content[..600.min(r.messages[0].content.len())]);
+                let c = &r.messages[0].content;
+                match c.find("The file is") {
+                    Some(i) => println!("MARKER: {}", &c[i..(i+40).min(c.len())]),
+                    None => println!("MARKER: <absent> len={}", c.len()),
+                }
             }
         }
         println!("SUMMARY: {}", outcome.summary);
