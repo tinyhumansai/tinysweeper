@@ -24,7 +24,7 @@ use crate::harness::prompt::{self, PromptInputs};
 use crate::flows::runner::{self, PanelRequest};
 use crate::harness::schema;
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
-use crate::ports::model::{Message, Model, ModelRequest, Spend};
+use crate::ports::model::Model;
 
 /// Bodies shorter than this are treated as no body at all.
 ///
