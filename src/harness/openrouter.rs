@@ -637,7 +637,7 @@ mod tests {
         // Absence matters: sending `provider: {order: []}` is not the same as
         // sending nothing, and the empty list is the shape that would pin the
         // gateway to no provider at all.
-        let options = request_options("high", &ProviderRouting::default());
+        let options = provider_options("high", &ProviderRouting::default());
         assert!(options.get("provider").is_none());
         assert_eq!(options["reasoning"]["effort"], json!("high"));
     }
@@ -647,7 +647,7 @@ mod tests {
         // The regression this guards: both are top-level body keys set through
         // one `with_default_provider_options` call, so building them
         // separately silently drops whichever is written second.
-        let options = request_options("high", &pinned(&["deepseek"], false));
+        let options = provider_options("high", &pinned(&["deepseek"], false));
 
         assert_eq!(options["reasoning"]["effort"], json!("high"));
         assert_eq!(options["provider"]["order"], json!(["deepseek"]));
@@ -658,7 +658,7 @@ mod tests {
     fn a_pin_survives_reasoning_being_turned_off() {
         // `off` takes a different branch of `reasoning_options`, which returns a
         // differently-shaped object. The pin has to ride along on both.
-        let options = request_options("off", &pinned(&["deepseek"], false));
+        let options = provider_options("off", &pinned(&["deepseek"], false));
 
         assert_eq!(options["reasoning"]["enabled"], json!(false));
         assert_eq!(options["provider"]["order"], json!(["deepseek"]));
@@ -668,7 +668,7 @@ mod tests {
     fn blank_provider_names_are_dropped_rather_than_sent() {
         // With `allow_fallbacks = false` an unmatchable name is not a cosmetic
         // problem: it fails every request the deployment makes.
-        let options = request_options("high", &pinned(&["", "  ", "deepseek"], false));
+        let options = provider_options("high", &pinned(&["", "  ", "deepseek"], false));
         assert_eq!(options["provider"]["order"], json!(["deepseek"]));
     }
 
@@ -676,7 +676,7 @@ mod tests {
     fn a_routing_block_of_only_blanks_counts_as_unpinned() {
         assert!(pinned(&["", "   "], false).is_empty());
         assert!(
-            request_options("high", &pinned(&[""], false))
+            provider_options("high", &pinned(&[""], false))
                 .get("provider")
                 .is_none()
         );
@@ -764,7 +764,7 @@ mod tests {
     fn every_request_asks_the_gateway_for_the_cost_it_charged() {
         // Without this the only cost figure in the whole system is the rate
         // table's estimate, and `budget_usd_per_pr` stops a real bill on it.
-        let options = provider_options("high");
+        let options = provider_options("high", &ProviderRouting::default());
         assert_eq!(options["usage"], json!({ "include": true }));
         // The reasoning block is still there: the two travel in one object and
         // an overwrite would silently un-configure `reasoning_effort`.
