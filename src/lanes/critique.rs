@@ -1022,6 +1022,7 @@ fn helper() {
             }))
             .then(json!({"incorrect": []}));
 
+        let model2 = model.clone();
         let outcome = Critique::new(Arc::new(model))
             .run(LaneInput {
                 config: &config,
@@ -1039,6 +1040,12 @@ fn helper() {
             .await
             .expect("runs");
 
+        for r in model2.requests() {
+            if r.schema_name.contains("critique") && !r.schema_name.contains("verify") {
+                println!("--- {} ---", r.schema_name);
+                println!("{}", &r.messages[0].content[..600.min(r.messages[0].content.len())]);
+            }
+        }
         println!("SUMMARY: {}", outcome.summary);
         println!("FINDINGS: {:#?}", outcome.findings);
         assert_eq!(
