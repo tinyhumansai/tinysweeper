@@ -18,6 +18,9 @@
   is a new folder, never a new module.
 - `vendor/tinyagents` — the agent harness, as a git submodule. Never edit it
   here; change it upstream and bump the pin.
+- `vendor/tinyflows` — the orchestration graph, as a git submodule. Same rule.
+  Lane concurrency, the consensus panel and sub-agents are all expressed as
+  graphs against it; see `docs/modules/flows/README.md`.
 - `docs/modules/<module>/README.md` — one document per `src/` module.
 - `examples/` — declared explicitly in `Cargo.toml` with `required-features`, so
   credential-needing smoke tests never build in CI.
