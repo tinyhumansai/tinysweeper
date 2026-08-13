@@ -25,14 +25,19 @@
 name: Deploy
 
 on:
-  # Chained off CI rather than off `push` so a deploy can only ever follow a
-  # green run that actually published an image.
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: [main]
-  # The manual escape hatch: re-roll the cluster without waiting for a commit.
   workflow_dispatch:
+    inputs:
+      # Both inputs exist for the one-off case — rolling a second namespace, or
+      # a single workload out of several. Left empty they fall back to the
+      # repository variables, which is what a routine deploy uses.
+      namespace:
+        description: "Namespace. Empty uses the K8S_NAMESPACE variable"
+        required: false
+        type: string
+      deployments:
+        description: "Comma-separated deployments. Empty uses the K8S_DEPLOYMENTS variable"
+        required: false
+        type: string
 
 # Nothing here touches the GitHub API. The cluster credential is a secret, not
 # a permission, so the job's own token is given nothing.
