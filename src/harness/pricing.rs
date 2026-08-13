@@ -41,7 +41,9 @@ pub struct Price {
     pub cached: f64,
 }
 
-/// Per-million-token prices, verified against openrouter.ai on 2026-08-09.
+/// Per-million-token prices, verified against openrouter.ai on 2026-08-09;
+/// the two DeepSeek V4 Pro rows re-verified against the endpoint listing on
+/// 2026-08-13.
 ///
 /// tinyagents reports tokens but not cost, and the budget ceiling is
 /// denominated in dollars, so the conversion happens here.
@@ -62,20 +64,55 @@ const MODEL_PRICES: &[(&str, Price)] = &[
         },
     ),
     (
+        // Corrected 2026-08-13; the previous row was $0.07 / $0.22 / $0.013 and
+        // understated the real bill by roughly **ten times**. No endpoint has
+        // ever served GLM 5.2 at those rates: the cheapest of the thirty-three
+        // on the gateway is Baidu at $0.392 / $1.232, and this deployment routes
+        // to StreamLake at $0.753 / $2.367 / $0.1399.
+        //
+        // It mattered in two places, both quiet. `budget_usd_per_pr` is a hard
+        // stop on a real bill enforced through this table, so it was failing
+        // open by an order of magnitude. And the eval corpus records a cost per
+        // case from here whenever the gateway reports none, which made every
+        // GLM scorecard look ten times cheaper than the run really was —
+        // including the baseline a model change gets compared against.
+        //
+        // Priced at the worst of the providers this account can reach
+        // (DeepInfra $0.750, StreamLake $0.753, DigitalOcean $0.630 input), so
+        // the ceiling errs toward stopping early rather than overspending.
         "z-ai/glm-5.2",
         Price {
-            input: 0.07,
-            output: 0.22,
-            cached: 0.013,
+            input: 0.753,
+            output: 2.400,
+            cached: 0.140,
         },
     ),
     (
-        "deepseek/deepseek-v4-pro",
+        // The selected model. Priced at the DeepSeek first-party endpoint,
+        // which is not a guess about routing: this snapshot is the one V4 Pro
+        // build DeepSeek serves alone, so there is exactly one endpoint and
+        // exactly one price. See `models.scan` in `defaults.toml`.
+        "deepseek/deepseek-v4-pro-0813",
         Price {
             input: 0.435,
             output: 0.87,
             // Cache reads are a *hundredth* of the input price here, against a
             // tenth on kimi-k3. On a re-review that is most of the bill.
+            cached: 0.003625,
+        },
+    ),
+    (
+        // Not selected, and **known to under-price**: left as-is deliberately.
+        // These are DeepSeek's own endpoint prices, but the floating alias is
+        // served by eighteen providers spanning $0.42-$1.74 per million input
+        // tokens and $0.0036-$0.33 per million cache reads, and the gateway
+        // picks among whichever the account permits. A deployment that selects
+        // this alias should re-derive the row from
+        // `/api/v1/models/deepseek/deepseek-v4-pro/endpoints` first.
+        "deepseek/deepseek-v4-pro",
+        Price {
+            input: 0.435,
+            output: 0.87,
             cached: 0.003625,
         },
     ),
@@ -361,19 +398,46 @@ mod tests {
     }
 
     #[test]
-    fn the_new_deep_tier_costs_what_the_table_says() {
-        // Anchored on the real figure this change was made against: PR #62's
-        // security lane sent 82,914 input and 842 output tokens and cost
-        // $0.2614 on the outgoing model. The same call on this one is the whole
-        // argument for the switch, so it is pinned rather than asserted vaguely.
+    fn the_deep_tier_costs_what_the_table_says() {
+        // Anchored on the same real figure every deep-tier change has been
+        // measured against: PR #62's security lane sent 82,914 input and 842
+        // output tokens. That call cost $0.2614 on kimi-k3 and $0.0061 on GLM
+        // 5.2; on the model selected now it is pinned below rather than
+        // asserted vaguely, because the price of the *selected* tier is what
+        // the budget ceiling is actually spent through.
+        //
         // Note the argument order: input, **cached**, output. Getting it wrong
         // is silent — every argument is a `u64` — and I did exactly that while
         // writing this test, which is why the ordering is now pinned below.
-        let cost = completion_cost("z-ai/glm-5.2", 82_914, 0, 842);
+        let cost = completion_cost("deepseek/deepseek-v4-pro-0813", 82_914, 0, 842);
 
         assert!(
-            (0.005..0.007).contains(&cost),
-            "expected roughly $0.006 for the 83k-token security call, got {cost:.5}"
+            (0.035..0.039).contains(&cost),
+            "expected roughly $0.037 for the 83k-token security call, got {cost:.5}"
+        );
+    }
+
+    #[test]
+    fn no_model_is_priced_below_what_any_endpoint_actually_charges() {
+        // The GLM 5.2 row sat at $0.07 / $0.22 for months. Nothing caught it,
+        // because every test here compares this table against itself: a row can
+        // be wrong by any factor and still be internally consistent.
+        //
+        // A floor is the one property checkable offline. The cheapest endpoint
+        // serving any model this table lists is $0.392 per million input
+        // tokens; a row below $0.10 is therefore not a cheap model but a
+        // mistake, and it is the direction that matters — an underpriced row
+        // makes `budget_usd_per_pr` fail open and lets a real bill run past a
+        // ceiling that thinks it has room.
+        let too_cheap: Vec<_> = MODEL_PRICES
+            .iter()
+            .filter(|(_, price)| price.input < 0.10 || price.output < 0.10)
+            .map(|(name, _)| *name)
+            .collect();
+
+        assert!(
+            too_cheap.is_empty(),
+            "priced below any real endpoint, so the budget ceiling fails open: {too_cheap:?}"
         );
     }
 

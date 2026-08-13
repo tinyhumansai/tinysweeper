@@ -1,0 +1,17 @@
+{
+  "key": "7042f2628e522625",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4413,
+    "output_tokens": 3596,
+    "cached_tokens": 1024,
+    "embed_tokens": 0,
+    "cost_usd": 0.004606447
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds model pricing entries and in-crate tests for cost estimation; no security problems introduced."
+  }
+}

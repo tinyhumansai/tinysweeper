@@ -6,6 +6,41 @@ the two implementations of that port — `MockModel` for tests, `GatewayModel`
 behind the `harness` feature for the real thing — plus the prompt assembly and
 schema that every lane shares.
 
+## Who enforces the schema
+
+`models.structured_output` picks between two ways of getting a structured answer,
+and they are not equally strong.
+
+- **`schema`** — the default. The provider is handed the JSON Schema and
+  constrains generation to it. A response of the wrong shape is never generated.
+- **`json_object`** — the provider guarantees only that the answer is a
+  well-formed JSON object. The schema travels in the system prompt instead, via
+  `schema::json_mode_instruction`, and `schema::parse` is what rejects a
+  mismatch.
+
+Under `json_object` a wrong shape is *caught* rather than *prevented*. That is a
+real reduction in strength, and it is still a long way from parsing prose: the
+answer is always valid JSON or a hard error, never a best-effort read of English.
+
+The setting exists because the strong form is not universally available.
+`deepseek-v4-pro-0813` answers a strict schema request with
+`400 — "This response_format type is unavailable now"`, so a deployment that
+selects it on `schema` never reaches DeepSeek at all — every call fails and the
+fallback chain answers instead, which looks indistinguishable from a healthy
+deployment. That was measured: a corpus re-record produced 29 of 29 answers from
+the fallback model.
+
+Two halves, one decision. `json_object` mode changes the wire `response_format`
+*and* appends the schema to the prompt; `wire_messages` is split out and tested
+precisely so the two cannot drift apart. Changing one without the other either
+sends a schema nobody reads or asks for a shape nobody described. The instruction
+text must also contain the literal word "json" — DeepSeek's JSON mode rejects a
+request without it, so a reword that drops the word breaks every call.
+
+The setting applies to the whole chain, fallbacks included: any model in it can
+answer a given review, and the prompt is assembled before the answering model is
+known.
+
 ## The output ceiling, and what happens when an answer hits it
 
 `models.max_tokens` is a ceiling on *generated* tokens, and the hidden reasoning

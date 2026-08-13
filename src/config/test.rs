@@ -7,7 +7,7 @@ use std::path::Path;
 
 use tempfile::TempDir;
 
-use crate::config::types::{Config, LaneId, Severity};
+use crate::config::types::{Config, LaneId, Severity, StructuredOutput};
 use crate::config::{DEFAULTS, Layer, load, load_validated, validate};
 
 /// Build a repository skeleton with an optional config file and preset.
@@ -141,6 +141,36 @@ fn the_built_in_defaults_are_valid() {
     let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
     let problems = validate::validate(&config);
     assert!(problems.is_empty(), "{problems:#?}");
+}
+
+#[test]
+fn the_defaults_pair_the_selected_model_with_a_mode_it_can_answer() {
+    // These two keys are one decision. `deepseek-v4-pro-0813` returns 400
+    // "This response_format type is unavailable now" for a strict schema, so
+    // selecting it while leaving `structured_output = "schema"` produces a
+    // deployment where every single review fails over to the fallback and looks
+    // healthy doing it. Measured: 29 of 29 corpus recordings answered by GLM.
+    let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
+
+    if config.models.scan.contains("deepseek-v4-pro-0813")
+        || config.models.deep.contains("deepseek-v4-pro-0813")
+    {
+        assert_eq!(
+            config.models.structured_output,
+            StructuredOutput::JsonObject,
+            "the pinned DeepSeek snapshot cannot answer a strict schema request"
+        );
+    }
+}
+
+#[test]
+fn structured_output_defaults_to_the_strong_setting() {
+    // Absent from a repository's own config, the mode must be the one that lets
+    // the provider refuse a bad shape outright. A weaker default would silently
+    // downgrade every deployment that never heard of this key.
+    let models: crate::config::types::Models = toml::from_str("").expect("empty table");
+
+    assert_eq!(models.structured_output, StructuredOutput::Schema);
 }
 
 #[test]

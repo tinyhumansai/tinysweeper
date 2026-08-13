@@ -1,0 +1,28 @@
+{
+  "key": "353d2a1fbdf240b0",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 8868,
+    "output_tokens": 36545,
+    "cached_tokens": 5376,
+    "embed_tokens": 0,
+    "cost_usd": 0.017925596
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The comment says cache reads are a hundredth of the input price, which for `input: 0.435` would be `0.00435`. The actual value is `0.003625`, which is `0.435 / 120` and about 17% lower than a hundredth. This either misdocuments the verified ratio or underreports cached-token cost. Update the value to `0.00435` or correct the comment and re-verify against OpenRouter.",
+        "confidence": 0.8,
+        "existing_code": "            // Cache reads are a *hundredth* of the input price here, against a\n            // tenth on kimi-k3. On a re-review that is most of the bill.\n            cached: 0.003625,",
+        "path": "src/harness/pricing.rs",
+        "rule": "incorrect-comment",
+        "severity": "low",
+        "suggestion": null,
+        "title": "Correct the cached-price comment or value for deepseek-v4-pro"
+      }
+    ],
+    "summary": "The change adds new model price rows and tests that the default-selected models are priced, including checks for cached/output billing order. The code looks mostly sound, but one cached-price comment/value mismatch should be corrected before merging."
+  }
+}

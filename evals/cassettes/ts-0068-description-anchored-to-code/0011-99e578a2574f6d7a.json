@@ -1,0 +1,17 @@
+{
+  "key": "99e578a2574f6d7a",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4718,
+    "output_tokens": 1800,
+    "cached_tokens": 1024,
+    "embed_tokens": 0,
+    "cost_usd": 0.003176602
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a configurable reasoning_effort field to GatewayModel and uses it to construct provider options via a safe JSON builder. No security issues are introduced."
+  }
+}

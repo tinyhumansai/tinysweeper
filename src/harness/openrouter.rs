@@ -19,10 +19,12 @@ use tinyagents::{
     HarnessEventJournal, InMemoryEventJournal, JournalSink, LangfuseClient, LangfuseTraceConfig,
 };
 
-use crate::config::types::Models;
+use crate::config::types::{Models, StructuredOutput};
 use crate::error::{Error, Result};
-use crate::harness::pricing;
-use crate::ports::model::{Model, ModelRequest, ModelResponse, Role, Usage};
+use crate::harness::{pricing, schema};
+use crate::ports::model::{
+    Message as CrateMessage, Model, ModelRequest, ModelResponse, Role, Usage,
+};
 
 /// A model reached through an OpenAI-compatible gateway.
 ///
@@ -33,6 +35,7 @@ pub struct GatewayModel {
     base_url: String,
     fallbacks: Vec<String>,
     reasoning_effort: String,
+    structured_output: StructuredOutput,
     langfuse: Option<LangfuseClient>,
 }
 
@@ -85,6 +88,28 @@ fn gateway_cost(raw: Option<&serde_json::Value>) -> Option<f64> {
     (cost.is_finite() && cost >= 0.0).then_some(cost)
 }
 
+/// The conversation as it goes on the wire, including anything the structured
+/// output mode has to say.
+///
+/// Split out so the coupling can be tested: under
+/// [`StructuredOutput::JsonObject`] the provider is told only "return json", so
+/// if this function stops appending the schema the model is left describing a
+/// contract nobody gave it — and that failure looks like a quality regression
+/// rather than a bug, which is exactly the kind that survives a review.
+fn wire_messages(request: &ModelRequest, mode: StructuredOutput) -> Vec<CrateMessage> {
+    let mut messages = request.messages.clone();
+    // Appended as its own system message rather than folded into the lane
+    // prompt: the lane prompts are shared with the mock and the cassettes, and
+    // this text is a property of how *this* gateway asks for structured output,
+    // not of what the lane wants said.
+    if mode == StructuredOutput::JsonObject {
+        messages.push(CrateMessage::system(schema::json_mode_instruction(
+            &request.schema,
+        )));
+    }
+    messages
+}
+
 impl GatewayModel {
     /// Build from the `[models]` config, reading the key from the environment
     /// variable the config names.
@@ -105,6 +130,7 @@ impl GatewayModel {
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
+            structured_output: models.structured_output,
             langfuse: langfuse_client(),
         })
     }
@@ -170,11 +196,19 @@ impl GatewayModel {
 
     async fn call(&self, model: &str, request: &ModelRequest, cap: u32) -> Result<CallOutcome> {
         let mut harness = self.harness(model)?;
+        // Who enforces the schema. These two arms are one decision, not two
+        // independent settings: `JsonObject` asks the provider for *some* JSON
+        // and therefore has to carry the schema in the prompt itself, and the
+        // prompt half is added below. Changing one arm without the other either
+        // sends a schema nobody reads or asks for a shape nobody described.
+        let response_format = match self.structured_output {
+            StructuredOutput::Schema => {
+                ResponseFormat::json_schema(&request.schema_name, request.schema.clone())
+            }
+            StructuredOutput::JsonObject => ResponseFormat::JsonObject,
+        };
         harness.with_policy(RunPolicy {
-            default_response_format: Some(ResponseFormat::json_schema(
-                &request.schema_name,
-                request.schema.clone(),
-            )),
+            default_response_format: Some(response_format),
             capture: if self.langfuse.is_some() {
                 PayloadCapture {
                     model_io: true,
@@ -186,8 +220,7 @@ impl GatewayModel {
             ..RunPolicy::default()
         });
 
-        let messages: Vec<TaMessage> = request
-            .messages
+        let messages: Vec<TaMessage> = wire_messages(request, self.structured_output)
             .iter()
             .map(|m| match m.role {
                 Role::System => TaMessage::system(&m.content),
@@ -304,11 +337,33 @@ impl GatewayModel {
         // Structured output is not optional: a lane that falls back to parsing
         // prose posts nonsense the first time a model phrases something
         // differently.
-        let value = run.structured.ok_or_else(|| {
-            Error::Model(format!(
-                "{model} returned no structured output; the response did not satisfy the schema"
-            ))
-        })?;
+        //
+        // `run.structured` is populated only when the harness was given a schema
+        // to extract against, which is the `schema` mode. Under `json_object`
+        // there is no schema on the wire, so the harness has nothing to extract
+        // with and leaves it empty — the answer arrives as the run's text. That
+        // is *not* a licence to parse prose: `serde_json::from_str` either
+        // yields a JSON value or fails, and `schema::parse` downstream rejects
+        // any value of the wrong shape. Both modes end at the same guarantee;
+        // only the enforcer differs.
+        let value = match (run.structured.clone(), self.structured_output) {
+            (Some(value), _) => value,
+            (None, StructuredOutput::JsonObject) => {
+                let text = run.text().unwrap_or_default();
+                serde_json::from_str(text.trim()).map_err(|err| {
+                    Error::Model(format!(
+                        "{model} answered in `json_object` mode with something that is not \
+                         JSON: {err}"
+                    ))
+                })?
+            }
+            (None, StructuredOutput::Schema) => {
+                return Err(Error::Model(format!(
+                    "{model} returned no structured output; the response did not satisfy the \
+                     schema"
+                )));
+            }
+        };
 
         let usage = Usage {
             input_tokens: totals.input_tokens,
@@ -509,6 +564,7 @@ mod tests {
     fn models() -> Models {
         Models {
             reasoning_effort: "high".into(),
+            structured_output: StructuredOutput::Schema,
             gateway: "openrouter".into(),
             base_url: "https://openrouter.ai/api/v1".into(),
             api_key_env: "TINYSWEEPER_TEST_KEY_ABSENT".into(),
@@ -528,6 +584,52 @@ mod tests {
             schema_name: "tinysweeper_critique".into(),
             max_tokens,
         }
+    }
+
+    #[test]
+    fn schema_mode_leaves_the_conversation_alone() {
+        // Under `schema` the provider holds the schema, so adding it to the
+        // prompt as well would spend input tokens on every call of every lane
+        // to say something the wire format already said.
+        let mut req = request(100);
+        req.messages = vec![CrateMessage::system("review this")];
+
+        let wire = wire_messages(&req, StructuredOutput::Schema);
+
+        assert_eq!(wire.len(), 1, "schema mode must not touch the prompt");
+    }
+
+    #[test]
+    fn json_object_mode_carries_the_schema_in_the_prompt() {
+        // The other half of the same decision. `ResponseFormat::JsonObject`
+        // tells the provider "any json object", so the shape has to arrive in
+        // the prompt or the model is guessing at the contract.
+        let mut req = request(100);
+        req.messages = vec![CrateMessage::system("review this")];
+        req.schema = crate::harness::schema::json_schema();
+
+        let wire = wire_messages(&req, StructuredOutput::JsonObject);
+
+        assert_eq!(wire.len(), 2, "the schema instruction must be appended");
+        assert!(matches!(wire[1].role, Role::System));
+        assert!(
+            wire[1].content.contains("existing_code"),
+            "the appended message must actually carry the schema"
+        );
+    }
+
+    #[test]
+    fn the_json_mode_instruction_says_the_word_json() {
+        // Not a style assertion. DeepSeek's JSON mode **rejects** a request
+        // whose prompt never says "json", so a well-meaning reword that drops
+        // the word turns every call into a 400 — and the fallback chain then
+        // hides it behind a working review from a different model.
+        let text = crate::harness::schema::json_mode_instruction(&json!({"type": "object"}));
+
+        assert!(
+            text.to_lowercase().contains("json"),
+            "DeepSeek's JSON mode requires the literal word in the prompt"
+        );
     }
 
     #[test]
@@ -623,6 +725,7 @@ mod tests {
     fn debug_never_prints_the_api_key() {
         let model = GatewayModel {
             reasoning_effort: "high".into(),
+            structured_output: StructuredOutput::Schema,
             api_key: "sk-secret-value".into(),
             base_url: "https://openrouter.ai/api/v1".into(),
             fallbacks: vec![],
@@ -682,6 +785,7 @@ mod tests {
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
+            structured_output: models.structured_output,
             langfuse: None,
         };
 

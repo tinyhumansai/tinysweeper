@@ -1,0 +1,17 @@
+{
+  "key": "41ed18e32c1b3bd3",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2696,
+    "output_tokens": 525,
+    "cached_tokens": 1024,
+    "embed_tokens": 0,
+    "cost_usd": 0.001187782
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a public `summarise` module to the findings module. It introduces no untrusted input paths, authentication or authorization changes, network/subprocess calls, deserialization, path traversal, secret handling, or dependency changes."
+  }
+}
