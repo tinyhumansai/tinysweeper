@@ -68,6 +68,37 @@ fn the_built_in_defaults_are_valid() {
 }
 
 #[test]
+fn the_shipped_defaults_pin_the_upstream_provider() {
+    // Unpinned, the gateway load-balances across providers whose prices span
+    // 4x while `harness::pricing` keeps one price per model id — so the cost
+    // line and `budget_usd_per_pr` stop describing anything real. This asserts
+    // the *shipped* config rather than the type's default, because the default
+    // is deliberately empty (an operator pointing `base_url` at a gateway with
+    // no provider routing must not have a stray `provider` block sent).
+    let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
+
+    assert_eq!(config.models.provider.order, vec!["deepseek".to_string()]);
+    assert!(
+        !config.models.provider.allow_fallbacks,
+        "a pin the gateway may route around is not a pin"
+    );
+}
+
+#[test]
+fn a_sub_table_never_swallows_the_model_scalars() {
+    // `[models.provider]` ends the `[models]` table, so a scalar written after
+    // it is parsed as `models.provider.<key>` and the whole config fails to
+    // load with an error naming an unrelated key. That is exactly how this was
+    // first written, and the message it produced pointed nowhere near the
+    // mistake.
+    let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
+
+    assert_eq!(config.models.max_tokens, 16_000);
+    assert_eq!(config.models.reasoning_effort, "high");
+    assert!((config.models.budget_usd_per_pr - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
 fn a_repository_with_no_config_runs_on_defaults() {
     let dir = repo(None, &[]);
     let loaded = load(dir.path(), None).expect("loads");
