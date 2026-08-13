@@ -29,6 +29,10 @@ pub struct MockModel {
     panel: Option<Arc<PanelAnswers>>,
 }
 
+/// Schema names that belong to a lane's own stages rather than to a panel
+/// round, and so must reach the response queue.
+const PANEL_STAGES: &[&str] = &["relocate", "falsify"];
+
 /// What a panel-aware mock answers each round with.
 #[derive(Debug)]
 struct PanelAnswers {
@@ -174,22 +178,36 @@ impl Model for MockModel {
             .answers_as
             .clone()
             .unwrap_or_else(|| request.model.clone());
-        // A panel-aware mock answers from the round rather than the queue.
+        // A panel-aware mock answers the panel's own rounds from the round it
+        // recognises, and lets every other call fall through to the queue.
+        //
+        // The fall-through is what keeps the existing golden tests meaningful:
+        // relocation (`tinysweeper_relocate`) and falsification
+        // (`tinysweeper_falsify`) are not panel rounds, they are separate
+        // stages a lane drives itself, and a test that queues a canned
+        // relocation still needs that value to reach the positioner.
         if let Some(answers) = self.panel.clone() {
-            let value = if request.schema_name.ends_with("_verify") {
-                json!({ "real": answers.verdict, "why": "canned" })
-            } else if request.schema_name.ends_with("_answer") {
-                json!({ "answer": "The evidence does not say.", "confident": false })
+            let canned = if request.schema_name.ends_with("_verify") {
+                Some(json!({ "real": answers.verdict, "why": "canned" }))
+            } else if request.schema_name.ends_with("_subagent_answer") {
+                Some(json!({ "answer": "The evidence does not say.", "confident": false }))
+            } else if PANEL_STAGES
+                .iter()
+                .all(|stage| !request.schema_name.contains(stage))
+            {
+                Some(answers.propose.clone())
             } else {
-                answers.propose.clone()
+                None
             };
 
-            self.requests.lock().expect("mock model lock").push(request);
-            return Ok(ModelResponse {
-                value,
-                model,
-                usage: self.usage,
-            });
+            if let Some(value) = canned {
+                self.requests.lock().expect("mock model lock").push(request);
+                return Ok(ModelResponse {
+                    value,
+                    model,
+                    usage: self.usage,
+                });
+            }
         }
 
         self.requests.lock().expect("mock model lock").push(request);

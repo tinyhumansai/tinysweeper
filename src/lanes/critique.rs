@@ -462,7 +462,7 @@ fn helper() {
 
     #[tokio::test]
     async fn a_finding_on_a_changed_line_survives() {
-        let model = MockModel::new().then(json!({
+        let model = MockModel::panel(json!({
             "summary": "Adds an unchecked index.",
             "findings": [finding_at(2)]
         }));
@@ -477,7 +477,7 @@ fn helper() {
     async fn a_quoted_snippet_is_what_places_the_finding() {
         // The model quotes the code with the indentation it felt like using and
         // never names a line. Line 2 is where that code actually is.
-        let model = MockModel::new().then(json!({
+        let model = MockModel::panel(json!({
             "summary": "Adds an unchecked index.",
             "findings": [finding_quoting("let x = items[i];")]
         }));
@@ -489,7 +489,7 @@ fn helper() {
 
     #[tokio::test]
     async fn a_leaked_diff_marker_in_the_quote_does_not_lose_the_finding() {
-        let model = MockModel::new().then(json!({
+        let model = MockModel::panel(json!({
             "summary": "…",
             "findings": [finding_quoting("+    let x = items[i];")]
         }));
@@ -500,7 +500,7 @@ fn helper() {
 
     #[tokio::test]
     async fn a_multi_line_quote_becomes_a_range() {
-        let model = MockModel::new().then(json!({
+        let model = MockModel::panel(json!({
             "summary": "…",
             "findings": [finding_quoting("let x = items[i];\n\nprintln!(\"{x}\");")]
         }));
@@ -518,7 +518,7 @@ fn helper() {
         // did to it.
         let mut files = BTreeMap::new();
         files.insert("src/main.rs".to_string(), FILE.to_string());
-        let model = MockModel::new().then(json!({
+        let model = MockModel::panel(json!({
             "summary": "…",
             "findings": [finding_quoting("    let cfg = load();")]
         }));
@@ -536,7 +536,7 @@ fn helper() {
 
     #[tokio::test]
     async fn a_quote_that_matches_nothing_leaves_the_finding_unanchored() {
-        let model = MockModel::new().then(json!({
+        let model = MockModel::panel(json!({
             "summary": "…",
             "findings": [finding_quoting("let y = somewhere_else();")]
         }));
@@ -642,7 +642,7 @@ fn helper() {
     async fn a_finding_quoting_a_line_the_model_did_not_change_is_still_postable() {
         // Line 1 is context inside the hunk. The model quoted it, so it read
         // it, and GitHub will take a comment there.
-        let model = MockModel::new().then(json!({
+        let model = MockModel::panel(json!({
             "summary": "…",
             "findings": [finding_quoting("fn main() {")]
         }));
@@ -655,7 +655,7 @@ fn helper() {
     async fn a_legacy_response_with_a_line_and_no_quote_still_anchors() {
         // Migration: a proposal or a fine-tune still answering with the old
         // schema keeps working, because its number is better than nothing.
-        let model = MockModel::new().then(json!({
+        let model = MockModel::panel(json!({
             "summary": "…",
             "findings": [finding_at(2)]
         }));
@@ -666,7 +666,7 @@ fn helper() {
 
     #[tokio::test]
     async fn a_legacy_line_outside_every_hunk_is_not_trusted() {
-        let model = MockModel::new().then(json!({
+        let model = MockModel::panel(json!({
             "summary": "…",
             "findings": [finding_at(99)]
         }));
@@ -677,7 +677,7 @@ fn helper() {
 
     #[tokio::test]
     async fn a_finding_in_a_file_the_pull_request_never_touched_is_discarded() {
-        let model = MockModel::new().then(json!({
+        let model = MockModel::panel(json!({
             "summary": "…",
             "findings": [{
                 "path": "src/elsewhere.rs",
@@ -699,7 +699,7 @@ fn helper() {
     async fn a_late_finding_may_sit_on_unchanged_lines_of_a_touched_file() {
         let mut late = finding_at(1);
         late["late"] = json!(true);
-        let model = MockModel::new().then(json!({"summary": "…", "findings": [late]}));
+        let model = MockModel::panel(json!({"summary": "…", "findings": [late]}));
 
         let outcome = run_with(model, &config(), &diffs()).await;
         assert_eq!(outcome.findings.len(), 1);
@@ -712,7 +712,7 @@ fn helper() {
         // request changed. A finding that lands on a context line is therefore
         // about code the author did not touch, and the reader has to be able to
         // tell — the model did not say `late`, the diff did.
-        let model = MockModel::new().then(json!({
+        let model = MockModel::panel(json!({
             "summary": "…",
             "findings": [finding_quoting("fn main() {")]
         }));
@@ -729,7 +729,7 @@ fn helper() {
 
     #[tokio::test]
     async fn a_finding_quoting_an_added_line_is_not_marked_pre_existing() {
-        let model = MockModel::new().then(json!({
+        let model = MockModel::panel(json!({
             "summary": "…",
             "findings": [finding_quoting("    let x = items[i];")]
         }));
@@ -925,7 +925,7 @@ fn helper() {
     /// depends on.
     #[tokio::test]
     async fn malformed_model_output_is_reported_rather_than_posted_as_nonsense() {
-        let model = MockModel::new().then(json!({"summary": "…", "findings": [{"path": "x"}]}));
+        let model = MockModel::panel(json!({"summary": "…", "findings": [{"path": "x"}]}));
         let pr = pull_request();
         let config = config();
         let diffs = diffs();
@@ -1021,7 +1021,7 @@ fn helper() {
 
     #[tokio::test]
     async fn resolved_findings_are_carried_through() {
-        let model = MockModel::new().then(json!({
+        let model = MockModel::panel(json!({
             "summary": "Earlier issue is fixed.",
             "findings": [],
             "resolved": ["Guard the index before dereferencing"]
