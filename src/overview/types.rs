@@ -1,5 +1,5 @@
-//! The core types of the change map: components, the links between them, and
-//! how much of the picture the graph was actually able to supply.
+//! The core types of the change flow: named behaviours, the links between
+//! them, and how much of the picture the graph was actually able to supply.
 //!
 //! Always compiled. Nothing here reads a store or renders anything — `build`
 //! fills these in from a diff and a neighbourhood, and `mermaid` / `render`
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::types::Severity;
 
-/// What a component's relationship to the change is.
+/// What a behaviour's relationship to the change is.
 ///
 /// The distinction is the whole point of the picture. A reviewer can see the
 /// changed files in the diff; what they cannot see is which *untouched* parts
@@ -17,62 +17,89 @@ use crate::config::types::Severity;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
-    /// The pull request edits files here.
+    /// The pull request edits this behaviour.
     Changed,
-    /// Untouched, but the graph reaches it from a changed file.
+    /// Untouched behaviour connected to one the pull request edits.
     Impacted,
 }
 
-/// One box in the diagram: a directory's worth of files, treated as a unit.
+/// One named behaviour in the diagram.
 ///
-/// A component is a *directory*, not a semantic module. Nothing here knows
-/// what a repository considers a component, and inventing one from a model's
-/// opinion would make the picture unreproducible between runs of the same
-/// commit. A directory is a claim the repository itself made.
+/// `name` is the graph's stable symbol id (`path#symbol`). Renderers show only
+/// the symbol half: the path keeps same-named symbols distinct without turning
+/// the diagram back into a file inventory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Component {
-    /// The directory this component stands for, or `(root)` for files with no
-    /// directory at all.
+    /// Stable graph node id for the behaviour.
     pub name: String,
-    /// Whether the change edits this component or merely reaches it.
+    /// Whether the change edits this behaviour or it supplies flow context.
     pub role: Role,
-    /// How many files of this component the pull request changed.
+    /// Legacy count retained in the proposal wire shape. New maps do not render
+    /// it because files are not the unit of the flow.
     pub files: usize,
-    /// Lines added across those files.
+    /// Legacy churn retained for proposal compatibility.
     pub additions: usize,
-    /// Lines removed across those files.
+    /// Legacy churn retained for proposal compatibility.
     pub deletions: usize,
     /// How many findings this review raised against files here.
     pub findings: usize,
     /// The worst severity among them, when there are any.
     pub worst: Option<Severity>,
-    /// The changed paths, for the table under the diagram. Capped by
-    /// [`crate::config::types::Overview::max_paths_per_component`]; `files` is
-    /// the untruncated count.
+    /// The source path that owns the behaviour, used only to attach findings.
+    /// It is deliberately not rendered.
     pub paths: Vec<String>,
 }
 
 impl Component {
-    /// Total churn, which is how components are ranked when there are too many
-    /// to draw.
+    /// Legacy churn total.
     pub fn churn(&self) -> usize {
         self.additions + self.deletions
     }
 }
 
-/// An aggregated edge between two components.
+/// An aggregated edge between two behaviours.
 ///
 /// Aggregated on purpose: drawing one arrow per import edge produces a hairball
 /// at about thirty files, and the count carries the same information in a form
 /// that survives being looked at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Link {
-    /// Index into [`ChangeMap::components`] of the importing side.
+    /// Index into [`ChangeMap::components`] of the source behaviour.
     pub from: usize,
-    /// Index into [`ChangeMap::components`] of the imported side.
+    /// Index into [`ChangeMap::components`] of the target behaviour.
     pub to: usize,
+    /// The semantic relationship carried by the arrow.
+    #[serde(default)]
+    pub relation: FlowRelation,
     /// How many underlying graph edges this arrow stands for.
     pub weight: usize,
+}
+
+/// A human-readable relationship between two behaviours.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FlowRelation {
+    /// The source invokes the target.
+    Calls,
+    /// The source uses the target without invoking it.
+    #[default]
+    Uses,
+    /// The source implements, extends, or embeds the target.
+    Implements,
+    /// The source test exercises the target.
+    Tests,
+}
+
+impl FlowRelation {
+    /// Text placed on an arrow in the flowchart.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Calls => "calls",
+            Self::Uses => "uses",
+            Self::Implements => "implements",
+            Self::Tests => "tests",
+        }
+    }
 }
 
 /// How much of the picture the code graph supplied.
@@ -102,7 +129,7 @@ pub enum GraphStatus {
     Cold,
     /// The walk ran and reached this many nodes.
     Walked {
-        /// Nodes reached, before they were folded into components.
+        /// Nodes reached, before they were folded into behaviours.
         nodes: usize,
     },
 }
@@ -110,18 +137,17 @@ pub enum GraphStatus {
 /// The finished map, ready to render.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangeMap {
-    /// Every component, changed ones first, each side ordered by churn.
+    /// Every named behaviour, changed ones first.
     pub components: Vec<Component>,
     /// Arrows between them.
     pub links: Vec<Link>,
-    /// Files the pull request changed, across every component including the
-    /// ones that did not fit.
+    /// Legacy diff total retained in the proposal wire shape.
     pub files: usize,
-    /// Lines added, across every changed file.
+    /// Legacy diff total retained in the proposal wire shape.
     pub additions: usize,
-    /// Lines removed, across every changed file.
+    /// Legacy diff total retained in the proposal wire shape.
     pub deletions: usize,
-    /// Components that were left out to keep the diagram legible.
+    /// Behaviours that were left out to keep the diagram legible.
     ///
     /// Reported rather than dropped quietly: a picture that silently omits
     /// half the change is worse than no picture, because it reads as complete.
@@ -133,18 +159,18 @@ pub struct ChangeMap {
 impl ChangeMap {
     /// Whether there is anything worth drawing.
     ///
-    /// A single-component change with no links is a box on its own, which
-    /// tells a reviewer nothing they did not get from the file list.
+    /// A set of disconnected names is not a flow. Only draw when the graph can
+    /// explain at least one relationship.
     pub fn worth_drawing(&self) -> bool {
-        self.components.len() > 1 || !self.links.is_empty()
+        !self.links.is_empty()
     }
 
-    /// The components the change edits.
+    /// The behaviours the change edits.
     pub fn changed(&self) -> impl Iterator<Item = &Component> {
         self.components.iter().filter(|c| c.role == Role::Changed)
     }
 
-    /// The components it only reaches.
+    /// The surrounding behaviours shown for context.
     pub fn impacted(&self) -> impl Iterator<Item = &Component> {
         self.components.iter().filter(|c| c.role == Role::Impacted)
     }
