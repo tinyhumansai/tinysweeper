@@ -7,7 +7,7 @@ use std::path::Path;
 
 use tempfile::TempDir;
 
-use crate::config::types::{Config, LaneId, Severity};
+use crate::config::types::{Config, LaneId, Severity, StructuredOutput};
 use crate::config::{DEFAULTS, Layer, load, load_validated, validate};
 
 /// Build a repository skeleton with an optional config file and preset.
