@@ -23,9 +23,10 @@ use crate::config::types::LaneId;
 use crate::error::Result;
 use crate::evidence::diff::{FileDiff, render as render_diffs};
 use crate::harness::prompt::{self, PromptInputs};
+use crate::flows::runner::{self, PanelRequest};
 use crate::harness::schema;
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
-use crate::ports::model::{Message, Model, ModelRequest, Spend};
+use crate::ports::model::Model;
 
 /// The tests lane.
 pub struct Tests {
@@ -90,31 +91,32 @@ impl Lane for Tests {
             ..PromptInputs::new(LaneId::Tests, input.config)
         });
 
-        let response = self
-            .model
-            .complete(ModelRequest {
-                model: input.config.model_for(LaneId::Tests).to_string(),
-                messages: vec![
-                    Message::system(built.prefix()),
-                    Message::user(built.suffix()),
-                ],
-                schema: schema::json_schema(),
-                schema_name: "tinysweeper_tests".into(),
-                max_tokens: input.config.models.max_tokens,
-            })
-            .await?;
+        // One panel over the whole pull request, rather than one call. The
+        // lenses split this lane's subject in two — whether the change is
+        // covered, and whether the tests that cover it could ever fail — and
+        // neither reading is much use without the other.
+        let panel = runner::run(
+            self.model.clone(),
+            input.config,
+            input.config.models.budget_usd_per_pr,
+            PanelRequest {
+                lane: LaneId::Tests,
+                schema: runner::schema_with_questions(schema::json_schema()),
+                suffix: built.suffix(),
+                system_of: &|lens| runner::system_with_charter(built.prefix(), lens),
+            },
+        )
+        .await;
 
-        // Taken before the value is moved out: the spend belongs to the model
-        // that answered, whether or not its answer parses.
-        let spend = Spend::of(&response);
-        let parsed = schema::parse(LaneId::Tests, response.value)?;
-        Ok(LaneOutcome::from_response(
+        let mut outcome = LaneOutcome::from_response(
             LaneId::Tests,
-            parsed,
+            runner::into_response(&panel),
             input.diffs,
             Anchoring::Strict,
-            spend,
-        ))
+            panel.spend.clone(),
+        );
+        outcome.summary.push_str(&panel.failure_note());
+        Ok(outcome)
     }
 }
 
