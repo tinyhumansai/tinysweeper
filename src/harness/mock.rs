@@ -51,6 +51,7 @@ impl MockModel {
             requests: Arc::new(Mutex::new(vec![])),
             usage: Usage::default(),
             answers_as: None,
+            panel: None,
         }
         .repeating(value)
     }
