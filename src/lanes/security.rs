@@ -222,6 +222,7 @@ async fn review_file(
         LaneId::Security,
         &calls,
         &schema::json_schema(),
+        config.council.subagents.then_some(config.models.flash.as_str()),
     )
     .await?;
 

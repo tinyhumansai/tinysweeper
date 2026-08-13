@@ -728,6 +728,19 @@ pub struct Council {
     /// Separate from `enabled` so the merge can be measured on its own before
     /// a second agent is what is being judged.
     pub corroboration: bool,
+    /// Let a reviewer ask the codebase a question instead of guessing.
+    ///
+    /// A reviewer may end its turn with questions; each is answered by a
+    /// sub-agent against the same evidence, and that reviewer is asked once
+    /// more with the answers. Exactly one follow-up turn, and only for
+    /// reviewers that asked — see `flows::subagent`.
+    ///
+    /// Independent of `enabled`: the solo reviewer a disabled council yields
+    /// asks questions too, which is what makes this measurable before a second
+    /// agent is also in play. It lives in `[council]` rather than `[review]`
+    /// because it spends the operator's money, and `[review]` is a section a
+    /// reviewed repository may override.
+    pub subagents: bool,
     /// The reviewers, in the order they run.
     pub agents: Vec<CouncilAgent>,
 }
