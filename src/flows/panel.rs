@@ -152,6 +152,13 @@ fn agent_node(id: &str, tier: Tier, system: &str, prompt: &str, schema: Value, n
             "prompt": prompt,
             "schema": schema,
             "schema_name": name,
+            // A panellist that fails must not fail the panel. The engine's
+            // default is `stop`, which would make one provider timeout return a
+            // whole lane's worth of nothing — and a lane that reports nothing
+            // is indistinguishable from a lane that found nothing. The runner
+            // notices the missing node output and records it as a failure, so
+            // the summary says which reader was lost.
+            "on_error": "continue",
         }),
         ports: Vec::new(),
         position: None,
