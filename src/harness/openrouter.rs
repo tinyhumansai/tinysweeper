@@ -22,7 +22,9 @@ use tinyagents::{
 use crate::config::types::{Models, StructuredOutput};
 use crate::error::{Error, Result};
 use crate::harness::{pricing, schema};
-use crate::ports::model::{Message as CrateMessage, Model, ModelRequest, ModelResponse, Role, Usage};
+use crate::ports::model::{
+    Message as CrateMessage, Model, ModelRequest, ModelResponse, Role, Usage,
+};
 
 /// A model reached through an OpenAI-compatible gateway.
 ///
