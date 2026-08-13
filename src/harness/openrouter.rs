@@ -86,6 +86,29 @@ fn gateway_cost(raw: Option<&serde_json::Value>) -> Option<f64> {
     (cost.is_finite() && cost >= 0.0).then_some(cost)
 }
 
+/// The conversation as it goes on the wire, including anything the structured
+/// output mode has to say.
+///
+/// Split out so the coupling can be tested: under
+/// [`StructuredOutput::JsonObject`] the provider is told only "return json", so
+/// if this function stops appending the schema the model is left describing a
+/// contract nobody gave it — and that failure looks like a quality regression
+/// rather than a bug, which is exactly the kind that survives a review.
+fn wire_messages(request: &ModelRequest, mode: StructuredOutput) -> Vec<CrateMessage> {
+    let mut messages = request.messages.clone();
+    // Appended as its own system message rather than folded into the lane
+    // prompt: the lane prompts are shared with the mock and the cassettes, and
+    // this text is a property of how *this* gateway asks for structured output,
+    // not of what the lane wants said.
+    if mode == StructuredOutput::JsonObject {
+        messages.push(CrateMessage {
+            role: Role::System,
+            content: schema::json_mode_instruction(&request.schema),
+        });
+    }
+    messages
+}
+
 impl GatewayModel {
     /// Build from the `[models]` config, reading the key from the environment
     /// variable the config names.
