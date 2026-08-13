@@ -79,40 +79,6 @@ where
     out
 }
 
-/// Review files while enforcing a lane's share of the pull-request budget.
-///
-/// Usage is only known once a provider call returns, so calls run serially:
-/// that is what prevents queued work from starting after the hard ceiling has
-/// already been spent. The caller still gets successful earlier reviews.
-pub async fn per_file_with_budget<F, Fut>(paths: &[String], budget: f64, review: F) -> FanOut
-where
-    F: Fn(String) -> Fut,
-    Fut: Future<Output = crate::error::Result<FileReview>>,
-{
-    let mut out = FanOut::default();
-    let mut spent = 0.0;
-    for path in paths {
-        if spent >= budget {
-            out.failures.push((
-                path.clone(),
-                Error::Budget {
-                    spent,
-                    limit: budget,
-                },
-            ));
-            continue;
-        }
-        match review(path.clone()).await {
-            Ok(review) => {
-                spent += review.spend.cost_usd();
-                out.reviews.push(review);
-            }
-            Err(err) => out.failures.push((path.clone(), err)),
-        }
-    }
-    out
-}
-
 /// The results of a fan-out, successes and failures kept apart.
 #[derive(Debug, Default)]
 pub struct FanOut {
