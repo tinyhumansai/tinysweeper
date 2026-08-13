@@ -239,7 +239,25 @@ impl Model for MockModel {
                         .map_or_else(|| answers.propose.clone(), |(_, value)| value.clone()),
                 )
             } else {
-                None
+                // A lane stage (relocation, falsification). A queued response
+                // still wins — that is how a test says what the stage returns —
+                // but an *empty* queue must not become a provider error. A
+                // panel makes several times as many calls as the single one
+                // these tests were written against, and a test that queues one
+                // relocation should not have to know how many. The fallbacks
+                // are the inert answer for each stage: relocate nothing,
+                // falsify nothing.
+                self.responses
+                    .lock()
+                    .expect("mock model lock")
+                    .is_empty()
+                    .then(|| {
+                        if request.schema_name.contains("falsify") {
+                            json!({ "incorrect": [] })
+                        } else {
+                            json!({})
+                        }
+                    })
             };
 
             if let Some(value) = canned {
