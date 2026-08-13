@@ -80,11 +80,16 @@ const MODEL_PRICES: &[(&str, Price)] = &[
         },
     ),
     (
+        // DeepSeek's own rates, matching the `[models.provider]` pin. The
+        // cached figure was 0.028 — the rate almost every *other* provider
+        // charges — which over-reports a re-review tenfold now that routing is
+        // pinned. Every row in this table is a price for the provider config
+        // actually selects; unpin the provider and these become fiction again.
         "deepseek/deepseek-v4-flash",
         Price {
             input: 0.14,
             output: 0.28,
-            cached: 0.028,
+            cached: 0.0028,
         },
     ),
     (
