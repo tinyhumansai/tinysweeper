@@ -94,6 +94,13 @@ api_key_env = "OPENROUTER_API_KEY"
 # input tokens per security-lane call was where the bill actually came from.
 scan = "z-ai/glm-5.2"
 deep = "z-ai/glm-5.2"
+# The consensus panel's tier. Several of these replace one `deep` call, so what
+# matters is the aggregate, and on the pinned DeepSeek endpoint that arithmetic
+# works out: blended against the ~80% prompt-cache hit this layout achieves,
+# flash costs $0.030/M where pro costs $0.090/M. Three independent opinions for
+# the price of one, and the panel only reports what more than one of them saw —
+# which is the noise control `deep` was buying by being expensive.
+flash = "deepseek/deepseek-v4-flash"
 # Tried in order when the selected model fails. Both were measured against the
 # reasoning setting below and both answer a strict JSON schema cleanly; the
 # previous first fallback did not, and refused every request with "Reasoning is
