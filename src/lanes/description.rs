@@ -110,6 +110,27 @@ impl Lane for Description {
         )
         .await;
 
+        // Nothing was read. A whole-pull-request lane has no fan-out to record
+        // the failure in, so without this it returns an empty-but-successful
+        // review — and an unreviewed lane that reports Success is exactly what
+        // branch protection approves. A live run against a real pull request is
+        // what surfaced this: every panellist 404'd and the check still went
+        // green.
+        if panel.nothing_was_read() {
+            return Ok(LaneOutcome {
+                summary: format!(
+                    "No reviewer could be consulted.{}",
+                    panel.failure_note()
+                ),
+                spend: panel.spend.clone(),
+                skipped: Some(
+                    "No reviewer could be consulted; see the listed provider failures."
+                        .into(),
+                ),
+                ..LaneOutcome::default()
+            });
+        }
+
         let spend = panel.spend.clone();
         let parsed = runner::into_response(&panel);
 
