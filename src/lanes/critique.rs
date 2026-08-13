@@ -174,6 +174,26 @@ async fn review_file(
     )
     .await;
 
+    // A file whose every panellist failed is a file nobody read, and it must
+    // not come back as a clean review. Failing here is what puts it in the
+    // fan-out's failure list, where the summary names it — the alternative is
+    // an unreviewed file that branch protection would approve.
+    if panel.nothing_was_read() {
+        return Err(crate::error::Error::lane(
+            LaneId::Critique,
+            format!(
+                "no panellist could review {}: {}",
+                diff.path,
+                panel
+                    .failures
+                    .iter()
+                    .map(|(who, why)| format!("{who}: {why}"))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+        ));
+    }
+
     let mut spend = panel.spend.clone();
     let parsed = runner::into_response(&panel);
 

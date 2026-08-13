@@ -43,6 +43,11 @@ pub struct PanelOutcome {
     /// Lenses whose call failed, with why. Reported rather than swallowed: a
     /// partial review that reads like a complete one is worse than none.
     pub failures: Vec<(String, String)>,
+    /// How many panellists produced a usable answer.
+    ///
+    /// Zero is the case a caller must not treat as a clean review — see
+    /// [`PanelOutcome::nothing_was_read`].
+    pub read: usize,
 }
 
 impl PanelOutcome {
@@ -51,6 +56,17 @@ impl PanelOutcome {
     /// Appended to every lane's summary. A partial review that reads like a
     /// complete one is worse than no review at all, because a human stops
     /// looking — so a lost panellist is stated rather than absorbed.
+    /// Whether the panel produced no usable reading at all.
+    ///
+    /// The distinction a caller has to preserve: a panel that read the evidence
+    /// and found nothing is a clean review, and a panel where every member
+    /// failed is *no review*. Both leave `findings` empty, so a lane that does
+    /// not check this reports a file nobody looked at as a file with nothing
+    /// wrong — and that is what branch protection would then approve.
+    pub fn nothing_was_read(&self) -> bool {
+        self.read == 0 && !self.failures.is_empty()
+    }
+
     pub fn failure_note(&self) -> String {
         if self.failures.is_empty() {
             return String::new();
@@ -220,6 +236,8 @@ pub async fn run_with_llm(
         }
     }
 
+    outcome.read = opinions.len();
+
     if opinions.is_empty() {
         outcome.spend = llm.spend();
         outcome.summary = "No panellist produced a usable answer.".into();
@@ -256,6 +274,7 @@ pub async fn run_with_llm(
         }
     }
 
+    outcome.read = opinions.len();
     outcome.resolved = consensus::resolved(&opinions);
     outcome.summary = summarize(&opinions);
     outcome.findings = consensus::settle(proposals, &verdicts);
