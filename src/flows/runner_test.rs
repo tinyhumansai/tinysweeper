@@ -281,18 +281,3 @@ fn a_blank_question_is_not_dispatched() {
     assert_eq!(read_questions(&value), vec!["real question"]);
 }
 
-#[tokio::test]
-async fn debug_dump_output() {
-    let capabilities = crate::flows::caps::with_llm(
-        Arc::new(ModelCapability::new(
-            Arc::new(MockModel::always(proposing("unwrap", "Avoid unwrap"))),
-            config().models.clone(),
-        )),
-        ChildGraphs::none(),
-    );
-    let graph = panel::propose_graph(LaneId::Tests, json!({"type":"object"}), "e", |l| {
-        l.id.to_string()
-    });
-    let out = run_graph(&graph, &capabilities).await;
-    println!("OUTPUT: {}", serde_json::to_string_pretty(&out.unwrap()).unwrap());
-}
