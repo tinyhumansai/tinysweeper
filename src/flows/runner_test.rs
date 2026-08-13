@@ -166,3 +166,58 @@ async fn a_reviewer_id_that_is_not_a_legal_node_id_still_gets_its_answer() {
     assert!(answers[0].value.is_some(), "{:?}", answers[0].error);
     assert_eq!(answers[0].id, "security-focused reviewer!");
 }
+
+#[tokio::test]
+async fn reviewers_run_concurrently_rather_than_one_after_another() {
+    // The claim the graph exists to make good on. A council multiplies calls by
+    // the number of agents, and run serially that multiplies wall clock too —
+    // which is what the per-file loop used to do, because a budget could only
+    // be checked once a call had returned.
+    //
+    // Measured by overlap rather than by clock: each call reports itself in and
+    // out, and the assertion is that the peak in-flight count reached the
+    // number of reviewers. A serial runner never exceeds one.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Default)]
+    struct Overlapping {
+        in_flight: AtomicUsize,
+        peak: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::ports::model::Model for Overlapping {
+        async fn complete(
+            &self,
+            _request: crate::ports::model::ModelRequest,
+        ) -> crate::error::Result<crate::ports::model::ModelResponse> {
+            let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(now, Ordering::SeqCst);
+
+            // Long enough that a serial runner could not overlap them by
+            // accident, short enough not to slow the suite.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            Ok(crate::ports::model::ModelResponse {
+                value: json!({ "summary": "s", "findings": [] }),
+                model: "vendor/flash".into(),
+                usage: Usage::default(),
+            })
+        }
+    }
+
+    let model = Arc::new(Overlapping::default());
+    let llm = lane_llm(model.clone(), &config(), 100.0);
+    let calls: Vec<Call> = ["a", "b", "c"].iter().map(|id| call(id)).collect();
+
+    ask_all(llm, LaneId::Critique, &calls, &schema())
+        .await
+        .expect("runs");
+
+    assert_eq!(
+        model.peak.load(Ordering::SeqCst),
+        3,
+        "the reviewers were asked one at a time"
+    );
+}
