@@ -19,9 +19,9 @@ use tinyagents::{
     HarnessEventJournal, InMemoryEventJournal, JournalSink, LangfuseClient, LangfuseTraceConfig,
 };
 
-use crate::config::types::Models;
+use crate::config::types::{Models, StructuredOutput};
 use crate::error::{Error, Result};
-use crate::harness::pricing;
+use crate::harness::{pricing, schema};
 use crate::ports::model::{Model, ModelRequest, ModelResponse, Role, Usage};
 
 /// A model reached through an OpenAI-compatible gateway.
@@ -33,6 +33,7 @@ pub struct GatewayModel {
     base_url: String,
     fallbacks: Vec<String>,
     reasoning_effort: String,
+    structured_output: StructuredOutput,
     langfuse: Option<LangfuseClient>,
 }
 
@@ -105,6 +106,7 @@ impl GatewayModel {
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
+            structured_output: models.structured_output,
             langfuse: langfuse_client(),
         })
     }
