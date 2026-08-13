@@ -155,10 +155,7 @@ impl GatewayModel {
             // The `provider` pin rides in the same object; see
             // [`request_options`] for why the two are merged rather than set
             // separately.
-            .with_default_provider_options(request_options(
-                &self.reasoning_effort,
-                &self.provider,
-            ))
+            .with_default_provider_options(request_options(&self.reasoning_effort, &self.provider))
             // Identifies us to OpenRouter, which is how per-application usage
             // shows up separately in their dashboard.
             .with_header(
