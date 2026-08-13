@@ -184,15 +184,33 @@ max_tokens = 16000
 # model thinks a bit and answers a bit; either reasoning fits and the answer is
 # whole, or reasoning takes everything and the content is empty.
 #
-# `high` is kept because `max_tokens` above is now 16000, which cleared it in
-# production — no structured-output failure and no fallback in the hours after
-# the deploy. 16000 itself was never measured; the table brackets it with the
-# ceiling that fails (8000) and the one that stays safe (32000), where
-# `deepseek-v4-pro` spent 8152 of the allowance on reasoning before it
-# answered. A harder prompt is one step from the same cliff. If this starts
-# failing again, `off` is the fix that is *proven* rather than the one that
-# buys room, and it costs 13 findings against 23.
-reasoning_effort = "high"
+# `-0813` has now been through the sweep the paragraph above asked for, and it
+# changes the answer. Measured end to end on one real pull request
+# (tinyhumansai/openhuman#5523, one file, +47/-31), same config, only this key
+# moved:
+#
+#   effort   wall clock   cost      output tokens   worst call's reasoning
+#   high      17m 10s     $0.0506       73416        40522, hit the ceiling
+#   medium     3m 19s     $0.0189       15007         4229, no retry
+#
+# So `medium` is 5x faster and 2.7x cheaper on identical evidence, and the
+# `high` run had to retry a call that came back `finish_reason = length` with
+# nothing in it — the exact failure this whole block exists to document,
+# reproduced in production rather than in a sweep.
+#
+# It also contradicts, for this model, the bimodal claim above. That claim was
+# measured on `z-ai/glm-5.2` and the older floating alias, where `low` burned
+# the entire allowance exactly as `high` did. On `-0813` the dial is gradual:
+# the five `medium` calls spent 4229, 3121, 739, 2206 and 3856 reasoning tokens
+# against a 16000 ceiling, none of them close to it. The earlier conclusion
+# still holds for the models it was measured on; it does not generalise to this
+# one, which is why the rows above are kept rather than replaced.
+#
+# `off` remains the setting that is *proven* rather than merely roomy, and it
+# costs findings — 13 against 23 on the model that was measured that way. The
+# reason not to reach for it here is that `medium` never came close to the
+# ceiling on a real review, where `high` went over it.
+reasoning_effort = "medium"
 # Who enforces the response schema, and the reason the model above is usable at
 # all.
 #
