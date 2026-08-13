@@ -182,7 +182,12 @@ pub struct NoCode;
 
 #[async_trait]
 impl CodeRunner for NoCode {
-    async fn run(&self, _language: CodeLanguage, _source: &str, _input: Value) -> FlowResult<Value> {
+    async fn run(
+        &self,
+        _language: CodeLanguage,
+        _source: &str,
+        _input: Value,
+    ) -> FlowResult<Value> {
         Err(refused(
             "code",
             "contributor code is never executed — we read the diff and the tree, and build nothing",

@@ -34,10 +34,6 @@ fn opinion(lens: &str, findings: Vec<RawFinding>) -> Opinion {
     }
 }
 
-fn all_real(n: usize, count: usize) -> Vec<Vec<Verdict>> {
-    vec![vec![Verdict { real: true }; count]; n]
-}
-
 #[test]
 fn two_lenses_reporting_one_problem_report_it_once() {
     // The double-reporting this whole design has to avoid: N panellists reading
@@ -49,7 +45,13 @@ fn two_lenses_reporting_one_problem_report_it_once() {
         ),
         opinion(
             "security",
-            vec![finding("a.rs", "unwrap", "x.unwrap()", "Panic on bad input", 0.9)],
+            vec![finding(
+                "a.rs",
+                "unwrap",
+                "x.unwrap()",
+                "Panic on bad input",
+                0.9,
+            )],
         ),
     ]);
 
@@ -68,7 +70,13 @@ fn the_better_argued_version_of_a_shared_finding_wins() {
         ),
         opinion(
             "security",
-            vec![finding("a.rs", "unwrap", "x.unwrap()", "Panic on bad input", 0.9)],
+            vec![finding(
+                "a.rs",
+                "unwrap",
+                "x.unwrap()",
+                "Panic on bad input",
+                0.9,
+            )],
         ),
     ]);
 
@@ -82,7 +90,10 @@ fn re_indented_quotes_of_one_hunk_are_one_finding() {
     // Models re-indent what they quote. An indentation difference is not a
     // different finding, and treating it as one reports the same problem twice.
     let proposals = propose(&[
-        opinion("a", vec![finding("a.rs", "unwrap", "x.unwrap()", "One", 0.5)]),
+        opinion(
+            "a",
+            vec![finding("a.rs", "unwrap", "x.unwrap()", "One", 0.5)],
+        ),
         opinion(
             "b",
             vec![finding("a.rs", "unwrap", "    x.unwrap()\n", "Two", 0.5)],
@@ -145,7 +156,13 @@ fn proposal_order_is_the_panels_order_not_the_keys() {
         "correctness",
         vec![
             finding("z.rs", "zeta", "z()", "Last alphabetically first seen", 0.5),
-            finding("a.rs", "alpha", "a()", "First alphabetically seen second", 0.5),
+            finding(
+                "a.rs",
+                "alpha",
+                "a()",
+                "First alphabetically seen second",
+                0.5,
+            ),
         ],
     )]);
 
