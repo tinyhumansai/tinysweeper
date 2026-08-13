@@ -244,6 +244,7 @@ fn a_definition_past_the_ceiling_is_cut_on_lines_and_says_so() {
     let options = ChunkOptions {
         target_chars: 200,
         max_chars: 400,
+        ..ChunkOptions::default()
     };
 
     let chunks = split(&source, Language::Rust, &options).expect("parses");

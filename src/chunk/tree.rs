@@ -344,10 +344,12 @@ fn emit(
     }
     let start_line = line_of(starts, start);
 
-    // Past the ceiling even as a single definition: the embedder would truncate
-    // it, so the chunk is cut on lines and labelled as such rather than stored
-    // as a parsed chunk whose tail was never embedded.
-    if text.len() > options.max_chars {
+    // Past the ceiling even as a single definition: the embedder rejects an
+    // input this large outright — it does not truncate — so the chunk is cut on
+    // lines and labelled as such rather than stored as a parsed chunk the
+    // provider will refuse. `split_ceiling` rather than `max_chars` so the
+    // provider's own per-input limit binds even when `max_chars` is larger.
+    if text.len() > options.split_ceiling() {
         chunks.extend(lines::split(text, start_line, options));
         return;
     }
