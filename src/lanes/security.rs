@@ -32,10 +32,11 @@ use crate::evidence::diff::{FileDiff, render as render_diffs};
 use crate::findings::types::Finding;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
-use crate::lanes::fanout::{FileReview, per_file_with_budget};
+use crate::flows::runner::{self, PanelRequest};
+use crate::lanes::fanout::{FileReview, per_file};
 use crate::lanes::triage::triage;
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
-use crate::ports::model::{Message, Model, ModelRequest, Spend};
+use crate::ports::model::Model;
 use crate::scan::types::{Finding as ScanFinding, ScanKind};
 
 /// The scanner findings this lane owns.
@@ -119,11 +120,19 @@ impl Lane for Security {
             )));
         }
 
-        let outcome = per_file_with_budget(
-            &triaged.review,
+        // One capability for the whole lane, so the pull-request budget is
+        // enforced across every file and every panel round at once — which is
+        // what lets the files run concurrently rather than one at a time.
+        let llm = runner::lane_llm(
+            self.model.clone(),
+            input.config,
             input.config.models.budget_usd_per_pr,
+        );
+
+        let outcome = per_file(
+            &triaged.review,
             |path| {
-                let model = self.model.clone();
+                let llm = llm.clone();
                 let config = input.config;
                 let repo_policy = input.repo_policy;
                 let extracted_rules = input.extracted_rules;
@@ -137,7 +146,7 @@ impl Lane for Security {
                         .find(|d| d.path == path)
                         .expect("the path came from the diff list");
                     review_file(
-                        model.as_ref(),
+                        llm,
                         config,
                         repo_policy,
                         extracted_rules,
@@ -167,7 +176,7 @@ impl Lane for Security {
 // ones to the wrong half of the prompt.
 #[allow(clippy::too_many_arguments)]
 async fn review_file(
-    model: &dyn Model,
+    llm: std::sync::Arc<crate::flows::caps::ModelCapability>,
     config: &crate::config::types::Config,
     repo_policy: Option<&str>,
     extracted_rules: &[String],
@@ -190,21 +199,43 @@ async fn review_file(
         ..PromptInputs::new(LaneId::Security, config)
     });
 
-    let response = model
-        .complete(ModelRequest {
-            model: config.model_for(LaneId::Security).to_string(),
-            messages: vec![
-                Message::system(built.prefix()),
-                Message::user(built.suffix()),
-            ],
-            schema: schema::json_schema(),
-            schema_name: "tinysweeper_security".into(),
-            max_tokens: config.models.max_tokens,
-        })
-        .await?;
+    // A panel rather than one call. The lenses partition this lane's subject:
+    // where untrusted input can reach, who is allowed to do what, and the
+    // adjudication of what the deterministic scanners already found. The last
+    // is a lens rather than a separate call because a scanner match is context
+    // the other two readings want anyway.
+    let panel = runner::run_with_llm(
+        llm,
+        PanelRequest {
+            lane: LaneId::Security,
+            schema: runner::schema_with_questions(schema::json_schema()),
+            suffix: built.suffix(),
+            system_of: &|lens| runner::system_with_charter(built.prefix(), lens),
+        },
+    )
+    .await;
 
-    let spend = Spend::of(&response);
-    let parsed = schema::parse(LaneId::Security, response.value)?;
+    // A file whose every panellist failed is a file nobody read. It must reach
+    // the fan-out's failure list rather than come back as a clean review — an
+    // unreviewed file that reads as clean is what branch protection approves.
+    if panel.nothing_was_read() {
+        return Err(crate::error::Error::lane(
+            LaneId::Security.as_str(),
+            format!(
+                "no panellist could review {}: {}",
+                diff.path,
+                panel
+                    .failures
+                    .iter()
+                    .map(|(who, why)| format!("{who}: {why}"))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+        ));
+    }
+
+    let spend = panel.spend.clone();
+    let parsed = runner::into_response(&panel);
     let outcome = LaneOutcome::from_response(
         LaneId::Security,
         parsed,
