@@ -1043,6 +1043,10 @@ fn helper() {
         for r in model2.requests() {
             if r.schema_name.contains("critique") && !r.schema_name.contains("verify") {
                 println!("--- {} ---", r.schema_name);
+                let joined = r.messages.iter().map(|m| m.content.as_str()).collect::<Vec<_>>().join("\n");
+                println!("HAS_MAIN_KEY={} HAS_OTHER_KEY={}",
+                    joined.contains("The file is `src/main.rs`"),
+                    joined.contains("The file is `src/other.rs`"));
                 let c = &r.messages[0].content;
                 match c.find("The file is") {
                     Some(i) => println!("MARKER: {}", &c[i..(i+40).min(c.len())]),
