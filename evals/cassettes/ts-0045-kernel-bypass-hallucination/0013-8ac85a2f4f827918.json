@@ -1,0 +1,28 @@
+{
+  "key": "8ac85a2f4f827918",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3038,
+    "output_tokens": 5196,
+    "cached_tokens": 1024,
+    "embed_tokens": 0,
+    "cost_usd": 0.005400322
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "Overriding `entrypoint` replaces the official MongoDB image's `docker-entrypoint.sh`, which normally drops privileges to the `mongodb` user with `gosu` before starting `mongod`. The Python shim is not shown here, and the file's comment says it only stops the image refusing to start, so unless the shim re-execs as `mongodb`, `mongod` will run as root in the container. Keep the privilege drop in the shim, or re-use the official entrypoint after setting the environment override.",
+        "confidence": 0.5,
+        "existing_code": "    entrypoint:\n      [\"python3\", \"/usr/local/bin/kernel-bypass-entrypoint.py\", \"mongod\"]",
+        "path": "docker-compose.kernel-bypass.yml",
+        "rule": "privilege-drop",
+        "severity": "medium",
+        "suggestion": null,
+        "title": "Preserve the image's privilege drop when overriding entrypoint"
+      }
+    ],
+    "summary": "The overlay adds an opt-in kernel workaround for local MongoDB by mounting and running a Python shim as the entrypoint. It should not be merged as-is because overriding the official entrypoint likely loses the image's privilege drop to the `mongodb` user, causing `mongod` to run as root."
+  }
+}

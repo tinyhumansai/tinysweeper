@@ -1,0 +1,37 @@
+{
+  "key": "2dc7e57b83706c42",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_description",
+  "usage": {
+    "input_tokens": 5739,
+    "output_tokens": 9564,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.010817145
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "`shorten` documents it shortens to at most `limit` characters, but the no-space branch returns the first `limit` characters plus the ellipsis, producing `limit + 1` characters. A caller sizing `limit` to GitHub's exact check-run title ceiling can therefore still exceed it. Reserve one character for the ellipsis before taking the head, or adjust the contract and tests if the extra character is intentional.",
+        "confidence": 0.9,
+        "existing_code": "    let head: String = text.chars().take(limit).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),\n    }",
+        "path": "src/findings/summarise.rs",
+        "rule": "off-by-one",
+        "severity": "medium",
+        "suggestion": "    let head: String = text.chars().take(limit.saturating_sub(1)).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),\n    }",
+        "title": "Keep shorten output within the stated limit"
+      },
+      {
+        "body": "The title says the PR adds a summarise helper, and the body only acknowledges that helper and the end-to-end test. The diff also adds a new `[embeddings]` block to `.tinysweeper.toml`, forwards OpenRouter/Cohere keys in `docker-compose.yml`, renames the GitHub App environment variables to the names the server actually reads, mounts the config into the container, and introduces a MongoDB kernel-bypass overlay. None of these are described. Update the body to list all significant changes, or split this into the helper change and the deployment/e2e change, so reviewers can see what the diff actually does.",
+        "confidence": 0.95,
+        "existing_code": "[embeddings]\nenabled = true\nprovider = \"openrouter\"\nmodel = \"openai/text-embedding-3-small\"\ndimensions = 1536\napi_key_env = \"OPENROUTER_API_KEY\"",
+        "path": ".tinysweeper.toml",
+        "rule": "description-mismatch",
+        "severity": "medium",
+        "title": "Mention the deployment configuration in the PR description"
+      }
+    ],
+    "summary": "The PR adds `findings::summarise` and end-to-end deployment configuration. The helper can exceed its stated length limit, and the PR description omits the substantial deployment changes, so it is not ready to merge until both are addressed."
+  }
+}

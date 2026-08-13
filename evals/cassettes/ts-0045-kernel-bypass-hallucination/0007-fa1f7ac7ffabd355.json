@@ -1,0 +1,17 @@
+{
+  "key": "fa1f7ac7ffabd355",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 2717,
+    "output_tokens": 3061,
+    "cached_tokens": 1024,
+    "embed_tokens": 0,
+    "cost_usd": 0.003403237
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a public `summarise` module to the findings module. The one-line declaration is syntactically valid and introduces no visible bug in this file; the module body itself is outside this diff."
+  }
+}
