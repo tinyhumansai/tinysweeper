@@ -19,7 +19,7 @@
 
 use bson::{Document, doc};
 use mongodb::options::IndexOptions;
-use mongodb::{Client, Collection, Database, IndexModel};
+use mongodb::{Collection, Database, IndexModel};
 
 use async_trait::async_trait;
 
@@ -61,9 +61,7 @@ impl MongoManifest {
 
     /// Connect to `uri` and use database `name`.
     pub async fn connect(uri: &str, name: &str) -> Result<Self> {
-        let client = Client::with_uri_str(uri)
-            .await
-            .map_err(|err| Error::Forge(format!("could not reach MongoDB: {err}")))?;
+        let client = crate::index::client::connect(uri).await?;
         let manifest = Self::new(&client.database(name));
         manifest.prepare().await?;
         Ok(manifest)

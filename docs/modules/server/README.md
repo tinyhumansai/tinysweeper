@@ -218,3 +218,32 @@ Deliberately narrow: identity, trust, and delivery bookkeeping. Review state
 stays on GitHub in the durable comment's markers, so losing the database costs
 the trust decisions and nothing else. That is a property worth keeping — the
 database is never the thing standing between a pull request and its review.
+
+### A delivery is acknowledged before the database is touched
+
+The module doc says a delivery is "acknowledged and queued, never handled
+inline", because GitHub allows ten seconds. That was true of the *work* but not
+of the acknowledgement: `claim_delivery` — a MongoDB round trip — ran before
+the response, so a slow database made the fast ack slow.
+
+On 2026-08-13 that cost eight deliveries in ninety seconds: four timed out at
+exactly 10.0s, four returned `503`. One of them was a `pull_request opened`, so
+that pull request was never reviewed and nothing on our side recorded a
+failure — the review had not started, so there was no failed review to report.
+
+The 503 was deliberate, and the reasoning was wrong. It existed so GitHub would
+retry rather than have a delivery silently dropped. GitHub does not retry: the
+delivery log says `giving up after 1 attempt(s)`. Failing the request did not
+buy a second attempt, it only turned a slow database into permanent loss.
+
+So routing — which is pure — now happens first, and the two outcomes that do no
+work (`Ignore`, `TrackDraft`) are answered without touching Mongo at all. That
+is most deliveries. Anything that *is* work is spawned, and the delivery claim
+happens there, on the other side of the response.
+
+Dedupe is not weakened. The claim still runs before any work, and it was never
+the only guard: `review_inner` takes a lease keyed on `repo#number@sha`, so a
+claim that fails outright still cannot produce two reviews of one commit. When
+the claim errors the worker now proceeds rather than returning — the delivery is
+already acknowledged, so dropping the work would be silent, and doing it twice
+is the better failure.

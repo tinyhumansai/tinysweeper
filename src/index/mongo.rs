@@ -38,7 +38,7 @@ use bson::binary::Vector;
 use bson::{Binary, Bson, Document, Regex, doc};
 use futures::StreamExt;
 use mongodb::options::IndexOptions;
-use mongodb::{Client, Collection, Database, IndexModel, SearchIndexModel, SearchIndexType};
+use mongodb::{Collection, Database, IndexModel, SearchIndexModel, SearchIndexType};
 use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
@@ -68,7 +68,7 @@ pub const VECTOR_SEARCH_UNAVAILABLE: &str = concat!(
 /// Indexing a repository is thousands of documents and the driver pipelines
 /// them over one connection pool; unbounded concurrency here just converts the
 /// pool into a queue with worse error messages.
-const UPSERT_CONCURRENCY: usize = 32;
+pub(crate) const UPSERT_CONCURRENCY: usize = 32;
 
 /// How long [`MongoIndex::prepare`] waits for a freshly created search index to
 /// become queryable before giving up.
@@ -280,9 +280,10 @@ impl MongoIndex {
 
     /// Connect to `uri` and open every store in database `name`.
     pub async fn connect(uri: &str, name: &str) -> Result<Self> {
-        let client = Client::with_uri_str(uri)
-            .await
-            .map_err(|err| Error::Forge(format!("could not reach MongoDB: {err}")))?;
+        // Through `index::client`: this is the pool `UPSERT_CONCURRENCY`
+        // runs against, and the one whose under-sizing cleared itself under a
+        // large graph write.
+        let client = crate::index::client::connect(uri).await?;
         Ok(Self::new(&client.database(name)))
     }
 

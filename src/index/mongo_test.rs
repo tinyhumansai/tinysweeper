@@ -20,6 +20,7 @@
 use super::*;
 use crate::index::mock::MockEmbedder;
 use crate::ports::embed::Embedder;
+use mongodb::Client;
 
 /// Environment variable naming the test database, shared with `server::store`.
 const TEST_URI_ENV: &str = "TINYSWEEPER_TEST_MONGODB_URI";

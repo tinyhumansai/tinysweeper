@@ -13,6 +13,8 @@
 //! graph for "what breaks if this changes", the knowledge base for "what did we
 //! already decide".
 
+#[cfg(feature = "serve")]
+pub mod client;
 pub mod mock;
 #[cfg(feature = "serve")]
 pub mod mongo;

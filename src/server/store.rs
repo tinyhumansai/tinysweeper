@@ -20,7 +20,7 @@
 
 use bson::{Document, doc};
 use mongodb::options::IndexOptions;
-use mongodb::{Client, Collection, IndexModel};
+use mongodb::{Collection, IndexModel};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
@@ -122,9 +122,10 @@ pub struct Store {
 impl Store {
     /// Connect to `uri` and use database `name`.
     pub async fn connect(uri: &str, name: &str) -> Result<Self> {
-        let client = Client::with_uri_str(uri)
-            .await
-            .map_err(|err| Error::Forge(format!("could not reach MongoDB: {err}")))?;
+        // Through `index::client` so this pool is sized and bounded like the
+        // others. This is the client the webhook path uses, so its
+        // server-selection timeout is the one GitHub's ten seconds depends on.
+        let client = crate::index::client::connect(uri).await?;
         let database = client.database(name);
 
         let store = Self {

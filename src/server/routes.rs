@@ -257,46 +257,78 @@ async fn receive(
         }
     };
 
-    // GitHub redelivers on timeout. Claiming the id means a redelivery is a
-    // no-op rather than a second review.
+    // Routing is pure — headers and the parsed body, no I/O — so the two
+    // outcomes that do no work are answered without touching the database at
+    // all. Most deliveries land here: a repository the app is installed on
+    // produces a check run for everything its CI does.
+    let action = webhook::route(&event, &payload);
+    match action {
+        Action::TrackDraft => {
+            tracing::debug!(%event, "tracking draft pull request");
+            return (StatusCode::OK, "tracked").into_response();
+        }
+        Action::Ignore(reason) => {
+            tracing::debug!(%event, reason, "ignoring");
+            return (StatusCode::OK, "ignored").into_response();
+        }
+        _ => {}
+    }
+
+    // Everything past here is work, and none of it happens on this task.
+    //
+    // The delivery claim used to run *here*, inline, and that is what made a
+    // slow database a dropped delivery: `claim_delivery` is a round trip, the
+    // handler could not answer until it returned, and GitHub allows ten
+    // seconds. On 2026-08-13 a large graph write saturated Mongo and eight
+    // deliveries were lost in ninety seconds — four to a ten-second timeout and
+    // four to the 503 this function used to return. Among them was a
+    // `pull_request opened`, so that pull request was simply never reviewed.
+    //
+    // The 503 was meant to make GitHub retry. It does not: the delivery log
+    // says `giving up after 1 attempt(s)`, so failing the request did not buy a
+    // second chance, it only converted a slow database into permanent data
+    // loss. Acknowledging first and claiming in the worker cannot lose a
+    // delivery that way.
+    //
+    // Dedupe is not weakened by the move, because the claim still runs before
+    // any work — just on the other side of the response. It is also not the
+    // only guard: `review_inner` takes a lease keyed on `repo#number@sha`, so
+    // even a claim that is lost outright cannot produce two reviews of one
+    // commit.
+    tokio::spawn(dispatch(state, action, delivery, event));
+    (StatusCode::ACCEPTED, "queued").into_response()
+}
+
+/// Claim the delivery, then run whatever it asked for.
+///
+/// Runs off the request path so nothing here is racing GitHub's clock.
+async fn dispatch(state: AppState, action: Action, delivery: String, event: String) {
     match state.store.claim_delivery(&delivery, &event).await {
         Ok(true) => {}
         Ok(false) => {
             tracing::debug!(%delivery, "already handled");
-            return (StatusCode::OK, "duplicate").into_response();
+            return;
         }
         Err(err) => {
-            // A database that is down must not silently drop deliveries: fail
-            // the request so GitHub retries rather than pretending it worked.
-            tracing::error!(%err, "could not claim the delivery");
-            return (StatusCode::SERVICE_UNAVAILABLE, "store unavailable").into_response();
+            // The delivery is already acknowledged, so there is no retry to
+            // ask for and dropping the work would be silent. Proceeding risks
+            // duplicating a review that a redelivery also runs; the lease in
+            // `review_inner` is what makes that risk affordable, and doing the
+            // work twice is a better failure than never doing it.
+            tracing::error!(%err, %delivery, "could not claim the delivery; proceeding unclaimed");
         }
     }
 
-    match webhook::route(&event, &payload) {
-        Action::TrackDraft => {
-            tracing::debug!(%event, "tracking draft pull request");
-            (StatusCode::OK, "tracked").into_response()
-        }
-        Action::Ignore(reason) => {
-            tracing::debug!(%event, reason, "ignoring");
-            (StatusCode::OK, "ignored").into_response()
-        }
+    match action {
+        // Both were answered on the request path and never reach here.
+        Action::TrackDraft | Action::Ignore(_) => {}
         Action::Review {
             repo,
             number,
             author,
             installation,
         } => {
-            tokio::spawn(handle_review(
-                state,
-                repo,
-                number,
-                author,
-                installation,
-                Mode::Incremental,
-            ));
-            (StatusCode::ACCEPTED, "queued").into_response()
+            handle_review(state, repo, number, author, installation, Mode::Incremental).await;
         }
         Action::TriageIssue {
             repo,
@@ -304,8 +336,7 @@ async fn receive(
             author,
             installation,
         } => {
-            tokio::spawn(handle_triage(state, repo, number, author, installation));
-            (StatusCode::ACCEPTED, "queued").into_response()
+            handle_triage(state, repo, number, author, installation).await;
         }
         Action::AutoMerge {
             repo,
@@ -320,7 +351,6 @@ async fn receive(
                     installation,
                 ));
             }
-            (StatusCode::ACCEPTED, "queued").into_response()
         }
     }
 }
