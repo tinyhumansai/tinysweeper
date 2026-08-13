@@ -100,6 +100,39 @@ deep = "z-ai/glm-5.2"
 # mandatory for this endpoint", which made the whole chain a guaranteed failure
 # rather than a safety net.
 fallback = ["deepseek/deepseek-v4-pro", "minimax/minimax-m3"]
+
+# Pin the upstream provider. This is a cost-correctness setting, not a
+# preference: OpenRouter serves one model id from eighteen providers at prices
+# spanning 4x and load-balances between them, while `harness::pricing` holds a
+# single price per model id. Unpinned, the cost line reports whatever DeepSeek
+# charges no matter who actually answered, and `budget_usd_per_pr` bounds
+# nothing — `deepseek-v4-pro` defaults to Novita at $1.168/M input against the
+# $0.435/M this repository prices it at, a 2.7x under-report.
+#
+# DeepSeek rather than the cheapest headline, because this harness is built
+# around cache reads (see `harness::prompt`) and that is where the providers
+# actually differ. Measured against openrouter.ai/api/v1/models/.../endpoints on
+# 2026-08-14, per million tokens:
+#
+#                    input     cache read
+#   DeepSeek         $0.435    $0.003625     <- pinned
+#   Baidu            $0.4225   $0.035
+#   StreamLake       $0.522    $0.0435
+#   Novita (default) $1.168    $0.09855
+#
+# Baidu is 3% cheaper on fresh input and ~10x more expensive on a cache read.
+# At the ~80% hit rate this prompt layout achieves, the blended prices are
+# $0.090/M on DeepSeek against $0.113/M on Baidu — so the provider with the
+# higher sticker price is 25% cheaper on the workload this actually runs.
+#
+# Pinning also keeps structured output working: `BaseTen` and `Cloudflare` do
+# not advertise `response_format`, and a lane that cannot get strict JSON is a
+# lane that fails. `allow_fallbacks = false` makes the pin a guarantee; the
+# safety net for a DeepSeek outage is `fallback` above, which switches model and
+# is priced accordingly.
+[models.provider]
+order = ["deepseek"]
+allow_fallbacks = false
 # A ceiling, not a purchase: tokens are billed as produced, so raising this
 # costs nothing on the calls that finish early and buys headroom on the ones
 # that would otherwise be cut off. It was 8000, which is the same budget the
