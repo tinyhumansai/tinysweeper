@@ -35,6 +35,10 @@ pub struct GatewayModel {
     base_url: String,
     fallbacks: Vec<String>,
     reasoning_effort: String,
+    /// The `flash` tier's model id, so a per-tier effort can be matched to it.
+    flash: String,
+    /// `reasoning_effort` for the flash tier, when it differs.
+    reasoning_effort_flash: Option<String>,
     provider: ProviderRouting,
     structured_output: StructuredOutput,
     langfuse: Option<LangfuseClient>,
@@ -172,6 +176,8 @@ impl GatewayModel {
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
+            flash: models.flash.clone(),
+            reasoning_effort_flash: models.reasoning_effort_flash.clone(),
             provider: models.provider.clone(),
             structured_output: models.structured_output,
             langfuse: langfuse_client(),
@@ -225,7 +231,7 @@ impl GatewayModel {
             // The `provider` pin rides in the same object; see
             // [`provider_options`] for why they are merged rather than set
             // separately.
-            .with_default_provider_options(provider_options(&self.reasoning_effort, &self.provider))
+            .with_default_provider_options(provider_options(self.effort_for(model), &self.provider))
             // Identifies us to OpenRouter, which is how per-application usage
             // shows up separately in their dashboard.
             .with_header(
@@ -892,6 +898,8 @@ mod tests {
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
+            flash: models.flash.clone(),
+            reasoning_effort_flash: models.reasoning_effort_flash.clone(),
             provider: models.provider.clone(),
             structured_output: models.structured_output,
             langfuse: None,

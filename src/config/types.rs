@@ -508,6 +508,22 @@ pub struct Models {
     /// deployment whose model reasons past `max_tokens` and answers with
     /// nothing, which is a real failure this repository has measured.
     pub reasoning_effort: String,
+    /// `reasoning_effort` for the `flash` tier alone, when it must differ.
+    ///
+    /// This key exists because one measurement demanded it. `reasoning_effort`
+    /// is global, and the two tiers want opposite values: the deep tier gets
+    /// better answers at `medium`, while `deepseek-v4-flash` at `medium` is
+    /// bimodal — it spends the *entire* output allowance thinking. Measured on
+    /// one pull request, a two-reviewer flash council ran 11m11s and 134,704
+    /// output tokens at `medium` against 24s and 940 at `off`.
+    ///
+    /// Without this the cheap tier costs more than the expensive one, which
+    /// defeats the whole reason the tier exists. Only `flash` has an override
+    /// because only `flash` has been measured to need one; a global default
+    /// with one documented exception is easier to reason about than three keys
+    /// that can silently disagree.
+    #[serde(default)]
+    pub reasoning_effort_flash: Option<String>,
     /// Who enforces the response schema — see [`StructuredOutput`].
     ///
     /// Applies to the whole chain, `fallback` included, because a single review
