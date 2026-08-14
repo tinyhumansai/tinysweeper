@@ -16,6 +16,7 @@
 use std::sync::Arc;
 
 use serde_json::{Value, json};
+use tinyflows::caps::ToolInvoker;
 use tinyflows::engine;
 
 use crate::config::types::LaneId;
