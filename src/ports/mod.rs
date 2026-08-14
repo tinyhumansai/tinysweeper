@@ -4,6 +4,7 @@
 //! build links no HTTP client and the test suite never reaches the network. The
 //! real, network-backed adapters live in sibling modules behind Cargo features.
 
+pub mod corpus;
 pub mod embed;
 pub mod forge;
 pub mod graph;
