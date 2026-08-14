@@ -4,6 +4,7 @@
 //! `--dry-run`. The real GitHub adapter arrives behind the `github` feature.
 
 #[cfg(feature = "github")]
+pub mod corpus;
 pub mod github;
 pub mod mock;
 pub mod types;

@@ -60,18 +60,21 @@ impl Corpus for ForgeCorpus<'_> {
 mod tests {
     use super::*;
 
-    use crate::forge::mock::MockForge;
+    use crate::forge::mock::{MockForge, MockState};
 
     fn repo() -> RepoId {
-        RepoId {
-            owner: "acme".into(),
-            name: "widgets".into(),
-        }
+        RepoId::parse("acme/widgets").expect("a valid repo id")
+    }
+
+    fn forge_serving(sha: &str, path: &str, content: &str) -> MockForge {
+        let mut state = MockState::default();
+        state.set_file(sha, path, content);
+        MockForge::with_state(state)
     }
 
     #[tokio::test]
     async fn a_file_is_read_at_the_pinned_revision() {
-        let forge = MockForge::new().with_file("head", "src/a.rs", "fn one() {}");
+        let forge = forge_serving("head", "src/a.rs", "fn one() {}");
         let repo = repo();
         let corpus = ForgeCorpus::new(&forge, &repo, "head");
 
@@ -86,7 +89,7 @@ mod tests {
         // The revision is fixed at construction and there is no argument that
         // could change it. A sub-agent reasoning about a different commit's code
         // is reasoning about a change nobody proposed.
-        let forge = MockForge::new().with_file("other", "src/a.rs", "fn one() {}");
+        let forge = forge_serving("other", "src/a.rs", "fn one() {}");
         let repo = repo();
         let corpus = ForgeCorpus::new(&forge, &repo, "head");
 
@@ -97,7 +100,7 @@ mod tests {
     async fn search_reports_that_it_cannot_search_rather_than_finding_nothing() {
         // `Some(vec![])` would let a sub-agent conclude "this appears nowhere
         // else" from an index that never saw this branch.
-        let forge = MockForge::new();
+        let forge = MockForge::default();
         let repo = repo();
 
         assert_eq!(
