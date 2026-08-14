@@ -594,8 +594,7 @@ async fn the_tool_loop_is_bounded_even_when_the_subagent_never_stops_asking() {
     let transcript = recorder.requests();
     let last = transcript
         .iter()
-        .filter(|r| r.schema_name.ends_with("_subagent_answer"))
-        .next_back()
+        .rfind(|r| r.schema_name.ends_with("_subagent_answer"))
         .expect("a sub-agent turn");
 
     assert!(
