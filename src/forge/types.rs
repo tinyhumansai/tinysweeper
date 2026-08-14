@@ -281,12 +281,34 @@ pub struct CheckRun {
     pub name: String,
     /// The commit it reports on.
     pub head_sha: String,
-    /// The outcome.
-    pub conclusion: CheckConclusion,
+    /// The outcome, or `None` to report work still in progress.
+    ///
+    /// `None` is the same convention [`CheckStatus::conclusion`] already reads
+    /// back, now expressible on the write side too. It exists so the umbrella
+    /// review check can be published the moment a delivery is accepted, long
+    /// before there is a verdict: a contributor watching a pull request should
+    /// be able to tell "the reviewer has not started" from "the reviewer is
+    /// thinking", and until this was an `Option` the only publishable states
+    /// were the five terminal ones.
+    ///
+    /// A pending check refuses auto-merge — see
+    /// `automerge::policy::check_refusal`, which treats *any* pending check as
+    /// a refusal, not only a required one. That is the behaviour we want while
+    /// a review is in flight, and it is also why every path that publishes a
+    /// `None` owes the same commit a terminal conclusion afterwards. Leaving
+    /// one pending is not a cosmetic bug: it stalls the merge gate forever.
+    pub conclusion: Option<CheckConclusion>,
     /// One-line title shown in the checks list.
     pub title: String,
     /// The markdown summary.
     pub summary: String,
+}
+
+impl CheckRun {
+    /// Whether this check reports work that has not finished.
+    pub fn is_in_progress(&self) -> bool {
+        self.conclusion.is_none()
+    }
 }
 
 /// How a review is submitted.

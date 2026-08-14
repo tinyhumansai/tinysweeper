@@ -46,7 +46,10 @@ pub async fn apply(
     // Housekeeping first: threads this run decided are settled. Deterministic
     // policy chose them (`crate::threads`), this only executes the list, and a
     // failure here is logged rather than allowed to cost the verdict.
-    if let Err(err) = crate::threads::apply_plan(write, &repo, &proposal.threads).await {
+    if let Err(err) =
+        crate::threads::apply_plan(write, config, &repo, &proposal.threads, &proposal.head_sha)
+            .await
+    {
         tracing::warn!(%err, "could not resolve review threads");
     }
 
@@ -57,7 +60,7 @@ pub async fn apply(
                 CheckRun {
                     name: lane.check_name.clone(),
                     head_sha: proposal.head_sha.clone(),
-                    conclusion: lane.conclusion,
+                    conclusion: Some(lane.conclusion),
                     title: title_for(lane.findings.len(), &lane.summary),
                     summary: render_lane_summary(lane),
                 },
@@ -568,7 +571,7 @@ mod tests {
         let checks = forge.checks();
         assert_eq!(
             checks["tinysweeper/critique"].conclusion,
-            CheckConclusion::Success
+            Some(CheckConclusion::Success)
         );
     }
 

@@ -23,6 +23,13 @@ use crate::ports::forge::{ForgeRead, ForgeWrite};
 pub enum Write {
     /// A check run was published.
     Check(CheckRun),
+    /// An existing check run was replaced in place.
+    CheckUpdate {
+        /// The check run that was replaced.
+        check_id: u64,
+        /// Its new state.
+        check: CheckRun,
+    },
     /// A new issue comment was created.
     Comment {
         /// The item it was posted on.
@@ -82,6 +89,13 @@ pub enum Write {
         body: String,
         /// The labels applied at creation.
         labels: Vec<String>,
+    },
+    /// A reply was posted in a review conversation.
+    ThreadReply {
+        /// The GraphQL node id of the thread.
+        thread_id: String,
+        /// The body.
+        body: String,
     },
     /// A review conversation was resolved.
     ThreadResolved {
@@ -467,8 +481,13 @@ impl ForgeRead for MockForge {
 
 #[async_trait]
 impl ForgeWrite for MockForge {
-    async fn publish_check(&self, _repo: &RepoId, check: CheckRun) -> Result<()> {
+    async fn publish_check(&self, _repo: &RepoId, check: CheckRun) -> Result<u64> {
         self.record(Write::Check(check));
+        Ok(self.allocate_id())
+    }
+
+    async fn update_check(&self, _repo: &RepoId, check_id: u64, check: CheckRun) -> Result<()> {
+        self.record(Write::CheckUpdate { check_id, check });
         Ok(())
     }
 
@@ -647,6 +666,19 @@ impl ForgeWrite for MockForge {
         Ok(number)
     }
 
+    async fn reply_to_review_thread(
+        &self,
+        _repo: &RepoId,
+        thread_id: &str,
+        body: &str,
+    ) -> Result<()> {
+        self.record(Write::ThreadReply {
+            thread_id: thread_id.to_string(),
+            body: body.to_string(),
+        });
+        Ok(())
+    }
+
     async fn resolve_review_thread(&self, _repo: &RepoId, thread_id: &str) -> Result<()> {
         self.record(Write::ThreadResolved {
             thread_id: thread_id.to_string(),
@@ -774,7 +806,7 @@ mod tests {
                 CheckRun {
                     name: "tinysweeper/critique".into(),
                     head_sha: "abc123".into(),
-                    conclusion: CheckConclusion::Success,
+                    conclusion: Some(CheckConclusion::Success),
                     title: "No findings".into(),
                     summary: String::new(),
                 },
@@ -801,7 +833,7 @@ mod tests {
                 CheckRun {
                     name: "tinysweeper/security".into(),
                     head_sha: "abc123".into(),
-                    conclusion: CheckConclusion::Failure,
+                    conclusion: Some(CheckConclusion::Failure),
                     title: "1 high finding".into(),
                     summary: String::new(),
                 },
@@ -812,7 +844,7 @@ mod tests {
         let checks = forge.checks();
         assert_eq!(
             checks["tinysweeper/security"].conclusion,
-            CheckConclusion::Failure
+            Some(CheckConclusion::Failure)
         );
     }
 

@@ -62,6 +62,50 @@ the lease release below it. Leases also carry a TTL in Mongo, which is the only
 thing that covers a killed process — a stranded lease would otherwise mean that
 pull request can never be reviewed again.
 
+### A running review is never silent either
+
+`server::status` owns **`tinysweeper/review`**, one check with a lifecycle
+rather than a single verdict. It is created *in progress* as soon as a run has
+claimed the lease and knows the head SHA — after two metadata reads, before any
+model call — and the same run is concluded afterwards by id.
+
+| State | Conclusion | Meaning |
+|---|---|---|
+| in progress | `None` | accepted, lanes running |
+| concluded | `Success` | the lanes ran; the lane checks carry the verdicts |
+| concluded | `Neutral` | opened, then declined — draft, blocked author, taken |
+| concluded | `ActionRequired` | the review could not run (see below) |
+
+It is opened *after* the draft check and the lease claim, not on the delivery
+path, so a draft, a blocked contributor or a duplicate delivery never announces
+a review that is not going to happen. It is still early enough that a
+contributor sees it seconds after pushing rather than minutes.
+
+`Success` here reports that the review **completed**, not that the code passed,
+and the summary says so. Conflating the two would make a pull request with
+findings unmergeable on a check that only ever measured liveness.
+
+Two consequences are load-bearing:
+
+- **A pending check refuses auto-merge.** `automerge::policy::check_refusal`
+  refuses on *any* pending check, not only a required one. That is what we
+  want — nothing should merge underneath a review still in flight — but it
+  means an in-progress check that never concludes stalls the gate on that
+  commit until somebody pushes again. Every exit from `handle_review`
+  therefore concludes it, which is what `routes::StatusSlot` is for: the
+  obligation is discharged in one place instead of at each `return`.
+- **The check is updated, never re-posted.** A second POST of the same name
+  creates a second run and leaves the first pending forever, so `publish_check`
+  returns the id and `update_check` takes it.
+
+On the write token: opening this check mints an installation token before the
+lanes run, which the security boundary otherwise reserves for after every model
+call. The property that rule protects — *the model never holds a write handle*
+— is preserved exactly. The token is minted in `open_status`, used for one
+request, and dropped before the function returns; it never enters `AppState`,
+never reaches `run_and_publish`, and no lane or model can reach it.
+`report_failure` has always minted one on the same terms.
+
 ### A failed review is never silent
 
 `server::failure` exists because the paragraph above was, for a while, the
@@ -80,8 +124,10 @@ ceiling. The retry is safe against the lease because `review_inner` releases it
 on every exit path, so the next attempt re-claims it rather than colliding with
 itself and returning a silent `Ok`.
 
-A review that still cannot run publishes a **`tinysweeper/review`** check with
-conclusion `ActionRequired`. That conclusion is the load-bearing choice:
+A review that still cannot run concludes the **`tinysweeper/review`** check as
+`ActionRequired` — updating the in-progress run when there is one, and creating
+its own when the review died before it had a SHA to pin one to. That conclusion
+is the load-bearing choice:
 `CheckConclusion::blocks` is true for it, and `automerge::policy::check_refusal`
 refuses on the first failing check it sees regardless of `require_checks`, so
 an unreviewed pull request now stops the gate without any repository having to

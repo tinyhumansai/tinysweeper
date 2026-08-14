@@ -19,14 +19,7 @@
 
 use crate::error::Error;
 use crate::forge::types::{CheckConclusion, CheckRun};
-
-/// The check a failed review publishes.
-///
-/// Deliberately *not* one of the lane names. A lane check reports a lane's
-/// verdict, and a review that never reached the lanes has no verdict to
-/// report; reusing `tinysweeper/critique` here would overwrite a real result
-/// from an earlier push with an infrastructure error.
-pub const CHECK_NAME: &str = "tinysweeper/review";
+use crate::server::status::CHECK_NAME;
 
 /// How many times a transient failure is retried before it is reported.
 ///
@@ -118,7 +111,7 @@ pub fn check_run(head_sha: &str, err: &Error) -> CheckRun {
     CheckRun {
         name: CHECK_NAME.to_string(),
         head_sha: head_sha.to_string(),
-        conclusion: CheckConclusion::ActionRequired,
+        conclusion: Some(CheckConclusion::ActionRequired),
         title: title_for(err).to_string(),
         summary: summary_for(err),
     }
@@ -181,10 +174,14 @@ mod tests {
         // The whole reason this module exists. If this assertion ever flips,
         // a model outage silently reads as consent to auto-merge again.
         let check = check_run("abc123", &Error::Model("gateway returned 403".into()));
-        assert_eq!(check.conclusion, CheckConclusion::ActionRequired);
+        assert_eq!(check.conclusion, Some(CheckConclusion::ActionRequired));
         assert!(
-            check.conclusion.blocks(),
+            check.conclusion.is_some_and(CheckConclusion::blocks),
             "a review that never ran must not be mistaken for a passing one"
+        );
+        assert!(
+            !check.is_in_progress(),
+            "a reported failure is terminal; leaving it pending would stall the merge gate"
         );
     }
 
@@ -198,7 +195,7 @@ mod tests {
         let check = check_run("abc123", &Error::Model("gateway returned 403".into()));
         let observed = crate::forge::types::CheckStatus {
             name: check.name.clone(),
-            conclusion: Some(check.conclusion),
+            conclusion: check.conclusion,
         };
         assert!(observed.is_failing(), "the gate must refuse on this check");
         assert!(

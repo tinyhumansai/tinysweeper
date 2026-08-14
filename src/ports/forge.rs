@@ -165,8 +165,23 @@ pub trait ForgeRead: Send + Sync {
 /// every model call has returned.
 #[async_trait]
 pub trait ForgeWrite: Send + Sync {
-    /// Create or update a check run.
-    async fn publish_check(&self, repo: &RepoId, check: CheckRun) -> Result<()>;
+    /// Create a check run, returning its id.
+    ///
+    /// The id is returned so a check published as in-progress can be concluded
+    /// later through [`update_check`](Self::update_check). Posting a second
+    /// check run of the same name does *not* replace the first — GitHub keeps
+    /// both, and the pull request grows a duplicate row that never concludes —
+    /// so the id is the only way to finish what this started.
+    async fn publish_check(&self, repo: &RepoId, check: CheckRun) -> Result<u64>;
+
+    /// Replace an existing check run, by the id [`publish_check`] returned.
+    ///
+    /// Separate from `publish_check` rather than an `Option<u64>` parameter on
+    /// it, because the two have genuinely different preconditions: creating
+    /// needs a commit, updating needs a check that is already on that commit.
+    ///
+    /// [`publish_check`]: Self::publish_check
+    async fn update_check(&self, repo: &RepoId, check_id: u64, check: CheckRun) -> Result<()>;
 
     /// Create an issue comment, returning its id.
     async fn create_comment(&self, repo: &RepoId, number: u64, body: &str) -> Result<u64>;
@@ -217,6 +232,23 @@ pub trait ForgeWrite: Send + Sync {
         body: &str,
         labels: &[String],
     ) -> Result<u64>;
+
+    /// Reply in one review conversation, by GraphQL node id.
+    ///
+    /// Exists so [`resolve_review_thread`](Self::resolve_review_thread) does
+    /// not have to happen silently. A thread that collapses with no explanation
+    /// looks like the bot losing interest; the same thread with "addressed in
+    /// `abc1234`" under it is a claim the author can check, and disagree with,
+    /// against a specific commit.
+    ///
+    /// The body is written by this crate, never by a model — see
+    /// `threads::resolution_note`.
+    async fn reply_to_review_thread(
+        &self,
+        repo: &RepoId,
+        thread_id: &str,
+        body: &str,
+    ) -> Result<()>;
 
     /// Resolve one review conversation, by GraphQL node id.
     ///

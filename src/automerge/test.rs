@@ -759,8 +759,24 @@ impl crate::ports::forge::ForgeWrite for RefusingForge {
         &self,
         _repo: &RepoId,
         _check: crate::forge::types::CheckRun,
+    ) -> crate::Result<u64> {
+        unreachable!("auto-merge publishes no checks")
+    }
+    async fn update_check(
+        &self,
+        _repo: &RepoId,
+        _check_id: u64,
+        _check: crate::forge::types::CheckRun,
     ) -> crate::Result<()> {
         unreachable!("auto-merge publishes no checks")
+    }
+    async fn reply_to_review_thread(
+        &self,
+        _repo: &RepoId,
+        _thread_id: &str,
+        _body: &str,
+    ) -> crate::Result<()> {
+        unreachable!("auto-merge writes no thread replies")
     }
     async fn create_comment(
         &self,
