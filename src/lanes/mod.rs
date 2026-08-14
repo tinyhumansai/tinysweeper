@@ -68,6 +68,15 @@ pub struct LaneInput<'a> {
     /// `crate::harness::prompt`. Empty when retrieval is off, degraded, or
     /// found nothing, in which case the lane reviews the diff alone.
     pub retrieved_context: &'a str,
+    /// Read-only access to the tree, for the tools a sub-agent may call.
+    ///
+    /// `None` is the ordinary case and not a degradation: sub-agents are off by
+    /// default, and with them on but no corpus available they answer from the
+    /// evidence alone, exactly as they did before tools existed. What must
+    /// never happen is a corpus that can reach outside the repository under
+    /// review — see [`crate::flows::tools::ReadOnlyTools`], which refuses that
+    /// in front of every implementation rather than trusting each one.
+    pub corpus: Option<Arc<dyn Corpus>>,
 }
 
 impl LaneInput<'_> {
