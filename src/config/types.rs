@@ -1133,11 +1133,10 @@ impl Config {
     /// cheap tier, and a council agent is a reviewer.
     pub fn model_for_agent<'a>(&'a self, agent: &'a CouncilAgent, lane: LaneId) -> &'a str {
         match agent.model.as_ref().map(|r| r.0.as_str()) {
-            Some("deep") => &self.models.deep,
-            Some("scan") => &self.models.scan,
-            Some("flash") => &self.models.flash,
-            Some(explicit) => explicit,
+            // Naming nothing inherits the lane's model, which is what makes a
+            // one-agent council byte-identical to no council at all.
             None => self.model_for(lane),
+            reference => self.resolve_tier(reference),
         }
     }
 
