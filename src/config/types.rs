@@ -1099,8 +1099,22 @@ impl Config {
     /// opt-in.
     pub fn model_for(&self, lane: LaneId) -> &str {
         let reference = self.lane(lane).and_then(|l| l.model.as_ref());
-        match reference.map(|r| r.0.as_str()) {
+        self.resolve_tier(reference.map(|r| r.0.as_str()))
+    }
+
+    /// Resolve a tier name to a model id, or pass an explicit id through.
+    ///
+    /// One function rather than a `match` per caller, because the failure when
+    /// they drift is silent and expensive: a tier name no arm handles falls to
+    /// the `explicit` branch and is sent to the gateway *as the model id*. The
+    /// provider then 404s every call, or — worse with fallbacks on — quietly
+    /// answers from something nobody chose. Adding a tier to
+    /// [`ModelRef::TIERS`] without adding it here is exactly that bug, and it
+    /// is what happened to `flash`.
+    fn resolve_tier(&self, reference: Option<&str>) -> &str {
+        match reference {
             Some("deep") => &self.models.deep,
+            Some("flash") => &self.models.flash,
             Some("scan") | None => &self.models.scan,
             Some(explicit) => explicit,
         }
