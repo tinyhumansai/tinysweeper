@@ -232,7 +232,12 @@ pub fn answers_graph(model: &str, prompts: &[String], with_tools: bool) -> Workf
     }];
     let mut edges = Vec::new();
 
-    for (index, question) in questions.iter().enumerate() {
+    let system = match with_tools {
+        true => format!("{ANSWER_SYSTEM}{TOOL_INSTRUCTION}"),
+        false => ANSWER_SYSTEM.to_string(),
+    };
+
+    for (index, prompt) in prompts.iter().enumerate() {
         let id = node_id(index);
 
         nodes.push(Node {
@@ -242,9 +247,9 @@ pub fn answers_graph(model: &str, prompts: &[String], with_tools: bool) -> Workf
             name: "tinysweeper_subagent_answer".into(),
             config: json!({
                 "model": model,
-                "system": ANSWER_SYSTEM,
-                "prompt": format!("{evidence}\n\nThe question:\n{question}\n"),
-                "schema": answer_schema(),
+                "system": system,
+                "prompt": prompt,
+                "schema": answer_schema(with_tools),
                 "schema_name": "tinysweeper_subagent_answer",
                 // A question that cannot be answered is a question left
                 // unanswered, never a failed review.
