@@ -174,10 +174,20 @@ pub fn question_prompt(evidence: &str, question: &str) -> String {
 /// calls reads, by the third round, as a pile of unexplained file contents, and
 /// the sub-agent starts answering about the wrong one.
 pub fn render_tool_result(slug: &str, args: &Value, result: &Value) -> String {
+    // Fenced and labelled like every other untrusted span: the *contents* of a
+    // file a sub-agent chose to read are repository text, authored by whoever
+    // opened the pull request, and a file whose comments address the reader is
+    // the obvious way to reach a sub-agent that went looking.
     format!(
-        "\n\n### Lookup: `{slug}` {}\n\n```json\n{}\n```\n",
-        serde_json::to_string(args).unwrap_or_default(),
-        serde_json::to_string_pretty(result).unwrap_or_default(),
+        "\n\n{}\n",
+        fenced(
+            "lookup",
+            &format!(
+                "tool: {slug} {}\n\n{}",
+                serde_json::to_string(args).unwrap_or_default(),
+                serde_json::to_string_pretty(result).unwrap_or_default(),
+            )
+        )
     )
 }
 

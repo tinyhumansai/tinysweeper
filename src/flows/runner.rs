@@ -218,7 +218,7 @@ async fn answer_questions(
         .iter()
         .map(|question| Turn {
             question: question.clone(),
-            prompt: format!("{evidence}\n\nThe question:\n{question}\n"),
+            prompt: subagent::question_prompt(evidence, question),
             answered: None,
             looking: true,
         })
