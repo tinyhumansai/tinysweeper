@@ -238,26 +238,41 @@ fn print_prose(loaded: &Loaded) {
         );
     }
 
-    // Reasoning on the flash tier is the one configuration that makes the
-    // cheap tier cost more than the expensive one. Measured: a two-reviewer
-    // flash council on one pull request spent 134,704 output tokens over 11
-    // minutes at `medium`, against 940 tokens in 24 seconds at `off`, with one
-    // call hitting the ceiling and retrying. The key is global, so a council
-    // inherits whatever the deep tier wanted — which is why this is worth
-    // saying out loud here rather than leaving to whoever reads the bill.
-    let reasoning_on = !matches!(config.models.reasoning_effort.trim(), "off" | "");
+    // Reasoning on the flash tier is the one configuration that makes the cheap
+    // tier cost more than the expensive one, so what is actually in effect for
+    // each tier is worth stating rather than leaving to whoever reads the bill.
+    let global = config.models.reasoning_effort.trim();
+    let flash = config
+        .models
+        .reasoning_effort_flash
+        .as_deref()
+        .map(str::trim);
+    let reasoning_on = |effort: &str| !matches!(effort, "off" | "");
+
+    match flash {
+        Some(flash) if flash != global => println!(
+            "  reasoning        `{global}`, and `{flash}` on the flash tier"
+        ),
+        _ => println!("  reasoning        `{global}` on every tier"),
+    }
+
+    // The warning survives the override, because the override can be turned
+    // off again. Measured: a flash council on one pull request spent 134,704
+    // output tokens over 11 minutes at `medium`, against 940 tokens in 24
+    // seconds at `off`, with one call hitting the ceiling and retrying.
+    let effective_flash = flash.unwrap_or(global);
     let on_flash = config
         .enabled_lanes()
         .into_iter()
         .flat_map(|lane| crate::council::reviewers(config, lane))
         .any(|reviewer| reviewer.model == config.models.flash);
 
-    if reasoning_on && (on_flash || config.council.subagents) {
+    if reasoning_on(effective_flash) && (on_flash || config.council.subagents) {
         println!(
-            "  reasoning        `{}` on the flash tier — measured bimodal: it spends the whole \n\
-             \x20                 output budget thinking. Set `models.reasoning_effort = \"off\"` \n\
-             \x20                 for a council or sub-agent deployment.",
-            config.models.reasoning_effort
+            "  \x20                `{effective_flash}` on the flash tier — measured bimodal: it \n\
+             \x20                 spends the whole output budget thinking. Set \n\
+             \x20                 `models.reasoning_effort_flash = \"off\"` for a council or \n\
+             \x20                 sub-agent deployment."
         );
     }
 
