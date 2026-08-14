@@ -124,6 +124,7 @@ impl Lane for Tests {
                 .council
                 .subagents
                 .then_some(input.config.models.flash.as_str()),
+            input.corpus.clone(),
         )
         .await?;
 

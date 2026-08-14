@@ -152,6 +152,7 @@ impl Lane for Security {
                     extracted_rules,
                     prior_findings,
                     retrieved_context,
+                    input.corpus.clone(),
                     diff,
                     scanner,
                 )
@@ -185,6 +186,7 @@ async fn review_file(
     extracted_rules: &[String],
     prior_findings: &[String],
     retrieved_context: &str,
+    corpus: Option<std::sync::Arc<dyn crate::ports::corpus::Corpus>>,
     diff: &FileDiff,
     scanner: &[&ScanFinding],
 ) -> Result<FileReview> {
@@ -226,6 +228,7 @@ async fn review_file(
             .council
             .subagents
             .then_some(config.models.flash.as_str()),
+        corpus,
     )
     .await?;
 
