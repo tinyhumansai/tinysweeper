@@ -124,8 +124,9 @@ async fn one_round(
 
     Ok(calls
         .iter()
-        .map(|call| {
-            let node = panel::node_id(&call.id);
+        .enumerate()
+        .map(|(index, call)| {
+            let node = panel::node_id(index, &call.id);
 
             match node_answer(&outcome.output, &node) {
                 Some((value, model)) => Answer {

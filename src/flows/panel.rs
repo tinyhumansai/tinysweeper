@@ -100,8 +100,8 @@ pub fn council_graph(lane: LaneId, calls: &[Call], schema: &Value) -> WorkflowGr
     }];
     let mut edges = Vec::new();
 
-    for call in calls {
-        let id = node_id(&call.id);
+    for (index, call) in calls.iter().enumerate() {
+        let id = node_id(index, &call.id);
 
         nodes.push(Node {
             id: id.clone(),

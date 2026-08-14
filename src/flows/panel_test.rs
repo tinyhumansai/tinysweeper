@@ -76,17 +76,17 @@ fn each_reviewer_carries_its_own_model_and_prompt() {
     calls[1].model = "vendor/deep".into();
 
     let graph = council_graph(LaneId::Critique, &calls, &json!({}));
-    let node = |id: &str| {
+    let node = |index: usize, id: &str| {
         graph
             .nodes
             .iter()
-            .find(|n| n.id == node_id(id))
+            .find(|n| n.id == node_id(index, id))
             .expect("node")
     };
 
-    assert_eq!(node("a").config["model"], json!("vendor/flash"));
-    assert_eq!(node("b").config["model"], json!("vendor/deep"));
-    assert_eq!(node("a").config["system"], json!("system for a"));
+    assert_eq!(node(0, "a").config["model"], json!("vendor/flash"));
+    assert_eq!(node(1, "b").config["model"], json!("vendor/deep"));
+    assert_eq!(node(0, "a").config["system"], json!("system for a"));
 }
 
 #[test]
@@ -106,9 +106,9 @@ fn an_operator_supplied_id_cannot_produce_an_illegal_node_id() {
     // Agent ids come from configuration, so they are not assumed to be legal
     // node ids. `config::validate` already rejects duplicates, so the only job
     // here is producing something the graph can carry.
-    assert_eq!(node_id("security-focused"), "reviewer_security_focused");
-    assert_eq!(node_id("A Reviewer!"), "reviewer_a_reviewer_");
-    assert_eq!(node_id("plain"), "reviewer_plain");
+    assert_eq!(node_id(0, "security-focused"), "reviewer_0_security_focused");
+    assert_eq!(node_id(1, "A Reviewer!"), "reviewer_1_a_reviewer_");
+    assert_eq!(node_id(2, "plain"), "reviewer_2_plain");
 }
 
 #[test]
@@ -132,4 +132,23 @@ fn every_lanes_graph_compiles() {
 fn no_calls_still_produces_a_compilable_graph() {
     let graph = council_graph(LaneId::Critique, &[], &json!({}));
     tinyflows::compiler::compile(&graph).expect("an empty council still compiles");
+}
+
+#[test]
+fn reviewers_whose_ids_sanitise_alike_still_get_distinct_nodes() {
+    // `config::validate` rejects only *exact* duplicate agent ids, so these
+    // three are all legal and all validated. Sanitising alone reduces them to
+    // one node id, and a graph with three nodes claiming it either fails to
+    // compile or silently attributes one reviewer's findings to another.
+    let graph = graph_of(&["sec-review", "sec review", "Sec_Review"]);
+
+    let ids: std::collections::BTreeSet<&str> = graph
+        .nodes
+        .iter()
+        .map(|n| n.id.as_str())
+        .filter(|id| id.starts_with("reviewer_"))
+        .collect();
+
+    assert_eq!(ids.len(), 3, "colliding node ids: {ids:?}");
+    tinyflows::compiler::compile(&graph).expect("distinct ids compile");
 }
