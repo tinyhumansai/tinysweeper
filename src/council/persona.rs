@@ -238,6 +238,53 @@ mod tests {
     }
 
     #[test]
+    fn only_style_is_capped() {
+        // A cap on a persona that reports defects would silently downgrade real
+        // findings below the gate, which is indistinguishable from the reviewer
+        // never having run.
+        assert_eq!(ceiling("style"), Some(Severity::Low));
+
+        for name in NAMES.iter().filter(|n| **n != "style") {
+            assert_eq!(ceiling(name), None, "`{name}` is capped");
+        }
+    }
+
+    #[test]
+    fn an_unknown_persona_is_not_capped() {
+        // `ceiling` is consulted for every reviewer, including the persona-less
+        // default. Capping something it does not recognise would make a typo
+        // quietly mute a reviewer rather than fail at load.
+        assert_eq!(ceiling(""), None);
+        assert_eq!(ceiling("styles"), None);
+    }
+
+    #[test]
+    fn style_is_told_to_expect_to_find_nothing() {
+        // The one persona guaranteed to find something on any input. Without
+        // this it returns `max_comments` findings on every pull request, and
+        // the cap alone would not stop it crowding out the reviewers that
+        // matter during merge.
+        let text = lookup("style").expect("resolves");
+        assert!(text.contains("Say nothing rather than something"));
+    }
+
+    #[test]
+    fn every_persona_names_a_subject_rather_than_asking_for_effort() {
+        // The module doc's claim: a persona must change *what* is looked at.
+        // "Be thorough" produces the same answer at a second bill.
+        for name in NAMES {
+            let text = lookup(name).expect("resolves").to_lowercase();
+            for empty in ["be thorough", "step by step", "carefully consider"] {
+                assert!(!text.contains(empty), "`{name}` contains `{empty}`");
+            }
+            assert!(
+                text.contains("your subject is"),
+                "`{name}` does not name a subject"
+            );
+        }
+    }
+
+    #[test]
     fn no_persona_overrides_the_lanes_own_subject() {
         // A persona narrows *within* a lane. One that told the reviewer to
         // ignore the lane instructions would make the check run mean something
