@@ -882,7 +882,7 @@ fn every_tier_name_resolves_to_a_model_id_rather_than_to_itself() {
     // the gateway *as the model id*. The provider 404s every call — or, with
     // fallbacks enabled, quietly answers from something nobody chose. `flash`
     // shipped that way, and only a live run would have shown it.
-    let config = defaults();
+    let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
 
     for tier in crate::config::types::ModelRef::TIERS {
         let reference = crate::config::types::ModelRef(tier.to_string());
@@ -911,7 +911,7 @@ fn a_lane_and_the_issue_workload_resolve_tiers_the_same_way() {
     // Three copies of one `match` drifted once already. This asserts they agree
     // rather than asserting each one's arms separately, which is the assertion
     // that would have caught it.
-    let mut config = defaults();
+    let mut config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
 
     for tier in crate::config::types::ModelRef::TIERS {
         config.issues.model = Some(crate::config::types::ModelRef(tier.to_string()));
