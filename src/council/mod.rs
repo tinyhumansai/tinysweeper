@@ -48,6 +48,28 @@ pub struct Reviewer<'a> {
     /// The persona text appended to the lane instructions. Empty is the lane's
     /// own prompt, unchanged.
     pub persona: &'static str,
+    /// The severity this reviewer's findings are clamped to, if any.
+    ///
+    /// Set from the persona rather than from configuration: it is a property of
+    /// the subject being reviewed, not an operator preference, and a cap an
+    /// operator could raise is not a cap. See [`persona::ceiling`].
+    pub ceiling: Option<Severity>,
+}
+
+impl Reviewer<'_> {
+    /// Apply this reviewer's ceiling to what it reported.
+    ///
+    /// A no-op for every reviewer that has none, which is all of them but
+    /// `style`. Applied to the model's answer rather than requested in the
+    /// prompt, because a prompt is a request and this is a guarantee.
+    pub fn clamp(&self, findings: &mut [crate::findings::types::Finding]) {
+        let Some(ceiling) = self.ceiling else {
+            return;
+        };
+        for finding in findings {
+            finding.severity = finding.severity.min(ceiling);
+        }
+    }
 }
 
 /// Who reviews `lane`, in configuration order.
