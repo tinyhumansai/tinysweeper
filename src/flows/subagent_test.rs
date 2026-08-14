@@ -61,7 +61,7 @@ fn a_sub_agent_is_told_it_may_not_reach_a_verdict() {
 
 #[test]
 fn an_answer_may_be_an_admission_that_the_evidence_does_not_say() {
-    let schema = answer_schema();
+    let schema = answer_schema(false);
     assert_eq!(schema["required"], json!(["answer", "confident"]));
 }
 
@@ -125,11 +125,7 @@ fn widening_a_schema_leaves_its_own_contract_alone() {
 
 #[test]
 fn a_batch_of_questions_is_one_concurrent_graph() {
-    let graph = answers_graph(
-        "vendor/flash",
-        &["a".into(), "b".into(), "c".into()],
-        "diff",
-    );
+    let graph = answers_graph("vendor/flash", &["a".into(), "b".into(), "c".into()], false);
 
     let fan_out = graph
         .edges
@@ -147,7 +143,7 @@ fn a_batch_of_questions_is_one_concurrent_graph() {
 
 #[test]
 fn one_question_failing_leaves_the_others_answerable() {
-    for node in answers_graph("vendor/flash", &["a".into(), "b".into()], "diff")
+    for node in answers_graph("vendor/flash", &["a".into(), "b".into()], false)
         .nodes
         .iter()
         .filter(|n| n.id.starts_with("answer_"))

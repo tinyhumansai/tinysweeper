@@ -118,7 +118,8 @@ async fn a_missing_argument_is_an_error_rather_than_a_default() {
 #[tokio::test]
 async fn a_truncated_read_says_that_it_was_truncated() {
     let big = "x".repeat(MAX_READ_BYTES * 2);
-    let tools = ReadOnlyTools::new(&MapCorpus::default().with("big.txt", &big));
+    let corpus = MapCorpus::default().with("big.txt", &big);
+    let tools = ReadOnlyTools::new(&corpus);
 
     let out = call(&tools, "read_file", json!({ "path": "big.txt" }))
         .await
@@ -134,7 +135,8 @@ async fn truncation_does_not_split_a_utf8_character() {
     // A byte slice through a multi-byte character panics on `&text[..end]`,
     // which would take the whole review down rather than shorten one read.
     let big = "é".repeat(MAX_READ_BYTES);
-    let tools = ReadOnlyTools::new(&MapCorpus::default().with("u.txt", &big));
+    let corpus = MapCorpus::default().with("u.txt", &big);
+    let tools = ReadOnlyTools::new(&corpus);
 
     let out = call(&tools, "read_file", json!({ "path": "u.txt" }))
         .await
@@ -189,7 +191,8 @@ async fn being_unable_to_search_is_not_reported_as_no_matches() {
         }
     }
 
-    let tools = ReadOnlyTools::new(&NoSearch);
+    let corpus = NoSearch;
+    let tools = ReadOnlyTools::new(&corpus);
     let out = call(&tools, "search", json!({ "pattern": "fn" }))
         .await
         .unwrap();
