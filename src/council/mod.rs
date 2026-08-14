@@ -84,6 +84,7 @@ pub fn reviewers<'a>(config: &'a Config, lane: LaneId) -> Vec<Reviewer<'a>> {
             id: "reviewer",
             model: config.model_for(lane),
             persona: persona::NONE,
+            ceiling: None,
         }]
     };
 
