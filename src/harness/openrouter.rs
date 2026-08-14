@@ -184,6 +184,23 @@ impl GatewayModel {
         })
     }
 
+    /// The reasoning effort to send for `model`.
+    ///
+    /// Matched on the resolved model id rather than on a tier name, because by
+    /// the time a request reaches this adapter the tier is gone — `council`
+    /// resolves it so there is exactly one answer to "what did this call run
+    /// on". Comparing ids is what recovers the distinction here.
+    ///
+    /// A deployment whose `flash` and `deep` ids are the same string gets the
+    /// flash setting for both, which is correct: they are the same model, and
+    /// the override describes the model rather than the role.
+    fn effort_for(&self, model: &str) -> &str {
+        match &self.reasoning_effort_flash {
+            Some(effort) if model == self.flash => effort,
+            _ => &self.reasoning_effort,
+        }
+    }
+
     fn harness(&self, model: &str) -> Result<AgentHarness<()>> {
         let provider = OpenAiModel::new(&self.api_key)
             .with_base_url(&self.base_url)
