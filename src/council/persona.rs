@@ -25,6 +25,8 @@
 //! below names concrete things to go and check, and why none of them says
 //! "be thorough" or "think step by step".
 
+use crate::config::types::Severity;
+
 /// The persona applied when a council agent names none.
 ///
 /// Empty rather than a default flavour: an agent with no persona is the lane's
