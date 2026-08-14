@@ -534,10 +534,12 @@ mod tests {
         // behaviour the reservation replaced, where calls ran until real spend
         // caught up.
         let capability = ModelCapability::new(
-            Arc::new(MockModel::always(json!({ "summary": "ok" })).with_usage(Usage {
-                cost_usd: 0.0,
-                ..Usage::default()
-            })),
+            Arc::new(
+                MockModel::always(json!({ "summary": "ok" })).with_usage(Usage {
+                    cost_usd: 0.0,
+                    ..Usage::default()
+                }),
+            ),
             models(),
         )
         .with_budget(0.000_001);

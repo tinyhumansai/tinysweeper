@@ -644,7 +644,11 @@ async fn the_engine_envelope_is_exactly_this_deep() {
     // unreachable. Neither shows up as a compile error, so the shape is
     // asserted here against a real engine run rather than described in prose.
     let answer = json!({ "summary": "the model's own answer", "findings": [] });
-    let llm = lane_llm(Arc::new(MockModel::always(answer.clone())), &config(), 100.0);
+    let llm = lane_llm(
+        Arc::new(MockModel::always(answer.clone())),
+        &config(),
+        100.0,
+    );
     let capabilities = crate::flows::caps::with_llm(llm, ChildGraphs::none());
 
     let calls = vec![call("solo")];
@@ -657,14 +661,16 @@ async fn the_engine_envelope_is_exactly_this_deep() {
     let node = panel::node_id(0, "solo");
     let (value, model) = node_answer(&outcome.output, &node).expect("an answer");
 
-    assert_eq!(value, answer, "node_answer did not return the model's answer");
+    assert_eq!(
+        value, answer,
+        "node_answer did not return the model's answer"
+    );
     assert_eq!(model, "vendor/flash");
 
     // And the literal path, so a change in the engine's envelope fails here
     // with the shape in front of you rather than as a lane that found nothing.
     assert_eq!(
-        outcome.output["nodes"][&node]["items"][0]["json"]["json"]["json"],
-        answer,
+        outcome.output["nodes"][&node]["items"][0]["json"]["json"]["json"], answer,
         "the envelope depth changed"
     );
 }
