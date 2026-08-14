@@ -108,6 +108,10 @@ pub fn reviewers<'a>(config: &'a Config, lane: LaneId) -> Vec<Reviewer<'a>> {
                 .as_deref()
                 .and_then(persona::lookup)
                 .unwrap_or(persona::NONE),
+            // Keyed off the *resolved* name, so an unknown persona is an
+            // uncapped reviewer with no character rather than a capped one —
+            // matching what `lookup` already does with the same typo.
+            ceiling: agent.persona.as_deref().and_then(persona::ceiling),
         })
         .collect();
 
