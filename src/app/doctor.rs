@@ -218,12 +218,22 @@ fn print_prose(loaded: &Loaded) {
         let reviewers = crate::council::reviewers(config, lane);
         let models: Vec<&str> = reviewers.iter().map(|r| r.model).collect();
 
+        // A capped reviewer is one whose findings can never reach the comment
+        // threshold. That is the intent for `style`, and it is indistinguishable
+        // from a broken reviewer if nothing says so — somebody configures one,
+        // sees no comments, and concludes it is not running.
+        let capped = reviewers.iter().filter(|r| r.ceiling.is_some()).count();
+
         println!(
-            "  {:<16} {}  ({} reviewer{}, fails at {})",
+            "  {:<16} {}  ({} reviewer{}{}, fails at {})",
             lane.as_str(),
             models.join(", "),
             reviewers.len(),
             if reviewers.len() == 1 { "" } else { "s" },
+            match capped {
+                0 => String::new(),
+                n => format!(", {n} summary-only"),
+            },
             config.fail_on(lane)
         );
     }
