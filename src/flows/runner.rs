@@ -211,7 +211,7 @@ async fn answer_questions(
     model: &str,
     questions: &[String],
     evidence: &str,
-    tools: Option<&ReadOnlyTools>,
+    tools: Option<&ReadOnlyTools<'_>>,
 ) -> Vec<Answered> {
     let mut turns: Vec<Turn> = questions
         .iter()

@@ -137,7 +137,7 @@ impl<'a> ReadOnlyTools<'a> {
     }
 
     /// One argument, as a non-empty string.
-    fn arg<'a>(args: &'a Value, key: &str) -> FlowResult<&'a str> {
+    fn arg<'v>(args: &'v Value, key: &str) -> FlowResult<&'v str> {
         let value = args
             .get(key)
             .and_then(Value::as_str)
