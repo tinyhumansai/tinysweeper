@@ -102,29 +102,36 @@ const MODEL_PRICES: &[(&str, Price)] = &[
         },
     ),
     (
-        // DeepSeek's own rates, which is what `[models.provider]` now pins.
-        // The note this replaces was right that the floating alias spans
-        // $0.42-$1.74 across eighteen providers and that one row could not
-        // describe it; pinning the provider is what makes a single row true
-        // again. Re-derive from `/api/v1/models/deepseek/<id>/endpoints` if the
-        // pin changes.
+        // The *floating* alias, which is a different and dearer model from the
+        // `-0813` snapshot above — not the same price with a different name.
+        // These are its own rates, read from `/api/v1/models` on 2026-08-14.
+        //
+        // It carried the snapshot's numbers until then, which under-reported it
+        // by 2.7x. Nothing caught that because the pin means this row is not
+        // normally reached: it is what a cost line falls back to when the
+        // gateway omits `usage.cost`, so a wrong number here is invisible right
+        // up until the one run that needed it.
         "deepseek/deepseek-v4-pro",
         Price {
-            input: 0.435,
-            output: 0.87,
-            cached: 0.003625,
+            input: 1.168,
+            output: 2.336,
+            cached: 0.09855,
         },
     ),
     (
         // The tier a council runs on, at DeepSeek's own rates to match the pin.
-        // Cache reads are a *fiftieth* of the input price here, which is the
-        // whole reason several reviewers cost about what one used to: the
-        // shared prompt prefix is paid for once.
+        // Read from `/api/v1/models` on 2026-08-14.
+        //
+        // Cache reads are a *fifth* of the input price, not a fiftieth: the
+        // cached rate here was 0.0028 for a while, which under-reported cache
+        // hits by 10x and made the caching claim look better than it is.
+        // Caching still pays — a council shares one prompt prefix across every
+        // reviewer — it just pays five times over rather than fifty.
         "deepseek/deepseek-v4-flash",
         Price {
             input: 0.14,
             output: 0.28,
-            cached: 0.0028,
+            cached: 0.028,
         },
     ),
     (
