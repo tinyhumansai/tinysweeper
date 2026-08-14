@@ -472,9 +472,8 @@ mod tests {
         // and the test would pass against the very bug it is written for.
         let model = SlowModel::default();
         let calls = model.started.clone();
-        let capability = Arc::new(
-            ModelCapability::new(Arc::new(model), models()).with_budget(0.10),
-        );
+        let capability =
+            Arc::new(ModelCapability::new(Arc::new(model), models()).with_budget(0.10));
 
         let mut running = tokio::task::JoinSet::new();
         for _ in 0..8 {
@@ -489,7 +488,10 @@ mod tests {
             }
         }
 
-        assert!(allowed >= 1, "every call was refused; the budget is unusable");
+        assert!(
+            allowed >= 1,
+            "every call was refused; the budget is unusable"
+        );
         assert!(
             allowed < 8,
             "all 8 concurrent calls passed a budget none of them had paid for"

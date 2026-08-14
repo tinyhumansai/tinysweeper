@@ -250,9 +250,9 @@ fn print_prose(loaded: &Loaded) {
     let reasoning_on = |effort: &str| !matches!(effort, "off" | "");
 
     match flash {
-        Some(flash) if flash != global => println!(
-            "  reasoning        `{global}`, and `{flash}` on the flash tier"
-        ),
+        Some(flash) if flash != global => {
+            println!("  reasoning        `{global}`, and `{flash}` on the flash tier")
+        }
         _ => println!("  reasoning        `{global}` on every tier"),
     }
 

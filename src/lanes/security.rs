@@ -524,7 +524,10 @@ mod tests {
         let outcome = run_with(model, &config(), &diffs(), &[]).await;
 
         assert!(
-            outcome.spend.models.contains(&"vendor/fallback-took-over".to_string()),
+            outcome
+                .spend
+                .models
+                .contains(&"vendor/fallback-took-over".to_string()),
             "the lane reported no model attribution: {:?}",
             outcome.spend.models
         );

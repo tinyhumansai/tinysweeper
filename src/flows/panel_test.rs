@@ -106,7 +106,10 @@ fn an_operator_supplied_id_cannot_produce_an_illegal_node_id() {
     // Agent ids come from configuration, so they are not assumed to be legal
     // node ids. `config::validate` already rejects duplicates, so the only job
     // here is producing something the graph can carry.
-    assert_eq!(node_id(0, "security-focused"), "reviewer_0_security_focused");
+    assert_eq!(
+        node_id(0, "security-focused"),
+        "reviewer_0_security_focused"
+    );
     assert_eq!(node_id(1, "A Reviewer!"), "reviewer_1_a_reviewer_");
     assert_eq!(node_id(2, "plain"), "reviewer_2_plain");
 }
