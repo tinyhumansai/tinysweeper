@@ -64,10 +64,15 @@ pub struct Call {
 /// The node id one call's answer lands under.
 ///
 /// A reviewer id is operator-supplied config, so it is not assumed to be a
-/// legal node id: anything outside `[a-z0-9_]` becomes `_`. Collisions are not
-/// a concern because `config::validate` rejects a council with duplicate agent
-/// ids, and a graph with two nodes of one id would fail to compile anyway.
-pub fn node_id(reviewer_id: &str) -> String {
+/// legal node id: anything outside `[a-z0-9_]` becomes `_`.
+///
+/// The index is what makes it unique, and it is load-bearing rather than
+/// decorative. Sanitising alone collides — `sec-review`, `sec review` and
+/// `Sec_Review` all reduce to `sec_review` — and `config::validate` rejects
+/// only *exact* duplicate agent ids, so three distinct, legal, validated agents
+/// can name one node. The reviewer list and the node list are read back by
+/// position anyway, so the index is already the identity that matters.
+pub fn node_id(index: usize, reviewer_id: &str) -> String {
     let cleaned: String = reviewer_id
         .chars()
         .map(|c| {
@@ -79,7 +84,7 @@ pub fn node_id(reviewer_id: &str) -> String {
         })
         .collect();
 
-    format!("reviewer_{cleaned}")
+    format!("reviewer_{index}_{cleaned}")
 }
 
 /// Build the graph that asks every reviewer at once.
