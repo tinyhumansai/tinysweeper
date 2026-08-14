@@ -207,7 +207,7 @@ fn the_allow_label_is_recognised_however_it_is_spelled() {
         let mut snapshot = snapshot_of();
         snapshot.pull_request.labels = vec![spelling.into()];
         assert!(
-            !matches!(refusal(&policy(), &snapshot), Refusal::MissingAllowLabel),
+            evaluate(&policy(), &snapshot).is_merge(),
             "{spelling:?} was not accepted as the opt-in"
         );
     }
