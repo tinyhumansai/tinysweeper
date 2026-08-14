@@ -53,8 +53,10 @@ fn the_question_schema_caps_how_many_may_be_asked() {
 
 #[test]
 fn a_sub_agent_is_told_it_may_not_reach_a_verdict() {
-    // Its output is evidence for the verify round. Evidence that has already
-    // made up its mind is worth less than none.
+    // Its output is evidence for the reviewer's own second turn — there is no
+    // verify round on this path, and nothing here can remove a finding.
+    // Evidence that has already made up its mind is worth less than none, and a
+    // sub-agent that reported findings would be a reviewer nobody configured.
     assert!(ANSWER_SYSTEM.contains("not reviewing"));
     assert!(ANSWER_SYSTEM.contains("do not report problems"));
 }
@@ -67,9 +69,10 @@ fn an_answer_may_be_an_admission_that_the_evidence_does_not_say() {
 
 #[test]
 fn an_unconfident_answer_is_rendered_as_such_rather_than_dropped() {
-    // "The evidence does not say" is a real input to whether a finding
-    // survives: it is the difference between a verifier confirming a claim and
-    // a verifier having had no way to check it.
+    // "The evidence does not say" is a real input to the reviewer's final
+    // verdict: it is the difference between a doubt that was resolved and one
+    // that could not be. Dropping it would let the reviewer read silence as
+    // confirmation.
     let rendered = render(&[Answered {
         question: "Does the caller validate this?".into(),
         answer: "No caller is visible in the supplied evidence.".into(),
