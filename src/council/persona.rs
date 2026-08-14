@@ -41,12 +41,46 @@ pub fn lookup(name: &str) -> Option<&'static str> {
         "correctness" => CORRECTNESS,
         "integration" => INTEGRATION,
         "adversary" => ADVERSARY,
+        "resilience" => RESILIENCE,
+        "data" => DATA,
+        "style" => STYLE,
         _ => return None,
     })
 }
 
+/// The severity a persona's findings may not exceed.
+///
+/// `None` for every persona that reports defects, which is most of them: a
+/// reviewer that found a critical bug must be able to say so, and capping that
+/// would be capping the product.
+///
+/// `style` is the exception and the reason this exists. Style is the noise this
+/// repository is built to suppress — `max_comments`, dedupe and the anchoring
+/// rules all exist to keep nits off a pull request — so a style reviewer that
+/// could rank itself alongside a correctness finding would undo that in one
+/// configuration line. Capped at [`Severity::Low`] it lands *below* the default
+/// severity gate, which means its findings reach the check-run summary and
+/// never become inline comments. That is the whole intent: visible to somebody
+/// who goes looking, invisible to somebody reading their pull request.
+///
+/// The cap is applied to what the model returned rather than requested in the
+/// prompt, because a prompt is a request and a clamp is a guarantee.
+pub fn ceiling(name: &str) -> Option<Severity> {
+    match name {
+        "style" => Some(Severity::Low),
+        _ => None,
+    }
+}
+
 /// Every persona name, for error messages and `doctor`.
-pub const NAMES: [&str; 3] = ["correctness", "integration", "adversary"];
+pub const NAMES: [&str; 6] = [
+    "correctness",
+    "integration",
+    "adversary",
+    "resilience",
+    "data",
+    "style",
+];
 
 /// Local correctness: what this code does on its own, read closely.
 const CORRECTNESS: &str = r#"
