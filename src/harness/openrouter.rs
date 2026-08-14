@@ -634,6 +634,7 @@ mod tests {
     fn models() -> Models {
         Models {
             reasoning_effort: "high".into(),
+            reasoning_effort_flash: None,
             structured_output: StructuredOutput::Schema,
             gateway: "openrouter".into(),
             base_url: "https://openrouter.ai/api/v1".into(),
@@ -850,10 +851,58 @@ mod tests {
         assert_eq!(truncation_ladder(0), vec![0]);
     }
 
+    fn gateway(effort: &str, flash_effort: Option<&str>) -> GatewayModel {
+        GatewayModel {
+            reasoning_effort: effort.into(),
+            flash: "vendor/flash".into(),
+            reasoning_effort_flash: flash_effort.map(str::to_string),
+            structured_output: StructuredOutput::Schema,
+            api_key: "k".into(),
+            base_url: "https://example.invalid".into(),
+            fallbacks: vec![],
+            provider: ProviderRouting::default(),
+            langfuse: None,
+        }
+    }
+
+    #[test]
+    fn the_flash_tier_can_reason_differently_from_every_other_tier() {
+        // The measured reason this key exists: `deepseek-v4-flash` at `medium`
+        // spends the entire output allowance thinking, while the deep tier
+        // genuinely benefits from it. One global setting cannot serve both.
+        let model = gateway("medium", Some("off"));
+
+        assert_eq!(model.effort_for("vendor/flash"), "off");
+        assert_eq!(model.effort_for("vendor/deep"), "medium");
+    }
+
+    #[test]
+    fn without_an_override_every_tier_reasons_the_same() {
+        let model = gateway("medium", None);
+
+        assert_eq!(model.effort_for("vendor/flash"), "medium");
+        assert_eq!(model.effort_for("vendor/deep"), "medium");
+    }
+
+    #[test]
+    fn the_override_is_matched_on_the_model_id_not_a_tier_name() {
+        // By the time a request reaches this adapter the tier is gone —
+        // `council` resolves it so there is one answer to "what did this run
+        // on". Matching on ids is what recovers the distinction, and a
+        // deployment whose tiers share an id correctly gets one answer.
+        let mut model = gateway("medium", Some("off"));
+        model.flash = "same/model".into();
+
+        assert_eq!(model.effort_for("same/model"), "off");
+        assert_eq!(model.effort_for("flash"), "medium", "matched a tier name");
+    }
+
     #[test]
     fn debug_never_prints_the_api_key() {
         let model = GatewayModel {
             reasoning_effort: "high".into(),
+            flash: "c".into(),
+            reasoning_effort_flash: None,
             structured_output: StructuredOutput::Schema,
             api_key: "sk-secret-value".into(),
             base_url: "https://openrouter.ai/api/v1".into(),
