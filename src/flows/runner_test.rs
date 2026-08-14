@@ -634,3 +634,37 @@ async fn no_corpus_means_no_tool_turns_at_all() {
 
     assert_eq!(turns, 1, "a corpus-less run took extra turns");
 }
+
+#[tokio::test]
+async fn the_engine_envelope_is_exactly_this_deep() {
+    // `node_answer` walks a fixed path into the engine's output. One hop too
+    // few returns `{json, model}`, which deserializes into an *empty*
+    // `LaneResponse` rather than failing — a silent all-clear on every lane at
+    // once. One hop too many returns `None`, which reports every reviewer as
+    // unreachable. Neither shows up as a compile error, so the shape is
+    // asserted here against a real engine run rather than described in prose.
+    let answer = json!({ "summary": "the model's own answer", "findings": [] });
+    let llm = lane_llm(Arc::new(MockModel::always(answer.clone())), &config(), 100.0);
+    let capabilities = crate::flows::caps::with_llm(llm, ChildGraphs::none());
+
+    let calls = vec![call("solo")];
+    let graph = panel::council_graph(LaneId::Critique, &calls, &schema());
+    let compiled = tinyflows::compiler::compile(&graph).expect("compiles");
+    let outcome = engine::run(&compiled, json!({}), &capabilities)
+        .await
+        .expect("runs");
+
+    let node = panel::node_id(0, "solo");
+    let (value, model) = node_answer(&outcome.output, &node).expect("an answer");
+
+    assert_eq!(value, answer, "node_answer did not return the model's answer");
+    assert_eq!(model, "vendor/flash");
+
+    // And the literal path, so a change in the engine's envelope fails here
+    // with the shape in front of you rather than as a lane that found nothing.
+    assert_eq!(
+        outcome.output["nodes"][&node]["items"][0]["json"]["json"]["json"],
+        answer,
+        "the envelope depth changed"
+    );
+}

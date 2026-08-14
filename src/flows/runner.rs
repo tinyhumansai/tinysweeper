@@ -70,14 +70,20 @@ pub fn lane_llm(
 
 /// Read one agent node's structured answer out of a finished run.
 ///
-/// Two envelopes, not one, and the difference is easy to get wrong in a way
-/// nothing reports. The engine wraps a node's result as
-/// `nodes.<id>.items[0].{json, raw, text}`, and the `json` there is whatever
-/// [`crate::flows::caps::ModelCapability`] returned — this crate's own
-/// `{json, model}` pair. So the model's answer is two `json` hops down, and
-/// stopping one hop early yields `{json, model}`, which deserializes into an
-/// *empty* lane response rather than failing. That reads exactly like a
-/// reviewer that found nothing.
+/// Three `json` hops, and the count is easy to get wrong in a way nothing
+/// reports. The path is `nodes.<id>.items[0].json.json.json`:
+///
+/// 1. `items[0].json` — the engine's envelope for one item.
+/// 2. `.json` — the `agent` node's own wrapper around the provider result.
+/// 3. `.json` — the payload [`crate::flows::caps::ModelCapability`] returned,
+///    this crate's `{json, model}` pair, whose `json` is the model's answer.
+///
+/// Stopping one hop early yields `{json, model}`, which deserializes into an
+/// *empty* `LaneResponse` rather than failing — it reads exactly like a
+/// reviewer that found nothing, on every lane at once. So the depth is pinned
+/// by `the_engine_envelope_is_exactly_this_deep` rather than by this comment:
+/// a comment cannot fail, and this one was wrong about the count for a while
+/// without anything noticing.
 fn node_answer(output: &Value, node_id: &str) -> Option<(Value, String)> {
     let envelope = output.get("nodes")?.get(node_id)?.get("items")?.get(0)?;
     let payload = envelope.get("json")?.get("json")?;
