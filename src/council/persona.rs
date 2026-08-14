@@ -275,7 +275,15 @@ mod tests {
         // The module doc's claim: a persona must change *what* is looked at.
         // "Be thorough" produces the same answer at a second bill.
         for name in NAMES {
-            let text = lookup(name).expect("resolves").to_lowercase();
+            // Collapsed, because these are hard-wrapped prose: "Your subject
+            // is" straddles a line break in half of them.
+            let text = lookup(name)
+                .expect("resolves")
+                .to_lowercase()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+
             for empty in ["be thorough", "step by step", "carefully consider"] {
                 assert!(!text.contains(empty), "`{name}` contains `{empty}`");
             }
