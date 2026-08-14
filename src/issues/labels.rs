@@ -127,8 +127,25 @@ fn same(left: &str, right: &str) -> bool {
     left.trim().eq_ignore_ascii_case(right.trim())
 }
 
+/// One of the four labels triage may *apply*.
 fn is_priority(label: &str) -> bool {
     Priority::labels().iter().any(|known| same(known, label))
+}
+
+/// Anything in the `priority:` facet, including spellings this bot retired.
+///
+/// Deliberately wider than [`is_priority`], and the gap between the two is the
+/// point. The vocabulary is what may be added; the *facet* is what a new
+/// priority replaces, and those are not the same set once a name has been
+/// retired. `openhuman` and `backend` still carry an older axis — `priority:
+/// high`, `medium`, `low`, `critical` — from before the p0–p3 scale, on 539
+/// items between them. Matching only the current four left those untouched
+/// forever: an issue would take `priority: p2` and keep `priority: high`
+/// beside it, two labels in one facet disagreeing, which is exactly the
+/// contradiction `supersede` exists to prevent. Anything a human applied
+/// outside this prefix is still none of our business.
+fn in_priority_facet(label: &str) -> bool {
+    label.trim().to_ascii_lowercase().starts_with("priority:")
 }
 
 /// The built-in vocabulary: what triage may apply when `allow_labels` is empty.
