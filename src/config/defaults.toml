@@ -579,3 +579,7 @@ resolve_fixed = true
 # Ask a model whether a reply settled a finding the code did not change. Off:
 # the only evidence in that case is a comment, and comments are untrusted input.
 ask_model = false
+# Reply with the reason and the commit before resolving. On: a thread that
+# collapses silently reads as the bot losing interest rather than as a finding
+# somebody fixed, and the author cannot check a claim that was never made.
+comment_on_resolve = true

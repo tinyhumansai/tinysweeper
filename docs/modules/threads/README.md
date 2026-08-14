@@ -63,15 +63,47 @@ into the run's spend **before** the proposal's totals are read, so an advisory
 call reaches `Proposal::usage()` and the rendered `findings::render::cost_table`
 like any lane's call. A model call whose spend is not merged is invisible money.
 
+## Saying why, and naming the commit
+
+A resolve used to happen silently. GitHub indexed that as resolved and the
+author read it as the bot losing interest: the objection was tinysweeper's, so
+the retraction should be too, and it should name the commit it is crediting.
+
+`apply_plan` therefore posts `threads::resolution_note` into the thread before
+resolving it. The note carries the deterministic reason and the abbreviated head
+SHA of the reviewed commit — the same SHA `app::apply` has already checked
+against live state, so a note cannot credit a commit nobody is looking at:
+
+> **Resolved** — the review agent found this finding fixed in the new code, as
+> of `abc1234`.
+
+Both halves of that string are crate-owned. `reason` is a `&'static str` from
+`Decision`, and the SHA is read off the forge, so nothing a contributor writes
+reaches the rendered comment.
+
+The note comes **first** and its failure does not stop the resolve. Both
+orderings lose something when the second call fails; this one loses the
+explanation for a thread that did close, rather than leaving a thread open
+underneath a comment announcing it was resolved.
+
+`threads.comment_on_resolve` (default on) turns the note off without turning off
+the resolving — deliberately two behaviours behind one switch would mean
+silencing the noise silently disabled the feature.
+
 ## Ports
 
 - `ForgeRead::review_threads` — GraphQL `reviewThreads`, because REST cannot say
   whether a thread is resolved.
+- `ForgeWrite::reply_to_review_thread` — the `addPullRequestReviewThreadReply`
+  mutation. GraphQL rather than REST's `pulls/comments/{id}/replies` because the
+  thread is already identified by the node id the resolve takes, and REST would
+  mean carrying a second identifier for the same thread.
 - `ForgeWrite::resolve_review_thread` — the `resolveReviewThread` mutation.
 
-Both have offline mock implementations; `MockForge` records every resolve as
-`Write::ThreadResolved` and reflects it in its state, so a run that resolved the
-same thread twice cannot pass unnoticed.
+All three have offline mock implementations; `MockForge` records every reply as
+`Write::ThreadReply` and every resolve as `Write::ThreadResolved`, reflecting the
+latter in its state, so a run that resolved the same thread twice cannot pass
+unnoticed.
 
 ## Trigger
 

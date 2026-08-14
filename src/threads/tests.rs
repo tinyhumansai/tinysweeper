@@ -14,6 +14,9 @@ use crate::harness::mock::MockModel;
 
 const FINGERPRINT: &str = "0123456789abcdef";
 const TITLE: &str = "Guard the index";
+/// The commit a resolution note credits. Longer than the seven characters the
+/// note shows, so the abbreviation is actually exercised.
+const HEAD_SHA: &str = "abc1234def5678";
 
 fn repo() -> RepoId {
     RepoId::parse("tinyhumansai/tinysweeper").unwrap()
@@ -49,6 +52,7 @@ fn config() -> Config {
         threads: crate::config::types::Threads {
             resolve_fixed: true,
             ask_model: false,
+            comment_on_resolve: true,
         },
         ..Config::default()
     }
@@ -198,13 +202,76 @@ async fn planning_writes_nothing_and_applying_resolves_exactly_the_planned_threa
     );
     assert_eq!(plan.resolve.len(), 1);
 
-    apply_plan(&forge, &repo(), &plan).await.expect("applies");
+    apply_plan(&forge, &config(), &repo(), &plan, HEAD_SHA)
+        .await
+        .expect("applies");
+
+    // The note comes first and names the commit, then the resolve. A thread
+    // that closes with no explanation reads as the bot losing interest.
+    let writes = forge.writes();
+    assert_eq!(writes.len(), 2, "{writes:?}");
+    let crate::forge::mock::Write::ThreadReply { thread_id, body } = &writes[0] else {
+        panic!("the reply must precede the resolve: {writes:?}");
+    };
+    assert_eq!(thread_id, "PRRT_1");
+    assert!(
+        body.contains("abc1234"),
+        "the note must name the commit: {body}"
+    );
+    assert_eq!(
+        writes[1],
+        crate::forge::mock::Write::ThreadResolved {
+            thread_id: "PRRT_1".into()
+        }
+    );
+}
+
+#[tokio::test]
+async fn the_note_can_be_turned_off_without_losing_the_resolve() {
+    // An operator who finds the extra comment noisy gets the silence back, and
+    // keeps the housekeeping. If these ever became one switch, turning off the
+    // noise would quietly turn off the feature.
+    let forge = forge_with(vec![ours()]);
+    let mut quiet = config();
+    quiet.threads.comment_on_resolve = false;
+
+    let plan = plan_for(&forge, &quiet, &[TITLE]).await;
+    apply_plan(&forge, &quiet, &repo(), &plan, HEAD_SHA)
+        .await
+        .expect("applies");
+
     assert_eq!(
         forge.writes(),
         vec![crate::forge::mock::Write::ThreadResolved {
             thread_id: "PRRT_1".into()
         }]
     );
+}
+
+#[test]
+fn a_resolution_note_abbreviates_the_commit_and_invites_disagreement() {
+    let note = resolution_note("the review agent found this finding fixed", HEAD_SHA);
+    assert!(note.contains("abc1234"));
+    // The full SHA would be noise, and the point is that a reader can find the
+    // commit, not that they can paste it.
+    assert!(!note.contains(HEAD_SHA));
+    // A resolve nobody can argue with is a resolve nobody can correct.
+    assert!(note.contains("reopen"));
+}
+
+#[test]
+fn a_resolution_note_is_built_only_from_crate_owned_text() {
+    // Both inputs are ours: `reason` is a `&'static str` from `Decision`, and
+    // the SHA is read off the forge. Nothing a contributor writes reaches this
+    // string, which is what lets it be posted without escaping.
+    for decision in [
+        decide(&ours(), &resolved_titles(&[TITLE])),
+        decide(&ours(), &resolved_titles(&[])),
+    ] {
+        if let Decision::Resolve(reason) = decision {
+            assert!(resolution_note(reason, HEAD_SHA).contains(reason));
+        }
+    }
 }
 
 #[tokio::test]
@@ -251,7 +318,9 @@ async fn every_refusal_leaves_the_forge_untouched() {
     let plan = plan_for(&forge, &config(), &[FINGERPRINT]).await;
 
     assert!(plan.resolve.is_empty(), "{plan:?}");
-    apply_plan(&forge, &repo(), &plan).await.expect("applies");
+    apply_plan(&forge, &config(), &repo(), &plan, HEAD_SHA)
+        .await
+        .expect("applies");
     assert!(forge.writes().is_empty(), "{:?}", forge.writes());
 }
 

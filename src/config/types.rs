@@ -314,6 +314,17 @@ pub struct Threads {
     /// this is on: it feeds a plan that deterministic code executes, and it can
     /// only ever close a thread tinysweeper itself opened.
     pub ask_model: bool,
+    /// Say why, in the thread, before resolving it.
+    ///
+    /// On by default. A conversation that collapses with no reply is indexed
+    /// by GitHub as resolved and by the author as unexplained: the objection
+    /// was tinysweeper's, so the retraction should be too, and it should name
+    /// the commit it is claiming credit for. That is the difference between a
+    /// claim somebody can check and a bot quietly tidying up after itself.
+    ///
+    /// Turning it off keeps the resolving and drops the note, for a repository
+    /// that finds the extra comment noisier than the silence.
+    pub comment_on_resolve: bool,
 }
 
 /// The change-flow comment: the diagram posted on a pull request.
