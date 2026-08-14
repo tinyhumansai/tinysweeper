@@ -370,7 +370,14 @@ pub async fn ask_all(
 
     for (index, questions) in pending {
         let evidence = &calls[index].prompt;
-        let answered = answer_questions(&capabilities, model, &questions, evidence).await;
+
+        // One toolset per reviewer's batch of questions, so the byte budget in
+        // `flows::tools` is spent on settling *this* reviewer's doubt. A single
+        // lane-wide toolset would let the first reviewer to ask read the
+        // repository and leave the rest nothing.
+        let tools = corpus.clone().map(ReadOnlyTools::new);
+        let answered =
+            answer_questions(&capabilities, model, &questions, evidence, tools.as_ref()).await;
 
         // Nothing came back, so a second turn would be the same turn with the
         // same evidence — one more call that cannot say anything new.
