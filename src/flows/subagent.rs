@@ -211,7 +211,16 @@ pub fn node_id(index: usize) -> String {
 /// One `agent` node per question, all concurrent. Still nothing but a trigger
 /// and agents: everything this module promises about depth rests on there being
 /// no node here that could run another graph.
-pub fn answers_graph(model: &str, questions: &[String], evidence: &str) -> WorkflowGraph {
+///
+/// Takes whole `prompts` rather than questions plus shared evidence because the
+/// tool loop grows each one independently — by round three, question 1 may have
+/// read two files and question 2 none, and their prompts have nothing left in
+/// common but the diff they started from.
+///
+/// `with_tools` decides only the schema and the system prompt. The graph never
+/// invokes a tool itself; see [`crate::flows::tools`] for why the invocation
+/// stays in host code.
+pub fn answers_graph(model: &str, prompts: &[String], with_tools: bool) -> WorkflowGraph {
     let mut nodes = vec![Node {
         id: "trigger".into(),
         kind: NodeKind::Trigger,
