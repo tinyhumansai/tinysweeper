@@ -164,6 +164,12 @@ invariant from `AGENTS.md`; `shell` and `memory` are absent entirely. A graph
 that grows a `code` node fails on its first run with the reason, rather than
 quietly executing contributor code.
 
+This is unchanged by sub-agent tools, which is the point of invoking them from
+`runner` rather than granting them to the engine. Reading is not executing: the
+boundary permits "we read the diff and the tree" and forbids building,
+installing dependencies and running the repository's scripts. Nothing here
+spawns a process against contributor code.
+
 ## Where the budget lives
 
 In `caps::ModelCapability`, checked before each call. This is what let the
