@@ -341,6 +341,36 @@ mod tests {
     }
 
     #[test]
+    fn a_retired_priority_spelling_is_superseded_too() {
+        // The churn this exists to stop. `priority: high` predates the p0-p3
+        // scale and is still on hundreds of items in `openhuman` and
+        // `backend`. It is in the facet triage owns, so a new priority retires
+        // it — otherwise the item carries two priorities that disagree, and
+        // the stale one is the louder word.
+        let plan = plan(
+            &["priority: high".into(), "priority: critical".into()],
+            &["priority: p2".into()],
+            &policy(),
+        );
+
+        assert_eq!(plan.add, ["priority: p2"]);
+        assert_eq!(plan.remove, ["priority: high", "priority: critical"]);
+    }
+
+    #[test]
+    fn a_retired_priority_spelling_is_never_added() {
+        // The bound on the rule above: widening what `supersede` *removes*
+        // must not widen what triage may *apply*. The old axis is retired, so
+        // asking for it is refused exactly as any other unknown label is.
+        let plan = plan(&[], &owned(&["priority: high"]), &policy());
+        assert!(plan.add.is_empty(), "{plan:?}");
+        assert_eq!(
+            plan.declined,
+            vec![("priority: high".to_string(), "not a label triage may apply")]
+        );
+    }
+
+    #[test]
     fn a_label_outside_the_owned_facet_is_never_superseded() {
         // The bound on the rule. `needs-design` is a human's, in no facet
         // triage owns, and not ours to retire.
