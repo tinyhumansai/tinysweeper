@@ -182,6 +182,38 @@ fn a_missing_allow_label_refuses() {
 }
 
 #[test]
+fn a_blocking_label_refuses_however_it_is_spelled() {
+    // The dangerous direction. GitHub has no distinct `Do-Not-Merge` label —
+    // it is the same label as `do-not-merge` — so an exact comparison here
+    // read a human's veto as absent and merged past it. The refusal quotes the
+    // spelling on the pull request, which is what a maintainer will see.
+    for spelling in ["Do-Not-Merge", "DO-NOT-MERGE", " do-not-merge "] {
+        let mut snapshot = snapshot_of();
+        snapshot.pull_request.labels.push(spelling.into());
+        assert_eq!(
+            refusal(&policy(), &snapshot),
+            Refusal::BlockedLabel(spelling.into()),
+            "{spelling:?} did not block"
+        );
+    }
+}
+
+#[test]
+fn the_allow_label_is_recognised_however_it_is_spelled() {
+    // The same comparison in the permissive direction, where getting it wrong
+    // only wasted a maintainer's time: they applied the opt-in and nothing
+    // happened, with the refusal claiming the label was missing.
+    for spelling in ["AutoMerge", "AUTOMERGE", " automerge "] {
+        let mut snapshot = snapshot_of();
+        snapshot.pull_request.labels = vec![spelling.into()];
+        assert!(
+            !matches!(refusal(&policy(), &snapshot), Refusal::MissingAllowLabel),
+            "{spelling:?} was not accepted as the opt-in"
+        );
+    }
+}
+
+#[test]
 fn an_unknown_mergeable_state_refuses() {
     // `None` is "GitHub is still computing it". Unknown is not yes.
     let mut snapshot = snapshot_of();
