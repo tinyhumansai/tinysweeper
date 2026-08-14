@@ -11,7 +11,7 @@
 //! draft, because that is the thing to fix first.
 
 use crate::automerge::complexity::measure;
-use crate::automerge::paths::{glob_set, logins_match};
+use crate::automerge::paths::{carries, glob_set, logins_match};
 use crate::automerge::types::{Decision, Refusal};
 use crate::config::types::AutoMerge;
 use crate::forge::types::{ChangedFile, CheckStatus, PullRequest, ReviewVerdict};
