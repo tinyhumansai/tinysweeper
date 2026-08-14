@@ -526,6 +526,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_pessimistic_estimate_bounds_concurrency_but_never_progress() {
+        // The estimate is the full output ceiling at the *most expensive rate in
+        // the table* when a model has no price, so on a small budget it exceeds
+        // the whole allowance on its own. Applied unconditionally that refuses
+        // every call and the lane never runs at all — strictly worse than the
+        // behaviour the reservation replaced, where calls ran until real spend
+        // caught up.
+        let capability = ModelCapability::new(
+            Arc::new(MockModel::always(json!({ "summary": "ok" })).with_usage(Usage {
+                cost_usd: 0.0,
+                ..Usage::default()
+            })),
+            models(),
+        )
+        .with_budget(0.000_001);
+
+        assert!(
+            capability
+                .complete(request("no/such/model/anywhere"), None)
+                .await
+                .is_ok(),
+            "a tiny budget refused every call, so the lane could never run"
+        );
+    }
+
+    #[tokio::test]
     async fn a_failed_call_gives_its_reservation_back() {
         // A reservation that leaked on the error path would refuse every later
         // call for budget nobody spent — a lane that goes quiet after one
