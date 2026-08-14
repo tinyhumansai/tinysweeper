@@ -16,7 +16,6 @@ pub mod tests;
 pub mod triage;
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 
