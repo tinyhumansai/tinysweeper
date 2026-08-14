@@ -154,6 +154,20 @@ pub fn answer_schema(with_tools: bool) -> Value {
 /// once the sub-agent can go and read the file it is speculating about.
 pub const TOOL_INSTRUCTION: &str = "\n\nYou may look things up before answering. Set `tool_call` to read a file or search the repository for a literal string, and you will be asked again with the result. Prefer looking something up over answering with `confident` false — that is what the tools are for. Once you can answer, omit `tool_call`. You have a small number of lookups, so ask for what would settle the question rather than for background.";
 
+/// The prompt one sub-agent starts from: the evidence, then the question.
+///
+/// Both are fenced and labelled as data. The evidence is a diff and repository
+/// prose; the `question` was authored by a *model* that had just read the pull
+/// request body, so it is untrusted twice over — once because a model wrote it,
+/// and once because what the model read was attacker-controlled.
+pub fn question_prompt(evidence: &str, question: &str) -> String {
+    format!(
+        "{}\n\n{}\n",
+        fenced("evidence", evidence),
+        fenced("question", question)
+    )
+}
+
 /// Render one tool result for the next turn of the loop.
 ///
 /// The call is echoed alongside its result. A transcript of results with no
