@@ -307,7 +307,14 @@ async fn review_file(
         summary: outcome.summary,
         findings: merged,
         resolved: outcome.resolved,
-        spend: outcome.spend,
+        // The accumulated tally, not `outcome.spend`. `from_response` was handed
+        // `Spend::default()` deliberately — the dollar figure arrives once at
+        // lane level from `llm.spend()`, because the capability is shared across
+        // the fan-out and adding it per file would multiply the bill by the file
+        // count. But the *model names* are per reviewer and only recorded here,
+        // so returning `outcome.spend` dropped them and this lane alone reported
+        // no model attribution.
+        spend,
     })
 }
 
