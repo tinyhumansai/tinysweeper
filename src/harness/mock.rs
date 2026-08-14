@@ -219,7 +219,27 @@ impl Model for MockModel {
             let canned = if request.schema_name.ends_with("_verify") {
                 Some(json!({ "real": answers.verdict, "why": "canned" }))
             } else if request.schema_name.ends_with("_subagent_answer") {
-                Some(json!({ "answer": "The evidence does not say.", "confident": false }))
+                // Prompt-aware so the tool loop is testable: a sub-agent that
+                // has not looked anything up asks to, and one that has been
+                // shown a lookup answers. Without the second half a loop test
+                // could only ever prove the first round happened.
+                //
+                // Harmless where tools are absent: `runner` ignores a
+                // `tool_call` it has no toolset for, and the `answer` is
+                // required on every turn precisely so that turn is still usable.
+                let looked_up = request
+                    .messages
+                    .iter()
+                    .any(|m| m.content.contains("### Lookup"));
+
+                Some(match looked_up {
+                    true => json!({ "answer": "Yes, the caller validates it.", "confident": true }),
+                    false => json!({
+                        "answer": "Not yet established.",
+                        "confident": false,
+                        "tool_call": { "slug": "read_file", "args": { "path": "src/a.rs" } },
+                    }),
+                })
             } else if PANEL_STAGES
                 .iter()
                 .all(|stage| !request.schema_name.contains(stage))
