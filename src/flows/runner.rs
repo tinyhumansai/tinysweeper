@@ -163,34 +163,111 @@ fn read_questions(value: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// One sub-agent's state as the tool loop runs.
+struct Turn {
+    /// The question, as the reviewer phrased it.
+    question: String,
+    /// Everything the sub-agent has been shown: the evidence, the question, and
+    /// every lookup it has made since.
+    prompt: String,
+    /// The last answer it gave, kept even while it is still looking things up.
+    /// A sub-agent that exhausts its rounds mid-loop still has this to offer,
+    /// which is why `answer` is required in the schema on every turn.
+    answered: Option<Answered>,
+    /// Whether it is still asking for lookups.
+    looking: bool,
+}
+
+/// Read a `tool_call` out of one sub-agent's answer.
+fn read_tool_call(value: &Value) -> Option<(String, Value)> {
+    let call = value.get("tool_call")?;
+    let slug = call.get("slug").and_then(Value::as_str)?.to_string();
+
+    // Absent args are an empty object rather than a rejection: the tool reports
+    // its own missing argument in words the sub-agent can act on, and that is a
+    // better turn than a call that silently never happened.
+    Some((slug, call.get("args").cloned().unwrap_or_else(|| json!({}))))
+}
+
 /// Answer one reviewer's questions, one sub-agent each, all at once.
+///
+/// Every question runs concurrently and loops independently: a question settled
+/// on the first turn stops there while another is still on its third lookup,
+/// so the round count is a per-question ceiling rather than a number of graph
+/// runs everybody pays for.
 ///
 /// A question that could not be answered is simply absent from the result. It
 /// was a request for more certainty; failing to get it leaves the reviewer
 /// exactly where it would have been without sub-agents.
+///
+/// `tools` is `None` when no corpus is available, which is the forge-only path
+/// with nothing to read. The sub-agents then answer from the evidence alone,
+/// exactly as they did before tools existed.
 async fn answer_questions(
     capabilities: &tinyflows::caps::Capabilities,
     model: &str,
     questions: &[String],
     evidence: &str,
+    tools: Option<&ReadOnlyTools>,
 ) -> Vec<Answered> {
-    let graph = subagent::answers_graph(model, questions, evidence);
-
-    let Ok(compiled) = tinyflows::compiler::compile(&graph) else {
-        return Vec::new();
-    };
-    let Ok(outcome) = engine::run(&compiled, json!({}), capabilities).await else {
-        return Vec::new();
-    };
-
-    questions
+    let mut turns: Vec<Turn> = questions
         .iter()
-        .enumerate()
-        .filter_map(|(index, question)| {
-            let (value, _) = node_answer(&outcome.output, &subagent::node_id(index))?;
+        .map(|question| Turn {
+            question: question.clone(),
+            prompt: format!("{evidence}\n\nThe question:\n{question}\n"),
+            answered: None,
+            looking: true,
+        })
+        .collect();
 
-            Some(Answered {
-                question: question.clone(),
+    // One extra pass beyond the lookup rounds: the last lookup's result has to
+    // be shown to somebody. Without it the final tool call is paid for and
+    // never read, which is the most expensive possible way to learn nothing.
+    let passes = match tools {
+        Some(_) => subagent::MAX_TOOL_ROUNDS + 1,
+        None => 1,
+    };
+
+    for pass in 0..passes {
+        let active: Vec<usize> = turns
+            .iter()
+            .enumerate()
+            .filter(|(_, turn)| turn.looking)
+            .map(|(index, _)| index)
+            .collect();
+
+        if active.is_empty() {
+            break;
+        }
+
+        // The last pass offers no tools. A sub-agent that can still see the key
+        // has no reason to stop asking, and a `tool_call` on the final turn is
+        // one nothing will ever answer — the same trap the reviewer's own final
+        // turn avoids by dropping `questions` from its schema.
+        let offer_tools = tools.is_some() && pass + 1 < passes;
+
+        let prompts: Vec<String> = active.iter().map(|i| turns[*i].prompt.clone()).collect();
+        let graph = subagent::answers_graph(model, &prompts, offer_tools);
+
+        let Ok(compiled) = tinyflows::compiler::compile(&graph) else {
+            break;
+        };
+        let Ok(outcome) = engine::run(&compiled, json!({}), capabilities).await else {
+            break;
+        };
+
+        for (slot, index) in active.iter().enumerate() {
+            let turn = &mut turns[*index];
+
+            let Some((value, _)) = node_answer(&outcome.output, &subagent::node_id(slot)) else {
+                // This sub-agent is gone. Whatever it said on an earlier pass
+                // stands; it stops looking either way.
+                turn.looking = false;
+                continue;
+            };
+
+            turn.answered = Some(Answered {
+                question: turn.question.clone(),
                 answer: value
                     .get("answer")
                     .and_then(Value::as_str)
@@ -200,9 +277,32 @@ async fn answer_questions(
                     .get("confident")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
-            })
-        })
-        .collect()
+            });
+
+            let (Some(tools), Some((slug, args))) = (tools, read_tool_call(&value)) else {
+                turn.looking = false;
+                continue;
+            };
+
+            // The invocation happens here, in host code, rather than through a
+            // capability granted to the graph. The graph's `tools` capability
+            // stays `NoTools`: a model's `tool_call` is a *request in its
+            // structured output*, adjudicated by this crate, not a door the
+            // engine can open on its own.
+            match tools.invoke(&slug, args.clone(), None).await {
+                Ok(result) => turn
+                    .prompt
+                    .push_str(&subagent::render_tool_result(&slug, &args, &result)),
+                // A refusal is shown rather than swallowed, so the sub-agent can
+                // adjust instead of asking for the same refused thing again.
+                Err(err) => turn
+                    .prompt
+                    .push_str(&subagent::render_tool_refusal(&slug, &err.to_string())),
+            }
+        }
+    }
+
+    turns.into_iter().filter_map(|turn| turn.answered).collect()
 }
 
 /// Ask every reviewer at once, and return one [`Answer`] each, in order.
