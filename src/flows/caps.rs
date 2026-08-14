@@ -155,11 +155,15 @@ impl LlmProvider for ModelCapability {
 
         // The node may lower the ceiling but never raise it: `models.max_tokens`
         // is a budget decision, and a graph is data that a repository can edit.
+        // Clamped in `u64` and narrowed afterwards. Narrowing first wraps: a
+        // node asking for `u32::MAX + 1` becomes `0` and the call generates
+        // nothing, which reads downstream as a reviewer that found nothing
+        // rather than as a rejected ceiling.
         let max_tokens = request
             .get("max_tokens")
             .and_then(Value::as_u64)
             .map_or(self.models.max_tokens, |n| {
-                (n as u32).min(self.models.max_tokens)
+                n.min(u64::from(self.models.max_tokens)) as u32
             });
 
         let response = self
