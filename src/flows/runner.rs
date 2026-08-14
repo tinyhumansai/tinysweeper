@@ -322,6 +322,7 @@ pub async fn ask_all(
     calls: &[Call],
     schema: &Value,
     subagent_model: Option<&str>,
+    corpus: Option<Arc<dyn Corpus>>,
 ) -> Result<Vec<Answer>> {
     if calls.is_empty() {
         return Ok(Vec::new());
