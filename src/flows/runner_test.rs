@@ -265,6 +265,7 @@ async fn ask_with_subagents(model: MockModel, ids: &[&str]) -> Vec<Answer> {
         &calls,
         &schema(),
         Some("vendor/flash"),
+        None,
     )
     .await
     .expect("the graph runs")
@@ -304,6 +305,7 @@ async fn the_second_turn_sees_the_answer_and_the_first_turn_does_not() {
         &[call("a")],
         &schema(),
         Some("vendor/flash"),
+        None,
     )
     .await
     .expect("runs");
@@ -339,6 +341,7 @@ async fn a_reviewer_with_no_questions_costs_exactly_one_call() {
         &[call("a")],
         &schema(),
         Some("vendor/flash"),
+        None,
     )
     .await
     .expect("runs");
@@ -397,6 +400,7 @@ async fn questions_are_capped_at_the_documented_number() {
         &[call("a")],
         &schema(),
         Some("vendor/flash"),
+        None,
     )
     .await
     .expect("runs");
@@ -424,6 +428,7 @@ async fn the_final_turn_is_not_offered_a_way_to_ask_again() {
         &[call("a")],
         &schema(),
         Some("vendor/flash"),
+        None,
     )
     .await
     .expect("runs");
