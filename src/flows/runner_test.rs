@@ -488,3 +488,170 @@ async fn one_reviewers_questions_do_not_disturb_another_reviewers_answer() {
         json!("B untouched")
     );
 }
+
+// --- the tool loop -------------------------------------------------------
+
+fn corpus() -> crate::ports::corpus::MapCorpus {
+    crate::ports::corpus::MapCorpus::default().with("src/a.rs", "fn validate() {}\n")
+}
+
+async fn ask_with_tools(
+    model: MockModel,
+    corpus: &dyn crate::ports::corpus::Corpus,
+) -> Vec<Answer> {
+    let calls = vec![call("a")];
+    let llm = lane_llm(Arc::new(model), &config(), 100.0);
+
+    ask_all(
+        llm,
+        LaneId::Critique,
+        &calls,
+        &schema(),
+        Some("vendor/flash"),
+        Some(corpus),
+    )
+    .await
+    .expect("the graph runs")
+}
+
+#[tokio::test]
+async fn a_subagent_that_looks_something_up_is_asked_again_with_the_result() {
+    // The loop's whole purpose. The mock answers unconfidently and asks for a
+    // file on its first turn, and confidently once it has been shown one, so a
+    // confident answer here proves the result actually reached a second turn.
+    let model = MockModel::panel(json!({
+        "summary": "s",
+        "findings": [],
+        "questions": [{ "question": "Does the caller validate it?", "why": "decides it" }],
+    }));
+    let calls = model.calls();
+    let corpus = corpus();
+
+    let answers = ask_with_tools(model, &corpus).await;
+
+    assert_eq!(answers.len(), 1);
+    let transcript = calls.lock().expect("calls");
+    let answered: Vec<&crate::ports::model::ModelRequest> = transcript
+        .iter()
+        .filter(|r| r.schema_name.ends_with("_subagent_answer"))
+        .collect();
+
+    assert!(
+        answered.len() >= 2,
+        "the sub-agent was never asked again: {} turns",
+        answered.len()
+    );
+    assert!(
+        answered
+            .last()
+            .expect("a turn")
+            .messages
+            .iter()
+            .any(|m| m.content.contains("fn validate")),
+        "the file it asked for never reached its prompt"
+    );
+}
+
+#[tokio::test]
+async fn the_tool_loop_is_bounded_even_when_the_subagent_never_stops_asking() {
+    // A sub-agent that asks on every turn is the runaway case: unbounded, it
+    // spends the review's whole budget looking things up and never answers.
+    struct AlwaysAsks;
+
+    #[async_trait::async_trait]
+    impl crate::ports::corpus::Corpus for AlwaysAsks {
+        async fn read(&self, _path: &str) -> crate::error::Result<Option<String>> {
+            // Never contains the lookup marker, so the mock keeps asking.
+            Ok(Some("nothing useful".into()))
+        }
+        async fn search(
+            &self,
+            _pattern: &str,
+            _limit: usize,
+        ) -> crate::error::Result<Option<Vec<crate::ports::corpus::Hit>>> {
+            Ok(None)
+        }
+    }
+
+    let model = MockModel::panel(json!({
+        "summary": "s",
+        "findings": [],
+        "questions": [{ "question": "q", "why": "w" }],
+    }));
+    let calls = model.calls();
+
+    ask_with_tools(model, &AlwaysAsks).await;
+
+    let turns = calls
+        .lock()
+        .expect("calls")
+        .iter()
+        .filter(|r| r.schema_name.ends_with("_subagent_answer"))
+        .count();
+
+    assert_eq!(
+        turns,
+        crate::flows::subagent::MAX_TOOL_ROUNDS + 1,
+        "the loop is not bounded by MAX_TOOL_ROUNDS"
+    );
+}
+
+#[tokio::test]
+async fn the_final_turn_is_not_offered_tools_it_cannot_use() {
+    // A `tool_call` on the last turn is one nothing will ever answer — the same
+    // trap the reviewer's own final turn avoids by dropping `questions`.
+    let model = MockModel::panel(json!({
+        "summary": "s",
+        "findings": [],
+        "questions": [{ "question": "q", "why": "w" }],
+    }));
+    let calls = model.calls();
+    let corpus = corpus();
+
+    ask_with_tools(model, &corpus).await;
+
+    let transcript = calls.lock().expect("calls");
+    let last = transcript
+        .iter()
+        .filter(|r| r.schema_name.ends_with("_subagent_answer"))
+        .next_back()
+        .expect("a sub-agent turn");
+
+    assert!(
+        last.schema["properties"].get("tool_call").is_none(),
+        "the last turn was still offered tools"
+    );
+}
+
+#[tokio::test]
+async fn no_corpus_means_no_tool_turns_at_all() {
+    // The forge-only path with nothing to read must cost exactly what it cost
+    // before tools existed: one sub-agent call per question.
+    let model = MockModel::panel(json!({
+        "summary": "s",
+        "findings": [],
+        "questions": [{ "question": "q", "why": "w" }],
+    }));
+    let calls = model.calls();
+
+    let llm = lane_llm(Arc::new(model), &config(), 100.0);
+    ask_all(
+        llm,
+        LaneId::Critique,
+        &[call("a")],
+        &schema(),
+        Some("vendor/flash"),
+        None,
+    )
+    .await
+    .expect("the graph runs");
+
+    let turns = calls
+        .lock()
+        .expect("calls")
+        .iter()
+        .filter(|r| r.schema_name.ends_with("_subagent_answer"))
+        .count();
+
+    assert_eq!(turns, 1, "a corpus-less run took extra turns");
+}
