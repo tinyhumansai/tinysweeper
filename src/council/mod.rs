@@ -36,7 +36,7 @@ pub mod persona;
 pub use crate::council::agree::corroborates;
 pub use crate::council::merge::merge;
 
-use crate::config::types::{Config, LaneId};
+use crate::config::types::{Config, LaneId, Severity};
 
 /// One reviewer, resolved from configuration.
 #[derive(Debug, Clone, Copy)]
