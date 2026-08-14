@@ -56,6 +56,20 @@ pub struct ModelCapability {
     model: Arc<dyn Model>,
     models: Models,
     spend: Mutex<Spend>,
+    /// Worst-case cost of the calls currently in flight.
+    ///
+    /// The budget was checked against *completed* spend, which is a ceiling
+    /// only when calls are serialised — and the whole point of the graph is
+    /// that they are not. Eight concurrent reviewers all read a tally of zero,
+    /// all pass, and the budget is exceeded by up to eight calls before the
+    /// first one records anything. Serialising was what used to hide this.
+    ///
+    /// So a call reserves its worst case before dispatch and releases it after,
+    /// whether it succeeded or failed. The reservation is deliberately
+    /// pessimistic — the full output ceiling at the model's output rate — so
+    /// the error is always toward refusing a call that would have fit, never
+    /// toward allowing one that does not.
+    reserved: Mutex<f64>,
     budget_usd: f64,
 }
 
