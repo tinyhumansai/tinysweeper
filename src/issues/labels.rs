@@ -90,7 +90,7 @@ fn supersede(label: &str, existing: &[String]) -> Vec<String> {
 
     existing
         .iter()
-        .filter(|have| is_priority(have) && !same(have, label))
+        .filter(|have| in_priority_facet(have) && !same(have, label))
         .cloned()
         .collect()
 }
