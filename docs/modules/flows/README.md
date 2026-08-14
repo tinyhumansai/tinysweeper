@@ -36,6 +36,30 @@ needed context to notice. That argument is right, and the round is gone.
 Removal is falsify's job; it rejects only what it can *prove* wrong from the
 diff, and it fails open. Agreement between reviewers only ever ranks.
 
+## Who reviews, and why they differ
+
+`council` picks the reviewers; a **persona** decides what each one looks at.
+The diversity that pays is diversity of *subject* — two reviewers reading the
+same file for the same failure class are a duplicate with a bill attached.
+
+| persona | subject |
+|---|---|
+| `correctness` | this code on its own: boundaries, ordering, the empty case |
+| `integration` | callers and contracts it does not show |
+| `adversary` | what a hostile input does with it |
+| `resilience` | what happens when something it depends on fails |
+| `data` | what becomes of records written before this shipped |
+| `style` | consistency with the surrounding code |
+
+`style` is the exception in every way. It is the noise every other rule in this
+repository exists to suppress, and it is the one subject a model will always
+find *something* to say about. So `persona::ceiling` caps its findings at `low`,
+below the default severity gate: they reach the check-run summary and never
+become inline comments. The cap is in code rather than configuration — an
+operator who could raise it would have an uncapped style reviewer, which is the
+thing being prevented. A capped reviewer also yields the check-run headline to
+any uncapped one, whatever order they are configured in.
+
 ## Sub-agents: asking instead of guessing
 
 Off by default (`council.subagents`). A reviewer may end its turn with
@@ -48,6 +72,58 @@ answers in hand. What it says on that turn is what counts.
                      ├─ sub-agent: q2 ─┼─► answers ──► reviewer, once more
                      └─ sub-agent: q3 ─┘
 ```
+
+### Sub-agents have tools, and loop
+
+Each sub-agent may call `read_file` or `search` over the tree at the revision
+under review, up to `MAX_TOOL_ROUNDS` lookups before it must answer. Every
+question loops independently: one settled on the first turn stops there while
+another is still on its third lookup.
+
+```
+  sub-agent ─► tool_call ─► read_file ─┐
+       ▲                               │
+       └───────── result ◄─────────────┘   ×3, then it must answer
+```
+
+**The invocation is host code, not a capability.** The graph's `tools`
+capability is still `NoTools` — a model's `tool_call` arrives as a field in its
+*structured output*, and `runner` decides whether to honour it. The engine has
+no door of its own to open.
+
+Three things bound the loop, and they bound different failures:
+
+- **Rounds** (`subagent::MAX_TOOL_ROUNDS`) bound how long one question takes.
+- **Bytes** (`tools::MAX_TOTAL_BYTES`) bound what it drags into the prompt.
+  This is the limit that matters: a tool call costs nothing to make, but its
+  result is re-sent on every later turn, so twenty reads are billed twenty times
+  over. Every other cost control here counts *model calls* and would not see it.
+- **The last pass offers no tools at all**, for the same reason the reviewer's
+  own final turn drops `questions`: a call nothing will answer.
+
+A truncated read says so in its text. A reviewer shown the first 24kB of a file
+with no marker has been told the file ends there, and "the cleanup is missing"
+is exactly the finding that gets invented from that.
+
+### What the tools cannot reach
+
+`ReadOnlyTools::safe_path` rejects absolute paths, `~`, `..` and drive letters
+in front of *every* corpus rather than trusting each one. The arguments come
+from a model that has just read a pull request body — untrusted input — so
+`../../.ssh/id_rsa` is a thing that gets asked for.
+
+`ports::corpus::Corpus` exists as a separate port rather than a borrow of
+`Forge` for the same reason: `Forge` can comment, label, approve and merge, and
+handing it to the thing that executes model-chosen calls would put every write
+method one slug away. `Corpus` has no write method to reach.
+
+`ForgeCorpus` pins the revision at construction, so a sub-agent cannot name a
+SHA and read another branch. It also refuses to search: a forge's code index
+covers the default branch and lags, so "this appears nowhere else" would be a
+false conclusion about the branch under review. `Corpus::search` returns
+`Ok(None)` — *cannot search* — which is deliberately not the same value as
+`Ok(Some(vec![]))`, *searched and found nothing*. The two support opposite
+conclusions.
 
 This makes a reviewer *find more* — the same direction `council` argues for a
 second reviewer, and the opposite of asking whether the first was right.
