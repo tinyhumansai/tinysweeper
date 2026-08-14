@@ -492,7 +492,7 @@ async fn one_reviewers_questions_do_not_disturb_another_reviewers_answer() {
 // --- the tool loop -------------------------------------------------------
 
 fn corpus() -> crate::ports::corpus::MapCorpus {
-    crate::ports::corpus::MapCorpus::default().with("src/a.rs", "fn validate() {}\n")
+    crate::ports::corpus::MapCorpus::default().with("src/a.rs", "fn validate() {} // SETTLED\n")
 }
 
 async fn ask_with_tools(
@@ -593,22 +593,10 @@ async fn the_tool_loop_is_bounded_even_when_the_subagent_never_stops_asking() {
         crate::flows::subagent::MAX_TOOL_ROUNDS + 1,
         "the loop is not bounded by MAX_TOOL_ROUNDS"
     );
-}
 
-#[tokio::test]
-async fn the_final_turn_is_not_offered_tools_it_cannot_use() {
-    // A `tool_call` on the last turn is one nothing will ever answer — the same
-    // trap the reviewer's own final turn avoids by dropping `questions`.
-    let model = MockModel::panel(json!({
-        "summary": "s",
-        "findings": [],
-        "questions": [{ "question": "q", "why": "w" }],
-    }));
-    let recorder = model.clone();
-    let corpus = corpus();
-
-    ask_with_tools(model, &corpus).await;
-
+    // And the turn it stopped on was not offered tools. A `tool_call` on the
+    // last possible turn is one nothing will ever answer — the same trap the
+    // reviewer's own final turn avoids by dropping `questions` from its schema.
     let transcript = recorder.requests();
     let last = transcript
         .iter()

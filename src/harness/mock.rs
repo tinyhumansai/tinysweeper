@@ -219,10 +219,11 @@ impl Model for MockModel {
             let canned = if request.schema_name.ends_with("_verify") {
                 Some(json!({ "real": answers.verdict, "why": "canned" }))
             } else if request.schema_name.ends_with("_subagent_answer") {
-                // Prompt-aware so the tool loop is testable: a sub-agent that
-                // has not looked anything up asks to, and one that has been
-                // shown a lookup answers. Without the second half a loop test
-                // could only ever prove the first round happened.
+                // Prompt-aware so the tool loop is testable: it keeps asking
+                // until a lookup has put `SETTLED` in its prompt, then answers.
+                // Keyed on the corpus content rather than on the presence of a
+                // lookup so a test can choose either behaviour — one that always
+                // asks is the runaway case the round cap exists for.
                 //
                 // Harmless where tools are absent: `runner` ignores a
                 // `tool_call` it has no toolset for, and the `answer` is
@@ -230,7 +231,7 @@ impl Model for MockModel {
                 let looked_up = request
                     .messages
                     .iter()
-                    .any(|m| m.content.contains("### Lookup"));
+                    .any(|m| m.content.contains("SETTLED"));
 
                 Some(match looked_up {
                     true => json!({ "answer": "Yes, the caller validates it.", "confident": true }),
