@@ -317,8 +317,34 @@ enabled = false
 # one call as before, and one that asks costs at most three cheap sub-agent
 # calls plus one more turn. Nothing here can remove a finding; it exists to stop
 # a reviewer hedging when the answer was one question away.
+#
+# With sub-agents on, they also get tools: `read_file` and `search` over the
+# repository at the revision under review, looping up to three lookups before
+# they must answer. Both read and nothing else — no build, no dependency
+# install, no contributor script — which is the `AGENTS.md` boundary unchanged.
+# On the forge-only path `search` reports that it cannot search, rather than
+# reporting no matches: a forge's code index only covers the default branch, so
+# "this appears nowhere else" would be a false conclusion about this branch.
 subagents = false
 corroboration = true
+# Each agent is `{ id, persona, lanes = [], model = "scan" | "deep" | "flash" }`.
+# `lanes = []` means every lane. A persona changes *what a reviewer looks at*,
+# which is the only kind of diversity that pays — two reviewers reading the same
+# file for the same failure class are a duplicate with a bill attached:
+#
+#   correctness   this code on its own: boundaries, ordering, the empty case
+#   integration   what it does to callers and contracts it does not show
+#   adversary     what a hostile input does with it
+#   resilience    what happens when something it depends on fails
+#   data          what becomes of records written before this shipped
+#   style         consistency with the surrounding code — see below
+#
+# `style` is capped at `low` severity in code, not by configuration, so its
+# findings land below the default severity gate: they reach the check-run
+# summary and never become inline comments. Style is the noise every other rule
+# here exists to suppress, and it is the one subject a model will always find
+# something to say about. The cap is what makes shipping it safe; an operator
+# cannot raise it, which is the point of it not being a key.
 agents = []
 
 # The knowledge centre. `files` are read from the pull request's head commit
