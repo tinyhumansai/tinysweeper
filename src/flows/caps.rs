@@ -148,7 +148,29 @@ impl ModelCapability {
         // `>=` on committed spend alone, so a budget already exhausted refuses
         // even a call whose estimate is zero — an unpriced model must not become
         // a free one.
-        if spent >= self.budget_usd || spent + *reserved + estimate > self.budget_usd {
+        if spent >= self.budget_usd {
+            return Err(EngineError::Capability(
+                crate::error::Error::Budget {
+                    spent,
+                    limit: self.budget_usd,
+                }
+                .to_string(),
+            ));
+        }
+
+        // With nothing in flight, budget remaining is enough on its own. The
+        // estimate is a deliberately pessimistic worst case — the full output
+        // ceiling, and the *most expensive rate in the table* for a model with
+        // no price — so on a small budget it can exceed the whole allowance by
+        // itself. Applied unconditionally that refuses every call and the lane
+        // never runs, which is strictly worse than the behaviour this replaced:
+        // before, calls ran and stopped once real spend caught up.
+        //
+        // So the reservation bounds *concurrency*, never progress. One call at a
+        // time is always allowed while budget remains, which is exactly the
+        // serial behaviour that used to be the only guarantee; everything the
+        // reservation adds is on top of it.
+        if *reserved > 0.0 && spent + *reserved + estimate > self.budget_usd {
             return Err(EngineError::Capability(
                 crate::error::Error::Budget {
                     spent: spent + *reserved,
