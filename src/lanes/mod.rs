@@ -78,7 +78,7 @@ pub struct LaneInput<'a> {
     /// never happen is a corpus that can reach outside the repository under
     /// review — see [`crate::flows::tools::ReadOnlyTools`], which refuses that
     /// in front of every implementation rather than trusting each one.
-    pub corpus: Option<Arc<dyn Corpus>>,
+    pub corpus: Option<&'a dyn Corpus>,
 }
 
 impl LaneInput<'_> {

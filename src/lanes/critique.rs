@@ -177,7 +177,7 @@ async fn review_file(
             .council
             .subagents
             .then_some(config.models.flash.as_str()),
-        input.corpus.clone(),
+        input.corpus,
     )
     .await?;
 

@@ -124,7 +124,7 @@ impl Lane for Description {
                 .council
                 .subagents
                 .then_some(input.config.models.flash.as_str()),
-            input.corpus.clone(),
+            input.corpus,
         )
         .await?;
 

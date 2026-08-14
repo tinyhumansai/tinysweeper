@@ -26,7 +26,7 @@
 //! result says so in the text, because a reviewer that cannot tell a short file
 //! from a truncated one will conclude something false about the end of it.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -79,14 +79,14 @@ pub fn descriptors() -> Value {
 /// One per sub-agent rather than one per lane: the budget is what stops a
 /// single question reading the repository, and a lane-wide one would let the
 /// first question spend every later question's allowance.
-pub struct ReadOnlyTools {
-    corpus: Arc<dyn Corpus>,
+pub struct ReadOnlyTools<'a> {
+    corpus: &'a dyn Corpus,
     spent_bytes: Mutex<usize>,
 }
 
-impl ReadOnlyTools {
+impl<'a> ReadOnlyTools<'a> {
     /// Grant `corpus` to one sub-agent.
-    pub fn new(corpus: Arc<dyn Corpus>) -> Self {
+    pub fn new(corpus: &'a dyn Corpus) -> Self {
         Self {
             corpus,
             spent_bytes: Mutex::new(0),
@@ -179,7 +179,7 @@ impl ReadOnlyTools {
 }
 
 #[async_trait]
-impl ToolInvoker for ReadOnlyTools {
+impl ToolInvoker for ReadOnlyTools<'_> {
     /// Invoke one tool by slug.
     ///
     /// An unrecognised slug is an error naming what is available rather than a

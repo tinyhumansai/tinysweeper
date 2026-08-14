@@ -325,7 +325,7 @@ pub async fn ask_all(
     calls: &[Call],
     schema: &Value,
     subagent_model: Option<&str>,
-    corpus: Option<Arc<dyn Corpus>>,
+    corpus: Option<&dyn Corpus>,
 ) -> Result<Vec<Answer>> {
     if calls.is_empty() {
         return Ok(Vec::new());
@@ -378,7 +378,7 @@ pub async fn ask_all(
         // `flows::tools` is spent on settling *this* reviewer's doubt. A single
         // lane-wide toolset would let the first reviewer to ask read the
         // repository and leave the rest nothing.
-        let tools = corpus.clone().map(ReadOnlyTools::new);
+        let tools = corpus.map(ReadOnlyTools::new);
         let answered =
             answer_questions(&capabilities, model, &questions, evidence, tools.as_ref()).await;
 
