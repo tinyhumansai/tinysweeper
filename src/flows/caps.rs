@@ -125,11 +125,79 @@ impl ModelCapability {
             .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
     }
 
+    /// Take this call's worst case out of the budget, or refuse it.
+    ///
+    /// The guard returned releases the reservation on drop, so an early return,
+    /// a provider error and a panic all give it back. Returning a bare `f64` and
+    /// subtracting it after the call would leak the reservation on every error
+    /// path — and a leaked reservation is a lane that refuses every later call
+    /// for a budget nobody spent.
+    fn reserve(&self, model_id: &str, max_tokens: u32) -> FlowResult<Reservation<'_>> {
+        // Output only, at the full ceiling. Input is not counted because it is
+        // already known to the caller and is the cheap half; the point is to be
+        // pessimistic, not exact, and to be so without a second price lookup.
+        let estimate =
+            crate::harness::pricing::completion_cost(model_id, 0, 0, u64::from(max_tokens));
+
+        let spent = self.spend().cost_usd();
+        let mut reserved = self
+            .reserved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // `>=` on committed spend alone, so a budget already exhausted refuses
+        // even a call whose estimate is zero — an unpriced model must not become
+        // a free one.
+        if spent >= self.budget_usd || spent + *reserved + estimate > self.budget_usd {
+            return Err(EngineError::Capability(
+                crate::error::Error::Budget {
+                    spent: spent + *reserved,
+                    limit: self.budget_usd,
+                }
+                .to_string(),
+            ));
+        }
+
+        *reserved += estimate;
+        Ok(Reservation {
+            capability: self,
+            estimate,
+        })
+    }
+
+    /// Give back a reservation.
+    fn release(&self, estimate: f64) {
+        let mut reserved = self
+            .reserved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // Clamped at zero: floating-point subtraction of the same values in a
+        // different order can leave a tiny negative, which would slowly hand
+        // out budget that does not exist.
+        *reserved = (*reserved - estimate).max(0.0);
+    }
+
     /// Read one required string out of a node's config.
     fn required<'a>(config: &'a Value, key: &str) -> FlowResult<&'a str> {
         config.get(key).and_then(Value::as_str).ok_or_else(|| {
             EngineError::Capability(format!("agent node config is missing a string `{key}`"))
         })
+    }
+}
+
+/// Holds one in-flight call's worst-case cost against the budget.
+///
+/// Releases on drop rather than at a call site, so every path — success, a
+/// provider error, an early return, a panic — gives the reservation back.
+struct Reservation<'a> {
+    capability: &'a ModelCapability,
+    estimate: f64,
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        self.capability.release(self.estimate);
     }
 }
 
@@ -139,19 +207,6 @@ impl LlmProvider for ModelCapability {
     /// `nodes::integration::agent`. This crate authors both sides of that
     /// contract, so the keys read here are the keys `flows::panel` writes.
     async fn complete(&self, request: Value, _conn: Option<&str>) -> FlowResult<Value> {
-        // Checked before the call, not after. Refusing a call that has already
-        // been paid for would throw away work and still overspend.
-        let spent = self.spend().cost_usd();
-        if spent >= self.budget_usd {
-            return Err(EngineError::Capability(
-                crate::error::Error::Budget {
-                    spent,
-                    limit: self.budget_usd,
-                }
-                .to_string(),
-            ));
-        }
-
         // The model id, already resolved from tier by `council::reviewers`.
         // Resolution stays there rather than here so there is exactly one
         // answer to "what did this call run on", and it is the one the cost
@@ -180,6 +235,10 @@ impl LlmProvider for ModelCapability {
             .map_or(self.models.max_tokens, |n| {
                 n.min(u64::from(self.models.max_tokens)) as u32
             });
+
+        // Reserved before dispatch, released after. Checking completed spend
+        // alone is a ceiling only when calls are serialised — see `reserved`.
+        let _reservation = self.reserve(model_id, max_tokens)?;
 
         let response = self
             .model
