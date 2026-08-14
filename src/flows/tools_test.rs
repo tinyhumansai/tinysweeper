@@ -4,21 +4,23 @@ use super::*;
 
 use crate::ports::corpus::MapCorpus;
 
-fn tools() -> ReadOnlyTools {
-    ReadOnlyTools::new(Arc::new(
-        MapCorpus::default()
-            .with("src/a.rs", "fn one() {}\nfn two() {}\n")
-            .with("src/b.rs", "fn three() {}\n"),
-    ))
+fn corpus() -> MapCorpus {
+    MapCorpus::default()
+        .with("src/a.rs", "fn one() {}\nfn two() {}\n")
+        .with("src/b.rs", "fn three() {}\n")
 }
 
-async fn call(tools: &ReadOnlyTools, slug: &str, args: Value) -> FlowResult<Value> {
+fn tools(corpus: &MapCorpus) -> ReadOnlyTools<'_> {
+    ReadOnlyTools::new(corpus)
+}
+
+async fn call(tools: &ReadOnlyTools<'_>, slug: &str, args: Value) -> FlowResult<Value> {
     tools.invoke(slug, args, None).await
 }
 
 #[tokio::test]
 async fn read_file_returns_the_content() {
-    let out = call(&tools(), "read_file", json!({ "path": "src/a.rs" }))
+    let out = call(&tools(&corpus()), "read_file", json!({ "path": "src/a.rs" }))
         .await
         .unwrap();
 
@@ -29,7 +31,7 @@ async fn read_file_returns_the_content() {
 async fn a_missing_file_is_a_result_not_an_error() {
     // A reviewer guessing at a filename must be able to guess again. An `Err`
     // ends the tool loop and it stops looking.
-    let out = call(&tools(), "read_file", json!({ "path": "nope.rs" }))
+    let out = call(&tools(&corpus()), "read_file", json!({ "path": "nope.rs" }))
         .await
         .expect("not an error");
 
@@ -47,7 +49,7 @@ async fn a_path_escaping_the_repository_is_refused() {
         "src/../../secrets",
         "C:/Windows/System32/config",
     ] {
-        let err = call(&tools(), "read_file", json!({ "path": path }))
+        let err = call(&tools(&corpus()), "read_file", json!({ "path": path }))
             .await
             .expect_err(path);
 
@@ -72,7 +74,7 @@ async fn an_ordinary_relative_path_is_not_caught_by_the_traversal_check() {
 async fn an_unknown_slug_is_an_error_naming_what_exists() {
     // Not an empty result: a model that asked to run the tests and got `{}`
     // may well conclude they passed.
-    let err = call(&tools(), "run_tests", json!({}))
+    let err = call(&tools(&corpus()), "run_tests", json!({}))
         .await
         .expect_err("refused");
 
@@ -86,7 +88,7 @@ async fn every_offered_slug_is_actually_invocable() {
     // tool that fails on first use.
     for slug in SLUGS {
         let args = json!({ "path": "src/a.rs", "pattern": "fn" });
-        call(&tools(), slug, args).await.unwrap_or_else(|e| {
+        call(&tools(&corpus()), slug, args).await.unwrap_or_else(|e| {
             panic!("`{slug}` is offered but not invocable: {e}");
         });
     }
@@ -105,9 +107,9 @@ async fn every_offered_slug_is_actually_invocable() {
 async fn a_missing_argument_is_an_error_rather_than_a_default() {
     // An empty pattern defaulted to "" would search for nothing and report no
     // matches, which a reviewer reads as "this appears nowhere".
-    assert!(call(&tools(), "search", json!({})).await.is_err());
+    assert!(call(&tools(&corpus()), "search", json!({})).await.is_err());
     assert!(
-        call(&tools(), "search", json!({ "pattern": "  " }))
+        call(&tools(&corpus()), "search", json!({ "pattern": "  " }))
             .await
             .is_err()
     );
@@ -116,7 +118,7 @@ async fn a_missing_argument_is_an_error_rather_than_a_default() {
 #[tokio::test]
 async fn a_truncated_read_says_that_it_was_truncated() {
     let big = "x".repeat(MAX_READ_BYTES * 2);
-    let tools = ReadOnlyTools::new(Arc::new(MapCorpus::default().with("big.txt", &big)));
+    let tools = ReadOnlyTools::new(&MapCorpus::default().with("big.txt", &big));
 
     let out = call(&tools, "read_file", json!({ "path": "big.txt" }))
         .await
@@ -132,7 +134,7 @@ async fn truncation_does_not_split_a_utf8_character() {
     // A byte slice through a multi-byte character panics on `&text[..end]`,
     // which would take the whole review down rather than shorten one read.
     let big = "é".repeat(MAX_READ_BYTES);
-    let tools = ReadOnlyTools::new(Arc::new(MapCorpus::default().with("u.txt", &big)));
+    let tools = ReadOnlyTools::new(&MapCorpus::default().with("u.txt", &big));
 
     let out = call(&tools, "read_file", json!({ "path": "u.txt" }))
         .await
@@ -150,7 +152,7 @@ async fn the_total_budget_is_shared_across_calls_not_per_call() {
     for i in 0..10 {
         corpus = corpus.with(&format!("f{i}.txt"), &big);
     }
-    let tools = ReadOnlyTools::new(Arc::new(corpus));
+    let tools = ReadOnlyTools::new(&corpus);
 
     let mut exhausted = false;
     for i in 0..10 {
@@ -187,7 +189,7 @@ async fn being_unable_to_search_is_not_reported_as_no_matches() {
         }
     }
 
-    let tools = ReadOnlyTools::new(Arc::new(NoSearch));
+    let tools = ReadOnlyTools::new(&NoSearch);
     let out = call(&tools, "search", json!({ "pattern": "fn" }))
         .await
         .unwrap();
