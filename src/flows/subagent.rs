@@ -85,9 +85,23 @@ pub fn questions_schema() -> Value {
     })
 }
 
+/// How many times a sub-agent may call a tool before it must answer.
+///
+/// Small on purpose. A sub-agent answers *one narrow factual question*, and the
+/// questions worth asking are settled by reading a file or two. A loop with
+/// room to wander is one that spends a reviewer's latency budget confirming
+/// something it already knew — and every round re-sends the whole accumulated
+/// transcript, so the cost of round N is paid again by every round after it.
+pub const MAX_TOOL_ROUNDS: usize = 3;
+
 /// The schema a sub-agent answers under.
-pub fn answer_schema() -> Value {
-    json!({
+///
+/// `with_tools` adds the optional `tool_call` key. `answer` and `confident`
+/// stay required in both: a turn that asks for a file must still say what it
+/// knows so far, so a sub-agent that runs out of rounds mid-loop still has an
+/// answer to give rather than nothing.
+pub fn answer_schema(with_tools: bool) -> Value {
+    let mut schema = json!({
         "type": "object",
         "additionalProperties": false,
         "required": ["answer", "confident"],
@@ -103,7 +117,63 @@ pub fn answer_schema() -> Value {
                                 is the correct answer; guessing is not."
             }
         }
-    })
+    });
+
+    if with_tools && let Some(properties) = schema["properties"].as_object_mut() {
+        properties.insert(
+            "tool_call".into(),
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["slug", "args"],
+                "description": "Set this to look something up before answering. You are asked \
+                                again with the result. Omit it once you can answer.",
+                "properties": {
+                    "slug": {
+                        "type": "string",
+                        "enum": crate::flows::tools::SLUGS,
+                        "description": "Which tool to call."
+                    },
+                    "args": {
+                        "type": "object",
+                        "description": "`{\"path\": \"...\"}` for read_file, \
+                                        `{\"pattern\": \"...\"}` for search."
+                    }
+                }
+            }),
+        );
+    }
+
+    schema
+}
+
+/// What a tool-capable sub-agent is told about its tools.
+///
+/// Appended to [`ANSWER_SYSTEM`] rather than replacing it: everything that
+/// prompt says about not reviewing and not guessing is still true, and more so
+/// once the sub-agent can go and read the file it is speculating about.
+pub const TOOL_INSTRUCTION: &str = "\n\nYou may look things up before answering. Set `tool_call` to read a file or search the repository for a literal string, and you will be asked again with the result. Prefer looking something up over answering with `confident` false — that is what the tools are for. Once you can answer, omit `tool_call`. You have a small number of lookups, so ask for what would settle the question rather than for background.";
+
+/// Render one tool result for the next turn of the loop.
+///
+/// The call is echoed alongside its result. A transcript of results with no
+/// calls reads, by the third round, as a pile of unexplained file contents, and
+/// the sub-agent starts answering about the wrong one.
+pub fn render_tool_result(slug: &str, args: &Value, result: &Value) -> String {
+    format!(
+        "\n\n### Lookup: `{slug}` {}\n\n```json\n{}\n```\n",
+        serde_json::to_string(args).unwrap_or_default(),
+        serde_json::to_string_pretty(result).unwrap_or_default(),
+    )
+}
+
+/// Render a refused tool call for the next turn.
+///
+/// A refusal has to come back *as a turn*, not as a dropped call. A sub-agent
+/// whose call vanished asks for the same thing again and burns every remaining
+/// round on it; one that is told why adjusts or answers.
+pub fn render_tool_refusal(slug: &str, why: &str) -> String {
+    format!("\n\n### Lookup `{slug}` was refused\n\n{why}\n")
 }
 
 /// Add the `questions` key to a lane's response schema.
