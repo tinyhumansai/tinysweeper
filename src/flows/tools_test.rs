@@ -20,9 +20,13 @@ async fn call(tools: &ReadOnlyTools<'_>, slug: &str, args: Value) -> FlowResult<
 
 #[tokio::test]
 async fn read_file_returns_the_content() {
-    let out = call(&tools(&corpus()), "read_file", json!({ "path": "src/a.rs" }))
-        .await
-        .unwrap();
+    let out = call(
+        &tools(&corpus()),
+        "read_file",
+        json!({ "path": "src/a.rs" }),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(out["content"], json!("fn one() {}\nfn two() {}\n"));
 }
@@ -53,10 +57,7 @@ async fn a_path_escaping_the_repository_is_refused() {
             .await
             .expect_err(path);
 
-        assert!(
-            err.to_string().contains("nowhere else"),
-            "{path}: {err}"
-        );
+        assert!(err.to_string().contains("nowhere else"), "{path}: {err}");
     }
 }
 
@@ -88,9 +89,11 @@ async fn every_offered_slug_is_actually_invocable() {
     // tool that fails on first use.
     for slug in SLUGS {
         let args = json!({ "path": "src/a.rs", "pattern": "fn" });
-        call(&tools(&corpus()), slug, args).await.unwrap_or_else(|e| {
-            panic!("`{slug}` is offered but not invocable: {e}");
-        });
+        call(&tools(&corpus()), slug, args)
+            .await
+            .unwrap_or_else(|e| {
+                panic!("`{slug}` is offered but not invocable: {e}");
+            });
     }
 
     let offered: Vec<String> = descriptors()

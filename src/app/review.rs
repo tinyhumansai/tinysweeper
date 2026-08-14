@@ -372,11 +372,8 @@ pub async fn review_with_retrieval(
     // `crate::forge::corpus`. Built unconditionally because it costs nothing
     // until a tool is actually called, and `council.subagents` decides whether
     // one ever is.
-    let corpus = crate::forge::corpus::ForgeCorpus::new(
-        forge,
-        repo,
-        &context.pull_request.head_sha,
-    );
+    let corpus =
+        crate::forge::corpus::ForgeCorpus::new(forge, repo, &context.pull_request.head_sha);
 
     let mut lanes = Vec::new();
     let mut spend = Spend::default();

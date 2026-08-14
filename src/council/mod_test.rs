@@ -146,10 +146,7 @@ fn the_cap_lowers_a_severity_and_never_raises_one() {
         ceiling: Some(Severity::Low),
     };
 
-    let mut findings = vec![
-        finding(Severity::Critical),
-        finding(Severity::Low),
-    ];
+    let mut findings = vec![finding(Severity::Critical), finding(Severity::Low)];
     reviewer.clamp(&mut findings);
 
     assert_eq!(findings[0].severity, Severity::Low, "not lowered");
