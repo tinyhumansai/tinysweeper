@@ -236,6 +236,21 @@ max_tokens = 16000
 # cheap tier cost more than the expensive one, which is the entire reason the
 # tier exists. `tinysweeper doctor` warns when the two are configured together.
 reasoning_effort = "medium"
+# The same key for the `flash` tier alone, because the two tiers want opposite
+# values and one global setting cannot serve both.
+#
+# Measured on tinyhumansai/openhuman #5549, a five-reviewer council, changing
+# nothing but this key:
+#
+#   deepseek-v4-flash at `medium`   14,714 output tokens (14,665 reasoning)
+#   deepseek-v4-flash at `off`         ~200 output tokens
+#
+# That call was the *style* reviewer, whose findings are capped below the
+# comment threshold by design — so at `medium` it was 15% of the bill for a
+# reviewer that cannot post a comment. The deep tier genuinely benefits from
+# `medium`, which is why this is an override rather than a change to the line
+# above. See the tables further down for the full measurement.
+reasoning_effort_flash = "off"
 # Who enforces the response schema, and the reason the model above is usable at
 # all.
 #
