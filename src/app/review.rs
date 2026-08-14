@@ -474,7 +474,7 @@ pub async fn review_with_retrieval(
                 reviewed_evidence: &reviewed_evidence,
                 prior_findings: &prior_titles,
                 retrieved_context: &retrieved_context,
-                corpus: corpus.clone(),
+                corpus: Some(&corpus),
             })
             .await?;
 
