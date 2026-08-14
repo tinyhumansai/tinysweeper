@@ -322,7 +322,7 @@ pub fn answer_graph(model: &str, system: &str, prompt: &str) -> WorkflowGraph {
                     "model": model,
                     "system": system,
                     "prompt": prompt,
-                    "schema": answer_schema(),
+                    "schema": answer_schema(false),
                     "schema_name": "tinysweeper_subagent_answer",
                 }),
                 ports: Vec::new(),
