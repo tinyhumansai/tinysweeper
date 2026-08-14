@@ -90,6 +90,7 @@ impl ModelCapability {
             model,
             models,
             spend: Mutex::new(Spend::default()),
+            reserved: Mutex::new(0.0),
             budget_usd,
         }
     }
