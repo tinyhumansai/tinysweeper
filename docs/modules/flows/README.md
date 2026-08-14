@@ -185,7 +185,11 @@ lane, so it can refuse one however many are in flight.
 | `caps.rs` | the capability seam, budget, spend tally, and every refusal |
 | `panel.rs` | one `agent` node per reviewer, and the fan-in barrier |
 | `subagent.rs` | the child graph, the question schema, and the depth bound |
-| `runner.rs` | runs the rounds and returns one answer per reviewer |
+| `tools.rs` | the two read-only tools, the byte budget, and the path check |
+| `runner.rs` | runs the rounds and the tool loop, one answer per reviewer |
+
+Two ports back it: `ports::corpus` (the read-only tree, with an in-memory mock)
+and `forge::corpus` (the same, over a forge, pinned to one revision).
 
 ## Testing
 
