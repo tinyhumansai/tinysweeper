@@ -874,3 +874,58 @@ fn enabled_lanes_reflects_the_merged_config() {
         vec![LaneId::Critique, LaneId::Security]
     );
 }
+
+#[test]
+fn every_tier_name_resolves_to_a_model_id_rather_than_to_itself() {
+    // The bug this pins: a name in `ModelRef::TIERS` that no resolver arm
+    // handles falls through to the "explicit model id" branch and is sent to
+    // the gateway *as the model id*. The provider 404s every call — or, with
+    // fallbacks enabled, quietly answers from something nobody chose. `flash`
+    // shipped that way, and only a live run would have shown it.
+    let config = defaults();
+
+    for tier in crate::config::types::ModelRef::TIERS {
+        let reference = crate::config::types::ModelRef(tier.to_string());
+
+        let agent = crate::config::types::CouncilAgent {
+            id: "a".into(),
+            lanes: vec![],
+            model: Some(reference),
+            persona: None,
+        };
+        let resolved = config.model_for_agent(&agent, LaneId::Critique);
+
+        assert_ne!(
+            resolved, tier,
+            "`{tier}` reaches the gateway as a model id called `{tier}`"
+        );
+        assert!(
+            !resolved.is_empty(),
+            "`{tier}` resolves to an empty model id"
+        );
+    }
+}
+
+#[test]
+fn a_lane_and_the_issue_workload_resolve_tiers_the_same_way() {
+    // Three copies of one `match` drifted once already. This asserts they agree
+    // rather than asserting each one's arms separately, which is the assertion
+    // that would have caught it.
+    let mut config = defaults();
+
+    for tier in crate::config::types::ModelRef::TIERS {
+        config.issues.model = Some(crate::config::types::ModelRef(tier.to_string()));
+        let agent = crate::config::types::CouncilAgent {
+            id: "a".into(),
+            lanes: vec![],
+            model: Some(crate::config::types::ModelRef(tier.to_string())),
+            persona: None,
+        };
+
+        assert_eq!(
+            config.model_for_issues(),
+            config.model_for_agent(&agent, LaneId::Critique),
+            "`{tier}` resolves differently for issues than for a council agent"
+        );
+    }
+}
