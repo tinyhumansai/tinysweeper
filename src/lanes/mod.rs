@@ -16,6 +16,7 @@ pub mod tests;
 pub mod triage;
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -25,6 +26,7 @@ use crate::evidence::diff::FileDiff;
 use crate::findings::types::Finding;
 use crate::forge::types::{CheckConclusion, Commit, PullRequest};
 use crate::harness::schema::LaneResponse;
+use crate::ports::corpus::Corpus;
 use crate::ports::model::Spend;
 use crate::scan::types::{Finding as ScanFinding, ScanKind};
 
