@@ -137,14 +137,57 @@ pub async fn plan(
     Ok((plan, spend))
 }
 
+/// How much of a SHA a resolution note shows.
+///
+/// GitHub's own abbreviation, and long enough to stay unambiguous in any
+/// repository this will plausibly run on.
+const SHORT_SHA: usize = 7;
+
+/// The note posted in a thread just before it is resolved.
+///
+/// Written here, from a `&'static str` reason and a SHA, so no part of it can
+/// come from a model or from a pull request. `reason` originates in
+/// [`Decision`] — every one of its strings is a literal in this crate — and
+/// `head_sha` is read off the forge, so the worst input this can render is a
+/// malformed commit id.
+pub fn resolution_note(reason: &str, head_sha: &str) -> String {
+    let short: String = head_sha.chars().take(SHORT_SHA).collect();
+    format!(
+        "**Resolved** — {reason}, as of `{short}`.\n\n\
+         <sub>If this is wrong, reopen the conversation and say so; \
+         the finding will be re-raised on the next push if it still reproduces.</sub>"
+    )
+}
+
 /// Execute a plan. The only mutation in this module.
+///
+/// `head_sha` is the commit the run reviewed, and it is what the note claims
+/// the fix landed in — the caller has already checked it against live state,
+/// so a note posted here cannot credit a commit nobody is looking at.
 ///
 /// Returns how many threads were resolved. A thread that fails is logged and
 /// the rest still run: one stale node id must not cost a pull request the whole
 /// of its housekeeping.
-pub async fn apply_plan(write: &dyn ForgeWrite, repo: &RepoId, plan: &ThreadPlan) -> Result<usize> {
+///
+/// The note is posted *before* the resolve, and its failure does not stop one.
+/// Both orderings lose something when the second call fails; this one loses the
+/// explanation for a thread that did close, rather than leaving a thread open
+/// under a comment announcing it was resolved.
+pub async fn apply_plan(
+    write: &dyn ForgeWrite,
+    config: &Config,
+    repo: &RepoId,
+    plan: &ThreadPlan,
+    head_sha: &str,
+) -> Result<usize> {
     let mut resolved = 0;
     for entry in &plan.resolve {
+        if config.threads.comment_on_resolve {
+            let note = resolution_note(&entry.reason, head_sha);
+            if let Err(err) = write.reply_to_review_thread(repo, &entry.id, &note).await {
+                tracing::warn!(%err, thread = %entry.id, "could not explain a resolve");
+            }
+        }
         match write.resolve_review_thread(repo, &entry.id).await {
             Ok(()) => resolved += 1,
             Err(err) => tracing::warn!(%err, thread = %entry.id, "could not resolve a thread"),

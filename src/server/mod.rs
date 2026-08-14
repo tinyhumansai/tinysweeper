@@ -29,6 +29,7 @@ pub mod failure;
 pub mod indexing;
 pub mod manual;
 pub mod routes;
+pub mod status;
 pub mod store;
 #[cfg(test)]
 mod test_key;

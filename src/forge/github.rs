@@ -127,6 +127,55 @@ mutation($id: ID!) {
 }
 "#;
 
+/// Reply inside an existing review conversation.
+///
+/// `addPullRequestReviewThreadReply` rather than the REST
+/// `pulls/comments/{id}/replies` route, because the thread is already
+/// identified by the GraphQL node id the resolve mutation takes — going
+/// through REST would mean carrying a second identifier for the same thread
+/// purely to say one sentence in it.
+const REPLY_THREAD_MUTATION: &str = r#"
+mutation($id: ID!, $body: String!) {
+  addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $id, body: $body}) {
+    comment { id }
+  }
+}
+"#;
+
+/// The request body shared by creating and updating a check run.
+///
+/// The status/conclusion pair is the part worth keeping in one place: GitHub
+/// rejects a `conclusion` on a run that is not `completed`, and silently leaves
+/// a run pending forever if `status` says `in_progress` when a verdict exists.
+/// Deriving both from the same `Option` makes the mismatch unrepresentable.
+fn check_payload(check: &CheckRun) -> serde_json::Value {
+    // A check-run summary is capped at 65535 characters by the API, and a
+    // rejected request means no check at all — which reads as "the bot did not
+    // run" rather than "the bot said too much".
+    let summary: String = check.summary.chars().take(60_000).collect();
+
+    let mut body = serde_json::json!({
+        "name": check.name,
+        "output": { "title": check.title, "summary": summary },
+    });
+
+    match check.conclusion {
+        Some(conclusion) => {
+            body["status"] = serde_json::json!("completed");
+            body["conclusion"] = serde_json::json!(match conclusion {
+                CheckConclusion::Success => "success",
+                CheckConclusion::Failure => "failure",
+                CheckConclusion::ActionRequired => "action_required",
+                CheckConclusion::Neutral => "neutral",
+                CheckConclusion::Skipped => "skipped",
+            });
+        }
+        None => body["status"] = serde_json::json!("in_progress"),
+    }
+
+    body
+}
+
 /// The `reviewThreads` connection, wherever the client left it.
 ///
 /// Accepts both the raw GraphQL envelope (`data.repository…`) and an already
@@ -996,30 +1045,31 @@ impl GitHubWrite {
 
 #[async_trait]
 impl ForgeWrite for GitHubWrite {
-    async fn publish_check(&self, repo: &RepoId, check: CheckRun) -> Result<()> {
-        let conclusion = match check.conclusion {
-            CheckConclusion::Success => "success",
-            CheckConclusion::Failure => "failure",
-            CheckConclusion::ActionRequired => "action_required",
-            CheckConclusion::Neutral => "neutral",
-            CheckConclusion::Skipped => "skipped",
-        };
-
-        // A check-run summary is capped at 65535 characters by the API, and a
-        // rejected request means no check at all — which reads as "the bot did
-        // not run" rather than "the bot said too much".
-        let summary: String = check.summary.chars().take(60_000).collect();
-
-        let body = serde_json::json!({
-            "name": check.name,
-            "head_sha": check.head_sha,
-            "status": "completed",
-            "conclusion": conclusion,
-            "output": { "title": check.title, "summary": summary },
-        });
+    async fn publish_check(&self, repo: &RepoId, check: CheckRun) -> Result<u64> {
+        let mut body = check_payload(&check);
+        // Only on create: `head_sha` is what binds the run to a commit, and the
+        // update route rejects it.
+        body["head_sha"] = serde_json::json!(check.head_sha);
 
         let route = format!("/repos/{}/{}/check-runs", repo.owner, repo.name);
-        let _: serde_json::Value = self.client.post(route, Some(&body)).await.map_err(api)?;
+        let created: serde_json::Value = self.client.post(route, Some(&body)).await.map_err(api)?;
+
+        // The id is how an in-progress check is concluded later. A create that
+        // succeeded but answered with something unreadable is an error rather
+        // than a zero: a caller that went on to update check `0` would be
+        // writing to whatever run that is, on somebody else's repository.
+        created["id"]
+            .as_u64()
+            .ok_or_else(|| Error::Forge("the check-run create returned no usable id".to_string()))
+    }
+
+    async fn update_check(&self, repo: &RepoId, check_id: u64, check: CheckRun) -> Result<()> {
+        let route = format!("/repos/{}/{}/check-runs/{check_id}", repo.owner, repo.name);
+        let _: serde_json::Value = self
+            .client
+            .patch(route, Some(&check_payload(&check)))
+            .await
+            .map_err(api)?;
         Ok(())
     }
 
@@ -1136,6 +1186,23 @@ impl ForgeWrite for GitHubWrite {
         Ok(issue.number)
     }
 
+    async fn reply_to_review_thread(
+        &self,
+        _repo: &RepoId,
+        thread_id: &str,
+        body: &str,
+    ) -> Result<()> {
+        let raw: serde_json::Value = self
+            .client
+            .graphql(&serde_json::json!({
+                "query": REPLY_THREAD_MUTATION,
+                "variables": {"id": thread_id, "body": body},
+            }))
+            .await
+            .map_err(api)?;
+        graphql_errors(&raw, "the reply-to-thread mutation")
+    }
+
     async fn resolve_review_thread(&self, _repo: &RepoId, thread_id: &str) -> Result<()> {
         let raw: serde_json::Value = self
             .client
@@ -1210,6 +1277,61 @@ fn review_comment_payload(c: &ReviewComment) -> serde_json::Value {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn check(conclusion: Option<CheckConclusion>) -> CheckRun {
+        CheckRun {
+            name: "tinysweeper/review".into(),
+            head_sha: "abc123".into(),
+            conclusion,
+            title: "t".into(),
+            summary: "s".into(),
+        }
+    }
+
+    #[test]
+    fn an_unfinished_check_is_sent_as_in_progress_with_no_conclusion() {
+        let body = check_payload(&check(None));
+        assert_eq!(body["status"], "in_progress");
+        // GitHub rejects the request outright if a conclusion rides along with
+        // a non-completed status, and a rejected request is no check at all.
+        assert!(body.get("conclusion").is_none());
+    }
+
+    #[test]
+    fn a_finished_check_is_sent_as_completed_with_its_conclusion() {
+        for (conclusion, wire) in [
+            (CheckConclusion::Success, "success"),
+            (CheckConclusion::Failure, "failure"),
+            (CheckConclusion::ActionRequired, "action_required"),
+            (CheckConclusion::Neutral, "neutral"),
+            (CheckConclusion::Skipped, "skipped"),
+        ] {
+            let body = check_payload(&check(Some(conclusion)));
+            assert_eq!(body["status"], "completed");
+            assert_eq!(body["conclusion"], wire);
+        }
+    }
+
+    #[test]
+    fn the_create_payload_pins_a_commit_and_the_update_payload_does_not() {
+        // `head_sha` is what binds a run to a commit; the update route rejects
+        // it, so it is added at the create call site rather than in the shared
+        // payload. This asserts the shared half stays free of it.
+        assert!(check_payload(&check(None)).get("head_sha").is_none());
+    }
+
+    #[test]
+    fn an_oversized_summary_is_truncated_rather_than_rejected() {
+        let mut long = check(Some(CheckConclusion::Success));
+        long.summary = "x".repeat(70_000);
+        let body = check_payload(&long);
+        assert_eq!(
+            body["output"]["summary"].as_str().expect("a summary").len(),
+            60_000,
+            "the API caps a summary at 65535, and a rejected request reads as \
+             the bot not having run"
+        );
+    }
 
     /// A two-link error chain shaped like octocrab's: an outer value whose own
     /// `Display` says nothing useful, wrapping the one that does.

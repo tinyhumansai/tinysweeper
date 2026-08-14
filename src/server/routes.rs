@@ -27,6 +27,7 @@ use crate::server::auth::AppAuth;
 use crate::server::failure;
 use crate::server::indexing::{IndexBackend, index_in_background};
 use crate::server::manual::{self, FullReviews, MergeReport, Merges};
+use crate::server::status;
 use crate::server::store::{Store, Trust};
 use crate::server::webhook::{self, Action, Payload};
 
@@ -755,6 +756,136 @@ fn config_for(base: &Config, mode: Mode) -> std::borrow::Cow<'_, Config> {
     }
 }
 
+/// A published in-progress check, and everything needed to conclude it.
+///
+/// Exists because the check is *opened* deep inside `review_inner`, where the
+/// head SHA is first known, and *closed* by whichever path the review ends on
+/// — including the error paths, which unwind past every local in that function.
+/// Holding it in a slot the caller owns is what makes "always concluded"
+/// structural rather than a rule each `return` has to remember.
+#[derive(Debug, Clone)]
+struct ReviewStatus {
+    repo: RepoId,
+    /// The check run to update. Never re-created: a second POST of the same
+    /// name leaves the first one pending forever, and a pending check refuses
+    /// auto-merge on that commit for good.
+    check_id: u64,
+    head_sha: String,
+    installation: u64,
+}
+
+/// Where a review's in-progress check lives between opening and concluding.
+///
+/// `None` means there is nothing to conclude — the review returned before it
+/// had a SHA to pin a check to, or another worker already holds the lease for
+/// this commit and owns the check that goes with it.
+type StatusSlot = Arc<std::sync::Mutex<Option<ReviewStatus>>>;
+
+/// Publish the in-progress check, and record how to conclude it.
+///
+/// Best-effort in both directions: a failure to publish is logged and the
+/// review proceeds without a status, because a missing progress indicator is a
+/// far smaller problem than a pull request that goes unreviewed because its
+/// progress indicator could not be drawn.
+///
+/// ## On the write token
+///
+/// This mints one before the lanes run, which the security boundary in
+/// `AGENTS.md` otherwise reserves for after every model call has returned. The
+/// property that rule protects is that *the model* never holds a write handle,
+/// and that is preserved exactly: the token is minted here, used for one
+/// request, and dropped before this function returns — it is never placed in
+/// `AppState`, never passed to `run_and_publish`, and no lane or model can
+/// reach it. `report_failure` has always minted one on the same terms. See the
+/// pull request that introduced this for the discussion the boundary requires.
+async fn open_status(
+    state: &AppState,
+    slot: &StatusSlot,
+    repo: &RepoId,
+    head_sha: &str,
+    installation: u64,
+) {
+    // A retry re-enters `review_inner`, so without this the second attempt
+    // would open a second check and orphan the first.
+    if slot.lock().expect("status slot").is_some() {
+        return;
+    }
+
+    let published = async {
+        use crate::ports::forge::ForgeWrite;
+        let token = state.auth.installation_token(installation).await?;
+        crate::forge::github::GitHubWrite::new(&token)?
+            .publish_check(repo, status::in_progress(head_sha))
+            .await
+    }
+    .await;
+
+    match published {
+        Ok(check_id) => {
+            *slot.lock().expect("status slot") = Some(ReviewStatus {
+                repo: repo.clone(),
+                check_id,
+                head_sha: head_sha.to_string(),
+                installation,
+            });
+        }
+        Err(err) => {
+            tracing::warn!(%err, %repo, "could not publish the in-progress check");
+        }
+    }
+}
+
+/// Conclude the in-progress check, if one was ever opened.
+///
+/// Takes the status out of the slot, so a check cannot be concluded twice —
+/// the second write would be a PATCH to a run already in its terminal state,
+/// and the API is entitled to reject it.
+async fn close_status(state: &AppState, slot: &StatusSlot, conclusion: Conclusion<'_>) {
+    let Some(open) = slot.lock().expect("status slot").take() else {
+        return;
+    };
+
+    let check = match conclusion {
+        Conclusion::Reviewed(findings) => status::completed(&open.head_sha, findings),
+        Conclusion::NotReviewed => status::not_reviewed(&open.head_sha),
+        Conclusion::Failed(err) => failure::check_run(&open.head_sha, err),
+    };
+
+    let written = async {
+        use crate::ports::forge::ForgeWrite;
+        let token = state.auth.installation_token(open.installation).await?;
+        crate::forge::github::GitHubWrite::new(&token)?
+            .update_check(&open.repo, open.check_id, check)
+            .await
+    }
+    .await;
+
+    if let Err(err) = written {
+        // Worth an error rather than a warning: the check is now stuck
+        // in-progress, and a pending check refuses auto-merge on this commit
+        // until somebody pushes again.
+        tracing::error!(
+            %err, repo = %open.repo, check_id = open.check_id,
+            "could not conclude the in-progress check; it will block auto-merge until the next push"
+        );
+    }
+}
+
+/// How a review ended, for the umbrella check.
+enum Conclusion<'a> {
+    /// The lanes ran. Carries the finding count, for the title.
+    Reviewed(usize),
+    /// The run stopped deliberately, without reviewing anything.
+    ///
+    /// Reachable when a check was already opened and the run *then* declined —
+    /// a retry whose pull request has since been converted back to a draft, say.
+    /// It exists so that case does not report "Reviewed" for a commit nothing
+    /// looked at, which is the exact confusion this whole check is here to end.
+    NotReviewed,
+    /// The review could not be produced.
+    Failed(&'a Error),
+}
+
 /// Review one pull request, off the request path.
 ///
 /// A failed review must not take the server with it — one pull request going
@@ -770,10 +901,25 @@ async fn handle_review(
     installation: u64,
     mode: Mode,
 ) {
+    let slot: StatusSlot = Arc::new(std::sync::Mutex::new(None));
+
     let mut attempt = 1;
     let err = loop {
-        match review_inner(&state, &repo, number, &author, installation, mode).await {
-            Ok(()) => return,
+        match review_inner(&state, &repo, number, &author, installation, mode, &slot).await {
+            Ok(findings) => {
+                // Usually there is nothing to close: a run that declines — a
+                // blocked contributor, a draft, a lease another worker holds —
+                // does so before opening a check, and `close_status` is a no-op
+                // when the slot is empty. `NotReviewed` covers the one ordering
+                // where it is not: an earlier attempt opened the check and this
+                // one declined.
+                let conclusion = match findings {
+                    Some(findings) => Conclusion::Reviewed(findings),
+                    None => Conclusion::NotReviewed,
+                };
+                close_status(&state, &slot, conclusion).await;
+                return;
+            }
             Err(err) => {
                 // The lease is released inside `review_inner` on every path,
                 // including this one, so a retry re-claims it rather than
@@ -794,6 +940,18 @@ async fn handle_review(
     };
 
     tracing::error!(%err, %repo, number, attempts = attempt, "review failed");
+
+    // Two ways to report the same thing, and which one applies depends on how
+    // far the review got. If a check is already open, concluding it in place is
+    // both cheaper and correct — a fresh POST would leave the open one pending
+    // and refuse auto-merge forever. If the review died before it had a SHA,
+    // there is nothing to conclude and the failure has to open its own check.
+    let opened = slot.lock().expect("status slot").is_some();
+    if opened {
+        close_status(&state, &slot, Conclusion::Failed(&err)).await;
+        return;
+    }
+
     if let Err(report) = report_failure(&state, &repo, number, installation, &err).await {
         // Reporting is best-effort by necessity: the most likely reason it
         // fails is the same forge outage that failed the review. Log both, so
@@ -833,8 +991,15 @@ async fn report_failure(
     write
         .publish_check(&repo_id, failure::check_run(&head_sha, err))
         .await
+        .map(|_| ())
 }
 
+/// Run one review.
+///
+/// `Ok(None)` is a run that deliberately did nothing — a blocked contributor, a
+/// draft, or a commit another worker is already reviewing — and is distinct
+/// from `Ok(Some(0))`, a review that ran and found nothing. Only the latter
+/// should tell a pull request it has been reviewed.
 async fn review_inner(
     state: &AppState,
     repo: &str,
@@ -842,11 +1007,12 @@ async fn review_inner(
     author: &str,
     installation: u64,
     mode: Mode,
-) -> Result<()> {
+    slot: &StatusSlot,
+) -> Result<Option<usize>> {
     let who = state.store.contributor(author).await?;
     if who.trust == Trust::Blocked {
         tracing::info!(%author, "blocked contributor; not reviewing");
-        return Ok(());
+        return Ok(None);
     }
 
     let repo_id =
@@ -878,7 +1044,7 @@ async fn review_inner(
     // ready for review.
     if pull_request.draft {
         tracing::debug!(%repo, number, "tracking draft pull request without reviewing");
-        return Ok(());
+        return Ok(None);
     }
 
     // Indexing is kicked off here and deliberately not awaited. A cold full
@@ -905,8 +1071,19 @@ async fn review_inner(
     };
     if !state.store.claim_lease(&lease, "server").await? {
         tracing::debug!(%lease, "another worker holds this review");
-        return Ok(());
+        return Ok(None);
     }
+
+    // The lease is held and the pull request is real, so this run is the one
+    // that will review this commit — which makes it the run that owns the
+    // status check. Opening it here rather than on the delivery path is what
+    // keeps a blocked contributor, a draft, or a duplicate delivery from
+    // announcing a review that is not going to happen.
+    //
+    // Still early: everything above is metadata reads, and every model call is
+    // below. A contributor sees the check appear seconds after pushing, not
+    // minutes.
+    open_status(state, slot, &repo_id, &pull_request.head_sha, installation).await;
 
     // `AssertUnwindSafe` + `catch_unwind` so a panic inside a lane still
     // reaches the release below. Without it the `?` on the outcome is not the
@@ -950,10 +1127,8 @@ async fn review_inner(
     drop(permit);
 
     let proposal = outcome?;
-    state
-        .store
-        .record_review(author, proposal.findings().count() as u64)
-        .await?;
+    let findings = proposal.findings().count();
+    state.store.record_review(author, findings as u64).await?;
 
     // The review has just published its check runs and, when everything passed,
     // its approving review — which is to say it has just changed the two things
@@ -975,7 +1150,7 @@ async fn review_inner(
         installation,
     ));
 
-    Ok(())
+    Ok(Some(findings))
 }
 
 /// Run the review and publish it.
