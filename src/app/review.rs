@@ -367,6 +367,17 @@ pub async fn review_with_retrieval(
     // fallback to run. It degrades to hunk matching rather than failing.
     let file_contents = std::collections::BTreeMap::new();
 
+    // What a sub-agent's tools read through. Pinned to the head under review,
+    // so a lookup cannot return code from another branch — see
+    // `crate::forge::corpus`. Built unconditionally because it costs nothing
+    // until a tool is actually called, and `council.subagents` decides whether
+    // one ever is.
+    let corpus = crate::forge::corpus::ForgeCorpus::new(
+        forge,
+        repo,
+        &context.pull_request.head_sha,
+    );
+
     let mut lanes = Vec::new();
     let mut spend = Spend::default();
 
