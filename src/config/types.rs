@@ -1111,7 +1111,7 @@ impl Config {
     /// answers from something nobody chose. Adding a tier to
     /// [`ModelRef::TIERS`] without adding it here is exactly that bug, and it
     /// is what happened to `flash`.
-    fn resolve_tier(&self, reference: Option<&str>) -> &str {
+    fn resolve_tier<'a>(&'a self, reference: Option<&'a str>) -> &'a str {
         match reference {
             Some("deep") => &self.models.deep,
             Some("flash") => &self.models.flash,
