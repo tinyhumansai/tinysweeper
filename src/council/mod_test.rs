@@ -187,7 +187,19 @@ fn a_capped_finding_lands_below_the_default_severity_gate() {
 
 fn finding(severity: Severity) -> crate::findings::types::Finding {
     crate::findings::types::Finding {
+        lane: LaneId::Critique,
         severity,
-        ..Default::default()
+        confidence: 0.9,
+        path: "src/main.rs".into(),
+        line: Some(2),
+        end_line: None,
+        rule: "naming".into(),
+        title: "A name that says something else".into(),
+        body: "The surrounding code calls this the other thing.".into(),
+        suggestion: None,
+        applicable: None,
+        late: false,
+        identity: None,
+        corroboration: 1,
     }
 }
