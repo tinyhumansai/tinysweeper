@@ -111,10 +111,7 @@ fn refuse(config: &AutoMerge, snapshot: &Snapshot) -> Option<Refusal> {
     // An empty allow list means "no label is required"; a non-empty one means
     // the pull request has to have been opted in by hand.
     if !config.allow_labels.is_empty()
-        && !pull_request
-            .labels
-            .iter()
-            .any(|label| config.allow_labels.contains(label))
+        && carries(&pull_request.labels, &config.allow_labels).is_none()
     {
         return Some(Refusal::MissingAllowLabel);
     }
