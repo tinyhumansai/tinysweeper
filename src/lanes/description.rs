@@ -167,9 +167,18 @@ impl Lane for Description {
                 Spend::default(),
             );
 
-            per_reviewer.push(anchored.findings.clone());
-            if first.is_none() {
+            let mut findings = anchored.findings.clone();
+            reviewer.clamp(&mut findings);
+            per_reviewer.push(findings);
+
+            // A capped reviewer yields the headline to any uncapped one,
+            // whatever the configured order: `style` is capped precisely
+            // because its subject is not what a check run should lead with,
+            // and this outcome's summary is the one line a human reads.
+            let capped = reviewer.ceiling.is_some();
+            if first.is_none() || (first_capped && !capped) {
                 first = Some(anchored);
+                first_capped = capped;
             }
         }
 
