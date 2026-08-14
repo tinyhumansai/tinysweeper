@@ -524,13 +524,13 @@ async fn a_subagent_that_looks_something_up_is_asked_again_with_the_result() {
         "findings": [],
         "questions": [{ "question": "Does the caller validate it?", "why": "decides it" }],
     }));
-    let calls = model.calls();
+    let recorder = model.clone();
     let corpus = corpus();
 
     let answers = ask_with_tools(model, &corpus).await;
 
     assert_eq!(answers.len(), 1);
-    let transcript = calls.lock().expect("calls");
+    let transcript = recorder.requests();
     let answered: Vec<&crate::ports::model::ModelRequest> = transcript
         .iter()
         .filter(|r| r.schema_name.ends_with("_subagent_answer"))
@@ -578,13 +578,12 @@ async fn the_tool_loop_is_bounded_even_when_the_subagent_never_stops_asking() {
         "findings": [],
         "questions": [{ "question": "q", "why": "w" }],
     }));
-    let calls = model.calls();
+    let recorder = model.clone();
 
     ask_with_tools(model, &AlwaysAsks).await;
 
-    let turns = calls
-        .lock()
-        .expect("calls")
+    let turns = recorder
+        .requests()
         .iter()
         .filter(|r| r.schema_name.ends_with("_subagent_answer"))
         .count();
@@ -605,12 +604,12 @@ async fn the_final_turn_is_not_offered_tools_it_cannot_use() {
         "findings": [],
         "questions": [{ "question": "q", "why": "w" }],
     }));
-    let calls = model.calls();
+    let recorder = model.clone();
     let corpus = corpus();
 
     ask_with_tools(model, &corpus).await;
 
-    let transcript = calls.lock().expect("calls");
+    let transcript = recorder.requests();
     let last = transcript
         .iter()
         .filter(|r| r.schema_name.ends_with("_subagent_answer"))
@@ -632,7 +631,7 @@ async fn no_corpus_means_no_tool_turns_at_all() {
         "findings": [],
         "questions": [{ "question": "q", "why": "w" }],
     }));
-    let calls = model.calls();
+    let recorder = model.clone();
 
     let llm = lane_llm(Arc::new(model), &config(), 100.0);
     ask_all(
@@ -646,9 +645,8 @@ async fn no_corpus_means_no_tool_turns_at_all() {
     .await
     .expect("the graph runs");
 
-    let turns = calls
-        .lock()
-        .expect("calls")
+    let turns = recorder
+        .requests()
         .iter()
         .filter(|r| r.schema_name.ends_with("_subagent_answer"))
         .count();
