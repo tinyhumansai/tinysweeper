@@ -220,11 +220,20 @@ async fn review_file(
         // The first reviewer's prose, taken whole. Blending N summaries would
         // author text no reviewer wrote, which is the objection `src/falsify`
         // raises to a filter that can return findings of its own.
-        if summary.is_empty() {
+        //
+        // A capped reviewer yields the headline to any uncapped one, whatever
+        // the configured order: `style` is capped precisely because its subject
+        // is not what a check run should lead with, and the summary is the one
+        // line a human actually reads.
+        let capped = reviewer.ceiling.is_some();
+        if summary.is_empty() || (summary_capped && !capped) {
             summary = asked.summary;
             resolved = asked.resolved;
+            summary_capped = capped;
         }
-        per_reviewer.push(asked.findings);
+        let mut findings = asked.findings;
+        reviewer.clamp(&mut findings);
+        per_reviewer.push(findings);
     }
 
     if per_reviewer.is_empty() {
