@@ -24,6 +24,30 @@ pub struct MockModel {
     requests: Arc<Mutex<Vec<ModelRequest>>>,
     usage: Usage,
     answers_as: Option<String>,
+    /// When set, the panel's own rounds are answered from their `schema_name`
+    /// rather than from the queue — see [`MockModel::panel`].
+    panel: Option<Arc<PanelAnswers>>,
+}
+
+/// Schema names that belong to a lane's own stages rather than to a panel
+/// round, and so must reach the response queue.
+const PANEL_STAGES: &[&str] = &["relocate", "falsify"];
+
+/// What a panel-aware mock answers each round with.
+#[derive(Debug)]
+struct PanelAnswers {
+    /// The lane response every proposing lens gives, when no `matching` entry
+    /// applies.
+    propose: Value,
+    /// Per-file responses, chosen by a substring of the prompt.
+    ///
+    /// A per-file lane runs one panel per file, and some tests are precisely
+    /// about one file behaving differently from another. With one canned
+    /// response that is not expressible, and with a queue it depends on the
+    /// panel's internal call order.
+    matching: Vec<(String, Value)>,
+    /// Whether every verifier confirms.
+    verdict: bool,
 }
 
 impl MockModel {
@@ -39,6 +63,7 @@ impl MockModel {
             requests: Arc::new(Mutex::new(vec![])),
             usage: Usage::default(),
             answers_as: None,
+            panel: None,
         }
         .repeating(value)
     }
@@ -46,6 +71,64 @@ impl MockModel {
     /// A model that reports no findings.
     pub fn silent() -> Self {
         Self::always(json!({"summary": "Nothing to report.", "findings": []}))
+    }
+
+    /// A model that answers a whole panel from one lane response.
+    ///
+    /// A panel is three rounds of differently-shaped calls, so a queue of
+    /// canned values makes a golden test depend on call *order* — which is the
+    /// panel's internal business and changes whenever a lens is added. This
+    /// dispatches on the schema each round asks for instead: every proposing
+    /// lens gets `response`, every verifier confirms, and every sub-agent
+    /// answers unhelpfully (a golden test asserting on filtering should not
+    /// also be asserting on what sub-agents said).
+    ///
+    /// The effect is that a golden test still reads "given a model that says
+    /// exactly this, the lane must post exactly that" — which is the property
+    /// these tests exist to pin.
+    pub fn panel(response: Value) -> Self {
+        Self {
+            panel: Some(Arc::new(PanelAnswers {
+                propose: response,
+                matching: Vec::new(),
+                verdict: true,
+            })),
+            ..Self::default()
+        }
+    }
+
+    /// A panel that answers each file differently.
+    ///
+    /// The first entry whose key appears anywhere in the request's messages
+    /// wins; `fallback` answers everything else. Written against the prompt
+    /// rather than call order because the panel's ordering is its own business.
+    pub fn panel_matching(matching: &[(&str, Value)], fallback: Value) -> Self {
+        Self {
+            panel: Some(Arc::new(PanelAnswers {
+                propose: fallback,
+                matching: matching
+                    .iter()
+                    .map(|(key, value)| ((*key).to_string(), value.clone()))
+                    .collect(),
+                verdict: true,
+            })),
+            ..Self::default()
+        }
+    }
+
+    /// A panel whose verifiers refute everything the lenses propose.
+    ///
+    /// The other half of the contract: proving a lane publishes nothing when
+    /// the verify round rejects it.
+    pub fn panel_refuting(response: Value) -> Self {
+        Self {
+            panel: Some(Arc::new(PanelAnswers {
+                propose: response,
+                matching: Vec::new(),
+                verdict: false,
+            })),
+            ..Self::default()
+        }
     }
 
     /// Queue one response. Responses are consumed in order.
@@ -124,6 +207,69 @@ impl Model for MockModel {
             .answers_as
             .clone()
             .unwrap_or_else(|| request.model.clone());
+        // A panel-aware mock answers the panel's own rounds from the round it
+        // recognises, and lets every other call fall through to the queue.
+        //
+        // The fall-through is what keeps the existing golden tests meaningful:
+        // relocation (`tinysweeper_relocate`) and falsification
+        // (`tinysweeper_falsify`) are not panel rounds, they are separate
+        // stages a lane drives itself, and a test that queues a canned
+        // relocation still needs that value to reach the positioner.
+        if let Some(answers) = self.panel.clone() {
+            let canned = if request.schema_name.ends_with("_verify") {
+                Some(json!({ "real": answers.verdict, "why": "canned" }))
+            } else if request.schema_name.ends_with("_subagent_answer") {
+                Some(json!({ "answer": "The evidence does not say.", "confident": false }))
+            } else if PANEL_STAGES
+                .iter()
+                .all(|stage| !request.schema_name.contains(stage))
+            {
+                let prompt = request
+                    .messages
+                    .iter()
+                    .map(|m| m.content.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                Some(
+                    answers
+                        .matching
+                        .iter()
+                        .find(|(key, _)| prompt.contains(key.as_str()))
+                        .map_or_else(|| answers.propose.clone(), |(_, value)| value.clone()),
+                )
+            } else {
+                // A lane stage (relocation, falsification). A queued response
+                // still wins — that is how a test says what the stage returns —
+                // but an *empty* queue must not become a provider error. A
+                // panel makes several times as many calls as the single one
+                // these tests were written against, and a test that queues one
+                // relocation should not have to know how many. The fallbacks
+                // are the inert answer for each stage: relocate nothing,
+                // falsify nothing.
+                self.responses
+                    .lock()
+                    .expect("mock model lock")
+                    .is_empty()
+                    .then(|| {
+                        if request.schema_name.contains("falsify") {
+                            json!({ "incorrect": [] })
+                        } else {
+                            json!({})
+                        }
+                    })
+            };
+
+            if let Some(value) = canned {
+                self.requests.lock().expect("mock model lock").push(request);
+                return Ok(ModelResponse {
+                    value,
+                    model,
+                    usage: self.usage,
+                });
+            }
+        }
+
         self.requests.lock().expect("mock model lock").push(request);
 
         let queued = {

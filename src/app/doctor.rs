@@ -10,7 +10,7 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::config::types::Config;
+use crate::config::types::{Config, LaneId};
 use crate::config::{self, Loaded};
 use crate::error::{Error, Result};
 
@@ -183,13 +183,71 @@ fn print_prose(loaded: &Loaded) {
     println!("  base url         {}", config.models.base_url);
     println!("  scan tier        {}", config.models.scan);
     println!("  deep tier        {}", config.models.deep);
-    println!("  budget per PR    ${:.2}", config.models.budget_usd_per_pr);
-    for lane in config.enabled_lanes() {
+    println!("  flash tier       {}", config.models.flash);
+    if !config.models.provider.is_empty() {
         println!(
-            "  {:<16} {}  (fails at {})",
+            "  provider         {}{}",
+            config.models.provider.order.join(", "),
+            if config.models.provider.allow_fallbacks {
+                "  (the gateway may route elsewhere)"
+            } else {
+                "  (pinned)"
+            }
+        );
+    }
+    println!("  budget per PR    ${:.2}", config.models.budget_usd_per_pr);
+
+    // The model a lane actually calls, which is the panel's tier — not
+    // `model_for`, which names the tier the lane *would* use for a single
+    // call. Reporting the latter is how this line came to describe a model no
+    // review had run on since the lanes became panels.
+    for lane in config.enabled_lanes() {
+        // `commits` resolves a reviewer like every other lane and then never
+        // calls it: its verdict is a regular expression's. Naming a model here
+        // would tell an operator they are paying for a lane that spends
+        // nothing, which is the opposite of what this line is for.
+        if lane == LaneId::Commits {
+            println!(
+                "  {:<16} no model call  (fails at {})",
+                lane.as_str(),
+                config.fail_on(lane)
+            );
+            continue;
+        }
+
+        let reviewers = crate::council::reviewers(config, lane);
+        let models: Vec<&str> = reviewers.iter().map(|r| r.model).collect();
+
+        println!(
+            "  {:<16} {}  ({} reviewer{}, fails at {})",
             lane.as_str(),
-            config.model_for(lane),
+            models.join(", "),
+            reviewers.len(),
+            if reviewers.len() == 1 { "" } else { "s" },
             config.fail_on(lane)
+        );
+    }
+
+    // Reasoning on the flash tier is the one configuration that makes the
+    // cheap tier cost more than the expensive one. Measured: a two-reviewer
+    // flash council on one pull request spent 134,704 output tokens over 11
+    // minutes at `medium`, against 940 tokens in 24 seconds at `off`, with one
+    // call hitting the ceiling and retrying. The key is global, so a council
+    // inherits whatever the deep tier wanted — which is why this is worth
+    // saying out loud here rather than leaving to whoever reads the bill.
+    let reasoning_on = !matches!(config.models.reasoning_effort.trim(), "off" | "");
+    let on_flash = config
+        .enabled_lanes()
+        .into_iter()
+        .flat_map(|lane| crate::council::reviewers(config, lane))
+        .any(|reviewer| reviewer.model == config.models.flash);
+
+    if reasoning_on && (on_flash || config.council.subagents) {
+        println!(
+            "  reasoning        `{}` on the flash tier — measured bimodal: it spends the whole \n\
+             \x20                 output budget thinking. Set `models.reasoning_effort = \"off\"` \n\
+             \x20                 for a council or sub-agent deployment.",
+            config.models.reasoning_effort
         );
     }
 
@@ -201,7 +259,14 @@ fn print_prose(loaded: &Loaded) {
         .enabled_lanes()
         .into_iter()
         .map(|lane| config.model_for(lane))
-        .chain([config.models.scan.as_str(), config.models.deep.as_str()])
+        .chain([
+            config.models.scan.as_str(),
+            config.models.deep.as_str(),
+            // The tier every panel actually runs on. Leaving it out meant the
+            // one model every review calls was the one model whose price was
+            // never checked.
+            config.models.flash.as_str(),
+        ])
         .chain(config.models.fallback.iter().map(String::as_str))
         .collect();
     let unpriced = crate::harness::pricing::unpriced(configured);

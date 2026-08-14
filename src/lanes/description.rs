@@ -16,14 +16,17 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::config::types::{LaneId, Severity};
+use crate::council;
 use crate::error::Result;
 use crate::evidence::diff::render as render_diffs;
 use crate::findings::types::Finding;
+use crate::flows::panel::Call;
+use crate::flows::runner;
 use crate::forge::types::PullRequest;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
-use crate::ports::model::{Message, Model, ModelRequest, Spend};
+use crate::ports::model::{Model, Spend};
 
 /// Bodies shorter than this are treated as no body at all.
 ///
@@ -90,34 +93,110 @@ impl Lane for Description {
             ..PromptInputs::new(LaneId::Description, input.config)
         });
 
-        let response = self
-            .model
-            .complete(ModelRequest {
-                model: input.config.model_for(LaneId::Description).to_string(),
-                messages: vec![
-                    Message::system(built.prefix()),
-                    Message::user(built.suffix()),
-                ],
-                schema: schema::json_schema(),
+        // Every reviewer at once, as one graph. With no council configured
+        // this is the single default reviewer on the lane's own model, so the
+        // shape of a solo run and a council run is one code path rather than
+        // two that drift.
+        let reviewers = council::reviewers(input.config, LaneId::Description);
+        let calls: Vec<Call> = reviewers
+            .iter()
+            .map(|reviewer| Call {
+                id: reviewer.id.to_string(),
+                model: reviewer.model.to_string(),
+                system: built.prefix().to_string(),
+                prompt: built.suffix().to_string(),
                 schema_name: "tinysweeper_description".into(),
-                max_tokens: input.config.models.max_tokens,
             })
-            .await?;
+            .collect();
 
-        // Taken before the value is moved out: the spend belongs to the model
-        // that answered, whether or not its answer parses.
-        let spend = Spend::of(&response);
-        let parsed = schema::parse(LaneId::Description, response.value)?;
-
-        // `Demote`, not `Strict`: a finding about the description has no line
-        // to sit on, and dropping every unanchored one would silence the lane.
-        let mut outcome = LaneOutcome::from_response(
-            LaneId::Description,
-            parsed,
-            input.diffs,
-            Anchoring::Demote,
-            spend,
+        let llm = runner::lane_llm(
+            self.model.clone(),
+            input.config,
+            input.config.models.budget_usd_per_pr,
         );
+        let answers = runner::ask_all(
+            llm.clone(),
+            LaneId::Description,
+            &calls,
+            &schema::json_schema(),
+            input
+                .config
+                .council
+                .subagents
+                .then_some(input.config.models.flash.as_str()),
+        )
+        .await?;
+
+        // Seeded from the capability after the calls return: it is the object
+        // every graph call passes through, and the only place their cost is
+        // counted.
+        let mut spend = Spend::default();
+        let mut per_reviewer: Vec<Vec<crate::findings::types::Finding>> = Vec::new();
+        let mut first: Option<LaneOutcome> = None;
+
+        for (reviewer, answer) in reviewers.iter().zip(&answers) {
+            let Some(value) = answer.value.clone() else {
+                tracing::warn!(
+                    agent = reviewer.id,
+                    err = answer.error.as_deref().unwrap_or("no answer"),
+                    "a council reviewer failed"
+                );
+                continue;
+            };
+
+            spend.note(&answer.model);
+
+            let parsed = match schema::parse(LaneId::Description, value) {
+                Ok(parsed) => parsed,
+                Err(err) if reviewers.len() > 1 => {
+                    tracing::warn!(agent = reviewer.id, %err, "a council reviewer failed");
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
+
+            // Anchored per reviewer, before merging. Anchoring resolves a
+            // quoted snippet against the diff and drops what it cannot place,
+            // and both are per-answer facts — merging first would lose the
+            // discard count and hand `council::merge` findings with no lines.
+            let anchored = LaneOutcome::from_response(
+                LaneId::Description,
+                parsed,
+                input.diffs,
+                Anchoring::Demote,
+                Spend::default(),
+            );
+
+            per_reviewer.push(anchored.findings.clone());
+            if first.is_none() {
+                first = Some(anchored);
+            }
+        }
+
+        spend.merge(llm.spend());
+
+        // Nothing was read. Without this the lane returns an empty *successful*
+        // review, and an unreviewed lane that reports Success is what branch
+        // protection approves — a live run against a real pull request is what
+        // surfaced it, with every reviewer 404ing and the check still green.
+        let Some(mut outcome) = first else {
+            return Ok(LaneOutcome {
+                summary: "No reviewer could be consulted.".into(),
+                spend,
+                skipped: Some(
+                    "No reviewer could be consulted; see the provider errors in the log.".into(),
+                ),
+                ..LaneOutcome::default()
+            });
+        };
+
+        // Agreement ranks, it never removes — see `src/council`.
+        outcome.findings = if input.config.council.corroboration {
+            council::merge(per_reviewer)
+        } else {
+            per_reviewer.into_iter().flatten().collect()
+        };
+        outcome.spend = spend;
 
         // A description mismatch is about the pull request text, never the
         // implementation. A model may quote a diff line as evidence, but

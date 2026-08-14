@@ -162,8 +162,14 @@ impl fmt::Display for Severity {
 pub struct ModelRef(pub String);
 
 impl ModelRef {
-    /// The two tier names that resolve against `[models]`.
-    pub const TIERS: [&'static str; 2] = ["scan", "deep"];
+    /// The tier names that resolve against `[models]`.
+    ///
+    /// `flash` is here because a council selects it: several reviewers on one
+    /// file only pay for themselves at a tier cheaper than the single call they
+    /// stand in for, and a name that `is_tier` did not recognise was passed
+    /// through as a literal model id — so `model = "flash"` reached the gateway
+    /// as the model `flash`, which exists nowhere.
+    pub const TIERS: [&'static str; 3] = ["scan", "deep", "flash"];
 
     /// Whether this reference names a tier rather than a raw model id.
     pub fn is_tier(&self) -> bool {
@@ -394,6 +400,41 @@ pub struct Labels {
     pub manual_only: String,
 }
 
+/// Which upstream providers the gateway may route a call to.
+///
+/// OpenRouter serves one model id from many providers at prices that differ by
+/// more than 4x, and it load-balances between them. Leaving that unpinned makes
+/// the cost line fiction: `harness::pricing` holds one price per model id, so a
+/// call served by a pricier provider is under-reported and
+/// `models.budget_usd_per_pr` stops bounding anything real.
+///
+/// Cache reads are the reason the *cheapest headline* provider is not
+/// automatically the right pin — see `defaults.toml`, where the choice is
+/// argued against measured numbers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProviderRouting {
+    /// Providers to try, in order, by their gateway-side name. Empty leaves
+    /// routing entirely to the gateway.
+    pub order: Vec<String>,
+    /// Whether the gateway may fall outside `order` when those providers are
+    /// unavailable.
+    ///
+    /// `false` is the setting that makes the pin a guarantee rather than a
+    /// preference: with it `true`, an outage silently reroutes to a provider
+    /// whose price is not the one being billed against the budget. The safety
+    /// net for a genuine outage is `models.fallback`, which switches *model*
+    /// and is priced accordingly.
+    pub allow_fallbacks: bool,
+}
+
+impl ProviderRouting {
+    /// Whether any pin is expressed at all.
+    pub fn is_empty(&self) -> bool {
+        self.order.iter().all(|p| p.trim().is_empty())
+    }
+}
+
 /// How a lane's structured answer is obtained from the model.
 ///
 /// Not a performance dial. It selects *who enforces the schema*, and the two
@@ -444,8 +485,17 @@ pub struct Models {
     pub scan: String,
     /// The expensive tier used for deep review.
     pub deep: String,
+    /// The tier a consensus panel runs on.
+    ///
+    /// Separate from `scan` because the two are cheap for different reasons and
+    /// move independently: `scan` is a mechanical single call, `flash` is one of
+    /// N concurrent opinions whose *aggregate* has to stay under the price of
+    /// the one `deep` call it replaces. See `flows::panel` for the arithmetic.
+    pub flash: String,
     /// Tried in order when the selected model fails.
     pub fallback: Vec<String>,
+    /// Which upstream providers the gateway may serve these models from.
+    pub provider: ProviderRouting,
     /// Cap on tokens generated per model call.
     ///
     /// Reasoning is billed against this same ceiling, so a thinking-heavy model
@@ -678,6 +728,19 @@ pub struct Council {
     /// Separate from `enabled` so the merge can be measured on its own before
     /// a second agent is what is being judged.
     pub corroboration: bool,
+    /// Let a reviewer ask the codebase a question instead of guessing.
+    ///
+    /// A reviewer may end its turn with questions; each is answered by a
+    /// sub-agent against the same evidence, and that reviewer is asked once
+    /// more with the answers. Exactly one follow-up turn, and only for
+    /// reviewers that asked — see `flows::subagent`.
+    ///
+    /// Independent of `enabled`: the solo reviewer a disabled council yields
+    /// asks questions too, which is what makes this measurable before a second
+    /// agent is also in play. It lives in `[council]` rather than `[review]`
+    /// because it spends the operator's money, and `[review]` is a section a
+    /// reviewed repository may override.
+    pub subagents: bool,
     /// The reviewers, in the order they run.
     pub agents: Vec<CouncilAgent>,
 }
@@ -1058,6 +1121,7 @@ impl Config {
         match agent.model.as_ref().map(|r| r.0.as_str()) {
             Some("deep") => &self.models.deep,
             Some("scan") => &self.models.scan,
+            Some("flash") => &self.models.flash,
             Some(explicit) => explicit,
             None => self.model_for(lane),
         }

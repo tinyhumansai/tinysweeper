@@ -102,13 +102,12 @@ const MODEL_PRICES: &[(&str, Price)] = &[
         },
     ),
     (
-        // Not selected, and **known to under-price**: left as-is deliberately.
-        // These are DeepSeek's own endpoint prices, but the floating alias is
-        // served by eighteen providers spanning $0.42-$1.74 per million input
-        // tokens and $0.0036-$0.33 per million cache reads, and the gateway
-        // picks among whichever the account permits. A deployment that selects
-        // this alias should re-derive the row from
-        // `/api/v1/models/deepseek/deepseek-v4-pro/endpoints` first.
+        // DeepSeek's own rates, which is what `[models.provider]` now pins.
+        // The note this replaces was right that the floating alias spans
+        // $0.42-$1.74 across eighteen providers and that one row could not
+        // describe it; pinning the provider is what makes a single row true
+        // again. Re-derive from `/api/v1/models/deepseek/<id>/endpoints` if the
+        // pin changes.
         "deepseek/deepseek-v4-pro",
         Price {
             input: 0.435,
@@ -117,11 +116,15 @@ const MODEL_PRICES: &[(&str, Price)] = &[
         },
     ),
     (
+        // The tier a council runs on, at DeepSeek's own rates to match the pin.
+        // Cache reads are a *fiftieth* of the input price here, which is the
+        // whole reason several reviewers cost about what one used to: the
+        // shared prompt prefix is paid for once.
         "deepseek/deepseek-v4-flash",
         Price {
             input: 0.14,
             output: 0.28,
-            cached: 0.028,
+            cached: 0.0028,
         },
     ),
     (

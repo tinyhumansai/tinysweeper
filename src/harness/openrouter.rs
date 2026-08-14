@@ -19,7 +19,7 @@ use tinyagents::{
     HarnessEventJournal, InMemoryEventJournal, JournalSink, LangfuseClient, LangfuseTraceConfig,
 };
 
-use crate::config::types::{Models, StructuredOutput};
+use crate::config::types::{Models, ProviderRouting, StructuredOutput};
 use crate::error::{Error, Result};
 use crate::harness::{pricing, schema};
 use crate::ports::model::{
@@ -35,6 +35,7 @@ pub struct GatewayModel {
     base_url: String,
     fallbacks: Vec<String>,
     reasoning_effort: String,
+    provider: ProviderRouting,
     structured_output: StructuredOutput,
     langfuse: Option<LangfuseClient>,
 }
@@ -44,6 +45,7 @@ impl std::fmt::Debug for GatewayModel {
         f.debug_struct("GatewayModel")
             .field("base_url", &self.base_url)
             .field("fallbacks", &self.fallbacks)
+            .field("provider", &self.provider)
             .field("api_key", &"<redacted>")
             .finish()
     }
@@ -61,6 +63,34 @@ fn reasoning_options(effort: &str) -> serde_json::Value {
     }
 }
 
+/// The `provider` routing block, or `Null` when unpinned.
+///
+/// OpenRouter reads this at the top level of the body to choose which upstream
+/// serves the call. Empty names are dropped rather than sent: an unmatchable
+/// name plus `allow_fallbacks = false` is a hard `404 No endpoints found` on
+/// every request the deployment makes — which is exactly how the first version
+/// of this shipped, and it took a live run against a real pull request to see
+/// it, because every unit test uses a mock that never routes.
+fn provider_pin(routing: &ProviderRouting) -> serde_json::Value {
+    if routing.is_empty() {
+        return serde_json::Value::Null;
+    }
+
+    let order: Vec<&str> = routing
+        .order
+        .iter()
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .collect();
+
+    json!({
+        "provider": {
+            "order": order,
+            "allow_fallbacks": routing.allow_fallbacks,
+        }
+    })
+}
+
 /// Everything sent alongside every request that the OpenAI wire format has no
 /// field for: the reasoning block, and the ask for real accounting.
 ///
@@ -69,9 +99,21 @@ fn reasoning_options(effort: &str) -> serde_json::Value {
 /// a hand-maintained rate table, and `models.budget_usd_per_pr` — a hard stop on
 /// a real bill — is then enforced against a guess that drifts every time a
 /// provider reprices. A gateway that does not know the field ignores it.
-fn provider_options(effort: &str) -> serde_json::Value {
+fn provider_options(effort: &str, routing: &ProviderRouting) -> serde_json::Value {
     let mut options = reasoning_options(effort);
     options["usage"] = json!({ "include": true });
+
+    // The pin is merged in rather than set separately: `reasoning`, `usage` and
+    // `provider` are all top-level body keys reaching the wire through one
+    // `with_default_provider_options` call, so writing them apart would drop
+    // whichever went second.
+    if let (Some(target), Some(pin)) = (options.as_object_mut(), provider_pin(routing).as_object())
+    {
+        for (key, value) in pin {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+
     options
 }
 
@@ -130,6 +172,7 @@ impl GatewayModel {
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
+            provider: models.provider.clone(),
             structured_output: models.structured_output,
             langfuse: langfuse_client(),
         })
@@ -178,7 +221,11 @@ impl GatewayModel {
             //
             // `models.reasoning_effort = "off"` restores the old behaviour for
             // a deployment that puts a thinking-heavy model back.
-            .with_default_provider_options(provider_options(&self.reasoning_effort))
+            //
+            // The `provider` pin rides in the same object; see
+            // [`provider_options`] for why they are merged rather than set
+            // separately.
+            .with_default_provider_options(provider_options(&self.reasoning_effort, &self.provider))
             // Identifies us to OpenRouter, which is how per-application usage
             // shows up separately in their dashboard.
             .with_header(
@@ -570,10 +617,69 @@ mod tests {
             api_key_env: "TINYSWEEPER_TEST_KEY_ABSENT".into(),
             scan: "a".into(),
             deep: "b".into(),
+            flash: "c".into(),
             fallback: vec![],
+            provider: ProviderRouting::default(),
             max_tokens: 100,
             budget_usd_per_pr: 1.0,
         }
+    }
+
+    fn pinned(order: &[&str], allow_fallbacks: bool) -> ProviderRouting {
+        ProviderRouting {
+            order: order.iter().map(|p| (*p).to_string()).collect(),
+            allow_fallbacks,
+        }
+    }
+
+    #[test]
+    fn an_unpinned_config_sends_no_provider_block() {
+        // Absence matters: sending `provider: {order: []}` is not the same as
+        // sending nothing, and the empty list is the shape that would pin the
+        // gateway to no provider at all.
+        let options = provider_options("high", &ProviderRouting::default());
+        assert!(options.get("provider").is_none());
+        assert_eq!(options["reasoning"]["effort"], json!("high"));
+    }
+
+    #[test]
+    fn the_pin_and_the_reasoning_block_both_survive_the_merge() {
+        // The regression this guards: both are top-level body keys set through
+        // one `with_default_provider_options` call, so building them
+        // separately silently drops whichever is written second.
+        let options = provider_options("high", &pinned(&["deepseek"], false));
+
+        assert_eq!(options["reasoning"]["effort"], json!("high"));
+        assert_eq!(options["provider"]["order"], json!(["deepseek"]));
+        assert_eq!(options["provider"]["allow_fallbacks"], json!(false));
+    }
+
+    #[test]
+    fn a_pin_survives_reasoning_being_turned_off() {
+        // `off` takes a different branch of `reasoning_options`, which returns a
+        // differently-shaped object. The pin has to ride along on both.
+        let options = provider_options("off", &pinned(&["deepseek"], false));
+
+        assert_eq!(options["reasoning"]["enabled"], json!(false));
+        assert_eq!(options["provider"]["order"], json!(["deepseek"]));
+    }
+
+    #[test]
+    fn blank_provider_names_are_dropped_rather_than_sent() {
+        // With `allow_fallbacks = false` an unmatchable name is not a cosmetic
+        // problem: it fails every request the deployment makes.
+        let options = provider_options("high", &pinned(&["", "  ", "deepseek"], false));
+        assert_eq!(options["provider"]["order"], json!(["deepseek"]));
+    }
+
+    #[test]
+    fn a_routing_block_of_only_blanks_counts_as_unpinned() {
+        assert!(pinned(&["", "   "], false).is_empty());
+        assert!(
+            provider_options("high", &pinned(&[""], false))
+                .get("provider")
+                .is_none()
+        );
     }
 
     fn request(max_tokens: u32) -> ModelRequest {
@@ -658,7 +764,7 @@ mod tests {
     fn every_request_asks_the_gateway_for_the_cost_it_charged() {
         // Without this the only cost figure in the whole system is the rate
         // table's estimate, and `budget_usd_per_pr` stops a real bill on it.
-        let options = provider_options("high");
+        let options = provider_options("high", &ProviderRouting::default());
         assert_eq!(options["usage"], json!({ "include": true }));
         // The reasoning block is still there: the two travel in one object and
         // an overwrite would silently un-configure `reasoning_effort`.
@@ -729,6 +835,7 @@ mod tests {
             api_key: "sk-secret-value".into(),
             base_url: "https://openrouter.ai/api/v1".into(),
             fallbacks: vec![],
+            provider: ProviderRouting::default(),
             langfuse: None,
         };
         let rendered = format!("{model:?}");
@@ -785,6 +892,7 @@ mod tests {
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
+            provider: models.provider.clone(),
             structured_output: models.structured_output,
             langfuse: None,
         };

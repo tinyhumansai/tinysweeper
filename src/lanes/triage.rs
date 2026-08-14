@@ -16,10 +16,12 @@
 //! - **Ordering** is free to be aggressive, because it can only change *when* a
 //!   file is reviewed, never *whether*. A file whose added lines reach a
 //!   dangerous sink, or whose path names an authorisation boundary, goes first.
-//!   That matters because `fanout::per_file_with_budget` spends the budget in
-//!   order: when a pull request is large enough to exhaust it, the budget
-//!   should have bought the riskiest files rather than the alphabetically
-//!   luckiest ones.
+//!   That matters because the budget is spent in this order: when a pull
+//!   request is large enough to exhaust it, the budget should have bought the
+//!   riskiest files rather than the alphabetically luckiest ones. The ceiling
+//!   itself now lives in `flows::caps::ModelCapability`, which refuses a call
+//!   once it is reached however many are in flight — so ordering still decides
+//!   what gets bought, but no longer has to be enforced by reviewing serially.
 //!
 //! The sink list is a *priority* signal only. It never suppresses a review, so
 //! a vulnerability in a shape nobody listed here is still reviewed — later.

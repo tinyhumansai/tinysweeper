@@ -42,11 +42,13 @@ use crate::evidence::diff::FileDiff;
 use crate::evidence::replay;
 use crate::falsify::{Falsifier, Rejection};
 use crate::findings::types::Finding;
+use crate::flows::panel::Call;
+use crate::flows::runner;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema::{self, RawFinding};
-use crate::lanes::fanout::{FileReview, per_file_with_budget};
+use crate::lanes::fanout::{FileReview, per_file};
 use crate::lanes::{Lane, LaneInput, LaneOutcome};
-use crate::ports::model::{Message, Model, ModelRequest, Spend};
+use crate::ports::model::{Model, Spend};
 use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
 
 /// The correctness lane.
@@ -95,8 +97,19 @@ impl Lane for Critique {
         let paths: Vec<String> = fresh.iter().map(|diff| diff.path.clone()).collect();
 
         let changed_paths = input.changed_paths();
-        let outcome = per_file_with_budget(&paths, input.config.models.budget_usd_per_pr, |path| {
-            let model = self.model.clone();
+        // One capability for the whole lane, so the pull-request budget is
+        // enforced across every file and every reviewer at once. That is what
+        // lets the files run concurrently: this lane reviewed them one at a
+        // time only because spend is known after a call returns, and there was
+        // nowhere else to check it.
+        let llm = runner::lane_llm(
+            self.model.clone(),
+            input.config,
+            input.config.models.budget_usd_per_pr,
+        );
+
+        let outcome = per_file(&paths, |path| {
+            let llm = llm.clone();
             let input = &input;
             let changed_paths = &changed_paths;
             async move {
@@ -105,12 +118,18 @@ impl Lane for Critique {
                     .iter()
                     .find(|d| d.path == path)
                     .expect("the path came from the diff list");
-                review_file(model.as_ref(), input, changed_paths, diff).await
+                review_file(llm, input, changed_paths, diff).await
             }
         })
         .await;
 
-        Ok(outcome.into_outcome())
+        // The graph's own calls are tallied inside the capability, which is the
+        // only object every one of them passes through. Folded in once here
+        // rather than per file: `llm` is shared across the fan-out, so adding
+        // it per file would multiply the bill by the file count.
+        let mut outcome = outcome.into_outcome();
+        outcome.spend.merge(llm.spend());
+        Ok(outcome)
     }
 }
 
@@ -123,7 +142,7 @@ impl Lane for Critique {
 /// is nothing to filter, so the number of falsify calls is the number of files
 /// that actually produced a finding.
 async fn review_file(
-    model: &dyn Model,
+    llm: std::sync::Arc<crate::flows::caps::ModelCapability>,
     input: &LaneInput<'_>,
     changed_paths: &[String],
     diff: &FileDiff,
@@ -132,6 +151,35 @@ async fn review_file(
     let evidence = replay::render(std::slice::from_ref(diff));
     let reviewers = council::reviewers(config, LaneId::Critique);
 
+    // Every reviewer at once, as one graph. `ask_all` returns one answer per
+    // reviewer in the order asked, and reports a reviewer it could not reach
+    // rather than failing the council for it.
+    let calls: Vec<Call> = reviewers
+        .iter()
+        .map(|reviewer| {
+            let built = build_prompt(input, changed_paths, diff, &evidence, reviewer);
+            Call {
+                id: reviewer.id.to_string(),
+                model: reviewer.model.to_string(),
+                system: built.prefix().to_string(),
+                prompt: built.suffix().to_string(),
+                schema_name: "tinysweeper_critique".into(),
+            }
+        })
+        .collect();
+
+    let answers = runner::ask_all(
+        llm.clone(),
+        LaneId::Critique,
+        &calls,
+        &schema::json_schema(),
+        config
+            .council
+            .subagents
+            .then_some(config.models.flash.as_str()),
+    )
+    .await?;
+
     let mut spend = Spend::default();
     let mut per_reviewer: Vec<Vec<Finding>> = Vec::with_capacity(reviewers.len());
     let mut summary = String::new();
@@ -139,12 +187,25 @@ async fn review_file(
     let mut unanchored = 0usize;
     let mut discarded = 0usize;
 
-    for reviewer in &reviewers {
-        // One reviewer's failure is not the lane's. With a council configured,
-        // losing one angle should cost that angle and nothing else — the same
-        // rule `lanes::fanout` applies to a file that could not be reviewed.
-        let asked = ask(model, input, changed_paths, diff, &evidence, reviewer).await;
-        let asked = match asked {
+    for (reviewer, answer) in reviewers.iter().zip(&answers) {
+        let Some(value) = answer.value.clone() else {
+            // One reviewer's failure is not the lane's. With a council
+            // configured, losing one angle should cost that angle and nothing
+            // else — the same rule `lanes::fanout` applies to a file.
+            tracing::warn!(
+                agent = reviewer.id,
+                err = answer.error.as_deref().unwrap_or("no answer"),
+                "a council reviewer failed"
+            );
+            continue;
+        };
+
+        spend.note(&answer.model);
+
+        // One reviewer answering off-schema is that reviewer lost, not the
+        // file. With a solo council there is nothing else, so it is fatal —
+        // which is what `per_reviewer.is_empty()` below turns it into.
+        let asked = match place(llm.clone(), input, diff, &evidence, value).await {
             Ok(asked) => asked,
             Err(err) if reviewers.len() > 1 => {
                 tracing::warn!(agent = reviewer.id, %err, "a council reviewer failed");
@@ -185,7 +246,7 @@ async fn review_file(
     // Step 5, once over the merged set rather than once per reviewer. The
     // filter can only reject, so more inputs in one pass is identical semantics
     // at a fraction of the calls.
-    let filtered = Falsifier::new(model, config)
+    let filtered = Falsifier::new(llm.model().as_ref(), config)
         .filter(LaneId::Critique, findings, &evidence)
         .await;
     spend.merge(filtered.spend);
@@ -214,18 +275,21 @@ struct Asked {
     discarded: usize,
 }
 
-/// Ask one reviewer about one file, and place what it said.
-async fn ask(
-    model: &dyn Model,
-    input: &LaneInput<'_>,
-    changed_paths: &[String],
-    diff: &FileDiff,
-    evidence: &str,
+/// Build one reviewer's prompt for one file.
+///
+/// Split from [`place`] so every reviewer's prompt is assembled before any call
+/// is made: the graph asks them all at once, and a builder that ran inside the
+/// call would serialise them again.
+fn build_prompt<'a>(
+    input: &'a LaneInput<'_>,
+    changed_paths: &'a [String],
+    diff: &'a FileDiff,
+    evidence: &'a str,
     reviewer: &council::Reviewer<'_>,
-) -> Result<Asked> {
+) -> prompt::Prompt {
     let config: &Config = input.config;
 
-    let built = prompt::build(&PromptInputs {
+    prompt::build(&PromptInputs {
         repo_policy: input.repo_policy,
         extracted_rules: input.extracted_rules,
         prior_findings: input.prior_findings,
@@ -240,29 +304,26 @@ async fn ask(
         persona: reviewer.persona,
         retrieved_context: input.retrieved_context,
         ..PromptInputs::new(LaneId::Critique, config)
-    });
+    })
+}
 
-    // The prefix goes in the system message and the suffix in the user
-    // message. Providers cache on the serialised prefix, and a system
-    // message is the one part guaranteed to be sent first.
-    let response = model
-        .complete(ModelRequest {
-            model: reviewer.model.to_string(),
-            messages: vec![
-                Message::system(built.prefix()),
-                Message::user(built.suffix()),
-            ],
-            schema: schema::json_schema(),
-            schema_name: "tinysweeper_critique".into(),
-            max_tokens: config.models.max_tokens,
-        })
-        .await?;
+/// Place what one reviewer said against the file it reviewed.
+async fn place(
+    llm: std::sync::Arc<crate::flows::caps::ModelCapability>,
+    input: &LaneInput<'_>,
+    diff: &FileDiff,
+    evidence: &str,
+    value: serde_json::Value,
+) -> Result<Asked> {
+    let config: &Config = input.config;
 
-    // Taken before the value is moved out: the spend belongs to the model
-    // that answered, whether or not its answer parses.
-    let mut spend = Spend::of(&response);
-    let parsed = schema::parse(LaneId::Critique, response.value)?;
+    // The call's own cost is already tallied inside the capability; what is
+    // counted here is only what *placement* adds, which is a relocation call
+    // per finding the quote could not anchor.
+    let mut spend = Spend::default();
+    let parsed = schema::parse(LaneId::Critique, value)?;
 
+    let model = llm.model().as_ref();
     let positioner = Positioner::new(model, config);
     let mut findings = Vec::new();
     let mut unanchored = 0usize;

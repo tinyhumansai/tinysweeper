@@ -109,6 +109,19 @@ api_key_env = "OPENROUTER_API_KEY"
 # input tokens per security-lane call was where the bill actually came from.
 scan = "deepseek/deepseek-v4-pro-0813"
 deep = "deepseek/deepseek-v4-pro-0813"
+# The tier a council of reviewers runs on, when one is configured.
+#
+# Separate from `scan` because the two are cheap for different reasons: `scan`
+# is one mechanical call, `flash` is one of N concurrent opinions whose
+# *aggregate* has to stay under the price of the single `deep` call it stands
+# in for. Blended against the ~80% prompt-cache hit this prompt layout achieves,
+# and on the same pinned DeepSeek endpoint as the tiers above, flash costs
+# $0.030/M where the pro snapshot costs $0.090/M — so three reviewers cost
+# roughly what one did.
+#
+# Same `json_object` caveat as everything else in this block: the flash endpoint
+# refuses a strict schema request exactly as the pro snapshot does.
+flash = "deepseek/deepseek-v4-flash"
 # Tried in order when the selected model fails. Both were measured against the
 # reasoning setting below and both answer a strict JSON schema cleanly; a
 # previous entry did not, and refused every request with "Reasoning is
@@ -171,15 +184,58 @@ max_tokens = 16000
 # model thinks a bit and answers a bit; either reasoning fits and the answer is
 # whole, or reasoning takes everything and the content is empty.
 #
-# `high` is kept because `max_tokens` above is now 16000, which cleared it in
-# production — no structured-output failure and no fallback in the hours after
-# the deploy. 16000 itself was never measured; the table brackets it with the
-# ceiling that fails (8000) and the one that stays safe (32000), where
-# `deepseek-v4-pro` spent 8152 of the allowance on reasoning before it
-# answered. A harder prompt is one step from the same cliff. If this starts
-# failing again, `off` is the fix that is *proven* rather than the one that
-# buys room, and it costs 13 findings against 23.
-reasoning_effort = "high"
+# `-0813` has now been through the sweep the paragraph above asked for, and it
+# changes the answer. Measured end to end on one real pull request
+# (tinyhumansai/openhuman#5523, one file, +47/-31), same config, only this key
+# moved:
+#
+#   effort   wall clock   cost      output tokens   worst call's reasoning
+#   high      17m 10s     $0.0506       73416        40522, hit the ceiling
+#   medium     3m 19s     $0.0189       15007         4229, no retry
+#
+# So `medium` is 5x faster and 2.7x cheaper on identical evidence, and the
+# `high` run had to retry a call that came back `finish_reason = length` with
+# nothing in it — the exact failure this whole block exists to document,
+# reproduced in production rather than in a sweep.
+#
+# It also contradicts, for this model, the bimodal claim above. That claim was
+# measured on `z-ai/glm-5.2` and the older floating alias, where `low` burned
+# the entire allowance exactly as `high` did. On `-0813` the dial is gradual:
+# the five `medium` calls spent 4229, 3121, 739, 2206 and 3856 reasoning tokens
+# against a 16000 ceiling, none of them close to it. The earlier conclusion
+# still holds for the models it was measured on; it does not generalise to this
+# one, which is why the rows above are kept rather than replaced.
+#
+# `off` remains the setting that is *proven* rather than merely roomy, and it
+# costs findings — 13 against 23 on the model that was measured that way. The
+# reason not to reach for it here is that `medium` never came close to the
+# ceiling on a real review, where `high` went over it.
+#
+# ## `flash` is bimodal where `-0813` is gradual, and this key is global
+#
+# Everything above is about the tier `scan`/`deep` name. `models.flash` — the
+# tier a council and its sub-agents run on — behaves like the *original* table,
+# not like `-0813`, and this key cannot be set per tier. Measured on one pull
+# request (openhuman#5521, two files), same council of two flash reviewers with
+# `council.subagents` on, only this key moved:
+#
+#   effort   wall clock   cost      output tokens   worst call
+#   medium    11m 11s     $0.0267      134704       48000 reasoning, finish=length
+#   off          24s      $0.0031         940          34-185 tokens, no retry
+#
+# 143x the output tokens for 28x the wall clock. Three of the flash calls spent
+# 33853, 41273 and 48000 tokens reasoning; the last hit the ceiling and had to
+# be retried. At `off` the same calls answered in 34 to 185 tokens. There is no
+# middle setting on this model — it is the cliff the paragraphs above describe,
+# and `-0813` not having it does not generalise.
+#
+# So a council or sub-agent deployment on `flash` wants `reasoning_effort =
+# "off"`, and pays for that in findings: the run above reported one finding at
+# `medium` and none at `off`. That is one sample and not a measurement of
+# quality. What it does establish is that leaving this at `medium` makes the
+# cheap tier cost more than the expensive one, which is the entire reason the
+# tier exists. `tinysweeper doctor` warns when the two are configured together.
+reasoning_effort = "medium"
 # Who enforces the response schema, and the reason the model above is usable at
 # all.
 #
@@ -208,6 +264,38 @@ reasoning_effort = "high"
 structured_output = "json_object"
 budget_usd_per_pr = 1.0
 
+# Pin the upstream provider, so the price this repository records is the price
+# it is charged.
+#
+# OpenRouter serves a floating model id from ~18 providers at prices spanning 4x
+# and load-balances between them, while `harness::pricing` holds one price per
+# model id. Unpinned, the cost line describes whichever provider answered and
+# `budget_usd_per_pr` stops bounding a real bill. `scan`/`deep` above are
+# already single-provider by virtue of the dated snapshot; `flash` is not, and
+# is the tier a council multiplies.
+#
+# `deepseek` is both the cheapest endpoint and — see `structured_output` below —
+# the reason this deployment is on `json_object` at all. Pinning it is only
+# viable *because* of that setting: measured against the live API, the DeepSeek
+# endpoint refuses a strict-schema request, so a deployment that pins this
+# provider while asking for `schema` gets `404 No endpoints found` on every
+# call, for every model. That combination was shipped once and every lane went
+# neutral against a real pull request before anything caught it, which is why
+# the two keys are documented together.
+#
+# `allow_fallbacks = false` makes the pin a guarantee rather than a preference;
+# `models.fallback` is the safety net, and it switches model rather than
+# provider. Note this is a *routing* pin and does not fix an account whose
+# allowed-providers list excludes DeepSeek — that failure is the one the `scan`
+# comment above describes, and it is fixed at openrouter.ai/settings/privacy.
+#
+# This table must stay *below* every scalar key in `[models]`: a TOML sub-table
+# ends the parent table, so anything written after it is parsed as a key of
+# `models.provider` instead.
+[models.provider]
+order = ["deepseek"]
+allow_fallbacks = false
+
 # Several reviewers on one lane's evidence, folded into one review.
 #
 # Off, and off is the honest default: a second reviewer doubles the calls for
@@ -221,6 +309,15 @@ budget_usd_per_pr = 1.0
 # is what is being judged.
 [council]
 enabled = false
+# Let a reviewer ask the codebase a question instead of guessing, and answer it
+# with a sub-agent before the reviewer's final turn.
+#
+# Off, for the same reason the council is: it costs calls the operator pays for.
+# The cost is bounded and shaped — a reviewer with no questions costs exactly
+# one call as before, and one that asks costs at most three cheap sub-agent
+# calls plus one more turn. Nothing here can remove a finding; it exists to stop
+# a reviewer hedging when the answer was one question away.
+subagents = false
 corroboration = true
 agents = []
 

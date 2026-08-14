@@ -27,15 +27,18 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::config::types::LaneId;
+use crate::council;
 use crate::error::Result;
 use crate::evidence::diff::{FileDiff, render as render_diffs};
 use crate::findings::types::Finding;
+use crate::flows::panel::Call;
+use crate::flows::runner;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
-use crate::lanes::fanout::{FileReview, per_file_with_budget};
+use crate::lanes::fanout::{FileReview, per_file};
 use crate::lanes::triage::triage;
 use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
-use crate::ports::model::{Message, Model, ModelRequest, Spend};
+use crate::ports::model::{Model, Spend};
 use crate::scan::types::{Finding as ScanFinding, ScanKind};
 
 /// The scanner findings this lane owns.
@@ -119,40 +122,49 @@ impl Lane for Security {
             )));
         }
 
-        let outcome = per_file_with_budget(
-            &triaged.review,
+        // One capability for the whole lane, so the pull-request budget holds
+        // across every file and every reviewer at once — which is what lets the
+        // files run concurrently rather than one at a time.
+        let llm = runner::lane_llm(
+            self.model.clone(),
+            input.config,
             input.config.models.budget_usd_per_pr,
-            |path| {
-                let model = self.model.clone();
-                let config = input.config;
-                let repo_policy = input.repo_policy;
-                let extracted_rules = input.extracted_rules;
-                let prior_findings = input.prior_findings;
-                let retrieved_context = input.retrieved_context;
-                let diffs = input.diffs;
-                let scanner = &scanner;
-                async move {
-                    let diff = diffs
-                        .iter()
-                        .find(|d| d.path == path)
-                        .expect("the path came from the diff list");
-                    review_file(
-                        model.as_ref(),
-                        config,
-                        repo_policy,
-                        extracted_rules,
-                        prior_findings,
-                        retrieved_context,
-                        diff,
-                        scanner,
-                    )
-                    .await
-                }
-            },
-        )
+        );
+
+        let outcome = per_file(&triaged.review, |path| {
+            let llm = llm.clone();
+            let config = input.config;
+            let repo_policy = input.repo_policy;
+            let extracted_rules = input.extracted_rules;
+            let prior_findings = input.prior_findings;
+            let retrieved_context = input.retrieved_context;
+            let diffs = input.diffs;
+            let scanner = &scanner;
+            async move {
+                let diff = diffs
+                    .iter()
+                    .find(|d| d.path == path)
+                    .expect("the path came from the diff list");
+                review_file(
+                    llm,
+                    config,
+                    repo_policy,
+                    extracted_rules,
+                    prior_findings,
+                    retrieved_context,
+                    diff,
+                    scanner,
+                )
+                .await
+            }
+        })
         .await;
 
         let mut outcome = outcome.into_outcome();
+        // Tallied inside the capability, which every graph call passes through.
+        // Folded in once rather than per file: `llm` is shared across the
+        // fan-out, so per-file would multiply the bill by the file count.
+        outcome.spend.merge(llm.spend());
         outcome.summary.push_str(&skip_note(&triaged.skipped));
         merge_scanner_findings(&mut outcome, &scanner);
         Ok(outcome)
@@ -167,7 +179,7 @@ impl Lane for Security {
 // ones to the wrong half of the prompt.
 #[allow(clippy::too_many_arguments)]
 async fn review_file(
-    model: &dyn Model,
+    llm: std::sync::Arc<crate::flows::caps::ModelCapability>,
     config: &crate::config::types::Config,
     repo_policy: Option<&str>,
     extracted_rules: &[String],
@@ -190,32 +202,95 @@ async fn review_file(
         ..PromptInputs::new(LaneId::Security, config)
     });
 
-    let response = model
-        .complete(ModelRequest {
-            model: config.model_for(LaneId::Security).to_string(),
-            messages: vec![
-                Message::system(built.prefix()),
-                Message::user(built.suffix()),
-            ],
-            schema: schema::json_schema(),
+    // Every reviewer at once, as one graph. With no council configured this is
+    // the single default reviewer on the lane's own model, so a solo run and a
+    // council run are one code path.
+    let reviewers = council::reviewers(config, LaneId::Security);
+    let calls: Vec<Call> = reviewers
+        .iter()
+        .map(|reviewer| Call {
+            id: reviewer.id.to_string(),
+            model: reviewer.model.to_string(),
+            system: built.prefix().to_string(),
+            prompt: built.suffix().to_string(),
             schema_name: "tinysweeper_security".into(),
-            max_tokens: config.models.max_tokens,
         })
-        .await?;
+        .collect();
 
-    let spend = Spend::of(&response);
-    let parsed = schema::parse(LaneId::Security, response.value)?;
-    let outcome = LaneOutcome::from_response(
+    let answers = runner::ask_all(
+        llm.clone(),
         LaneId::Security,
-        parsed,
-        std::slice::from_ref(diff),
-        Anchoring::Strict,
-        spend,
-    );
+        &calls,
+        &schema::json_schema(),
+        config
+            .council
+            .subagents
+            .then_some(config.models.flash.as_str()),
+    )
+    .await?;
+
+    let mut spend = Spend::default();
+    let mut per_reviewer: Vec<Vec<crate::findings::types::Finding>> = Vec::new();
+    let mut first: Option<LaneOutcome> = None;
+
+    for (reviewer, answer) in reviewers.iter().zip(&answers) {
+        let Some(value) = answer.value.clone() else {
+            tracing::warn!(
+                agent = reviewer.id,
+                err = answer.error.as_deref().unwrap_or("no answer"),
+                "a council reviewer failed"
+            );
+            continue;
+        };
+
+        spend.note(&answer.model);
+
+        let parsed = match schema::parse(LaneId::Security, value) {
+            Ok(parsed) => parsed,
+            Err(err) if reviewers.len() > 1 => {
+                tracing::warn!(agent = reviewer.id, %err, "a council reviewer failed");
+                continue;
+            }
+            Err(err) => return Err(err),
+        };
+
+        // Anchored per reviewer, before merging: anchoring resolves a quoted
+        // snippet against this file's diff and drops what it cannot place, and
+        // both are per-answer facts.
+        let anchored = LaneOutcome::from_response(
+            LaneId::Security,
+            parsed,
+            std::slice::from_ref(diff),
+            Anchoring::Strict,
+            Spend::default(),
+        );
+
+        per_reviewer.push(anchored.findings.clone());
+        if first.is_none() {
+            first = Some(anchored);
+        }
+    }
+
+    // A file whose every reviewer failed is a file nobody read. Failing here is
+    // what puts it in the fan-out's failure list, where the summary names it —
+    // the alternative is an unreviewed file that reads as clean.
+    let Some(outcome) = first else {
+        return Err(crate::error::Error::lane(
+            LaneId::Security.as_str(),
+            format!("no reviewer could review {}", diff.path),
+        ));
+    };
+
+    // Agreement ranks, it never removes — see `src/council`.
+    let merged = if config.council.corroboration {
+        council::merge(per_reviewer)
+    } else {
+        per_reviewer.into_iter().flatten().collect()
+    };
 
     Ok(FileReview {
         summary: outcome.summary,
-        findings: outcome.findings,
+        findings: merged,
         resolved: outcome.resolved,
         spend: outcome.spend,
     })
