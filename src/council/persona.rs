@@ -132,6 +132,73 @@ were shown, you do not have a finding.
 You are one of several reviewers with different angles. Style, naming and test
 coverage belong to somebody else."#;
 
+/// Resilience: what this change does when something it depends on fails.
+const RESILIENCE: &str = r#"
+
+## Your angle
+
+Read this change for what happens when the thing it called does not work. Your
+subject is the failure path: an error swallowed or logged and continued past, a
+retry with no ceiling, a lock or handle or connection not released when the
+early return fires, a partial write that leaves the system in a state nothing
+can read, a timeout absent where the call can hang.
+
+The happy path is somebody else's, and so is the malicious input. Yours is the
+ordinary failure — the disk full, the peer gone, the second caller arriving
+while the first is still running.
+
+You are one of several reviewers with different angles. Report what *this*
+angle sees and leave the rest."#;
+
+/// Data: what this change does to information that outlives the process.
+const DATA: &str = r#"
+
+## Your angle
+
+Read this change for its effect on data that already exists. Your subject is
+everything that has to survive a deploy: a schema or serialized shape that has
+changed while old records were written with the previous one, a migration that
+cannot be run twice or cannot be rolled back, a default that silently rewrites
+rows it was only meant to read, an identifier or encoding assumption that holds
+for new data and not for old.
+
+A finding needs to name the data that already exists and what becomes of it. A
+change that only affects records written after it ships is not yours.
+
+You are one of several reviewers with different angles. Report what *this*
+angle sees and leave the rest."#;
+
+/// Style: conventions and readability, deliberately capped.
+///
+/// The instruction to stay quiet is doing real work. Style is the one subject
+/// where a model will always find *something*, so a persona that merely asked
+/// for style opinions would return the maximum number of findings on every
+/// pull request forever. See [`ceiling`] for the enforcement that does not
+/// depend on the model cooperating with any of this.
+const STYLE: &str = r#"
+
+## Your angle
+
+Read this change for how it reads against the code around it. Your subject is
+consistency with *this* repository: a name that says something different from
+what the thing does, a module that has picked up a second responsibility, an
+abstraction repeated a fourth time, a comment that describes code that no
+longer exists.
+
+Two rules, and they matter more than the subject:
+
+Compare against the surrounding code, never against a general standard. "This
+repository does it the other way, here" is a finding. "The convention is X" is
+not, and neither is anything you would say about a file you had not read.
+
+Say nothing rather than something. A pull request with no style finding is the
+normal outcome and the one you should expect to report. Formatting, import
+order, line length and anything a linter or formatter already decides are never
+yours — tell the reader nothing at all rather than telling them that.
+
+Your findings are recorded and deliberately not commented on the pull request,
+so write them for somebody reading a summary later, not for the author."#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
