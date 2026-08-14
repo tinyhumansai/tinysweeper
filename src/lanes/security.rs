@@ -514,6 +514,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_lane_reports_which_model_actually_answered() {
+        // The cost line names the models that answered, and a provider fallback
+        // taking over is exactly the case worth surfacing — it is invisible by
+        // the time findings are merged. This lane dropped its accumulated tally
+        // on the floor and reported none, while every other lane reported
+        // theirs, so nothing downstream looked wrong.
+        let model = MockModel::silent().answering_as("vendor/fallback-took-over");
+        let outcome = run_with(model, &config(), &diffs(), &[]).await;
+
+        assert!(
+            outcome.spend.models.contains(&"vendor/fallback-took-over".to_string()),
+            "the lane reported no model attribution: {:?}",
+            outcome.spend.models
+        );
+    }
+
+    #[tokio::test]
     async fn a_scanner_finding_is_republished_even_when_the_model_says_nothing() {
         let outcome = run_with(
             MockModel::silent(),
