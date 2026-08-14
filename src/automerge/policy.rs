@@ -104,11 +104,7 @@ fn refuse(config: &AutoMerge, snapshot: &Snapshot) -> Option<Refusal> {
         return Some(Refusal::Draft);
     }
 
-    if let Some(label) = pull_request
-        .labels
-        .iter()
-        .find(|label| config.block_labels.contains(label))
-    {
+    if let Some(label) = carries(&pull_request.labels, &config.block_labels) {
         return Some(Refusal::BlockedLabel(label.clone()));
     }
 
