@@ -133,6 +133,9 @@ impl Lane for Description {
         let mut spend = Spend::default();
         let mut per_reviewer: Vec<Vec<crate::findings::types::Finding>> = Vec::new();
         let mut first: Option<LaneOutcome> = None;
+        // Whether `first` came from a reviewer whose findings are capped, and
+        // may therefore still be replaced by an uncapped reviewer's prose.
+        let mut first_capped = false;
 
         for (reviewer, answer) in reviewers.iter().zip(&answers) {
             let Some(value) = answer.value.clone() else {
