@@ -183,6 +183,9 @@ async fn review_file(
     let mut spend = Spend::default();
     let mut per_reviewer: Vec<Vec<Finding>> = Vec::with_capacity(reviewers.len());
     let mut summary = String::new();
+    // Whether `summary` currently comes from a reviewer whose findings are
+    // capped, and may therefore still be replaced by an uncapped reviewer's.
+    let mut summary_capped = false;
     let mut resolved: Vec<String> = Vec::new();
     let mut unanchored = 0usize;
     let mut discarded = 0usize;
