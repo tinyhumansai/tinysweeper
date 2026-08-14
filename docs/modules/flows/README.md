@@ -73,6 +73,17 @@ answers in hand. What it says on that turn is what counts.
                      └─ sub-agent: q3 ─┘
 ```
 
+This makes a reviewer *find more* — the same direction `council` argues for a
+second reviewer, and the opposite of asking whether the first was right.
+Nothing here can remove a finding.
+
+Cost is shaped rather than merely capped:
+
+- A reviewer with **no questions costs exactly one call**, as before.
+- One that asks costs at most three cheap sub-agent calls plus one more turn.
+- If **every** sub-agent fails, there is no second turn — re-asking with no new
+  evidence is the same turn at full price.
+
 ### Sub-agents have tools, and loop
 
 Each sub-agent may call `read_file` or `search` over the tree at the revision
@@ -124,17 +135,6 @@ false conclusion about the branch under review. `Corpus::search` returns
 `Ok(None)` — *cannot search* — which is deliberately not the same value as
 `Ok(Some(vec![]))`, *searched and found nothing*. The two support opposite
 conclusions.
-
-This makes a reviewer *find more* — the same direction `council` argues for a
-second reviewer, and the opposite of asking whether the first was right.
-Nothing here can remove a finding.
-
-Cost is shaped rather than merely capped:
-
-- A reviewer with **no questions costs exactly one call**, as before.
-- One that asks costs at most three cheap sub-agent calls plus one more turn.
-- If **every** sub-agent fails, there is no second turn — re-asking with no new
-  evidence is the same turn at full price.
 
 ### The depth bound is structural, not a counter
 
