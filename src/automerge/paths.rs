@@ -43,3 +43,24 @@ pub fn logins_match(configured: &str, login: &str) -> bool {
 fn bare(login: &str) -> &str {
     login.strip_suffix("[bot]").unwrap_or(login)
 }
+
+/// The first label in `carried` that `configured` names, if any.
+///
+/// Trimmed and case-insensitive, because that is how GitHub itself treats a
+/// label name: a repository cannot hold both `automerge` and `AutoMerge`, so
+/// the two are one label wearing two spellings. Comparing them exactly is a
+/// bug in the dangerous direction — a `Do-Not-Merge` veto read against a
+/// configured `do-not-merge` looks *absent*, and the gate merges straight past
+/// a human's stop sign. `issues::labels` has always compared this way; the gate
+/// did not, which meant one label name meant two different things depending on
+/// which half of the bot was reading it.
+///
+/// Returns the label as the pull request spells it, not as the config does, so
+/// a refusal quotes what a maintainer will actually see on the pull request.
+pub fn carries<'a>(carried: &'a [String], configured: &[String]) -> Option<&'a String> {
+    carried.iter().find(|label| {
+        configured
+            .iter()
+            .any(|name| name.trim().eq_ignore_ascii_case(label.trim()))
+    })
+}
