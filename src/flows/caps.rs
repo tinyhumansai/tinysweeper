@@ -461,6 +461,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_calls_cannot_all_pass_a_check_none_of_them_has_paid_for() {
+        // The race the reservation exists for. Every call reads *completed*
+        // spend, and nothing completes until the calls return, so with a
+        // check-only design all eight see zero, all eight pass, and the budget
+        // is blown by eight calls before the first one records anything.
+        //
+        // A slow model is what makes the window wide enough to be certain: with
+        // an instant mock the first call can finish before the second starts,
+        // and the test would pass against the very bug it is written for.
+        let model = SlowModel::default();
+        let calls = model.started.clone();
+        let capability = Arc::new(
+            ModelCapability::new(Arc::new(model), models()).with_budget(0.10),
+        );
+
+        let mut running = tokio::task::JoinSet::new();
+        for _ in 0..8 {
+            let capability = capability.clone();
+            running.spawn(async move { capability.complete(request("vendor/deep"), None).await });
+        }
+
+        let mut allowed = 0usize;
+        while let Some(result) = running.join_next().await {
+            if result.expect("task").is_ok() {
+                allowed += 1;
+            }
+        }
+
+        assert!(allowed >= 1, "every call was refused; the budget is unusable");
+        assert!(
+            allowed < 8,
+            "all 8 concurrent calls passed a budget none of them had paid for"
+        );
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            allowed,
+            "a refused call still reached the provider"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_call_gives_its_reservation_back() {
+        // A reservation that leaked on the error path would refuse every later
+        // call for budget nobody spent — a lane that goes quiet after one
+        // provider blip, reporting an exhausted budget that was never used.
+        let capability = ModelCapability::new(
+            Arc::new(MockModel::new().then_error("provider exploded")),
+            models(),
+        )
+        .with_budget(1.0);
+
+        assert!(
+            capability
+                .complete(request("vendor/deep"), None)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            *capability.reserved.lock().expect("lock"),
+            0.0,
+            "the failed call kept its reservation"
+        );
+    }
+
+    /// A model that takes long enough for concurrent calls to overlap.
+    #[derive(Debug, Default)]
+    struct SlowModel {
+        started: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Model for SlowModel {
+        async fn complete(
+            &self,
+            request: ModelRequest,
+        ) -> crate::error::Result<crate::ports::model::ModelResponse> {
+            self.started
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+
+            Ok(crate::ports::model::ModelResponse {
+                value: json!({ "summary": "ok" }),
+                model: request.model,
+                usage: Usage {
+                    cost_usd: 0.05,
+                    ..Usage::default()
+                },
+            })
+        }
+    }
+
+    #[tokio::test]
     async fn a_call_is_refused_once_the_ceiling_is_reached() {
         // The safety property that used to be bought by reviewing files one at
         // a time. It lives here now, which is what let the fan-out become
