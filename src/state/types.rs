@@ -1,6 +1,10 @@
 //! What one pull request's last review left behind.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
+
+use crate::config::types::Severity;
 
 /// The state of the most recent review of a pull request.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +29,18 @@ pub struct ReviewedState {
     pub fingerprints: Vec<String>,
     /// Titles of the findings still standing, for prompt layer 4.
     pub titles: Vec<String>,
+    /// The severity each of those titles was reported at.
+    ///
+    /// Carried so a re-review reports an unchanged finding at the level it
+    /// already has. Without it severity is re-decided from nothing on every
+    /// push, and one concern drifts through medium, high and critical while the
+    /// code it is about sits still.
+    ///
+    /// `default` because it was added after the first states were written, and
+    /// a state that predates it must still deserialize — an empty map means
+    /// "nothing to pin", which is exactly the old behaviour.
+    #[serde(default)]
+    pub severities: BTreeMap<String, Severity>,
 }
 
 /// The key a pull request's state is stored under.
@@ -51,9 +67,24 @@ mod tests {
             evidence: "--- a.rs\n@@ -1 +1 @@\n    1 +x\n".into(),
             fingerprints: vec!["0123456789abcdef".into()],
             titles: vec!["Guard the index".into()],
+            severities: BTreeMap::from([("Guard the index".to_string(), Severity::High)]),
         };
         let encoded = serde_json::to_string(&state).expect("serialises");
         let decoded: ReviewedState = serde_json::from_str(&encoded).expect("deserialises");
         assert_eq!(decoded, state);
+    }
+
+    #[test]
+    fn a_state_written_before_severities_existed_still_loads() {
+        // The field arrived after states were already in the store, and a TTL
+        // measured in days means old records outlive the deploy that adds it. A
+        // record that failed to deserialize would be discarded silently and the
+        // pull request re-reviewed from scratch — more expensive, and it would
+        // lose exactly the continuity the field was added to keep.
+        let old =
+            r#"{"head_sha":"abc123","evidence":"","fingerprints":[],"titles":["Guard the index"]}"#;
+        let decoded: ReviewedState = serde_json::from_str(old).expect("deserialises");
+        assert!(decoded.severities.is_empty());
+        assert_eq!(decoded.titles, vec!["Guard the index".to_string()]);
     }
 }

@@ -197,7 +197,8 @@ pub fn json_schema() -> Value {
                         },
                         "severity": {
                             "type": "string",
-                            "enum": ["low", "medium", "high", "critical"]
+                            "enum": ["low", "medium", "high", "critical"],
+                            "description": "How much it matters, by the rubric in the instructions. Decide it from the consequence, not from how confident you are — `confidence` already carries that. The same defect must get the same level every time it is reported, including on a re-review where nothing about it has changed."
                         },
                         "confidence": {
                             "type": "number",

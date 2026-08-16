@@ -89,13 +89,19 @@ fn overlapping_ranges_corroborate_even_when_the_starts_differ() {
 }
 
 #[test]
-fn two_unplaceable_findings_on_one_file_corroborate() {
-    // Both were demoted to the check-run summary. Posting two unplaceable
-    // findings about one file is the worst version of this noise: a reader
-    // cannot even tell them apart by line.
-    let a = finding("src/a.rs", None, "x");
-    let b = finding("src/a.rs", None, "y");
-    assert!(corroborates(&a, &b));
+fn two_unplaceable_findings_on_one_file_corroborate_only_on_the_same_rule() {
+    // Both were demoted to the check-run summary, so there is no line to
+    // compare and the rule id is the only evidence left. Same rule is a repeat;
+    // different rules are two defects that happen to share a file, and merging
+    // those throws one away. `.github/workflows/eval.yml` on `tinysweeper#86`
+    // produced exactly that: an unpinned `dtolnay/rust-toolchain` and an
+    // unpinned `Swatinem/rust-cache`, both real, both unplaceable.
+    let unpinned_toolchain = finding(".github/workflows/eval.yml", None, "unpinned-action");
+    let also_unpinned_toolchain = finding(".github/workflows/eval.yml", None, "unpinned-action");
+    assert!(corroborates(&unpinned_toolchain, &also_unpinned_toolchain));
+
+    let unpinned_cache = finding(".github/workflows/eval.yml", None, "mutable-action-tag");
+    assert!(!corroborates(&unpinned_toolchain, &unpinned_cache));
 }
 
 #[test]
