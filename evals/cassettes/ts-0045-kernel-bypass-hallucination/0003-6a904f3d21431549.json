@@ -1,0 +1,17 @@
+{
+  "key": "6a904f3d21431549",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3380,
+    "output_tokens": 1935,
+    "cached_tokens": 640,
+    "embed_tokens": 0,
+    "cost_usd": 0.00287767
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a TOML section enabling OpenRouter embeddings with provider, model, dimensions, and API key environment variable. It is syntactically valid and consistent with the surrounding configuration; no issues found in this file."
+  }
+}
