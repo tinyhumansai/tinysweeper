@@ -1,0 +1,28 @@
+{
+  "key": "86efd049e0b944eb",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3663,
+    "output_tokens": 5259,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.006168735
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "When `rfind(' ')` returns `None`, the code appends an ellipsis to the full `limit`-character `head`, producing a result of `limit + 1` characters. This violates the documented contract (\"at most `limit` characters\") and may exceed downstream limits (e.g., GitHub check-run titles). The fix removes one character from `head` before appending the ellipsis, except when `limit` is 0, where an empty string should be returned.",
+        "confidence": 0.95,
+        "existing_code": "    let head: String = text.chars().take(limit).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),\n    }",
+        "path": "src/findings/summarise.rs",
+        "rule": "off-by-one",
+        "severity": "medium",
+        "suggestion": "    let head: String = text.chars().take(limit).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => {\n            let mut head = head;\n            if head.is_empty() {\n                String::new()\n            } else {\n                head.pop();\n                format!(\"{head}…\")\n            }\n        }\n    }",
+        "title": "Respect the character limit when no space is found"
+      }
+    ],
+    "summary": "The change adds `shorten` and `first_sentence` utilities with tests, but `shorten` can return a string one character longer than the requested limit when the truncated prefix contains no space."
+  }
+}

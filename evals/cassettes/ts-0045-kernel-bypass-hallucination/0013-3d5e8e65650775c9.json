@@ -1,0 +1,17 @@
+{
+  "key": "3d5e8e65650775c9",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2824,
+    "output_tokens": 508,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0016704
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a new submodule `summarise` to the findings module. No security-sensitive code is introduced in this file; the change is safe to merge."
+  }
+}
