@@ -1,0 +1,17 @@
+{
+  "key": "de8143183d9a6731",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2891,
+    "output_tokens": 746,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.001740957
+  },
+  "value": {
+    "findings": [],
+    "summary": "The diff adds documentation comments to `max_tokens` and introduces a new public field `reasoning_effort` with documentation. No code logic is changed, and the new field does not introduce a security vulnerability."
+  }
+}

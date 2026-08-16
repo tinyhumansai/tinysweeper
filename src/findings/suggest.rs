@@ -18,13 +18,19 @@
 //! ## The comment range is the replaced range
 //!
 //! GitHub replaces exactly the lines the comment is anchored to — not the lines
-//! the model quoted, and not the lines the prose talks about. A comment
-//! anchored to one line carrying a five-line suggestion deletes the other four
-//! lines of the block it was about. So a suggestion is only emitted with an
-//! explicit `start_line..line` span, and only when that whole span is in the
-//! diff: GitHub rejects a review comment anchored outside the diff, and it
-//! rejects the *entire review*, so one over-reaching range would drop every
-//! other comment with it.
+//! the prose talks about, and not the lines the replacement was written for.
+//! The anchor comes from `existing_code`, which the model is asked to keep to
+//! the smallest span that shows the problem; the replacement is whatever it
+//! thinks the fix is. Those are two different spans, and only the first one
+//! reaches GitHub.
+//!
+//! So the whole span has to be in the diff — GitHub rejects a comment anchored
+//! outside it, and rejects the *entire review* with it, so one over-reaching
+//! range would drop every other comment too — and a replacement covering more
+//! lines than the anchor does is refused outright. Anchored to two lines, a
+//! five-line replacement does not overwrite the block it was about: it is
+//! inserted in place of those two and the other three survive underneath it,
+//! leaving code that has the fix and the bug in it at once.
 //!
 //! ## Indentation has to be put back
 //!
@@ -65,6 +71,27 @@ pub fn applicable(finding: &Finding, diffs: &[FileDiff]) -> Option<Suggestion> {
     }
 
     let (start, end) = finding.range()?;
+
+    // A replacement longer than the span it is anchored to is the one wrong
+    // block GitHub accepts without complaint, and it is the shape the schema
+    // makes easy to produce: `existing_code` is quoted as the *smallest span
+    // that shows the problem* while the replacement is written for the whole
+    // construct the problem lives in. Quote two lines of a block, rewrite all
+    // five, and the button replaces those two — inserting the rewrite above the
+    // remaining three, which stay exactly where they were.
+    //
+    // The comparison is against the whole anchor rather than just the
+    // single-line case: a two-line anchor carrying a three-line replacement
+    // strands one line the same way, and only the arithmetic differs.
+    //
+    // The two spans disagree and nothing in the reply says which one was meant,
+    // so there is nothing to infer. Widening the anchor to fit the replacement
+    // would be a guess about code the model never quoted, so the block is
+    // refused and the replacement survives as the inert fence in the summary.
+    if replacement.lines().count() > (start..=end).count() {
+        return None;
+    }
+
     let diff = diffs.iter().find(|d| d.path == finding.path)?;
 
     // Every line of the span, in order, as it exists in the head revision.

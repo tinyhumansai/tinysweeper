@@ -29,6 +29,36 @@ priority from the review's own worst finding and emits that one label.
 `no_severity_label_is_ever_planned` fails if a `severity:` label is ever planned
 again — a run that emitted one would re-create labels `--prune` has deleted.
 
+## The facet is wider than the vocabulary
+
+`labels::is_priority` is what triage may *apply* — the four current names.
+`labels::in_priority_facet` is what a new priority *replaces* — anything spelled
+`priority:`. Those two sets stop being equal the moment a name is retired, and
+keeping them equal was a live bug: `openhuman` and `backend` still carry an
+older axis (`priority: critical | high | medium | low`) on 539 items between
+them, from before the p0–p3 scale. Matching only the current four meant an item
+took `priority: p2` and kept `priority: high` beside it — two labels in one
+facet, disagreeing, forever, because nothing in the add-only planner could ever
+retire the older one.
+
+Widening what `supersede` removes must not widen what triage may add. Asking for
+`priority: high` is still refused as "not a label triage may apply", and
+`a_retired_priority_spelling_is_never_added` is the test that holds that line.
+
+## One facet, one owner
+
+A label facet needs exactly one writer. CodeRabbit also applies labels on these
+repositories, and with `reviews.labeling_instructions` empty it picks names
+"based on prior PR patterns" — which is to say it learned `priority: pN` and
+`severity: low` from tinysweeper's own history and started writing them back.
+Two bots owning one facet is not two opinions; it is a ping-pong, and every
+round is an add and a remove on somebody's timeline.
+
+The fix is upstream of this repository: turn off `auto_apply_labels` in the
+CodeRabbit organisation settings (it defaults to `false`; ours is on), or set
+`reviews.auto_apply_labels: false` in a `.coderabbit.yaml`. Nothing in this
+module can resolve it, because the other writer is not reading this policy.
+
 ## Nothing here duplicates a native field
 
 Bug, Feature and Task are **GitHub issue types**, set on the issue itself, so

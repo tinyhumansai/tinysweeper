@@ -61,7 +61,7 @@ jobs:
       name: production
       url: ${{ vars.TINYSWEEPER_SERVER_URL }}
     steps:
-      - uses: azure/setup-kubectl@v4
+      - uses: azure/setup-kubectl@v5
 
       - name: Roll the workload
         env:

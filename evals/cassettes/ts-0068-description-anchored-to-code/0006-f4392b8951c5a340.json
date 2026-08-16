@@ -1,0 +1,17 @@
+{
+  "key": "f4392b8951c5a340",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3351,
+    "output_tokens": 4767,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.005439327
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change swaps the default scan/deep/fallback model selections and adds a `reasoning_effort` setting. The TOML is syntactically valid and consistent with the surrounding config; no issues found in this file."
+  }
+}

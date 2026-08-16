@@ -1,0 +1,38 @@
+{
+  "key": "6a2e2ad299636656",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 7140,
+    "output_tokens": 6833,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.008884962
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The test titled `the_configured_effort_reaches_the_gateway` never constructs a harness or inspects the provider options it sends. It copies the field into a new `GatewayModel` and calls `reasoning_options` directly, which is exactly what the isolated tests above already cover. If `harness` stopped applying `reasoning_effort` — the failure this test exists to catch — the assertion would still pass. Call `gateway.harness(...)` and assert the resulting provider options contain the configured reasoning block, or move the options assembly into a seam that `harness` is known to use.",
+        "confidence": 0.9,
+        "existing_code": "        let gateway = GatewayModel {\n            api_key: \"unused\".into(),\n            base_url: models.base_url.clone(),\n            fallbacks: models.fallback.clone(),\n            reasoning_effort: models.reasoning_effort.clone(),\n        };\n\n        assert_eq!(\n            reasoning_options(&gateway.reasoning_effort),\n            json!({ \"reasoning\": { \"enabled\": false } })\n        );",
+        "path": "src/harness/openrouter.rs",
+        "rule": "test-does-not-exercise-behaviour",
+        "severity": "medium",
+        "suggestion": null,
+        "title": "Make the wired-effort test exercise harness construction"
+      },
+      {
+        "body": "`the_new_deep_tier_costs_what_the_table_says` computes the cost for the literal `\"z-ai/glm-5.2\"` rather than the model actually named by `config.models.deep`. The test's premise is that the selected deep tier is cheap, but if `defaults.toml` later points `deep` at an already-priced expensive model (e.g. the `qwen` row), the `every_model_the_defaults_select_has_a_price` test still passes and this test keeps checking the old model, so the cost regression would be silent. Parse the defaults in this test and use `config.models.deep` as the model argument.",
+        "confidence": 0.7,
+        "existing_code": "        let cost = completion_cost(\"z-ai/glm-5.2\", 82_914, 0, 842);\n\n        assert!(\n            (0.005..0.007).contains(&cost),\n            \"expected roughly $0.006 for the 83k-token security call, got {cost:.5}\"\n        );",
+        "path": "src/harness/pricing.rs",
+        "rule": "test-does-not-exercise-behaviour",
+        "severity": "medium",
+        "suggestion": null,
+        "title": "Pin the deep-tier cost test to the selected model"
+      }
+    ],
+    "summary": "The change adds configurable reasoning effort and new model pricing with tests, but two tests do not protect the behaviour they claim to, so the PR is not fully covered."
+  }
+}

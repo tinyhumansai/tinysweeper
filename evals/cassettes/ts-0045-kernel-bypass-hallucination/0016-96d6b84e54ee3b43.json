@@ -1,0 +1,17 @@
+{
+  "key": "96d6b84e54ee3b43",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2943,
+    "output_tokens": 1048,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.002191965
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds configuration for embeddings retrieval using an API key from the environment; no security issues introduced."
+  }
+}
