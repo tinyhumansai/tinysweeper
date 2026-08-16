@@ -81,7 +81,11 @@ fn a_finding_on_a_file_with_no_diff_produces_no_block() {
 /// body it was meant to replace, leaving the file with both copies.
 #[test]
 fn a_multi_line_replacement_on_a_single_line_anchor_produces_no_block() {
-    let f = finding(Some(3), None, Some("if n > 0 {\n    eprintln!(\"{n}\");\n}"));
+    let f = finding(
+        Some(3),
+        None,
+        Some("if n > 0 {\n    eprintln!(\"{n}\");\n}"),
+    );
     assert!(applicable(&f, &diffs()).is_none());
 }
 
