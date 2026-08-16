@@ -207,7 +207,7 @@ pub fn json_schema() -> Value {
                         },
                         "suggestion": {
                             "type": ["string", "null"],
-                            "description": "Replacement text for the anchored lines, if you have one."
+                            "description": "The fixed code, written out in full, that replaces `existing_code` line for line — not a description of the fix and not a diff. It is committed verbatim over exactly the lines you quoted, so it must cover all of them and nothing beyond them: if the fix needs a line you did not quote, widen `existing_code` to include it. Keep the indentation of the surrounding code. Omit it when the fix is a judgement call or spans more than the code you anchored to; a fix explained in `body` is fine, a wrong one-click commit is not."
                         },
                         "late": {
                             "type": "boolean",

@@ -74,6 +74,38 @@ fn a_finding_on_a_file_with_no_diff_produces_no_block() {
     assert!(applicable(&f, &diffs()).is_none());
 }
 
+/// Observed on tinyflows#52: the model quoted one line of a let-chain — the
+/// smallest span that showed the MSRV problem, exactly as asked — and wrote a
+/// replacement for the whole block it opened. Anchored to that one line, the
+/// button would have inserted the rewritten block above the `errors.push(…)`
+/// body it was meant to replace, leaving the file with both copies.
+#[test]
+fn a_multi_line_replacement_on_a_single_line_anchor_produces_no_block() {
+    let f = finding(Some(3), None, Some("if n > 0 {\n    eprintln!(\"{n}\");\n}"));
+    assert!(applicable(&f, &diffs()).is_none());
+}
+
+/// The same replacement is fine once the anchor covers what it rewrites — the
+/// refusal is about the two spans disagreeing, not about size.
+#[test]
+fn the_same_replacement_is_allowed_once_the_anchor_covers_it() {
+    let f = finding(
+        Some(3),
+        Some(5),
+        Some("if n > 0 {\n    eprintln!(\"{n}\");\n}"),
+    );
+    assert!(applicable(&f, &diffs()).is_some());
+}
+
+/// A replacement narrower than its anchor is a deliberate collapse — the span
+/// the model quoted is the span that goes away, so there is no ambiguity.
+#[test]
+fn a_replacement_narrower_than_its_anchor_is_kept() {
+    let f = finding(Some(3), Some(5), Some("done();"));
+    let out = applicable(&f, &diffs()).expect("a block");
+    assert_eq!((out.start_line, out.end_line), (3, 5));
+}
+
 #[test]
 fn a_single_line_replacement_spans_exactly_that_line() {
     let f = finding(Some(6), None, Some("finish();"));
