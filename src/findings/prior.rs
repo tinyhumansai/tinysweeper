@@ -71,6 +71,20 @@ pub struct PostedAnchor {
     pub line: Option<u64>,
     /// The first line, when the comment spans a range.
     pub start_line: Option<u64>,
+    /// The title it was posted under, when the body has the renderer's shape.
+    ///
+    /// The content guard. Position alone says two findings are in the same
+    /// place, which is not the same as saying they are the same finding — two
+    /// defects three lines apart in one function would be one repeat and one
+    /// deletion. `None` disables the anchor for this comment entirely: a body we
+    /// cannot read a title out of is not evidence about anything.
+    ///
+    /// The title rather than the `rule`, on the evidence. The four repeats of
+    /// one concern on `tinysweeper#86` carried the rules `untrusted-repo-rules`,
+    /// `Pin third-party actions to a commit SHA`, and twice nothing at all,
+    /// while the title was identical every time. Keying on the rule would leave
+    /// the fallback catching nothing in the exact case it exists for.
+    pub title: Option<String>,
 }
 
 /// Everything an earlier cycle left behind on the pull request.
@@ -114,26 +128,38 @@ impl PriorReview {
 
     /// Whether an earlier comment already sits where this finding anchors.
     ///
-    /// The same rule [`corroborates`](crate::council::agree::corroborates) uses
-    /// for one defect seen by two reviewers, applied across pushes instead of
-    /// across agents: same lane, same file, anchors within
-    /// [`LINE_TOLERANCE`]. It is deliberately the *second* thing dedupe asks —
-    /// a fingerprint match is conclusive and this is not, so it only ever
-    /// catches what the fingerprint missed.
+    /// Same lane, same file, same title, anchors within [`LINE_TOLERANCE`] —
+    /// the positional half of the rule
+    /// [`corroborates`](crate::council::agree::corroborates) uses for one defect
+    /// seen by two reviewers, applied across pushes instead of across agents,
+    /// with a content guard on top.
     ///
-    /// An unplaceable finding never matches. Two findings on one file that
-    /// GitHub could not put on a line are frequently two different problems —
-    /// `.github/workflows/eval.yml` produced exactly that pair — and suppressing
-    /// on no positional evidence deletes one of them.
+    /// It is deliberately the *second* thing dedupe asks. A fingerprint match is
+    /// conclusive and this is not, so it only ever catches what the fingerprint
+    /// missed.
+    ///
+    /// Every clause here is a way of refusing to suppress on thin evidence,
+    /// which is the same principle `council::agree` applies to two unplaceable
+    /// findings on one file:
+    ///
+    /// - **The title must match.** Position says two findings are in the same
+    ///   place; it does not say they are the same finding. Two defects three
+    ///   lines apart in one function would otherwise be one repeat and one
+    ///   silent deletion — and a deleted finding can flip a verdict.
+    /// - **Both must be placed.** An unplaceable finding never matches, because
+    ///   `.github/workflows/eval.yml` readily produces two different unplaceable
+    ///   problems and there is no positional evidence to tell them apart.
+    /// - **The lane must match**, and a comment whose lane or title we cannot
+    ///   read matches nothing rather than everything.
     pub fn covers_anchor(&self, finding: &Finding) -> bool {
         let Some((start, end)) = finding.range() else {
             return false;
         };
         self.anchors.iter().any(|anchor| {
-            if anchor.path != finding.path {
+            if anchor.path != finding.path || anchor.lane != Some(finding.lane) {
                 return false;
             }
-            if anchor.lane != Some(finding.lane) {
+            if anchor.title.as_deref() != Some(finding.title.as_str()) {
                 return false;
             }
             let Some(anchor_end) = anchor.line else {
@@ -200,6 +226,7 @@ pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<Pr
                 path: comment.path.clone(),
                 line: comment.line,
                 start_line: comment.start_line,
+                title: title_in(&comment.body),
             });
 
             // A repeated fingerprint is normal — the same finding across two
@@ -582,22 +609,72 @@ mod tests {
         .await;
 
         let mut moved = finding(LaneId::Tests, "src/main.rs", Some(42));
+        moved.title = "Track cost from failed cases".into();
         moved.identity = Some("aaaaaaaaaaaaaaaa".into());
         assert!(
             prior.covers_anchor(&moved),
             "two lines from a comment we already posted is the same finding"
         );
 
-        let far_away = finding(LaneId::Tests, "src/main.rs", Some(400));
+        let mut far_away = moved.clone();
+        far_away.line = Some(400);
         assert!(!prior.covers_anchor(&far_away));
 
-        let other_file = finding(LaneId::Tests, "src/other.rs", Some(42));
+        let mut other_file = moved.clone();
+        other_file.path = "src/other.rs".into();
         assert!(!prior.covers_anchor(&other_file));
 
         // A different lane looking at the same line is a different reviewer
         // with a different job, not a repeat.
-        let other_lane = finding(LaneId::Security, "src/main.rs", Some(42));
+        let mut other_lane = moved.clone();
+        other_lane.lane = LaneId::Security;
         assert!(!prior.covers_anchor(&other_lane));
+    }
+
+    #[tokio::test]
+    async fn a_different_finding_on_a_nearby_line_is_not_suppressed() {
+        // Position says two findings are in the same place. It does not say they
+        // are the same finding, and two defects a few lines apart in one
+        // function are ordinary. Suppressing on proximity alone would post the
+        // first and silently delete the second — and a deleted finding can flip
+        // a verdict, which is the failure this whole branch is about.
+        let prior = load_from(vec![rendered(
+            Severity::Medium,
+            LaneId::Critique,
+            "Guard the index before dereferencing",
+            "0123456789abcdef",
+        )])
+        .await;
+
+        let mut neighbour = finding(LaneId::Critique, "src/main.rs", Some(41));
+        neighbour.title = "Close the file handle on the error path".into();
+        assert!(
+            !prior.covers_anchor(&neighbour),
+            "a different defect one line away was deleted as a duplicate"
+        );
+
+        // The same title one line away is the repeat this exists to catch.
+        let mut repeat = neighbour.clone();
+        repeat.title = "Guard the index before dereferencing".into();
+        assert!(prior.covers_anchor(&repeat));
+    }
+
+    #[tokio::test]
+    async fn a_comment_with_no_readable_title_anchors_nothing() {
+        // Fails towards repeating ourselves rather than towards deleting a
+        // finding: a body we cannot parse is not evidence about anything.
+        let mut unreadable = rendered(
+            Severity::Medium,
+            LaneId::Critique,
+            "Guard the index before dereferencing",
+            "0123456789abcdef",
+        );
+        unreadable.body = "no bold run here <!-- tinysweeper:fp=0123456789abcdef -->".into();
+        let prior = load_from(vec![unreadable]).await;
+
+        let mut anything = finding(LaneId::Critique, "src/main.rs", Some(40));
+        anything.title = "Guard the index before dereferencing".into();
+        assert!(!prior.covers_anchor(&anything));
     }
 
     #[tokio::test]

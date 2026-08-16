@@ -63,13 +63,26 @@ at lines 146, then 145 and 171, under three fingerprints. Dedupe did exactly wha
 it was written to do and never fired.
 
 So `already_posted` asks a third question after the two fingerprint checks: is
-there already one of our comments in the same lane, on the same file, within
-three lines — the rule `council::agree` uses for one defect seen by two
-reviewers, applied across pushes instead of across agents. It is asked last
-because it is weaker evidence, it needs both findings placed on a line (no
-positional evidence means no suppression), and it reads anchors off the live pull
-request rather than the store, so a comment a maintainer deleted stops
-suppressing anything.
+there already one of our comments in the same lane, on the same file, **under the
+same title**, within three lines. It is asked last because it is weaker evidence
+than a fingerprint.
+
+The title is the content guard, and it is not optional. Position says two
+findings are in the same place; it does not say they are the same finding, and
+two defects a few lines apart in one function are ordinary. Without the guard the
+second is silently deleted — and a deleted finding can flip a verdict, which is
+the failure this whole mechanism exists to prevent.
+
+The title rather than the `rule`, on the evidence: the four repeats of one
+concern on `tinysweeper#86` carried the rules `untrusted-repo-rules`, `Pin
+third-party actions to a commit SHA`, and twice nothing at all, while the title
+was identical every time. Keying on the rule would leave the fallback catching
+nothing in the exact case it exists for.
+
+The remaining clauses are the same refusal to act on thin evidence: both findings
+must be placed on a line, a comment whose lane or title cannot be read anchors
+nothing rather than everything, and anchors are read off the live pull request
+rather than the store, so a comment a maintainer deleted stops suppressing.
 
 ## Suppression cannot unblock a merge
 
