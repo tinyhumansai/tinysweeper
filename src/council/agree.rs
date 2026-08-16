@@ -74,7 +74,19 @@ pub fn corroborates(a: &Finding, b: &Finding) -> bool {
         // which is exactly why it is not consulted anywhere a line number
         // exists; on this branch it is the difference between a conservative
         // merge and a coin toss.
-        (None, None) => a.rule.trim().eq_ignore_ascii_case(b.rule.trim()),
+        //
+        // An empty or whitespace-only rule id is not evidence of anything —
+        // it is the *absence* of the one signal this branch has — so two
+        // unplaceable findings that both left it blank must not corroborate
+        // on that basis. Without this guard, two different unplaceable
+        // defects the model described with no rule id at all would merge and
+        // one would be silently thrown away, which is exactly the failure
+        // this whole branch exists to avoid.
+        (None, None) => {
+            let left = a.rule.trim();
+            let right = b.rule.trim();
+            !left.is_empty() && !right.is_empty() && left.eq_ignore_ascii_case(right)
+        }
         // One was placed and the other was not. They may well be the same
         // defect, but there is no evidence of it, and merging on no evidence
         // would silently delete a finding.

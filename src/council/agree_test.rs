@@ -105,6 +105,19 @@ fn two_unplaceable_findings_on_one_file_corroborate_only_on_the_same_rule() {
 }
 
 #[test]
+fn two_unplaceable_findings_with_no_rule_id_do_not_corroborate() {
+    // An empty rule id is the absence of evidence, not evidence of a match.
+    // Two different unplaceable defects the model described with no rule id
+    // at all must both survive, not merge into one.
+    let no_rule_a = finding(".github/workflows/eval.yml", None, "");
+    let no_rule_b = finding(".github/workflows/eval.yml", None, "");
+    assert!(!corroborates(&no_rule_a, &no_rule_b));
+
+    let whitespace_rule = finding(".github/workflows/eval.yml", None, "   ");
+    assert!(!corroborates(&no_rule_a, &whitespace_rule));
+}
+
+#[test]
 fn a_placed_finding_does_not_absorb_an_unplaceable_one() {
     // They may well be the same defect, but there is no evidence of it, and
     // merging on no evidence silently deletes a finding.
