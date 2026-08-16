@@ -90,25 +90,37 @@ base_url = "https://openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
 # Both tiers on one model, and the tiering kept rather than collapsed.
 #
-# DeepSeek V4 Pro, pinned to the dated `0813` GA snapshot rather than the
-# floating `deepseek/deepseek-v4-pro` alias. The alias is a different, older
-# build and moves without a config change; a reviewer whose output shape is a
-# strict JSON schema should not have its model swapped underneath it silently.
+# DeepSeek V4 Flash, chosen for price: $0.14/$0.28 per M against the V4 Pro
+# snapshot's $0.435/$0.87, so roughly a third of the bill per token. The
+# deployment was spending past its daily ceiling on the pro snapshot, which is
+# the whole reason this moved.
 #
-# **This snapshot is served only by DeepSeek first-party.** An OpenRouter
-# account whose allowed-providers list excludes `deepseek` gets a 404 —
-# "No allowed providers are available for the selected model" — on every call,
-# and every review falls through to the chain below. If reviews are quietly
-# still coming back as GLM, that is the cause: fix it at
-# https://openrouter.ai/settings/privacy, not here.
+# **Read `reasoning_effort` below before trusting that saving.** The flash
+# endpoint is bimodal: at any effort above `off` it spends the entire output
+# budget thinking. A two-reviewer flash council measured 134,704 output tokens
+# over 11 minutes at `medium`, against 940 tokens in 24 seconds at `off`, with
+# one call hitting the ceiling and retrying. `reasoning_effort` is deliberately
+# left at `medium` here — the depth is wanted — so the per-token saving is real
+# and the per-review saving is not guaranteed. `doctor` prints a warning about
+# exactly this configuration, and it is right to. Watch the bill; if it has not
+# come down, `reasoning_effort = "off"` is the lever, not the model.
+#
+# Unlike `deepseek-v4-pro-0813` this is not a dated snapshot, so DeepSeek can
+# move the build underneath a reviewer whose output shape is a strict JSON
+# schema. There is no dated flash id to pin to. That is a real cost of this
+# choice: a silent build change shows up as a shift in review behaviour with no
+# config diff to explain it.
+#
+# The `json_object` caveat that applies to the pro snapshot applies here too —
+# the flash endpoint refuses a strict schema request.
 #
 # The two keys stay separate because the *shape* of the decision is worth
 # keeping: `scan` is mechanical work run often, `deep` reads code closely. A
 # deployment that wants a stronger deep tier changes one line, and the cost of
-# doing so is visible — the previous deep model's $3.00/M input against 83k
-# input tokens per security-lane call was where the bill actually came from.
-scan = "deepseek/deepseek-v4-pro-0813"
-deep = "deepseek/deepseek-v4-pro-0813"
+# doing so is visible — an earlier deep model's $3.00/M input against 83k input
+# tokens per security-lane call was where the bill actually came from once.
+scan = "deepseek/deepseek-v4-flash"
+deep = "deepseek/deepseek-v4-flash"
 # The tier a council of reviewers runs on, when one is configured.
 #
 # Separate from `scan` because the two are cheap for different reasons: `scan`
