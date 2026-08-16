@@ -1,0 +1,28 @@
+{
+  "key": "dddcbde4f844fcd3",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 7507,
+    "output_tokens": 1896,
+    "cached_tokens": 2176,
+    "embed_tokens": 0,
+    "cost_usd": 0.003976393
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The test `the_configured_effort_reaches_the_gateway` only calls `reasoning_options` again on the struct field, duplicating the earlier unit tests. It never invokes `harness()` or `with_default_provider_options()`, so it cannot catch a regression where the field is ignored in the actual request construction. The comment claims it tests \"the wire between config and gateway,\" but the wire is never exercised. This leaves the core behavioural change unprotected: if someone later removes or alters the line `.with_default_provider_options(reasoning_options(&self.reasoning_effort))`, all tests still pass.",
+        "confidence": 0.9,
+        "existing_code": "        let gateway = GatewayModel {\n            api_key: \"unused\".into(),\n            base_url: models.base_url.clone(),\n            fallbacks: models.fallback.clone(),\n            reasoning_effort: models.reasoning_effort.clone(),\n        };\n\n        assert_eq!(\n            reasoning_options(&gateway.reasoning_effort),\n            json!({ \"reasoning\": { \"enabled\": false } })\n        );",
+        "path": "src/harness/openrouter.rs",
+        "rule": "inadequate-integration-test",
+        "severity": "medium",
+        "suggestion": "Consider mocking or capturing the provider options passed to `with_default_provider_options` in the `harness()` method, or refactor to make that wiring testable and assert that the correct JSON is sent.",
+        "title": "Test does not verify that the harness actually forwards reasoning_effort"
+      }
+    ],
+    "summary": "The change updates model configuration and pricing, adds a configurable reasoning effort, and includes tests for the new helper and pricing entries. However, the test for forwarding the configured effort to the gateway does not actually exercise the code path that uses it, leaving a regression gap."
+  }
+}

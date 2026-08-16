@@ -1,0 +1,27 @@
+{
+  "key": "46700cd61a5e9d78",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 7446,
+    "output_tokens": 4142,
+    "cached_tokens": 512,
+    "embed_tokens": 0,
+    "cost_usd": 0.006621686
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The test claims to assert the wire between config and gateway, but it constructs `GatewayModel` manually and only calls the free function `reasoning_options` on the field. It never invokes `harness()` or checks what `with_default_provider_options` receives, so a regression where `harness` stops forwarding `reasoning_effort` would pass this test. The positive case should exercise the actual `harness` builder and inspect the provider options it produces, or the request payload via a mock.",
+        "confidence": 0.95,
+        "existing_code": "        assert_eq!(\n            reasoning_options(&gateway.reasoning_effort),\n            json!({ \"reasoning\": { \"enabled\": false } })\n        );",
+        "path": "src/harness/openrouter.rs",
+        "rule": "ineffective-test",
+        "severity": "medium",
+        "title": "Make the gateway integration test call harness, not reasoning_options directly"
+      }
+    ],
+    "summary": "The pricing and model-selection changes are well covered by tests that pin actual costs and ensure defaults have prices, but the new integration test for reasoning_effort doesn't actually exercise the gateway wiring, leaving a stated contract untested."
+  }
+}

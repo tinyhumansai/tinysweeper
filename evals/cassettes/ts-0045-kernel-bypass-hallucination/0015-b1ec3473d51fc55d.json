@@ -1,0 +1,28 @@
+{
+  "key": "b1ec3473d51fc55d",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 5887,
+    "output_tokens": 3473,
+    "cached_tokens": 2176,
+    "embed_tokens": 0,
+    "cost_usd": 0.004643683
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The `shorten` function's documented contract states it will produce a string of at most `limit` characters, but when the first `limit` characters contain no space, the `None` branch returns `format!(\"{head}…\")`, which yields `limit + 1` characters (the original `limit` characters plus the ellipsis). This can cause callers that rely on the length limit (e.g., check-run titles) to receive a string that is still too long. The tests do not cover this branch, as `a_multibyte_title_does_not_panic` only asserts no panic and a length bound of `limit + 1`, not the contract's `limit`.",
+        "confidence": 0.9,
+        "existing_code": "        None => format!(\"{head}…\"),",
+        "path": "src/findings/summarise.rs",
+        "rule": "length-limit-violation",
+        "severity": "high",
+        "suggestion": "        None => format!(\"{}…\", &head[..limit.saturating_sub(1)]),",
+        "title": "Ensure shorten never exceeds the requested limit"
+      }
+    ],
+    "summary": "The change adds text summarisation helpers and compose configuration for kernel bypass. The shorten function violates its own length contract when no space is found in the first limit characters, which should be fixed before merging."
+  }
+}

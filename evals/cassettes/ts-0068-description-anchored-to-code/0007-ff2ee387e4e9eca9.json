@@ -1,0 +1,28 @@
+{
+  "key": "ff2ee387e4e9eca9",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4935,
+    "output_tokens": 7627,
+    "cached_tokens": 512,
+    "embed_tokens": 0,
+    "cost_usd": 0.008561351
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The test `the_configured_effort_reaches_the_gateway` constructs a `GatewayModel` and calls `reasoning_options` on its field, but it never invokes `harness` or checks what `harness` passes to `with_default_provider_options`. It therefore does not assert the wiring it claims to assert: if `harness` were changed to ignore `self.reasoning_effort`, this test would still pass. The comment even states it asserts the error from `GatewayModel::new`, but the test skips that path entirely. Consider either testing `harness` with a mock transport or refactoring so the provider options can be inspected without network access.",
+        "confidence": 1.0,
+        "existing_code": "        assert_eq!(\n            reasoning_options(&gateway.reasoning_effort),\n            json!({ \"reasoning\": { \"enabled\": false } })\n        );",
+        "path": "src/harness/openrouter.rs",
+        "rule": "ineffective-test",
+        "severity": "medium",
+        "suggestion": null,
+        "title": "Test does not verify reasoning_effort reaches the gateway"
+      }
+    ],
+    "summary": "The change adds configurable reasoning effort for OpenRouter, with a helper and unit tests. The production logic is sound; however, one new test claims to verify that the configured effort reaches the gateway but never exercises the harness call, so it does not catch a wiring regression."
+  }
+}

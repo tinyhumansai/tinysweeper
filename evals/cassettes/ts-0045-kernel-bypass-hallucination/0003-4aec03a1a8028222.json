@@ -1,0 +1,17 @@
+{
+  "key": "4aec03a1a8028222",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3038,
+    "output_tokens": 1804,
+    "cached_tokens": 1280,
+    "embed_tokens": 0,
+    "cost_usd": 0.00233885
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds an embeddings configuration enabling retrieval via OpenRouter with a comment about the index partition key; the TOML is valid and the new fields are consistent with the stated purpose. No issues found."
+  }
+}
