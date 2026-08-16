@@ -1,0 +1,17 @@
+{
+  "key": "b5380fa68e6677d3",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3642,
+    "output_tokens": 506,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00202449
+  },
+  "value": {
+    "findings": [],
+    "summary": "The new string truncation and sentence extraction helpers are pure and safe; no security issues introduced."
+  }
+}

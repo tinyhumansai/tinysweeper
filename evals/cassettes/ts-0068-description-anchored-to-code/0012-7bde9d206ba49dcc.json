@@ -1,0 +1,17 @@
+{
+  "key": "7bde9d206ba49dcc",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4608,
+    "output_tokens": 734,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.002477412
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change introduces a configurable reasoning_effort field and forwards it to the gateway provider options. The logic is straightforward and the tests cover the key paths; no security issues were found in the modified file."
+  }
+}

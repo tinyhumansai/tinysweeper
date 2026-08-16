@@ -1,0 +1,17 @@
+{
+  "key": "23736351a1125283",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4303,
+    "output_tokens": 393,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.002048067
+  },
+  "value": {
+    "findings": [],
+    "summary": "The diff adds pricing entries for several new models and tests that validate cost calculations and that all default models are priced. No security issues are introduced."
+  }
+}

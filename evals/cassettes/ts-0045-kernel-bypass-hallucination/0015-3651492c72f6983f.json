@@ -1,0 +1,17 @@
+{
+  "key": "3651492c72f6983f",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3166,
+    "output_tokens": 744,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00202449
+  },
+  "value": {
+    "findings": [],
+    "summary": "The overlay adds a workaround for running MongoDB on newer Linux kernels by setting GLIBC_TUNABLES and mounting a custom entrypoint script. The script itself is not part of this diff and cannot be reviewed here. The change is explicitly scoped to local development and introduces no new security issues that are visible from the diff."
+  }
+}

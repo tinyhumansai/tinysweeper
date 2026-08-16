@@ -1,0 +1,17 @@
+{
+  "key": "17541401c04d839b",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 2845,
+    "output_tokens": 552,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.001717815
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a new public module `summarise` to `src/findings/mod.rs`. The declaration follows the repository's snake_case naming convention and does not introduce any apparent issues."
+  }
+}
