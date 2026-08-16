@@ -27,10 +27,10 @@
 //! So the whole span has to be in the diff — GitHub rejects a comment anchored
 //! outside it, and rejects the *entire review* with it, so one over-reaching
 //! range would drop every other comment too — and a replacement covering more
-//! lines than the anchor does is refused outright. Anchored to one line, a
+//! lines than the anchor does is refused outright. Anchored to two lines, a
 //! five-line replacement does not overwrite the block it was about: it is
-//! inserted in place of the first line and the other four survive underneath
-//! it, leaving code that has the fix and the bug in it at once.
+//! inserted in place of those two and the other three survive underneath it,
+//! leaving code that has the fix and the bug in it at once.
 //!
 //! ## Indentation has to be put back
 //!
@@ -72,19 +72,23 @@ pub fn applicable(finding: &Finding, diffs: &[FileDiff]) -> Option<Suggestion> {
 
     let (start, end) = finding.range()?;
 
-    // A multi-line replacement anchored to a single line is the one wrong block
-    // GitHub accepts without complaint, and it is the shape the schema makes
-    // easy to produce: `existing_code` is quoted as the *smallest span that
-    // shows the problem* while the replacement is written for the whole
-    // construct the problem lives in. Quote one line of a block, rewrite all of
-    // it, and the button replaces that one line — inserting the rewrite above
-    // the lines it was meant to replace, which stay exactly where they were.
+    // A replacement longer than the span it is anchored to is the one wrong
+    // block GitHub accepts without complaint, and it is the shape the schema
+    // makes easy to produce: `existing_code` is quoted as the *smallest span
+    // that shows the problem* while the replacement is written for the whole
+    // construct the problem lives in. Quote two lines of a block, rewrite all
+    // five, and the button replaces those two — inserting the rewrite above the
+    // remaining three, which stay exactly where they were.
+    //
+    // The comparison is against the whole anchor rather than just the
+    // single-line case: a two-line anchor carrying a three-line replacement
+    // strands one line the same way, and only the arithmetic differs.
     //
     // The two spans disagree and nothing in the reply says which one was meant,
     // so there is nothing to infer. Widening the anchor to fit the replacement
     // would be a guess about code the model never quoted, so the block is
     // refused and the replacement survives as the inert fence in the summary.
-    if start == end && replacement.lines().count() > 1 {
+    if replacement.lines().count() > (start..=end).count() {
         return None;
     }
 

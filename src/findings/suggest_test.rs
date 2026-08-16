@@ -89,6 +89,19 @@ fn a_multi_line_replacement_on_a_single_line_anchor_produces_no_block() {
     assert!(applicable(&f, &diffs()).is_none());
 }
 
+/// The refusal is arithmetic over the whole anchor, not a special case for
+/// single lines: a two-line anchor carrying a three-line replacement strands
+/// the third line below the inserted block exactly the same way.
+#[test]
+fn a_replacement_longer_than_a_multi_line_anchor_produces_no_block() {
+    let f = finding(
+        Some(3),
+        Some(4),
+        Some("if n > 0 {\n    eprintln!(\"{n}\");\n}"),
+    );
+    assert!(applicable(&f, &diffs()).is_none());
+}
+
 /// The same replacement is fine once the anchor covers what it rewrites — the
 /// refusal is about the two spans disagreeing, not about size.
 #[test]
