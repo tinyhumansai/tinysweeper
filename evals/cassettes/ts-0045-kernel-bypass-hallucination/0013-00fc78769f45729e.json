@@ -1,0 +1,28 @@
+{
+  "key": "00fc78769f45729e",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3088,
+    "output_tokens": 1689,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.002647062
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "Enabling embeddings by default makes the tool perform network calls to OpenRouter unless explicitly disabled. This violates the repository rule to keep the default build offline and gate network features behind feature flags. It may also cause unexpected API usage and cost. Set `enabled = false` by default or require a feature flag for this functionality.",
+        "confidence": 0.9,
+        "existing_code": "[embeddings]\nenabled = true\nprovider = \"openrouter\"\nmodel = \"openai/text-embedding-3-small\"\ndimensions = 1536\napi_key_env = \"OPENROUTER_API_KEY\"",
+        "path": ".tinysweeper.toml",
+        "rule": "offline-default",
+        "severity": "medium",
+        "suggestion": "[embeddings]\nenabled = false\nprovider = \"openrouter\"\nmodel = \"openai/text-embedding-3-small\"\ndimensions = 1536\napi_key_env = \"OPENROUTER_API_KEY\"",
+        "title": "Gate network retrieval behind a feature flag"
+      }
+    ],
+    "summary": "The change adds embeddings configuration that enables network retrieval via OpenRouter by default, violating the repository's offline-default rule. This should be gated or disabled by default before merging."
+  }
+}

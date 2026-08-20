@@ -1,0 +1,16 @@
+{
+  "key": "7735f062b4e9c01f",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_falsify",
+  "usage": {
+    "input_tokens": 1058,
+    "output_tokens": 155,
+    "cached_tokens": 896,
+    "embed_tokens": 0,
+    "cost_usd": 0.000208568
+  },
+  "value": {
+    "incorrect": []
+  }
+}

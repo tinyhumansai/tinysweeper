@@ -1,0 +1,28 @@
+{
+  "key": "d1d7526419f774e7",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3279,
+    "output_tokens": 1565,
+    "cached_tokens": 1280,
+    "embed_tokens": 0,
+    "cost_usd": 0.002235755
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "Adding a new required field to a struct that is likely deserialized from TOML or similar will cause existing configuration files that omit this key to fail to load. If this struct is constructed via `serde`, the field needs `#[serde(default)]` or a suitable default value (e.g., `\"low\"` or `\"off\"`). The repository rule about returning results suggests config loading is strict, and this change is a breaking configuration change that may disrupt existing deployments.",
+        "confidence": 0.6,
+        "existing_code": "pub reasoning_effort: String,",
+        "path": "src/config/types.rs",
+        "rule": "missing-serde-default",
+        "severity": "high",
+        "suggestion": "pub reasoning_effort: String, // add #[serde(default = \"default_reasoning_effort\")] and define a default",
+        "title": "Provide a default for the new required config field"
+      }
+    ],
+    "summary": "The diff adds a `reasoning_effort` field with documentation to a config struct. The change looks sound aside from a potential backwards-compatibility issue: adding a required field without a default may break deserialization of existing configs."
+  }
+}

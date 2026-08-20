@@ -1,0 +1,17 @@
+{
+  "key": "39457e2f10a2f86e",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4670,
+    "output_tokens": 1921,
+    "cached_tokens": 1280,
+    "embed_tokens": 0,
+    "cost_usd": 0.00315056
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds model price entries and tests for the pricing harness. No security issues are introduced; the prices are hardcoded data, the tests validate internal consistency without external calls, and no untrusted input or dangerous operations are present."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "b1c3212fad1e62ba",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2969,
+    "output_tokens": 286,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.001374687
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change adds a new public module `summarise` to the findings module. The declaration itself introduces no security issues."
+  }
+}

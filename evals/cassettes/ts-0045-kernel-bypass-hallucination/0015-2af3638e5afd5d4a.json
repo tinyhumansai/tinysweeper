@@ -1,0 +1,17 @@
+{
+  "key": "2af3638e5afd5d4a",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4059,
+    "output_tokens": 3384,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.004544097
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds an opt-in shim that patches and runs the MongoDB entrypoint with the kernel compatibility check disabled; it is intended for development environments only and does not introduce security vulnerabilities."
+  }
+}

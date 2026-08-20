@@ -1,0 +1,37 @@
+{
+  "key": "a6b666a9c66e7d44",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_description",
+  "usage": {
+    "input_tokens": 6012,
+    "output_tokens": 7581,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.009045042
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "`shorten` is documented to return at most `limit` characters, but when the first `limit` characters contain no space, the `None` branch appends an ellipsis to the full `head`, producing `limit + 1` characters. This violates the contract and could cause callers (e.g., GitHub check-run titles) to be rejected for exceeding a hard cap. Truncate `head` to `limit - 1` before appending the ellipsis, or adjust the documentation and tests to reflect an explicit allowance for the extra character.",
+        "confidence": 0.9,
+        "existing_code": "    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),\n    }",
+        "path": "src/findings/summarise.rs",
+        "rule": "length-limit-violation",
+        "severity": "medium",
+        "suggestion": "None => format!(\"{}…\", &head[..limit.saturating_sub(1)]),",
+        "title": "Ensure shorten never exceeds the character limit"
+      },
+      {
+        "body": "The PR title says \"Add a helper for shortening model-authored text\", but the diff adds a kernel-bypass entrypoint script, a new Compose overlay, and default embedding configuration, none of which are mentioned in the title. The body only partially covers these changes and frames the PR as an end-to-end test. This violates the repository rule \"State in PRs what changed, any behaviour change, and how it was verified.\" Update the title and body to accurately describe all included changes.",
+        "confidence": 0.95,
+        "existing_code": "\"\"\"Run the image's own entrypoint with the kernel gate turned off.",
+        "path": "deploy/mongo/kernel-bypass-entrypoint.py",
+        "rule": "pr-description-mismatch",
+        "severity": "low",
+        "title": "Update PR description to cover all changes"
+      }
+    ],
+    "summary": "The summarise helper works but can exceed its stated limit by one when the first `limit` characters contain no space; the PR description also omits major changes like the kernel-bypass script. Fix the limit and update the description before merging."
+  }
+}

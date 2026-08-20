@@ -1,0 +1,54 @@
+{
+  "key": "d32eea1b341940f8",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_description",
+  "usage": {
+    "input_tokens": 8634,
+    "output_tokens": 6160,
+    "cached_tokens": 2176,
+    "embed_tokens": 0,
+    "cost_usd": 0.008176318
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "Adding `reasoning_effort` as a required `String` field means any existing `preset.toml` or user config that does not include it will fail to deserialize. The repository's `presets/` directories likely contain partial configs, and this PR does not update them. Add `#[serde(default = \"default_reasoning_effort\")]` (or make the field `Option` with a sensible fallback) to preserve backward compatibility.",
+        "confidence": 0.8,
+        "existing_code": "    pub reasoning_effort: String,",
+        "path": "src/config/types.rs",
+        "rule": "missing-serde-default",
+        "severity": "high",
+        "title": "Add a serde default for reasoning_effort"
+      },
+      {
+        "body": "This test calls `reasoning_options` directly on the gateway's field, so it would pass even if `harness()` forgot to forward the reasoning effort to `.with_default_provider_options`. That is exactly the regression the comment warns about. Assert on the request options produced by `harness`, or inspect the built gateway, rather than re-testing the helper.",
+        "confidence": 0.9,
+        "existing_code": "        assert_eq!(\n            reasoning_options(&gateway.reasoning_effort),\n            json!({ \"reasoning\": { \"enabled\": false } })\n        );",
+        "path": "src/harness/openrouter.rs",
+        "rule": "misleading-test",
+        "severity": "medium",
+        "title": "Test the actual harness wiring, not the helper"
+      },
+      {
+        "body": "`deepseek/deepseek-v4-flash` is added to the price table but does not appear in the pull request's measurement data, so the blanket statement \"Every model here was measured before being priced\" is false for that entry. Remove the claim or qualify it to the models actually evaluated.",
+        "confidence": 0.9,
+        "existing_code": "    /// with it. Every model here was measured before being priced.",
+        "path": "src/harness/pricing.rs",
+        "rule": "inaccurate-comment",
+        "severity": "low",
+        "title": "Qualify the claim that every priced model was measured"
+      },
+      {
+        "body": "The field is documented as `off`, `low`, `medium`, `high`, but any other string (e.g. `max`, a typo) is passed through to the gateway. The pull request already observed that `max` is undocumented and produced malformed JSON. Reject unknown values at config load, or at least document that arbitrary values are forwarded and may fail at runtime.",
+        "confidence": 0.8,
+        "existing_code": "        effort => json!({ \"reasoning\": { \"effort\": effort } }),",
+        "path": "src/harness/openrouter.rs",
+        "rule": "unvalidated-config-value",
+        "severity": "low",
+        "title": "Validate reasoning_effort against allowed values"
+      }
+    ],
+    "summary": "The model swap is well-supported by measurements and fixes a guaranteed fallback failure, but the new required config field without a serde default will break existing preset files, and a couple of tests and comments need cleaning up before merge."
+  }
+}

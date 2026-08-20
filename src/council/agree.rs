@@ -59,11 +59,34 @@ pub fn corroborates(a: &Finding, b: &Finding) -> bool {
             let high = b_end.saturating_add(LINE_TOLERANCE);
             a_start <= high && a_end >= low
         }
-        // Neither could be placed. Both were demoted to the check-run summary
-        // for the same file, and posting two unplaceable findings about one
-        // file is the worst version of this noise: a reader cannot even tell
-        // them apart by line.
-        (None, None) => true,
+        // Neither could be placed. The argument for merging these was that a
+        // reader cannot tell two unplaceable findings on one file apart by
+        // line, so posting both is the worst version of the noise. That is
+        // true of two *copies*. It is false of two different defects, and one
+        // file will readily produce those: `.github/workflows/eval.yml` on
+        // `tinysweeper#86` yielded an unpinned `dtolnay/rust-toolchain` and an
+        // unpinned `Swatinem/rust-cache`, both unplaceable, both real, and
+        // merging them threw one away.
+        //
+        // So the rule is the same one the placed branch uses — merge on
+        // evidence, never on the absence of it — and here the only evidence
+        // available is the rule id. It is model-authored and therefore weak,
+        // which is exactly why it is not consulted anywhere a line number
+        // exists; on this branch it is the difference between a conservative
+        // merge and a coin toss.
+        //
+        // An empty or whitespace-only rule id is not evidence of anything —
+        // it is the *absence* of the one signal this branch has — so two
+        // unplaceable findings that both left it blank must not corroborate
+        // on that basis. Without this guard, two different unplaceable
+        // defects the model described with no rule id at all would merge and
+        // one would be silently thrown away, which is exactly the failure
+        // this whole branch exists to avoid.
+        (None, None) => {
+            let left = a.rule.trim();
+            let right = b.rule.trim();
+            !left.is_empty() && !right.is_empty() && left.eq_ignore_ascii_case(right)
+        }
         // One was placed and the other was not. They may well be the same
         // defect, but there is no evidence of it, and merging on no evidence
         // would silently delete a finding.

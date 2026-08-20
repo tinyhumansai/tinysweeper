@@ -1,0 +1,28 @@
+{
+  "key": "d7e17f0006305127",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4058,
+    "output_tokens": 3738,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.004851642
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The doc comment states `Shorten text to at most limit characters`, but the implementation takes up to `limit` characters and then unconditionally appends a `…`, producing up to `limit + 1` characters. If a caller uses the exact limit (e.g., GitHub's title ceiling), this could exceed it. Either reserve one character for the ellipsis before truncating, or update the documentation to say that the ellipsis is not counted. The current test allows `out.len() <= 21` for a limit of 20, confirming the implementation's behavior but contradicting the stated contract.",
+        "confidence": 0.7,
+        "existing_code": "    let head: String = text.chars().take(limit).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),\n    }",
+        "path": "src/findings/summarise.rs",
+        "rule": "off-by-one",
+        "severity": "low",
+        "suggestion": null,
+        "title": "Account for the ellipsis to honor the character limit"
+      }
+    ],
+    "summary": "Adds text shortening and first-sentence helpers with tests. The code handles multibyte input safely, but the `shorten` function's character limit is off by one relative to its documented contract."
+  }
+}

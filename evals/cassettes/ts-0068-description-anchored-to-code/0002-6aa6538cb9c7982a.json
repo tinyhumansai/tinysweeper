@@ -1,0 +1,28 @@
+{
+  "key": "6aa6538cb9c7982a",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3218,
+    "output_tokens": 1656,
+    "cached_tokens": 512,
+    "embed_tokens": 0,
+    "cost_usd": 0.002619686
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "Adding a new required field to a public configuration struct without a serde default (or a manual `Default` impl) breaks deserialization of existing user configuration files that do not yet contain this key. If this struct is constructed directly in code, it also breaks compilation of those call sites. Either annotate the field with `#[serde(default = \"...\")]` and provide a sensible default such as `\"medium\"`, or make it `Option<String>` and handle the absence downstream.",
+        "confidence": 0.7,
+        "existing_code": "    pub reasoning_effort: String,",
+        "path": "src/config/types.rs",
+        "rule": "missing-config-default",
+        "severity": "high",
+        "suggestion": null,
+        "title": "Add a default for the new required config field"
+      }
+    ],
+    "summary": "The change adds a `reasoning_effort` field to `ModelConfig`, but without a default this likely breaks deserialization of existing configuration files or compilation of existing struct literals. Add a serde default or make the field optional before merging."
+  }
+}

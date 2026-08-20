@@ -1,0 +1,17 @@
+{
+  "key": "6dc6189a5eab43fe",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 2990,
+    "output_tokens": 583,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.001642212
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a new `summarise` module to the findings crate. The declaration follows the existing module organization and no issues are apparent from this line; the module contents are not part of this file."
+  }
+}

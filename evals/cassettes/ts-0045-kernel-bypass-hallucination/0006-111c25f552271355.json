@@ -1,0 +1,17 @@
+{
+  "key": "111c25f552271355",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3565,
+    "output_tokens": 3909,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.004785957
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change updates environment variable names for GitHub App authentication to match the binary, requires those variables, adds OpenRouter and Cohere API keys, and mounts a configuration file read-only. The change appears sound."
+  }
+}

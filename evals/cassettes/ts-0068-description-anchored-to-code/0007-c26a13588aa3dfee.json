@@ -1,0 +1,17 @@
+{
+  "key": "c26a13588aa3dfee",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4691,
+    "output_tokens": 6427,
+    "cached_tokens": 1280,
+    "embed_tokens": 0,
+    "cost_usd": 0.007079915
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds pricing entries for several models and tests to verify pricing behavior. The code looks correct and the tests are reasonable."
+  }
+}

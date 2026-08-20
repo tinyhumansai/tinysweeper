@@ -1,0 +1,17 @@
+{
+  "key": "57a439887b4e858c",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3261,
+    "output_tokens": 1245,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.002336037
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a new `summarise` module declaration to the findings module. The addition itself is safe, provided the corresponding module file exists and meets documentation requirements elsewhere."
+  }
+}

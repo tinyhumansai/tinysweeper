@@ -52,6 +52,38 @@ and carried in the proposal so `apply` and the next review cannot disagree.
 No sibling signature was added. Two identities would drift, and the exclusions
 triage inheritance needs are the same exclusions dedupe needs.
 
+### The anchor, for what the identity cannot catch
+
+The identity recognises a finding described *identically* twice. Two of its four
+inputs are model-authored — the `rule`, and the snippet quoted as the anchored
+code — so a re-review that quotes one line either side of last push's snippet
+mints a fresh fingerprint for a concern that has not moved. `src/eval/runner.rs`
+on `tinysweeper#86` carried one such concern posted three times over two pushes,
+at lines 146, then 145 and 171, under three fingerprints. Dedupe did exactly what
+it was written to do and never fired.
+
+So `already_posted` asks a third question after the two fingerprint checks: is
+there already one of our comments in the same lane, on the same file, **under the
+same title**, within three lines. It is asked last because it is weaker evidence
+than a fingerprint.
+
+The title is the content guard, and it is not optional. Position says two
+findings are in the same place; it does not say they are the same finding, and
+two defects a few lines apart in one function are ordinary. Without the guard the
+second is silently deleted — and a deleted finding can flip a verdict, which is
+the failure this whole mechanism exists to prevent.
+
+The title rather than the `rule`, on the evidence: the four repeats of one
+concern on `tinysweeper#86` carried the rules `untrusted-repo-rules`, `Pin
+third-party actions to a commit SHA`, and twice nothing at all, while the title
+was identical every time. Keying on the rule would leave the fallback catching
+nothing in the exact case it exists for.
+
+The remaining clauses are the same refusal to act on thin evidence: both findings
+must be placed on a line, a comment whose lane or title cannot be read anchors
+nothing rather than everything, and anchors are read off the live pull request
+rather than the store, so a comment a maintainer deleted stops suppressing.
+
 ## Suppression cannot unblock a merge
 
 Dedupe runs **after** the check-run conclusion is decided, in
@@ -98,10 +130,26 @@ would rather have a duplicate comment than a suppressed one.
 
 ## Re-review continuity
 
-Prompt layer 4 lists the titles of prior findings and appends
+Prompt layer 5 lists prior findings as `severity — title` and appends
 `CONTINUITY_CONTRACT` from `harness::prompt`: verify each earlier finding first,
-never re-raise a fixed one, never silently drop an unfixed one. That contract
-was unreachable in production while `prior_findings` was always empty.
+never re-raise a fixed one, never silently drop an unfixed one, and report one
+that still stands at the level it already has. That contract was unreachable in
+production while `prior_findings` was always empty.
+
+The severity is carried in `ReviewedState::severities` and read back off the
+comment's own priority badge, with the forge winning where the two disagree — the
+comment is what the author is looking at, and it is the copy a human can edit or
+delete. Where one title has two levels already, the earliest holds: following the
+newest would ratify the drift rather than stop it.
+
+`lane_proposal` then pins any finding whose title it has seen to that level,
+before the conclusion and the request-changes verdict are computed. The prompt
+alone is not enough here, because severity is not derived from anything: two runs
+over identical code can return different levels and neither breaks a rule the
+model was given. `tinymemory#13` flipped from changes-requested to approved ten
+minutes later on exactly that. Only an exact title match pins — a reviewer that
+reworded the finding has re-made the case for it, and is free to argue a
+different level.
 
 What the lane resolves is carried through to `LaneProposal::resolved` and
 rendered into the check-run summary, so an author sees progress rather than only

@@ -1,0 +1,16 @@
+{
+  "key": "4a7231a69490d93e",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_relocate",
+  "usage": {
+    "input_tokens": 1454,
+    "output_tokens": 1314,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00177567
+  },
+  "value": {
+    "existing_code": "        None => format!(\"{head}…\"),"
+  }
+}

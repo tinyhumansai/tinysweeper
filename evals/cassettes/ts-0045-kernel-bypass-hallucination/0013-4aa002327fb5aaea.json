@@ -1,0 +1,17 @@
+{
+  "key": "4aa002327fb5aaea",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3359,
+    "output_tokens": 1447,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.002554407
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds an [embeddings] section to .tinysweeper.toml, enabling retrieval embeddings via OpenRouter with an API key from the OPENROUTER_API_KEY environment variable. This is configuration only and does not introduce security issues in this file."
+  }
+}

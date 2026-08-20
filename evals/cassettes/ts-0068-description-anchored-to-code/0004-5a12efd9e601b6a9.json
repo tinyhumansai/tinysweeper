@@ -1,0 +1,17 @@
+{
+  "key": "5a12efd9e601b6a9",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3657,
+    "output_tokens": 3491,
+    "cached_tokens": 512,
+    "embed_tokens": 0,
+    "cost_usd": 0.004407101
+  },
+  "value": {
+    "findings": [],
+    "summary": "Updates default model tiers to GLM 5.2 with a revised fallback chain and adds reasoning_effort=high, with comments explaining the measurements. The file is valid TOML and no bugs are apparent."
+  }
+}
