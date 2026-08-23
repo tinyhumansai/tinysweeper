@@ -178,7 +178,7 @@ impl GatewayModel {
         })
     }
 
-    fn harness(&self, model: &str) -> Result<AgentHarness<()>> {
+    fn harness(&self, model: &str, routing: &ProviderRouting) -> Result<AgentHarness<()>> {
         let provider = OpenAiModel::new(&self.api_key)
             .with_base_url(&self.base_url)
             .with_model(model)
@@ -225,7 +225,7 @@ impl GatewayModel {
             // The `provider` pin rides in the same object; see
             // [`provider_options`] for why they are merged rather than set
             // separately.
-            .with_default_provider_options(provider_options(&self.reasoning_effort, &self.provider))
+            .with_default_provider_options(provider_options(&self.reasoning_effort, routing))
             // Identifies us to OpenRouter, which is how per-application usage
             // shows up separately in their dashboard.
             .with_header(
@@ -241,8 +241,14 @@ impl GatewayModel {
         Ok(harness)
     }
 
-    async fn call(&self, model: &str, request: &ModelRequest, cap: u32) -> Result<CallOutcome> {
-        let mut harness = self.harness(model)?;
+    async fn call(
+        &self,
+        model: &str,
+        request: &ModelRequest,
+        cap: u32,
+        routing: &ProviderRouting,
+    ) -> Result<CallOutcome> {
+        let mut harness = self.harness(model, routing)?;
         // Who enforces the schema. These two arms are one decision, not two
         // independent settings: `JsonObject` asks the provider for *some* JSON
         // and therefore has to carry the schema in the prompt itself, and the
@@ -452,13 +458,14 @@ impl GatewayModel {
         &self,
         model: &str,
         request: &ModelRequest,
+        routing: &ProviderRouting,
     ) -> Result<ModelResponse> {
         let base = request.max_tokens;
         let ladder = truncation_ladder(base);
         let last = ladder.len() - 1;
 
         for (attempt, cap) in ladder.into_iter().enumerate() {
-            match self.call(model, request, cap).await? {
+            match self.call(model, request, cap, routing).await? {
                 CallOutcome::Answer(response) => return Ok(response),
                 CallOutcome::Truncated {
                     output_tokens,
