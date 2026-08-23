@@ -320,6 +320,27 @@ budget_usd_per_pr = 1.0
 [models.provider]
 order = ["streamlake", "deepinfra"]
 allow_fallbacks = false
+# The rung that stops this pin being a single point of failure.
+#
+# `models.fallback` switches *model* and every rung of it inherits the `order`
+# above, so a pin that cannot serve these models fails the whole ladder for one
+# reason — which is exactly how a week of reviews came back empty. With this on,
+# one final attempt is made with no pin at all once every priced route has
+# failed.
+#
+# It costs nothing on a healthy deployment because it is only reached after
+# everything else has failed, and the trade when it *is* reached is deliberate:
+# an unpinned call is billed at a price `harness::pricing` cannot predict, so
+# the cost line for that review is an estimate. `budget_usd_per_pr` still bounds
+# it, the summary still names the model that answered, and reaching this rung
+# logs at `warn` — a wrong cost line is recoverable, a silent all-clear over
+# unreviewed code is not.
+#
+# Set it `false` only where an unpinned call is genuinely unacceptable — a
+# data-residency rule that some provider in the pool would break. That is a
+# deployment choosing a failed review over an unpinned one, which is coherent,
+# but it should be a decision rather than a default.
+last_resort_unpinned = true
 
 # Several reviewers on one lane's evidence, folded into one review.
 #
