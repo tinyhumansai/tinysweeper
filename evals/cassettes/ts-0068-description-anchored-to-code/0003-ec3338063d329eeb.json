@@ -1,0 +1,17 @@
+{
+  "key": "ec3338063d329eeb",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4105,
+    "output_tokens": 69,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00020731298
+  },
+  "value": {
+    "summary": "Adds new model price entries for qwen, glm, and two deepseek variants, plus three tests that verify the pricing function works as documented. The change looks correct and the tests guard against the known silent-argument-ordering hazard.  No bugs were found.",
+    "findings": []
+  }
+}

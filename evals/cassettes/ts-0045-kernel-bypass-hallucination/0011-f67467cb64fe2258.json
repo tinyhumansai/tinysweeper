@@ -1,0 +1,17 @@
+{
+  "key": "f67467cb64fe2258",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3505,
+    "output_tokens": 54,
+    "cached_tokens": 1024,
+    "embed_tokens": 0,
+    "cost_usd": 0.000136505068
+  },
+  "value": {
+    "summary": "This pull request introduces a new `shorten` and `first_sentence` utility for truncating model-authored text, along with tests.  I found no security problems introduced by this change.",
+    "findings": []
+  }
+}
