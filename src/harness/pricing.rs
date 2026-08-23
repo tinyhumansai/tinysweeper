@@ -116,15 +116,24 @@ const MODEL_PRICES: &[(&str, Price)] = &[
         },
     ),
     (
-        // The tier a council runs on, at DeepSeek's own rates to match the pin.
-        // Cache reads are a *fiftieth* of the input price here, which is the
-        // whole reason several reviewers cost about what one used to: the
-        // shared prompt prefix is paid for once.
+        // Both tiers, and the tier a council runs on, at the dearer of the two
+        // providers `models.provider` pins — DeepInfra at $0.09/$0.18 against
+        // StreamLake's $0.0503/$0.1005. The dearer rate is deliberate: the pin
+        // lists two providers so an outage costs price rather than the review,
+        // and a table that recorded the cheaper one would let `budget_usd_per_pr`
+        // under-count exactly when the fallback provider is answering.
+        //
+        // Not DeepSeek's own rates. DeepSeek first-party does not serve this
+        // model at all — see `[models.provider]` in `config/defaults.toml`.
+        //
+        // Cache reads are a *fifth* of the input price here, which is the whole
+        // reason several reviewers cost about what one used to: the shared
+        // prompt prefix is paid for once.
         "deepseek/deepseek-v4-flash",
         Price {
-            input: 0.14,
-            output: 0.28,
-            cached: 0.0028,
+            input: 0.09,
+            output: 0.18,
+            cached: 0.018,
         },
     ),
     (
