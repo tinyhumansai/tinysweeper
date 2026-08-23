@@ -449,9 +449,29 @@ mod tests {
 
     #[test]
     fn an_empty_review_says_so_and_stops() {
-        let out = lane_summary("Looks sound.", &[], "0.1.0");
+        let out = lane_summary("Looks sound.", &[], "0.1.0", true);
         assert!(out.contains("No findings."));
         assert!(!out.contains("<details>"), "nothing to fold away");
+    }
+
+    #[test]
+    fn a_lane_that_never_ran_does_not_report_an_all_clear() {
+        // The bug this exists to stop: a provider pin that 404'd every model in
+        // the chain made every lane skip, and each one published "No findings."
+        // over code nobody had read. An empty finding list is a result only
+        // when a reviewer produced one.
+        let out = lane_summary(
+            "No files could be reviewed; see the listed provider failures.",
+            &[],
+            "0.1.0",
+            false,
+        );
+        assert!(
+            !out.contains("No findings."),
+            "a lane with no verdict must not read as a clean one: {out}"
+        );
+        assert!(out.contains("no verdict"), "{out}");
+        assert!(out.contains("not an all-clear"), "{out}");
     }
 
     #[test]
@@ -463,6 +483,7 @@ mod tests {
                 finding(Severity::Critical, "Remove the key"),
             ],
             "0.1.0",
+            true,
         );
         let critical = out.find("Remove the key").expect("present");
         let low = out.find("Rename this").expect("present");
@@ -472,7 +493,7 @@ mod tests {
     #[test]
     fn a_pipe_in_a_title_cannot_break_the_table() {
         // Titles are model output, and a bare `|` ends the cell.
-        let out = lane_summary("…", &[finding(Severity::High, "Handle a | b")], "0.1.0");
+        let out = lane_summary("…", &[finding(Severity::High, "Handle a | b")], "0.1.0", true);
         let row = out.lines().find(|l| l.contains("Handle a")).expect("row");
         assert!(row.contains("\\|"), "{row}");
     }
@@ -483,6 +504,7 @@ mod tests {
             "…",
             &[finding(Severity::High, "Fix <script>alert(1)</script>")],
             "0.1.0",
+            true,
         );
         assert!(!out.contains("<script>"), "{out}");
         assert!(out.contains("&lt;script&gt;"));
@@ -492,7 +514,7 @@ mod tests {
     fn a_suggestion_is_rendered_as_a_block() {
         let mut f = finding(Severity::High, "Guard the index");
         f.suggestion = Some("if let Some(x) = items.get(i) {".into());
-        let out = lane_summary("…", &[f], "0.1.0");
+        let out = lane_summary("…", &[f], "0.1.0", true);
         assert!(out.contains("Suggested change"));
         assert!(out.contains("items.get(i)"));
     }
