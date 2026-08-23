@@ -431,11 +431,23 @@ mod tests {
         // Note the argument order: input, **cached**, output. Getting it wrong
         // is silent — every argument is a `u64` — and I did exactly that while
         // writing this test, which is why the ordering is now pinned below.
-        let cost = completion_cost("deepseek/deepseek-v4-pro-0813", 82_914, 0, 842);
+        //
+        // Read from the shipped config rather than naming a model id. This test
+        // hardcoded `deepseek-v4-pro-0813` and kept asserting its price after
+        // the deep tier had moved to Flash, so the one number it exists to
+        // guard described a model no review had run on.
+        let config: crate::config::types::Config = crate::config::DEFAULTS
+            .parse::<toml::Table>()
+            .expect("defaults parse")
+            .try_into()
+            .expect("defaults deserialize");
+
+        let cost = completion_cost(&config.models.deep, 82_914, 0, 842);
 
         assert!(
-            (0.035..0.039).contains(&cost),
-            "expected roughly $0.037 for the 83k-token security call, got {cost:.5}"
+            (0.0070..0.0085).contains(&cost),
+            "expected roughly $0.0076 for the 83k-token security call on `{}`, got {cost:.5}",
+            config.models.deep
         );
     }
 

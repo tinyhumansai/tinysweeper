@@ -183,7 +183,8 @@ fn every_shipped_model_can_be_served_by_a_pinned_provider() {
     // rung that drops it. `PROVIDER_IS_NOT_A_VENDOR` lists the gateway-side
     // names that read like a model vendor and are therefore the ones somebody
     // reaches for by mistake.
-    const PROVIDER_IS_NOT_A_VENDOR: &[&str] = &["deepseek", "minimax", "z-ai", "moonshotai", "qwen"];
+    const PROVIDER_IS_NOT_A_VENDOR: &[&str] =
+        &["deepseek", "minimax", "z-ai", "moonshotai", "qwen"];
 
     let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
 

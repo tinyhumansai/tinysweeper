@@ -493,7 +493,12 @@ mod tests {
     #[test]
     fn a_pipe_in_a_title_cannot_break_the_table() {
         // Titles are model output, and a bare `|` ends the cell.
-        let out = lane_summary("…", &[finding(Severity::High, "Handle a | b")], "0.1.0", true);
+        let out = lane_summary(
+            "…",
+            &[finding(Severity::High, "Handle a | b")],
+            "0.1.0",
+            true,
+        );
         let row = out.lines().find(|l| l.contains("Handle a")).expect("row");
         assert!(row.contains("\\|"), "{row}");
     }
