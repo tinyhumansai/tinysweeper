@@ -71,13 +71,33 @@ pub fn confidence_badge(confidence: f64) -> String {
 }
 
 /// Render one lane's findings as a check-run summary.
-pub fn lane_summary(summary: &str, findings: &[Finding], version: &str) -> String {
+///
+/// `reached_a_verdict` is false for a lane that did not run — disabled, skipped
+/// as a draft, or one whose every model call failed. It exists because the two
+/// cases render identically otherwise and mean opposite things: "we looked and
+/// found nothing" against "we never looked". A provider misconfiguration once
+/// 404'd every call in the chain for a week and each lane published `No
+/// findings.` over unreviewed code, which is the most expensive way this
+/// reviewer can be wrong. An empty finding list is a result only when a
+/// reviewer actually produced one.
+pub fn lane_summary(
+    summary: &str,
+    findings: &[Finding],
+    version: &str,
+    reached_a_verdict: bool,
+) -> String {
     let mut out = String::with_capacity(1024);
     out.push_str(summary.trim());
     out.push_str("\n\n");
 
     if findings.is_empty() {
-        out.push_str("No findings.\n");
+        out.push_str(if reached_a_verdict {
+            "No findings.\n"
+        } else {
+            "**This lane did not review the change, so it has no verdict.** \
+             The absence of findings below is not an all-clear — see the reason \
+             above.\n"
+        });
         out.push_str(&footer(version));
         return out;
     }
