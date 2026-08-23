@@ -127,9 +127,10 @@ deep = "deepseek/deepseek-v4-flash"
 # is one mechanical call, `flash` is one of N concurrent opinions whose
 # *aggregate* has to stay under the price of the single `deep` call it stands
 # in for. Blended against the ~80% prompt-cache hit this prompt layout achieves,
-# and on the same pinned DeepSeek endpoint as the tiers above, flash costs
-# $0.030/M where the pro snapshot costs $0.090/M — so three reviewers cost
-# roughly what one did.
+# and on the same pinned endpoint as the tiers above, flash costs roughly a
+# third of what the pro snapshot did — so three reviewers cost about what one
+# did. Note "the same endpoint" is StreamLake/DeepInfra, not DeepSeek: see
+# `[models.provider]` below for why that distinction stopped every review once.
 #
 # Same `json_object` caveat as everything else in this block: the flash endpoint
 # refuses a strict schema request exactly as the pro snapshot does.
