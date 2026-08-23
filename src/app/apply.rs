@@ -314,7 +314,16 @@ fn title_for(findings: usize, summary: &str) -> String {
 }
 
 fn render_lane_summary(lane: &crate::app::review::LaneProposal) -> String {
-    let mut out = crate::findings::render::lane_summary(&lane.summary, &lane.findings, VERSION);
+    // `Neutral` is exactly "this lane formed no opinion" — not implemented,
+    // skipped as a draft, or every model call in the chain failed. Anything
+    // else reached a verdict, including a clean one.
+    let reached_a_verdict = lane.conclusion != crate::forge::types::CheckConclusion::Neutral;
+    let mut out = crate::findings::render::lane_summary(
+        &lane.summary,
+        &lane.findings,
+        VERSION,
+        reached_a_verdict,
+    );
 
     // Resolved findings are reported, not discarded. An author who fixed
     // something needs to see that it was noticed; otherwise the only signal a

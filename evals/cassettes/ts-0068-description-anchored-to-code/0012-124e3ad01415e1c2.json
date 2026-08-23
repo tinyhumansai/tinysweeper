@@ -1,0 +1,48 @@
+{
+  "key": "124e3ad01415e1c2",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_description",
+  "usage": {
+    "input_tokens": 8048,
+    "output_tokens": 760,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00046749248
+  },
+  "value": {
+    "summary": "This change moves the scan and deep tiers to GLM 5.2, makes reasoning effort configurable, updates the fallback chain, and extends pricing tables with the new models, all backed by measured cost data and test coverage; it is safe to merge.",
+    "findings": [
+      {
+        "path": "src/config/types.rs",
+        "existing_code": "    pub reasoning_effort: String,",
+        "rule": "untyped-string-config",
+        "title": "Represent reasoning_effort as an enum instead of String",
+        "body": "`reasoning_effort` is stored as a raw `String` but is only ever compared against a fixed set of values (`\"off\"`, `\"\"`, `\"low\"`, `\"medium\"`, `\"high\"`, `\"max\"`). A typo (`\"hgh\"` -> passes validation, becomes `effort: \"hgh\"` in the request) would silently fall through to the `effort =>` branch of `reasoning_options` and produce an unsupported effort string. Parse it into an enum with a `Display` / `FromStr` implementation, or validate it in the config deserializer and reject unknown values at startup.",
+        "severity": "medium",
+        "confidence": 0.8,
+        "suggestion": null
+      },
+      {
+        "path": "src/harness/openrouter.rs",
+        "existing_code": "fn reasoning_options(effort: &str) -> serde_json::Value {\n    match effort.trim() {\n        \"off\" | \"\" => json!({ \"reasoning\": { \"enabled\": false } }),\n        effort => json!({ \"reasoning\": { \"effort\": effort } }),\n    }\n}",
+        "rule": "missing-input-validation",
+        "title": "Reject unknown effort values instead of passing them through silently",
+        "body": "The catch-all arm `effort =>` passes any unknown string (e.g. `\"hgh\"`, `\"max\"`, `\"extreme\"`) directly as the `effort` field to OpenRouter. The PR body itself says `\"max\"` is undocumented and produced malformed JSON. This should either validate the effort against a known set, or log a warning before passing it through. At minimum, document the valid values in the function signature.",
+        "severity": "medium",
+        "confidence": 0.9,
+        "suggestion": null
+      },
+      {
+        "path": "src/config/defaults.toml",
+        "existing_code": "reasoning_effort = \"high\"",
+        "rule": "incomplete-validation",
+        "title": "Document that max reasoning effort is unsupported and may break outputs",
+        "body": "The PR body warns that `reasoning_effort = \"max\"` is undocumented, passed through rather than validated, and produced malformed JSON in testing. The config file sets `reasoning_effort = \"high\"` and the comment block explains the hazard of thinking-heavy models, but it does not explicitly tell an operator that `\"max\"` is not a supported value and will cause failures. Add a line to the comment above or to the type's doc comment warning against `\"max\"`.",
+        "severity": "low",
+        "confidence": 0.9,
+        "suggestion": null
+      }
+    ]
+  }
+}

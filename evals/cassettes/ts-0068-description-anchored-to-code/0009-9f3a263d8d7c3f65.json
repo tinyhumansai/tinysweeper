@@ -1,0 +1,17 @@
+{
+  "key": "9f3a263d8d7c3f65",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4389,
+    "output_tokens": 125,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00022666154
+  },
+  "value": {
+    "summary": "This change re-enables a configurable `reasoning` block in OpenRouter requests, replacing a hard-coded disable with a runtime option. The new field is read from configuration, forwarded through the gateway builder, and tested. No security problems were introduced: the input reaches a controlled JSON sink but is not interpreted as code or used in a dangerous way; the field is an enum-like string and the JSON is constructed by `serde_json::json!`, which is safe. The tests cover the edge cases explicitly. The change looks sound.",
+    "findings": []
+  }
+}

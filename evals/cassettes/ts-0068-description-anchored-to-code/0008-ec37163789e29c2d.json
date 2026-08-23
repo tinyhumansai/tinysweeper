@@ -1,0 +1,28 @@
+{
+  "key": "ec37163789e29c2d",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2672,
+    "output_tokens": 185,
+    "cached_tokens": 1024,
+    "embed_tokens": 0,
+    "cost_usd": 0.000108606008
+  },
+  "value": {
+    "summary": "Adds a `reasoning_effort` field as a plain `String` without validation. This risks upstream breakage or silent misconfiguration. No security issue introduced.",
+    "findings": [
+      {
+        "path": "src/config/types.rs",
+        "existing_code": "    pub reasoning_effort: String,",
+        "rule": "unvalidated-enum",
+        "title": "Constrain reasoning_effort to accepted values",
+        "body": "The doc comment defines only `off`, `low`, `medium`, `high` as valid, but the type is `String`. Any value compiles and is silently forwarded to the API. Use an enum or validate at the boundary.",
+        "severity": "low",
+        "confidence": 0.95,
+        "suggestion": null
+      }
+    ]
+  }
+}

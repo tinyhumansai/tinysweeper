@@ -127,9 +127,10 @@ deep = "deepseek/deepseek-v4-flash"
 # is one mechanical call, `flash` is one of N concurrent opinions whose
 # *aggregate* has to stay under the price of the single `deep` call it stands
 # in for. Blended against the ~80% prompt-cache hit this prompt layout achieves,
-# and on the same pinned DeepSeek endpoint as the tiers above, flash costs
-# $0.030/M where the pro snapshot costs $0.090/M — so three reviewers cost
-# roughly what one did.
+# and on the same pinned endpoint as the tiers above, flash costs roughly a
+# third of what the pro snapshot did — so three reviewers cost about what one
+# did. Note "the same endpoint" is StreamLake/DeepInfra, not DeepSeek: see
+# `[models.provider]` below for why that distinction stopped every review once.
 #
 # Same `json_object` caveat as everything else in this block: the flash endpoint
 # refuses a strict schema request exactly as the pro snapshot does.
@@ -286,27 +287,60 @@ budget_usd_per_pr = 1.0
 # already single-provider by virtue of the dated snapshot; `flash` is not, and
 # is the tier a council multiplies.
 #
-# `deepseek` is both the cheapest endpoint and — see `structured_output` below —
-# the reason this deployment is on `json_object` at all. Pinning it is only
-# viable *because* of that setting: measured against the live API, the DeepSeek
-# endpoint refuses a strict-schema request, so a deployment that pins this
-# provider while asking for `schema` gets `404 No endpoints found` on every
-# call, for every model. That combination was shipped once and every lane went
-# neutral against a real pull request before anything caught it, which is why
-# the two keys are documented together.
+# **Pin only providers that actually serve every model in the chain.** This is
+# the trap, and it has now been sprung twice. `order` names a *routing*
+# preference; with `allow_fallbacks = false` it is a hard constraint, so a model
+# with no endpoint on any listed provider is `404 No endpoints found` — not a
+# reroute, not a downgrade, a dead call. The pin applies to the whole chain, so
+# when it is wrong `models.fallback` cannot save it: the safety net switches
+# model, never provider, and every fallback 404s for exactly the same reason.
 #
-# `allow_fallbacks = false` makes the pin a guarantee rather than a preference;
-# `models.fallback` is the safety net, and it switches model rather than
-# provider. Note this is a *routing* pin and does not fix an account whose
-# allowed-providers list excludes DeepSeek — that failure is the one the `scan`
-# comment above describes, and it is fixed at openrouter.ai/settings/privacy.
+# `order = ["deepseek"]` was that mistake. DeepSeek first-party serves the dated
+# `deepseek-v4-pro-0813` snapshot and **does not serve `deepseek-v4-flash`** —
+# the vendor prefix names who trained the model, not who hosts it. Once both
+# tiers moved to Flash, every primary call and both fallbacks 404'd, every lane
+# went `Neutral`, and each pull request was told there was nothing to review.
+# A silent all-clear over unreviewed code is the worst failure this repo has.
+#
+# StreamLake and DeepInfra both serve all four ids this deployment can ask for —
+# the two tiers, and both fallbacks — and both accept `json_object`. Verified
+# against the live API on 2026-08-23; re-verify before changing this line, with
+#
+#   curl -s https://openrouter.ai/api/v1/models/<id>/endpoints \
+#     | jq -r '.data.endpoints[].tag'
+#
+# and confirm the id you are pinning appears there. StreamLake leads because it
+# is the cheaper of the two; DeepInfra follows so a single provider's outage
+# degrades the price rather than the review. `harness::pricing` records
+# DeepInfra's dearer rate for the same reason — see the note on the flash entry.
 #
 # This table must stay *below* every scalar key in `[models]`: a TOML sub-table
 # ends the parent table, so anything written after it is parsed as a key of
 # `models.provider` instead.
 [models.provider]
-order = ["deepseek"]
+order = ["streamlake", "deepinfra"]
 allow_fallbacks = false
+# The rung that stops this pin being a single point of failure.
+#
+# `models.fallback` switches *model* and every rung of it inherits the `order`
+# above, so a pin that cannot serve these models fails the whole ladder for one
+# reason — which is exactly how a week of reviews came back empty. With this on,
+# one final attempt is made with no pin at all once every priced route has
+# failed.
+#
+# It costs nothing on a healthy deployment because it is only reached after
+# everything else has failed, and the trade when it *is* reached is deliberate:
+# an unpinned call is billed at a price `harness::pricing` cannot predict, so
+# the cost line for that review is an estimate. `budget_usd_per_pr` still bounds
+# it, the summary still names the model that answered, and reaching this rung
+# logs at `warn` — a wrong cost line is recoverable, a silent all-clear over
+# unreviewed code is not.
+#
+# Set it `false` only where an unpinned call is genuinely unacceptable — a
+# data-residency rule that some provider in the pool would break. That is a
+# deployment choosing a failed review over an unpinned one, which is coherent,
+# but it should be a decision rather than a default.
+last_resort_unpinned = true
 
 # Several reviewers on one lane's evidence, folded into one review.
 #

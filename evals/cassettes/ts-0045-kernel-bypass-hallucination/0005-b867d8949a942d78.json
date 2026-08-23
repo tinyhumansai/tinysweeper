@@ -1,0 +1,17 @@
+{
+  "key": "b867d8949a942d78",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 2708,
+    "output_tokens": 98,
+    "cached_tokens": 1024,
+    "embed_tokens": 0,
+    "cost_usd": 0.000101863328
+  },
+  "value": {
+    "summary": "Adds a `summarise` module declaration to the findings module.  The change itself is trivial and safe; it exposes a name that must resolve to a file in the same directory.  I cannot verify that `src/findings/summarise.rs` exists or that it compiles, but that is a completeness check outside the diff's scope, not a bug in this one-line addition.",
+    "findings": []
+  }
+}

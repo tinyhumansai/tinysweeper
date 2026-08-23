@@ -1,0 +1,17 @@
+{
+  "key": "877af0253e3927ce",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2667,
+    "output_tokens": 200,
+    "cached_tokens": 2295,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004794
+  },
+  "value": {
+    "summary": "The change adds a new `summarise` submodule declaration to `src/findings/mod.rs`. It is a one-line, low-risk addition with no security-relevant surface.",
+    "findings": []
+  }
+}
