@@ -153,11 +153,49 @@ fn the_shipped_defaults_pin_the_upstream_provider() {
     // no provider routing must not have a stray `provider` block sent).
     let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
 
-    assert_eq!(config.models.provider.order, vec!["deepseek".to_string()]);
+    assert_eq!(
+        config.models.provider.order,
+        vec!["streamlake".to_string(), "deepinfra".to_string()]
+    );
     assert!(
         !config.models.provider.allow_fallbacks,
         "a pin the gateway may route around is not a pin"
     );
+    assert!(
+        config.models.provider.last_resort_unpinned,
+        "a pin every rung of the ladder inherits needs an unpinned rung below it"
+    );
+}
+
+#[test]
+fn every_shipped_model_can_be_served_by_a_pinned_provider() {
+    // The outage this exists to make impossible. `order = ["deepseek"]` was
+    // shipped while every configured model was served by StreamLake and
+    // DeepInfra and by DeepSeek not at all — the vendor prefix on
+    // `deepseek/deepseek-v4-flash` names who trained it, not who hosts it. Every
+    // rung of the ladder 404'd with `No endpoints found`, every lane went
+    // Neutral, and each pull request was told there was nothing to review for a
+    // week.
+    //
+    // Which providers serve which model is catalogue data this test cannot
+    // reach offline, so what is checked here is the shape that made the mistake
+    // survivable: the pin names providers, not vendors, and the ladder has a
+    // rung that drops it. `PROVIDER_IS_NOT_A_VENDOR` lists the gateway-side
+    // names that read like a model vendor and are therefore the ones somebody
+    // reaches for by mistake.
+    const PROVIDER_IS_NOT_A_VENDOR: &[&str] = &["deepseek", "minimax", "z-ai", "moonshotai", "qwen"];
+
+    let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
+
+    for provider in &config.models.provider.order {
+        assert!(
+            !PROVIDER_IS_NOT_A_VENDOR.contains(&provider.as_str()),
+            "`{provider}` is a model vendor, and pinning it routes only to the \
+             subset of models it also hosts. Confirm every id in `[models]` has \
+             an endpoint there before pinning it: \
+             curl -s https://openrouter.ai/api/v1/models/<id>/endpoints"
+        );
+    }
 }
 
 #[test]
