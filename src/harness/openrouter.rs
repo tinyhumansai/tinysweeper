@@ -586,7 +586,10 @@ fn langfuse_client() -> Option<LangfuseClient> {
 #[async_trait]
 impl Model for GatewayModel {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse> {
-        let mut last = match self.call_until_complete(&request.model, &request).await {
+        let mut last = match self
+            .call_until_complete(&request.model, &request, &self.provider)
+            .await
+        {
             Ok(response) => return Ok(response),
             Err(err) => err,
         };
@@ -601,7 +604,42 @@ impl Model for GatewayModel {
                 error = %last,
                 "model call failed; trying the next model"
             );
-            match self.call_until_complete(fallback, &request).await {
+            match self
+                .call_until_complete(fallback, &request, &self.provider)
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(err) => last = err,
+            }
+        }
+
+        // The last rung, and the only one that changes *provider* rather than
+        // model.
+        //
+        // Every rung above shares `self.provider`, so a pin that cannot serve
+        // these models fails all of them for one reason and the ladder is
+        // decoration. That is the outage this rung exists for: `deepseek` was
+        // pinned while the configured models were served only by StreamLake and
+        // DeepInfra, every rung returned `404 No endpoints found`, and each pull
+        // request was told there was nothing to review.
+        //
+        // Only reached when every priced route has already failed, so it costs
+        // nothing on a healthy deployment. It is loud because an unpinned call
+        // is billed at a price `harness::pricing` did not predict, and an
+        // operator who never learns the pin is broken keeps paying it.
+        if self.provider.last_resort_unpinned && !self.provider.is_empty() {
+            let unpinned = ProviderRouting::unpinned();
+            tracing::warn!(
+                primary = %request.model,
+                pinned_to = %self.provider.order.join(", "),
+                error = %last,
+                "every model failed on the pinned provider; retrying unpinned — \
+                 the cost line for this review is an estimate, and the pin needs fixing"
+            );
+            match self
+                .call_until_complete(&request.model, &request, &unpinned)
+                .await
+            {
                 Ok(response) => return Ok(response),
                 Err(err) => last = err,
             }
