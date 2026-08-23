@@ -674,7 +674,48 @@ mod tests {
         ProviderRouting {
             order: order.iter().map(|p| (*p).to_string()).collect(),
             allow_fallbacks,
+            ..ProviderRouting::default()
         }
+    }
+
+    #[test]
+    fn the_last_resort_rung_is_on_by_default() {
+        // A pin is only safe to default to because this rung exists. Turning it
+        // off by default would restore the failure it was added for: every rung
+        // of the ladder inheriting one broken pin.
+        assert!(ProviderRouting::default().last_resort_unpinned);
+    }
+
+    #[test]
+    fn the_last_resort_rung_sends_no_provider_block() {
+        // The whole point of the rung: it must not carry the pin that just
+        // failed every other rung, or it is a fourth identical attempt.
+        let unpinned = ProviderRouting::unpinned();
+        assert!(unpinned.is_empty());
+
+        let options = provider_options("high", &unpinned);
+        assert!(
+            options.get("provider").is_none(),
+            "the last rung must route freely: {options}"
+        );
+    }
+
+    #[test]
+    fn the_last_resort_rung_cannot_recurse() {
+        // It is reached from `complete` only when `self.provider` is pinned, and
+        // the routing it swaps in is unpinned — so the guard is false for it and
+        // there is no second last-resort attempt.
+        let unpinned = ProviderRouting::unpinned();
+        assert!(!(unpinned.last_resort_unpinned && !unpinned.is_empty()));
+    }
+
+    #[test]
+    fn an_unpinned_deployment_has_no_last_resort_rung_to_take() {
+        // Nothing to fall back *from*: the primary call already routed freely,
+        // so retrying it unpinned would be a duplicate call on a real outage.
+        let routing = ProviderRouting::default();
+        assert!(routing.is_empty());
+        assert!(!(routing.last_resort_unpinned && !routing.is_empty()));
     }
 
     #[test]
