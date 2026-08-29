@@ -1,7 +1,7 @@
 //! Tests for duplicate pull request detection.
 
 use super::*;
-use crate::forge::types::ChangedFile;
+use crate::forge::types::{ChangedFile, FileStatus};
 
 fn changed(path: &str, patch: &str) -> ChangedFile {
     ChangedFile {
@@ -256,4 +256,51 @@ fn a_backport_is_not_a_duplicate_of_the_change_it_backports() {
 
     assert_eq!(overlap(&to_main, &to_release).edits, 1.0);
     assert_eq!(duplicate_of(&to_release, &[to_main], 0.8, 0.9), None);
+}
+
+#[test]
+fn the_same_patch_text_with_a_different_file_operation_is_not_a_duplicate() {
+    // Emptying a file and deleting it can produce the same patch body and are
+    // materially different results.
+    let patch = "@@ -1,3 +1,1 @@\n keep\n-gone\n-also gone\n";
+    let emptied = Shape::of(1, "main", &[changed("a.rs", patch)]);
+    let deleted = Shape::of(
+        2,
+        "main",
+        &[ChangedFile {
+            path: "a.rs".into(),
+            status: FileStatus::Removed,
+            patch: Some(patch.into()),
+            ..ChangedFile::default()
+        }],
+    );
+
+    assert_eq!(overlap(&emptied, &deleted).paths, 1.0);
+    assert_eq!(overlap(&emptied, &deleted).edits, 0.0);
+    assert_eq!(duplicate_of(&deleted, &[emptied], 0.8, 0.9), None);
+}
+
+#[test]
+fn two_edits_to_identical_distant_blocks_are_told_apart_by_position() {
+    // Same context, same change, different place in the file. Nothing but the
+    // hunk coordinates separates them.
+    let first = Shape::of(
+        1,
+        "main",
+        &[changed(
+            "config.rs",
+            "@@ -1,3 +1,3 @@\n let block = [\n-    \"old\",\n+    \"new\",\n",
+        )],
+    );
+    let second = Shape::of(
+        2,
+        "main",
+        &[changed(
+            "config.rs",
+            "@@ -40,3 +40,3 @@\n let block = [\n-    \"old\",\n+    \"new\",\n",
+        )],
+    );
+
+    assert_eq!(overlap(&first, &second).edits, 0.0);
+    assert_eq!(duplicate_of(&second, &[first], 0.8, 0.9), None);
 }
