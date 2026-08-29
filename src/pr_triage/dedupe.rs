@@ -37,14 +37,19 @@ pub struct Shape {
     pub number: u64,
     /// The paths it changes.
     pub paths: BTreeSet<String>,
-    /// Every line it adds, normalised, as a set.
+    /// Every line it adds, normalised and **qualified by the file it is in**,
+    /// as a set.
     ///
     /// A set rather than a sequence: two contributors solving the same problem
     /// order their hunks differently often enough that sequence comparison
     /// would miss real duplicates, and the paths gate has already established
     /// that they are working on the same files.
+    ///
+    /// Qualified by path because a bare line set is repository-wide: two pull
+    /// requests that touch the same three files and add `return false;` to a
+    /// *different* one of them each would otherwise share the line perfectly.
     pub added: BTreeSet<String>,
-    /// Every line it removes, normalised, as a set.
+    /// Every line it removes, normalised and qualified by path, as a set.
     ///
     /// Carried because the additions alone do not identify an edit. Two changes
     /// to two different functions that each add `return false;` share 100% of
@@ -74,13 +79,13 @@ impl Shape {
                     hunk.after
                         .iter()
                         .filter(|line| !hunk.before.contains(line))
-                        .cloned(),
+                        .map(|line| qualified(&file.path, line)),
                 );
                 removed.extend(
                     hunk.before
                         .iter()
                         .filter(|line| !hunk.after.contains(line))
-                        .cloned(),
+                        .map(|line| qualified(&file.path, line)),
                 );
             }
         }
@@ -141,6 +146,14 @@ pub fn overlap(left: &Shape, right: &Shape) -> Overlap {
         added,
         removed,
     }
+}
+
+/// A line tagged with the file it changed.
+///
+/// A unit separator, like the index's document ids, so a path or a line
+/// containing the delimiter cannot forge a different file's entry.
+fn qualified(path: &str, line: &str) -> String {
+    format!("{path}\u{{1f}}{line}")
 }
 
 /// Overlap of two sets, 0..=1. Empty on either side is zero, never NaN.
