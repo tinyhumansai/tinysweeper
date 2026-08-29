@@ -112,6 +112,13 @@ pub struct Hunk {
     pub after: Vec<String>,
     /// How many lines the hunk actually changes, context excluded.
     pub changed: usize,
+    /// How many of those it removes.
+    ///
+    /// Tracked separately because the before-image test is only meaningful on
+    /// a hunk that removes something: for a pure addition the before image is
+    /// nothing but context, and context is still on the branch whether or not
+    /// the change landed.
+    pub removes: usize,
 }
 
 /// Split a unified diff into its hunks.
@@ -151,6 +158,7 @@ pub fn hunks(patch: &str) -> Vec<Hunk> {
             Some(b'-') if !line.starts_with("---") => {
                 if push_normalised(&line[1..], &mut current.before) {
                     current.changed += 1;
+                    current.removes += 1;
                 }
             }
             // Context, and the reason this module can say anything about
@@ -254,14 +262,13 @@ pub fn file_landed(file: &ChangedFile, base: Option<&str>) -> Result<usize, NotL
         // still reads the way it did before the change proves the change has
         // not been applied, whatever the additions look like.
         //
-        // Skipped when the hunk has no context of its own — a whole new file,
-        // or an addition at a file boundary — because a before image that is
-        // only the removed lines is empty for a pure addition, and "is the
-        // empty run present" is true of every file.
-        if !hunk.before.is_empty()
-            && hunk.before != hunk.after
-            && contains_run(&base, &hunk.before)
-        {
+        // Only where the hunk removes something. A pure addition's before
+        // image is nothing but its context lines, and those are on the branch
+        // whether or not the change landed — testing them would refuse every
+        // addition there is. Such hunks are judged on the after image alone,
+        // which carries the same context and is therefore still a statement
+        // about a *place* rather than about the file as a whole.
+        if hunk.removes > 0 && contains_run(&base, &hunk.before) {
             return Err(NotLanded::RemovedLineStillPresent);
         }
         if !contains_run(&base, &hunk.after) {
