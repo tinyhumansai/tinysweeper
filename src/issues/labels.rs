@@ -18,20 +18,25 @@
 //!   highest severity.
 //! - `triage:` — what the deterministic pull request sweep concluded:
 //!   duplicate, superseded, or worth reading.
+//! - `flag:` — something a human should look at *before* judging the item on
+//!   its merits. Separate from `triage:` rather than a fourth value of it,
+//!   because the two facts are independent: a pull request can be a duplicate
+//!   *and* an advertisement, and collapsing them would lose whichever was
+//!   written second.
 //!
 //! Labels outside both facets are never removed. A human's own triage is not
 //! this planner's business.
 
 use crate::config::types::{Issues, PrTriage};
 use crate::issues::types::Priority;
-use crate::pr_triage::types::Verdict;
+use crate::pr_triage::types::{Flag, Verdict};
 
 /// The label prefixes this bot owns, and within which a label is exclusive.
 ///
 /// Adding a facet here is the *only* thing needed to make a new axis
 /// self-superseding — which is the point of naming them in one place rather
 /// than special-casing `priority:` in three functions, as this module used to.
-pub const FACETS: [&str; 2] = ["priority:", "triage:"];
+pub const FACETS: [&str; 3] = ["priority:", "triage:", "flag:"];
 
 /// The labelling rules, independent of which job is applying them.
 ///
@@ -62,9 +67,10 @@ impl<'a> From<&'a Issues> for LabelPolicy<'a> {
 }
 
 impl<'a> From<&'a PrTriage> for LabelPolicy<'a> {
-    /// The pull request sweep applies exactly one label — its verdict — so it
-    /// has no `max_labels` or `allow_labels` of its own to configure. A cap of
-    /// one is not a limitation here; it is the shape of the job.
+    /// The pull request sweep applies at most two labels — its verdict, and a
+    /// `flag:` when something wants a human's eye before the merits are judged
+    /// — so it has no `max_labels` or `allow_labels` of its own to configure.
+    /// A cap of two is not a limitation here; it is the shape of the job.
     ///
     /// It reuses `[issues] block_labels` rather than declaring its own: the
     /// kill switches (`tinysweeper:human-review`, `tinysweeper:manual-only`)
@@ -74,7 +80,7 @@ impl<'a> From<&'a PrTriage> for LabelPolicy<'a> {
     fn from(policy: &'a PrTriage) -> Self {
         LabelPolicy {
             apply_labels: policy.apply_labels,
-            max_labels: 1,
+            max_labels: 2,
             allow_labels: &[],
             block_labels: &[],
         }
@@ -240,6 +246,7 @@ pub fn vocabulary() -> Vec<&'static str> {
     Priority::labels()
         .into_iter()
         .chain(Verdict::labels())
+        .chain(Flag::labels())
         .collect()
 }
 
