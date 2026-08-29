@@ -262,7 +262,7 @@ async fn verdict_for(
         return Verdict::Duplicate {
             of,
             path_overlap: overlap.paths,
-            line_overlap: overlap.lines,
+            line_overlap: overlap.edits,
         };
     }
 

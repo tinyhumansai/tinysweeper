@@ -22,7 +22,7 @@
 //! guarantees `open_pull_requests` comes back oldest first for exactly this
 //! reason.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::forge::types::ChangedFile;
 use crate::pr_triage::landed::{Hunk, hunks};
@@ -48,10 +48,15 @@ pub struct Shape {
     /// are what say *where*, so two identical edits in two different places
     /// fingerprint differently.
     ///
-    /// A set rather than a sequence, because two contributors solving the same
+    /// A **multiset**, not a set: the count matters. An older pull request that
+    /// changes one occurrence of a repeated block and a newer one that changes
+    /// two identical occurrences collapse to the same single fingerprint under
+    /// a set, score 1.0, and the newer one is closed despite its extra edit.
+    ///
+    /// Counted rather than ordered, because two contributors solving the same
     /// problem order their hunks differently often enough that sequence
     /// comparison would miss real duplicates.
-    pub edits: BTreeSet<String>,
+    pub edits: BTreeMap<String, usize>,
     /// Whether every changed file came with a readable patch.
     ///
     /// A binary or truncated file contributes its *path* and no content. Two
@@ -65,7 +70,7 @@ impl Shape {
     /// Reduce one pull request's changed files to its comparable shape.
     pub fn of(number: u64, files: &[ChangedFile]) -> Self {
         let mut paths = BTreeSet::new();
-        let mut edits = BTreeSet::new();
+        let mut edits: BTreeMap<String, usize> = BTreeMap::new();
         let mut every_file_readable = true;
 
         for file in files {
@@ -75,7 +80,7 @@ impl Shape {
                 continue;
             };
             for hunk in hunks(patch) {
-                edits.insert(fingerprint(&file.path, &hunk));
+                *edits.entry(fingerprint(&file.path, &hunk)).or_default() += 1;
             }
         }
 
@@ -114,15 +119,20 @@ fn fingerprint(path: &str, hunk: &Hunk) -> String {
 pub struct Overlap {
     /// Jaccard overlap of the changed-path sets, 0..=1.
     pub paths: f64,
-    /// Jaccard overlap of the hunk fingerprints, 0..=1.
-    pub lines: f64,
+    /// Multiset Jaccard overlap of the hunk fingerprints, 0..=1.
+    ///
+    /// Named for what it measures. It was `lines` for a while and that invited
+    /// exactly the misreading the fingerprint exists to prevent — a hunk
+    /// overlap is not a line overlap, and two identical edits in different
+    /// places score 0 here where a line comparison would score 1.
+    pub edits: f64,
 }
 
 /// Score one pair.
 pub fn overlap(left: &Shape, right: &Shape) -> Overlap {
     Overlap {
         paths: jaccard(&left.paths, &right.paths),
-        lines: jaccard(&left.edits, &right.edits),
+        edits: multiset_jaccard(&left.edits, &right.edits),
     }
 }
 
@@ -133,6 +143,27 @@ fn jaccard(left: &BTreeSet<String>, right: &BTreeSet<String>) -> f64 {
         return 0.0;
     }
     left.intersection(right).count() as f64 / union as f64
+}
+
+/// Overlap of two multisets, 0..=1: summed minimums over summed maximums.
+///
+/// The generalisation of Jaccard that keeps counts, so one occurrence of an
+/// edit against two of the same edit scores 0.5 rather than 1.0.
+fn multiset_jaccard(left: &BTreeMap<String, usize>, right: &BTreeMap<String, usize>) -> f64 {
+    let mut intersection = 0usize;
+    let mut union = 0usize;
+
+    for key in left.keys().chain(right.keys()).collect::<BTreeSet<_>>() {
+        let mine = left.get(key).copied().unwrap_or(0);
+        let theirs = right.get(key).copied().unwrap_or(0);
+        intersection += mine.min(theirs);
+        union += mine.max(theirs);
+    }
+
+    if union == 0 {
+        return 0.0;
+    }
+    intersection as f64 / union as f64
 }
 
 /// The older pull request `subject` duplicates, if any.
@@ -161,14 +192,14 @@ pub fn duplicate_of(
             continue;
         }
         let score = overlap(subject, other);
-        if score.paths < path_min || score.lines < line_min {
+        if score.paths < path_min || score.edits < line_min {
             continue;
         }
         let better = match best {
             None => true,
             Some((number, current)) => {
-                score.lines > current.lines
-                    || (score.lines == current.lines && other.number < number)
+                score.edits > current.edits
+                    || (score.edits == current.edits && other.number < number)
             }
         };
         if better {

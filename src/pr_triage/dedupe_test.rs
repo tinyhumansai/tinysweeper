@@ -50,7 +50,7 @@ fn the_same_lines_in_different_files_are_not_duplicates() {
     let score = overlap(&one, &two);
     // Neither axis matches: the paths differ, and the added lines are qualified
     // by the file they were added to, so they differ too.
-    assert_eq!(score.lines, 0.0);
+    assert_eq!(score.edits, 0.0);
     assert_eq!(score.paths, 0.0);
     assert_eq!(duplicate_of(&two, &[one], 0.8, 0.9), None);
 }
@@ -134,7 +134,7 @@ fn the_same_line_added_to_different_files_is_not_a_duplicate() {
     let two = Shape::of(2, &files("b"));
 
     assert_eq!(overlap(&one, &two).paths, 1.0);
-    assert_eq!(overlap(&one, &two).lines, 0.0);
+    assert_eq!(overlap(&one, &two).edits, 0.0);
     assert_eq!(duplicate_of(&two, &[one], 0.8, 0.9), None);
 }
 
@@ -153,7 +153,7 @@ fn two_edits_that_add_the_same_line_but_remove_different_ones_are_not_duplicates
 
     // The added lines are identical; the removed ones are not, and a hunk
     // fingerprint carries both.
-    assert_eq!(overlap(&one, &two).lines, 0.0);
+    assert_eq!(overlap(&one, &two).edits, 0.0);
     assert_eq!(duplicate_of(&two, &[one], 0.8, 0.9), None);
 }
 
@@ -178,7 +178,7 @@ fn the_same_edit_in_two_places_in_one_file_is_not_a_duplicate() {
     );
 
     assert_eq!(overlap(&one, &two).paths, 1.0);
-    assert_eq!(overlap(&one, &two).lines, 0.0);
+    assert_eq!(overlap(&one, &two).edits, 0.0);
     assert_eq!(duplicate_of(&two, &[one], 0.8, 0.9), None);
 }
 
