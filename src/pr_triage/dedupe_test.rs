@@ -134,7 +134,7 @@ fn the_same_line_added_to_different_files_is_not_a_duplicate() {
     let two = Shape::of(2, &files("b"));
 
     assert_eq!(overlap(&one, &two).paths, 1.0);
-    assert_eq!(overlap(&one, &two).added, 0.0);
+    assert_eq!(overlap(&one, &two).lines, 0.0);
     assert_eq!(duplicate_of(&two, &[one], 0.8, 0.9), None);
 }
 
@@ -151,9 +151,58 @@ fn two_edits_that_add_the_same_line_but_remove_different_ones_are_not_duplicates
         &[changed("a.rs", "@@\n-return beta();\n+return false;\n")],
     );
 
-    let score = overlap(&one, &two);
-    assert_eq!(score.added, 1.0);
-    assert_eq!(score.removed, 0.0);
-    assert_eq!(score.lines, 0.0, "the lower of the two, not the mean");
+    // The added lines are identical; the removed ones are not, and a hunk
+    // fingerprint carries both.
+    assert_eq!(overlap(&one, &two).lines, 0.0);
+    assert_eq!(duplicate_of(&two, &[one], 0.8, 0.9), None);
+}
+
+#[test]
+fn the_same_edit_in_two_places_in_one_file_is_not_a_duplicate() {
+    // Flipping `enabled = false` to `true` in two unrelated blocks produces
+    // identical added and removed lines. What tells them apart is the context
+    // each hunk carries, which is why the fingerprint is per hunk.
+    let one = Shape::of(
+        1,
+        &[changed(
+            "config.toml",
+            "@@ -1,3 +1,3 @@\n [alpha]\n-enabled = false\n+enabled = true\n",
+        )],
+    );
+    let two = Shape::of(
+        2,
+        &[changed(
+            "config.toml",
+            "@@ -9,3 +9,3 @@\n [beta]\n-enabled = false\n+enabled = true\n",
+        )],
+    );
+
+    assert_eq!(overlap(&one, &two).paths, 1.0);
+    assert_eq!(overlap(&one, &two).lines, 0.0);
+    assert_eq!(duplicate_of(&two, &[one], 0.8, 0.9), None);
+}
+
+#[test]
+fn an_unreadable_file_makes_the_whole_shape_incomparable() {
+    // The textual halves match perfectly and the binaries are invisible, so a
+    // shape that ignored them would close the newer one over bytes nobody saw.
+    let with_binary = |number: u64| {
+        Shape::of(
+            number,
+            &[
+                changed("README.md", "@@ -1,2 +1,2 @@\n # Title\n-old\n+new\n"),
+                ChangedFile {
+                    path: "logo.png".into(),
+                    patch: None,
+                    ..ChangedFile::default()
+                },
+            ],
+        )
+    };
+    let one = with_binary(1);
+    let two = with_binary(2);
+
+    assert!(!one.every_file_readable);
+    assert!(!two.is_comparable());
     assert_eq!(duplicate_of(&two, &[one], 0.8, 0.9), None);
 }
