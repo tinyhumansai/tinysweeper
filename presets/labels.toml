@@ -39,6 +39,29 @@ name = "priority: p3"
 color = "0e8a16"
 description = "Whenever. Cosmetic, a nicety, or a cleanup with no user visible effect."
 
+# The second axis, and the only other one this bot owns: what the deterministic
+# pull request sweep concluded. Exclusive like `priority:`, so a pull request
+# never carries two of these at once — see `src/pr_triage`.
+#
+# These are applied without a model call. `triage: duplicate` means two open
+# pull requests change the same files in the same way; `triage: superseded`
+# means every line the pull request changes is already on the base branch. Both
+# are checkable by hand, which is why they are allowed to justify a close.
+[[labels]]
+name = "triage: duplicate"
+color = "cfd3d7"
+description = "The same change as an older open pull request. The comment says which."
+
+[[labels]]
+name = "triage: superseded"
+color = "cfd3d7"
+description = "Already on the base branch. Applying it would change nothing."
+
+[[labels]]
+name = "triage: review"
+color = "1d76db"
+description = "Nothing disqualifies it. A human should read this one."
+
 # Applied by triage when it is confident enough to say so, and by people.
 [[labels]]
 name = "duplicate"
