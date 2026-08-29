@@ -29,7 +29,7 @@ fn the_newer_of_two_identical_pull_requests_is_the_duplicate() {
     let newer = readme_fix(5798);
 
     assert_eq!(
-        duplicate_of(&newer, &[older.clone()], 0.8, 0.9).map(|(number, _)| number),
+        duplicate_of(&newer, std::slice::from_ref(&older), 0.8, 0.9).map(|(number, _)| number),
         Some(5789)
     );
     // And never the other way round, however the caller orders the list.
