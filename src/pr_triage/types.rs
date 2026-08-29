@@ -105,6 +105,14 @@ pub struct TriagePlan {
     pub declined_labels: Vec<(String, &'static str)>,
     /// The evidence comment, when one is to be posted.
     pub comment: Option<String>,
+    /// The id of tinysweeper's own previous comment on this pull request, when
+    /// there is one.
+    ///
+    /// The sweep is meant to be run over and over — that is what a sweep is —
+    /// and a job that posts a fresh comment every pass would bury the
+    /// conversation it is trying to help. One comment per pull request, edited
+    /// forever, exactly as the review path does it.
+    pub comment_id: Option<u64>,
     /// Whether to actually close, and on what terms.
     pub close: Option<ClosePlan>,
     /// Why the close was refused, when it was. For the log and the comment.
@@ -121,6 +129,7 @@ impl TriagePlan {
             remove_labels: Vec::new(),
             declined_labels: Vec::new(),
             comment: None,
+            comment_id: None,
             close: None,
             close_refusal: None,
         }

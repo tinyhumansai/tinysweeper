@@ -112,7 +112,14 @@ pub async fn sweep(
                 &mut budget,
             )
             .await;
-            plans.push(build_plan(config, pull_request, verdict, maintainers));
+            let mut plan = build_plan(config, pull_request, verdict, maintainers);
+            // Only for a pull request that is actually getting a comment, so
+            // the extra request is spent on the handful the sweep flags rather
+            // than on every pull request it reads.
+            if plan.comment.is_some() {
+                attach_previous_comment(read, repo, &mut plan).await;
+            }
+            plans.push(plan);
         }
 
         // Pushed after the verdict, never before: a pull request must not be
@@ -124,6 +131,33 @@ pub async fn sweep(
         plans,
         skipped: None,
     })
+}
+
+/// Point the plan at tinysweeper's own previous comment, if it left one.
+///
+/// A body identical to what is already posted clears the comment from the plan
+/// entirely: an edit that changes nothing still bumps `updated_at`, which is
+/// the very field the close gate's quiet check reads. A sweep that kept
+/// touching pull requests would keep resetting its own guard.
+async fn attach_previous_comment(read: &dyn ForgeRead, repo: &RepoId, plan: &mut TriagePlan) {
+    // Best effort. Failing to read the comments means posting a second one,
+    // which is untidy; refusing to triage over it would be worse.
+    let Ok(existing) = read.comments(repo, plan.number).await else {
+        return;
+    };
+
+    let Some(previous) = existing
+        .iter()
+        .find(|comment| comment.body.contains(comment::MARKER))
+    else {
+        return;
+    };
+
+    if Some(previous.body.as_str()) == plan.comment.as_deref() {
+        plan.comment = None;
+        return;
+    }
+    plan.comment_id = previous.id;
 }
 
 /// Decide what one pull request is, cheapest question first.
