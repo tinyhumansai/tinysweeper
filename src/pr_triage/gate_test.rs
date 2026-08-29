@@ -128,6 +128,18 @@ fn a_merged_pull_request_is_not_closed_again() {
 }
 
 #[test]
+fn an_already_closed_pull_request_is_not_closed_again() {
+    let subject = PullRequest {
+        open: false,
+        ..subject()
+    };
+    assert_eq!(
+        decide_with(&subject, &duplicate(), &policy()),
+        Outcome::Refuse("it is already closed")
+    );
+}
+
+#[test]
 fn a_young_pull_request_is_left_alone() {
     let subject = PullRequest {
         age_days: 0,

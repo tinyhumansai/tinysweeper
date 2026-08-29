@@ -65,6 +65,13 @@ pub fn decide(inputs: Inputs<'_>) -> Outcome {
     if subject.merged {
         return Outcome::Refuse("it is already merged");
     }
+    // Separate from `merged`, because a pull request closed without merging is
+    // neither. Closing it again writes a timeline event saying the bot did
+    // something it did not, and on the revalidation path it is the difference
+    // between noticing a maintainer's intervention and overwriting it.
+    if !subject.open {
+        return Outcome::Refuse("it is already closed");
+    }
     // A draft is the author saying the work is not finished. Judging an
     // unfinished change against the base branch and closing it is the rudest
     // thing this bot could do, and the author will open it for review when they
