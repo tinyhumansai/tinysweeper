@@ -179,26 +179,36 @@ async fn the_new_label_goes_on_before_the_old_one_comes_off() {
 
 #[tokio::test]
 async fn one_failure_does_not_abandon_the_rest_of_the_sweep() {
-    // A read-only forge refuses nothing, so the failure is manufactured by
-    // asking to close a pull request that is not there — which is exactly what
-    // a sweep meets when somebody closes one by hand mid-run.
-    let plans = vec![duplicate_plan(), {
-        let mut second = duplicate_plan();
-        second.number = 5799;
-        second
-    }];
+    // A real failure, not an assumed one. `update_comment` against an id the
+    // mock has never issued is refused, which is exactly what happens when a
+    // maintainer deletes the bot's comment between the sweep and the write.
+    let mut failing = duplicate_plan();
+    failing.comment_id = Some(999_999);
 
-    let forge = MockForge::new();
-    let reports = apply_all(&forge, &forge, &config(), &repo(), &plans, &[]).await;
+    let mut second = duplicate_plan();
+    second.number = 5799;
 
-    assert_eq!(reports.len(), 2);
+    let forge = MockForge::new().refusing_unknown_comments();
+    let reports = apply_all(
+        &forge,
+        &forge,
+        &config(),
+        &repo(),
+        &[failing, second],
+        &[],
+    )
+    .await;
+
+    assert_eq!(reports.len(), 2, "the sweep abandoned the rest");
     assert!(
-        reports
-            .iter()
-            .all(|report| report.outcome == Outcome::Labelled)
+        matches!(reports[0].outcome, Outcome::Failed(_)),
+        "{:?}",
+        reports[0]
     );
+    // The point: the second one still ran.
     assert_eq!(reports[1].number, 5799);
-    assert_eq!(reports[0].verdict, "triage: duplicate");
+    assert_eq!(reports[1].outcome, Outcome::Labelled);
+    assert_eq!(reports[1].verdict, "triage: duplicate");
 }
 
 #[tokio::test]
