@@ -89,7 +89,9 @@ pub async fn sweep(
     // fall off the end and produce a successful-looking answer that considered
     // nothing, so it is fetched on its own and put back.
     if let Some(number) = only
-        && !pulls.iter().any(|pull_request| pull_request.number == number)
+        && !pulls
+            .iter()
+            .any(|pull_request| pull_request.number == number)
     {
         pulls.push(read.pull_request(repo, number).await?);
     }

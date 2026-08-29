@@ -288,11 +288,7 @@ pub fn file_landed(file: &ChangedFile, base: Option<&str>) -> Result<usize, NotL
 ///
 /// Returns the number of substantive lines checked, which the verdict carries
 /// so a maintainer reading the comment knows how much evidence is behind it.
-pub fn landed(
-    files: &[ChangedFile],
-    bases: &[Base],
-    min_lines: usize,
-) -> Result<usize, NotLanded> {
+pub fn landed(files: &[ChangedFile], bases: &[Base], min_lines: usize) -> Result<usize, NotLanded> {
     // A short `bases` would let `zip` drop the tail of `files` silently, and a
     // pull request judged on the first two of its twenty files is exactly the
     // wrong thing to close. Callers build the two lists together; a mismatch is

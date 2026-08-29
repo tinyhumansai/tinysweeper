@@ -57,7 +57,10 @@ fn a_change_already_on_the_base_branch_is_landed() {
         "README.md",
         "@@ -1,3 +1,3 @@\n # Title\n-Rust 1.93.0\n+Rust 1.96.1\n more\n",
     );
-    assert_eq!(file_landed(&file, Some("# Title\nRust 1.96.1\nmore\n")), Ok(2));
+    assert_eq!(
+        file_landed(&file, Some("# Title\nRust 1.96.1\nmore\n")),
+        Ok(2)
+    );
 }
 
 #[test]
@@ -69,7 +72,10 @@ fn the_before_image_is_what_makes_a_one_line_change_safe() {
         "@@ -1,3 +1,3 @@\n # Title\n-Rust 1.93.0\n+Rust 1.96.1\n more\n",
     );
     assert_eq!(
-        file_landed(&file, Some("# Title\nRust 1.93.0\nmore\nRust 1.96.1 is coming\n")),
+        file_landed(
+            &file,
+            Some("# Title\nRust 1.93.0\nmore\nRust 1.96.1 is coming\n")
+        ),
         Err(NotLanded::RemovedLineStillPresent)
     );
 }
@@ -83,7 +89,8 @@ fn an_addition_that_exists_somewhere_else_is_not_landed_here() {
         "config.rs",
         "@@ -10,2 +10,5 @@\n let second = [\n+    \"alpha\",\n+    \"beta\",\n+    \"gamma\",\n ];\n",
     );
-    let base = "let first = [\n    \"alpha\",\n    \"beta\",\n    \"gamma\",\n];\nlet second = [\n];\n";
+    let base =
+        "let first = [\n    \"alpha\",\n    \"beta\",\n    \"gamma\",\n];\nlet second = [\n];\n";
     assert_eq!(
         file_landed(&file, Some(base)),
         Err(NotLanded::AddedLineMissing)

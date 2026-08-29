@@ -70,8 +70,18 @@ impl Shape {
                 // The images carry context lines, which are on both sides and
                 // therefore say nothing about who changed what. Only the lines
                 // one side has and the other does not are the edit.
-                added.extend(hunk.after.iter().filter(|line| !hunk.before.contains(line)).cloned());
-                removed.extend(hunk.before.iter().filter(|line| !hunk.after.contains(line)).cloned());
+                added.extend(
+                    hunk.after
+                        .iter()
+                        .filter(|line| !hunk.before.contains(line))
+                        .cloned(),
+                );
+                removed.extend(
+                    hunk.before
+                        .iter()
+                        .filter(|line| !hunk.after.contains(line))
+                        .cloned(),
+                );
             }
         }
 

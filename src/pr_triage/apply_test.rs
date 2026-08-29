@@ -5,10 +5,10 @@
 //! before close — are the whole of its behaviour.
 
 use super::*;
-use crate::forge::mock::{MockForge, Write};
-use crate::pr_triage::comment::MARKER;
 use crate::config::types::{Config, PrClose, PrTriage};
+use crate::forge::mock::{MockForge, Write};
 use crate::forge::types::PullRequest;
+use crate::pr_triage::comment::MARKER;
 use crate::pr_triage::types::{ClosePlan, TriagePlan, Verdict};
 
 /// A deployment with closing fully on, so a refusal in these tests is always
@@ -294,15 +294,7 @@ async fn a_dropped_close_takes_its_comment_claim_with_it() {
         vec![],
     );
 
-    let reports = apply_all(
-        &forge,
-        &forge,
-        &config(),
-        &repo(),
-        &[closing_plan()],
-        &[],
-    )
-    .await;
+    let reports = apply_all(&forge, &forge, &config(), &repo(), &[closing_plan()], &[]).await;
 
     assert_eq!(reports[0].outcome, Outcome::Labelled);
     let posted = forge
