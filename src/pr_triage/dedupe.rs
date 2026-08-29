@@ -25,7 +25,7 @@
 use std::collections::BTreeSet;
 
 use crate::forge::types::ChangedFile;
-use crate::pr_triage::landed::runs;
+use crate::pr_triage::landed::hunks;
 
 /// One pull request reduced to what the comparison reads.
 ///
@@ -44,6 +44,14 @@ pub struct Shape {
     /// would miss real duplicates, and the paths gate has already established
     /// that they are working on the same files.
     pub added: BTreeSet<String>,
+    /// Every line it removes, normalised, as a set.
+    ///
+    /// Carried because the additions alone do not identify an edit. Two changes
+    /// to two different functions that each add `return false;` share 100% of
+    /// their added lines and are not remotely the same change — what separates
+    /// them is what they took out. Compared under the same floor as the
+    /// additions, so a duplicate has to match on both halves of the edit.
+    pub removed: BTreeSet<String>,
 }
 
 impl Shape {
@@ -51,14 +59,19 @@ impl Shape {
     pub fn of(number: u64, files: &[ChangedFile]) -> Self {
         let mut paths = BTreeSet::new();
         let mut added = BTreeSet::new();
+        let mut removed = BTreeSet::new();
 
         for file in files {
             paths.insert(file.path.clone());
             let Some(patch) = file.patch.as_deref() else {
                 continue;
             };
-            for run in runs(patch).added {
-                added.extend(run);
+            for hunk in hunks(patch) {
+                // The images carry context lines, which are on both sides and
+                // therefore say nothing about who changed what. Only the lines
+                // one side has and the other does not are the edit.
+                added.extend(hunk.after.iter().filter(|line| !hunk.before.contains(line)).cloned());
+                removed.extend(hunk.before.iter().filter(|line| !hunk.after.contains(line)).cloned());
             }
         }
 
@@ -66,6 +79,7 @@ impl Shape {
             number,
             paths,
             added,
+            removed,
         }
     }
 
@@ -84,15 +98,38 @@ impl Shape {
 pub struct Overlap {
     /// Jaccard overlap of the changed-path sets, 0..=1.
     pub paths: f64,
-    /// Jaccard overlap of the added-line sets, 0..=1.
+    /// Overlap of the two edits, 0..=1: the lower of the added-line and
+    /// removed-line scores.
+    ///
+    /// The lower, not the mean. An average lets a perfect match on one half
+    /// carry a poor match on the other, which is exactly the pair this is meant
+    /// to separate — two changes that add the same line and remove different
+    /// ones.
     pub lines: f64,
+    /// Overlap of the added-line sets alone, for the comment's evidence.
+    pub added: f64,
+    /// Overlap of the removed-line sets alone. `1.0` when neither removes
+    /// anything, which is agreement rather than a missing answer.
+    pub removed: f64,
 }
 
 /// Score one pair.
 pub fn overlap(left: &Shape, right: &Shape) -> Overlap {
+    // Two pull requests that both remove nothing agree perfectly about what
+    // they remove. Scoring that as zero — which is what an empty-set Jaccard
+    // gives — would make every pure-addition duplicate unfindable.
+    let removed = if left.removed.is_empty() && right.removed.is_empty() {
+        1.0
+    } else {
+        jaccard(&left.removed, &right.removed)
+    };
+    let added = jaccard(&left.added, &right.added);
+
     Overlap {
         paths: jaccard(&left.paths, &right.paths),
-        lines: jaccard(&left.added, &right.added),
+        lines: added.min(removed),
+        added,
+        removed,
     }
 }
 
