@@ -72,6 +72,11 @@ pub async fn apply_all(forge: &dyn ForgeWrite, repo: &RepoId, plans: &[TriagePla
             number: plan.number,
             verdict: plan.verdict.label(),
             detail: plan.verdict.detail(),
+            flags: plan
+                .flags
+                .iter()
+                .map(|(flag, why)| (flag.label(), why.clone()))
+                .collect(),
             outcome,
         });
     }
@@ -116,6 +121,9 @@ pub struct Report {
     pub verdict: &'static str,
     /// The evidence behind the verdict, in one line.
     pub detail: String,
+    /// Advisory flags raised, with what matched. Never a reason for a close.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub flags: Vec<(&'static str, String)>,
     /// What was actually written.
     #[serde(flatten)]
     pub outcome: Outcome,

@@ -983,6 +983,12 @@ async fn run_pr_triage(
             format!("{:?}", report.outcome),
             report.detail
         );
+        // On their own lines, indented: a flag is a separate fact from the
+        // verdict, and folding it into the row would make one column mean two
+        // things.
+        for (label, why) in &report.flags {
+            println!("        {label:<20} {why}");
+        }
     }
     println!(
         "\n{} pull request(s) considered{}",
