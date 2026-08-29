@@ -111,6 +111,19 @@ pub trait ForgeRead: Send + Sync {
     /// List open issues, most recently updated first.
     async fn open_issues(&self, repo: &RepoId, limit: usize) -> Result<Vec<Issue>>;
 
+    /// List open pull requests, oldest first.
+    ///
+    /// Oldest first, and that ordering is load-bearing rather than cosmetic:
+    /// `crate::pr_triage::dedupe` calls the *older* of two near-identical pull
+    /// requests the original and the newer one the duplicate, and a caller that
+    /// paged newest-first would truncate away the originals and leave a
+    /// shortlist of duplicates with nothing to be duplicates of.
+    ///
+    /// No default implementation. An adapter that forgot to answer would
+    /// report an empty repository, and a duplicate sweep that can see no other
+    /// pull requests silently concludes that nothing is a duplicate.
+    async fn open_pull_requests(&self, repo: &RepoId, limit: usize) -> Result<Vec<PullRequest>>;
+
     /// The names of the issue types the repository's owner defines.
     ///
     /// Read rather than hard-coded: "Bug", "Feature" and "Task" are only
@@ -223,6 +236,19 @@ pub trait ForgeWrite: Send + Sync {
 
     /// Close an issue.
     async fn close_issue(&self, repo: &RepoId, number: u64) -> Result<()>;
+
+    /// Close a pull request without merging it.
+    ///
+    /// Separate from [`close_issue`](Self::close_issue) even though GitHub's
+    /// issues endpoint would close either one. Two reasons, and the second is
+    /// the real one: an adapter for a forge that does not conflate the two
+    /// needs somewhere to differ, and a `MockForge` that records the two as one
+    /// write would let a test asserting "it closed the issue" pass on a run
+    /// that closed a pull request instead.
+    ///
+    /// Nothing here merges. The only path to the default branch is
+    /// [`merge`](Self::merge), which needs a `MergeApproved` this cannot mint.
+    async fn close_pull_request(&self, repo: &RepoId, number: u64) -> Result<()>;
 
     /// Open an issue, returning its number.
     async fn create_issue(
