@@ -25,7 +25,7 @@
 use std::collections::BTreeSet;
 
 use crate::forge::types::ChangedFile;
-use crate::pr_triage::landed::hunks;
+use crate::pr_triage::landed::{Hunk, hunks};
 
 /// One pull request reduced to what the comparison reads.
 ///
@@ -37,75 +37,76 @@ pub struct Shape {
     pub number: u64,
     /// The paths it changes.
     pub paths: BTreeSet<String>,
-    /// Every line it adds, normalised and **qualified by the file it is in**,
-    /// as a set.
+    /// One fingerprint per hunk: its path, its before image and its after
+    /// image, context included.
     ///
-    /// A set rather than a sequence: two contributors solving the same problem
-    /// order their hunks differently often enough that sequence comparison
-    /// would miss real duplicates, and the paths gate has already established
-    /// that they are working on the same files.
+    /// A **hunk** rather than a line, and that is the whole of the precision
+    /// here. A set of changed lines cannot tell two edits apart when they read
+    /// the same: flipping `enabled = false` to `true` in two unrelated
+    /// configuration blocks produces identical added and removed lines, and a
+    /// line-set comparison scores it a confident 100%. The hunk's context lines
+    /// are what say *where*, so two identical edits in two different places
+    /// fingerprint differently.
     ///
-    /// Qualified by path because a bare line set is repository-wide: two pull
-    /// requests that touch the same three files and add `return false;` to a
-    /// *different* one of them each would otherwise share the line perfectly.
-    pub added: BTreeSet<String>,
-    /// Every line it removes, normalised and qualified by path, as a set.
+    /// A set rather than a sequence, because two contributors solving the same
+    /// problem order their hunks differently often enough that sequence
+    /// comparison would miss real duplicates.
+    pub edits: BTreeSet<String>,
+    /// Whether every changed file came with a readable patch.
     ///
-    /// Carried because the additions alone do not identify an edit. Two changes
-    /// to two different functions that each add `return false;` share 100% of
-    /// their added lines and are not remotely the same change — what separates
-    /// them is what they took out. Compared under the same floor as the
-    /// additions, so a duplicate has to match on both halves of the edit.
-    pub removed: BTreeSet<String>,
+    /// A binary or truncated file contributes its *path* and no content. Two
+    /// pull requests that make the same one-line edit and also touch the same
+    /// image would otherwise score 100% on both axes while carrying completely
+    /// different bytes, and the newer one would be closed for it.
+    pub every_file_readable: bool,
 }
 
 impl Shape {
     /// Reduce one pull request's changed files to its comparable shape.
     pub fn of(number: u64, files: &[ChangedFile]) -> Self {
         let mut paths = BTreeSet::new();
-        let mut added = BTreeSet::new();
-        let mut removed = BTreeSet::new();
+        let mut edits = BTreeSet::new();
+        let mut every_file_readable = true;
 
         for file in files {
             paths.insert(file.path.clone());
             let Some(patch) = file.patch.as_deref() else {
+                every_file_readable = false;
                 continue;
             };
             for hunk in hunks(patch) {
-                // The images carry context lines, which are on both sides and
-                // therefore say nothing about who changed what. Only the lines
-                // one side has and the other does not are the edit.
-                added.extend(
-                    hunk.after
-                        .iter()
-                        .filter(|line| !hunk.before.contains(line))
-                        .map(|line| qualified(&file.path, line)),
-                );
-                removed.extend(
-                    hunk.before
-                        .iter()
-                        .filter(|line| !hunk.after.contains(line))
-                        .map(|line| qualified(&file.path, line)),
-                );
+                edits.insert(fingerprint(&file.path, &hunk));
             }
         }
 
         Shape {
             number,
             paths,
-            added,
-            removed,
+            edits,
+            every_file_readable,
         }
     }
 
     /// Whether there is anything here to compare.
     ///
-    /// A pull request with no readable added lines — all deletions, or all
-    /// binary — cannot be shown to duplicate anything, and a comparison of two
-    /// empty sets would score a confident 1.0.
+    /// A pull request with no readable hunks — all binary, or a diff the forge
+    /// truncated — cannot be shown to duplicate anything, and a comparison of
+    /// two empty sets would score a confident 1.0.
     pub fn is_comparable(&self) -> bool {
-        !self.paths.is_empty() && !self.added.is_empty()
+        !self.paths.is_empty() && !self.edits.is_empty() && self.every_file_readable
     }
+}
+
+/// One hunk's identity: where it is, what it replaced, and with what.
+///
+/// Unit and record separators, like the index's document ids, so a path or a
+/// line containing the delimiter cannot forge another hunk's fingerprint.
+fn fingerprint(path: &str, hunk: &Hunk) -> String {
+    format!(
+        "{path}\u{1f}{}\u{1e}{}",
+        hunk.before.join("\u{1f}"),
+        hunk.after.join("\u{1f}")
+    )
 }
 
 /// How much two shapes overlap.
@@ -113,47 +114,16 @@ impl Shape {
 pub struct Overlap {
     /// Jaccard overlap of the changed-path sets, 0..=1.
     pub paths: f64,
-    /// Overlap of the two edits, 0..=1: the lower of the added-line and
-    /// removed-line scores.
-    ///
-    /// The lower, not the mean. An average lets a perfect match on one half
-    /// carry a poor match on the other, which is exactly the pair this is meant
-    /// to separate — two changes that add the same line and remove different
-    /// ones.
+    /// Jaccard overlap of the hunk fingerprints, 0..=1.
     pub lines: f64,
-    /// Overlap of the added-line sets alone, for the comment's evidence.
-    pub added: f64,
-    /// Overlap of the removed-line sets alone. `1.0` when neither removes
-    /// anything, which is agreement rather than a missing answer.
-    pub removed: f64,
 }
 
 /// Score one pair.
 pub fn overlap(left: &Shape, right: &Shape) -> Overlap {
-    // Two pull requests that both remove nothing agree perfectly about what
-    // they remove. Scoring that as zero — which is what an empty-set Jaccard
-    // gives — would make every pure-addition duplicate unfindable.
-    let removed = if left.removed.is_empty() && right.removed.is_empty() {
-        1.0
-    } else {
-        jaccard(&left.removed, &right.removed)
-    };
-    let added = jaccard(&left.added, &right.added);
-
     Overlap {
         paths: jaccard(&left.paths, &right.paths),
-        lines: added.min(removed),
-        added,
-        removed,
+        lines: jaccard(&left.edits, &right.edits),
     }
-}
-
-/// A line tagged with the file it changed.
-///
-/// A unit separator, like the index's document ids, so a path or a line
-/// containing the delimiter cannot forge a different file's entry.
-fn qualified(path: &str, line: &str) -> String {
-    format!("{path}\u{1f}{line}")
 }
 
 /// Overlap of two sets, 0..=1. Empty on either side is zero, never NaN.
