@@ -262,14 +262,34 @@ pub async fn apply_all(
         let close = writes.close.take();
 
         let outcome = match apply_plan(forge, repo, &writes).await {
-            Ok(()) => match close {
-                Some(close) if !close.dry_run => {
-                    plan.close = Some(close);
-                    match revalidate(read, config, repo, &mut plan, maintainers).await {
-                        _ if plan.close.is_none() => {
+            Ok(posted) => {
+                // The id of the comment this run just wrote, so a corrective
+                // pass edits it rather than posting a second one underneath.
+                plan.comment_id = posted;
+
+                match close {
+                    Some(close) if !close.dry_run => {
+                        plan.close = Some(close);
+                        let recheck = revalidate_at(
+                            read,
+                            config,
+                            repo,
+                            &mut plan,
+                            maintainers,
+                            Freshness::SinceOurOwnWrites,
+                        )
+                        .await;
+
+                        if plan.close.is_some() && recheck != Recheck::LeaveAlone {
+                            match forge.close_pull_request(repo, plan.number).await {
+                                Ok(()) => Outcome::Closed,
+                                Err(err) => Outcome::Failed(err.to_string()),
+                            }
+                        } else {
                             // Refused on the second look. The comment already
-                            // posted said a close was coming, so it is
-                            // corrected rather than left standing.
+                            // posted said a close was coming, so it is corrected
+                            // rather than left standing — edited in place, using
+                            // the id the write above returned.
                             if let Some(body) = crate::pr_triage::comment::render(&plan) {
                                 let corrected = TriagePlan {
                                     comment: Some(body),
@@ -282,20 +302,17 @@ pub async fn apply_all(
                             }
                             Outcome::of(&plan)
                         }
-                        _ => match forge.close_pull_request(repo, plan.number).await {
-                            Ok(()) => Outcome::Closed,
-                            Err(err) => Outcome::Failed(err.to_string()),
-                        },
+                    }
+                    other => {
+                        plan.close = other;
+                        Outcome::of(&plan)
                     }
                 }
-                other => {
-                    plan.close = other;
-                    Outcome::of(&plan)
-                }
-            },
+            }
             Err(err) => Outcome::Failed(err.to_string()),
         };
         let plan = &plan;
+
         reports.push(Report::of(plan, outcome));
     }
 
