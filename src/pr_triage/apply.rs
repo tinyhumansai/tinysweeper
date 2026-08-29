@@ -60,11 +60,7 @@ pub async fn apply_plan(forge: &dyn ForgeWrite, repo: &RepoId, plan: &TriagePlan
 /// hundred pull requests that abandoned the other ninety-nine because the third
 /// one was deleted mid-run would be useless in exactly the repositories it is
 /// for.
-pub async fn apply_all(
-    forge: &dyn ForgeWrite,
-    repo: &RepoId,
-    plans: &[TriagePlan],
-) -> Vec<Report> {
+pub async fn apply_all(forge: &dyn ForgeWrite, repo: &RepoId, plans: &[TriagePlan]) -> Vec<Report> {
     let mut reports = Vec::with_capacity(plans.len());
 
     for plan in plans {

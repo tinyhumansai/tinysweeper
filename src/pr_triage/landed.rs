@@ -66,9 +66,7 @@ impl NotLanded {
             NotLanded::OpaqueFile => "the forge gave no patch for one of its files",
             NotLanded::TooSmall => "the change is too small for a match to mean anything",
             NotLanded::AddedLineMissing => "it adds lines the base branch does not have",
-            NotLanded::RemovedLineStillPresent => {
-                "it removes lines the base branch still has"
-            }
+            NotLanded::RemovedLineStillPresent => "it removes lines the base branch still has",
         }
     }
 }
@@ -179,9 +177,7 @@ fn contains_run(haystack: &[String], run: &[String]) -> bool {
     if run.len() > haystack.len() {
         return false;
     }
-    haystack
-        .windows(run.len())
-        .any(|window| window == run)
+    haystack.windows(run.len()).any(|window| window == run)
 }
 
 /// Whether one file's change is already on the base branch.

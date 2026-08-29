@@ -22,11 +22,11 @@ use crate::error::{Error, Result};
 use crate::forge::RepoId;
 use crate::index::mongo::MongoIndex;
 use crate::ports::knowledge::KnowledgeStore;
+use crate::pr_triage::Report as PrTriageReport;
 use crate::server::admin::{self, AdminAuth};
 use crate::server::auth::AppAuth;
 use crate::server::failure;
 use crate::server::indexing::{IndexBackend, index_in_background};
-use crate::pr_triage::Report as PrTriageReport;
 use crate::server::manual::{self, FullReviews, MergeReport, Merges, Triages};
 use crate::server::status;
 use crate::server::store::{Store, Trust};
@@ -192,9 +192,13 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
     // pressing anything.
     spawn_triage_sweeps(manual_state, triages.clone());
 
-    if let Some(routes) =
-        manual::router(manual_auth, manual::allowed_org(), dispatch, merges, triages)
-    {
+    if let Some(routes) = manual::router(
+        manual_auth,
+        manual::allowed_org(),
+        dispatch,
+        merges,
+        triages,
+    ) {
         app = app.merge(routes);
         tracing::info!(
             organisation = %manual::allowed_org(),

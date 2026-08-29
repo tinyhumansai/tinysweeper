@@ -20,7 +20,10 @@ fn a_run_is_broken_by_context_and_by_blank_lines() {
     let got = runs("@@\n context\n+alpha\n+beta\n context\n+gamma\n");
     assert_eq!(
         got.added,
-        vec![vec!["alpha".to_string(), "beta".into()], vec!["gamma".into()]]
+        vec![
+            vec!["alpha".to_string(), "beta".into()],
+            vec!["gamma".into()]
+        ]
     );
 
     // The blank line ends the run rather than being carried inside it: two
@@ -97,7 +100,10 @@ fn a_rename_is_refused_rather_than_guessed_at() {
         patch: Some("@@\n+something\n".into()),
         ..ChangedFile::default()
     };
-    assert_eq!(file_landed(&file, Some("something\n")), Err(NotLanded::Renamed));
+    assert_eq!(
+        file_landed(&file, Some("something\n")),
+        Err(NotLanded::Renamed)
+    );
 }
 
 #[test]
@@ -152,10 +158,7 @@ fn one_unlanded_file_sinks_the_whole_pull_request() {
 fn a_wholly_landed_pull_request_reports_how_much_it_checked() {
     let one = changed("a.rs", "@@\n+alpha\n+beta\n");
     let two = changed("b.rs", "@@ -1 +1 @@\n-was\n+is\n");
-    let bases = vec![
-        Some("alpha\nbeta\n".to_string()),
-        Some("is\n".to_string()),
-    ];
+    let bases = vec![Some("alpha\nbeta\n".to_string()), Some("is\n".to_string())];
     assert_eq!(landed(&[one, two], &bases, 3), Ok(4));
 }
 

@@ -244,8 +244,7 @@ pub fn build_plan(
     // The kill-switch labels come from `[issues] block_labels` rather than a
     // second list of their own: an item two jobs disagree about leaving alone
     // is worse than one setting in one place.
-    let label_policy =
-        LabelPolicy::from(&config.pr_triage).blocking(&config.issues.block_labels);
+    let label_policy = LabelPolicy::from(&config.pr_triage).blocking(&config.issues.block_labels);
     let planned = plan_labels(
         &pull_request.labels,
         &[plan.verdict.label().to_string()],

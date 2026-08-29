@@ -524,7 +524,6 @@ impl GitHubRead {
             }
         }
     }
-
 }
 
 /// Count the reviewers whose *latest* verdict is an approval.

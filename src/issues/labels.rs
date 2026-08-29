@@ -222,9 +222,7 @@ fn refusal(
 /// applies today.
 fn facet_of(label: &str) -> Option<&'static str> {
     let label = label.trim().to_ascii_lowercase();
-    FACETS
-        .into_iter()
-        .find(|facet| label.starts_with(*facet))
+    FACETS.into_iter().find(|facet| label.starts_with(*facet))
 }
 
 /// Label comparison. GitHub label names are case-insensitive in practice, and
@@ -232,8 +230,6 @@ fn facet_of(label: &str) -> Option<&'static str> {
 fn same(left: &str, right: &str) -> bool {
     left.trim().eq_ignore_ascii_case(right.trim())
 }
-
-
 
 /// The built-in vocabulary: what triage may apply when `allow_labels` is empty.
 ///
@@ -339,7 +335,10 @@ mod tests {
         assert_eq!(plan.add, owned(&["needs-triage"]));
         assert_eq!(
             plan.declined,
-            vec![("priority: p0".to_string(), "not in the configured allow list")]
+            vec![(
+                "priority: p0".to_string(),
+                "not in the configured allow list"
+            )]
         );
     }
 
@@ -370,7 +369,10 @@ mod tests {
         assert!(plan.add.is_empty());
         assert_eq!(
             plan.declined,
-            vec![("priority: p0".to_string(), "labelling is off in the configuration")]
+            vec![(
+                "priority: p0".to_string(),
+                "labelling is off in the configuration"
+            )]
         );
     }
 

@@ -110,10 +110,10 @@ async fn a_second_sweep_edits_its_own_comment_rather_than_adding_one() {
     apply_plan(&forge, &repo(), &plan).await.expect("applies");
 
     assert!(
-        forge.writes().iter().any(|write| matches!(
-            write,
-            Write::CommentUpdate { comment_id: 99, .. }
-        )),
+        forge
+            .writes()
+            .iter()
+            .any(|write| matches!(write, Write::CommentUpdate { comment_id: 99, .. })),
         "{:?}",
         forge.writes()
     );
@@ -160,7 +160,11 @@ async fn one_failure_does_not_abandon_the_rest_of_the_sweep() {
     let reports = apply_all(&forge, &repo(), &plans).await;
 
     assert_eq!(reports.len(), 2);
-    assert!(reports.iter().all(|report| report.outcome == Outcome::Labelled));
+    assert!(
+        reports
+            .iter()
+            .all(|report| report.outcome == Outcome::Labelled)
+    );
     assert_eq!(reports[1].number, 5799);
     assert_eq!(reports[0].verdict, "triage: duplicate");
 }

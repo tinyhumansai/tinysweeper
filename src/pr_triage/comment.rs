@@ -92,10 +92,7 @@ pub fn render(plan: &TriagePlan) -> Option<String> {
             // The refusals are the useful half. A maintainer who wants to know
             // why the sweep flagged something and then left it alone should not
             // have to read the server log to find out.
-            let _ = write!(
-                body,
-                "\nLeft open: {refusal}. A human decides this one.\n"
-            );
+            let _ = write!(body, "\nLeft open: {refusal}. A human decides this one.\n");
         }
         (None, None) => {}
     }

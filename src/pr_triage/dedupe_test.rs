@@ -65,7 +65,14 @@ fn a_pull_request_with_nothing_readable_duplicates_nothing() {
     );
     assert!(!binary.is_comparable());
     // Two of them would otherwise score a confident 1.0 against each other.
-    let other = Shape::of(1, &[ChangedFile { path: "logo.png".into(), patch: None, ..ChangedFile::default() }]);
+    let other = Shape::of(
+        1,
+        &[ChangedFile {
+            path: "logo.png".into(),
+            patch: None,
+            ..ChangedFile::default()
+        }],
+    );
     assert_eq!(duplicate_of(&binary, &[other], 0.8, 0.9), None);
 }
 

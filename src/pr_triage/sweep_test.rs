@@ -109,7 +109,12 @@ async fn the_later_of_two_identical_pull_requests_is_closed_as_a_duplicate() {
     );
     assert_eq!(second.add_labels, vec!["triage: duplicate"]);
     assert_eq!(second.close.as_ref().map(|close| close.number), Some(20));
-    assert!(second.comment.as_deref().is_some_and(|body| body.contains("#10")));
+    assert!(
+        second
+            .comment
+            .as_deref()
+            .is_some_and(|body| body.contains("#10"))
+    );
 }
 
 #[tokio::test]
@@ -121,12 +126,22 @@ async fn a_change_already_on_the_base_branch_is_superseded() {
     let forge = MockForge::new()
         .with_pull_request(pull(7, "carol"), files, vec![])
         // Read at the base *branch*, which is the ref the sweep asks for.
-        .with_file("main", "src/lib.rs", "fn alpha() {}\nfn beta() {}\nfn gamma() {}\n");
+        .with_file(
+            "main",
+            "src/lib.rs",
+            "fn alpha() {}\nfn beta() {}\nfn gamma() {}\n",
+        );
 
     let outcome = run(&forge, &config(), None).await;
     let plan = &outcome.plans[0];
     assert!(
-        matches!(plan.verdict, Verdict::Superseded { lines_checked: 3, .. }),
+        matches!(
+            plan.verdict,
+            Verdict::Superseded {
+                lines_checked: 3,
+                ..
+            }
+        ),
         "{:?}",
         plan.verdict
     );
