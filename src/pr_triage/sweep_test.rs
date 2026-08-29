@@ -122,7 +122,7 @@ async fn the_later_of_two_identical_pull_requests_is_closed_as_a_duplicate() {
 async fn a_change_already_on_the_base_branch_is_superseded() {
     let files = vec![changed(
         "src/lib.rs",
-        "@@\n+fn alpha() {}\n+fn beta() {}\n+fn gamma() {}\n",
+        "@@ -1,1 +1,4 @@\n mod top;\n+fn alpha() {}\n+fn beta() {}\n+fn gamma() {}\n",
     )];
     let forge = MockForge::new()
         .with_pull_request(pull(7, "carol"), files, vec![])
@@ -130,7 +130,7 @@ async fn a_change_already_on_the_base_branch_is_superseded() {
         .with_file(
             "main",
             "src/lib.rs",
-            "fn alpha() {}\nfn beta() {}\nfn gamma() {}\n",
+            "mod top;\nfn alpha() {}\nfn beta() {}\nfn gamma() {}\n",
         );
 
     let outcome = run(&forge, &config(), None).await;
