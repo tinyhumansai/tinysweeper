@@ -102,6 +102,11 @@ pub enum Write {
         /// The GraphQL node id of the thread.
         thread_id: String,
     },
+    /// A pull request was closed without merging.
+    PullRequestClosed {
+        /// The pull request.
+        number: u64,
+    },
     /// A pull request was merged.
     Merged {
         /// The pull request.
@@ -215,6 +220,19 @@ impl MockForge {
             state.pull_requests.insert(number, pull_request);
             state.files.insert(number, files);
             state.commits.insert(number, commits);
+        }
+        self
+    }
+
+    /// Serve `content` for `path` at `sha`.
+    ///
+    /// The builder form of [`MockState::set_file`], so a pull request and the
+    /// base-branch text `crate::pr_triage::landed` compares it against can be
+    /// assembled in one expression.
+    pub fn with_file(self, sha: &str, path: &str, content: &str) -> Self {
+        {
+            let mut state = self.state.lock().expect("mock state lock");
+            state.set_file(sha, path, content);
         }
         self
     }
@@ -449,6 +467,19 @@ impl ForgeRead for MockForge {
             .collect())
     }
 
+    async fn open_pull_requests(&self, _repo: &RepoId, limit: usize) -> Result<Vec<PullRequest>> {
+        let state = self.state.lock().expect("mock state lock");
+        // `BTreeMap` iterates by key, so this is already oldest-number-first —
+        // the order the port promises and that dedupe's older/newer rule reads.
+        Ok(state
+            .pull_requests
+            .values()
+            .filter(|pull_request| !pull_request.merged)
+            .take(limit)
+            .cloned()
+            .collect())
+    }
+
     async fn issue_types(&self, _repo: &RepoId) -> Result<Vec<String>> {
         let state = self.state.lock().expect("mock state lock");
         Ok(state.issue_types.clone())
@@ -630,6 +661,20 @@ impl ForgeWrite for MockForge {
             let mut state = self.state.lock().expect("mock state lock");
             if let Some(issue) = state.issues.get_mut(&number) {
                 issue.open = false;
+            }
+        }
+        Ok(())
+    }
+
+    async fn close_pull_request(&self, _repo: &RepoId, number: u64) -> Result<()> {
+        self.record(Write::PullRequestClosed { number });
+        if !self.read_only {
+            let mut state = self.state.lock().expect("mock state lock");
+            if let Some(pull_request) = state.pull_requests.get_mut(&number) {
+                // Closed, never merged. Nothing on the write half but `merge`
+                // may set that flag, and this is the path that exists precisely
+                // to end a pull request *without* landing it.
+                pull_request.merged = false;
             }
         }
         Ok(())
