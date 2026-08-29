@@ -34,6 +34,7 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_council(config, &mut problems);
     validate_automerge(config, &mut problems);
     validate_issues(config, &mut problems);
+    validate_pr_triage(config, &mut problems);
     validate_automation(config, &mut problems);
     validate_sentry(config, &mut problems);
 
@@ -587,6 +588,74 @@ fn validate_issues(config: &Config, problems: &mut Vec<String>) {
             "`issues.close` is live with `min_age_days = 0`; that would close issues the moment they are opened. Set an age floor, or keep `dry_run = true` until you trust it"
                 .into(),
         );
+    }
+}
+
+fn validate_pr_triage(config: &Config, problems: &mut Vec<String>) {
+    let triage = &config.pr_triage;
+
+    for (name, value) in [
+        (
+            "duplicate_path_overlap_min",
+            triage.duplicate_path_overlap_min,
+        ),
+        (
+            "duplicate_line_overlap_min",
+            triage.duplicate_line_overlap_min,
+        ),
+    ] {
+        if !(0.0..=1.0).contains(&value) {
+            problems.push(format!(
+                "`pr_triage.{name} = {value}` is out of range; expected 0.0 to 1.0"
+            ));
+        }
+    }
+
+    if triage.enabled && triage.max_pull_requests == 0 {
+        problems.push(
+            "`pr_triage.enabled = true` with `max_pull_requests = 0` would read nothing".into(),
+        );
+    }
+
+    // A floor of zero would let a single shared line — a `}`, a blank import —
+    // count as proof that a whole pull request had already landed.
+    if triage.enabled && triage.min_landed_lines == 0 {
+        problems.push(
+            "`pr_triage.min_landed_lines = 0` would call a one-line coincidence a superseded pull request"
+                .into(),
+        );
+    }
+
+    let close = &triage.close;
+    if close.enabled && !triage.enabled {
+        problems.push(
+            "`pr_triage.close.enabled = true` has no effect while `pr_triage.enabled = false`"
+                .into(),
+        );
+    }
+
+    // The same warning issue closing gets, for the same reason: this is the one
+    // action on this path that a contributor experiences as a rejection.
+    if close.enabled && !close.dry_run && close.min_age_days == 0 {
+        problems.push(
+            "`pr_triage.close` is live with `min_age_days = 0`; that would close pull requests the moment they are opened. Set an age floor, or keep `dry_run = true` until you trust it"
+                .into(),
+        );
+    }
+
+    if let Some(every) = triage.sweep_every_minutes.filter(|every| *every > 0) {
+        if triage.sweep_repositories.is_empty() {
+            problems.push(format!(
+                "`pr_triage.sweep_every_minutes = {every}` is set but `sweep_repositories` is empty, so the timer sweeps nothing"
+            ));
+        }
+        for name in &triage.sweep_repositories {
+            if crate::forge::RepoId::parse(name).is_none() {
+                problems.push(format!(
+                    "`pr_triage.sweep_repositories` has `{name}`, which is not `owner/name`"
+                ));
+            }
+        }
     }
 }
 
