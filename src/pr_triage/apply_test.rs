@@ -30,6 +30,27 @@ fn config() -> Config {
     config
 }
 
+/// The head the original of a duplicate was read at.
+const ORIGINAL: &str = "cccccccccccccccccccccccccccccccccccccccc";
+
+/// A forge holding `subject` and the original it is said to duplicate.
+///
+/// A duplicate verdict rests on both, and `revalidate` re-reads both, so a
+/// fixture with only the subject in it would fail for the wrong reason.
+fn forge_with(subject: PullRequest) -> MockForge {
+    MockForge::new()
+        .with_pull_request(subject, vec![], vec![])
+        .with_pull_request(
+            PullRequest {
+                number: 5789,
+                head_sha: ORIGINAL.into(),
+                ..closeable()
+            },
+            vec![],
+            vec![],
+        )
+}
+
 /// A pull request that clears every guard.
 fn closeable() -> PullRequest {
     PullRequest {
@@ -235,7 +256,7 @@ fn closing_plan() -> TriagePlan {
 
 #[tokio::test]
 async fn a_close_survives_a_pull_request_that_has_not_changed() {
-    let forge = MockForge::new().with_pull_request(closeable(), vec![], vec![]);
+    let forge = forge_with(closeable());
     let mut plan = closing_plan();
     revalidate(&forge, &config(), &repo(), &mut plan, &[]).await;
     assert!(plan.close.is_some(), "{plan:?}");
@@ -247,7 +268,7 @@ async fn a_kill_switch_added_during_the_sweep_stops_the_close() {
         labels: vec!["tinysweeper:human-review".into()],
         ..closeable()
     };
-    let forge = MockForge::new().with_pull_request(subject, vec![], vec![]);
+    let forge = forge_with(subject);
 
     let mut plan = closing_plan();
     revalidate(&forge, &config(), &repo(), &mut plan, &[]).await;
@@ -261,14 +282,10 @@ async fn a_kill_switch_added_during_the_sweep_stops_the_close() {
 
 #[tokio::test]
 async fn a_pull_request_marked_draft_during_the_sweep_stops_the_close() {
-    let forge = MockForge::new().with_pull_request(
-        PullRequest {
+    let forge = forge_with(PullRequest {
             draft: true,
             ..closeable()
-        },
-        vec![],
-        vec![],
-    );
+        });
 
     let mut plan = closing_plan();
     revalidate(&forge, &config(), &repo(), &mut plan, &[]).await;
@@ -296,14 +313,10 @@ async fn a_pull_request_that_cannot_be_re_read_is_not_closed() {
 async fn a_dropped_close_takes_its_comment_claim_with_it() {
     // The comment says what was decided, so a decision reversed between the
     // sweep and the write has to reach the comment too.
-    let forge = MockForge::new().with_pull_request(
-        PullRequest {
+    let forge = forge_with(PullRequest {
             draft: true,
             ..closeable()
-        },
-        vec![],
-        vec![],
-    );
+        });
 
     let reports = apply_all(&forge, &forge, &config(), &repo(), &[closing_plan()], &[]).await;
 
@@ -330,14 +343,10 @@ async fn a_dropped_close_takes_its_comment_claim_with_it() {
 async fn a_push_during_the_sweep_stops_the_close() {
     // The verdict was read off a diff. A new head is a new diff, so the
     // evidence no longer describes the pull request being closed.
-    let forge = MockForge::new().with_pull_request(
-        PullRequest {
+    let forge = forge_with(PullRequest {
             head_sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
             ..closeable()
-        },
-        vec![],
-        vec![],
-    );
+        });
 
     let mut plan = closing_plan();
     revalidate(&forge, &config(), &repo(), &mut plan, &[]).await;
@@ -369,7 +378,7 @@ async fn a_kill_switch_found_at_write_time_cancels_every_write() {
         labels: vec!["tinysweeper:human-review".into()],
         ..closeable()
     };
-    let forge = MockForge::new().with_pull_request(subject, vec![], vec![]);
+    let forge = forge_with(subject);
 
     let reports = apply_all(&forge, &forge, &config(), &repo(), &[closing_plan()], &[]).await;
 
@@ -382,7 +391,7 @@ async fn the_close_is_gated_again_after_the_label_and_comment_go_out() {
     // The writes above the close each await the forge, and a contributor can
     // push inside that window. `MockForge` moves the head when `push` is
     // called, which is what a synchronize delivery looks like from here.
-    let forge = MockForge::new().with_pull_request(closeable(), vec![], vec![]);
+    let forge = forge_with(closeable());
     let plan = closing_plan();
 
     // The plan is valid right now.
@@ -415,19 +424,7 @@ async fn the_close_is_gated_again_after_the_label_and_comment_go_out() {
 async fn a_push_to_the_original_also_stops_the_close() {
     // A duplicate verdict rests on two diffs. Pinning only the subject's would
     // leave half the evidence free to move.
-    const ORIGINAL: &str = "cccccccccccccccccccccccccccccccccccccccc";
-
-    let forge = MockForge::new()
-        .with_pull_request(closeable(), vec![], vec![])
-        .with_pull_request(
-            PullRequest {
-                number: 5789,
-                head_sha: ORIGINAL.into(),
-                ..closeable()
-            },
-            vec![],
-            vec![],
-        );
+    let forge = forge_with(closeable());
 
     // Unmoved: the close stands.
     let mut plan = closing_plan();

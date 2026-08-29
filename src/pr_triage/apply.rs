@@ -132,6 +132,17 @@ pub async fn revalidate(
         return Recheck::LeaveAlone;
     }
 
+    if let GateOutcome::Refuse(reason) = gate::decide(gate::Inputs {
+        subject: &current,
+        verdict: &plan.verdict,
+        maintainers,
+        policy: &config.pr_triage.close,
+    }) {
+        plan.close = None;
+        plan.close_refusal = Some(reason);
+        return Recheck::Unchanged;
+    }
+
     // The other half of a duplicate's evidence. If the original has been pushed
     // to since the sweep read it, the two changes may no longer overlap and
     // closing the subject as a copy of it would be closing it over a diff that
@@ -148,16 +159,6 @@ pub async fn revalidate(
                 Some("the pull request it duplicates changed after the sweep read it");
             return Recheck::Unchanged;
         }
-    }
-
-    if let GateOutcome::Refuse(reason) = gate::decide(gate::Inputs {
-        subject: &current,
-        verdict: &plan.verdict,
-        maintainers,
-        policy: &config.pr_triage.close,
-    }) {
-        plan.close = None;
-        plan.close_refusal = Some(reason);
     }
 
     Recheck::Unchanged
