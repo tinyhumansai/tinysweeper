@@ -22,6 +22,14 @@
 //! - everything else is **worth reading**, which is the answer that needs no
 //!   evidence.
 //!
+//! Alongside the verdict, on its own independent facet, sits a **flag**:
+//! [`promo`] reads a diff for the shape of an advertisement — a referral link,
+//! a vendor endpoint beside a new API key, product copy in a change that adds
+//! no code — and says so. A flag is advisory and can never close anything, for
+//! the reason spelled out in that module: the same integration is a real
+//! contribution to one repository and an advertisement on another, and no
+//! pattern knows which.
+//!
 //! That is a deliberate departure from `crate::issues`, where a model proposes
 //! a duplicate and a gate refuses most of what it proposes. It buys three
 //! things. The verdicts are reproducible: a maintainer can check any of them
@@ -52,9 +60,10 @@ pub mod comment;
 pub mod dedupe;
 pub mod gate;
 pub mod landed;
+pub mod promo;
 pub mod sweep;
 pub mod types;
 
 pub use crate::pr_triage::apply::{Report, apply_all, apply_plan};
 pub use crate::pr_triage::sweep::{SweepOutcome, sweep};
-pub use crate::pr_triage::types::{ClosePlan, TriagePlan, Verdict};
+pub use crate::pr_triage::types::{ClosePlan, Flag, TriagePlan, Verdict};
