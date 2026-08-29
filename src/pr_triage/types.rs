@@ -23,6 +23,14 @@ pub enum Verdict {
     Duplicate {
         /// The older pull request. Always a lower number than the subject.
         of: u64,
+        /// The head commit the original was compared at.
+        ///
+        /// A duplicate verdict rests on *two* diffs, so pinning only the
+        /// subject's would leave half the evidence free to move: if the
+        /// original is pushed to while the sweep runs, the two changes may no
+        /// longer overlap and the subject would still be closed as a copy of
+        /// it. `apply::revalidate` re-fetches this one too.
+        of_head_sha: String,
         /// Overlap of the two changed-path sets, 0..=1.
         path_overlap: f64,
         /// Overlap of the two added-line sets, 0..=1.
@@ -83,6 +91,7 @@ impl Verdict {
                 of,
                 path_overlap,
                 line_overlap,
+                ..
             } => format!(
                 "of #{of} ({:.0}% of paths, {:.0}% of added lines)",
                 path_overlap * 100.0,
@@ -234,6 +243,7 @@ mod tests {
         let verdicts = [
             Verdict::Duplicate {
                 of: 1,
+                of_head_sha: String::new(),
                 path_overlap: 1.0,
                 line_overlap: 1.0,
             },

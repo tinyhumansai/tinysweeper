@@ -22,6 +22,8 @@
 //! Asking the free question first is what keeps the budget for the pull
 //! requests that actually need it.
 
+use std::collections::BTreeMap;
+
 use crate::config::types::Config;
 use crate::error::Result;
 use crate::forge::types::{ChangedFile, PullRequest, RepoId};
@@ -118,6 +120,9 @@ pub async fn sweep(
     // rather than of whatever order the forge answered in.
     pulls.sort_by_key(|pull_request| pull_request.number);
 
+    // The head each pull request was read at, so a duplicate verdict can pin
+    // the original's revision as well as the subject's.
+    let mut heads: BTreeMap<u64, String> = BTreeMap::new();
     let mut earlier: Vec<Shape> = Vec::new();
     let mut budget = policy.max_base_reads;
     let mut plans = Vec::new();
@@ -171,6 +176,7 @@ pub async fn sweep(
                     &changed,
                     &shape,
                     &earlier,
+                    &heads,
                     &mut budget,
                 )
                 .await;
@@ -186,6 +192,7 @@ pub async fn sweep(
 
             // Pushed after the verdict, never before: a pull request must not
             // be able to be a duplicate of itself.
+            heads.insert(pull_request.number, pull_request.head_sha.clone());
             earlier.push(shape);
         }
     }
@@ -249,6 +256,7 @@ async fn verdict_for(
     changed: &[ChangedFile],
     shape: &Shape,
     earlier: &[Shape],
+    heads: &BTreeMap<u64, String>,
     budget: &mut usize,
 ) -> Verdict {
     let policy = &config.pr_triage;
@@ -261,6 +269,10 @@ async fn verdict_for(
     ) {
         return Verdict::Duplicate {
             of,
+            // The head the original was read at, so both halves of the evidence
+            // are pinned. `heads` is filled as the sweep goes, from the same
+            // listing the shapes were built from.
+            of_head_sha: heads.get(&of).cloned().unwrap_or_default(),
             path_overlap: overlap.paths,
             line_overlap: overlap.edits,
         };
