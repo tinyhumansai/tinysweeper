@@ -14,9 +14,11 @@
 //! Nothing here can merge. [`ForgeWrite::merge`] needs a `MergeApproved` that
 //! only the auto-merge policy can mint, and this module never sees one.
 
+use crate::config::types::Config;
 use crate::error::Result;
 use crate::forge::types::RepoId;
-use crate::ports::forge::ForgeWrite;
+use crate::ports::forge::{ForgeRead, ForgeWrite};
+use crate::pr_triage::gate::{self, Outcome as GateOutcome};
 use crate::pr_triage::types::TriagePlan;
 
 /// Execute one triage plan.
@@ -52,6 +54,65 @@ pub async fn apply_plan(forge: &dyn ForgeWrite, repo: &RepoId, plan: &TriagePlan
     }
 
     Ok(())
+}
+
+/// Re-run the close gate against the pull request as it is *now*.
+///
+/// A sweep of a hundred pull requests takes minutes, and every plan is built
+/// before any of them is applied. In between, a maintainer can add
+/// `tinysweeper:human-review`, mark the pull request a draft, push a commit or
+/// merge it — and each of those is a guard [`gate::decide`] already knows how
+/// to apply, evaluated against a snapshot that has since stopped being true. So
+/// the subject is re-fetched and re-judged in the moment before the close, and
+/// the plan's close is dropped if the answer has changed.
+///
+/// Only the close. Labels and comments are additive and cheap to undo, and
+/// re-reading a pull request to decide whether to add a label it already has
+/// would double the cost of the safe half of the job.
+///
+/// A read that *fails* drops the close too: "we could not check" and "it is no
+/// longer allowed" are the same answer when the action cannot be undone.
+pub async fn revalidate(
+    read: &dyn ForgeRead,
+    config: &Config,
+    repo: &RepoId,
+    plan: &mut TriagePlan,
+    maintainers: &[String],
+) {
+    if plan.close.is_none() {
+        return;
+    }
+
+    let Ok(current) = read.pull_request(repo, plan.number).await else {
+        plan.close = None;
+        plan.close_refusal = Some("its current state could not be re-checked before closing");
+        return;
+    };
+
+    // The kill switch again, against the labels as they are now. `gate::decide`
+    // reads `close.protected_labels`; this reads the `[issues] block_labels`
+    // that `sweep::build_plan` honours, so a label added mid-sweep stops the
+    // close by the same rule that would have stopped it a minute earlier.
+    if config.issues.block_labels.iter().any(|blocked| {
+        current
+            .labels
+            .iter()
+            .any(|label| label.trim().eq_ignore_ascii_case(blocked.trim()))
+    }) {
+        plan.close = None;
+        plan.close_refusal = Some("it carries a label that switches the bot off");
+        return;
+    }
+
+    if let GateOutcome::Refuse(reason) = gate::decide(gate::Inputs {
+        subject: &current,
+        verdict: &plan.verdict,
+        maintainers,
+        policy: &config.pr_triage.close,
+    }) {
+        plan.close = None;
+        plan.close_refusal = Some(reason);
+    }
 }
 
 /// Execute every plan in a sweep, reporting what happened to each.
