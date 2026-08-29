@@ -826,6 +826,9 @@ impl crate::ports::forge::ForgeWrite for RefusingForge {
     async fn close_issue(&self, _repo: &RepoId, _number: u64) -> crate::Result<()> {
         unreachable!("auto-merge closes no issues")
     }
+    async fn close_pull_request(&self, _repo: &RepoId, _number: u64) -> crate::Result<()> {
+        unreachable!("auto-merge merges pull requests, it does not close them")
+    }
     async fn create_issue(
         &self,
         _repo: &RepoId,
