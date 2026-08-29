@@ -55,6 +55,10 @@ pub enum NotLanded {
     AddedLineMissing,
     /// A line it removes is still on the base branch.
     RemovedLineStillPresent,
+    /// It deletes a file the base branch still has.
+    FileStillThere,
+    /// A hunk adds lines with no surrounding context to locate them by.
+    NoAnchor,
     /// The base branch's copy of a file could not be read.
     ///
     /// Distinct from the file being *absent*, and the distinction is the whole
@@ -74,6 +78,8 @@ impl NotLanded {
             NotLanded::TooSmall => "the change is too small for a match to mean anything",
             NotLanded::AddedLineMissing => "it adds lines the base branch does not have",
             NotLanded::RemovedLineStillPresent => "it removes lines the base branch still has",
+            NotLanded::FileStillThere => "it deletes a file the base branch still has",
+            NotLanded::NoAnchor => "it adds lines with no surrounding context to place them by",
             NotLanded::BaseUnreadable => {
                 "the base branch copy of one of its files could not be read"
             }
@@ -119,6 +125,13 @@ pub struct Hunk {
     /// nothing but context, and context is still on the branch whether or not
     /// the change landed.
     pub removes: usize,
+    /// How many context lines survived normalisation.
+    ///
+    /// Blank context is dropped, so a hunk can end up with none — and a pure
+    /// addition with no context has no location evidence at all. Its lines
+    /// could match anywhere in the file, which is the coincidence the whole
+    /// image comparison exists to refuse.
+    pub anchors: usize,
 }
 
 /// Split a unified diff into its hunks.
@@ -170,6 +183,7 @@ pub fn hunks(patch: &str) -> Vec<Hunk> {
                 if !normalised.is_empty() {
                     current.before.push(normalised.clone());
                     current.after.push(normalised);
+                    current.anchors += 1;
                 }
             }
             // A `diff --git`/`index` header between hunks. Not content.
@@ -253,6 +267,15 @@ pub fn file_landed(file: &ChangedFile, base: Option<&str>) -> Result<usize, NotL
         return Err(NotLanded::OpaqueFile);
     };
 
+    // A whole-file deletion, judged on the file's existence rather than on its
+    // lines. The `after` image of such a hunk is empty, and the empty run is
+    // "present" in every file — so without this a pull request deleting a file
+    // that is still on the branch, and has merely been edited since, reads as
+    // already applied. It is the one case where the images say nothing.
+    if file.status == FileStatus::Removed && base.is_some() {
+        return Err(NotLanded::FileStillThere);
+    }
+
     let hunks = hunks(patch);
     let base = base_lines(base);
     let mut changed = 0usize;
@@ -270,6 +293,12 @@ pub fn file_landed(file: &ChangedFile, base: Option<&str>) -> Result<usize, NotL
         // about a *place* rather than about the file as a whole.
         if hunk.removes > 0 && contains_run(&base, &hunk.before) {
             return Err(NotLanded::RemovedLineStillPresent);
+        }
+        // A pure addition with no surviving context has nothing to locate it
+        // by, so a match would only say the lines exist *somewhere* — which is
+        // exactly the coincidence the image comparison exists to refuse.
+        if hunk.removes == 0 && hunk.anchors == 0 {
+            return Err(NotLanded::NoAnchor);
         }
         if !contains_run(&base, &hunk.after) {
             return Err(NotLanded::AddedLineMissing);
