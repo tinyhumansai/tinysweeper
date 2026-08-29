@@ -53,7 +53,9 @@ fn a_campaign_parameter_is_matched_where_a_query_string_can_hold_one() {
     ] {
         let files = vec![changed("README.md", &format!("@@\n{line}\n"))];
         assert!(
-            inspect_diff(&files, &[]).signals.contains(&Signal::ReferralLink),
+            inspect_diff(&files, &[])
+                .signals
+                .contains(&Signal::ReferralLink),
             "missed: {line}"
         );
     }
