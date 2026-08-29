@@ -474,7 +474,10 @@ impl ForgeRead for MockForge {
         Ok(state
             .pull_requests
             .values()
-            .filter(|pull_request| !pull_request.merged)
+            // `open`, not `!merged`. A pull request closed without merging is
+            // neither, and a mock that served it as open would let the sweep
+            // re-triage everything anybody has ever closed.
+            .filter(|pull_request| pull_request.open)
             .take(limit)
             .cloned()
             .collect())
@@ -674,6 +677,7 @@ impl ForgeWrite for MockForge {
                 // Closed, never merged. Nothing on the write half but `merge`
                 // may set that flag, and this is the path that exists precisely
                 // to end a pull request *without* landing it.
+                pull_request.open = false;
                 pull_request.merged = false;
             }
         }

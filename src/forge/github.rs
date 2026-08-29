@@ -391,6 +391,13 @@ fn pull_request_from(
         // latter on some endpoints, and a missing bool would read as "not
         // merged" on exactly the path that decides whether an issue closes.
         merged: pr.merged_at.is_some(),
+        // Absent reads as open: the endpoints that omit `state` are the ones
+        // that only ever return open pull requests, and reading an omission as
+        // "closed" would make the triage sweep skip every one of them.
+        open: pr
+            .state
+            .map(|state| matches!(state, octocrab::models::IssueState::Open))
+            .unwrap_or(true),
         approvals,
         age_days: days_since(pr.created_at.map(|at| at.timestamp())),
         // `updated_at` counts *any* write, tinysweeper's own labels and
