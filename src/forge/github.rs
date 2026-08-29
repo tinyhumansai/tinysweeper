@@ -525,33 +525,6 @@ impl GitHubRead {
         }
     }
 
-    /// The numbers of the open pull requests, most recently updated first.
-    ///
-    /// Inherent rather than part of `ForgeRead`: only the manual full-review
-    /// path asks "which pull requests are open" — every other caller is handed
-    /// a number by a webhook — and widening the port would oblige every mock to
-    /// answer a question nothing else asks. `limit` is a hard cap, because this
-    /// list turns directly into model spend.
-    pub async fn open_pull_requests(&self, repo: &RepoId, limit: usize) -> Result<Vec<u64>> {
-        let page = self
-            .client
-            .pulls(&repo.owner, &repo.name)
-            .list()
-            .state(octocrab::params::State::Open)
-            .sort(octocrab::params::pulls::Sort::Updated)
-            .direction(octocrab::params::Direction::Descending)
-            .per_page(100)
-            .send()
-            .await
-            .map_err(api)?;
-
-        Ok(page
-            .items
-            .into_iter()
-            .map(|pull| pull.number)
-            .take(limit)
-            .collect())
-    }
 }
 
 /// Count the reviewers whose *latest* verdict is an approval.
