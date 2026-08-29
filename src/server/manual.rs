@@ -429,6 +429,7 @@ mod tests {
                     verdict: "triage: duplicate",
                     detail: "of #10 (100% of paths, 100% of added lines)".into(),
                     flags: vec![],
+                    close_refusal: None,
                     outcome: crate::pr_triage::apply::Outcome::Closed,
                 },
                 crate::pr_triage::Report {
@@ -436,6 +437,7 @@ mod tests {
                     verdict: "triage: review",
                     detail: "-".into(),
                     flags: vec![("flag: promotional", "a referral link".into())],
+                    close_refusal: Some("it is a draft"),
                     outcome: crate::pr_triage::apply::Outcome::Labelled,
                 },
             ])

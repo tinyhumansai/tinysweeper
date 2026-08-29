@@ -1009,6 +1009,9 @@ async fn run_pr_triage(
         for (label, why) in &report.flags {
             println!("        {label:<20} {why}");
         }
+        if let Some(refusal) = report.close_refusal {
+            println!("        {:<20} {refusal}", "not closed:");
+        }
     }
     println!(
         "\n{} pull request(s) considered{}",

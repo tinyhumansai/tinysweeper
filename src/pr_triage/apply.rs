@@ -174,6 +174,7 @@ pub async fn apply_all(
                 .iter()
                 .map(|(flag, why)| (flag.label(), why.clone()))
                 .collect(),
+            close_refusal: plan.close_refusal,
             outcome,
         });
     }
@@ -230,6 +231,13 @@ pub struct Report {
     /// Advisory flags raised, with what matched. Never a reason for a close.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub flags: Vec<(&'static str, String)>,
+    /// Why it was not closed, when the sweep considered closing it.
+    ///
+    /// The refusals are the half an operator presses the button to read: "it
+    /// found a duplicate and left it open" is only useful with the *because*
+    /// attached.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub close_refusal: Option<&'static str>,
     /// What was actually written.
     #[serde(flatten)]
     pub outcome: Outcome,
