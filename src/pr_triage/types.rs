@@ -66,6 +66,30 @@ impl Verdict {
         ["triage: duplicate", "triage: superseded", "triage: review"]
     }
 
+    /// The verdict's evidence, in one line, for a log or a terminal.
+    ///
+    /// The numbers rather than a restatement of the label: an operator reading
+    /// a hundred rows wants to know *which* pull request a duplicate duplicates
+    /// without opening it.
+    pub fn detail(&self) -> String {
+        match self {
+            Verdict::Duplicate {
+                of,
+                path_overlap,
+                line_overlap,
+            } => format!(
+                "of #{of} ({:.0}% of paths, {:.0}% of added lines)",
+                path_overlap * 100.0,
+                line_overlap * 100.0
+            ),
+            Verdict::Superseded {
+                base_ref,
+                lines_checked,
+            } => format!("{lines_checked} lines already on `{base_ref}`"),
+            Verdict::Review { because } => because.to_string(),
+        }
+    }
+
     /// Whether this verdict is even a candidate for closing.
     ///
     /// `Review` never is, which is why the gate in [`crate::pr_triage::gate`]

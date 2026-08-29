@@ -977,8 +977,11 @@ async fn run_pr_triage(
 
     for report in &reports {
         println!(
-            "#{:<6} {:<20} {:?}",
-            report.number, report.verdict, report.outcome
+            "#{:<6} {:<20} {:<12} {}",
+            report.number,
+            report.verdict,
+            format!("{:?}", report.outcome),
+            report.detail
         );
     }
     println!(

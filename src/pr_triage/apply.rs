@@ -71,6 +71,7 @@ pub async fn apply_all(forge: &dyn ForgeWrite, repo: &RepoId, plans: &[TriagePla
         reports.push(Report {
             number: plan.number,
             verdict: plan.verdict.label(),
+            detail: plan.verdict.detail(),
             outcome,
         });
     }
@@ -113,6 +114,8 @@ pub struct Report {
     /// The label its verdict implies, which is also the shortest way to say
     /// what the sweep concluded.
     pub verdict: &'static str,
+    /// The evidence behind the verdict, in one line.
+    pub detail: String,
     /// What was actually written.
     #[serde(flatten)]
     pub outcome: Outcome,
