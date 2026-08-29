@@ -946,6 +946,12 @@ pub struct PrTriage {
     pub comment: bool,
     /// Apply the `triage:` label the verdict implies.
     pub apply_labels: bool,
+    /// Flag items that read as advertisements with `flag: promotional`.
+    ///
+    /// Advisory only. A flag never closes anything, because the honest form of
+    /// that judgement is a judgement: the same integration is a real
+    /// contribution to one repository and an advertisement on another.
+    pub flag_promotional: bool,
     /// Run a sweep this often, in minutes. `None` or `0` means only the
     /// `/admin/pr-triage` button runs one.
     ///

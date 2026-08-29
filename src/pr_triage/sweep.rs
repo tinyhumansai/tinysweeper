@@ -31,7 +31,8 @@ use crate::pr_triage::comment;
 use crate::pr_triage::dedupe::{Shape, duplicate_of};
 use crate::pr_triage::gate::{self, Outcome};
 use crate::pr_triage::landed::landed;
-use crate::pr_triage::types::{TriagePlan, Verdict};
+use crate::pr_triage::promo;
+use crate::pr_triage::types::{Flag, TriagePlan, Verdict};
 
 /// How many forge reads a sweep has in flight at once.
 ///
@@ -129,7 +130,8 @@ pub async fn sweep(
                     &mut budget,
                 )
                 .await;
-                let mut plan = build_plan(config, pull_request, verdict, maintainers);
+                let mut plan =
+                    build_plan(config, pull_request, verdict, &changed, maintainers);
                 // Only for a pull request that is actually getting a comment,
                 // so the extra request is spent on the handful the sweep flags
                 // rather than on every pull request it reads.
@@ -261,19 +263,32 @@ pub fn build_plan(
     config: &Config,
     pull_request: &PullRequest,
     verdict: Verdict,
+    changed: &[ChangedFile],
     maintainers: &[String],
 ) -> TriagePlan {
     let mut plan = TriagePlan::new(pull_request.number, verdict);
+
+    // Read from the diff, not from the title or the body. The hosts come from
+    // the author's login alone — fetching their profile would cost a request
+    // per pull request for one signal out of five, and the signal is only ever
+    // corroborating anyway.
+    if config.pr_triage.flag_promotional {
+        let finding = promo::inspect_diff(changed, &promo::author_hosts(&pull_request.author, None));
+        if finding.is_promotional() {
+            plan.flags.push((Flag::Promotional, finding.summary()));
+        }
+    }
 
     // The kill-switch labels come from `[issues] block_labels` rather than a
     // second list of their own: an item two jobs disagree about leaving alone
     // is worse than one setting in one place.
     let label_policy = LabelPolicy::from(&config.pr_triage).blocking(&config.issues.block_labels);
-    let planned = plan_labels(
-        &pull_request.labels,
-        &[plan.verdict.label().to_string()],
-        label_policy,
-    );
+    // The verdict first, so a `max_labels` of two can never spend both slots on
+    // flags and leave the item looking untriaged.
+    let mut suggested = vec![plan.verdict.label().to_string()];
+    suggested.extend(plan.flags.iter().map(|(flag, _)| flag.label().to_string()));
+
+    let planned = plan_labels(&pull_request.labels, &suggested, label_policy);
     plan.add_labels = planned.add;
     plan.remove_labels = planned.remove;
     plan.declined_labels = planned.declined;
