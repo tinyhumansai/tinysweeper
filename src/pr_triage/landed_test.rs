@@ -196,8 +196,14 @@ fn a_conflicting_small_change_says_so_rather_than_saying_too_small() {
 
 #[test]
 fn one_unlanded_file_sinks_the_whole_pull_request() {
-    let one = changed("a.rs", "@@ -1,2 +1,5 @@\n top\n+alpha\n+beta\n+gamma\n end\n");
-    let two = changed("b.rs", "@@ -1,2 +1,5 @@\n head\n+delta\n+epsilon\n+zeta\n tail\n");
+    let one = changed(
+        "a.rs",
+        "@@ -1,2 +1,5 @@\n top\n+alpha\n+beta\n+gamma\n end\n",
+    );
+    let two = changed(
+        "b.rs",
+        "@@ -1,2 +1,5 @@\n head\n+delta\n+epsilon\n+zeta\n tail\n",
+    );
     let bases = vec![
         present("top\nalpha\nbeta\ngamma\nend\n"),
         present("head\nnothing like it\ntail\n"),
@@ -218,7 +224,10 @@ fn a_wholly_landed_pull_request_reports_how_much_it_checked() {
 
 #[test]
 fn a_short_base_list_cannot_silently_skip_files() {
-    let one = changed("a.rs", "@@ -1,2 +1,5 @@\n top\n+alpha\n+beta\n+gamma\n end\n");
+    let one = changed(
+        "a.rs",
+        "@@ -1,2 +1,5 @@\n top\n+alpha\n+beta\n+gamma\n end\n",
+    );
     let two = changed("b.rs", "@@\n+nowhere\n");
     assert_eq!(
         landed(&[one, two], &[present("top\nalpha\nbeta\ngamma\nend\n")], 1),
@@ -292,7 +301,8 @@ fn a_hunk_with_no_context_at_all_is_refused_whichever_way_it_changes() {
 fn a_line_that_looks_like_a_diff_header_is_content_inside_a_hunk() {
     // `++counter;` renders as `+++counter;` in a unified diff. Discarding it as
     // a file header drops the line that is the whole difference.
-    let got = hunks("--- a/x.c\n+++ b/x.c\n@@ -1,3 +1,3 @@\n if (n) {\n---counter;\n+++counter;\n }\n");
+    let got =
+        hunks("--- a/x.c\n+++ b/x.c\n@@ -1,3 +1,3 @@\n if (n) {\n---counter;\n+++counter;\n }\n");
     assert_eq!(got.len(), 1);
     assert!(got[0].after.contains(&"++counter;".to_string()), "{got:?}");
     assert!(got[0].before.contains(&"--counter;".to_string()), "{got:?}");

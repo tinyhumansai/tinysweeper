@@ -158,7 +158,11 @@ async fn a_pull_request_that_has_not_landed_is_worth_reading_and_says_why() {
     )];
     let forge = MockForge::new()
         .with_pull_request(pull(7, "carol"), files, vec![])
-        .with_file("main", "src/lib.rs", "mod top;\nfn something_else() {}\nmod tail;\n");
+        .with_file(
+            "main",
+            "src/lib.rs",
+            "mod top;\nfn something_else() {}\nmod tail;\n",
+        );
 
     let outcome = run(&forge, &config(), None).await;
     assert_eq!(
@@ -278,8 +282,14 @@ async fn the_base_read_budget_bounds_the_whole_sweep() {
         ..config()
     };
     let files = vec![
-        changed("a.rs", "@@ -1,2 +1,5 @@\n top\n+alpha\n+beta\n+gamma\n end\n"),
-        changed("b.rs", "@@ -1,2 +1,5 @@\n head\n+delta\n+epsilon\n+zeta\n tail\n"),
+        changed(
+            "a.rs",
+            "@@ -1,2 +1,5 @@\n top\n+alpha\n+beta\n+gamma\n end\n",
+        ),
+        changed(
+            "b.rs",
+            "@@ -1,2 +1,5 @@\n head\n+delta\n+epsilon\n+zeta\n tail\n",
+        ),
     ];
     let forge = MockForge::new().with_pull_request(pull(7, "carol"), files, vec![]);
 

@@ -305,8 +305,14 @@ async fn a_pull_request_that_cannot_be_re_read_is_not_closed() {
     assert!(plan.close.is_none(), "{plan:?}");
     assert_eq!(
         plan.close_refusal,
-        Some("its current state could not be re-checked before closing")
+        Some("its current state could not be re-checked before writing")
     );
+    // And nothing else is written either: an unreadable state might be hiding
+    // a kill switch a maintainer applied a moment ago.
+    let forge = MockForge::new();
+    let reports = apply_all(&forge, &forge, &config(), &repo(), &[closing_plan()], &[]).await;
+    assert_eq!(reports[0].outcome, Outcome::LeftAlone);
+    assert!(forge.writes().is_empty(), "{:?}", forge.writes());
 }
 
 #[tokio::test]

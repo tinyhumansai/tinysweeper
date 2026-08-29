@@ -138,12 +138,15 @@ pub async fn revalidate_at(
     // The rest of the re-check is about close evidence, so it is skipped when
     // there is no close: re-reading every pull request to decide whether to add
     // a label it may already have would double the cost of the safe half.
+    // Fails closed, and for every plan rather than only the closing ones. If a
+    // maintainer has just applied a kill switch and this read is the request
+    // that gets rate-limited, proceeding would write the stale labels and
+    // comment over their intervention. We cannot establish the item is still
+    // ours to write to, so we do not write to it.
     let Ok(current) = read.pull_request(repo, plan.number).await else {
-        if plan.close.is_some() {
-            plan.close = None;
-            plan.close_refusal = Some("its current state could not be re-checked before closing");
-        }
-        return Recheck::Unchanged;
+        plan.close = None;
+        plan.close_refusal = Some("its current state could not be re-checked before writing");
+        return Recheck::LeaveAlone;
     };
 
     if config.issues.block_labels.iter().any(|blocked| {
