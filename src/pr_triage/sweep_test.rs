@@ -284,6 +284,51 @@ async fn the_base_read_budget_bounds_the_whole_sweep() {
 }
 
 #[tokio::test]
+async fn an_advertisement_is_flagged_but_never_closed() {
+    let files = vec![changed(
+        "README.md",
+        "@@\n+Acme is the industry-leading agent platform.\n\
+         +Sign up free at https://acme.example/?ref=carol\n",
+    )];
+    let forge = MockForge::new().with_pull_request(pull(7, "carol"), files, vec![]);
+
+    let outcome = run(&forge, &config(), None).await;
+    let plan = &outcome.plans[0];
+
+    assert_eq!(plan.flags.len(), 1, "{plan:?}");
+    // Both facets, verdict first: the flag is a second opinion, not a
+    // replacement for saying whether the change itself is worth reading.
+    assert_eq!(
+        plan.add_labels,
+        vec!["triage: review", "flag: promotional"],
+        "{plan:?}"
+    );
+    // The whole point of the flag being advisory. Closing is on, the pull
+    // request is old enough and unprotected, and it still stays open.
+    assert!(plan.close.is_none(), "{plan:?}");
+    assert!(
+        plan.comment
+            .as_deref()
+            .is_some_and(|body| body.contains("Nothing is closed on this basis"))
+    );
+}
+
+#[tokio::test]
+async fn a_real_integration_is_not_accused_of_advertising() {
+    // One signal is not two. Adding a provider legitimately introduces an
+    // endpoint, and a flag that fires on that is a flag people stop reading.
+    let files = vec![changed(
+        "src/search/tavily.rs",
+        "@@\n+const BASE: &str = \"https://api.tavily.com/v1/search\";\n+pub struct Tavily;\n",
+    )];
+    let forge = MockForge::new().with_pull_request(pull(7, "carol"), files, vec![]);
+
+    let outcome = run(&forge, &config(), None).await;
+    assert!(outcome.plans[0].flags.is_empty(), "{:?}", outcome.plans[0]);
+    assert_eq!(outcome.plans[0].add_labels, vec!["triage: review"]);
+}
+
+#[tokio::test]
 async fn a_hostile_title_and_body_cannot_change_the_verdict() {
     // The regression the whole no-model design buys. The title and body are
     // never read, so there is no prompt for this to be a directive in.
