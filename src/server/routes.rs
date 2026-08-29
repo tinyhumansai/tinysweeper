@@ -665,9 +665,25 @@ impl TriageDispatch {
             return Err(Error::Forge(reason.to_string()));
         }
 
+        for (number, why) in &outcome.unread {
+            tracing::info!(%repo, number, why, "pull request skipped by the sweep");
+        }
+
         let write_token = self.state.auth.installation_token(installation).await?;
         let write = crate::forge::github::GitHubWrite::new(&write_token)?;
-        Ok(crate::pr_triage::apply_all(&write, repo, &outcome.plans).await)
+        // The same read handle the sweep used. `apply_all` re-fetches every
+        // pull request it is about to close and re-runs the gate against its
+        // live state, because a sweep of a hundred takes minutes and a
+        // maintainer can intervene inside them.
+        Ok(crate::pr_triage::apply_all(
+            &read,
+            &write,
+            &self.state.config.config,
+            repo,
+            &outcome.plans,
+            &[],
+        )
+        .await)
     }
 }
 

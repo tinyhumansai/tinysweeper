@@ -969,11 +969,31 @@ async fn run_pr_triage(
     // taking a different code path — so what it prints is what a real run would
     // have written, not a separate rendering that could disagree with it.
     let reports = if dry_run {
-        tinysweeper::pr_triage::apply_all(&MockForge::new(), &repo_id, &outcome.plans).await
+        tinysweeper::pr_triage::apply_all(
+            &read,
+            &MockForge::new(),
+            &loaded.config,
+            &repo_id,
+            &outcome.plans,
+            &[],
+        )
+        .await
     } else {
         let write = GitHubWrite::from_env()?;
-        tinysweeper::pr_triage::apply_all(&write, &repo_id, &outcome.plans).await
+        tinysweeper::pr_triage::apply_all(
+            &read,
+            &write,
+            &loaded.config,
+            &repo_id,
+            &outcome.plans,
+            &[],
+        )
+        .await
     };
+
+    for (number, why) in &outcome.unread {
+        println!("#{number:<6} skipped              {why}");
+    }
 
     for report in &reports {
         println!(
