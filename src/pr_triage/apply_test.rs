@@ -217,7 +217,18 @@ async fn one_failure_does_not_abandon_the_rest_of_the_sweep() {
     let mut second = duplicate_plan();
     second.number = 5799;
 
-    let forge = MockForge::new().refusing_unknown_comments();
+    // Both pull requests are registered: `apply_all` re-reads live state before
+    // writing, and fails closed when it cannot.
+    let forge = forge_with(closeable())
+        .with_pull_request(
+            PullRequest {
+                number: 5799,
+                ..closeable()
+            },
+            vec![],
+            vec![],
+        )
+        .refusing_unknown_comments();
     let reports = apply_all(&forge, &forge, &config(), &repo(), &[failing, second], &[]).await;
 
     assert_eq!(reports.len(), 2, "the sweep abandoned the rest");
@@ -235,7 +246,14 @@ async fn one_failure_does_not_abandon_the_rest_of_the_sweep() {
 #[tokio::test]
 async fn a_plan_with_nothing_to_write_reports_unchanged() {
     let plan = TriagePlan::new(1, Verdict::Review { because: "-" });
-    let forge = MockForge::new();
+    let forge = MockForge::new().with_pull_request(
+        PullRequest {
+            number: 1,
+            ..closeable()
+        },
+        vec![],
+        vec![],
+    );
     let reports = apply_all(&forge, &forge, &config(), &repo(), &[plan], &[]).await;
 
     assert_eq!(reports[0].outcome, Outcome::Unchanged);
@@ -369,7 +387,14 @@ async fn a_plan_that_only_retires_a_label_is_not_reported_unchanged() {
     let mut plan = TriagePlan::new(1, Verdict::Review { because: "-" });
     plan.remove_labels = vec!["triage: duplicate".into()];
 
-    let forge = MockForge::new();
+    let forge = MockForge::new().with_pull_request(
+        PullRequest {
+            number: 1,
+            ..closeable()
+        },
+        vec![],
+        vec![],
+    );
     let reports = apply_all(&forge, &forge, &config(), &repo(), &[plan], &[]).await;
 
     assert_eq!(reports[0].outcome, Outcome::Labelled);
