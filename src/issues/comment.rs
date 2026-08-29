@@ -107,8 +107,31 @@ mod tests {
     }
 
     #[test]
+    fn a_promotional_flag_carries_its_evidence_and_the_way_to_disagree() {
+        let body = render(
+            &plan(),
+            "Asks for support for a hosted service.",
+            None,
+            Some("a link carrying a referral or campaign parameter"),
+        )
+        .expect("a comment");
+        assert!(body.contains("referral"));
+        assert!(body.contains("clear the label"));
+        assert!(body.contains("nothing was closed"));
+    }
+
+    #[test]
+    fn a_flag_alone_is_enough_to_be_worth_a_comment() {
+        let empty = TriagePlan {
+            number: 42,
+            ..TriagePlan::default()
+        };
+        assert!(render(&empty, "", None, Some("marketing language")).is_some());
+    }
+
+    #[test]
     fn a_labelling_only_run_reports_the_labels_it_added() {
-        let body = render(&plan(), "The editor crashes on save.", None).expect("a comment");
+        let body = render(&plan(), "The editor crashes on save.", None, None).expect("a comment");
         assert!(body.starts_with(MARKER));
         assert!(body.contains("The editor crashes on save."));
         assert!(body.contains("`priority: p2`"));
@@ -123,7 +146,7 @@ mod tests {
             number: 42,
             ..TriagePlan::default()
         };
-        assert_eq!(render(&empty, "", None), None);
+        assert_eq!(render(&empty, "", None, None), None);
     }
 
     #[test]
@@ -136,7 +159,7 @@ mod tests {
             }),
             ..plan()
         };
-        let body = render(&plan, "Same crash as the earlier report.", None).expect("a comment");
+        let body = render(&plan, "Same crash as the earlier report.", None, None).expect("a comment");
         assert!(body.contains("duplicate of #7"));
         assert!(
             body.contains("reopen"),
@@ -154,7 +177,7 @@ mod tests {
             }),
             ..plan()
         };
-        let body = render(&plan, "Fixed upstream.", None).expect("a comment");
+        let body = render(&plan, "Fixed upstream.", None, None).expect("a comment");
         assert!(body.contains("fixed by #31"));
     }
 
@@ -168,7 +191,7 @@ mod tests {
             }),
             ..plan()
         };
-        let body = render(&plan, "Same crash.", None).expect("a comment");
+        let body = render(&plan, "Same crash.", None, None).expect("a comment");
         assert!(body.contains("would close"));
         assert!(!body.contains("Closing this"));
     }
