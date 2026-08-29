@@ -214,3 +214,46 @@ fn prose_about_affiliate_links_is_not_an_affiliate_link() {
         "{finding:?}"
     );
 }
+
+#[test]
+fn a_login_appearing_in_a_url_path_is_not_the_authors_host() {
+    // An author called `docs` does not own every documentation URL on the
+    // internet, and two signals is all it takes to put an accusatory label on
+    // an ordinary integration.
+    let files = vec![changed(
+        "src/client.rs",
+        "@@ -1,1 +1,2 @@\n use http;\n+const BASE: &str = \"https://api.example.com/docs/v1\";\n",
+    )];
+    let finding = inspect_diff(&files, &author_hosts("docsbot", None));
+    assert!(
+        !finding.signals.contains(&Signal::AuthorsOwnLink),
+        "{finding:?}"
+    );
+    assert!(!finding.is_promotional(), "{finding:?}");
+}
+
+#[test]
+fn a_subdomain_of_the_authors_site_still_counts() {
+    let files = vec![changed(
+        "docs/tools.md",
+        "@@ -1,1 +1,2 @@\n # Tools\n+See https://blog.acmelabs.example/post for more.\n",
+    )];
+    let hosts = author_hosts("someone", Some("https://acmelabs.example"));
+    let finding = inspect_diff(&files, &hosts);
+    assert!(finding.signals.contains(&Signal::AuthorsOwnLink), "{finding:?}");
+}
+
+#[test]
+fn userinfo_cannot_be_used_to_borrow_a_host() {
+    // `https://acmelabs.example@evil.test/` is a link to `evil.test`.
+    let files = vec![changed(
+        "README.md",
+        "@@ -1,1 +1,2 @@\n # Title\n+Visit https://acmelabs.example@evil.test/ now.\n",
+    )];
+    let hosts = author_hosts("someone", Some("https://acmelabs.example"));
+    assert!(
+        !inspect_diff(&files, &hosts)
+            .signals
+            .contains(&Signal::AuthorsOwnLink)
+    );
+}
