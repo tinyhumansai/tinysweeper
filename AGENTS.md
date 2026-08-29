@@ -82,8 +82,13 @@ discussion in the pull request:
 - Contributor code is never executed. We read the diff and the tree; we do not
   build, install dependencies, or run the target repository's scripts.
 - Pull request bodies, comments and diffs are untrusted input. Fence and label
-  them as data in prompts. A model verdict is advisory — only deterministic
-  policy in `src/apply/` and `src/automerge/` may mutate GitHub.
+  them as data in prompts. A model verdict is advisory — GitHub is only ever
+  mutated by deterministic policy, and only from a module whose whole job is
+  that write: `src/app/apply.rs`, `src/automerge/`, `src/issues/apply.rs`,
+  `src/pr_triage/apply.rs`, `src/threads/` and `src/sentry/promote.rs`. Adding
+  to that list is a decision to argue for in a pull request, and the bar is the
+  same each time: the module holds a `ForgeWrite` and *only* executes a plan
+  some other module already decided on.
 - Secrets found by the scanners are reported by type and location only. The
   value never reaches a comment, a check-run summary, or a log.
 

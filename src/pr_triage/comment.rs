@@ -94,10 +94,14 @@ pub fn render(plan: &TriagePlan) -> Option<String> {
 
     match (&plan.close, plan.close_refusal) {
         (Some(close), _) if close.dry_run => {
+            // Says what is true. `dry_run` skips the close and nothing else —
+            // the label above was still applied and this comment was still
+            // posted — so "nothing was changed" would be false every time the
+            // verdict label was new.
             let _ = write!(
                 body,
                 "\ntinysweeper would close this, but `pr_triage.close.dry_run` \
-                 is on, so nothing was changed.\n"
+                 is on, so it has been left open.\n"
             );
         }
         (Some(_), _) => {
@@ -196,6 +200,10 @@ mod tests {
         });
         let body = render(&plan).expect("a comment");
         assert!(body.contains("dry_run"));
+        assert!(body.contains("left open"));
+        // A dry run still labels and still comments, so it must not claim
+        // otherwise.
+        assert!(!body.contains("nothing was changed"));
         assert!(!body.contains("reopen it"));
     }
 
