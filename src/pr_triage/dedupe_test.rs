@@ -112,8 +112,22 @@ fn the_same_line_added_to_different_files_is_not_a_duplicate() {
     // repository-wide line set would score a confident 100% on both axes.
     let files = |which: &str| {
         vec![
-            changed("a.rs", if which == "a" { "@@\n+return false;\n" } else { "@@\n+let x = 1;\n" }),
-            changed("b.rs", if which == "a" { "@@\n+let x = 1;\n" } else { "@@\n+return false;\n" }),
+            changed(
+                "a.rs",
+                if which == "a" {
+                    "@@\n+return false;\n"
+                } else {
+                    "@@\n+let x = 1;\n"
+                },
+            ),
+            changed(
+                "b.rs",
+                if which == "a" {
+                    "@@\n+let x = 1;\n"
+                } else {
+                    "@@\n+return false;\n"
+                },
+            ),
         ]
     };
     let one = Shape::of(1, &files("a"));
@@ -128,8 +142,14 @@ fn the_same_line_added_to_different_files_is_not_a_duplicate() {
 fn two_edits_that_add_the_same_line_but_remove_different_ones_are_not_duplicates() {
     // Both change `a.rs` to `return false;`, in different functions. The
     // additions match perfectly; what separates them is what they took out.
-    let one = Shape::of(1, &[changed("a.rs", "@@\n-return alpha();\n+return false;\n")]);
-    let two = Shape::of(2, &[changed("a.rs", "@@\n-return beta();\n+return false;\n")]);
+    let one = Shape::of(
+        1,
+        &[changed("a.rs", "@@\n-return alpha();\n+return false;\n")],
+    );
+    let two = Shape::of(
+        2,
+        &[changed("a.rs", "@@\n-return beta();\n+return false;\n")],
+    );
 
     let score = overlap(&one, &two);
     assert_eq!(score.added, 1.0);

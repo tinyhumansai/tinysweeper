@@ -189,15 +189,7 @@ async fn one_failure_does_not_abandon_the_rest_of_the_sweep() {
     second.number = 5799;
 
     let forge = MockForge::new().refusing_unknown_comments();
-    let reports = apply_all(
-        &forge,
-        &forge,
-        &config(),
-        &repo(),
-        &[failing, second],
-        &[],
-    )
-    .await;
+    let reports = apply_all(&forge, &forge, &config(), &repo(), &[failing, second], &[]).await;
 
     assert_eq!(reports.len(), 2, "the sweep abandoned the rest");
     assert!(
