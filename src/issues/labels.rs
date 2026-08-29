@@ -136,16 +136,21 @@ pub fn plan<'a>(
         }
     };
 
+    // Blocked first, before the labelling switch. `blocked` is not a fact about
+    // labels — it is "a human said leave this item alone", and the pull request
+    // sweep reads it to cancel the comment and the close as well. Computing it
+    // after an early return meant a deployment with `apply_labels = false` still
+    // commented on and closed a kill-switched pull request.
+    plan.blocked = policy
+        .block_labels
+        .iter()
+        .any(|blocked| existing.iter().any(|label| same(label, blocked)));
+
     if !policy.apply_labels {
         refuse_all(&mut plan, "labelling is off in the configuration");
         return plan;
     }
-    if policy
-        .block_labels
-        .iter()
-        .any(|blocked| existing.iter().any(|label| same(label, blocked)))
-    {
-        plan.blocked = true;
+    if plan.blocked {
         refuse_all(&mut plan, "the item carries a blocked label");
         return plan;
     }
@@ -156,6 +161,19 @@ pub fn plan<'a>(
 
     for label in suggested {
         if let Some(reason) = refusal(label, existing, &policy, &chosen) {
+            // An already-applied label still retires the rest of its facet.
+            //
+            // Without this the contradiction is permanent: an interrupted run —
+            // or a failed `remove_label` — leaves both `triage: duplicate` and
+            // `triage: review` on the item, and every later sweep sees the one
+            // it wants already there, skips the removal, and moves on. The
+            // list then shows two answers to one question forever.
+            if reason == "already applied" {
+                plan.remove.extend(supersede(label, existing));
+                if let Some(facet) = facet_of(label) {
+                    chosen.push(facet);
+                }
+            }
             plan.declined.push((label.clone(), reason));
             continue;
         }
