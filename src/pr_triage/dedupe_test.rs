@@ -103,3 +103,35 @@ fn a_superset_pull_request_falls_below_the_path_floor() {
     assert!(overlap(&big, &small).paths < 0.8);
     assert_eq!(duplicate_of(&big, &[small], 0.8, 0.9), None);
 }
+
+#[test]
+fn the_same_line_added_to_different_files_is_not_a_duplicate() {
+    // The additions are identical and the path sets are identical, so a
+    // repository-wide line set would score a confident 100% on both axes.
+    let files = |which: &str| {
+        vec![
+            changed("a.rs", if which == "a" { "@@\n+return false;\n" } else { "@@\n+let x = 1;\n" }),
+            changed("b.rs", if which == "a" { "@@\n+let x = 1;\n" } else { "@@\n+return false;\n" }),
+        ]
+    };
+    let one = Shape::of(1, &files("a"));
+    let two = Shape::of(2, &files("b"));
+
+    assert_eq!(overlap(&one, &two).paths, 1.0);
+    assert_eq!(overlap(&one, &two).added, 0.0);
+    assert_eq!(duplicate_of(&two, &[one], 0.8, 0.9), None);
+}
+
+#[test]
+fn two_edits_that_add_the_same_line_but_remove_different_ones_are_not_duplicates() {
+    // Both change `a.rs` to `return false;`, in different functions. The
+    // additions match perfectly; what separates them is what they took out.
+    let one = Shape::of(1, &[changed("a.rs", "@@\n-return alpha();\n+return false;\n")]);
+    let two = Shape::of(2, &[changed("a.rs", "@@\n-return beta();\n+return false;\n")]);
+
+    let score = overlap(&one, &two);
+    assert_eq!(score.added, 1.0);
+    assert_eq!(score.removed, 0.0);
+    assert_eq!(score.lines, 0.0, "the lower of the two, not the mean");
+    assert_eq!(duplicate_of(&two, &[one], 0.8, 0.9), None);
+}

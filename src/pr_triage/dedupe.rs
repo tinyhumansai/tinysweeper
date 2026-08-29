@@ -153,7 +153,7 @@ pub fn overlap(left: &Shape, right: &Shape) -> Overlap {
 /// A unit separator, like the index's document ids, so a path or a line
 /// containing the delimiter cannot forge a different file's entry.
 fn qualified(path: &str, line: &str) -> String {
-    format!("{path}\u{{1f}}{line}")
+    format!("{path}\u{1f}{line}")
 }
 
 /// Overlap of two sets, 0..=1. Empty on either side is zero, never NaN.
