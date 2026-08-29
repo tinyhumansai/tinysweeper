@@ -84,7 +84,9 @@ impl NotLanded {
             NotLanded::RemovedLineStillPresent => "it removes lines the base branch still has",
             NotLanded::FileStillThere => "it deletes a file the base branch still has",
             NotLanded::NoAnchor => "it changes lines with no surrounding context to place them by",
-            NotLanded::PartiallyApplied => "only some of its repeated changes are on the base branch",
+            NotLanded::PartiallyApplied => {
+                "only some of its repeated changes are on the base branch"
+            }
             NotLanded::BaseUnreadable => {
                 "the base branch copy of one of its files could not be read"
             }

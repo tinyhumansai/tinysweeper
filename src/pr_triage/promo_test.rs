@@ -240,7 +240,10 @@ fn a_subdomain_of_the_authors_site_still_counts() {
     )];
     let hosts = author_hosts("someone", Some("https://acmelabs.example"));
     let finding = inspect_diff(&files, &hosts);
-    assert!(finding.signals.contains(&Signal::AuthorsOwnLink), "{finding:?}");
+    assert!(
+        finding.signals.contains(&Signal::AuthorsOwnLink),
+        "{finding:?}"
+    );
 }
 
 #[test]

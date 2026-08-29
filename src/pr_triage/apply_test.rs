@@ -505,3 +505,28 @@ async fn a_superseded_close_is_dropped_when_the_base_branch_moves() {
         Some("its base branch moved after the sweep compared against it")
     );
 }
+
+#[tokio::test]
+async fn a_kill_switch_stops_a_plan_that_was_not_going_to_close_anything() {
+    // The label means "leave this alone", and a maintainer who applies it is
+    // owed that whether or not a close happened to be on the table.
+    let forge = MockForge::new().with_pull_request(
+        PullRequest {
+            labels: vec!["tinysweeper:human-review".into()],
+            ..closeable()
+        },
+        vec![],
+        vec![],
+    );
+
+    let mut plan = duplicate_plan();
+    assert!(plan.close.is_none());
+
+    let reports = apply_all(&forge, &forge, &config(), &repo(), &[plan.clone()], &[]).await;
+
+    assert_eq!(reports[0].outcome, Outcome::LeftAlone);
+    assert!(forge.writes().is_empty(), "{:?}", forge.writes());
+
+    let recheck = revalidate(&forge, &config(), &repo(), &mut plan, &[]).await;
+    assert_eq!(recheck, Recheck::LeaveAlone);
+}
