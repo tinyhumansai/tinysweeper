@@ -611,12 +611,11 @@ impl ForgeRead for GitHubRead {
     }
 
     async fn branch_head(&self, repo: &RepoId, branch: &str) -> Result<Option<String>> {
-        let route = format!(
-            "/repos/{}/{}/commits/{}",
-            repo.owner,
-            repo.name,
-            urlencoding(branch)
-        );
+        // The branch name goes in the path, so a name containing a slash — a
+        // `release/1.2` — is passed through as-is. GitHub resolves it; what it
+        // must not do is escape the route, which `RepoId::parse` and GitHub's
+        // own ref rules already prevent.
+        let route = format!("/repos/{}/{}/commits/{branch}", repo.owner, repo.name);
         match self.client.get::<serde_json::Value, _, ()>(&route, None).await {
             Ok(commit) => Ok(commit["sha"].as_str().map(str::to_string)),
             // A pull request can outlive the branch it targets, and that is an
