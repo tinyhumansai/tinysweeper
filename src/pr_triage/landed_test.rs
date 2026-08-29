@@ -253,3 +253,35 @@ fn an_addition_with_no_surviving_context_has_nothing_to_locate_it_by() {
         Err(NotLanded::NoAnchor)
     );
 }
+
+#[test]
+fn making_a_repeated_change_twice_needs_it_on_the_branch_twice() {
+    // The same addition in two identical blocks. Checking each hunk on its own
+    // lets both match the single occurrence that is there, and calls a
+    // half-applied pull request finished.
+    let file = changed(
+        "config.rs",
+        "@@ -1,2 +1,3 @@\n let block = [\n+    \"new\",\n ];\n\
+         @@ -9,2 +9,3 @@\n let block = [\n+    \"new\",\n ];\n",
+    );
+
+    let one_applied = "let block = [\n    \"new\",\n];\nlet block = [\n];\n";
+    assert_eq!(
+        file_landed(&file, Some(one_applied)),
+        Err(NotLanded::PartiallyApplied)
+    );
+
+    let both_applied = "let block = [\n    \"new\",\n];\nlet block = [\n    \"new\",\n];\n";
+    assert_eq!(file_landed(&file, Some(both_applied)), Ok(2));
+}
+
+#[test]
+fn a_hunk_with_no_context_at_all_is_refused_whichever_way_it_changes() {
+    // An empty after image is "present" in every file on earth, so a deletion
+    // hunk without context has no evidence either.
+    let file = changed("a.rs", "@@ -1,2 +1,1 @@\n-gone\n-also gone\n");
+    assert_eq!(
+        file_landed(&file, Some("something else\n")),
+        Err(NotLanded::NoAnchor)
+    );
+}
