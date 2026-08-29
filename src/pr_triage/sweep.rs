@@ -285,20 +285,45 @@ async fn verdict_for(
     // `join_all` preserves input order, which is load-bearing: `landed` walks
     // `changed` and `bases` in step, so an answer arriving out of order would
     // compare one file's diff against another file's contents.
+    // Resolved once, and every file of this pull request read at that one
+    // commit. Reading at the branch *name* resolves per file, so a base branch
+    // that moves mid-sweep can serve one file from before a commit and another
+    // from after it — and a change then looks landed when no single revision
+    // contains all of it.
+    //
+    // A branch that cannot be resolved is not guessed at: the pull request is
+    // left for a human rather than judged against an unknown tree.
+    let base_sha = match read.branch_head(repo, &pull_request.base_ref).await {
+        Ok(Some(sha)) => sha,
+        Ok(None) => {
+            return Verdict::Review {
+                because: "its base branch no longer exists",
+            };
+        }
+        Err(err) => {
+            tracing::debug!(%err, branch = %pull_request.base_ref, "could not resolve the base");
+            return Verdict::Review {
+                because: "its base branch could not be resolved to a commit",
+            };
+        }
+    };
+
     let mut bases: Vec<Base> = Vec::with_capacity(changed.len());
     for batch in changed.chunks(FETCH_CONCURRENCY) {
         let fetched = futures::future::join_all(batch.iter().map(|file| async {
-            // Read at the base *branch*, not at `base_sha`. The question this
-            // answers is "is this change on the branch today", which is a
-            // question about the moving ref: a pull request opened six weeks
-            // ago carries a `base_sha` from before the change it duplicates
-            // landed, and reading there would answer "no" to every superseded
-            // pull request there is.
+            // Read at the base branch's *current head*, not at the pull
+            // request's recorded `base_sha`. The question this answers is "is
+            // this change on the branch today", which is a question about the
+            // moving ref: a pull request opened six weeks ago carries a
+            // `base_sha` from before the change it duplicates landed, and
+            // reading there would answer "no" to every superseded pull request
+            // there is. Pinned to one resolved commit so the answer describes a
+            // single tree.
             //
             // A read that *failed* is not a file that is *absent*. Collapsing
             // the two would tell a deletion-only pull request that everything
             // it removes is already gone, and close it on a rate limit.
-            match read.file_at(repo, &file.path, &pull_request.base_ref).await {
+            match read.file_at(repo, &file.path, &base_sha).await {
                 Ok(Some(content)) => Base::Present(content),
                 Ok(None) => Base::Absent,
                 Err(err) => {
@@ -315,6 +340,7 @@ async fn verdict_for(
     match landed(changed, &bases, policy.min_landed_lines) {
         Ok(lines_checked) => Verdict::Superseded {
             base_ref: pull_request.base_ref.clone(),
+            base_sha,
             lines_checked,
         },
         Err(why) => Verdict::Review {

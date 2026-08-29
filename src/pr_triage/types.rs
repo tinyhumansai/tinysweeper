@@ -35,6 +35,12 @@ pub enum Verdict {
     Superseded {
         /// The branch its lines were found on.
         base_ref: String,
+        /// The exact commit of that branch they were compared against.
+        ///
+        /// Named so the finding is reproducible: "already on `main`" is only
+        /// checkable if it says *which* `main`, and the branch will have moved
+        /// by the time anybody reads the comment.
+        base_sha: String,
         /// How many substantive lines were checked. Below
         /// `pr_triage.min_landed_lines` this verdict is not reached at all.
         lines_checked: usize,
