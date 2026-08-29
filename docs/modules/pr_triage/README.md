@@ -86,28 +86,44 @@ that.
 The question is asked in a form that has a checkable answer: *would applying
 this pull request change anything?*
 
-The unit of comparison is a **run** — a maximal stretch of consecutive added or
-removed lines in a hunk — and not a line. Matching lines individually would be
-far too generous: a pull request adding a single `}` would find one on the base
-branch and declare itself landed. A ten-line run in the same order in the same
-file is not a coincidence.
+The unit of comparison is a **hunk**, taken as its two images: the *before*
+image is the hunk's context plus the lines it removes, the *after* image is the
+same context plus the lines it adds. "This hunk is already applied" is then
+exactly "the base branch contains the after image and not the before image".
 
-The removed runs carry the other half of the argument, and it is the half that
+Both images carry the context lines, and that is what makes the answer about a
+*place* rather than about the file. Comparing added lines on their own is far
+too generous: a pull request that adds three entries to a second list, where the
+same three already sit in a first list, would match and be declared a no-op. The
+context is what says which list.
+
+The before image carries the other half of the argument, and it is the half that
 makes single-line changes safe. Take the real case this was built for: a pull
 request changing `Rust 1.93.0` to `Rust 1.96.1` in six READMEs. If the change
-already landed, the base branch has the new line and not the old one. If it did
-not, the base still has the old line — the removed run is *present* — and the
-detector refuses. That check runs first, because it is the conclusive one.
+already landed, the stretch reads the new way. If it did not, the stretch still
+reads exactly as it did — the before image is *present* — and the detector
+refuses. That check runs first, because it is the conclusive one. It is skipped
+on hunks that remove nothing, where the before image is only context and is on
+the branch either way.
 
 Lines are compared with interior whitespace collapsed, so re-indenting a block
-does not make it a different change. Blank lines *break* a run rather than
-joining across it, so two unrelated stretches are never compared as one block
-that exists nowhere.
+does not make it a different change. Blank lines are dropped, which is why a
+pure-addition hunk whose only context was blank is refused outright: with no
+surviving anchor it has no location evidence at all.
 
-Four shapes are refused rather than guessed at, each because the diff does not
-contain enough to answer the question: renames, files the forge gave no patch
-for, changes below `min_landed_lines`, and pull requests the sweep could not
-read the files of.
+Every file of one pull request is read at **one** resolved commit, not at the
+branch name. `ForgeRead::branch_head` pins it first. Reading at a moving ref
+resolves independently per file, so a base branch that advances mid-sweep could
+serve one file from before a commit and another from after it — and a change
+would look landed when no single revision contained all of it. The resolved SHA
+is named in the comment, so the finding stays checkable after the branch moves.
+
+Seven shapes are refused rather than guessed at, each because the evidence does
+not answer the question: renames; files the forge gave no patch for; a deletion
+of a file the base branch still has (whose after image is empty, and the empty
+run is "present" in every file); a pure addition with no anchor; a base file
+that could not be *read*, as distinct from one that is absent; changes below
+`min_landed_lines`; and pull requests whose diff would not load.
 
 ## How duplicates are decided
 
@@ -123,10 +139,26 @@ closing it in favour of a copy opened this morning throws all of that away.
 `ForgeRead::open_pull_requests` promises oldest-first ordering for that reason,
 and `dedupe::duplicate_of` re-checks the numbers rather than trusting it.
 
+The signature is a **multiset of hunk fingerprints** — path, before image, after
+image — and each of those words is load-bearing:
+
+- a *hunk*, not a line, because two edits that read the same are not the same
+  edit. Flipping `enabled = false` to `true` in two unrelated configuration
+  blocks produces identical added and removed lines; the context tells them
+  apart.
+- *path*-qualified, because a repository-wide line set makes two pull requests
+  that touch the same files and change *different* ones of them look identical.
+- a *multiset*, because counts matter. One occurrence of an edit against two of
+  the same edit scores 0.5, not 1.0 — otherwise a pull request that made the
+  change twice would be closed as a duplicate of one that made it once, losing
+  the second edit.
+
 A pull request that makes the same fix *and* six other changes is not a
-duplicate: its path set is much larger, so it falls below
+duplicate either: its path set is much larger, so it falls below
 `duplicate_path_overlap_min` and stays open. Closing it would lose the other
-six.
+six. Neither is a pull request carrying a binary or a truncated file: those
+paths count and their bytes do not, so the shape is marked incomparable rather
+than scored on the half we can see.
 
 ## Flagging self-promotion
 
@@ -243,6 +275,34 @@ comment is edited in place forever rather than re-posted: a sweep runs
 repeatedly by definition, and an edit that changes nothing is skipped entirely,
 because touching a pull request bumps `updated_at`, which is the field the close
 gate's own quiet check reads.
+
+## What happens between deciding and writing
+
+A sweep of a hundred pull requests takes minutes, and every plan is built before
+any of them is applied. A maintainer can intervene inside that window, and a
+contributor can push — so the plan is not simply executed.
+
+Before anything is written, `apply::revalidate` re-fetches the subject and:
+
+- **stops every write** if a `block_labels` kill switch has appeared. Not just
+  the close: the label means "leave this alone", and applying the label and the
+  comment anyway would honour the letter of the setting and none of its meaning.
+- **drops the close** if the subject's head has moved. Every verdict here is
+  read off a diff, so a new head is a new diff and the finding no longer
+  describes what would be closed.
+- **drops the close** if the *original's* head has moved, for a duplicate. That
+  verdict rests on two diffs, and pinning only one leaves half the evidence free
+  to move.
+- **drops the close** if the gate now refuses for any other reason — drafted,
+  merged, protected — or if the pull request could not be re-read at all. "We
+  could not check" and "it is no longer allowed" are the same answer when the
+  action cannot be undone.
+
+Then the label and the comment go out with the close held back, and the state is
+read and gated **once more** immediately before the close itself. Those writes
+each await the forge, and the close is the one that cannot be undone, so it gets
+the freshest possible answer. If the second check refuses, the comment that
+already went out is corrected rather than left standing.
 
 ## Known gaps
 

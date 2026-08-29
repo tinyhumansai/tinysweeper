@@ -283,9 +283,9 @@ async fn a_kill_switch_added_during_the_sweep_stops_the_close() {
 #[tokio::test]
 async fn a_pull_request_marked_draft_during_the_sweep_stops_the_close() {
     let forge = forge_with(PullRequest {
-            draft: true,
-            ..closeable()
-        });
+        draft: true,
+        ..closeable()
+    });
 
     let mut plan = closing_plan();
     revalidate(&forge, &config(), &repo(), &mut plan, &[]).await;
@@ -314,9 +314,9 @@ async fn a_dropped_close_takes_its_comment_claim_with_it() {
     // The comment says what was decided, so a decision reversed between the
     // sweep and the write has to reach the comment too.
     let forge = forge_with(PullRequest {
-            draft: true,
-            ..closeable()
-        });
+        draft: true,
+        ..closeable()
+    });
 
     let reports = apply_all(&forge, &forge, &config(), &repo(), &[closing_plan()], &[]).await;
 
@@ -344,9 +344,9 @@ async fn a_push_during_the_sweep_stops_the_close() {
     // The verdict was read off a diff. A new head is a new diff, so the
     // evidence no longer describes the pull request being closed.
     let forge = forge_with(PullRequest {
-            head_sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
-            ..closeable()
-        });
+        head_sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+        ..closeable()
+    });
 
     let mut plan = closing_plan();
     revalidate(&forge, &config(), &repo(), &mut plan, &[]).await;

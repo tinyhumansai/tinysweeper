@@ -147,7 +147,10 @@ pub async fn revalidate(
     // to since the sweep read it, the two changes may no longer overlap and
     // closing the subject as a copy of it would be closing it over a diff that
     // no longer exists.
-    if let crate::pr_triage::types::Verdict::Duplicate { of, of_head_sha, .. } = &plan.verdict {
+    if let crate::pr_triage::types::Verdict::Duplicate {
+        of, of_head_sha, ..
+    } = &plan.verdict
+    {
         let original = read.pull_request(repo, *of).await;
         let still_matches = original
             .as_ref()
