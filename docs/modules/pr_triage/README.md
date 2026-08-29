@@ -33,6 +33,13 @@ Here there is nothing to propose:
   applying it would change nothing;
 - everything else is **worth reading**, which needs no evidence at all.
 
+Alongside the verdict, on a second and independent facet, sits a **flag**.
+`promo.rs` reads the diff for the shape of an advertisement and says so with
+`flag: promotional`. The two facets are separate rather than four values of one,
+because the facts are independent: a pull request can be a duplicate *and* an
+advertisement, and one exclusive label cannot say both. See
+[Flagging self-promotion](#flagging-self-promotion).
+
 Three things follow, and all three are the reason it is built this way.
 
 **The verdicts are reproducible.** A maintainer who disagrees can check any of
@@ -68,6 +75,7 @@ that.
   is no advisory half, because nothing advises.
 - `landed.rs` — the "already implemented" detector.
 - `dedupe.rs` — the duplicate detector.
+- `promo.rs` — the self-promotion signals. Advisory; shared with issue triage.
 - `gate.rs` — the deterministic close gate.
 - `comment.rs` — the evidence comment.
 - `sweep.rs` — the read-only job.
@@ -120,6 +128,63 @@ duplicate: its path set is much larger, so it falls below
 `duplicate_path_overlap_min` and stays open. Closing it would lose the other
 six.
 
+## Flagging self-promotion
+
+The pattern is familiar on any repository with a public tracker. A pull request
+adds "support" for a service nobody asked for, and the support turns out to be a
+base URL, an API key and a link; or an issue is a paragraph of product copy with
+a signup link at the bottom. Both are cheap to write and expensive to triage,
+because they look like contributions right up until somebody reads them.
+
+Five signals, all about *shape* rather than about vendors:
+
+| Signal | What it matches |
+| --- | --- |
+| Referral link | a link carrying `?ref=`, `?via=`, `utm_source=`, `aff=` |
+| The author's own link | a host matching their login or their profile's site |
+| New credential | a new `*_API_KEY` / `*_SECRET` / `*_CLIENT_SECRET` name |
+| New endpoint | a new outbound `https://api.…` or `.com/v1` base URL |
+| Marketing copy | superlatives and calls to action, in a diff that adds no code |
+
+There is deliberately **no list of disallowed companies**, and there must never
+be one: a denylist of competitors is a different feature with a different name,
+and it would go stale the week after it was written.
+
+**Two signals are needed, not one** — except a referral link, which fires on its
+own because nothing technical requires a `?ref=` on a documentation link. The
+reason for the floor is that any single signal fires on perfectly ordinary work:
+adding an integration legitimately does introduce an endpoint and a key, and a
+flag that cries wolf on every third pull request is one people learn to ignore.
+`a_real_integration_is_not_accused_of_advertising` pins that.
+
+**A flag is advisory and can never close anything.** The honest form of this
+judgement is a judgement — "add Tavily as a BYOK search provider" is a real
+contribution to one repository and an advertisement on another, and no pattern
+knows which. `an_advertisement_is_flagged_but_never_closed` runs with closing
+fully enabled and asserts the pull request stays open. The comment names exactly
+which signals matched and how to clear the label, because a label that accuses
+somebody has to carry its evidence.
+
+A matched credential is reported by **name and location only**. The value never
+reaches a label, a comment or a log line: a promotional pull request that
+happens to carry a live key must not have it echoed onto a public comment by the
+thing that noticed it. That is the `AGENTS.md` scanner invariant, and
+`a_credential_is_reported_by_name_and_never_by_value` pins it.
+
+### Why it may read prose when nothing else here does
+
+The rest of this module never reads a title or a body, because those are
+untrusted input and putting them in a prompt is how injection works. `promo.rs`
+reads them and is still safe for a specific reason: there is no prompt. It
+matches patterns and counts them. Text saying "ignore previous instructions"
+matches nothing and is simply text.
+
+That is also why the same detector serves issue triage, over an issue's title
+and body, adding the same `flag: promotional` label through the same planner.
+An issue has no code to weigh the marketing signal against, so that signal is
+always eligible there — which is the right reading: a bug report has no reason
+to link a pricing page.
+
 ## What it costs
 
 One list request per hundred pull requests, one changed-files request per pull
@@ -161,11 +226,13 @@ alone is worse than one setting in one place.
 
 ## Labels
 
-The sweep owns one facet, `triage:`, with three exclusive values — `duplicate`,
+The sweep owns two facets. `triage:` has three exclusive values — `duplicate`,
 `superseded`, `review` — declared in `presets/labels.toml` and applied through
 `issues::labels::plan`, the same add-only planner issue triage uses. Adding one
 retires the others in the facet, so a pull request can never carry both
-`triage: duplicate` and `triage: review`.
+`triage: duplicate` and `triage: review`. `flag:` is the advisory facet, and the
+verdict label is always suggested first so a `max_labels` of two can never spend
+both slots on flags and leave the item looking untriaged.
 
 A pull request that is merely worth reading gets the label and **no comment**. A
 bot commenting "this looks fine" on a hundred pull requests is exactly the noise
