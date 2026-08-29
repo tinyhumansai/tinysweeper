@@ -19,7 +19,7 @@ use crate::error::Result;
 use crate::forge::types::RepoId;
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 use crate::pr_triage::gate::{self, Outcome as GateOutcome};
-use crate::pr_triage::types::TriagePlan;
+use crate::pr_triage::types::{TriagePlan, Verdict};
 
 /// Execute one triage plan, reporting the comment it left behind.
 ///
@@ -196,21 +196,53 @@ pub async fn revalidate_at(
     // to since the sweep read it, the two changes may no longer overlap and
     // closing the subject as a copy of it would be closing it over a diff that
     // no longer exists.
-    if let crate::pr_triage::types::Verdict::Duplicate {
-        of, of_head_sha, ..
-    } = &plan.verdict
-    {
-        let original = read.pull_request(repo, *of).await;
-        let still_matches = original
-            .as_ref()
-            .map(|original| &original.head_sha == of_head_sha)
-            .unwrap_or(false);
-        if !still_matches {
-            plan.close = None;
-            plan.close_refusal =
-                Some("the pull request it duplicates changed after the sweep read it");
-            return Recheck::Unchanged;
+    match &plan.verdict {
+        Verdict::Duplicate { of, of_head_sha, .. } => {
+            let Ok(original) = read.pull_request(repo, *of).await else {
+                plan.close = None;
+                plan.close_refusal =
+                    Some("the pull request it duplicates could not be re-checked");
+                return Recheck::Unchanged;
+            };
+            if original.head_sha != *of_head_sha {
+                plan.close = None;
+                plan.close_refusal =
+                    Some("the pull request it duplicates changed after the sweep read it");
+                return Recheck::Unchanged;
+            }
+            // And it has to still be somewhere the work can land. Closing a
+            // contribution as a duplicate of something that has itself been
+            // closed unmerged loses both, which is the one outcome nobody
+            // wants: the change simply disappears.
+            if !original.open && !original.merged {
+                plan.close = None;
+                plan.close_refusal =
+                    Some("the pull request it duplicates was itself closed unmerged");
+                return Recheck::Unchanged;
+            }
         }
+        Verdict::Superseded {
+            base_ref, base_sha, ..
+        } => {
+            // The branch can be force-pushed, or the change reverted, between
+            // the sweep and this moment — at which point the lines are no
+            // longer on it and the finding has evaporated.
+            match read.branch_head(repo, base_ref).await {
+                Ok(Some(head)) if head == *base_sha => {}
+                Ok(_) => {
+                    plan.close = None;
+                    plan.close_refusal =
+                        Some("its base branch moved after the sweep compared against it");
+                    return Recheck::Unchanged;
+                }
+                Err(_) => {
+                    plan.close = None;
+                    plan.close_refusal = Some("its base branch could not be re-checked");
+                    return Recheck::Unchanged;
+                }
+            }
+        }
+        Verdict::Review { .. } => {}
     }
 
     Recheck::Unchanged
