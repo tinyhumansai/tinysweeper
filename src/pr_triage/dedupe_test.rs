@@ -16,6 +16,7 @@ fn changed(path: &str, patch: &str) -> ChangedFile {
 fn readme_fix(number: u64) -> Shape {
     Shape::of(
         number,
+        "main",
         &[
             changed("README.md", "@@\n-Rust 1.93.0\n+Rust 1.96.1\n"),
             changed("crates/a/README.md", "@@\n-Rust 1.93.0\n+Rust 1.96.1\n"),
@@ -59,6 +60,7 @@ fn the_same_lines_in_different_files_are_not_duplicates() {
 fn a_pull_request_with_nothing_readable_duplicates_nothing() {
     let binary = Shape::of(
         2,
+        "main",
         &[ChangedFile {
             path: "logo.png".into(),
             patch: None,
@@ -69,6 +71,7 @@ fn a_pull_request_with_nothing_readable_duplicates_nothing() {
     // Two of them would otherwise score a confident 1.0 against each other.
     let other = Shape::of(
         1,
+        "main",
         &[ChangedFile {
             path: "logo.png".into(),
             patch: None,
@@ -96,6 +99,7 @@ fn a_superset_pull_request_falls_below_the_path_floor() {
     let small = Shape::of(1, "main", &[changed("a.rs", "@@\n+let a = 1;\n")]);
     let big = Shape::of(
         2,
+        "main",
         &[
             changed("a.rs", "@@\n+let a = 1;\n"),
             changed("b.rs", "@@\n+let b = 2;\n"),
@@ -144,10 +148,12 @@ fn two_edits_that_add_the_same_line_but_remove_different_ones_are_not_duplicates
     // additions match perfectly; what separates them is what they took out.
     let one = Shape::of(
         1,
+        "main",
         &[changed("a.rs", "@@\n-return alpha();\n+return false;\n")],
     );
     let two = Shape::of(
         2,
+        "main",
         &[changed("a.rs", "@@\n-return beta();\n+return false;\n")],
     );
 
@@ -164,6 +170,7 @@ fn the_same_edit_in_two_places_in_one_file_is_not_a_duplicate() {
     // each hunk carries, which is why the fingerprint is per hunk.
     let one = Shape::of(
         1,
+        "main",
         &[changed(
             "config.toml",
             "@@ -1,3 +1,3 @@\n [alpha]\n-enabled = false\n+enabled = true\n",
@@ -171,6 +178,7 @@ fn the_same_edit_in_two_places_in_one_file_is_not_a_duplicate() {
     );
     let two = Shape::of(
         2,
+        "main",
         &[changed(
             "config.toml",
             "@@ -9,3 +9,3 @@\n [beta]\n-enabled = false\n+enabled = true\n",
@@ -189,6 +197,7 @@ fn an_unreadable_file_makes_the_whole_shape_incomparable() {
     let with_binary = |number: u64| {
         Shape::of(
             number,
+            "main",
             &[
                 changed("README.md", "@@ -1,2 +1,2 @@\n # Title\n-old\n+new\n"),
                 ChangedFile {
@@ -214,6 +223,7 @@ fn making_the_same_edit_twice_is_not_the_same_as_making_it_once() {
     // score 1.0, closing the newer one and losing its second edit.
     let once = Shape::of(
         1,
+        "main",
         &[changed(
             "config.toml",
             "@@ -1,3 +1,3 @@\n [x]\n-enabled = false\n+enabled = true\n",
@@ -221,6 +231,7 @@ fn making_the_same_edit_twice_is_not_the_same_as_making_it_once() {
     );
     let twice = Shape::of(
         2,
+        "main",
         &[changed(
             "config.toml",
             "@@ -1,3 +1,3 @@\n [x]\n-enabled = false\n+enabled = true\n\
