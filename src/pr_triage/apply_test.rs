@@ -7,7 +7,39 @@
 use super::*;
 use crate::forge::mock::{MockForge, Write};
 use crate::pr_triage::comment::MARKER;
+use crate::config::types::{Config, PrClose, PrTriage};
+use crate::forge::types::PullRequest;
 use crate::pr_triage::types::{ClosePlan, TriagePlan, Verdict};
+
+/// A deployment with closing fully on, so a refusal in these tests is always
+/// the guard under test and never the policy being off.
+fn config() -> Config {
+    let mut config = Config {
+        pr_triage: PrTriage {
+            enabled: true,
+            close: PrClose {
+                enabled: true,
+                min_age_days: 1,
+                ..PrClose::default()
+            },
+            ..PrTriage::default()
+        },
+        ..Config::default()
+    };
+    config.issues.block_labels = vec!["tinysweeper:human-review".into()];
+    config
+}
+
+/// A pull request that clears every guard.
+fn closeable() -> PullRequest {
+    PullRequest {
+        number: 5798,
+        author: "contributor".into(),
+        age_days: 30,
+        quiet_days: 30,
+        ..PullRequest::default()
+    }
+}
 
 fn repo() -> RepoId {
     RepoId {
@@ -157,7 +189,7 @@ async fn one_failure_does_not_abandon_the_rest_of_the_sweep() {
     }];
 
     let forge = MockForge::new();
-    let reports = apply_all(&forge, &repo(), &plans).await;
+    let reports = apply_all(&forge, &forge, &config(), &repo(), &plans, &[]).await;
 
     assert_eq!(reports.len(), 2);
     assert!(
@@ -173,8 +205,120 @@ async fn one_failure_does_not_abandon_the_rest_of_the_sweep() {
 async fn a_plan_with_nothing_to_write_reports_unchanged() {
     let plan = TriagePlan::new(1, Verdict::Review { because: "-" });
     let forge = MockForge::new();
-    let reports = apply_all(&forge, &repo(), &[plan]).await;
+    let reports = apply_all(&forge, &forge, &config(), &repo(), &[plan], &[]).await;
 
     assert_eq!(reports[0].outcome, Outcome::Unchanged);
     assert!(forge.writes().is_empty());
+}
+
+// --- revalidation ---------------------------------------------------------
+
+fn closing_plan() -> TriagePlan {
+    let mut plan = duplicate_plan();
+    plan.close = Some(ClosePlan {
+        number: 5798,
+        dry_run: false,
+    });
+    plan
+}
+
+#[tokio::test]
+async fn a_close_survives_a_pull_request_that_has_not_changed() {
+    let forge = MockForge::new().with_pull_request(closeable(), vec![], vec![]);
+    let mut plan = closing_plan();
+    revalidate(&forge, &config(), &repo(), &mut plan, &[]).await;
+    assert!(plan.close.is_some(), "{plan:?}");
+}
+
+#[tokio::test]
+async fn a_kill_switch_added_during_the_sweep_stops_the_close() {
+    let subject = PullRequest {
+        labels: vec!["tinysweeper:human-review".into()],
+        ..closeable()
+    };
+    let forge = MockForge::new().with_pull_request(subject, vec![], vec![]);
+
+    let mut plan = closing_plan();
+    revalidate(&forge, &config(), &repo(), &mut plan, &[]).await;
+
+    assert!(plan.close.is_none(), "{plan:?}");
+    assert_eq!(
+        plan.close_refusal,
+        Some("it carries a label that switches the bot off")
+    );
+}
+
+#[tokio::test]
+async fn a_pull_request_marked_draft_during_the_sweep_stops_the_close() {
+    let forge = MockForge::new().with_pull_request(
+        PullRequest {
+            draft: true,
+            ..closeable()
+        },
+        vec![],
+        vec![],
+    );
+
+    let mut plan = closing_plan();
+    revalidate(&forge, &config(), &repo(), &mut plan, &[]).await;
+
+    assert!(plan.close.is_none(), "{plan:?}");
+    assert_eq!(plan.close_refusal, Some("it is a draft"));
+}
+
+#[tokio::test]
+async fn a_pull_request_that_cannot_be_re_read_is_not_closed() {
+    // "We could not check" and "it is no longer allowed" are the same answer
+    // when the action cannot be undone. The mock has no such pull request.
+    let forge = MockForge::new();
+    let mut plan = closing_plan();
+    revalidate(&forge, &config(), &repo(), &mut plan, &[]).await;
+
+    assert!(plan.close.is_none(), "{plan:?}");
+    assert_eq!(
+        plan.close_refusal,
+        Some("its current state could not be re-checked before closing")
+    );
+}
+
+#[tokio::test]
+async fn a_dropped_close_takes_its_comment_claim_with_it() {
+    // The comment says what was decided, so a decision reversed between the
+    // sweep and the write has to reach the comment too.
+    let forge = MockForge::new().with_pull_request(
+        PullRequest {
+            draft: true,
+            ..closeable()
+        },
+        vec![],
+        vec![],
+    );
+
+    let reports = apply_all(
+        &forge,
+        &forge,
+        &config(),
+        &repo(),
+        &[closing_plan()],
+        &[],
+    )
+    .await;
+
+    assert_eq!(reports[0].outcome, Outcome::Labelled);
+    let posted = forge
+        .writes()
+        .into_iter()
+        .find_map(|write| match write {
+            Write::Comment { body, .. } => Some(body),
+            _ => None,
+        })
+        .expect("a comment");
+    assert!(!posted.contains("Closing it on that basis"), "{posted}");
+    assert!(posted.contains("Left open: it is a draft"), "{posted}");
+    assert!(
+        !forge
+            .writes()
+            .iter()
+            .any(|write| matches!(write, Write::PullRequestClosed { .. }))
+    );
 }
