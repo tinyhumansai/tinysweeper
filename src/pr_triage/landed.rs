@@ -71,77 +71,89 @@ impl NotLanded {
     }
 }
 
-/// One file's diff, reduced to the runs that decide the question.
+/// One hunk of a diff, as the two versions of the text it describes.
+///
+/// This is the shape that makes the question answerable. A hunk is a *before*
+/// image and an *after* image over the same stretch of file, and "this hunk is
+/// already applied" is exactly "the base branch contains the after image and
+/// not the before image".
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Runs {
-    /// Maximal stretches of consecutive added lines, normalised.
-    pub added: Vec<Vec<String>>,
-    /// Maximal stretches of consecutive removed lines, normalised.
-    pub removed: Vec<Vec<String>>,
+pub struct Hunk {
+    /// The stretch as it was: context plus removed lines, normalised.
+    pub before: Vec<String>,
+    /// The stretch as it would be: context plus added lines, normalised.
+    pub after: Vec<String>,
+    /// How many lines the hunk actually changes, context excluded.
+    pub changed: usize,
 }
 
-impl Runs {
-    /// How many substantive lines this file contributes.
-    pub fn line_count(&self) -> usize {
-        self.added.iter().chain(&self.removed).map(Vec::len).sum()
-    }
-}
-
-/// Split a unified diff into its added and removed runs.
+/// Split a unified diff into its hunks.
 ///
-/// Blank and whitespace-only lines are dropped rather than kept, and dropping
-/// them *breaks* a run rather than joining across it — otherwise two unrelated
-/// stretches separated by a blank line would be compared as one block that
-/// exists nowhere, and every reformatted file would read as "not landed".
+/// Blank and whitespace-only lines are dropped from both images rather than
+/// kept, so re-blanking a file is not mistaken for a change; the images are
+/// still compared as consecutive runs, which is what the location argument in
+/// [`file_landed`] rests on.
 ///
-/// `\ No newline at end of file` is diff chrome, not content, and is skipped
-/// without breaking the run it sits inside.
-pub fn runs(patch: &str) -> Runs {
-    let mut out = Runs::default();
-    let mut adding: Vec<String> = Vec::new();
-    let mut removing: Vec<String> = Vec::new();
+/// `\ No newline at end of file` is diff chrome, not content, and is skipped.
+pub fn hunks(patch: &str) -> Vec<Hunk> {
+    let mut out: Vec<Hunk> = Vec::new();
+    let mut current = Hunk::default();
 
-    let flush = |run: &mut Vec<String>, into: &mut Vec<Vec<String>>| {
-        if !run.is_empty() {
-            into.push(std::mem::take(run));
+    let push = |current: &mut Hunk, out: &mut Vec<Hunk>| {
+        if current.changed > 0 {
+            out.push(std::mem::take(current));
+        } else {
+            *current = Hunk::default();
         }
     };
 
     for line in patch.lines() {
-        if line.starts_with("\\") {
+        if line.starts_with("@@") {
+            push(&mut current, &mut out);
+            continue;
+        }
+        if line.starts_with('\\') {
             continue;
         }
         match line.as_bytes().first() {
             Some(b'+') if !line.starts_with("+++") => {
-                flush(&mut removing, &mut out.removed);
-                push_normalised(&line[1..], &mut adding, &mut out.added);
+                if push_normalised(&line[1..], &mut current.after) {
+                    current.changed += 1;
+                }
             }
             Some(b'-') if !line.starts_with("---") => {
-                flush(&mut adding, &mut out.added);
-                push_normalised(&line[1..], &mut removing, &mut out.removed);
+                if push_normalised(&line[1..], &mut current.before) {
+                    current.changed += 1;
+                }
             }
-            _ => {
-                flush(&mut adding, &mut out.added);
-                flush(&mut removing, &mut out.removed);
+            // Context, and the reason this module can say anything about
+            // *location*: a line present on both sides anchors the change to a
+            // place in the file rather than to the file as a whole.
+            Some(b' ') | None => {
+                let text = line.strip_prefix(' ').unwrap_or(line);
+                let normalised = normalise(text);
+                if !normalised.is_empty() {
+                    current.before.push(normalised.clone());
+                    current.after.push(normalised);
+                }
             }
+            // A `diff --git`/`index` header between hunks. Not content.
+            _ => {}
         }
     }
 
-    flush(&mut adding, &mut out.added);
-    flush(&mut removing, &mut out.removed);
+    push(&mut current, &mut out);
     out
 }
 
-/// Add one diff line to the run being built, or end the run if it is blank.
-fn push_normalised(text: &str, run: &mut Vec<String>, into: &mut Vec<Vec<String>>) {
+/// Add one diff line to an image, reporting whether it counted.
+fn push_normalised(text: &str, into: &mut Vec<String>) -> bool {
     let normalised = normalise(text);
     if normalised.is_empty() {
-        if !run.is_empty() {
-            into.push(std::mem::take(run));
-        }
-        return;
+        return false;
     }
-    run.push(normalised);
+    into.push(normalised);
+    true
 }
 
 /// The comparable form of a line.
@@ -159,7 +171,9 @@ pub fn normalise(line: &str) -> String {
 ///
 /// A file that does not exist on the base branch is an empty list, not an
 /// error: a pull request deleting a file somebody already deleted removes lines
-/// that are already gone, which is precisely a superseded pull request.
+/// that are already gone, which is precisely a superseded pull request. The
+/// caller is responsible for distinguishing "not there" from "could not read
+/// it" — see [`landed`], which refuses the second.
 pub fn base_lines(content: Option<&str>) -> Vec<String> {
     content
         .unwrap_or_default()
@@ -183,8 +197,20 @@ fn contains_run(haystack: &[String], run: &[String]) -> bool {
 /// Whether one file's change is already on the base branch.
 ///
 /// `base` is that file's content on the base branch, `None` when it is not
-/// there at all.
-pub fn file_landed(file: &ChangedFile, base: Option<&str>) -> Result<Runs, NotLanded> {
+/// there at all. Returns the number of changed lines checked.
+///
+/// Each hunk has to clear both halves of the test, and both halves are
+/// necessary:
+///
+/// - **the after image is on the branch**, as a consecutive run. Because the
+///   image carries the hunk's context lines, this is a statement about a
+///   *place* in the file and not merely about the lines existing somewhere in
+///   it — which is what stops "adds three lines that already appear in some
+///   other list" from reading as a change that already landed.
+/// - **the before image is not on the branch**, where the hunk has context to
+///   make that meaningful. If the change had not been applied, the stretch
+///   would still read as it did before, and finding it says so conclusively.
+pub fn file_landed(file: &ChangedFile, base: Option<&str>) -> Result<usize, NotLanded> {
     if file.previous_path.is_some() || file.status == FileStatus::Renamed {
         return Err(NotLanded::Renamed);
     }
@@ -192,26 +218,32 @@ pub fn file_landed(file: &ChangedFile, base: Option<&str>) -> Result<Runs, NotLa
         return Err(NotLanded::OpaqueFile);
     };
 
-    let runs = runs(patch);
+    let hunks = hunks(patch);
     let base = base_lines(base);
+    let mut changed = 0usize;
 
-    // Removed runs first. It is the sharper of the two signals: a line the pull
-    // request deletes that is still on the base branch proves the change has
-    // not landed, whatever the additions look like, whereas a missing added
-    // line can also mean the base moved on in some third way. The refusal that
-    // reaches the log should be the conclusive one.
-    for run in &runs.removed {
-        if contains_run(&base, run) {
+    for hunk in &hunks {
+        // The before image first: it is the conclusive half. A stretch that
+        // still reads the way it did before the change proves the change has
+        // not been applied, whatever the additions look like.
+        //
+        // Skipped when the hunk has no context of its own — a whole new file,
+        // or an addition at a file boundary — because a before image that is
+        // only the removed lines is empty for a pure addition, and "is the
+        // empty run present" is true of every file.
+        if !hunk.before.is_empty()
+            && hunk.before != hunk.after
+            && contains_run(&base, &hunk.before)
+        {
             return Err(NotLanded::RemovedLineStillPresent);
         }
-    }
-    for run in &runs.added {
-        if !contains_run(&base, run) {
+        if !contains_run(&base, &hunk.after) {
             return Err(NotLanded::AddedLineMissing);
         }
+        changed += hunk.changed;
     }
 
-    Ok(runs)
+    Ok(changed)
 }
 
 /// Whether a whole pull request's change is already on the base branch.
