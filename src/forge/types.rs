@@ -86,11 +86,17 @@ pub struct PullRequest {
     /// clock and the age guards in `crate::pr_triage::gate` stay trivially
     /// testable. An adapter that cannot say reports `0`, which only ever makes
     /// a guard stricter.
+    ///
+    /// `serde(default)` because the committed eval fixtures predate the field,
+    /// and a fixture that never knew a pull request's age should replay as one
+    /// whose age is unknown rather than fail to load.
+    #[serde(default)]
     pub age_days: u32,
     /// Days since the last human activity on it, by the same rule.
     ///
     /// `0` from an adapter that cannot say, which reads as "active today" and
     /// therefore refuses a close rather than allowing one.
+    #[serde(default)]
     pub quiet_days: u32,
 }
 

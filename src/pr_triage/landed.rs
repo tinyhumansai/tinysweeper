@@ -199,14 +199,19 @@ pub fn file_landed(file: &ChangedFile, base: Option<&str>) -> Result<Runs, NotLa
     let runs = runs(patch);
     let base = base_lines(base);
 
-    for run in &runs.added {
-        if !contains_run(&base, run) {
-            return Err(NotLanded::AddedLineMissing);
-        }
-    }
+    // Removed runs first. It is the sharper of the two signals: a line the pull
+    // request deletes that is still on the base branch proves the change has
+    // not landed, whatever the additions look like, whereas a missing added
+    // line can also mean the base moved on in some third way. The refusal that
+    // reaches the log should be the conclusive one.
     for run in &runs.removed {
         if contains_run(&base, run) {
             return Err(NotLanded::RemovedLineStillPresent);
+        }
+    }
+    for run in &runs.added {
+        if !contains_run(&base, run) {
+            return Err(NotLanded::AddedLineMissing);
         }
     }
 

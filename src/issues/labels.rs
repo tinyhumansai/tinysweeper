@@ -339,7 +339,7 @@ mod tests {
         assert_eq!(plan.add, owned(&["needs-triage"]));
         assert_eq!(
             plan.declined,
-            vec![("priority: p0".to_string(), "not in issues.allow_labels")]
+            vec![("priority: p0".to_string(), "not in the configured allow list")]
         );
     }
 
