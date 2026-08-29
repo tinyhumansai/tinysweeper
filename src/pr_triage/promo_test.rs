@@ -30,6 +30,36 @@ fn a_referral_link_is_enough_on_its_own() {
 }
 
 #[test]
+fn an_html_link_is_not_a_referral_link() {
+    // The regression. `href=` contains `ref=`, so a substring match flags every
+    // HTML anchor in every README — found by running this over a real
+    // repository, and exactly the false positive a flag cannot afford.
+    let files = vec![changed(
+        "README.md",
+        "@@\n+<a href=\"https://star-history.example/#owner/repo&type=date\">chart</a>\n",
+    )];
+    let finding = inspect_diff(&files, &[]);
+    assert!(
+        !finding.signals.contains(&Signal::ReferralLink),
+        "{finding:?}"
+    );
+}
+
+#[test]
+fn a_campaign_parameter_is_matched_where_a_query_string_can_hold_one() {
+    for line in [
+        "+See [docs](https://acme.example/?utm_source=github)",
+        "+See <a href=\"https://acme.example/x?a=1&ref=someone\">docs</a>",
+    ] {
+        let files = vec![changed("README.md", &format!("@@\n{line}\n"))];
+        assert!(
+            inspect_diff(&files, &[]).signals.contains(&Signal::ReferralLink),
+            "missed: {line}"
+        );
+    }
+}
+
+#[test]
 fn a_genuine_integration_needs_more_than_an_endpoint_to_be_flagged() {
     // The exact shape this must not cry wolf on: a real BYOK provider, added
     // properly, with code beside it.

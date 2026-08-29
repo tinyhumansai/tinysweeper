@@ -113,15 +113,17 @@ impl Finding {
 /// How many paths are named in a finding before it stops listing them.
 const MAX_PATHS: usize = 5;
 
-/// Query parameters that exist to attribute a referral and nothing else.
-const REFERRAL_PARAMS: [&str; 6] = [
-    "ref=",
-    "via=",
-    "utm_source=",
-    "utm_campaign=",
-    "aff=",
-    "affiliate",
-];
+/// Query parameter *names* that exist to attribute a referral and nothing else.
+///
+/// Matched only where a query string can actually put them — after a `?` or an
+/// `&` — and never as a bare substring. `ref=` as a substring matches `href=`,
+/// which is in every HTML link ever written; that false positive was found by
+/// running this over a real repository and it is exactly the kind a flag cannot
+/// afford, because the flag reads as an accusation.
+const REFERRAL_PARAMS: [&str; 5] = ["ref", "via", "utm_source", "utm_campaign", "aff"];
+
+/// Referral markers that are not query parameters, matched as plain substrings.
+const REFERRAL_WORDS: [&str; 2] = ["affiliate", "/r/?"];
 
 /// Words that carry no technical content and a lot of register.
 ///
@@ -201,10 +203,10 @@ fn inspect_lines(
         let lower = line.to_ascii_lowercase();
 
         if lower.contains("http") {
-            if REFERRAL_PARAMS
-                .iter()
-                .any(|parameter| lower.contains(parameter))
-            {
+            let referral = REFERRAL_PARAMS.iter().any(|name| {
+                lower.contains(&format!("?{name}=")) || lower.contains(&format!("&{name}="))
+            }) || REFERRAL_WORDS.iter().any(|word| lower.contains(word));
+            if referral {
                 finding.signals.insert(Signal::ReferralLink);
             }
             if author_hosts
