@@ -48,6 +48,13 @@ const FETCH_CONCURRENCY: usize = 8;
 pub struct SweepOutcome {
     /// One plan per pull request considered, in ascending number order.
     pub plans: Vec<TriagePlan>,
+    /// Pull requests the sweep could not read, with why.
+    ///
+    /// Reported rather than silently absent, and *not* turned into plans: a
+    /// pull request whose diff would not load has no verdict, and writing
+    /// `triage: review` on it would retire a `triage: duplicate` a previous
+    /// sweep was right about.
+    pub unread: Vec<(u64, &'static str)>,
     /// Why the sweep did nothing, when it did nothing.
     pub skipped: Option<&'static str>,
 }
@@ -91,6 +98,7 @@ pub async fn sweep(
     let mut earlier: Vec<Shape> = Vec::new();
     let mut budget = policy.max_base_reads;
     let mut plans = Vec::new();
+    let mut skipped: Vec<(u64, &'static str)> = Vec::new();
 
     // Fetched a window at a time, and dropped at the end of the window.
     //
@@ -105,17 +113,30 @@ pub async fn sweep(
         // One pull request whose files cannot be read must not sink the sweep:
         // it is read as "nothing comparable", which reaches `Verdict::Review`
         // and leaves the pull request exactly as it was.
-        let fetched = futures::future::join_all(window.iter().map(|pull_request| async {
-            read.changed_files(repo, pull_request.number)
-                .await
-                .unwrap_or_default()
-        }))
+        let fetched = futures::future::join_all(
+            window
+                .iter()
+                .map(|pull_request| read.changed_files(repo, pull_request.number)),
+        )
         .await;
 
         // Sequential within the window, so a pull request can still duplicate
         // the one immediately before it: its shape is pushed before the next
         // one is judged.
         for (pull_request, changed) in window.iter().zip(fetched) {
+            // A read that failed is not a pull request that changed nothing.
+            // Treating it as an empty diff produces `Verdict::Review`, and that
+            // verdict would *retire* an existing `triage: duplicate` — so a
+            // rate limit would quietly undo yesterday's triage. Skipped
+            // entirely instead, and the next sweep tries again.
+            let changed = match changed {
+                Ok(changed) => changed,
+                Err(err) => {
+                    tracing::debug!(%err, number = pull_request.number, "could not read the diff");
+                    skipped.push((pull_request.number, "its diff could not be read"));
+                    continue;
+                }
+            };
             let shape = Shape::of(pull_request.number, &changed);
 
             if only.is_none_or(|number| number == pull_request.number) {
@@ -148,6 +169,7 @@ pub async fn sweep(
 
     Ok(SweepOutcome {
         plans,
+        unread: skipped,
         skipped: None,
     })
 }
@@ -165,9 +187,14 @@ async fn attach_previous_comment(read: &dyn ForgeRead, repo: &RepoId, plan: &mut
         return;
     };
 
+    // The marker *and* the author. A contributor who pastes the marker into a
+    // comment of their own would otherwise be picked as "our previous comment":
+    // the edit then fails, because an installation cannot edit somebody else's
+    // comment, and the failure aborts the plan before its explanation or its
+    // close. The overview comment already matches on both.
     let Some(previous) = existing
         .iter()
-        .find(|comment| comment.body.contains(comment::MARKER))
+        .find(|comment| comment.body.contains(comment::MARKER) && is_own(&comment.author))
     else {
         return;
     };
@@ -177,6 +204,16 @@ async fn attach_previous_comment(read: &dyn ForgeRead, repo: &RepoId, plan: &mut
         return;
     }
     plan.comment_id = previous.id;
+}
+
+/// Whether a comment author is this bot.
+///
+/// Matched on the `[bot]` suffix and the name, because the installation's login
+/// is `tinysweeper[bot]` on some deployments and `<app-slug>[bot]` on others,
+/// and a deployment that renamed the app should still find its own comments.
+fn is_own(author: &str) -> bool {
+    let author = author.trim().to_ascii_lowercase();
+    author.starts_with("tinysweeper") && author.ends_with("[bot]")
 }
 
 /// Decide what one pull request is, cheapest question first.
