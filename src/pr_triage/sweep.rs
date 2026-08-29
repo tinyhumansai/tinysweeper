@@ -80,9 +80,31 @@ pub async fn sweep(
         });
     }
 
-    let pulls = read
+    let mut pulls = read
         .open_pull_requests(repo, policy.max_pull_requests)
         .await?;
+
+    // The list is capped and oldest-first, because dedupe needs the originals.
+    // An explicitly requested pull request newer than the cap would otherwise
+    // fall off the end and produce a successful-looking answer that considered
+    // nothing, so it is fetched on its own and put back.
+    if let Some(number) = only
+        && !pulls.iter().any(|pull_request| pull_request.number == number)
+    {
+        pulls.push(read.pull_request(repo, number).await?);
+    }
+
+    // Loud, because it is the failure that hides: a repository that outgrows
+    // the cap gets a sweep that quietly re-triages the same oldest set forever
+    // and never reaches anything new.
+    if pulls.len() >= policy.max_pull_requests {
+        tracing::warn!(
+            %repo,
+            cap = policy.max_pull_requests,
+            "the sweep hit `pr_triage.max_pull_requests`; newer pull requests were not read"
+        );
+    }
+
     if pulls.is_empty() {
         return Ok(SweepOutcome {
             skipped: Some("the repository has no open pull requests"),
@@ -92,7 +114,6 @@ pub async fn sweep(
 
     // Ascending, so "the older one is the original" is a property of the loop
     // rather than of whatever order the forge answered in.
-    let mut pulls = pulls;
     pulls.sort_by_key(|pull_request| pull_request.number);
 
     let mut earlier: Vec<Shape> = Vec::new();

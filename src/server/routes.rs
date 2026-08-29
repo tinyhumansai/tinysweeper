@@ -706,6 +706,11 @@ fn spawn_triage_sweeps(state: AppState, triages: Arc<dyn Triages>) {
     tokio::spawn(async move {
         let period = std::time::Duration::from_secs(u64::from(minutes) * 60);
         let mut ticker = tokio::time::interval(period);
+        // A sweep of a large repository can outlast its own interval. Tokio's
+        // default then fires every missed tick back to back, so the sweep
+        // restarts with no pause and keeps the installation permanently rate
+        // limited. `Delay` skips the backlog and waits a full period.
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // The first tick fires immediately, which is not what a deploy wants:
         // a restart loop would sweep on every crash. Consume it here so the
         // first real sweep is one interval after boot.
@@ -743,7 +748,17 @@ fn spawn_triage_sweeps(state: AppState, triages: Arc<dyn Triages>) {
     });
 }
 
-/// The numbers of a repository's open pull requests, capped.
+/// How many open pull requests the manual buttons look at before picking the
+/// newest `MAX_MANUAL_REVIEWS` of them.
+///
+/// The port lists oldest first, because duplicate detection needs the
+/// originals. The manual buttons want the opposite: an operator pressing
+/// "review everything" twice must not enqueue the same twenty oldest pull
+/// requests both times and starve everything opened since. So they read a wider
+/// window and take the newest end of it.
+const MANUAL_SCAN_LIMIT: usize = 300;
+
+/// The numbers of a repository's most recent open pull requests, capped.
 ///
 /// A thin wrapper over the port so the two manual buttons do not each grow
 /// their own idea of what "open" means.
@@ -752,12 +767,20 @@ async fn open_numbers(
     repo: &RepoId,
     limit: usize,
 ) -> Result<Vec<u64>> {
-    Ok(read
-        .open_pull_requests(repo, limit)
+    let mut numbers: Vec<u64> = read
+        .open_pull_requests(repo, MANUAL_SCAN_LIMIT)
         .await?
         .into_iter()
         .map(|pull_request| pull_request.number)
-        .collect())
+        .collect();
+
+    // Newest first, then capped, so the cap drops the oldest rather than the
+    // newest. Sorted here rather than trusted from the adapter: the port
+    // promises ascending, and a manual button is not the place to depend on
+    // that promise being reversed.
+    numbers.sort_unstable_by(|a, b| b.cmp(a));
+    numbers.truncate(limit);
+    Ok(numbers)
 }
 
 /// The manual review path's way into the worker.
