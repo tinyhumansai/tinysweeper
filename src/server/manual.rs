@@ -469,7 +469,7 @@ mod tests {
             Arc::new(MergeRecorder::default()),
             triages.clone(),
         )
-        .oneshot(post_request(
+        .oneshot(post(
             "/admin/pr-triage/tinyhumansai/tinysweeper",
             None,
             "{}",
@@ -492,7 +492,7 @@ mod tests {
             Arc::new(MergeRecorder::default()),
             triages.clone(),
         )
-        .oneshot(post_request(
+        .oneshot(post(
             "/admin/pr-triage/tinyhumansai/tinysweeper",
             Some(TOKEN),
             "{}",
@@ -522,7 +522,7 @@ mod tests {
             Arc::new(MergeRecorder::default()),
             triages.clone(),
         )
-        .oneshot(post_request(
+        .oneshot(post(
             "/admin/pr-triage/someone-else/their-repo",
             Some(TOKEN),
             "{}",
