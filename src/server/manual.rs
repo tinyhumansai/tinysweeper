@@ -122,6 +122,31 @@ pub trait Merges: Send + Sync {
     async fn evaluate(&self, repo: &RepoId, number: Option<u64>) -> Result<Vec<MergeReport>>;
 }
 
+/// How the route reaches pull request triage.
+///
+/// A third trait for the same reason there is a second one: the jobs share only
+/// a repository. Triage spends no model calls and posts no review — it reads
+/// diffs and writes labels — so folding it into [`FullReviews`] would put a
+/// free, safe job behind the credential-and-cost warnings the expensive one
+/// carries.
+#[async_trait]
+pub trait Triages: Send + Sync {
+    /// Triage the repository's open pull requests, reporting what happened to
+    /// each.
+    ///
+    /// `number` is `None` for the whole repository, which is the ordinary use:
+    /// a duplicate is a statement about a *pair*, so the sweep is the natural
+    /// unit and one pull request is the narrow case. Like
+    /// [`Merges::evaluate`] this waits for the answer — there is no model in
+    /// the path — because "what did it conclude, and what did it refuse to do
+    /// about it" is the entire reason to press the button.
+    async fn triage(
+        &self,
+        repo: &RepoId,
+        number: Option<u64>,
+    ) -> Result<Vec<crate::pr_triage::Report>>;
+}
+
 /// What the policy decided about one pull request.
 #[derive(Debug, Clone, Serialize)]
 pub struct MergeReport {
@@ -142,6 +167,7 @@ struct ManualState {
     allowed_org: Arc<str>,
     reviews: Arc<dyn FullReviews>,
     merges: Arc<dyn Merges>,
+    triages: Arc<dyn Triages>,
 }
 
 /// Build the manual review router, or nothing when no token is configured.
@@ -154,18 +180,21 @@ pub fn router(
     allowed_org: String,
     reviews: Arc<dyn FullReviews>,
     merges: Arc<dyn Merges>,
+    triages: Arc<dyn Triages>,
 ) -> Option<Router> {
     let auth = Arc::new(auth?);
     let state = ManualState {
         allowed_org: allowed_org.into(),
         reviews,
         merges,
+        triages,
     };
 
     Some(
         Router::new()
             .route("/admin/reviews/{owner}/{name}", post(full_review))
             .route("/admin/merges/{owner}/{name}", post(auto_merge))
+            .route("/admin/pr-triage/{owner}/{name}", post(pull_request_triage))
             // `route_layer`, so the token is checked before the `Json`
             // extractor parses anything an anonymous caller sent.
             .route_layer(axum::middleware::from_fn_with_state(
@@ -256,6 +285,52 @@ async fn auto_merge(
         Json(json!({
             "repo": repo.to_string(),
             "merged": merged,
+            "results": reports,
+        })),
+    )
+        .into_response())
+}
+
+/// Sweep the repository's open pull requests for duplicates and for changes
+/// that already landed.
+///
+/// Behind the same credential and the same organisation check as the other two
+/// buttons, and — like auto-merge — it adds no authority of its own. Whether
+/// anything is closed is `[pr_triage.close]`'s decision, taken identically here
+/// and on the periodic sweep; this route is a way to ask *now*.
+async fn pull_request_triage(
+    State(state): State<ManualState>,
+    Path((owner, name)): Path<(String, String)>,
+    Json(body): Json<ManualReviewRequest>,
+) -> std::result::Result<Response, ApiError> {
+    let repo = checked_target(&owner, &name, &state.allowed_org)
+        .map_err(|message| ApiError(StatusCode::FORBIDDEN, message))?;
+
+    let reports = state
+        .triages
+        .triage(&repo, body.number)
+        .await
+        .map_err(|err| ApiError(StatusCode::BAD_GATEWAY, err.to_string()))?;
+
+    let closed: Vec<u64> = reports
+        .iter()
+        .filter(|report| report.outcome == crate::pr_triage::apply::Outcome::Closed)
+        .map(|report| report.number)
+        .collect();
+
+    tracing::info!(
+        %repo,
+        considered = reports.len(),
+        ?closed,
+        "triaged pull requests on request"
+    );
+
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "repo": repo.to_string(),
+            "considered": reports.len(),
+            "closed": closed,
             "results": reports,
         })),
     )
