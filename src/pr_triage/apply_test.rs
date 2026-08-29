@@ -35,11 +35,16 @@ fn closeable() -> PullRequest {
     PullRequest {
         number: 5798,
         author: "contributor".into(),
+        head_sha: HEAD.into(),
         age_days: 30,
         quiet_days: 30,
         ..PullRequest::default()
     }
 }
+
+/// The head the sweep read. A close is tied to it, so the fixtures have to
+/// agree on one.
+const HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn repo() -> RepoId {
     RepoId {
@@ -89,6 +94,7 @@ async fn the_comment_goes_up_before_the_close() {
     let mut plan = duplicate_plan();
     plan.close = Some(ClosePlan {
         number: 5798,
+        head_sha: HEAD.into(),
         dry_run: false,
     });
 
@@ -112,6 +118,7 @@ async fn a_dry_run_says_everything_and_closes_nothing() {
     let mut plan = duplicate_plan();
     plan.close = Some(ClosePlan {
         number: 5798,
+        head_sha: HEAD.into(),
         dry_run: true,
     });
 
@@ -219,6 +226,7 @@ fn closing_plan() -> TriagePlan {
     let mut plan = duplicate_plan();
     plan.close = Some(ClosePlan {
         number: 5798,
+        head_sha: HEAD.into(),
         dry_run: false,
     });
     plan
@@ -315,4 +323,38 @@ async fn a_dropped_close_takes_its_comment_claim_with_it() {
             .iter()
             .any(|write| matches!(write, Write::PullRequestClosed { .. }))
     );
+}
+
+#[tokio::test]
+async fn a_push_during_the_sweep_stops_the_close() {
+    // The verdict was read off a diff. A new head is a new diff, so the
+    // evidence no longer describes the pull request being closed.
+    let forge = MockForge::new().with_pull_request(
+        PullRequest {
+            head_sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+            ..closeable()
+        },
+        vec![],
+        vec![],
+    );
+
+    let mut plan = closing_plan();
+    revalidate(&forge, &config(), &repo(), &mut plan, &[]).await;
+
+    assert!(plan.close.is_none(), "{plan:?}");
+    assert_eq!(
+        plan.close_refusal,
+        Some("it was pushed to after the sweep read its diff")
+    );
+}
+
+#[tokio::test]
+async fn a_plan_that_only_retires_a_label_is_not_reported_unchanged() {
+    let mut plan = TriagePlan::new(1, Verdict::Review { because: "-" });
+    plan.remove_labels = vec!["triage: duplicate".into()];
+
+    let forge = MockForge::new();
+    let reports = apply_all(&forge, &forge, &config(), &repo(), &[plan], &[]).await;
+
+    assert_eq!(reports[0].outcome, Outcome::Labelled);
 }

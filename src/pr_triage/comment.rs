@@ -185,6 +185,7 @@ mod tests {
         let mut plan = duplicate_plan();
         plan.close = Some(ClosePlan {
             number: 5798,
+            head_sha: "abc1234".into(),
             dry_run: false,
         });
         let body = render(&plan).expect("a comment");
@@ -196,6 +197,7 @@ mod tests {
         let mut plan = duplicate_plan();
         plan.close = Some(ClosePlan {
             number: 5798,
+            head_sha: "abc1234".into(),
             dry_run: true,
         });
         let body = render(&plan).expect("a comment");
