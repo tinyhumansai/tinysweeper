@@ -29,6 +29,8 @@ fn config() -> Config {
             duplicate_line_overlap_min: 0.9,
             comment: true,
             apply_labels: true,
+            sweep_every_minutes: None,
+            sweep_repositories: vec![],
             close: PrClose {
                 enabled: true,
                 min_age_days: 1,
