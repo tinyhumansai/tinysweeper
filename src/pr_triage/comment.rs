@@ -24,11 +24,27 @@ pub const MARKER: &str = "<!-- tinysweeper:pr-triage -->";
 /// requests is the exact noise this repository's review policy exists to
 /// prevent.
 pub fn render(plan: &TriagePlan) -> Option<String> {
-    if matches!(plan.verdict, Verdict::Review { .. }) {
+    // A pull request that is merely worth reading, with nothing flagged, gets
+    // no comment. A flagged one does, whatever the verdict: the label says
+    // *that* something was noticed and the comment has to say *what*, or the
+    // label is an accusation with no evidence attached.
+    if matches!(plan.verdict, Verdict::Review { .. }) && plan.flags.is_empty() {
         return None;
     }
 
     let mut body = format!("{MARKER}\n\n");
+
+    for (flag, why) in &plan.flags {
+        let _ = write!(
+            body,
+            "**{}.** This change matched: {why}.\n\n             That is a set of textual signals, not a verdict — plenty of              legitimate contributions add an endpoint and a key. Nothing is              closed on this basis; a maintainer decides. If the signals are              wrong, say so and clear the `{}` label.\n\n",
+            match flag {
+                crate::pr_triage::types::Flag::Promotional =>
+                    "This reads like self-promotion",
+            },
+            flag.label(),
+        );
+    }
 
     match &plan.verdict {
         Verdict::Duplicate {
@@ -59,7 +75,9 @@ pub fn render(plan: &TriagePlan) -> Option<String> {
                  would change nothing.\n",
             );
         }
-        Verdict::Review { .. } => unreachable!("returned above"),
+        // Reachable now: a flagged pull request that is otherwise worth
+        // reading gets the flag paragraph above and nothing more.
+        Verdict::Review { .. } => {}
     }
 
     if !plan.add_labels.is_empty() {
@@ -129,6 +147,20 @@ mod tests {
             render(&TriagePlan::new(1, Verdict::Review { because: "-" })),
             None
         );
+    }
+
+    #[test]
+    fn a_flag_is_explained_even_when_the_verdict_is_worth_reading() {
+        let mut plan = TriagePlan::new(1, Verdict::Review { because: "-" });
+        plan.flags.push((
+            crate::pr_triage::types::Flag::Promotional,
+            "a link carrying a referral or campaign parameter".into(),
+        ));
+        let body = render(&plan).expect("a flagged pull request is explained");
+        assert!(body.contains("referral"));
+        // A label that accuses somebody must carry the way to disagree with it.
+        assert!(body.contains("`flag: promotional`"));
+        assert!(body.contains("Nothing is closed on this basis"));
     }
 
     #[test]
