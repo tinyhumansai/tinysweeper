@@ -100,6 +100,42 @@ impl Verdict {
     }
 }
 
+/// Something a human should see *before* judging an item on its merits.
+///
+/// A second, independent axis. A pull request can be a duplicate and an
+/// advertisement at once, and `Verdict` cannot say both — so this is its own
+/// facet rather than a fourth verdict.
+///
+/// One variant today, and the enum exists anyway: "unrelated" and "needs a
+/// human" are the obvious next two, and adding them to a type is a smaller
+/// change than inventing a second labelling path when they arrive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Flag {
+    /// It reads as an advertisement: a referral link, a vendor endpoint and a
+    /// key, or product copy in a change that adds no code.
+    ///
+    /// **Advisory, always.** [`crate::pr_triage::gate::decide`] cannot close on
+    /// a flag, because the honest form of this judgement is a judgement — the
+    /// same integration is a real contribution to one repository and an
+    /// advertisement on another.
+    Promotional,
+}
+
+impl Flag {
+    /// The `flag:` label this wants present.
+    pub fn label(self) -> &'static str {
+        match self {
+            Flag::Promotional => "flag: promotional",
+        }
+    }
+
+    /// Every label in the `flag:` facet, so the vocabulary has one definition.
+    pub fn labels() -> [&'static str; 1] {
+        [Flag::Promotional.label()]
+    }
+}
+
 /// A close that passed every deterministic guard.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClosePlan {
@@ -121,6 +157,11 @@ pub struct TriagePlan {
     pub number: u64,
     /// What the sweep concluded.
     pub verdict: Verdict,
+    /// What a human should see before judging it, and why.
+    ///
+    /// Independent of `verdict`, and never able to close: an item is flagged
+    /// *and* triaged, not flagged *instead of* triaged.
+    pub flags: Vec<(Flag, String)>,
     /// Labels to add, already filtered and capped.
     pub add_labels: Vec<String>,
     /// Labels superseded by one being added, in the same facet.
@@ -149,6 +190,7 @@ impl TriagePlan {
         Self {
             number,
             verdict,
+            flags: Vec::new(),
             add_labels: Vec::new(),
             remove_labels: Vec::new(),
             declined_labels: Vec::new(),
