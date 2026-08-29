@@ -264,6 +264,81 @@ pub fn title_in(body: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn anchored(path: &str, start: u64, end: u64) -> PriorReview {
+        PriorReview {
+            anchors: vec![PriorAnchor {
+                path: path.into(),
+                start,
+                end,
+            }],
+            ..PriorReview::default()
+        }
+    }
+
+    #[test]
+    fn a_comment_already_on_the_line_covers_it() {
+        let prior = anchored("src/main.rs", 10, 10);
+        assert!(prior.covers("src/main.rs", Some((10, 10))));
+    }
+
+    #[test]
+    fn a_few_lines_of_drift_is_the_same_place() {
+        // A model anchors to the guard, the call, or the line under it
+        // depending on what it quoted. `council::agree` allows the same slack
+        // between two reviewers for the same reason.
+        let prior = anchored("src/main.rs", 10, 10);
+        assert!(prior.covers("src/main.rs", Some((13, 13))));
+        assert!(prior.covers("src/main.rs", Some((7, 7))));
+    }
+
+    #[test]
+    fn a_finding_further_down_the_file_is_its_own_finding() {
+        // The bound on how much the loose rule may swallow. Without this,
+        // one comment would silence a whole file.
+        let prior = anchored("src/main.rs", 10, 10);
+        assert!(!prior.covers("src/main.rs", Some((14, 14))));
+        assert!(!prior.covers("src/main.rs", Some((200, 200))));
+    }
+
+    #[test]
+    fn another_file_is_never_covered() {
+        let prior = anchored("src/main.rs", 10, 10);
+        assert!(!prior.covers("src/other.rs", Some((10, 10))));
+    }
+
+    #[test]
+    fn a_finding_with_no_line_is_never_covered_by_an_anchor() {
+        // No evidence of where it is, so no evidence it is a repeat. It falls
+        // back to the fingerprint, which is where an unplaceable finding has
+        // always been decided.
+        let prior = anchored("src/main.rs", 10, 10);
+        assert!(!prior.covers("src/main.rs", None));
+    }
+
+    #[tokio::test]
+    async fn an_outdated_comment_contributes_a_fingerprint_but_no_anchor() {
+        // GitHub detaches a comment from its line once the diff moves past it.
+        // That costs the anchor and nothing else: the marker still suppresses.
+        let mut comment = ours("0123456789abcdef", "Guard the index");
+        comment.line = None;
+        let prior = load_from(vec![comment]).await;
+        assert!(prior.already_posted("0123456789abcdef"));
+        assert!(prior.anchors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_strangers_comment_contributes_no_anchor_either() {
+        // The same rule the fingerprint marker has always had. An anchor read
+        // from anyone else's comment would let a contributor silence a finding
+        // by commenting on the line first — no marker forgery required.
+        let mut comment = ours("0123456789abcdef", "Guard the index");
+        comment.author = "helpful-contributor".into();
+        let prior = load_from(vec![comment]).await;
+        assert!(prior.anchors.is_empty());
+        assert!(!prior.covers("src/main.rs", Some((2, 2))));
+    }
+
     use crate::forge::types::{IssueComment, ReviewComment};
     use crate::forge::{MockForge, MockState};
 
