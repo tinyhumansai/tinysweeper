@@ -1,8 +1,8 @@
 //! Tests for the "already on the base branch" detector.
 //!
-//! These are the golden tests of the close path: every one of them is a shape
-//! of pull request that a sweep will actually meet on a busy repository, and
-//! the refusals matter more than the acceptances.
+//! These are the golden tests of the close path: every one is a shape of pull
+//! request that a sweep will actually meet on a busy repository, and the
+//! refusals matter more than the acceptances.
 
 use super::*;
 use crate::forge::types::{ChangedFile, FileStatus};
@@ -15,32 +15,35 @@ fn changed(path: &str, patch: &str) -> ChangedFile {
     }
 }
 
-#[test]
-fn a_run_is_broken_by_context_and_by_blank_lines() {
-    let got = runs("@@\n context\n+alpha\n+beta\n context\n+gamma\n");
-    assert_eq!(
-        got.added,
-        vec![
-            vec!["alpha".to_string(), "beta".into()],
-            vec!["gamma".into()]
-        ]
-    );
+fn present(text: &str) -> Base {
+    Base::Present(text.into())
+}
 
-    // The blank line ends the run rather than being carried inside it: two
-    // stretches separated by whitespace exist separately on the base branch,
-    // and joining them would look for a block that is nowhere.
-    let split = runs("@@\n+alpha\n+   \n+beta\n");
+#[test]
+fn a_hunk_becomes_the_two_versions_of_its_stretch() {
+    let got = hunks("@@ -1,3 +1,4 @@\n before\n+added\n after\n");
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].before, vec!["before".to_string(), "after".into()]);
     assert_eq!(
-        split.added,
-        vec![vec!["alpha".to_string()], vec!["beta".to_string()]]
+        got[0].after,
+        vec!["before".to_string(), "added".into(), "after".into()]
     );
+    assert_eq!(got[0].changed, 1);
+}
+
+#[test]
+fn each_hunk_is_judged_on_its_own_stretch() {
+    let got = hunks("@@ -1 +1 @@\n-one\n+two\n@@ -9 +9 @@\n-three\n+four\n");
+    assert_eq!(got.len(), 2);
+    assert_eq!(got[1].before, vec!["three".to_string()]);
 }
 
 #[test]
 fn diff_headers_are_not_mistaken_for_content() {
-    let got = runs("--- a/x.rs\n+++ b/x.rs\n@@ -1 +1 @@\n-old\n+new\n");
-    assert_eq!(got.added, vec![vec!["new".to_string()]]);
-    assert_eq!(got.removed, vec![vec!["old".to_string()]]);
+    let got = hunks("--- a/x.rs\n+++ b/x.rs\n@@ -1 +1 @@\n-old\n+new\n");
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].before, vec!["old".to_string()]);
+    assert_eq!(got[0].after, vec!["new".to_string()]);
 }
 
 #[test]
@@ -50,34 +53,45 @@ fn indentation_does_not_make_the_same_line_a_different_one() {
 
 #[test]
 fn a_change_already_on_the_base_branch_is_landed() {
-    let file = changed("README.md", "@@ -1 +1 @@\n-Rust 1.93.0\n+Rust 1.96.1\n");
-    let base = "# Title\nRust 1.96.1\nmore\n";
-    assert!(file_landed(&file, Some(base)).is_ok());
+    let file = changed(
+        "README.md",
+        "@@ -1,3 +1,3 @@\n # Title\n-Rust 1.93.0\n+Rust 1.96.1\n more\n",
+    );
+    assert_eq!(file_landed(&file, Some("# Title\nRust 1.96.1\nmore\n")), Ok(2));
 }
 
 #[test]
-fn the_removed_line_is_what_makes_a_one_line_change_safe() {
-    // Same patch, base branch not yet updated. The added line is absent, but
-    // even if it were present somewhere the surviving old line would refuse.
-    let file = changed("README.md", "@@ -1 +1 @@\n-Rust 1.93.0\n+Rust 1.96.1\n");
-    let base = "# Title\nRust 1.93.0\nRust 1.96.1 is coming\n";
+fn the_before_image_is_what_makes_a_one_line_change_safe() {
+    // Same patch, base branch not yet updated. The stretch still reads exactly
+    // as it did, which is conclusive however the additions look.
+    let file = changed(
+        "README.md",
+        "@@ -1,3 +1,3 @@\n # Title\n-Rust 1.93.0\n+Rust 1.96.1\n more\n",
+    );
     assert_eq!(
-        file_landed(&file, Some(base)),
+        file_landed(&file, Some("# Title\nRust 1.93.0\nmore\nRust 1.96.1 is coming\n")),
         Err(NotLanded::RemovedLineStillPresent)
     );
 }
 
 #[test]
-fn an_added_run_must_be_consecutive_on_the_base_branch() {
-    let file = changed("a.rs", "@@\n+let a = 1;\n+let b = 2;\n");
-    // Both lines exist, but not together — so this is a different change that
-    // happens to reuse familiar lines.
-    let scattered = "let a = 1;\nsomething();\nlet b = 2;\n";
+fn an_addition_that_exists_somewhere_else_is_not_landed_here() {
+    // The reason a hunk carries its context. Adding three lines to a second
+    // list, where the same three lines already sit in a first list, changes the
+    // file — and a match on the lines alone would have called it a no-op.
+    let file = changed(
+        "config.rs",
+        "@@ -10,2 +10,5 @@\n let second = [\n+    \"alpha\",\n+    \"beta\",\n+    \"gamma\",\n ];\n",
+    );
+    let base = "let first = [\n    \"alpha\",\n    \"beta\",\n    \"gamma\",\n];\nlet second = [\n];\n";
     assert_eq!(
-        file_landed(&file, Some(scattered)),
+        file_landed(&file, Some(base)),
         Err(NotLanded::AddedLineMissing)
     );
-    assert!(file_landed(&file, Some("let a = 1;\nlet b = 2;\n")).is_ok());
+
+    // And once it really is applied in that place, it is landed.
+    let applied = "let first = [\n    \"alpha\",\n];\nlet second = [\n    \"alpha\",\n    \"beta\",\n    \"gamma\",\n];\n";
+    assert_eq!(file_landed(&file, Some(applied)), Ok(3));
 }
 
 #[test]
@@ -88,7 +102,25 @@ fn deleting_a_file_somebody_already_deleted_is_landed() {
         patch: Some("@@ -1,2 +0,0 @@\n-fn dead() {}\n-// gone\n".into()),
         ..ChangedFile::default()
     };
-    assert!(file_landed(&file, None).is_ok());
+    assert_eq!(file_landed(&file, None), Ok(2));
+}
+
+#[test]
+fn a_deletion_is_never_judged_on_a_base_read_that_failed() {
+    // The failure this variant exists for: an unreadable file that read as an
+    // absent one would tell a deletion-only pull request its work is done.
+    let file = ChangedFile {
+        path: "alive.rs".into(),
+        status: FileStatus::Removed,
+        patch: Some("@@ -1,3 +0,0 @@\n-fn alive() {}\n-// still here\n-// really\n".into()),
+        ..ChangedFile::default()
+    };
+    assert_eq!(
+        landed(std::slice::from_ref(&file), &[Base::Unreadable], 1),
+        Err(NotLanded::BaseUnreadable)
+    );
+    // Absent is a real answer, and a different one.
+    assert_eq!(landed(&[file], &[Base::Absent], 1), Ok(3));
 }
 
 #[test]
@@ -118,56 +150,54 @@ fn a_file_with_no_patch_is_refused_rather_than_assumed_clean() {
 
 #[test]
 fn a_trivial_match_is_too_small_to_be_evidence() {
-    let file = changed("a.rs", "@@\n+}\n");
-    let base = "fn main() {\n}\n";
-    // The file itself matches — and that is exactly the coincidence the floor
-    // exists to refuse.
-    assert!(file_landed(&file, Some(base)).is_ok());
+    let file = changed("a.rs", "@@ -1,2 +1,3 @@\n fn main() {\n+    work();\n }\n");
+    let base = "fn main() {\n    work();\n}\n";
+    assert_eq!(file_landed(&file, Some(base)), Ok(1));
     assert_eq!(
-        landed(&[file], &[Some(base.into())], 3),
+        landed(&[file], &[present(base)], 3),
         Err(NotLanded::TooSmall)
     );
 }
 
 #[test]
 fn a_conflicting_small_change_says_so_rather_than_saying_too_small() {
-    // The size floor is checked last on purpose: "it does not match" is a
-    // truer answer than "it is too small to tell" when we did in fact tell.
-    let file = changed("a.rs", "@@\n-old\n+new\n");
+    // The size floor is checked last on purpose: "it does not match" is a truer
+    // answer than "it is too small to tell" when we did in fact tell.
+    let file = changed("a.rs", "@@ -1,2 +1,2 @@\n keep\n-old\n+new\n");
     assert_eq!(
-        landed(&[file], &[Some("old\n".to_string())], 3),
+        landed(&[file], &[present("keep\nold\n")], 3),
         Err(NotLanded::RemovedLineStillPresent)
     );
 }
 
 #[test]
 fn one_unlanded_file_sinks_the_whole_pull_request() {
-    let landed_file = changed("a.rs", "@@\n+alpha\n+beta\n+gamma\n");
-    let other = changed("b.rs", "@@\n+delta\n+epsilon\n+zeta\n");
+    let one = changed("a.rs", "@@ -1,1 +1,4 @@\n top\n+alpha\n+beta\n+gamma\n");
+    let two = changed("b.rs", "@@ -1,1 +1,4 @@\n head\n+delta\n+epsilon\n+zeta\n");
     let bases = vec![
-        Some("alpha\nbeta\ngamma\n".to_string()),
-        Some("nothing like it\n".to_string()),
+        present("top\nalpha\nbeta\ngamma\n"),
+        present("head\nnothing like it\n"),
     ];
     assert_eq!(
-        landed(&[landed_file, other], &bases, 3),
+        landed(&[one, two], &bases, 3),
         Err(NotLanded::AddedLineMissing)
     );
 }
 
 #[test]
 fn a_wholly_landed_pull_request_reports_how_much_it_checked() {
-    let one = changed("a.rs", "@@\n+alpha\n+beta\n");
-    let two = changed("b.rs", "@@ -1 +1 @@\n-was\n+is\n");
-    let bases = vec![Some("alpha\nbeta\n".to_string()), Some("is\n".to_string())];
+    let one = changed("a.rs", "@@ -1,1 +1,3 @@\n top\n+alpha\n+beta\n");
+    let two = changed("b.rs", "@@ -1,2 +1,2 @@\n head\n-was\n+is\n");
+    let bases = vec![present("top\nalpha\nbeta\n"), present("head\nis\n")];
     assert_eq!(landed(&[one, two], &bases, 3), Ok(4));
 }
 
 #[test]
 fn a_short_base_list_cannot_silently_skip_files() {
-    let one = changed("a.rs", "@@\n+alpha\n+beta\n+gamma\n");
+    let one = changed("a.rs", "@@ -1,1 +1,4 @@\n top\n+alpha\n+beta\n+gamma\n");
     let two = changed("b.rs", "@@\n+nowhere\n");
     assert_eq!(
-        landed(&[one, two], &[Some("alpha\nbeta\ngamma\n".into())], 1),
+        landed(&[one, two], &[present("top\nalpha\nbeta\ngamma\n")], 1),
         Err(NotLanded::NoReadableDiff)
     );
 }
