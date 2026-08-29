@@ -358,3 +358,54 @@ async fn a_plan_that_only_retires_a_label_is_not_reported_unchanged() {
 
     assert_eq!(reports[0].outcome, Outcome::Labelled);
 }
+
+#[tokio::test]
+async fn a_kill_switch_found_at_write_time_cancels_every_write() {
+    // Not just the close. `tinysweeper:human-review` means leave this alone,
+    // and a run that noticed it and still applied the label and the comment
+    // would honour the letter of the setting and none of its meaning.
+    let subject = PullRequest {
+        labels: vec!["tinysweeper:human-review".into()],
+        ..closeable()
+    };
+    let forge = MockForge::new().with_pull_request(subject, vec![], vec![]);
+
+    let reports = apply_all(&forge, &forge, &config(), &repo(), &[closing_plan()], &[]).await;
+
+    assert_eq!(reports[0].outcome, Outcome::LeftAlone);
+    assert!(forge.writes().is_empty(), "{:?}", forge.writes());
+}
+
+#[tokio::test]
+async fn the_close_is_gated_again_after_the_label_and_comment_go_out() {
+    // The writes above the close each await the forge, and a contributor can
+    // push inside that window. `MockForge` moves the head when `push` is
+    // called, which is what a synchronize delivery looks like from here.
+    let forge = MockForge::new().with_pull_request(closeable(), vec![], vec![]);
+    let plan = closing_plan();
+
+    // The plan is valid right now.
+    let mut check = plan.clone();
+    assert_eq!(
+        revalidate(&forge, &config(), &repo(), &mut check, &[]).await,
+        Recheck::Unchanged
+    );
+    assert!(check.close.is_some());
+
+    // Then the head moves, and the close must not go through.
+    forge.push(5798, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", vec![]);
+    let reports = apply_all(&forge, &forge, &config(), &repo(), &[plan], &[]).await;
+
+    assert!(
+        !forge
+            .writes()
+            .iter()
+            .any(|write| matches!(write, Write::PullRequestClosed { .. })),
+        "{:?}",
+        forge.writes()
+    );
+    assert_eq!(
+        reports[0].close_refusal,
+        Some("it was pushed to after the sweep read its diff")
+    );
+}
