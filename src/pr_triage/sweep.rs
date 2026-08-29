@@ -298,6 +298,19 @@ pub fn build_plan(
     suggested.extend(plan.flags.iter().map(|(flag, _)| flag.label().to_string()));
 
     let planned = plan_labels(&pull_request.labels, &suggested, label_policy);
+
+    // The kill switch stops *everything*, not just the label.
+    //
+    // `tinysweeper:human-review` says "leave this one alone". A plan that
+    // merely declined to label it and then went on to comment on it and close
+    // it would honour the letter of the setting and none of its meaning — and
+    // that is a close nobody could have predicted from the configuration.
+    if planned.blocked {
+        plan.declined_labels = planned.declined;
+        plan.close_refusal = Some("it carries a label that switches the bot off");
+        return plan;
+    }
+
     plan.add_labels = planned.add;
     plan.remove_labels = planned.remove;
     plan.declined_labels = planned.declined;

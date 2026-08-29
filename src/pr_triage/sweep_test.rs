@@ -187,7 +187,16 @@ async fn a_kill_switch_label_stops_the_sweep_writing_anything() {
     let outcome = run(&forge, &config(), None).await;
     let second = &outcome.plans[1];
     assert!(matches!(second.verdict, Verdict::Duplicate { .. }));
+    // Everything, not just the label. The regression this pins is a plan that
+    // declined to label a kill-switched pull request and then closed it anyway.
     assert!(second.add_labels.is_empty(), "{second:?}");
+    assert!(second.remove_labels.is_empty(), "{second:?}");
+    assert!(second.comment.is_none(), "{second:?}");
+    assert!(second.close.is_none(), "{second:?}");
+    assert_eq!(
+        second.close_refusal,
+        Some("it carries a label that switches the bot off")
+    );
 }
 
 #[tokio::test]
