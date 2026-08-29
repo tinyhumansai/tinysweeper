@@ -111,6 +111,18 @@ pub trait ForgeRead: Send + Sync {
     /// List open issues, most recently updated first.
     async fn open_issues(&self, repo: &RepoId, limit: usize) -> Result<Vec<Issue>>;
 
+    /// The commit a branch currently points at.
+    ///
+    /// `None` when the branch is not there, which is an ordinary answer: a pull
+    /// request can outlive the branch it targets.
+    ///
+    /// Exists so `crate::pr_triage::landed` can read every file of one pull
+    /// request at a **single** revision. Reading them at the branch *name*
+    /// resolves independently per file, so a base branch that moves mid-sweep
+    /// can serve file A from one commit and file B from a later one — and a
+    /// change can then look landed when no single revision contains all of it.
+    async fn branch_head(&self, repo: &RepoId, branch: &str) -> Result<Option<String>>;
+
     /// List open pull requests, oldest first.
     ///
     /// Oldest first, and that ordering is load-bearing rather than cosmetic:

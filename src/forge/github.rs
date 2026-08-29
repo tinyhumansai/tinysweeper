@@ -610,6 +610,22 @@ impl ForgeRead for GitHubRead {
         Ok(pull_request_from(pr, repo, approvals))
     }
 
+    async fn branch_head(&self, repo: &RepoId, branch: &str) -> Result<Option<String>> {
+        let route = format!(
+            "/repos/{}/{}/commits/{}",
+            repo.owner,
+            repo.name,
+            urlencoding(branch)
+        );
+        match self.client.get::<serde_json::Value, _, ()>(&route, None).await {
+            Ok(commit) => Ok(commit["sha"].as_str().map(str::to_string)),
+            // A pull request can outlive the branch it targets, and that is an
+            // answer rather than a failure.
+            Err(octocrab::Error::GitHub { source, .. }) if source.status_code == 404 => Ok(None),
+            Err(err) => Err(api(err)),
+        }
+    }
+
     async fn open_pull_requests(&self, repo: &RepoId, limit: usize) -> Result<Vec<PullRequest>> {
         let mut out = Vec::new();
         let mut page = 1u32;

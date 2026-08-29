@@ -147,6 +147,10 @@ pub struct MockState {
     pub reviews: BTreeMap<u64, Vec<ReviewVerdict>>,
     /// Review conversations, keyed by pull request number.
     pub review_threads: BTreeMap<u64, Vec<ReviewThread>>,
+    /// Where each branch points, for `branch_head`. A branch that is absent
+    /// resolves to its own name, so tests that do not care about revisions can
+    /// set a file at `"main"` and be read at `"main"`.
+    pub branches: BTreeMap<String, String>,
     /// Repository file contents, keyed by [`file_key`].
     ///
     /// Keyed by commit as well as path because that is the distinction the
@@ -478,6 +482,20 @@ impl ForgeRead for MockForge {
             .take(limit)
             .cloned()
             .collect())
+    }
+
+    async fn branch_head(&self, _repo: &RepoId, branch: &str) -> Result<Option<String>> {
+        let state = self.state.lock().expect("mock state lock");
+        // A branch nobody registered resolves to itself, so a test that sets a
+        // file at `"main"` and never thinks about revisions still works: the
+        // sweep then reads at `"main"`, which is exactly where the file is.
+        Ok(Some(
+            state
+                .branches
+                .get(branch)
+                .cloned()
+                .unwrap_or_else(|| branch.to_string()),
+        ))
     }
 
     async fn open_pull_requests(&self, _repo: &RepoId, limit: usize) -> Result<Vec<PullRequest>> {
