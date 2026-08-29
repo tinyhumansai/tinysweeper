@@ -200,7 +200,7 @@ mod tests {
     fn a_refused_close_still_cross_links_the_probable_duplicate() {
         // The common outcome, and the one the design is optimised for: say what
         // it looks like, change nothing.
-        let body = render(&plan(), "Looks familiar.", Some(7)).expect("a comment");
+        let body = render(&plan(), "Looks familiar.", Some(7), None).expect("a comment");
         assert!(body.contains("#7"));
         assert!(body.contains("related"));
         assert!(!body.contains("Closing"));
