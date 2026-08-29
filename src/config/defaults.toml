@@ -532,6 +532,52 @@ protected_labels = ["pinned", "security", "tinysweeper:human-review"]
 protected_authors = []
 dry_run = true
 
+# Pull request triage: the sweep that answers "which of these hundred pull
+# requests is worth a human's time". Off by default for the same reason issue
+# triage is.
+#
+# Every decision below is deterministic. Nothing in this section calls a model:
+# a duplicate is two diffs that overlap, and a superseded pull request is one
+# whose lines are already on the base branch. Both are facts anybody can check
+# by hand, which is the point — a close needs evidence, not an opinion.
+[pr_triage]
+enabled = false
+# Cap the sweep. A hundred pull requests is already a few hundred API calls;
+# without a ceiling a busy repository turns one button press into a rate-limit
+# outage.
+max_pull_requests = 150
+# Skip the landed check on anything bigger than this. It costs one file read
+# per changed file, and a two-hundred-file pull request is not the kind that
+# quietly landed already.
+max_landed_files = 25
+# A change smaller than this is not evidence of anything: a single `}` that
+# also appears on the base branch is a coincidence, not a superseded pull
+# request.
+min_landed_lines = 3
+# How much two pull requests must overlap before they are called duplicates.
+# Paths first, because two diffs that touch different files are not the same
+# change however similarly they read.
+duplicate_path_overlap_min = 0.8
+duplicate_line_overlap_min = 0.9
+comment = true
+apply_labels = true
+
+# Closing somebody's pull request is this bot's second most expensive mistake,
+# after closing their issue. Same shape of gate, same defaults: it does nothing
+# until asked twice.
+[pr_triage.close]
+enabled = false
+min_age_days = 1
+quiet_days = 0
+protected_labels = [
+    "pinned",
+    "security",
+    "tinysweeper:human-review",
+    "tinysweeper:manual-only",
+]
+protected_authors = []
+dry_run = true
+
 [automation]
 enabled = false
 merge_sweep = false
