@@ -374,14 +374,31 @@ pub fn file_landed(file: &ChangedFile, base: Option<&str>) -> Result<usize, NotL
         // addition there is. Such hunks are judged on the after image alone,
         // which carries the same context and is therefore still a statement
         // about a *place* rather than about the file as a whole.
-        if hunk.removes > 0 && contains_run(&base, &hunk.before) {
+        // The before image is conclusive whenever the change would actually
+        // *break* it — which is any hunk that removes something, and a pure
+        // addition that has context on both sides of what it inserts. In both
+        // cases, finding the stretch still reading the old way proves the
+        // change is not applied *there*.
+        //
+        // That "there" is the point, and it is what a pure addition needs the
+        // two-sided context for: a file with two identical blocks, one of which
+        // already has the addition, satisfies the after image from the wrong
+        // block. The before image catches it, because the untouched block is
+        // still on the branch.
+        let before_is_conclusive = hunk.removes > 0 || (hunk.leading > 0 && hunk.trailing > 0);
+        if before_is_conclusive && contains_run(&base, &hunk.before) {
             return Err(NotLanded::RemovedLineStillPresent);
         }
         // Every hunk, not only the pure additions. Without context a match says
         // the lines exist *somewhere*, which is exactly the coincidence the
         // image comparison exists to refuse — and an empty after image (a
         // deletion hunk with no context) is "present" in every file on earth.
-        if hunk.anchors == 0 {
+        //
+        // A pure addition needs context on *both* sides, because that is what
+        // makes its before image conclusive above. With context on one side the
+        // hunk cannot say which of two identical blocks it meant, and a diff
+        // that cannot say where it applies cannot prove it already has.
+        if hunk.anchors == 0 || (hunk.removes == 0 && !before_is_conclusive) {
             return Err(NotLanded::NoAnchor);
         }
         if !contains_run(&base, &hunk.after) {
