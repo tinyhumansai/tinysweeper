@@ -1,13 +1,95 @@
 //! The label planner: which labels get *added*, and never which get removed.
 //!
 //! This is the reusable seam. It takes the labels an item already carries, the
-//! labels something suggested, and the `[issues]` policy — nothing about issues
+//! labels something suggested, and a [`LabelPolicy`] — nothing about issues
 //! specifically — so pull request triage can call it with a pull request's
 //! labels and get the same guarantees. Keep it that way: a parameter of type
 //! `Issue` here is what would force the next caller to build a fake one.
+//!
+//! ## Facets
+//!
+//! A **facet** is a label prefix this bot owns, and a facet is exclusive:
+//! adding a label in one retires the others in the same facet, because
+//! `priority: p0` beside `priority: p3` is a contradiction rather than two
+//! opinions. There are two, and both are stated in [`FACETS`]:
+//!
+//! - `priority:` — how soon a human should look, set by issue triage from a
+//!   model's suggestion and by pull request triage from the review's own
+//!   highest severity.
+//! - `triage:` — what the deterministic pull request sweep concluded:
+//!   duplicate, superseded, or worth reading.
+//!
+//! Labels outside both facets are never removed. A human's own triage is not
+//! this planner's business.
 
-use crate::config::types::Issues;
+use crate::config::types::{Issues, PrTriage};
 use crate::issues::types::Priority;
+use crate::pr_triage::types::Verdict;
+
+/// The label prefixes this bot owns, and within which a label is exclusive.
+///
+/// Adding a facet here is the *only* thing needed to make a new axis
+/// self-superseding — which is the point of naming them in one place rather
+/// than special-casing `priority:` in three functions, as this module used to.
+pub const FACETS: [&str; 2] = ["priority:", "triage:"];
+
+/// The labelling rules, independent of which job is applying them.
+///
+/// Borrowed rather than owned so neither caller has to clone its configuration
+/// to plan a label, and so this cannot quietly grow a field that only one of
+/// the two jobs can fill in.
+#[derive(Debug, Clone, Copy)]
+pub struct LabelPolicy<'a> {
+    /// Whether any label is applied at all.
+    pub apply_labels: bool,
+    /// Never apply more than this many labels to one item.
+    pub max_labels: usize,
+    /// Labels this job may apply. Empty means the built-in [`vocabulary`].
+    pub allow_labels: &'a [String],
+    /// Never touch an item carrying one of these.
+    pub block_labels: &'a [String],
+}
+
+impl<'a> From<&'a Issues> for LabelPolicy<'a> {
+    fn from(policy: &'a Issues) -> Self {
+        LabelPolicy {
+            apply_labels: policy.apply_labels,
+            max_labels: policy.max_labels,
+            allow_labels: &policy.allow_labels,
+            block_labels: &policy.block_labels,
+        }
+    }
+}
+
+impl<'a> From<&'a PrTriage> for LabelPolicy<'a> {
+    /// The pull request sweep applies exactly one label — its verdict — so it
+    /// has no `max_labels` or `allow_labels` of its own to configure. A cap of
+    /// one is not a limitation here; it is the shape of the job.
+    ///
+    /// It reuses `[issues] block_labels` rather than declaring its own: the
+    /// kill switches (`tinysweeper:human-review`, `tinysweeper:manual-only`)
+    /// mean "leave this item alone", and an item that two jobs disagree about
+    /// leaving alone is worse than one setting in one place. The caller passes
+    /// them through [`LabelPolicy::blocking`].
+    fn from(policy: &'a PrTriage) -> Self {
+        LabelPolicy {
+            apply_labels: policy.apply_labels,
+            max_labels: 1,
+            allow_labels: &[],
+            block_labels: &[],
+        }
+    }
+}
+
+impl<'a> LabelPolicy<'a> {
+    /// The same policy, refusing any item carrying one of `block_labels`.
+    pub fn blocking(self, block_labels: &'a [String]) -> Self {
+        LabelPolicy {
+            block_labels,
+            ..self
+        }
+    }
+}
 
 /// What labelling decided for one item.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -27,7 +109,12 @@ pub struct LabelPlan {
 /// Refusals are recorded rather than dropped: a suggestion that vanished
 /// silently is a suggestion nobody can debug, and "why did it not label this"
 /// is the first question a maintainer asks.
-pub fn plan(existing: &[String], suggested: &[String], policy: &Issues) -> LabelPlan {
+pub fn plan<'a>(
+    existing: &[String],
+    suggested: &[String],
+    policy: impl Into<LabelPolicy<'a>>,
+) -> LabelPlan {
+    let policy = policy.into();
     let mut plan = LabelPlan::default();
 
     let refuse_all = |plan: &mut LabelPlan, reason: &'static str| {
@@ -37,7 +124,7 @@ pub fn plan(existing: &[String], suggested: &[String], policy: &Issues) -> Label
     };
 
     if !policy.apply_labels {
-        refuse_all(&mut plan, "issues.apply_labels is off");
+        refuse_all(&mut plan, "labelling is off in the configuration");
         return plan;
     }
     if policy
@@ -49,16 +136,18 @@ pub fn plan(existing: &[String], suggested: &[String], policy: &Issues) -> Label
         return plan;
     }
 
-    let mut chose_priority = false;
+    // Which facets this run has already spoken on, so a second suggestion in
+    // the same facet is refused rather than applied beside the first.
+    let mut chosen: Vec<&'static str> = Vec::new();
 
     for label in suggested {
-        if let Some(reason) = refusal(label, existing, policy, chose_priority) {
+        if let Some(reason) = refusal(label, existing, &policy, &chosen) {
             plan.declined.push((label.clone(), reason));
             continue;
         }
         if plan.add.len() >= policy.max_labels {
             plan.declined
-                .push((label.clone(), "issues.max_labels reached"));
+                .push((label.clone(), "the label cap was reached"));
             continue;
         }
         // A facet is exclusive by nature: `priority: p0` beside `priority: p3`
@@ -72,7 +161,9 @@ pub fn plan(existing: &[String], suggested: &[String], policy: &Issues) -> Label
         // `issues.block_labels`, which refuses the whole plan.
         plan.remove.extend(supersede(label, existing));
 
-        chose_priority |= is_priority(label);
+        if let Some(facet) = facet_of(label) {
+            chosen.push(facet);
+        }
         plan.add.push(label.clone());
     }
 
@@ -84,13 +175,16 @@ pub fn plan(existing: &[String], suggested: &[String], policy: &Issues) -> Label
 /// Returns nothing for a label outside the owned facet, so this can be called
 /// unconditionally.
 fn supersede(label: &str, existing: &[String]) -> Vec<String> {
-    if !is_priority(label) {
+    let Some(facet) = facet_of(label) else {
         return Vec::new();
-    }
+    };
 
     existing
         .iter()
-        .filter(|have| is_priority(have) && !same(have, label))
+        .filter(|have| facet_of(have) == Some(facet) && !same(have, label))
+        // Only labels this bot's own vocabulary can produce. A human who wrote
+        // `triage: needs design` by hand has not entered a contest with us.
+        .filter(|have| vocabulary().iter().any(|known| same(known, have)))
         .cloned()
         .collect()
 }
@@ -102,8 +196,8 @@ fn supersede(label: &str, existing: &[String]) -> Vec<String> {
 fn refusal(
     label: &str,
     existing: &[String],
-    policy: &Issues,
-    chose_priority: bool,
+    policy: &LabelPolicy<'_>,
+    chosen: &[&'static str],
 ) -> Option<&'static str> {
     if existing.iter().any(|have| same(have, label)) {
         return Some("already applied");
@@ -113,12 +207,24 @@ fn refusal(
             return Some("not a label triage may apply");
         }
     } else if !policy.allow_labels.iter().any(|known| same(known, label)) {
-        return Some("not in issues.allow_labels");
+        return Some("not in the configured allow list");
     }
-    if chose_priority && is_priority(label) {
-        return Some("a priority label was already chosen");
+    if facet_of(label).is_some_and(|facet| chosen.contains(&facet)) {
+        return Some("a label in the same facet was already chosen");
     }
     None
+}
+
+/// The facet a label belongs to, or `None` for one outside every facet.
+///
+/// Matching on the prefix rather than on membership of [`vocabulary`], so a
+/// label this bot will apply *next* release already supersedes the one it
+/// applies today.
+fn facet_of(label: &str) -> Option<&'static str> {
+    let label = label.trim().to_ascii_lowercase();
+    FACETS
+        .into_iter()
+        .find(|facet| label.starts_with(*facet))
 }
 
 /// Label comparison. GitHub label names are case-insensitive in practice, and
@@ -127,9 +233,7 @@ fn same(left: &str, right: &str) -> bool {
     left.trim().eq_ignore_ascii_case(right.trim())
 }
 
-fn is_priority(label: &str) -> bool {
-    Priority::labels().iter().any(|known| same(known, label))
-}
+
 
 /// The built-in vocabulary: what triage may apply when `allow_labels` is empty.
 ///
@@ -137,7 +241,10 @@ fn is_priority(label: &str) -> bool {
 /// the same thing as `priority:` in different words — see
 /// `docs/modules/issues/LABELS.md`.
 pub fn vocabulary() -> Vec<&'static str> {
-    Priority::labels().into_iter().collect()
+    Priority::labels()
+        .into_iter()
+        .chain(Verdict::labels())
+        .collect()
 }
 
 #[cfg(test)]
@@ -263,7 +370,7 @@ mod tests {
         assert!(plan.add.is_empty());
         assert_eq!(
             plan.declined,
-            vec![("priority: p0".to_string(), "issues.apply_labels is off")]
+            vec![("priority: p0".to_string(), "labelling is off in the configuration")]
         );
     }
 
@@ -277,7 +384,7 @@ mod tests {
             plan.declined,
             vec![(
                 "priority: p2".to_string(),
-                "a priority label was already chosen"
+                "a label in the same facet was already chosen"
             )]
         );
     }
@@ -293,7 +400,7 @@ mod tests {
         assert_eq!(plan.add, owned(&["priority: p1"]));
         assert_eq!(
             plan.declined,
-            vec![("needs-triage".to_string(), "issues.max_labels reached")]
+            vec![("needs-triage".to_string(), "the label cap was reached")]
         );
     }
 
