@@ -206,3 +206,29 @@ fn an_unreadable_file_makes_the_whole_shape_incomparable() {
     assert!(!two.is_comparable());
     assert_eq!(duplicate_of(&two, &[one], 0.8, 0.9), None);
 }
+
+#[test]
+fn making_the_same_edit_twice_is_not_the_same_as_making_it_once() {
+    // An older pull request changes one occurrence of a repeated block; the
+    // newer one changes two. A set would collapse them to one fingerprint and
+    // score 1.0, closing the newer one and losing its second edit.
+    let once = Shape::of(
+        1,
+        &[changed(
+            "config.toml",
+            "@@ -1,3 +1,3 @@\n [x]\n-enabled = false\n+enabled = true\n",
+        )],
+    );
+    let twice = Shape::of(
+        2,
+        &[changed(
+            "config.toml",
+            "@@ -1,3 +1,3 @@\n [x]\n-enabled = false\n+enabled = true\n\
+             @@ -9,3 +9,3 @@\n [x]\n-enabled = false\n+enabled = true\n",
+        )],
+    );
+
+    assert_eq!(twice.edits.values().sum::<usize>(), 2);
+    assert_eq!(overlap(&once, &twice).edits, 0.5);
+    assert_eq!(duplicate_of(&twice, &[once], 0.8, 0.9), None);
+}
