@@ -226,7 +226,11 @@ pub fn landed(
     bases: &[Option<String>],
     min_lines: usize,
 ) -> Result<usize, NotLanded> {
-    if files.is_empty() {
+    // A short `bases` would let `zip` drop the tail of `files` silently, and a
+    // pull request judged on the first two of its twenty files is exactly the
+    // wrong thing to close. Callers build the two lists together; a mismatch is
+    // a bug, and the safe reading of a bug here is "we cannot tell".
+    if files.is_empty() || files.len() != bases.len() {
         return Err(NotLanded::NoReadableDiff);
     }
 
