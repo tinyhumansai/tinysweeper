@@ -64,7 +64,7 @@ pub fn render(
                 " If the signals are wrong, say so and clear the label."
             );
         }
-        let _ = write!(body, "\n");
+        let _ = writeln!(body);
     }
 
     if !plan.add_labels.is_empty() {
