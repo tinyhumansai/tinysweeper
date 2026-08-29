@@ -108,6 +108,13 @@ pub struct LabelPlan {
     pub remove: Vec<String>,
     /// Suggestions that were refused, with the reason. For the log.
     pub declined: Vec<(String, &'static str)>,
+    /// Whether the item carries a `block_labels` entry.
+    ///
+    /// Reported rather than left implicit in an empty `add`. The two are not
+    /// the same fact — "nothing new to add" and "a human said stay away" — and
+    /// a caller that could not tell them apart went on to close a pull request
+    /// carrying a kill switch. `pr_triage::sweep::build_plan` reads this.
+    pub blocked: bool,
 }
 
 /// Plan the labels to add to an item.
@@ -138,6 +145,7 @@ pub fn plan<'a>(
         .iter()
         .any(|blocked| existing.iter().any(|label| same(label, blocked)))
     {
+        plan.blocked = true;
         refuse_all(&mut plan, "the item carries a blocked label");
         return plan;
     }
