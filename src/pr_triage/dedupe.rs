@@ -86,7 +86,7 @@ impl Shape {
                 continue;
             };
             for hunk in hunks(patch) {
-                *edits.entry(fingerprint(&file.path, &hunk)).or_default() += 1;
+                *edits.entry(fingerprint(file, &hunk)).or_default() += 1;
             }
         }
 
@@ -109,13 +109,24 @@ impl Shape {
     }
 }
 
-/// One hunk's identity: where it is, what it replaced, and with what.
+/// One hunk's identity: which file, what kind of change, where in it, what it
+/// replaced, and with what.
 ///
 /// Unit and record separators, like the index's document ids, so a path or a
 /// line containing the delimiter cannot forge another hunk's fingerprint.
-fn fingerprint(path: &str, hunk: &Hunk) -> String {
+fn fingerprint(file: &ChangedFile, hunk: &Hunk) -> String {
     format!(
-        "{path}\u{1f}{}\u{1e}{}",
+        "{}\u{1f}{:?}\u{1f}{}\u{1f}{}\u{1e}{}\u{1e}{}",
+        file.path,
+        // The *operation*, not only the text. Emptying a file and deleting it
+        // can produce the same patch body and are materially different results,
+        // and a rename's source is part of what it does.
+        file.status,
+        file.previous_path.clone().unwrap_or_default(),
+        // And where in the file. Two distant blocks with identical surrounding
+        // context are told apart by nothing else, so two pull requests editing
+        // one different block each would otherwise fingerprint the same.
+        hunk.start,
         hunk.before.join("\u{1f}"),
         hunk.after.join("\u{1f}")
     )

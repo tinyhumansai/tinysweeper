@@ -134,6 +134,14 @@ pub struct Hunk {
     pub removes: usize,
     /// Context lines before the first changed line in the hunk.
     pub leading: usize,
+    /// The line this hunk starts at on the new side, from its `@@` header.
+    ///
+    /// Carried for duplicate detection rather than for this module: two hunks
+    /// with identical context in two distant places are told apart by where
+    /// they are. `0` when the header could not be parsed, which simply makes
+    /// two such hunks compare equal — the conservative direction is handled by
+    /// the context they also carry.
+    pub start: usize,
     /// Context lines after the last changed line.
     ///
     /// Kept apart from `leading` because a pure addition is only judgeable when
@@ -176,6 +184,7 @@ pub fn hunks(patch: &str) -> Vec<Hunk> {
         if line.starts_with("@@") {
             push(&mut current, &mut out);
             in_hunk = true;
+            current.start = new_side_start(line);
             continue;
         }
         if line.starts_with('\\') {
@@ -223,6 +232,20 @@ pub fn hunks(patch: &str) -> Vec<Hunk> {
 
     push(&mut current, &mut out);
     out
+}
+
+/// The new-side start line from an `@@ -a,b +c,d @@` header.
+///
+/// `0` when it will not parse, which is not an error: nothing here *depends* on
+/// the number, and a hunk whose position is unknown simply compares by its
+/// context like it always did.
+fn new_side_start(header: &str) -> usize {
+    header
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix('+'))
+        .and_then(|field| field.split(',').next())
+        .and_then(|number| number.parse().ok())
+        .unwrap_or(0)
 }
 
 /// Add one diff line to an image, reporting whether it counted.
