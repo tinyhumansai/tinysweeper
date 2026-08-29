@@ -410,3 +410,37 @@ async fn the_close_is_gated_again_after_the_label_and_comment_go_out() {
         Some("it was pushed to after the sweep read its diff")
     );
 }
+
+#[tokio::test]
+async fn a_push_to_the_original_also_stops_the_close() {
+    // A duplicate verdict rests on two diffs. Pinning only the subject's would
+    // leave half the evidence free to move.
+    const ORIGINAL: &str = "cccccccccccccccccccccccccccccccccccccccc";
+
+    let forge = MockForge::new()
+        .with_pull_request(closeable(), vec![], vec![])
+        .with_pull_request(
+            PullRequest {
+                number: 5789,
+                head_sha: ORIGINAL.into(),
+                ..closeable()
+            },
+            vec![],
+            vec![],
+        );
+
+    // Unmoved: the close stands.
+    let mut plan = closing_plan();
+    revalidate(&forge, &config(), &repo(), &mut plan, &[]).await;
+    assert!(plan.close.is_some(), "{plan:?}");
+
+    // Moved: it does not.
+    forge.push(5789, "dddddddddddddddddddddddddddddddddddddddd", vec![]);
+    let mut plan = closing_plan();
+    revalidate(&forge, &config(), &repo(), &mut plan, &[]).await;
+    assert!(plan.close.is_none(), "{plan:?}");
+    assert_eq!(
+        plan.close_refusal,
+        Some("the pull request it duplicates changed after the sweep read it")
+    );
+}

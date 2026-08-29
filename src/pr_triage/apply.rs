@@ -132,6 +132,24 @@ pub async fn revalidate(
         return Recheck::LeaveAlone;
     }
 
+    // The other half of a duplicate's evidence. If the original has been pushed
+    // to since the sweep read it, the two changes may no longer overlap and
+    // closing the subject as a copy of it would be closing it over a diff that
+    // no longer exists.
+    if let crate::pr_triage::types::Verdict::Duplicate { of, of_head_sha, .. } = &plan.verdict {
+        let original = read.pull_request(repo, *of).await;
+        let still_matches = original
+            .as_ref()
+            .map(|original| &original.head_sha == of_head_sha)
+            .unwrap_or(false);
+        if !still_matches {
+            plan.close = None;
+            plan.close_refusal =
+                Some("the pull request it duplicates changed after the sweep read it");
+            return Recheck::Unchanged;
+        }
+    }
+
     if let GateOutcome::Refuse(reason) = gate::decide(gate::Inputs {
         subject: &current,
         verdict: &plan.verdict,
