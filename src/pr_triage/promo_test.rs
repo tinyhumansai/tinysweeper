@@ -224,7 +224,7 @@ fn a_login_appearing_in_a_url_path_is_not_the_authors_host() {
         "src/client.rs",
         "@@ -1,1 +1,2 @@\n use http;\n+const BASE: &str = \"https://api.example.com/docs/v1\";\n",
     )];
-    let finding = inspect_diff(&files, &author_hosts("docsbot", None));
+    let finding = inspect_diff(&files, &author_hosts("docs", None));
     assert!(
         !finding.signals.contains(&Signal::AuthorsOwnLink),
         "{finding:?}"
@@ -259,4 +259,30 @@ fn userinfo_cannot_be_used_to_borrow_a_host() {
             .signals
             .contains(&Signal::AuthorsOwnLink)
     );
+}
+
+#[test]
+fn a_referral_marker_in_prose_beside_a_link_is_not_a_referral_link() {
+    // The markers are matched inside the URL, not across the line. A sentence
+    // that mentions one next to an ordinary link is a sentence.
+    let files = vec![changed(
+        "CONTRIBUTING.md",
+        "@@ -1,2 +1,3 @@\n # Rules\n+See https://example.test/policy for the /affiliate rule.\n",
+    )];
+    assert!(
+        !inspect_diff(&files, &[])
+            .signals
+            .contains(&Signal::ReferralLink)
+    );
+}
+
+#[test]
+fn a_common_login_does_not_own_every_host_containing_it() {
+    // `author_hosts` admits any login of four characters, so a bare-label match
+    // would make an author called `docs` the owner of `docs.rs`.
+    assert!(!host_matches("docs.rs", "docs"));
+    assert!(!host_matches("blog.example.test", "blog"));
+    // What it does own: the host itself and its subdomains.
+    assert!(host_matches("acmelabs.example", "acmelabs.example"));
+    assert!(host_matches("blog.acmelabs.example", "acmelabs.example"));
 }
