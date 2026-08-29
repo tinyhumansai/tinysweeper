@@ -1,0 +1,169 @@
+//! Core types for pull request triage.
+//!
+//! The split mirrors `crate::issues::types`, with one difference that matters:
+//! there is no advisory half. Issue triage has an [`IssueVerdict`] because a
+//! model speaks first and deterministic code decides afterwards. Nothing speaks
+//! first here — a [`Verdict`] *is* the deterministic conclusion, carrying the
+//! evidence that produced it — so there is no untrusted structure to keep apart
+//! from a trusted one.
+//!
+//! [`IssueVerdict`]: crate::issues::types::IssueVerdict
+
+use serde::{Deserialize, Serialize};
+
+/// What the sweep concluded about one pull request.
+///
+/// One axis, three values, and they are exclusive by construction: the sweep
+/// checks for a duplicate first, then for a superseded change, and calls
+/// everything else worth reading.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "verdict")]
+pub enum Verdict {
+    /// An older open pull request makes substantially the same change.
+    Duplicate {
+        /// The older pull request. Always a lower number than the subject.
+        of: u64,
+        /// Overlap of the two changed-path sets, 0..=1.
+        path_overlap: f64,
+        /// Overlap of the two added-line sets, 0..=1.
+        line_overlap: f64,
+    },
+    /// Every line this pull request changes is already on the base branch.
+    ///
+    /// "Already implemented", stated as something checkable: applying this pull
+    /// request would change nothing.
+    Superseded {
+        /// The branch its lines were found on.
+        base_ref: String,
+        /// How many substantive lines were checked. Below
+        /// `pr_triage.min_landed_lines` this verdict is not reached at all.
+        lines_checked: usize,
+    },
+    /// Nothing disqualifies it. A human should read it.
+    Review {
+        /// Why the cheaper verdicts did not apply, for the log and the comment.
+        because: &'static str,
+    },
+}
+
+impl Verdict {
+    /// The `triage:` label this verdict wants present.
+    ///
+    /// One facet, three values, exclusive — so applying one retires the others
+    /// through [`crate::issues::labels::plan`], and a pull request can never
+    /// carry both `triage: duplicate` and `triage: review`.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Verdict::Duplicate { .. } => "triage: duplicate",
+            Verdict::Superseded { .. } => "triage: superseded",
+            Verdict::Review { .. } => "triage: review",
+        }
+    }
+
+    /// Every label in the `triage:` facet, so the vocabulary has one
+    /// definition and the facet has one owner.
+    pub fn labels() -> [&'static str; 3] {
+        ["triage: duplicate", "triage: superseded", "triage: review"]
+    }
+
+    /// Whether this verdict is even a candidate for closing.
+    ///
+    /// `Review` never is, which is why the gate in [`crate::pr_triage::gate`]
+    /// takes a verdict rather than a boolean: "worth reading" and "closeable"
+    /// are not two independent facts that could contradict each other.
+    pub fn is_closeable(&self) -> bool {
+        !matches!(self, Verdict::Review { .. })
+    }
+}
+
+/// A close that passed every deterministic guard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClosePlan {
+    /// The pull request to close.
+    pub number: u64,
+    /// Whether to stop short of the close itself and only say what would
+    /// happen.
+    pub dry_run: bool,
+}
+
+/// What deterministic code decided to do about one pull request.
+///
+/// As with [`crate::issues::types::TriagePlan`], note what cannot be expressed:
+/// there is no field for merging, and no field for removing a label outside the
+/// facet this bot owns.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TriagePlan {
+    /// The pull request this concerns.
+    pub number: u64,
+    /// What the sweep concluded.
+    pub verdict: Verdict,
+    /// Labels to add, already filtered and capped.
+    pub add_labels: Vec<String>,
+    /// Labels superseded by one being added, in the same facet.
+    pub remove_labels: Vec<String>,
+    /// Suggestions that were refused, with why. For the log.
+    pub declined_labels: Vec<(String, &'static str)>,
+    /// The evidence comment, when one is to be posted.
+    pub comment: Option<String>,
+    /// Whether to actually close, and on what terms.
+    pub close: Option<ClosePlan>,
+    /// Why the close was refused, when it was. For the log and the comment.
+    pub close_refusal: Option<&'static str>,
+}
+
+impl TriagePlan {
+    /// An empty plan for `number` carrying `verdict` and nothing else.
+    pub fn new(number: u64, verdict: Verdict) -> Self {
+        Self {
+            number,
+            verdict,
+            add_labels: Vec::new(),
+            remove_labels: Vec::new(),
+            declined_labels: Vec::new(),
+            comment: None,
+            close: None,
+            close_refusal: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_verdict_labels_within_the_one_facet() {
+        let verdicts = [
+            Verdict::Duplicate {
+                of: 1,
+                path_overlap: 1.0,
+                line_overlap: 1.0,
+            },
+            Verdict::Superseded {
+                base_ref: "main".into(),
+                lines_checked: 9,
+            },
+            Verdict::Review { because: "-" },
+        ];
+
+        for verdict in verdicts {
+            assert!(
+                Verdict::labels().contains(&verdict.label()),
+                "{} escaped the facet",
+                verdict.label()
+            );
+        }
+    }
+
+    #[test]
+    fn worth_reading_is_never_closeable() {
+        assert!(!Verdict::Review { because: "-" }.is_closeable());
+        assert!(
+            Verdict::Superseded {
+                base_ref: "main".into(),
+                lines_checked: 9,
+            }
+            .is_closeable()
+        );
+    }
+}
