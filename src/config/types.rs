@@ -929,6 +929,13 @@ pub struct PrTriage {
     /// A pull request must change at least this many substantive lines before
     /// "already on the base branch" counts as evidence rather than coincidence.
     pub min_landed_lines: usize,
+    /// Total base-branch file reads one sweep may spend.
+    ///
+    /// `max_landed_files` bounds a single pull request; this bounds the sweep.
+    /// Without it a repository with a hundred open pull requests turns one
+    /// button press into a rate-limit outage — the same unbounded fan-out that
+    /// has bitten the indexer once already.
+    pub max_base_reads: usize,
     /// Overlap of two pull requests' changed-path sets, 0..=1, before they can
     /// be called duplicates.
     pub duplicate_path_overlap_min: f64,

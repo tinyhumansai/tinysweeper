@@ -554,6 +554,9 @@ max_landed_files = 25
 # also appears on the base branch is a coincidence, not a superseded pull
 # request.
 min_landed_lines = 3
+# `max_landed_files` bounds one pull request; this bounds the whole sweep, so a
+# busy repository cannot turn one button press into a rate-limit outage.
+max_base_reads = 600
 # How much two pull requests must overlap before they are called duplicates.
 # Paths first, because two diffs that touch different files are not the same
 # change however similarly they read.
