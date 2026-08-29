@@ -25,7 +25,7 @@
 use std::collections::BTreeSet;
 
 use crate::forge::types::ChangedFile;
-use crate::pr_triage::landed::{normalise, runs};
+use crate::pr_triage::landed::runs;
 
 /// One pull request reduced to what the comparison reads.
 ///
