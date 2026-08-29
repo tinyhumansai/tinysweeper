@@ -191,6 +191,8 @@ pub struct MockForge {
     ///
     /// Reads still work. This is what `--dry-run` sets.
     read_only: bool,
+    /// Whether editing an unknown comment is refused, as GitHub refuses it.
+    strict_comments: bool,
 }
 
 impl MockForge {
@@ -316,6 +318,17 @@ impl MockForge {
     /// Record writes but never apply them — what `--dry-run` uses.
     pub fn read_only(mut self) -> Self {
         self.read_only = true;
+        self
+    }
+
+    /// Refuse an edit to a comment id this forge has never issued.
+    ///
+    /// What GitHub actually does — a `404` — and opt-in rather than the default
+    /// so the many tests that hand this mock an invented id keep working. It
+    /// exists so a test about *recovering* from a failed write can produce a
+    /// real failure instead of asserting on a success and calling it one.
+    pub fn refusing_unknown_comments(mut self) -> Self {
+        self.strict_comments = true;
         self
     }
 
@@ -551,6 +564,19 @@ impl ForgeWrite for MockForge {
             comment_id,
             body: body.to_string(),
         });
+        if self.strict_comments {
+            let known = {
+                let state = self.state.lock().expect("mock state lock");
+                state
+                    .comments
+                    .values()
+                    .flatten()
+                    .any(|comment| comment.id == Some(comment_id))
+            };
+            if !known {
+                return Err(Self::missing("comment", comment_id));
+            }
+        }
         if !self.read_only {
             let mut state = self.state.lock().expect("mock state lock");
             for comments in state.comments.values_mut() {
