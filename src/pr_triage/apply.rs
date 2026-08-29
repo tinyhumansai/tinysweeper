@@ -89,6 +89,20 @@ pub async fn revalidate(
         return;
     };
 
+    // The evidence has to still describe the pull request. Every verdict here
+    // is read off a diff, and a push during the sweep replaces that diff — so a
+    // moved head means the duplicate or superseded finding is about a change
+    // that no longer exists, however well the state guards below pass.
+    if plan
+        .close
+        .as_ref()
+        .is_some_and(|close| close.head_sha != current.head_sha)
+    {
+        plan.close = None;
+        plan.close_refusal = Some("it was pushed to after the sweep read its diff");
+        return;
+    }
+
     // The kill switch again, against the labels as they are now. `gate::decide`
     // reads `close.protected_labels`; this reads the `[issues] block_labels`
     // that `sweep::build_plan` honours, so a label added mid-sweep stops the
@@ -188,7 +202,16 @@ impl Outcome {
         match &plan.close {
             Some(close) if close.dry_run => Outcome::WouldClose,
             Some(_) => Outcome::Closed,
-            None if plan.add_labels.is_empty() && plan.comment.is_none() => Outcome::Unchanged,
+            // Removals count as a write. A plan that only retires a
+            // superseded label does change the pull request, and reporting it
+            // as `Unchanged` — "it already carried everything the plan wanted"
+            // — would be false.
+            None if plan.add_labels.is_empty()
+                && plan.remove_labels.is_empty()
+                && plan.comment.is_none() =>
+            {
+                Outcome::Unchanged
+            }
             None => Outcome::Labelled,
         }
     }

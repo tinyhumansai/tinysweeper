@@ -141,6 +141,14 @@ impl Flag {
 pub struct ClosePlan {
     /// The pull request to close.
     pub number: u64,
+    /// The head commit the verdict was computed against.
+    ///
+    /// Carried so the close can be tied to the evidence that justified it. A
+    /// sweep takes minutes; if the contributor pushes in that window, the diff
+    /// the verdict was reached on is no longer the diff being closed, and
+    /// `apply::revalidate` refuses rather than acting on evidence that has
+    /// stopped describing the pull request.
+    pub head_sha: String,
     /// Whether to stop short of the close itself and only say what would
     /// happen.
     pub dry_run: bool,

@@ -101,6 +101,7 @@ pub fn decide(inputs: Inputs<'_>) -> Outcome {
 
     Outcome::Close(ClosePlan {
         number: subject.number,
+        head_sha: subject.head_sha.clone(),
         dry_run: policy.dry_run,
     })
 }
