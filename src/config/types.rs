@@ -243,6 +243,8 @@ pub struct Config {
     pub overview: Overview,
     /// Issue triage.
     pub issues: Issues,
+    /// Pull request triage: the duplicate and superseded sweep.
+    pub pr_triage: PrTriage,
     /// Scheduled repository automations.
     pub automation: Automation,
     /// Sentry issue promotion.
@@ -904,6 +906,68 @@ pub struct IssueClose {
     /// Never close an issue opened by one of these users.
     pub protected_authors: Vec<String>,
     /// Propose the close as a comment and a label, but do not actually close.
+    pub dry_run: bool,
+}
+
+/// Pull request triage: deciding which open pull requests are worth reading.
+///
+/// Deliberately model-free. Every judgement it makes is arithmetic over the
+/// diff and the base branch — two pull requests that change the same lines are
+/// duplicates, and a pull request whose lines are already on the base branch is
+/// superseded — so a maintainer can reproduce any verdict by hand, and a
+/// hostile pull request title has no prompt to be a directive in.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PrTriage {
+    /// Whether the sweep runs at all.
+    pub enabled: bool,
+    /// Never look at more than this many open pull requests in one sweep.
+    pub max_pull_requests: usize,
+    /// Skip the superseded check on pull requests touching more files than
+    /// this. It costs one file read per changed file.
+    pub max_landed_files: usize,
+    /// A pull request must change at least this many substantive lines before
+    /// "already on the base branch" counts as evidence rather than coincidence.
+    pub min_landed_lines: usize,
+    /// Overlap of two pull requests' changed-path sets, 0..=1, before they can
+    /// be called duplicates.
+    pub duplicate_path_overlap_min: f64,
+    /// Overlap of their added lines, 0..=1, before they can be called
+    /// duplicates.
+    pub duplicate_line_overlap_min: f64,
+    /// Post the evidence comment explaining the verdict.
+    pub comment: bool,
+    /// Apply the `triage:` label the verdict implies.
+    pub apply_labels: bool,
+    /// When and whether the sweep may close a pull request.
+    pub close: PrClose,
+}
+
+/// The deterministic guards on closing a pull request.
+///
+/// Shaped like [`IssueClose`] and for the same reason, with one field
+/// deliberately missing: there is no `confidence_min`, because no model is
+/// consulted and there is therefore no confidence to threshold. The evidence is
+/// the diff.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PrClose {
+    /// Whether the sweep may close anything at all.
+    pub enabled: bool,
+    /// Never close a pull request younger than this.
+    pub min_age_days: u32,
+    /// Never close a pull request touched in this many days.
+    ///
+    /// Coarse by construction: GitHub's `updated_at` counts the bot's own
+    /// labels too, so the figure behind this guard is a floor on how quiet the
+    /// pull request really is. A floor only ever refuses a close it might have
+    /// allowed, which is the direction to be wrong in.
+    pub quiet_days: u32,
+    /// Never close a pull request carrying one of these labels.
+    pub protected_labels: Vec<String>,
+    /// Never close a pull request opened by one of these users.
+    pub protected_authors: Vec<String>,
+    /// Label and comment, but stop short of the close itself.
     pub dry_run: bool,
 }
 
