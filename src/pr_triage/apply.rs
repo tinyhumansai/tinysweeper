@@ -130,15 +130,36 @@ pub async fn revalidate_at(
     maintainers: &[String],
     freshness: Freshness,
 ) -> Recheck {
+    // The kill-switch check runs for *every* plan, including the ones with
+    // nothing to close. `tinysweeper:human-review` means leave this item alone,
+    // and a maintainer who applies it between the sweep and the write is owed
+    // that whether or not a close happened to be on the table.
+    //
+    // The rest of the re-check is about close evidence, so it is skipped when
+    // there is no close: re-reading every pull request to decide whether to add
+    // a label it may already have would double the cost of the safe half.
+    let Ok(current) = read.pull_request(repo, plan.number).await else {
+        if plan.close.is_some() {
+            plan.close = None;
+            plan.close_refusal = Some("its current state could not be re-checked before closing");
+        }
+        return Recheck::Unchanged;
+    };
+
+    if config.issues.block_labels.iter().any(|blocked| {
+        current
+            .labels
+            .iter()
+            .any(|label| label.trim().eq_ignore_ascii_case(blocked.trim()))
+    }) {
+        plan.close = None;
+        plan.close_refusal = Some("it carries a label that switches the bot off");
+        return Recheck::LeaveAlone;
+    }
+
     if plan.close.is_none() {
         return Recheck::Unchanged;
     }
-
-    let Ok(current) = read.pull_request(repo, plan.number).await else {
-        plan.close = None;
-        plan.close_refusal = Some("its current state could not be re-checked before closing");
-        return Recheck::Unchanged;
-    };
 
     // The evidence has to still describe the pull request. Every verdict here
     // is read off a diff, and a push during the sweep replaces that diff — so a
@@ -152,21 +173,6 @@ pub async fn revalidate_at(
         plan.close = None;
         plan.close_refusal = Some("it was pushed to after the sweep read its diff");
         return Recheck::Unchanged;
-    }
-
-    // The kill switch again, against the labels as they are now. `gate::decide`
-    // reads `close.protected_labels`; this reads the `[issues] block_labels`
-    // that `sweep::build_plan` honours, so a label added mid-sweep stops the
-    // close by the same rule that would have stopped it a minute earlier.
-    if config.issues.block_labels.iter().any(|blocked| {
-        current
-            .labels
-            .iter()
-            .any(|label| label.trim().eq_ignore_ascii_case(blocked.trim()))
-    }) {
-        plan.close = None;
-        plan.close_refusal = Some("it carries a label that switches the bot off");
-        return Recheck::LeaveAlone;
     }
 
     // Zeroed on the second pass, for the reason on `Freshness`. Not a widening
