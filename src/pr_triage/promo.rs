@@ -224,24 +224,28 @@ fn inspect_lines(
     for line in lines {
         let lower = line.to_ascii_lowercase();
 
-        if lower.contains("http") {
-            let referral = REFERRAL_PARAMS.iter().any(|name| {
-                lower.contains(&format!("?{name}=")) || lower.contains(&format!("&{name}="))
-            }) || REFERRAL_WORDS.iter().any(|word| lower.contains(word));
-            if referral {
+        // Inside the URLs on the line, never across the line. "See
+        // https://example.test/policy for the /affiliate rule" is a sentence,
+        // and `ReferralLink` alone is enough to flag — so a whole-line match
+        // here puts an accusatory label on ordinary prose.
+        for url in urls_in(&lower) {
+            let (host, rest) = split_host(&url);
+
+            if REFERRAL_PARAMS
+                .iter()
+                .any(|name| rest.contains(&format!("?{name}=")) || rest.contains(&format!("&{name}=")))
+                || REFERRAL_WORDS.iter().any(|word| rest.contains(word))
+            {
                 finding.signals.insert(Signal::ReferralLink);
             }
-            // Against the URL's **host**, not the whole line. A substring
-            // match calls an author named `docs` the owner of
+            // Against the URL's **host**, not the whole line. A substring match
+            // calls an author named `docs` the owner of
             // `https://api.example.com/docs`, and two signals is all it takes
             // to put an accusatory label on an ordinary integration.
-            if hosts_in(&lower)
-                .iter()
-                .any(|host| author_hosts.iter().any(|mine| host_matches(host, mine)))
-            {
+            if author_hosts.iter().any(|mine| host_matches(&host, mine)) {
                 finding.signals.insert(Signal::AuthorsOwnLink);
             }
-            if lower.contains("https://api.") || lower.contains(".com/v1") {
+            if host.starts_with("api.") || rest.starts_with("/v1") {
                 finding.signals.insert(Signal::NewEndpoint);
             }
         }
@@ -258,6 +262,48 @@ fn inspect_lines(
             finding.signals.insert(Signal::MarketingCopy);
         }
     }
+}
+
+/// Split a URL into its host and everything after it.
+fn split_host(url: &str) -> (String, String) {
+    let after_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    let authority_len = after_scheme
+        .find(['/', '?', '#'])
+        .unwrap_or(after_scheme.len());
+    let authority = &after_scheme[..authority_len];
+    // Userinfo before an `@` is not the host, and `mine.example@evil.test` is
+    // exactly how somebody would try to borrow one.
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    let host = host.split(':').next().unwrap_or(host);
+    (
+        host.trim_start_matches("www.").to_string(),
+        after_scheme[authority_len..].to_string(),
+    )
+}
+
+/// The URLs on a line, from `http` to the first delimiter.
+fn urls_in(line: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut rest = line;
+
+    while let Some(at) = rest.find("http") {
+        rest = &rest[at..];
+        if !(rest.starts_with("https://") || rest.starts_with("http://")) {
+            rest = &rest[4..];
+            continue;
+        }
+        let url: String = rest
+            .chars()
+            .take_while(|c| !matches!(c, '"' | '\'' | ')' | '>' | ' ' | ',' | '`'))
+            .collect();
+        rest = &rest[url.len().min(rest.len())..];
+        urls.push(url);
+    }
+
+    urls
 }
 
 /// The hosts of every URL on a line.
@@ -301,9 +347,11 @@ fn host_matches(host: &str, mine: &str) -> bool {
     if mine.is_empty() {
         return false;
     }
-    // A login is compared against the host's *labels*, so `acme` matches
-    // `acme.example` and `docs.acme.example` but not `acmecorp.example`.
-    host == mine || host.ends_with(&format!(".{mine}")) || host.split('.').any(|part| part == mine)
+    // The host itself, or a subdomain of it. Deliberately *not* "any label
+    // equals the login": `author_hosts` admits any login of four characters or
+    // more, and `docs` matching `docs.rs` — or `blog`, `test`, `demo`, `help`
+    // matching half the internet — reaches two signals on one ordinary link.
+    host == mine || host.ends_with(&format!(".{mine}"))
 }
 
 /// The credential-shaped identifier on a line, if there is one.
