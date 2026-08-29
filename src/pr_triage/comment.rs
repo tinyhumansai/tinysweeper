@@ -9,7 +9,7 @@
 
 use std::fmt::Write as _;
 
-use crate::pr_triage::types::{TriagePlan, Verdict};
+use crate::pr_triage::types::{Flag, TriagePlan, Verdict};
 
 /// The marker that identifies tinysweeper's own pull request triage comment.
 ///
@@ -35,13 +35,16 @@ pub fn render(plan: &TriagePlan) -> Option<String> {
     let mut body = format!("{MARKER}\n\n");
 
     for (flag, why) in &plan.flags {
+        let headline = match flag {
+            Flag::Promotional => "This reads like self-promotion",
+        };
         let _ = write!(
             body,
-            "**{}.** This change matched: {why}.\n\n             That is a set of textual signals, not a verdict — plenty of              legitimate contributions add an endpoint and a key. Nothing is              closed on this basis; a maintainer decides. If the signals are              wrong, say so and clear the `{}` label.\n\n",
-            match flag {
-                crate::pr_triage::types::Flag::Promotional =>
-                    "This reads like self-promotion",
-            },
+            "**{headline}.** It matched {why}.\n\n\
+             Those are textual signals, not a verdict — plenty of legitimate \
+             contributions add an endpoint and a key. **Nothing is closed on \
+             this basis**; a maintainer decides. If the signals are wrong, say \
+             so and clear the `{}` label.\n\n",
             flag.label(),
         );
     }
@@ -153,7 +156,7 @@ mod tests {
     fn a_flag_is_explained_even_when_the_verdict_is_worth_reading() {
         let mut plan = TriagePlan::new(1, Verdict::Review { because: "-" });
         plan.flags.push((
-            crate::pr_triage::types::Flag::Promotional,
+            Flag::Promotional,
             "a link carrying a referral or campaign parameter".into(),
         ));
         let body = render(&plan).expect("a flagged pull request is explained");
