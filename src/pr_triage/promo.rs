@@ -39,7 +39,7 @@
 use std::collections::BTreeSet;
 
 use crate::forge::types::ChangedFile;
-use crate::pr_triage::landed::runs;
+use crate::pr_triage::landed::hunks;
 
 /// One reason something looks like an advertisement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -162,7 +162,18 @@ pub fn inspect_diff(files: &[ChangedFile], author_hosts: &[String]) -> Finding {
         let Some(patch) = file.patch.as_deref() else {
             continue;
         };
-        let added: Vec<String> = runs(patch).added.into_iter().flatten().collect();
+        // Only what the change *adds*. Deleting an advertisement is the
+        // opposite of posting one, and a context line is somebody else's text.
+        let added: Vec<String> = hunks(patch)
+            .into_iter()
+            .flat_map(|hunk| {
+                hunk.after
+                    .iter()
+                    .filter(|line| !hunk.before.contains(line))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
         let before = finding.signals.len();
 
         inspect_lines(&added, author_hosts, touches_code, &mut finding);

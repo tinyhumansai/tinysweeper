@@ -55,6 +55,13 @@ pub enum NotLanded {
     AddedLineMissing,
     /// A line it removes is still on the base branch.
     RemovedLineStillPresent,
+    /// The base branch's copy of a file could not be read.
+    ///
+    /// Distinct from the file being *absent*, and the distinction is the whole
+    /// point of the variant. A rate limit or a permission failure that read as
+    /// "the file is not there" would tell a deletion-only pull request that
+    /// everything it removes is already gone — and close it.
+    BaseUnreadable,
 }
 
 impl NotLanded {

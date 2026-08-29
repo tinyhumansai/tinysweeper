@@ -30,7 +30,7 @@ use crate::ports::forge::ForgeRead;
 use crate::pr_triage::comment;
 use crate::pr_triage::dedupe::{Shape, duplicate_of};
 use crate::pr_triage::gate::{self, Outcome};
-use crate::pr_triage::landed::landed;
+use crate::pr_triage::landed::{Base, landed};
 use crate::pr_triage::promo;
 use crate::pr_triage::types::{Flag, TriagePlan, Verdict};
 
@@ -225,7 +225,7 @@ async fn verdict_for(
     // `join_all` preserves input order, which is load-bearing: `landed` walks
     // `changed` and `bases` in step, so an answer arriving out of order would
     // compare one file's diff against another file's contents.
-    let mut bases: Vec<Option<String>> = Vec::with_capacity(changed.len());
+    let mut bases: Vec<Base> = Vec::with_capacity(changed.len());
     for batch in changed.chunks(FETCH_CONCURRENCY) {
         let fetched = futures::future::join_all(batch.iter().map(|file| async {
             // Read at the base *branch*, not at `base_sha`. The question this
@@ -234,9 +234,18 @@ async fn verdict_for(
             // ago carries a `base_sha` from before the change it duplicates
             // landed, and reading there would answer "no" to every superseded
             // pull request there is.
-            read.file_at(repo, &file.path, &pull_request.base_ref)
-                .await
-                .unwrap_or(None)
+            //
+            // A read that *failed* is not a file that is *absent*. Collapsing
+            // the two would tell a deletion-only pull request that everything
+            // it removes is already gone, and close it on a rate limit.
+            match read.file_at(repo, &file.path, &pull_request.base_ref).await {
+                Ok(Some(content)) => Base::Present(content),
+                Ok(None) => Base::Absent,
+                Err(err) => {
+                    tracing::debug!(%err, path = %file.path, "could not read the base branch copy");
+                    Base::Unreadable
+                }
+            }
         }))
         .await;
         bases.extend(fetched);
