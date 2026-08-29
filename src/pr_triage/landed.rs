@@ -308,8 +308,16 @@ pub fn file_landed(file: &ChangedFile, base: Option<&str>) -> Result<usize, NotL
     // "present" in every file — so without this a pull request deleting a file
     // that is still on the branch, and has merely been edited since, reads as
     // already applied. It is the one case where the images say nothing.
-    if file.status == FileStatus::Removed && base.is_some() {
-        return Err(NotLanded::FileStillThere);
+    if file.status == FileStatus::Removed {
+        return match base {
+            // The file is still there, so applying this would still delete it.
+            Some(_) => Err(NotLanded::FileStillThere),
+            // Already gone. Decided here rather than by the images below,
+            // because a whole-file deletion has no context to anchor on and its
+            // after image is empty — the images genuinely say nothing, and
+            // existence is the only question worth asking.
+            None => Ok(hunks(patch).iter().map(|hunk| hunk.changed).sum()),
+        };
     }
 
     let hunks = hunks(patch);
