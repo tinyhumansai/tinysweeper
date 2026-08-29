@@ -197,11 +197,12 @@ pub async fn revalidate_at(
     // closing the subject as a copy of it would be closing it over a diff that
     // no longer exists.
     match &plan.verdict {
-        Verdict::Duplicate { of, of_head_sha, .. } => {
+        Verdict::Duplicate {
+            of, of_head_sha, ..
+        } => {
             let Ok(original) = read.pull_request(repo, *of).await else {
                 plan.close = None;
-                plan.close_refusal =
-                    Some("the pull request it duplicates could not be re-checked");
+                plan.close_refusal = Some("the pull request it duplicates could not be re-checked");
                 return Recheck::Unchanged;
             };
             if original.head_sha != *of_head_sha {
