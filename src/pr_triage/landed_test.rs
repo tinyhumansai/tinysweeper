@@ -108,7 +108,9 @@ fn an_addition_that_exists_somewhere_else_is_not_landed_here() {
         "let first = [\n    \"alpha\",\n    \"beta\",\n    \"gamma\",\n];\nlet second = [\n];\n";
     assert_eq!(
         file_landed(&file, Some(base)),
-        Err(NotLanded::AddedLineMissing)
+        // The untouched `second` block is still on the branch, which is the
+        // conclusive form of "not applied here".
+        Err(NotLanded::RemovedLineStillPresent)
     );
 
     // And once it really is applied in that place, it is landed.
@@ -194,11 +196,11 @@ fn a_conflicting_small_change_says_so_rather_than_saying_too_small() {
 
 #[test]
 fn one_unlanded_file_sinks_the_whole_pull_request() {
-    let one = changed("a.rs", "@@ -1,1 +1,4 @@\n top\n+alpha\n+beta\n+gamma\n");
-    let two = changed("b.rs", "@@ -1,1 +1,4 @@\n head\n+delta\n+epsilon\n+zeta\n");
+    let one = changed("a.rs", "@@ -1,2 +1,5 @@\n top\n+alpha\n+beta\n+gamma\n end\n");
+    let two = changed("b.rs", "@@ -1,2 +1,5 @@\n head\n+delta\n+epsilon\n+zeta\n tail\n");
     let bases = vec![
-        present("top\nalpha\nbeta\ngamma\n"),
-        present("head\nnothing like it\n"),
+        present("top\nalpha\nbeta\ngamma\nend\n"),
+        present("head\nnothing like it\ntail\n"),
     ];
     assert_eq!(
         landed(&[one, two], &bases, 3),
@@ -208,18 +210,18 @@ fn one_unlanded_file_sinks_the_whole_pull_request() {
 
 #[test]
 fn a_wholly_landed_pull_request_reports_how_much_it_checked() {
-    let one = changed("a.rs", "@@ -1,1 +1,3 @@\n top\n+alpha\n+beta\n");
+    let one = changed("a.rs", "@@ -1,2 +1,4 @@\n top\n+alpha\n+beta\n end\n");
     let two = changed("b.rs", "@@ -1,2 +1,2 @@\n head\n-was\n+is\n");
-    let bases = vec![present("top\nalpha\nbeta\n"), present("head\nis\n")];
+    let bases = vec![present("top\nalpha\nbeta\nend\n"), present("head\nis\n")];
     assert_eq!(landed(&[one, two], &bases, 3), Ok(4));
 }
 
 #[test]
 fn a_short_base_list_cannot_silently_skip_files() {
-    let one = changed("a.rs", "@@ -1,1 +1,4 @@\n top\n+alpha\n+beta\n+gamma\n");
+    let one = changed("a.rs", "@@ -1,2 +1,5 @@\n top\n+alpha\n+beta\n+gamma\n end\n");
     let two = changed("b.rs", "@@\n+nowhere\n");
     assert_eq!(
-        landed(&[one, two], &[present("top\nalpha\nbeta\ngamma\n")], 1),
+        landed(&[one, two], &[present("top\nalpha\nbeta\ngamma\nend\n")], 1),
         Err(NotLanded::NoReadableDiff)
     );
 }
