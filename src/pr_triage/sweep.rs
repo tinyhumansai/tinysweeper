@@ -22,8 +22,6 @@
 //! Asking the free question first is what keeps the budget for the pull
 //! requests that actually need it.
 
-use std::collections::BTreeMap;
-
 use crate::config::types::Config;
 use crate::error::Result;
 use crate::forge::types::{ChangedFile, PullRequest, RepoId};
@@ -89,56 +87,62 @@ pub async fn sweep(
     let mut pulls = pulls;
     pulls.sort_by_key(|pull_request| pull_request.number);
 
-    let mut files: BTreeMap<u64, Vec<ChangedFile>> = BTreeMap::new();
-    for batch in pulls.chunks(FETCH_CONCURRENCY) {
-        // One pull request whose files cannot be read must not sink the sweep:
-        // it is read as "nothing comparable", which reaches `Verdict::Review`
-        // and leaves the pull request exactly as it was.
-        let fetched = futures::future::join_all(batch.iter().map(|pull_request| async {
-            (
-                pull_request.number,
-                read.changed_files(repo, pull_request.number)
-                    .await
-                    .unwrap_or_default(),
-            )
-        }))
-        .await;
-        files.extend(fetched);
-    }
-
     let mut earlier: Vec<Shape> = Vec::new();
     let mut budget = policy.max_base_reads;
     let mut plans = Vec::new();
 
-    for pull_request in &pulls {
-        let changed = files.get(&pull_request.number).cloned().unwrap_or_default();
-        let shape = Shape::of(pull_request.number, &changed);
+    // Fetched a window at a time, and dropped at the end of the window.
+    //
+    // The obvious shape — fetch every pull request's files, then judge them
+    // all — holds a hundred repositories' worth of patches in memory at once,
+    // and this process has a 1Gi ceiling it already sits close to. It is also
+    // unnecessary: the loop runs in ascending order and a pull request is only
+    // ever compared against *earlier* ones, whose `Shape` is already built. So
+    // only the window being judged needs its diffs, and a `Shape` — a path set
+    // and a line set — is what is kept.
+    for window in pulls.chunks(FETCH_CONCURRENCY) {
+        // One pull request whose files cannot be read must not sink the sweep:
+        // it is read as "nothing comparable", which reaches `Verdict::Review`
+        // and leaves the pull request exactly as it was.
+        let fetched = futures::future::join_all(window.iter().map(|pull_request| async {
+            read.changed_files(repo, pull_request.number)
+                .await
+                .unwrap_or_default()
+        }))
+        .await;
 
-        if only.is_none_or(|number| number == pull_request.number) {
-            let verdict = verdict_for(
-                read,
-                config,
-                repo,
-                pull_request,
-                &changed,
-                &shape,
-                &earlier,
-                &mut budget,
-            )
-            .await;
-            let mut plan = build_plan(config, pull_request, verdict, maintainers);
-            // Only for a pull request that is actually getting a comment, so
-            // the extra request is spent on the handful the sweep flags rather
-            // than on every pull request it reads.
-            if plan.comment.is_some() {
-                attach_previous_comment(read, repo, &mut plan).await;
+        // Sequential within the window, so a pull request can still duplicate
+        // the one immediately before it: its shape is pushed before the next
+        // one is judged.
+        for (pull_request, changed) in window.iter().zip(fetched) {
+            let shape = Shape::of(pull_request.number, &changed);
+
+            if only.is_none_or(|number| number == pull_request.number) {
+                let verdict = verdict_for(
+                    read,
+                    config,
+                    repo,
+                    pull_request,
+                    &changed,
+                    &shape,
+                    &earlier,
+                    &mut budget,
+                )
+                .await;
+                let mut plan = build_plan(config, pull_request, verdict, maintainers);
+                // Only for a pull request that is actually getting a comment,
+                // so the extra request is spent on the handful the sweep flags
+                // rather than on every pull request it reads.
+                if plan.comment.is_some() {
+                    attach_previous_comment(read, repo, &mut plan).await;
+                }
+                plans.push(plan);
             }
-            plans.push(plan);
-        }
 
-        // Pushed after the verdict, never before: a pull request must not be
-        // able to be a duplicate of itself.
-        earlier.push(shape);
+            // Pushed after the verdict, never before: a pull request must not
+            // be able to be a duplicate of itself.
+            earlier.push(shape);
+        }
     }
 
     Ok(SweepOutcome {
