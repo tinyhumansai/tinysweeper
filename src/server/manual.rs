@@ -427,11 +427,13 @@ mod tests {
                 crate::pr_triage::Report {
                     number: 20,
                     verdict: "triage: duplicate",
+                    detail: "of #10 (100% of paths, 100% of added lines)".into(),
                     outcome: crate::pr_triage::apply::Outcome::Closed,
                 },
                 crate::pr_triage::Report {
                     number: 21,
                     verdict: "triage: review",
+                    detail: "-".into(),
                     outcome: crate::pr_triage::apply::Outcome::Labelled,
                 },
             ])

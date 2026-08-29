@@ -24,8 +24,6 @@
 
 use std::collections::BTreeMap;
 
-use futures::StreamExt;
-
 use crate::config::types::Config;
 use crate::error::Result;
 use crate::forge::types::{ChangedFile, PullRequest, RepoId};
@@ -91,21 +89,22 @@ pub async fn sweep(
     let mut pulls = pulls;
     pulls.sort_by_key(|pull_request| pull_request.number);
 
-    let files: BTreeMap<u64, Vec<ChangedFile>> = futures::stream::iter(&pulls)
-        .map(|pull_request| async move {
-            // One pull request whose files cannot be read must not sink the
-            // sweep: it is read as "nothing comparable", which reaches
-            // `Verdict::Review` and leaves the pull request exactly as it was.
+    let mut files: BTreeMap<u64, Vec<ChangedFile>> = BTreeMap::new();
+    for batch in pulls.chunks(FETCH_CONCURRENCY) {
+        // One pull request whose files cannot be read must not sink the sweep:
+        // it is read as "nothing comparable", which reaches `Verdict::Review`
+        // and leaves the pull request exactly as it was.
+        let fetched = futures::future::join_all(batch.iter().map(|pull_request| async {
             (
                 pull_request.number,
                 read.changed_files(repo, pull_request.number)
                     .await
                     .unwrap_or_default(),
             )
-        })
-        .buffer_unordered(FETCH_CONCURRENCY)
-        .collect()
+        }))
         .await;
+        files.extend(fetched);
+    }
 
     let mut earlier: Vec<Shape> = Vec::new();
     let mut budget = policy.max_base_reads;
@@ -218,10 +217,12 @@ async fn verdict_for(
         };
     }
 
-    // Ordered, not unordered: `landed` walks `changed` and `bases` in step, so
-    // the answers have to come back in the order they were asked for.
-    let bases: Vec<Option<String>> = futures::stream::iter(changed)
-        .map(|file| async move {
+    // `join_all` preserves input order, which is load-bearing: `landed` walks
+    // `changed` and `bases` in step, so an answer arriving out of order would
+    // compare one file's diff against another file's contents.
+    let mut bases: Vec<Option<String>> = Vec::with_capacity(changed.len());
+    for batch in changed.chunks(FETCH_CONCURRENCY) {
+        let fetched = futures::future::join_all(batch.iter().map(|file| async {
             // Read at the base *branch*, not at `base_sha`. The question this
             // answers is "is this change on the branch today", which is a
             // question about the moving ref: a pull request opened six weeks
@@ -231,10 +232,10 @@ async fn verdict_for(
             read.file_at(repo, &file.path, &pull_request.base_ref)
                 .await
                 .unwrap_or(None)
-        })
-        .buffered(FETCH_CONCURRENCY)
-        .collect()
+        }))
         .await;
+        bases.extend(fetched);
+    }
     *budget -= changed.len();
 
     match landed(changed, &bases, policy.min_landed_lines) {
