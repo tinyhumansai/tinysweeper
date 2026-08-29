@@ -122,8 +122,12 @@ const MAX_PATHS: usize = 5;
 /// afford, because the flag reads as an accusation.
 const REFERRAL_PARAMS: [&str; 5] = ["ref", "via", "utm_source", "utm_campaign", "aff"];
 
-/// Referral markers that are not query parameters, matched as plain substrings.
-const REFERRAL_WORDS: [&str; 2] = ["affiliate", "/r/?"];
+/// Referral markers that are not query parameters.
+///
+/// Matched inside a URL only, never in prose. "We do not allow affiliate
+/// links" is a sentence about policy, and flagging the documentation that says
+/// so as an advertisement is the most embarrassing false positive available.
+const REFERRAL_WORDS: [&str; 3] = ["/affiliate", "affiliate=", "/r/?"];
 
 /// Words that carry no technical content and a lot of register.
 ///

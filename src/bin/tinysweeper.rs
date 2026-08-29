@@ -969,12 +969,26 @@ async fn run_pr_triage(
     // taking a different code path — so what it prints is what a real run would
     // have written, not a separate rendering that could disagree with it.
     let reports = if dry_run {
+        // The plans are rewritten to dry runs, not merely pointed at a mock.
+        // Without this the report says `Closed` for a run that wrote nothing,
+        // and the summary line underneath says the opposite.
+        let plans: Vec<_> = outcome
+            .plans
+            .iter()
+            .cloned()
+            .map(|mut plan| {
+                if let Some(close) = plan.close.as_mut() {
+                    close.dry_run = true;
+                }
+                plan
+            })
+            .collect();
         tinysweeper::pr_triage::apply_all(
             &read,
             &MockForge::new(),
             &loaded.config,
             &repo_id,
-            &outcome.plans,
+            &plans,
             &[],
         )
         .await

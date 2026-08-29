@@ -48,10 +48,23 @@ pub fn render(
         let _ = write!(
             body,
             "\nThis reads like self-promotion: it matched {why}. That is a set \
-             of textual signals rather than a verdict, nothing was closed on \
-             account of it, and if the signals are wrong just say so and clear \
-             the label.\n"
+             of textual signals rather than a verdict, and nothing was closed on \
+             account of it."
         );
+        // Only where the label actually went on. Telling somebody to clear a
+        // label that is not there sends them looking for something that does
+        // not exist.
+        let flagged = plan
+            .add_labels
+            .iter()
+            .any(|label| label.eq_ignore_ascii_case(crate::pr_triage::Flag::Promotional.label()));
+        if flagged {
+            let _ = write!(
+                body,
+                " If the signals are wrong, say so and clear the label."
+            );
+        }
+        let _ = write!(body, "\n");
     }
 
     if !plan.add_labels.is_empty() {
@@ -116,7 +129,7 @@ mod tests {
         )
         .expect("a comment");
         assert!(body.contains("referral"));
-        assert!(body.contains("clear the label"));
+        assert!(body.contains("a set of textual signals"));
         assert!(body.contains("nothing was closed"));
     }
 

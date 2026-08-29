@@ -199,3 +199,18 @@ fn hostile_prose_is_inert_because_there_is_no_prompt() {
     );
     assert_eq!(finding, Finding::default());
 }
+
+#[test]
+fn prose_about_affiliate_links_is_not_an_affiliate_link() {
+    // Documentation saying the project does not allow them must not be flagged
+    // as one — the most embarrassing false positive available here.
+    let files = vec![changed(
+        "CONTRIBUTING.md",
+        "@@ -1,2 +1,3 @@\n # Rules\n+We do not allow affiliate links; see https://docs.example/policy\n",
+    )];
+    let finding = inspect_diff(&files, &[]);
+    assert!(
+        !finding.signals.contains(&Signal::ReferralLink),
+        "{finding:?}"
+    );
+}
