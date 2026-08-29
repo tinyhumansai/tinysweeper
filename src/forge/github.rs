@@ -321,6 +321,88 @@ fn issue_from_json(raw: &serde_json::Value) -> Issue {
     }
 }
 
+/// Whole days between `then` (a Unix timestamp) and now.
+///
+/// `None` — a timestamp GitHub did not send — is **zero days**, not an error
+/// and not a large number. Every guard that reads an age refuses when the item
+/// is too *young*, so an unknown age has to read as "brand new" or a missing
+/// field would unlock the close it was meant to gate.
+fn days_since(then: Option<i64>) -> u32 {
+    let Some(then) = then else { return 0 };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs() as i64)
+        .unwrap_or(then);
+    ((now - then).max(0) / 86_400) as u32
+}
+
+/// Map octocrab's pull request onto the crate's, with `approvals` supplied.
+///
+/// The approval count is a parameter rather than a fetch because it costs a
+/// request of its own: the single-pull-request path pays for it, and the list
+/// path — which reads a hundred at a time and does not use the figure — does
+/// not.
+fn pull_request_from(
+    pr: octocrab::models::pulls::PullRequest,
+    repo: &RepoId,
+    approvals: u32,
+) -> PullRequest {
+    let number = pr.number;
+    let base = pr.base;
+    let head = pr.head;
+
+    PullRequest {
+        number,
+        title: pr.title.unwrap_or_default(),
+        body: pr.body.unwrap_or_default(),
+        author: pr
+            .user
+            .as_ref()
+            .map(|u| u.login.clone())
+            .unwrap_or_default(),
+        // GitHub's own answer, not a guess from the login. Auto-merge's
+        // dependency-bump exemption is only as safe as this field.
+        author_is_bot: pr
+            .user
+            .as_ref()
+            .map(|u| u.r#type.eq_ignore_ascii_case("bot"))
+            .unwrap_or(false),
+        draft: pr.draft.unwrap_or(false),
+        base_ref: base.ref_field,
+        base_sha: base.sha,
+        head_ref: head.ref_field.clone(),
+        head_sha: head.sha,
+        // `head.repo` differing from `base.repo` is what makes a pull
+        // request a fork one, and that changes which token can post.
+        from_fork: head
+            .repo
+            .as_ref()
+            .and_then(|r| r.owner.as_ref().map(|o| o.login.clone()))
+            .map(|owner| owner != repo.owner)
+            .unwrap_or(false),
+        labels: pr
+            .labels
+            .unwrap_or_default()
+            .into_iter()
+            .map(|l| l.name)
+            .collect(),
+        mergeable: pr.mergeable,
+        // `merged_at` rather than `merged`: octocrab only populates the
+        // latter on some endpoints, and a missing bool would read as "not
+        // merged" on exactly the path that decides whether an issue closes.
+        merged: pr.merged_at.is_some(),
+        approvals,
+        age_days: days_since(pr.created_at.map(|at| at.timestamp())),
+        // `updated_at` counts *any* write, tinysweeper's own labels and
+        // comments included, so this is a floor on how quiet the pull request
+        // really is and never an overstatement. That asymmetry is the safe one:
+        // a quiet guard that reads too low refuses a close it might have
+        // allowed, where one that read too high would allow a close on a pull
+        // request somebody commented on this morning.
+        quiet_days: days_since(pr.updated_at.map(|at| at.timestamp())),
+    }
+}
+
 /// The type names in an `/orgs/{org}/issue-types` answer.
 ///
 /// Anything that is not a list — a 404 body from a user account, an error
@@ -535,51 +617,54 @@ impl ForgeRead for GitHubRead {
             .await
             .map_err(api)?;
 
-        let base = pr.base;
-        let head = pr.head;
+        let approvals = self.approvals(repo, number).await;
+        Ok(pull_request_from(pr, repo, approvals))
+    }
 
-        Ok(PullRequest {
-            number,
-            title: pr.title.unwrap_or_default(),
-            body: pr.body.unwrap_or_default(),
-            author: pr
-                .user
-                .as_ref()
-                .map(|u| u.login.clone())
-                .unwrap_or_default(),
-            // GitHub's own answer, not a guess from the login. Auto-merge's
-            // dependency-bump exemption is only as safe as this field.
-            author_is_bot: pr
-                .user
-                .as_ref()
-                .map(|u| u.r#type.eq_ignore_ascii_case("bot"))
-                .unwrap_or(false),
-            draft: pr.draft.unwrap_or(false),
-            base_ref: base.ref_field,
-            base_sha: base.sha,
-            head_ref: head.ref_field.clone(),
-            head_sha: head.sha,
-            // `head.repo` differing from `base.repo` is what makes a pull
-            // request a fork one, and that changes which token can post.
-            from_fork: head
-                .repo
-                .as_ref()
-                .and_then(|r| r.owner.as_ref().map(|o| o.login.clone()))
-                .map(|owner| owner != repo.owner)
-                .unwrap_or(false),
-            labels: pr
-                .labels
-                .unwrap_or_default()
-                .into_iter()
-                .map(|l| l.name)
-                .collect(),
-            mergeable: pr.mergeable,
-            // `merged_at` rather than `merged`: octocrab only populates the
-            // latter on some endpoints, and a missing bool would read as "not
-            // merged" on exactly the path that decides whether an issue closes.
-            merged: pr.merged_at.is_some(),
-            approvals: self.approvals(repo, number).await,
-        })
+    async fn open_pull_requests(&self, repo: &RepoId, limit: usize) -> Result<Vec<PullRequest>> {
+        let mut out = Vec::new();
+        let mut page = 1u32;
+
+        // Paged by hand rather than through `into_stream`, so the request count
+        // is bounded by `limit` and visible here. A repository with a thousand
+        // open pull requests must not be able to turn one sweep into a thousand
+        // API calls.
+        while out.len() < limit {
+            let batch = self
+                .client
+                .pulls(&repo.owner, &repo.name)
+                .list()
+                .state(octocrab::params::State::Open)
+                // Ascending by creation, because the port promises oldest
+                // first: dedupe calls the older of two near-identical pull
+                // requests the original, and truncating the originals away
+                // would leave a shortlist that can find no duplicates at all.
+                .sort(octocrab::params::pulls::Sort::Created)
+                .direction(octocrab::params::Direction::Ascending)
+                .per_page(100)
+                .page(page)
+                .send()
+                .await
+                .map_err(api)?;
+
+            if batch.items.is_empty() {
+                break;
+            }
+            for pr in batch.items {
+                // Zero approvals rather than a per-pull-request call. Counting
+                // them properly costs one request each, and a hundred-pull
+                // sweep would spend its whole rate-limit budget on a figure
+                // triage does not read — only `[automerge]` does, and that path
+                // fetches the pull request singly.
+                out.push(pull_request_from(pr, repo, 0));
+                if out.len() >= limit {
+                    break;
+                }
+            }
+            page += 1;
+        }
+
+        Ok(out)
     }
 
     async fn changed_files(&self, repo: &RepoId, number: u64) -> Result<Vec<ChangedFile>> {
@@ -1161,6 +1246,21 @@ impl ForgeWrite for GitHubWrite {
             .issues(&repo.owner, &repo.name)
             .update(number)
             .state(octocrab::models::IssueState::Closed)
+            .send()
+            .await
+            .map_err(api)?;
+        Ok(())
+    }
+
+    async fn close_pull_request(&self, repo: &RepoId, number: u64) -> Result<()> {
+        // The pulls endpoint rather than the issues one, even though GitHub
+        // would accept either. `PATCH /pulls/{n}` cannot express a merge — the
+        // merge button is `PUT /pulls/{n}/merge` — so the request this sends is
+        // structurally incapable of landing the branch it is closing.
+        self.client
+            .pulls(&repo.owner, &repo.name)
+            .update(number)
+            .state(octocrab::params::pulls::State::Closed)
             .send()
             .await
             .map_err(api)?;
