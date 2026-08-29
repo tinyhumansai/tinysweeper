@@ -24,6 +24,8 @@
 
 use std::collections::BTreeMap;
 
+use futures::StreamExt;
+
 use crate::config::types::Config;
 use crate::error::Result;
 use crate::forge::types::{ChangedFile, PullRequest, RepoId};
@@ -34,6 +36,15 @@ use crate::pr_triage::dedupe::{Shape, duplicate_of};
 use crate::pr_triage::gate::{self, Outcome};
 use crate::pr_triage::landed::landed;
 use crate::pr_triage::types::{TriagePlan, Verdict};
+
+/// How many forge reads a sweep has in flight at once.
+///
+/// Bounded, and the bound is the point. Sequentially a hundred-pull-request
+/// repository takes twenty minutes of round trips; unbounded, the same sweep
+/// opens seven hundred concurrent connections and trips the forge's secondary
+/// rate limit, which is answered with a block rather than with a 403 anybody
+/// can read. Eight is the same figure the lane fan-out uses.
+const FETCH_CONCURRENCY: usize = 8;
 
 /// What one sweep produced.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -80,17 +91,21 @@ pub async fn sweep(
     let mut pulls = pulls;
     pulls.sort_by_key(|pull_request| pull_request.number);
 
-    let mut files: BTreeMap<u64, Vec<ChangedFile>> = BTreeMap::new();
-    for pull_request in &pulls {
-        // One pull request whose files cannot be read must not sink the sweep:
-        // it is read as "nothing comparable", which reaches `Verdict::Review`
-        // and leaves the pull request exactly as it was.
-        let changed = read
-            .changed_files(repo, pull_request.number)
-            .await
-            .unwrap_or_default();
-        files.insert(pull_request.number, changed);
-    }
+    let files: BTreeMap<u64, Vec<ChangedFile>> = futures::stream::iter(&pulls)
+        .map(|pull_request| async move {
+            // One pull request whose files cannot be read must not sink the
+            // sweep: it is read as "nothing comparable", which reaches
+            // `Verdict::Review` and leaves the pull request exactly as it was.
+            (
+                pull_request.number,
+                read.changed_files(repo, pull_request.number)
+                    .await
+                    .unwrap_or_default(),
+            )
+        })
+        .buffer_unordered(FETCH_CONCURRENCY)
+        .collect()
+        .await;
 
     let mut earlier: Vec<Shape> = Vec::new();
     let mut budget = policy.max_base_reads;
@@ -203,20 +218,24 @@ async fn verdict_for(
         };
     }
 
-    let mut bases = Vec::with_capacity(changed.len());
-    for file in changed {
-        // Read at the base *branch*, not at `base_sha`. The question this
-        // answers is "is this change on the branch today", which is a question
-        // about the moving ref: a pull request opened six weeks ago carries a
-        // `base_sha` from before the change it duplicates landed, and reading
-        // there would answer "no" to every superseded pull request there is.
-        let content = read
-            .file_at(repo, &file.path, &pull_request.base_ref)
-            .await
-            .unwrap_or(None);
-        bases.push(content);
-        *budget -= 1;
-    }
+    // Ordered, not unordered: `landed` walks `changed` and `bases` in step, so
+    // the answers have to come back in the order they were asked for.
+    let bases: Vec<Option<String>> = futures::stream::iter(changed)
+        .map(|file| async move {
+            // Read at the base *branch*, not at `base_sha`. The question this
+            // answers is "is this change on the branch today", which is a
+            // question about the moving ref: a pull request opened six weeks
+            // ago carries a `base_sha` from before the change it duplicates
+            // landed, and reading there would answer "no" to every superseded
+            // pull request there is.
+            read.file_at(repo, &file.path, &pull_request.base_ref)
+                .await
+                .unwrap_or(None)
+        })
+        .buffered(FETCH_CONCURRENCY)
+        .collect()
+        .await;
+    *budget -= changed.len();
 
     match landed(changed, &bases, policy.min_landed_lines) {
         Ok(lines_checked) => Verdict::Superseded {
