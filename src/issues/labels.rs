@@ -213,10 +213,18 @@ fn supersede(label: &str, existing: &[String]) -> Vec<String> {
 
     existing
         .iter()
+        // The *facet*, by prefix — deliberately wider than the vocabulary, and
+        // the gap between the two is the point. The vocabulary is what may be
+        // added; the facet is what a new label replaces, and those stop being
+        // the same set the moment a name is retired. `openhuman` and `backend`
+        // still carry an older priority axis — `priority: high`, `medium`,
+        // `low`, `critical` — on 539 items between them, and matching only the
+        // current four left every one of them untouched forever: an issue would
+        // take `priority: p2` and keep `priority: high` beside it, two labels
+        // in one facet disagreeing, which is exactly the contradiction this
+        // function exists to prevent. Anything a human applied outside the
+        // owned prefixes is still none of our business.
         .filter(|have| facet_of(have) == Some(facet) && !same(have, label))
-        // Only labels this bot's own vocabulary can produce. A human who wrote
-        // `triage: needs design` by hand has not entered a contest with us.
-        .filter(|have| vocabulary().iter().any(|known| same(known, have)))
         .cloned()
         .collect()
 }
@@ -463,6 +471,36 @@ mod tests {
 
         assert_eq!(plan.add, ["priority: p3"]);
         assert_eq!(plan.remove, ["priority: p1"]);
+    }
+
+    #[test]
+    fn a_retired_priority_spelling_is_superseded_too() {
+        // The churn this exists to stop. `priority: high` predates the p0-p3
+        // scale and is still on hundreds of items in `openhuman` and
+        // `backend`. It is in the facet triage owns, so a new priority retires
+        // it — otherwise the item carries two priorities that disagree, and
+        // the stale one is the louder word.
+        let plan = plan(
+            &["priority: high".into(), "priority: critical".into()],
+            &["priority: p2".into()],
+            &policy(),
+        );
+
+        assert_eq!(plan.add, ["priority: p2"]);
+        assert_eq!(plan.remove, ["priority: high", "priority: critical"]);
+    }
+
+    #[test]
+    fn a_retired_priority_spelling_is_never_added() {
+        // The bound on the rule above: widening what `supersede` *removes*
+        // must not widen what triage may *apply*. The old axis is retired, so
+        // asking for it is refused exactly as any other unknown label is.
+        let plan = plan(&[], &owned(&["priority: high"]), &policy());
+        assert!(plan.add.is_empty(), "{plan:?}");
+        assert_eq!(
+            plan.declined,
+            vec![("priority: high".to_string(), "not a label triage may apply")]
+        );
     }
 
     #[test]

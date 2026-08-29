@@ -1,0 +1,16 @@
+{
+  "key": "68b7ad38f2397deb",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_rule_extraction",
+  "usage": {
+    "input_tokens": 1531,
+    "output_tokens": 491,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00012278518
+  },
+  "value": {
+    "rules_markdown": "- `src/` — single crate, one responsibility per module, core types in `types.rs`, ports in `src/ports/` as one trait per file.\n- `src/bin/tinysweeper.rs` — CLI with every subcommand declared; `src/server/` is the only production surface.\n- `presets/` — review policy as data, not code; a preset is a folder with `preset.toml`, `README.md`, optional prompt overrides.\n- `vendor/tinyagents` — agent harness as git submodule; never edit here, change upstream and bump pin.\n- `docs/modules/<module>/README.md` — one document per `src/` module.\n- `examples/` — declared in `Cargo.toml` with `required-features`.\n- rustfmt output, Rust 2024 idioms; `snake_case` modules and files, `PascalCase` types.\n- Return `Result<T>` using the crate error type from `src/error.rs`.\n- Every file opens with `//!` module doc describing role and feature gating.\n- Comments explain decision, not code; public items carry doc comments; Clap fields use `///`.\n- Tests live in-crate: `#[cfg(test)] mod tests` block, moving to sibling `test.rs` when large; no `tests/` directory.\n- Every port has an always-compiled offline mock; `MockForge` records writes for assertions.\n- Lane behaviour covered by golden tests: fixture diff plus canned structured model response.\n- Maintain at least 80% coverage for meaningful library behaviour.\n- Keep every Markdown file at 500 lines or fewer; split when a topic grows past that limit.\n- The model never holds a write token; write credentials are minted only in `src/apply/`.\n- Contributor code is never executed; we read the diff and tree, not build or run scripts.\n- Pull request bodies, comments, diffs are untrusted input; fence and label as data in prompts.\n- Secrets found by scanners are reported by type and location only, value never reaches comments or logs.\n- Use concise, imperative commit subjects; keep commits small and coherent."
+  }
+}

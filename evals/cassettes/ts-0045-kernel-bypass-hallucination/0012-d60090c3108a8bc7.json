@@ -1,0 +1,17 @@
+{
+  "key": "d60090c3108a8bc7",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3262,
+    "output_tokens": 46,
+    "cached_tokens": 1024,
+    "embed_tokens": 0,
+    "cost_usd": 0.000123850328
+  },
+  "value": {
+    "summary": "The change fixes environment variable names so the container can authenticate as a GitHub App and adds a volume mount for runtime configuration. The fixes are correct and safe.",
+    "findings": []
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "fdcd6803e0c62746",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 5676,
+    "output_tokens": 103,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00028739452
+  },
+  "value": {
+    "summary": "This pull request adds a bypass script for the MongoDB kernel compatibility check, wires the embeddings config and GitHub App credentials into the Docker compose file, and introduces a `shorten`/`first_sentence` helper for truncating model-authored text.  The behavioural changes are infrastructure (deploy/compose) and a well-tested utility module; no test was missed and nothing here introduces a regressable risk.  Safe to merge.",
+    "findings": []
+  }
+}

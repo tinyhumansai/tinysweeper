@@ -116,6 +116,16 @@ impl Finding {
     ///
     /// `context` is a short snippet of the code the finding is about, so the
     /// same rule firing on two different call sites stays two findings.
+    /// # `rule` is in here, and it should not be trusted alone
+    ///
+    /// A model renames its own rule between runs, so two fingerprints differ
+    /// for one defect and the comment is posted twice. Cross-push dedupe
+    /// therefore treats a fingerprint match as *sufficient* but not necessary,
+    /// and falls back to where the last comment was —
+    /// [`PriorReview::covers`](crate::findings::prior::PriorReview::covers).
+    /// The field stays in the hash because removing it would collapse two
+    /// genuinely different findings on one line into one identity, which the
+    /// anchor check already handles more cheaply.
     pub fn fingerprint(&self, context: &str) -> String {
         let mut hasher = Sha256::new();
         hasher.update(self.lane.as_str().as_bytes());

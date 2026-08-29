@@ -49,8 +49,43 @@ and got posted again. The identity is now computed once during review — where
 the diff is in hand, see `findings::anchor` — stamped onto `Finding::identity`,
 and carried in the proposal so `apply` and the next review cannot disagree.
 
-No sibling signature was added. Two identities would drift, and the exclusions
-triage inheritance needs are the same exclusions dedupe needs.
+## Identity is not enough on its own
+
+Excluding the title was necessary and not sufficient. `rule` is also
+model-authored free text, and a model asked the same question twice renames the
+defect: on `tinyhumansai/backend#1295`, six reviews produced eighty-nine
+comments carrying **eighty-eight distinct fingerprints**, and one line collected
+four comments with the same title and the same suggested patch under
+`discarded-error-handling`, `unhandled-error`, `discarded-error` and
+`swallowed-error`. Fingerprint dedupe was working perfectly and suppressing
+almost nothing, because almost nothing repeated a fingerprint.
+
+`council::agree` had already written down why — "`rule` is model-authored free
+text" — and then argued the strict rule was still right across pushes because a
+rule id is stable for one class of problem across runs. That premise was wrong.
+
+So a finding is a repeat when **either** its fingerprint was already posted
+**or** a comment of ours already sits on the lines it points at, within the same
+few lines of slack the council allows between two reviewers
+(`PriorReview::covers`). The anchor comes from the comment's own `path` and
+`line` as GitHub reports them, so it needs no new marker and works on every
+thread already open.
+
+Two deliberate differences from `corroborates`:
+
+- **The lane is ignored.** Two lanes reporting one defect on one line is a
+  duplicate to the author reading the thread, whatever it is to the pipeline
+  that produced it. `#1295` posted that pair too.
+- **A comment GitHub no longer places contributes no anchor.** Outdated and
+  rebased-away comments still suppress by fingerprint; they simply cannot say
+  where they were.
+
+The looseness is bounded on both ends. It cannot silence a file — the tolerance
+is three lines — and it cannot silence a merge, because dedupe still runs after
+the conclusion is decided. A false suppression costs the author a comment they
+have to read in the check-run summary instead of inline. A false *duplicate*
+costs them the fourth copy of a comment they answered three pushes ago, which is
+the failure this module exists for.
 
 ## Suppression cannot unblock a merge
 

@@ -1,0 +1,29 @@
+{
+  "key": "12ef78c1f6c205ef",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3548,
+    "output_tokens": 8417,
+    "cached_tokens": 2504,
+    "embed_tokens": 0,
+    "cost_usd": 0.0093953856
+  },
+  "value": {
+    "summary": "The module adds two helpers for truncating model-authored text to fit length limits. `first_sentence` is sound, but `shorten` can return `limit + 1` characters when no word boundary is found in the first `limit` chars, contradicting its documented \"at most `limit` characters\" contract and potentially exceeding the hard ceilings it exists to respect.",
+    "resolved": [],
+    "findings": [
+      {
+        "path": "src/findings/summarise.rs",
+        "existing_code": "    let head: String = text.chars().take(limit).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),\n    }",
+        "rule": "off-by-one",
+        "title": "Reserve room for the ellipsis so output stays within limit",
+        "body": "`head` is exactly `limit` characters. When `rfind(' ')` returns `None`, the result is `head` + `…` = `limit + 1` characters, exceeding the `limit` the doc comment promises. The `Some` branch is fine because it drops at least the space, but the `None` branch is not. Since the function exists to stay under GitHub's check-run title ceiling, a caller that passes that ceiling as `limit` can still overflow it. Take `limit - 1` chars for `head` so the ellipsis fits within `limit`. (`limit == 0` with non-empty text remains an edge case that would still produce `\"…\"`; a guard for that is optional but worth considering.)",
+        "severity": "medium",
+        "confidence": 0.9,
+        "suggestion": "    // Leave room for the trailing ellipsis so the result stays within `limit`\n    // characters: `head` is at most `limit - 1` chars, plus one for `…`.\n    let head: String = text.chars().take(limit.saturating_sub(1)).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),\n    }"
+      }
+    ]
+  }
+}

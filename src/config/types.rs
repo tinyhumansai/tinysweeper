@@ -424,7 +424,7 @@ pub struct Labels {
 /// Cache reads are the reason the *cheapest headline* provider is not
 /// automatically the right pin — see `defaults.toml`, where the choice is
 /// argued against measured numbers.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ProviderRouting {
     /// Providers to try, in order, by their gateway-side name. Empty leaves
@@ -439,12 +439,48 @@ pub struct ProviderRouting {
     /// net for a genuine outage is `models.fallback`, which switches *model*
     /// and is priced accordingly.
     pub allow_fallbacks: bool,
+    /// Whether the last rung of the model ladder drops the pin entirely.
+    ///
+    /// On by default, and it is the rung that keeps a pin from being a single
+    /// point of failure. Every other rung — the primary and each
+    /// `models.fallback` — carries the same `order`, so a pin naming a provider
+    /// that does not serve these models 404s all of them identically and the
+    /// ladder protects nothing. That is not hypothetical: it is what shipped,
+    /// and every review for a week reported no findings over code no model had
+    /// read.
+    ///
+    /// The trade is deliberate and one-directional. Reaching this rung means
+    /// every priced route already failed, so the choice is an unpinned review
+    /// at a price `harness::pricing` cannot predict, or no review at all — and
+    /// a wrong cost line is recoverable in a way a silent all-clear is not.
+    /// `budget_usd_per_pr` still bounds the call, the response reports which
+    /// model actually answered, and reaching this rung logs at `warn`.
+    pub last_resort_unpinned: bool,
+}
+
+impl Default for ProviderRouting {
+    fn default() -> Self {
+        Self {
+            order: Vec::new(),
+            allow_fallbacks: false,
+            last_resort_unpinned: true,
+        }
+    }
 }
 
 impl ProviderRouting {
     /// Whether any pin is expressed at all.
     pub fn is_empty(&self) -> bool {
         self.order.iter().all(|p| p.trim().is_empty())
+    }
+
+    /// The same routing with no pin, for the ladder's last-resort rung.
+    pub fn unpinned() -> Self {
+        Self {
+            order: Vec::new(),
+            allow_fallbacks: true,
+            last_resort_unpinned: false,
+        }
     }
 }
 

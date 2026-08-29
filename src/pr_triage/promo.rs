@@ -231,10 +231,9 @@ fn inspect_lines(
         for url in urls_in(&lower) {
             let (host, rest) = split_host(&url);
 
-            if REFERRAL_PARAMS
-                .iter()
-                .any(|name| rest.contains(&format!("?{name}=")) || rest.contains(&format!("&{name}=")))
-                || REFERRAL_WORDS.iter().any(|word| rest.contains(word))
+            if REFERRAL_PARAMS.iter().any(|name| {
+                rest.contains(&format!("?{name}=")) || rest.contains(&format!("&{name}="))
+            }) || REFERRAL_WORDS.iter().any(|word| rest.contains(word))
             {
                 finding.signals.insert(Signal::ReferralLink);
             }

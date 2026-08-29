@@ -11,7 +11,7 @@
 //! draft, because that is the thing to fix first.
 
 use crate::automerge::complexity::measure;
-use crate::automerge::paths::{glob_set, logins_match};
+use crate::automerge::paths::{carries, glob_set, logins_match};
 use crate::automerge::types::{Decision, Refusal};
 use crate::config::types::AutoMerge;
 use crate::forge::types::{ChangedFile, CheckStatus, PullRequest, ReviewVerdict};
@@ -104,21 +104,14 @@ fn refuse(config: &AutoMerge, snapshot: &Snapshot) -> Option<Refusal> {
         return Some(Refusal::Draft);
     }
 
-    if let Some(label) = pull_request
-        .labels
-        .iter()
-        .find(|label| config.block_labels.contains(label))
-    {
+    if let Some(label) = carries(&pull_request.labels, &config.block_labels) {
         return Some(Refusal::BlockedLabel(label.clone()));
     }
 
     // An empty allow list means "no label is required"; a non-empty one means
     // the pull request has to have been opted in by hand.
     if !config.allow_labels.is_empty()
-        && !pull_request
-            .labels
-            .iter()
-            .any(|label| config.allow_labels.contains(label))
+        && carries(&pull_request.labels, &config.allow_labels).is_none()
     {
         return Some(Refusal::MissingAllowLabel);
     }

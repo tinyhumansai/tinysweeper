@@ -1,0 +1,17 @@
+{
+  "key": "b136475a5e9b393f",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2998,
+    "output_tokens": 519,
+    "cached_tokens": 2363,
+    "embed_tokens": 0,
+    "cost_usd": 0.0009088752
+  },
+  "value": {
+    "summary": "This new compose overlay adds a glibc tunable and a read-only bind-mounted Python shim to work around a MongoDB startup failure on newer Linux kernels, scoped to local development. No secrets, dangerous sinks, or widened permissions are introduced; the change looks safe to merge.",
+    "findings": []
+  }
+}

@@ -88,17 +88,23 @@ const MODEL_PRICES: &[(&str, Price)] = &[
         },
     ),
     (
-        // The selected model. Priced at the DeepSeek first-party endpoint,
-        // which is not a guess about routing: this snapshot is the one V4 Pro
-        // build DeepSeek serves alone, so there is exactly one endpoint and
-        // exactly one price. See `models.scan` in `defaults.toml`.
+        // Priced at the dearer of the two providers `models.provider` pins —
+        // StreamLake at $1.32/$3.96 against DeepInfra's $1.30/$2.60.
+        //
+        // This row read $0.435/$0.87 on the claim that "this snapshot is the
+        // one V4 Pro build DeepSeek serves alone, so there is exactly one
+        // endpoint and exactly one price". That was wrong twice: the snapshot
+        // has fifteen endpoints, and DeepSeek first-party is not among the ones
+        // this deployment can route to. The row was underpriced threefold on
+        // output, which is the direction that lets a real bill run past
+        // `budget_usd_per_pr`. Measured 2026-08-23.
         "deepseek/deepseek-v4-pro-0813",
         Price {
-            input: 0.435,
-            output: 0.87,
-            // Cache reads are a *hundredth* of the input price here, against a
-            // tenth on kimi-k3. On a re-review that is most of the bill.
-            cached: 0.003625,
+            input: 1.32,
+            output: 3.96,
+            // Cache reads are a *thirtieth* of the input price here. On a
+            // re-review that is most of the bill.
+            cached: 0.044,
         },
     ),
     (
@@ -108,23 +114,36 @@ const MODEL_PRICES: &[(&str, Price)] = &[
         // describe it; pinning the provider is what makes a single row true
         // again. Re-derive from `/api/v1/models/deepseek/<id>/endpoints` if the
         // pin changes.
+        // The floating alias, priced at the dearer of the two pinned providers
+        // (DeepInfra) for the same reason as the dated row above. Nothing
+        // selects this id — it is here so a deployment that sets it is costed
+        // rather than billed at `ceiling()`. Measured 2026-08-23.
         "deepseek/deepseek-v4-pro",
         Price {
-            input: 0.435,
-            output: 0.87,
-            cached: 0.003625,
+            input: 1.30,
+            output: 2.60,
+            cached: 0.10,
         },
     ),
     (
-        // The tier a council runs on, at DeepSeek's own rates to match the pin.
-        // Cache reads are a *fiftieth* of the input price here, which is the
-        // whole reason several reviewers cost about what one used to: the
-        // shared prompt prefix is paid for once.
+        // Both tiers, and the tier a council runs on, at the dearer of the two
+        // providers `models.provider` pins — DeepInfra at $0.09/$0.18 against
+        // StreamLake's $0.0503/$0.1005. The dearer rate is deliberate: the pin
+        // lists two providers so an outage costs price rather than the review,
+        // and a table that recorded the cheaper one would let `budget_usd_per_pr`
+        // under-count exactly when the fallback provider is answering.
+        //
+        // Not DeepSeek's own rates. DeepSeek first-party does not serve this
+        // model at all — see `[models.provider]` in `config/defaults.toml`.
+        //
+        // Cache reads are a *fifth* of the input price here, which is the whole
+        // reason several reviewers cost about what one used to: the shared
+        // prompt prefix is paid for once.
         "deepseek/deepseek-v4-flash",
         Price {
-            input: 0.14,
-            output: 0.28,
-            cached: 0.0028,
+            input: 0.09,
+            output: 0.18,
+            cached: 0.018,
         },
     ),
     (
@@ -412,13 +431,50 @@ mod tests {
         // Note the argument order: input, **cached**, output. Getting it wrong
         // is silent — every argument is a `u64` — and I did exactly that while
         // writing this test, which is why the ordering is now pinned below.
-        let cost = completion_cost("deepseek/deepseek-v4-pro-0813", 82_914, 0, 842);
+        //
+        // Read from the shipped config rather than naming a model id. This test
+        // hardcoded `deepseek-v4-pro-0813` and kept asserting its price after
+        // the deep tier had moved to Flash, so the one number it exists to
+        // guard described a model no review had run on.
+        let config: crate::config::types::Config = crate::config::DEFAULTS
+            .parse::<toml::Table>()
+            .expect("defaults parse")
+            .try_into()
+            .expect("defaults deserialize");
+
+        let cost = completion_cost(&config.models.deep, 82_914, 0, 842);
 
         assert!(
-            (0.035..0.039).contains(&cost),
-            "expected roughly $0.037 for the 83k-token security call, got {cost:.5}"
+            (0.0070..0.0085).contains(&cost),
+            "expected roughly $0.0076 for the 83k-token security call on `{}`, got {cost:.5}",
+            config.models.deep
         );
     }
+
+    /// The cheapest rate any OpenRouter endpoint charges for each priced model,
+    /// in USD per million tokens, as `(model, input, output)`.
+    ///
+    /// Measured 2026-08-23 against
+    /// `https://openrouter.ai/api/v1/models/<id>/endpoints`, taking the minimum
+    /// over every endpoint — not over the pinned ones. A floor that assumed the
+    /// pin would be wrong the moment the pin is, which is the failure this
+    /// whole file has already had once.
+    ///
+    /// Re-measure when adding a row. A model absent here fails the test below
+    /// rather than passing unchecked: an unmeasured row is exactly the state
+    /// every wrong row in this file has been in.
+    const CHEAPEST_ENDPOINT: &[(&str, f64, f64)] = &[
+        ("deepseek/deepseek-v4-flash", 0.0503, 0.1005),
+        ("deepseek/deepseek-v4-pro", 0.3969, 0.7938),
+        ("deepseek/deepseek-v4-pro-0813", 0.66, 1.98),
+        ("minimax/minimax-m2.1", 0.30, 1.20),
+        ("minimax/minimax-m3", 0.23, 0.96),
+        ("moonshotai/kimi-k2.6", 0.5415, 2.28),
+        ("moonshotai/kimi-k2.7-code", 0.67, 3.40),
+        ("moonshotai/kimi-k3", 2.60, 13.00),
+        ("qwen/qwen3.8-max", 2.00, 6.00),
+        ("z-ai/glm-5.2", 0.336, 1.056),
+    ];
 
     #[test]
     fn no_model_is_priced_below_what_any_endpoint_actually_charges() {
@@ -426,21 +482,46 @@ mod tests {
         // because every test here compares this table against itself: a row can
         // be wrong by any factor and still be internally consistent.
         //
-        // A floor is the one property checkable offline. The cheapest endpoint
-        // serving any model this table lists is $0.392 per million input
-        // tokens; a row below $0.10 is therefore not a cheap model but a
-        // mistake, and it is the direction that matters — an underpriced row
-        // makes `budget_usd_per_pr` fail open and lets a real bill run past a
-        // ceiling that thinks it has room.
-        let too_cheap: Vec<_> = MODEL_PRICES
-            .iter()
-            .filter(|(_, price)| price.input < 0.10 || price.output < 0.10)
-            .map(|(name, _)| *name)
-            .collect();
+        // This was a single `$0.10` floor for every model, justified by "the
+        // cheapest endpoint serving any model this table lists is $0.392 per
+        // million input tokens". Both halves aged badly. Flash is genuinely
+        // cheaper than that floor, so the constant started rejecting a correct
+        // row; and a blanket floor never checked the rows it passed, so
+        // `deepseek-v4-pro-0813` sat underpriced threefold on output — the
+        // direction that makes `budget_usd_per_pr` fail open — while the test
+        // stayed green. A per-model floor catches both.
+        let mut wrong = Vec::new();
+
+        for (model, price) in MODEL_PRICES {
+            let Some((_, floor_in, floor_out)) =
+                CHEAPEST_ENDPOINT.iter().find(|(id, _, _)| id == model)
+            else {
+                wrong.push(format!(
+                    "{model}: no measured floor; add one to CHEAPEST_ENDPOINT"
+                ));
+                continue;
+            };
+
+            // Strictly below, so a row priced exactly at the cheapest endpoint
+            // is correct rather than suspect — several are.
+            if price.input < *floor_in {
+                wrong.push(format!(
+                    "{model}: input ${:.4} is below the cheapest endpoint's ${floor_in:.4}",
+                    price.input
+                ));
+            }
+            if price.output < *floor_out {
+                wrong.push(format!(
+                    "{model}: output ${:.4} is below the cheapest endpoint's ${floor_out:.4}",
+                    price.output
+                ));
+            }
+        }
 
         assert!(
-            too_cheap.is_empty(),
-            "priced below any real endpoint, so the budget ceiling fails open: {too_cheap:?}"
+            wrong.is_empty(),
+            "priced below a real endpoint, so the budget ceiling fails open:\n  {}",
+            wrong.join("\n  ")
         );
     }
 
