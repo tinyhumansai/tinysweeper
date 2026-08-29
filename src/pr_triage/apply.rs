@@ -60,10 +60,32 @@ pub async fn apply_plan(forge: &dyn ForgeWrite, repo: &RepoId, plan: &TriagePlan
 /// hundred pull requests that abandoned the other ninety-nine because the third
 /// one was deleted mid-run would be useless in exactly the repositories it is
 /// for.
-pub async fn apply_all(forge: &dyn ForgeWrite, repo: &RepoId, plans: &[TriagePlan]) -> Vec<Report> {
+///
+/// `read` is used only by [`revalidate`], and only for the plans that close
+/// something. Holding a read handle here is not a widening of the write half's
+/// authority — reading mutates nothing — and the alternative is closing a pull
+/// request against a snapshot that is minutes old.
+pub async fn apply_all(
+    read: &dyn ForgeRead,
+    forge: &dyn ForgeWrite,
+    config: &Config,
+    repo: &RepoId,
+    plans: &[TriagePlan],
+    maintainers: &[String],
+) -> Vec<Report> {
     let mut reports = Vec::with_capacity(plans.len());
 
     for plan in plans {
+        let mut plan = plan.clone();
+        revalidate(read, config, repo, &mut plan, maintainers).await;
+        // Re-rendered, because the comment says what was decided and the
+        // decision may have just changed. "Closing it on that basis" above a
+        // pull request that stayed open is worse than no comment at all.
+        if plan.comment.is_some() {
+            plan.comment = crate::pr_triage::comment::render(&plan);
+        }
+        let plan = &plan;
+
         let outcome = match apply_plan(forge, repo, plan).await {
             Ok(()) => Outcome::of(plan),
             Err(err) => Outcome::Failed(err.to_string()),
