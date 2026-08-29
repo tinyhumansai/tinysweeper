@@ -21,8 +21,17 @@ use crate::ports::forge::{ForgeRead, ForgeWrite};
 use crate::pr_triage::gate::{self, Outcome as GateOutcome};
 use crate::pr_triage::types::TriagePlan;
 
-/// Execute one triage plan.
-pub async fn apply_plan(forge: &dyn ForgeWrite, repo: &RepoId, plan: &TriagePlan) -> Result<()> {
+/// Execute one triage plan, reporting the comment it left behind.
+///
+/// The returned id is the comment this run created or edited, when it wrote
+/// one. Callers need it because a comment created here has an id nobody else
+/// knows: without it a corrective second pass would post a *second* comment
+/// rather than editing the stale one it is correcting.
+pub async fn apply_plan(
+    forge: &dyn ForgeWrite,
+    repo: &RepoId,
+    plan: &TriagePlan,
+) -> Result<Option<u64>> {
     if !plan.add_labels.is_empty() {
         forge
             .add_labels(repo, plan.number, &plan.add_labels)
@@ -33,15 +42,14 @@ pub async fn apply_plan(forge: &dyn ForgeWrite, repo: &RepoId, plan: &TriagePlan
         forge.remove_label(repo, plan.number, label).await?;
     }
 
+    let mut comment_id = plan.comment_id;
     if let Some(body) = &plan.comment {
         // Edited in place forever where there is a previous comment, because a
         // sweep runs repeatedly by definition and a job that appends a comment
         // every pass buries the conversation it exists to help.
         match plan.comment_id {
             Some(id) => forge.update_comment(repo, id, body).await?,
-            None => {
-                forge.create_comment(repo, plan.number, body).await?;
-            }
+            None => comment_id = Some(forge.create_comment(repo, plan.number, body).await?),
         }
     }
 
@@ -53,7 +61,7 @@ pub async fn apply_plan(forge: &dyn ForgeWrite, repo: &RepoId, plan: &TriagePlan
         forge.close_pull_request(repo, plan.number).await?;
     }
 
-    Ok(())
+    Ok(comment_id)
 }
 
 /// Re-run the close gate against the pull request as it is *now*.
@@ -86,12 +94,41 @@ pub enum Recheck {
     LeaveAlone,
 }
 
+/// Which of the time-based guards a re-check may apply.
+///
+/// The second re-check — the one immediately before the close — runs *after*
+/// this run has posted or edited its own comment, and GitHub's `updated_at`
+/// counts that write. Re-applying `quiet_days` there would see the pull request
+/// as active today, drop every close, and repeat the same cycle on the next
+/// sweep: the configured quiet period would never elapse, because the bot keeps
+/// resetting it. So the second pass asks only about the things a *person* can
+/// have changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Freshness {
+    /// Everything, including age and quiet time. The pass before any writes.
+    Full,
+    /// Only what a person can have changed since: labels, draft, head, state.
+    SinceOurOwnWrites,
+}
+
 pub async fn revalidate(
     read: &dyn ForgeRead,
     config: &Config,
     repo: &RepoId,
     plan: &mut TriagePlan,
     maintainers: &[String],
+) -> Recheck {
+    revalidate_at(read, config, repo, plan, maintainers, Freshness::Full).await
+}
+
+/// [`revalidate`], with a say in which guards apply.
+pub async fn revalidate_at(
+    read: &dyn ForgeRead,
+    config: &Config,
+    repo: &RepoId,
+    plan: &mut TriagePlan,
+    maintainers: &[String],
+    freshness: Freshness,
 ) -> Recheck {
     if plan.close.is_none() {
         return Recheck::Unchanged;
@@ -132,11 +169,23 @@ pub async fn revalidate(
         return Recheck::LeaveAlone;
     }
 
+    // Zeroed on the second pass, for the reason on `Freshness`. Not a widening
+    // of the gate: the full pass already applied these against the state before
+    // any of our own writes touched it.
+    let policy = match freshness {
+        Freshness::Full => config.pr_triage.close.clone(),
+        Freshness::SinceOurOwnWrites => crate::config::types::PrClose {
+            min_age_days: 0,
+            quiet_days: 0,
+            ..config.pr_triage.close.clone()
+        },
+    };
+
     if let GateOutcome::Refuse(reason) = gate::decide(gate::Inputs {
         subject: &current,
         verdict: &plan.verdict,
         maintainers,
-        policy: &config.pr_triage.close,
+        policy: &policy,
     }) {
         plan.close = None;
         plan.close_refusal = Some(reason);
