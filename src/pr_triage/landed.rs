@@ -33,6 +33,8 @@
 //! contain enough to answer the question, and answering it anyway would mean
 //! closing somebody's pull request on a guess.
 
+use std::collections::BTreeMap;
+
 use crate::forge::types::{ChangedFile, FileStatus};
 
 /// Why a pull request could not be called superseded.
@@ -57,8 +59,10 @@ pub enum NotLanded {
     RemovedLineStillPresent,
     /// It deletes a file the base branch still has.
     FileStillThere,
-    /// A hunk adds lines with no surrounding context to locate them by.
+    /// A hunk has no surrounding context to locate it by.
     NoAnchor,
+    /// The same change appears more times in the diff than on the branch.
+    PartiallyApplied,
     /// The base branch's copy of a file could not be read.
     ///
     /// Distinct from the file being *absent*, and the distinction is the whole
@@ -79,7 +83,8 @@ impl NotLanded {
             NotLanded::AddedLineMissing => "it adds lines the base branch does not have",
             NotLanded::RemovedLineStillPresent => "it removes lines the base branch still has",
             NotLanded::FileStillThere => "it deletes a file the base branch still has",
-            NotLanded::NoAnchor => "it adds lines with no surrounding context to place them by",
+            NotLanded::NoAnchor => "it changes lines with no surrounding context to place them by",
+            NotLanded::PartiallyApplied => "only some of its repeated changes are on the base branch",
             NotLanded::BaseUnreadable => {
                 "the base branch copy of one of its files could not be read"
             }
@@ -239,6 +244,30 @@ pub fn base_lines(content: Option<&str>) -> Vec<String> {
         .collect()
 }
 
+/// How many times `run` appears as consecutive lines of `haystack`.
+///
+/// Overlapping occurrences are counted, which is the conservative direction: it
+/// can only ever make the branch look like it has *more* of the change than it
+/// does... and that is the wrong direction, so occurrences are counted
+/// non-overlapping instead — a repeated block that overlaps itself is one
+/// place, not two.
+fn occurrences(haystack: &[String], run: &[String]) -> usize {
+    if run.is_empty() || run.len() > haystack.len() {
+        return 0;
+    }
+    let mut found = 0;
+    let mut at = 0;
+    while at + run.len() <= haystack.len() {
+        if &haystack[at..at + run.len()] == run {
+            found += 1;
+            at += run.len();
+        } else {
+            at += 1;
+        }
+    }
+    found
+}
+
 /// Whether `run` appears as consecutive lines of `haystack`.
 fn contains_run(haystack: &[String], run: &[String]) -> bool {
     if run.is_empty() {
@@ -287,6 +316,20 @@ pub fn file_landed(file: &ChangedFile, base: Option<&str>) -> Result<usize, NotL
     let base = base_lines(base);
     let mut changed = 0usize;
 
+    // How many hunks share each after image. A pull request that makes the same
+    // addition in two identical blocks needs *two* occurrences on the branch;
+    // checking each hunk independently would let both match the one occurrence
+    // that is there and call a half-applied change finished.
+    let mut wanted: BTreeMap<&[String], usize> = BTreeMap::new();
+    for hunk in &hunks {
+        *wanted.entry(hunk.after.as_slice()).or_default() += 1;
+    }
+    for (image, count) in &wanted {
+        if *count > 1 && occurrences(&base, image) < *count {
+            return Err(NotLanded::PartiallyApplied);
+        }
+    }
+
     for hunk in &hunks {
         // The before image first: it is the conclusive half. A stretch that
         // still reads the way it did before the change proves the change has
@@ -301,10 +344,11 @@ pub fn file_landed(file: &ChangedFile, base: Option<&str>) -> Result<usize, NotL
         if hunk.removes > 0 && contains_run(&base, &hunk.before) {
             return Err(NotLanded::RemovedLineStillPresent);
         }
-        // A pure addition with no surviving context has nothing to locate it
-        // by, so a match would only say the lines exist *somewhere* — which is
-        // exactly the coincidence the image comparison exists to refuse.
-        if hunk.removes == 0 && hunk.anchors == 0 {
+        // Every hunk, not only the pure additions. Without context a match says
+        // the lines exist *somewhere*, which is exactly the coincidence the
+        // image comparison exists to refuse — and an empty after image (a
+        // deletion hunk with no context) is "present" in every file on earth.
+        if hunk.anchors == 0 {
             return Err(NotLanded::NoAnchor);
         }
         if !contains_run(&base, &hunk.after) {
