@@ -564,6 +564,11 @@ duplicate_path_overlap_min = 0.8
 duplicate_line_overlap_min = 0.9
 comment = true
 apply_labels = true
+# The periodic sweep. Unset means the sweep only runs from the
+# `/admin/pr-triage` button; both this and `sweep_repositories` have to be set
+# before anything happens on a timer.
+sweep_every_minutes = 0
+sweep_repositories = []
 
 # Closing somebody's pull request is this bot's second most expensive mistake,
 # after closing their issue. Same shape of gate, same defaults: it does nothing

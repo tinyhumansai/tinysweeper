@@ -946,6 +946,19 @@ pub struct PrTriage {
     pub comment: bool,
     /// Apply the `triage:` label the verdict implies.
     pub apply_labels: bool,
+    /// Run a sweep this often, in minutes. `None` or `0` means only the
+    /// `/admin/pr-triage` button runs one.
+    ///
+    /// A deployment setting, not a repository one: a `.tinysweeper.toml` is
+    /// read at a commit, and a periodic sweep has no commit to read it at.
+    pub sweep_every_minutes: Option<u32>,
+    /// The `owner/name` repositories the periodic sweep covers.
+    ///
+    /// Named explicitly rather than "every installation". A sweep reads every
+    /// open pull request's diff, so pointing it at an installation list would
+    /// make adding a repository to the GitHub App a decision about rate limit
+    /// somebody made by accident.
+    pub sweep_repositories: Vec<String>,
     /// When and whether the sweep may close a pull request.
     pub close: PrClose,
 }
