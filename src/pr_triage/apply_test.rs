@@ -418,36 +418,92 @@ async fn a_kill_switch_found_at_write_time_cancels_every_write() {
 }
 
 #[tokio::test]
-async fn the_close_is_gated_again_after_the_label_and_comment_go_out() {
-    // The writes above the close each await the forge, and a contributor can
-    // push inside that window. `MockForge` moves the head when `push` is
-    // called, which is what a synchronize delivery looks like from here.
+async fn the_second_gate_is_what_catches_a_push_during_the_writes() {
+    // The first gate cannot see this: the head moves *after* it has run and the
+    // label and comment have gone out. Driven directly, because the whole point
+    // is the window between the two calls — a test that pushed before
+    // `apply_all` would pass on the first gate alone and would still pass if
+    // the second were deleted.
     let forge = forge_with(closeable());
-    let plan = closing_plan();
+    let mut plan = closing_plan();
 
-    // The plan is valid right now.
-    let mut check = plan.clone();
+    // First gate: clean.
     assert_eq!(
-        revalidate(&forge, &config(), &repo(), &mut check, &[]).await,
+        revalidate(&forge, &config(), &repo(), &mut plan, &[]).await,
         Recheck::Unchanged
     );
-    assert!(check.close.is_some());
+    assert!(plan.close.is_some());
 
-    // Then the head moves, and the close must not go through.
+    // The writes happen, and the contributor pushes inside them.
+    let mut writes = plan.clone();
+    let close = writes.close.take();
+    apply_plan(&forge, &repo(), &writes).await.expect("writes");
     forge.push(5798, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", vec![]);
-    let reports = apply_all(&forge, &forge, &config(), &repo(), &[plan], &[]).await;
 
+    // Second gate: refuses.
+    plan.close = close;
+    revalidate_at(
+        &forge,
+        &config(),
+        &repo(),
+        &mut plan,
+        &[],
+        Freshness::SinceOurOwnWrites,
+    )
+    .await;
+
+    assert!(plan.close.is_none(), "{plan:?}");
+    assert_eq!(
+        plan.close_refusal,
+        Some("it was pushed to after the sweep read its diff")
+    );
     assert!(
         !forge
             .writes()
             .iter()
-            .any(|write| matches!(write, Write::PullRequestClosed { .. })),
-        "{:?}",
-        forge.writes()
+            .any(|write| matches!(write, Write::PullRequestClosed { .. }))
     );
+}
+
+#[tokio::test]
+async fn the_second_gate_does_not_trip_over_our_own_comment() {
+    // `quiet_days` reads `updated_at`, which our own comment just bumped. A
+    // second gate that re-applied it would drop every close and repeat the
+    // cycle forever — the bot resetting the clock it then waits on.
+    let policy = Config {
+        pr_triage: PrTriage {
+            close: PrClose {
+                quiet_days: 30,
+                ..config().pr_triage.close
+            },
+            ..config().pr_triage
+        },
+        ..config()
+    };
+    let forge = forge_with(PullRequest {
+        // Touched today, exactly as our own comment would leave it.
+        quiet_days: 0,
+        ..closeable()
+    });
+
+    let mut plan = closing_plan();
+    revalidate_at(
+        &forge,
+        &policy,
+        &repo(),
+        &mut plan,
+        &[],
+        Freshness::SinceOurOwnWrites,
+    )
+    .await;
+    assert!(plan.close.is_some(), "{plan:?}");
+
+    // The full gate, which runs before any of our writes, still applies it.
+    let mut plan = closing_plan();
+    revalidate(&forge, &policy, &repo(), &mut plan, &[]).await;
     assert_eq!(
-        reports[0].close_refusal,
-        Some("it was pushed to after the sweep read its diff")
+        plan.close_refusal,
+        Some("active within pr_triage.close.quiet_days")
     );
 }
 
