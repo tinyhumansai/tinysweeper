@@ -231,10 +231,16 @@ async fn attach_previous_comment(read: &dyn ForgeRead, repo: &RepoId, plan: &mut
     // comment of their own would otherwise be picked as "our previous comment":
     // the edit then fails, because an installation cannot edit somebody else's
     // comment, and the failure aborts the plan before its explanation or its
-    // close. The overview comment already matches on both.
+    // close.
+    //
+    // Through `findings::prior::is_own_login`, which compares against the
+    // configured `TINYSWEEPER_BOT_LOGIN` *exactly*. A prefix test would fail on
+    // a self-hosted app with a different slug — posting a fresh comment every
+    // sweep — and would simultaneously trust an account called
+    // `tinysweeper-evil[bot]`, which anyone can register.
     let Some(previous) = existing
         .iter()
-        .find(|comment| comment.body.contains(comment::MARKER) && is_own(&comment.author))
+        .find(|comment| comment.body.contains(comment::MARKER) && crate::findings::prior::is_own_login(&comment.author))
     else {
         return;
     };
@@ -244,16 +250,6 @@ async fn attach_previous_comment(read: &dyn ForgeRead, repo: &RepoId, plan: &mut
         return;
     }
     plan.comment_id = previous.id;
-}
-
-/// Whether a comment author is this bot.
-///
-/// Matched on the `[bot]` suffix and the name, because the installation's login
-/// is `tinysweeper[bot]` on some deployments and `<app-slug>[bot]` on others,
-/// and a deployment that renamed the app should still find its own comments.
-fn is_own(author: &str) -> bool {
-    let author = author.trim().to_ascii_lowercase();
-    author.starts_with("tinysweeper") && author.ends_with("[bot]")
 }
 
 /// Decide what one pull request is, cheapest question first.
