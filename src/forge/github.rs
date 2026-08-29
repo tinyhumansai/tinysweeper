@@ -616,7 +616,11 @@ impl ForgeRead for GitHubRead {
         // must not do is escape the route, which `RepoId::parse` and GitHub's
         // own ref rules already prevent.
         let route = format!("/repos/{}/{}/commits/{branch}", repo.owner, repo.name);
-        match self.client.get::<serde_json::Value, _, ()>(&route, None).await {
+        match self
+            .client
+            .get::<serde_json::Value, _, ()>(&route, None)
+            .await
+        {
             Ok(commit) => Ok(commit["sha"].as_str().map(str::to_string)),
             // A pull request can outlive the branch it targets, and that is an
             // answer rather than a failure.
@@ -800,23 +804,36 @@ impl ForgeRead for GitHubRead {
     }
 
     async fn comments(&self, repo: &RepoId, number: u64) -> Result<Vec<IssueComment>> {
-        let page = self
+        // Read to exhaustion, like `review_comments` beside it. Truncating at
+        // the first page is not a smaller answer here, it is a wrong one: the
+        // callers that look for tinysweeper's own durable comment conclude it
+        // does not exist and post a second — so on a pull request with a busy
+        // conversation, every sweep would append another one.
+        let mut page = self
             .client
             .issues(&repo.owner, &repo.name)
             .list_comments(number)
+            .per_page(100)
             .send()
             .await
             .map_err(api)?;
 
-        Ok(page
-            .items
-            .into_iter()
-            .map(|c| IssueComment {
-                id: Some(*c.id),
-                author: c.user.login,
-                body: c.body.unwrap_or_default(),
-            })
-            .collect())
+        let mut comments = Vec::new();
+        loop {
+            for c in &page.items {
+                comments.push(IssueComment {
+                    id: Some(*c.id),
+                    author: c.user.login.clone(),
+                    body: c.body.clone().unwrap_or_default(),
+                });
+            }
+            match self.client.get_page(&page.next).await.map_err(api)? {
+                Some(next) => page = next,
+                None => break,
+            }
+        }
+
+        Ok(comments)
     }
 
     async fn review_comments(&self, repo: &RepoId, number: u64) -> Result<Vec<ReviewComment>> {
