@@ -568,6 +568,23 @@ async fn triage_and_apply(
     Ok(outcome.plan)
 }
 
+/// The numbers of a repository's open pull requests, capped.
+///
+/// A thin wrapper over the port so the two manual buttons do not each grow
+/// their own idea of what "open" means.
+async fn open_numbers(
+    read: &dyn crate::ports::forge::ForgeRead,
+    repo: &RepoId,
+    limit: usize,
+) -> Result<Vec<u64>> {
+    Ok(read
+        .open_pull_requests(repo, limit)
+        .await?
+        .into_iter()
+        .map(|pull_request| pull_request.number)
+        .collect())
+}
+
 /// The manual review path's way into the worker.
 ///
 /// Everything a webhook delivery supplies and an operator cannot — the
@@ -593,7 +610,10 @@ impl FullReviews for ManualDispatch {
 
         let numbers = match number {
             Some(number) => vec![number],
-            None => forge.open_pull_requests(repo, MAX_MANUAL_REVIEWS).await?,
+            // Through the port, which is also where pull request triage reads
+            // them: one definition of "the open pull requests", so the button
+            // and the sweep can never disagree about what is open.
+            None => open_numbers(&forge, repo, MAX_MANUAL_REVIEWS).await?,
         };
 
         let mut queued = Vec::new();
@@ -653,7 +673,7 @@ impl Merges for MergeDispatch {
 
         let numbers = match number {
             Some(number) => vec![number],
-            None => read.open_pull_requests(repo, MAX_MANUAL_REVIEWS).await?,
+            None => open_numbers(&read, repo, MAX_MANUAL_REVIEWS).await?,
         };
 
         let mut reports = Vec::new();
