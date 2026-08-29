@@ -174,13 +174,20 @@ pub fn inspect_diff(files: &[ChangedFile], author_hosts: &[String]) -> Finding {
                     .collect::<Vec<_>>()
             })
             .collect();
-        let before = finding.signals.len();
 
-        inspect_lines(&added, author_hosts, touches_code, &mut finding);
+        // Matched into a *per-file* finding and merged afterwards. Comparing
+        // the size of the shared signal set before and after would miss the
+        // second file to match a signal the first already raised — and then
+        // name only the first in the comment, which is where a human goes to
+        // look.
+        let mut mine = Finding::default();
+        inspect_lines(&added, author_hosts, touches_code, &mut mine);
 
-        if finding.signals.len() != before && finding.paths.len() < MAX_PATHS {
+        if !mine.signals.is_empty() && finding.paths.len() < MAX_PATHS {
             finding.paths.insert(file.path.clone());
         }
+        finding.signals.extend(mine.signals);
+        finding.credentials.extend(mine.credentials);
     }
 
     finding

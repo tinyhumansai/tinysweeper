@@ -8,6 +8,10 @@ use super::*;
 use crate::config::types::PrClose;
 use crate::forge::types::PullRequest;
 
+/// The head the fixture pull request is at. A close names it, because the
+/// verdict is only about the diff at that commit.
+const HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
 fn policy() -> PrClose {
     PrClose {
         enabled: true,
@@ -24,6 +28,7 @@ fn subject() -> PullRequest {
         number: 5798,
         title: "docs: fix the Rust version".into(),
         author: "contributor".into(),
+        head_sha: HEAD.into(),
         age_days: 30,
         quiet_days: 30,
         ..PullRequest::default()
@@ -53,6 +58,7 @@ fn a_duplicate_that_clears_every_guard_closes() {
         decide_with(&subject(), &duplicate(), &policy()),
         Outcome::Close(ClosePlan {
             number: 5798,
+            head_sha: HEAD.into(),
             dry_run: false
         })
     );
@@ -70,6 +76,7 @@ fn dry_run_reaches_the_plan_rather_than_being_a_refusal() {
         decide_with(&subject(), &duplicate(), &policy),
         Outcome::Close(ClosePlan {
             number: 5798,
+            head_sha: HEAD.into(),
             dry_run: true
         })
     );
@@ -206,6 +213,7 @@ fn a_superseded_pull_request_closes_on_the_same_guards() {
         decide_with(&subject(), &verdict, &policy()),
         Outcome::Close(ClosePlan {
             number: 5798,
+            head_sha: HEAD.into(),
             dry_run: false
         })
     );

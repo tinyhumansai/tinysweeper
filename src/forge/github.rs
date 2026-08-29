@@ -374,11 +374,21 @@ fn pull_request_from(
         head_sha: head.sha,
         // `head.repo` differing from `base.repo` is what makes a pull
         // request a fork one, and that changes which token can post.
+        //
+        // Both halves of the name, not only the owner: an organisation's own
+        // fork — `org/fork` targeting `org/upstream` — shares the owner and is
+        // still a fork, and comparing only the login calls it a branch.
         from_fork: head
             .repo
             .as_ref()
-            .and_then(|r| r.owner.as_ref().map(|o| o.login.clone()))
-            .map(|owner| owner != repo.owner)
+            .map(|head_repo| {
+                let owner = head_repo
+                    .owner
+                    .as_ref()
+                    .map(|o| o.login.as_str())
+                    .unwrap_or_default();
+                owner != repo.owner || head_repo.name != repo.name
+            })
             .unwrap_or(false),
         labels: pr
             .labels
