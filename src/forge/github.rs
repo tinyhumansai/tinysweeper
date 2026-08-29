@@ -321,6 +321,13 @@ fn issue_from_json(raw: &serde_json::Value) -> Issue {
     }
 }
 
+/// How many pages of issue comments one read will walk.
+///
+/// A hundred per page, so ten thousand comments — far past any real
+/// conversation, and low enough that a pathological thread cannot spend a
+/// sweep's whole rate-limit budget on one pull request.
+const MAX_COMMENT_PAGES: usize = 100;
+
 /// Whole days between `then` (a Unix timestamp) and now.
 ///
 /// `None` — a timestamp GitHub did not send — is **zero days**, not an error
@@ -819,6 +826,7 @@ impl ForgeRead for GitHubRead {
             .map_err(api)?;
 
         let mut comments = Vec::new();
+        let mut pages = 0;
         loop {
             for c in &page.items {
                 comments.push(IssueComment {
@@ -826,6 +834,19 @@ impl ForgeRead for GitHubRead {
                     author: c.user.login.clone(),
                     body: c.body.clone().unwrap_or_default(),
                 });
+            }
+            pages += 1;
+            // Bounded, and an *error* rather than a short list at the bound.
+            // Callers read this to decide whether their own durable comment
+            // exists, and a truncated answer would read as "it does not" — so
+            // a thousand-comment thread would collect one new bot comment per
+            // sweep. Failing loudly is the only safe way to be short here.
+            if pages >= MAX_COMMENT_PAGES && page.next.is_some() {
+                return Err(Error::Forge(format!(
+                    "{repo}#{number} has more than {} pages of comments; \
+                     refusing to act on a partial list",
+                    MAX_COMMENT_PAGES
+                )));
             }
             match self.client.get_page(&page.next).await.map_err(api)? {
                 Some(next) => page = next,

@@ -173,9 +173,14 @@ pub async fn revalidate_at(
         .as_ref()
         .is_some_and(|close| close.head_sha != current.head_sha)
     {
+        // The whole plan, not only the close. Every verdict here is read off a
+        // diff, so a moved head makes the *label* stale too — and applying it
+        // would retire the pull request's current `triage:` label in favour of
+        // a conclusion about a revision that is no longer there, then post a
+        // comment asserting it.
         plan.close = None;
         plan.close_refusal = Some("it was pushed to after the sweep read its diff");
-        return Recheck::Unchanged;
+        return Recheck::LeaveAlone;
     }
 
     // Zeroed on the second pass, for the reason on `Freshness`. Not a widening
@@ -332,7 +337,14 @@ pub async fn apply_all(
                             // posted said a close was coming, so it is corrected
                             // rather than left standing — edited in place, using
                             // the id the write above returned.
-                            if let Some(body) = crate::pr_triage::comment::render(&plan) {
+                            // Only where a comment actually went out. With
+                            // `pr_triage.comment` off there is nothing to
+                            // correct, and rendering one here would post the
+                            // first comment of the run to say a close did not
+                            // happen.
+                            if let (Some(_), Some(body)) =
+                                (plan.comment_id, crate::pr_triage::comment::render(&plan))
+                            {
                                 let corrected = TriagePlan {
                                     comment: Some(body),
                                     close: None,
