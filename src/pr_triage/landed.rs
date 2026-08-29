@@ -132,6 +132,15 @@ pub struct Hunk {
     /// nothing but context, and context is still on the branch whether or not
     /// the change landed.
     pub removes: usize,
+    /// Context lines before the first changed line in the hunk.
+    pub leading: usize,
+    /// Context lines after the last changed line.
+    ///
+    /// Kept apart from `leading` because a pure addition is only judgeable when
+    /// it has both. With context on one side only, the before image is not
+    /// *broken* by the change — it is just a prefix that still appears — and
+    /// the hunk cannot say which of two identical blocks it meant.
+    pub trailing: usize,
     /// How many context lines survived normalisation.
     ///
     /// Blank context is dropped, so a hunk can end up with none — and a pure
@@ -161,24 +170,33 @@ pub fn hunks(patch: &str) -> Vec<Hunk> {
         }
     };
 
+    let mut in_hunk = false;
+
     for line in patch.lines() {
         if line.starts_with("@@") {
             push(&mut current, &mut out);
+            in_hunk = true;
             continue;
         }
         if line.starts_with('\\') {
             continue;
         }
         match line.as_bytes().first() {
-            Some(b'+') if !line.starts_with("+++") => {
+            // The `+++`/`---` guard applies only outside a hunk. Inside one,
+            // `++counter;` is a real added line whose diff form starts `+++`,
+            // and discarding it as a header would drop content that is the
+            // whole difference between two versions.
+            Some(b'+') if in_hunk || !line.starts_with("+++") => {
                 if push_normalised(&line[1..], &mut current.after) {
                     current.changed += 1;
+                    current.trailing = 0;
                 }
             }
-            Some(b'-') if !line.starts_with("---") => {
+            Some(b'-') if in_hunk || !line.starts_with("---") => {
                 if push_normalised(&line[1..], &mut current.before) {
                     current.changed += 1;
                     current.removes += 1;
+                    current.trailing = 0;
                 }
             }
             // Context, and the reason this module can say anything about
@@ -191,6 +209,11 @@ pub fn hunks(patch: &str) -> Vec<Hunk> {
                     current.before.push(normalised.clone());
                     current.after.push(normalised);
                     current.anchors += 1;
+                    if current.changed == 0 {
+                        current.leading += 1;
+                    } else {
+                        current.trailing += 1;
+                    }
                 }
             }
             // A `diff --git`/`index` header between hunks. Not content.
