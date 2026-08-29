@@ -25,6 +25,7 @@
 
 use std::collections::BTreeSet;
 
+use crate::council::agree::LINE_TOLERANCE;
 use crate::error::Result;
 use crate::forge::types::RepoId;
 use crate::ports::forge::ForgeRead;
@@ -44,11 +45,31 @@ const STATE_KEY: &str = "state v=1 sha=";
 /// suppress findings.
 const BOT_LOGIN_ENV: &str = "TINYSWEEPER_BOT_LOGIN";
 
+/// Where an earlier comment of ours sits in the file.
+///
+/// The fingerprint says *whether* two findings are the same; this says *where*
+/// the last one was, which is what lets the answer survive the model rewording
+/// its own rule id. See [`PriorReview::covers`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PriorAnchor {
+    /// The file the comment is on.
+    pub path: String,
+    /// First line it covers, in the revision it was written against.
+    pub start: u64,
+    /// Last line it covers, inclusive.
+    pub end: u64,
+}
+
 /// Everything an earlier cycle left behind on the pull request.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PriorReview {
     /// Fingerprints of findings already posted as inline comments.
     pub posted: BTreeSet<String>,
+    /// Where those comments sit, for the findings GitHub still places.
+    ///
+    /// Only comments carrying one of our fingerprint markers contribute, so a
+    /// reply in a thread does not widen what a single finding suppresses.
+    pub anchors: Vec<PriorAnchor>,
     /// Titles of those findings, in the order they were found.
     ///
     /// This is prompt layer 4: what the model said last time, so it can verify
@@ -62,6 +83,37 @@ impl PriorReview {
     /// Whether this finding has already been posted on the pull request.
     pub fn already_posted(&self, identity: &str) -> bool {
         self.posted.contains(identity)
+    }
+
+    /// Whether an earlier comment of ours already sits on `range` in `path`.
+    ///
+    /// The fingerprint is the strict answer and this is the loose one, and the
+    /// loose one is the one that holds across pushes. `Finding::fingerprint`
+    /// hashes the model-authored `rule`, and a model asked the same question
+    /// twice writes `discarded-error`, then `swallowed-error`, then
+    /// `unhandled-error` — three identities for one defect, all of them posted.
+    /// `council::agree::corroborates` already refused to trust `rule` for
+    /// exactly this reason; cross-push dedupe now refuses for the same one.
+    ///
+    /// Deliberately blind to the lane, unlike `corroborates`: two lanes
+    /// reporting one defect on one line is a duplicate to the author reading
+    /// the thread, whatever it is to the pipeline that produced it.
+    ///
+    /// Over-suppression is bounded by design. Dedupe runs *after* the check-run
+    /// conclusion in `app::review::lane_proposal`, so a finding hidden here
+    /// still fails its lane, still blocks the gate, and still appears in the
+    /// summary. The cost of a false positive is a comment the author has to
+    /// find in the summary; the cost of a false negative is the fourth copy of
+    /// a comment they answered three pushes ago.
+    pub fn covers(&self, path: &str, range: Option<(u64, u64)>) -> bool {
+        let Some((start, end)) = range else {
+            return false;
+        };
+        self.anchors.iter().any(|anchor| {
+            anchor.path == path
+                && start <= anchor.end.saturating_add(LINE_TOLERANCE)
+                && end >= anchor.start.saturating_sub(LINE_TOLERANCE)
+        })
     }
 }
 
@@ -117,6 +169,20 @@ pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<Pr
                 && let Some(title) = title_in(&comment.body)
             {
                 prior.titles.push(title);
+            }
+            // Recorded per comment rather than per fingerprint: the same
+            // finding re-posted at a second location has already annoyed the
+            // author in both places, and both should stay quiet.
+            //
+            // A comment GitHub no longer attaches to a line — outdated, or
+            // rebased away — contributes no anchor. Its fingerprint still
+            // suppresses; it simply cannot say where it was.
+            if let Some(line) = comment.line {
+                prior.anchors.push(PriorAnchor {
+                    path: comment.path.clone(),
+                    start: comment.start_line.unwrap_or(line).min(line),
+                    end: line,
+                });
             }
         }
     }

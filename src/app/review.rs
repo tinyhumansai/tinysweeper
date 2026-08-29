@@ -484,6 +484,7 @@ pub async fn review_with_retrieval(
             outcome,
             &diffs,
             &suppressed,
+            &prior,
             &prior_titles,
         ));
     }
@@ -734,7 +735,18 @@ fn suppressed_fingerprints(
 }
 
 /// Whether this finding is one already on the pull request.
-fn already_posted(finding: &Finding, suppressed: &BTreeSet<String>) -> bool {
+///
+/// Two answers, and the second is the one that does the work. The fingerprint
+/// match is exact and cheap, but it hashes the model-authored `rule`, so it
+/// only fires when the model happened to name the defect the same way twice.
+/// On a busy pull request it mostly does not: `tinyhumansai/backend#1295` drew
+/// six reviews and eighty-nine comments with eighty-eight distinct
+/// fingerprints, including one line that collected four comments with the same
+/// title and the same suggested patch under four different rule ids.
+///
+/// So a finding is also already posted when a comment of ours already sits on
+/// the lines it points at. See [`PriorReview::covers`] for why that is safe.
+fn already_posted(finding: &Finding, suppressed: &BTreeSet<String>, prior: &PriorReview) -> bool {
     finding
         .identity
         .as_deref()
@@ -743,6 +755,7 @@ fn already_posted(finding: &Finding, suppressed: &BTreeSet<String>) -> bool {
         // fingerprint context. Accept them during the migration so existing
         // unresolved threads are not duplicated on their next push.
         || suppressed.contains(&finding.fingerprint(&finding.title))
+        || prior.covers(&finding.path, finding.range())
 }
 
 /// The prior findings this cycle did not report as fixed, plus what it raised.
@@ -789,6 +802,7 @@ fn lane_proposal(
     outcome: LaneOutcome,
     diffs: &[FileDiff],
     suppressed: &BTreeSet<String>,
+    prior: &PriorReview,
     prior_titles: &[String],
 ) -> LaneProposal {
     let gate = config.severity_gate();
@@ -850,7 +864,7 @@ fn lane_proposal(
     let raised: Vec<String> = findings.iter().map(|f| f.title.clone()).collect();
 
     let before = findings.len();
-    findings.retain(|f| !already_posted(f, suppressed));
+    findings.retain(|f| !already_posted(f, suppressed, prior));
     let deduped = before - findings.len();
 
     // Most severe first, so the cap keeps what matters when it bites.
