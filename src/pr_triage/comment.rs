@@ -67,15 +67,18 @@ pub fn render(plan: &TriagePlan) -> Option<String> {
         }
         Verdict::Superseded {
             base_ref,
+            base_sha,
             lines_checked,
         } => {
             let _ = write!(
                 body,
                 "Every line this changes is already on `{base_ref}`.\n\n\
-                 tinysweeper compared {lines_checked} changed lines against the \
-                 current base branch: each block this adds is already there, and \
-                 each block it removes is already gone. Applying this pull request \
-                 would change nothing.\n",
+                 tinysweeper compared {lines_checked} changed lines against \
+                 `{base_ref}` at `{base_sha}`: each block this adds is already \
+                 there, with its surrounding context, and each block it removes \
+                 is already gone. Applying this pull request would change \
+                 nothing. The commit is named because the branch will have moved \
+                 by the time you read this.\n",
             );
         }
         // Reachable now: a flagged pull request that is otherwise worth
@@ -223,6 +226,7 @@ mod tests {
             42,
             Verdict::Superseded {
                 base_ref: "main".into(),
+                base_sha: "abc1234".into(),
                 lines_checked: 12,
             },
         );

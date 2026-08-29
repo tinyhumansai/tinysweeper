@@ -90,8 +90,12 @@ impl Verdict {
             ),
             Verdict::Superseded {
                 base_ref,
+                base_sha,
                 lines_checked,
-            } => format!("{lines_checked} lines already on `{base_ref}`"),
+            } => format!(
+                "{lines_checked} lines already on `{base_ref}` at {}",
+                short(base_sha)
+            ),
             Verdict::Review { because } => because.to_string(),
         }
     }
@@ -140,6 +144,11 @@ impl Flag {
     pub fn labels() -> [&'static str; 1] {
         [Flag::Promotional.label()]
     }
+}
+
+/// The first seven characters of a commit, as git renders one.
+fn short(sha: &str) -> &str {
+    &sha[..sha.len().min(7)]
 }
 
 /// A close that passed every deterministic guard.
@@ -230,6 +239,7 @@ mod tests {
             },
             Verdict::Superseded {
                 base_ref: "main".into(),
+                base_sha: "abc1234def".into(),
                 lines_checked: 9,
             },
             Verdict::Review { because: "-" },
@@ -250,6 +260,7 @@ mod tests {
         assert!(
             Verdict::Superseded {
                 base_ref: "main".into(),
+                base_sha: "abc1234def".into(),
                 lines_checked: 9,
             }
             .is_closeable()

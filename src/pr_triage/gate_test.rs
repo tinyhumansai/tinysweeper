@@ -207,6 +207,7 @@ fn the_original_must_be_older_even_if_the_scorer_says_otherwise() {
 fn a_superseded_pull_request_closes_on_the_same_guards() {
     let verdict = Verdict::Superseded {
         base_ref: "main".into(),
+        base_sha: "abc1234".into(),
         lines_checked: 12,
     };
     assert_eq!(
