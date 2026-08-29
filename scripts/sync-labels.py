@@ -26,7 +26,7 @@ import tomllib
 
 # Only these prefixes are ever considered for pruning. Everything else is
 # somebody else's, including GitHub's own defaults.
-OWNED_PREFIXES = ("priority: ", "severity: ", "triage: ", "tinysweeper:")
+OWNED_PREFIXES = ("priority: ", "severity: ", "triage: ", "flag: ", "tinysweeper:")
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 LABELS = HERE / "presets" / "labels.toml"

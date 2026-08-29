@@ -87,7 +87,10 @@ fn marketing_language_beside_real_code_is_not_flagged() {
         "@@\n+// Our platform's fastest path: skip the allocation entirely.\n+fn fast() {}\n",
     )];
     let finding = inspect_diff(&files, &[]);
-    assert!(!finding.signals.contains(&Signal::MarketingCopy), "{finding:?}");
+    assert!(
+        !finding.signals.contains(&Signal::MarketingCopy),
+        "{finding:?}"
+    );
 }
 
 #[test]

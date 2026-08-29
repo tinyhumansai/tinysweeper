@@ -159,7 +159,8 @@ mod tests {
             }),
             ..plan()
         };
-        let body = render(&plan, "Same crash as the earlier report.", None, None).expect("a comment");
+        let body =
+            render(&plan, "Same crash as the earlier report.", None, None).expect("a comment");
         assert!(body.contains("duplicate of #7"));
         assert!(
             body.contains("reopen"),

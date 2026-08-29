@@ -130,8 +130,7 @@ pub async fn sweep(
                     &mut budget,
                 )
                 .await;
-                let mut plan =
-                    build_plan(config, pull_request, verdict, &changed, maintainers);
+                let mut plan = build_plan(config, pull_request, verdict, &changed, maintainers);
                 // Only for a pull request that is actually getting a comment,
                 // so the extra request is spent on the handful the sweep flags
                 // rather than on every pull request it reads.
@@ -273,7 +272,8 @@ pub fn build_plan(
     // per pull request for one signal out of five, and the signal is only ever
     // corroborating anyway.
     if config.pr_triage.flag_promotional {
-        let finding = promo::inspect_diff(changed, &promo::author_hosts(&pull_request.author, None));
+        let finding =
+            promo::inspect_diff(changed, &promo::author_hosts(&pull_request.author, None));
         if finding.is_promotional() {
             plan.flags.push((Flag::Promotional, finding.summary()));
         }

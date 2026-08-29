@@ -226,11 +226,7 @@ fn inspect_lines(
         // Weighed against the rest of the change: a superlative in a comment
         // beside real code is somebody being enthusiastic, where the same
         // sentence in a docs-only diff is a paragraph of copy.
-        if !touches_code
-            && MARKETING_WORDS
-                .iter()
-                .any(|phrase| lower.contains(phrase))
-        {
+        if !touches_code && MARKETING_WORDS.iter().any(|phrase| lower.contains(phrase)) {
             finding.signals.insert(Signal::MarketingCopy);
         }
     }
@@ -247,7 +243,9 @@ fn credential_name(line: &str) -> Option<String> {
     line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
         .find(|word| {
             word.len() > 4
-                && word.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
                 && SUFFIXES.iter().any(|suffix| word.ends_with(suffix))
         })
         .map(str::to_string)
