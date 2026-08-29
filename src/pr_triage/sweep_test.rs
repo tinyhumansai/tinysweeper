@@ -122,7 +122,7 @@ async fn the_later_of_two_identical_pull_requests_is_closed_as_a_duplicate() {
 async fn a_change_already_on_the_base_branch_is_superseded() {
     let files = vec![changed(
         "src/lib.rs",
-        "@@ -1,1 +1,4 @@\n mod top;\n+fn alpha() {}\n+fn beta() {}\n+fn gamma() {}\n",
+        "@@ -1,2 +1,5 @@\n mod top;\n+fn alpha() {}\n+fn beta() {}\n+fn gamma() {}\n mod tail;\n",
     )];
     let forge = MockForge::new()
         .with_pull_request(pull(7, "carol"), files, vec![])
@@ -130,7 +130,7 @@ async fn a_change_already_on_the_base_branch_is_superseded() {
         .with_file(
             "main",
             "src/lib.rs",
-            "mod top;\nfn alpha() {}\nfn beta() {}\nfn gamma() {}\n",
+            "mod top;\nfn alpha() {}\nfn beta() {}\nfn gamma() {}\nmod tail;\n",
         );
 
     let outcome = run(&forge, &config(), None).await;
@@ -154,11 +154,11 @@ async fn a_change_already_on_the_base_branch_is_superseded() {
 async fn a_pull_request_that_has_not_landed_is_worth_reading_and_says_why() {
     let files = vec![changed(
         "src/lib.rs",
-        "@@ -1,1 +1,4 @@\n mod top;\n+fn alpha() {}\n+fn beta() {}\n+fn gamma() {}\n",
+        "@@ -1,2 +1,5 @@\n mod top;\n+fn alpha() {}\n+fn beta() {}\n+fn gamma() {}\n mod tail;\n",
     )];
     let forge = MockForge::new()
         .with_pull_request(pull(7, "carol"), files, vec![])
-        .with_file("main", "src/lib.rs", "mod top;\nfn something_else() {}\n");
+        .with_file("main", "src/lib.rs", "mod top;\nfn something_else() {}\nmod tail;\n");
 
     let outcome = run(&forge, &config(), None).await;
     assert_eq!(
@@ -278,8 +278,8 @@ async fn the_base_read_budget_bounds_the_whole_sweep() {
         ..config()
     };
     let files = vec![
-        changed("a.rs", "@@ -1,1 +1,4 @@\n top\n+alpha\n+beta\n+gamma\n"),
-        changed("b.rs", "@@ -1,1 +1,4 @@\n head\n+delta\n+epsilon\n+zeta\n"),
+        changed("a.rs", "@@ -1,2 +1,5 @@\n top\n+alpha\n+beta\n+gamma\n end\n"),
+        changed("b.rs", "@@ -1,2 +1,5 @@\n head\n+delta\n+epsilon\n+zeta\n tail\n"),
     ];
     let forge = MockForge::new().with_pull_request(pull(7, "carol"), files, vec![]);
 
