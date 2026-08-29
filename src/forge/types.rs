@@ -81,6 +81,17 @@ pub struct PullRequest {
     pub merged: bool,
     /// Approving reviews currently on it.
     pub approvals: u32,
+    /// Age in days. Kept as a plain number, exactly as on
+    /// [`Issue`](crate::forge::types::Issue), so the offline mock needs no
+    /// clock and the age guards in `crate::pr_triage::gate` stay trivially
+    /// testable. An adapter that cannot say reports `0`, which only ever makes
+    /// a guard stricter.
+    pub age_days: u32,
+    /// Days since the last human activity on it, by the same rule.
+    ///
+    /// `0` from an adapter that cannot say, which reads as "active today" and
+    /// therefore refuses a close rather than allowing one.
+    pub quiet_days: u32,
 }
 
 /// A file changed by a pull request.
