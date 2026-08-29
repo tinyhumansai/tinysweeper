@@ -243,3 +243,17 @@ fn making_the_same_edit_twice_is_not_the_same_as_making_it_once() {
     assert_eq!(overlap(&once, &twice).edits, 0.5);
     assert_eq!(duplicate_of(&twice, &[once], 0.8, 0.9), None);
 }
+
+#[test]
+fn a_backport_is_not_a_duplicate_of_the_change_it_backports() {
+    // Identical diffs, different targets. The backport still has to land on the
+    // release branch, and closing it loses it.
+    let to_main = readme_fix(1);
+    let to_release = Shape {
+        base_ref: "release/2.1".into(),
+        ..readme_fix(2)
+    };
+
+    assert_eq!(overlap(&to_main, &to_release).edits, 1.0);
+    assert_eq!(duplicate_of(&to_release, &[to_main], 0.8, 0.9), None);
+}
