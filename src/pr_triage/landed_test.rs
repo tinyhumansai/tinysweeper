@@ -287,3 +287,41 @@ fn a_hunk_with_no_context_at_all_is_refused_whichever_way_it_changes() {
         Err(NotLanded::NoAnchor)
     );
 }
+
+#[test]
+fn a_line_that_looks_like_a_diff_header_is_content_inside_a_hunk() {
+    // `++counter;` renders as `+++counter;` in a unified diff. Discarding it as
+    // a file header drops the line that is the whole difference.
+    let got = hunks("--- a/x.c\n+++ b/x.c\n@@ -1,3 +1,3 @@\n if (n) {\n---counter;\n+++counter;\n }\n");
+    assert_eq!(got.len(), 1);
+    assert!(got[0].after.contains(&"++counter;".to_string()), "{got:?}");
+    assert!(got[0].before.contains(&"--counter;".to_string()), "{got:?}");
+}
+
+#[test]
+fn an_addition_into_one_of_two_identical_blocks_names_which() {
+    // The base has the addition in the *second* block. The after image matches
+    // there, but the first block still reads the old way — and that is the
+    // before image, still on the branch.
+    let file = changed(
+        "config.rs",
+        "@@ -1,2 +1,3 @@\n let block = [\n+    \"new\",\n ];\n",
+    );
+    let second_only = "let block = [\n];\nlet block = [\n    \"new\",\n];\n";
+    assert_eq!(
+        file_landed(&file, Some(second_only)),
+        Err(NotLanded::RemovedLineStillPresent)
+    );
+}
+
+#[test]
+fn a_pure_addition_at_a_file_boundary_is_refused_rather_than_guessed_at() {
+    // Context on one side only. The before image is a prefix that survives the
+    // change rather than something the change breaks, so it proves nothing, and
+    // the hunk cannot say which of two identical blocks it meant.
+    let file = changed("a.rs", "@@ -1,1 +1,3 @@\n top\n+alpha\n+beta\n");
+    assert_eq!(
+        file_landed(&file, Some("top\nalpha\nbeta\n")),
+        Err(NotLanded::NoAnchor)
+    );
+}
