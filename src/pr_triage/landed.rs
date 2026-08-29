@@ -67,8 +67,28 @@ impl NotLanded {
             NotLanded::TooSmall => "the change is too small for a match to mean anything",
             NotLanded::AddedLineMissing => "it adds lines the base branch does not have",
             NotLanded::RemovedLineStillPresent => "it removes lines the base branch still has",
+            NotLanded::BaseUnreadable => {
+                "the base branch copy of one of its files could not be read"
+            }
         }
     }
+}
+
+/// A file as the base branch has it.
+///
+/// Three states, not two, and the third is why this type exists. "Not there"
+/// and "we could not find out" are opposite answers on the deletion path: a
+/// pull request that removes a file is superseded if the file is already gone,
+/// and completely unjudged if the forge simply would not say. Collapsing them
+/// into `Option<String>` is how a rate limit closes somebody's pull request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Base {
+    /// The forge served the file. Carries its text.
+    Present(String),
+    /// The forge answered, and the file is not on the branch.
+    Absent,
+    /// The forge did not answer: an error, a rate limit, a permission failure.
+    Unreadable,
 }
 
 /// One hunk of a diff, as the two versions of the text it describes.
@@ -248,15 +268,15 @@ pub fn file_landed(file: &ChangedFile, base: Option<&str>) -> Result<usize, NotL
 
 /// Whether a whole pull request's change is already on the base branch.
 ///
-/// `bases` supplies each changed file's base-branch content in the same order
-/// as `files`; a caller that could not read one passes `None`, which is the
-/// same as the file not existing there.
+/// `bases` supplies each changed file's base-branch state in the same order as
+/// `files`; a caller that could not read one passes [`Base::Unreadable`], which
+/// refuses the whole pull request rather than being read as an absent file.
 ///
 /// Returns the number of substantive lines checked, which the verdict carries
 /// so a maintainer reading the comment knows how much evidence is behind it.
 pub fn landed(
     files: &[ChangedFile],
-    bases: &[Option<String>],
+    bases: &[Base],
     min_lines: usize,
 ) -> Result<usize, NotLanded> {
     // A short `bases` would let `zip` drop the tail of `files` silently, and a
@@ -269,7 +289,15 @@ pub fn landed(
 
     let mut lines = 0usize;
     for (file, base) in files.iter().zip(bases) {
-        lines += file_landed(file, base.as_deref())?.line_count();
+        let base = match base {
+            Base::Present(content) => Some(content.as_str()),
+            Base::Absent => None,
+            // Refused rather than guessed at, and refused for the whole pull
+            // request: one file we could not read is one file whose change we
+            // cannot say landed.
+            Base::Unreadable => return Err(NotLanded::BaseUnreadable),
+        };
+        lines += file_landed(file, base)?;
     }
 
     if lines == 0 {
