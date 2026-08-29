@@ -72,21 +72,35 @@ pub async fn apply_plan(forge: &dyn ForgeWrite, repo: &RepoId, plan: &TriagePlan
 ///
 /// A read that *fails* drops the close too: "we could not check" and "it is no
 /// longer allowed" are the same answer when the action cannot be undone.
+/// What a live re-check concluded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recheck {
+    /// Nothing changed that matters. Apply the plan as planned.
+    Unchanged,
+    /// A human has since switched the bot off on this item. Write **nothing**.
+    ///
+    /// Distinct from a dropped close, and it has to be: the kill switch means
+    /// "leave this alone", so a run that noticed it and still applied the
+    /// labels and the comment would honour the letter of the setting and none
+    /// of its meaning.
+    LeaveAlone,
+}
+
 pub async fn revalidate(
     read: &dyn ForgeRead,
     config: &Config,
     repo: &RepoId,
     plan: &mut TriagePlan,
     maintainers: &[String],
-) {
+) -> Recheck {
     if plan.close.is_none() {
-        return;
+        return Recheck::Unchanged;
     }
 
     let Ok(current) = read.pull_request(repo, plan.number).await else {
         plan.close = None;
         plan.close_refusal = Some("its current state could not be re-checked before closing");
-        return;
+        return Recheck::Unchanged;
     };
 
     // The evidence has to still describe the pull request. Every verdict here
@@ -100,7 +114,7 @@ pub async fn revalidate(
     {
         plan.close = None;
         plan.close_refusal = Some("it was pushed to after the sweep read its diff");
-        return;
+        return Recheck::Unchanged;
     }
 
     // The kill switch again, against the labels as they are now. `gate::decide`
@@ -115,7 +129,7 @@ pub async fn revalidate(
     }) {
         plan.close = None;
         plan.close_refusal = Some("it carries a label that switches the bot off");
-        return;
+        return Recheck::LeaveAlone;
     }
 
     if let GateOutcome::Refuse(reason) = gate::decide(gate::Inputs {
@@ -127,6 +141,8 @@ pub async fn revalidate(
         plan.close = None;
         plan.close_refusal = Some(reason);
     }
+
+    Recheck::Unchanged
 }
 
 /// Execute every plan in a sweep, reporting what happened to each.
@@ -152,31 +168,64 @@ pub async fn apply_all(
 
     for plan in plans {
         let mut plan = plan.clone();
-        revalidate(read, config, repo, &mut plan, maintainers).await;
+        let recheck = revalidate(read, config, repo, &mut plan, maintainers).await;
+
+        if recheck == Recheck::LeaveAlone {
+            reports.push(Report::of(&plan, Outcome::LeftAlone));
+            continue;
+        }
+
         // Re-rendered, because the comment says what was decided and the
         // decision may have just changed. "Closing it on that basis" above a
         // pull request that stayed open is worse than no comment at all.
         if plan.comment.is_some() {
             plan.comment = crate::pr_triage::comment::render(&plan);
         }
-        let plan = &plan;
 
-        let outcome = match apply_plan(forge, repo, plan).await {
-            Ok(()) => Outcome::of(plan),
+        // The label and the comment go out first, with the close held back —
+        // then the state is re-read one last time. Each of those writes awaits
+        // the forge, and a contributor can push or a maintainer can intervene
+        // inside that window; the close is the one write that cannot be undone,
+        // so it gets the freshest possible answer.
+        let mut writes = plan.clone();
+        let close = writes.close.take();
+
+        let outcome = match apply_plan(forge, repo, &writes).await {
+            Ok(()) => match close {
+                Some(close) if !close.dry_run => {
+                    plan.close = Some(close);
+                    match revalidate(read, config, repo, &mut plan, maintainers).await {
+                        _ if plan.close.is_none() => {
+                            // Refused on the second look. The comment already
+                            // posted said a close was coming, so it is
+                            // corrected rather than left standing.
+                            if let Some(body) = crate::pr_triage::comment::render(&plan) {
+                                let corrected = TriagePlan {
+                                    comment: Some(body),
+                                    close: None,
+                                    add_labels: Vec::new(),
+                                    remove_labels: Vec::new(),
+                                    ..plan.clone()
+                                };
+                                let _ = apply_plan(forge, repo, &corrected).await;
+                            }
+                            Outcome::of(&plan)
+                        }
+                        _ => match forge.close_pull_request(repo, plan.number).await {
+                            Ok(()) => Outcome::Closed,
+                            Err(err) => Outcome::Failed(err.to_string()),
+                        },
+                    }
+                }
+                other => {
+                    plan.close = other;
+                    Outcome::of(&plan)
+                }
+            },
             Err(err) => Outcome::Failed(err.to_string()),
         };
-        reports.push(Report {
-            number: plan.number,
-            verdict: plan.verdict.label(),
-            detail: plan.verdict.detail(),
-            flags: plan
-                .flags
-                .iter()
-                .map(|(flag, why)| (flag.label(), why.clone()))
-                .collect(),
-            close_refusal: plan.close_refusal,
-            outcome,
-        });
+        let plan = &plan;
+        reports.push(Report::of(plan, outcome));
     }
 
     reports
@@ -194,6 +243,9 @@ pub enum Outcome {
     Labelled,
     /// Nothing was written: it already carried everything the plan wanted.
     Unchanged,
+    /// Nothing was written, because a human switched the bot off on this item
+    /// between the sweep and the write.
+    LeftAlone,
     /// The forge refused. Carries its complaint.
     Failed(String),
 }
@@ -214,6 +266,24 @@ impl Outcome {
                 Outcome::Unchanged
             }
             None => Outcome::Labelled,
+        }
+    }
+}
+
+impl Report {
+    /// One report line for `plan`, having done `outcome` to it.
+    fn of(plan: &TriagePlan, outcome: Outcome) -> Self {
+        Report {
+            number: plan.number,
+            verdict: plan.verdict.label(),
+            detail: plan.verdict.detail(),
+            flags: plan
+                .flags
+                .iter()
+                .map(|(flag, why)| (flag.label(), why.clone()))
+                .collect(),
+            close_refusal: plan.close_refusal,
+            outcome,
         }
     }
 }
