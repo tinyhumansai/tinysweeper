@@ -38,6 +38,7 @@ fn subject() -> PullRequest {
 fn duplicate() -> Verdict {
     Verdict::Duplicate {
         of: 5789,
+        of_head_sha: "cccccccccccccccccccccccccccccccccccccccc".into(),
         path_overlap: 1.0,
         line_overlap: 1.0,
     }
@@ -194,6 +195,7 @@ fn a_protected_author_stays_open() {
 fn the_original_must_be_older_even_if_the_scorer_says_otherwise() {
     let verdict = Verdict::Duplicate {
         of: 9999,
+        of_head_sha: "cccccccccccccccccccccccccccccccccccccccc".into(),
         path_overlap: 1.0,
         line_overlap: 1.0,
     };

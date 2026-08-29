@@ -54,6 +54,7 @@ pub fn render(plan: &TriagePlan) -> Option<String> {
             of,
             path_overlap,
             line_overlap,
+            ..
         } => {
             let _ = write!(
                 body,
@@ -143,6 +144,7 @@ mod tests {
             5798,
             Verdict::Duplicate {
                 of: 5789,
+                of_head_sha: "abc1234".into(),
                 path_overlap: 1.0,
                 line_overlap: 0.94,
             },

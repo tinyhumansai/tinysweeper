@@ -58,6 +58,7 @@ fn duplicate_plan() -> TriagePlan {
         5798,
         Verdict::Duplicate {
             of: 5789,
+            of_head_sha: "cccccccccccccccccccccccccccccccccccccccc".into(),
             path_overlap: 1.0,
             line_overlap: 1.0,
         },
