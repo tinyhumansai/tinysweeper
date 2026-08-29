@@ -175,7 +175,7 @@ pub async fn sweep(
                     continue;
                 }
             };
-            let shape = Shape::of(pull_request.number, &changed);
+            let shape = Shape::of(pull_request.number, &pull_request.base_ref, &changed);
 
             if only.is_none_or(|number| number == pull_request.number) {
                 let verdict = verdict_for(

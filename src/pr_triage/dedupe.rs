@@ -35,6 +35,12 @@ use crate::pr_triage::landed::{Hunk, hunks};
 pub struct Shape {
     /// The pull request's number.
     pub number: u64,
+    /// The branch it targets.
+    ///
+    /// Compared before anything else. A backport and the change it backports
+    /// are the same diff and are *not* duplicates: one still has to land on the
+    /// release branch. Closing the newer of the pair loses the backport.
+    pub base_ref: String,
     /// The paths it changes.
     pub paths: BTreeSet<String>,
     /// One fingerprint per hunk: its path, its before image and its after
@@ -68,7 +74,7 @@ pub struct Shape {
 
 impl Shape {
     /// Reduce one pull request's changed files to its comparable shape.
-    pub fn of(number: u64, files: &[ChangedFile]) -> Self {
+    pub fn of(number: u64, base_ref: &str, files: &[ChangedFile]) -> Self {
         let mut paths = BTreeSet::new();
         let mut edits: BTreeMap<String, usize> = BTreeMap::new();
         let mut every_file_readable = true;
@@ -86,6 +92,7 @@ impl Shape {
 
         Shape {
             number,
+            base_ref: base_ref.to_string(),
             paths,
             edits,
             every_file_readable,
@@ -189,6 +196,12 @@ pub fn duplicate_of(
         // contributor's review history, and it should not be possible to invert
         // it by passing the list the wrong way round.
         if other.number >= subject.number || !other.is_comparable() {
+            continue;
+        }
+        // Same target branch only. Two identical diffs aimed at `main` and at
+        // `release/2.1` are a change and its backport, and the backport still
+        // has to land.
+        if other.base_ref != subject.base_ref {
             continue;
         }
         let score = overlap(subject, other);

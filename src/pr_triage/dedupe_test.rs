@@ -38,15 +38,15 @@ fn the_newer_of_two_identical_pull_requests_is_the_duplicate() {
 
 #[test]
 fn the_same_files_changed_differently_are_not_duplicates() {
-    let one = Shape::of(1, &[changed("a.rs", "@@\n+let a = 1;\n")]);
-    let two = Shape::of(2, &[changed("a.rs", "@@\n+let b = 2;\n")]);
+    let one = Shape::of(1, "main", &[changed("a.rs", "@@\n+let a = 1;\n")]);
+    let two = Shape::of(2, "main", &[changed("a.rs", "@@\n+let b = 2;\n")]);
     assert_eq!(duplicate_of(&two, &[one], 0.8, 0.9), None);
 }
 
 #[test]
 fn the_same_lines_in_different_files_are_not_duplicates() {
-    let one = Shape::of(1, &[changed("a.rs", "@@\n+let a = 1;\n")]);
-    let two = Shape::of(2, &[changed("z.rs", "@@\n+let a = 1;\n")]);
+    let one = Shape::of(1, "main", &[changed("a.rs", "@@\n+let a = 1;\n")]);
+    let two = Shape::of(2, "main", &[changed("z.rs", "@@\n+let a = 1;\n")]);
     let score = overlap(&one, &two);
     // Neither axis matches: the paths differ, and the added lines are qualified
     // by the file they were added to, so they differ too.
@@ -93,7 +93,7 @@ fn the_best_match_wins_and_ties_go_to_the_oldest() {
 fn a_superset_pull_request_falls_below_the_path_floor() {
     // A pull request that makes the same fix *and* six other changes is not a
     // duplicate — closing it would lose the other six.
-    let small = Shape::of(1, &[changed("a.rs", "@@\n+let a = 1;\n")]);
+    let small = Shape::of(1, "main", &[changed("a.rs", "@@\n+let a = 1;\n")]);
     let big = Shape::of(
         2,
         &[
@@ -130,8 +130,8 @@ fn the_same_line_added_to_different_files_is_not_a_duplicate() {
             ),
         ]
     };
-    let one = Shape::of(1, &files("a"));
-    let two = Shape::of(2, &files("b"));
+    let one = Shape::of(1, "main", &files("a"));
+    let two = Shape::of(2, "main", &files("b"));
 
     assert_eq!(overlap(&one, &two).paths, 1.0);
     assert_eq!(overlap(&one, &two).edits, 0.0);
