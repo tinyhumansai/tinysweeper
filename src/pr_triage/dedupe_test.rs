@@ -48,7 +48,9 @@ fn the_same_lines_in_different_files_are_not_duplicates() {
     let one = Shape::of(1, &[changed("a.rs", "@@\n+let a = 1;\n")]);
     let two = Shape::of(2, &[changed("z.rs", "@@\n+let a = 1;\n")]);
     let score = overlap(&one, &two);
-    assert_eq!(score.lines, 1.0);
+    // Neither axis matches: the paths differ, and the added lines are qualified
+    // by the file they were added to, so they differ too.
+    assert_eq!(score.lines, 0.0);
     assert_eq!(score.paths, 0.0);
     assert_eq!(duplicate_of(&two, &[one], 0.8, 0.9), None);
 }
