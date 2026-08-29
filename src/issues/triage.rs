@@ -189,7 +189,7 @@ pub async fn triage(
     }
 
     if policy.comment {
-        plan.comment = comment::render(&plan, &verdict.summary, cross_link);
+        plan.comment = comment::render(&plan, &verdict.summary, cross_link, promotion.as_deref());
     }
 
     Ok(TriageOutcome {

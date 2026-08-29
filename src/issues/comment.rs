@@ -22,14 +22,36 @@ pub const MARKER: &str = "<!-- tinysweeper:issue-triage -->";
 /// `cross_link` is a probable duplicate that did **not** clear the close gate.
 /// Mentioning it is the whole value of the dedupe half on the overwhelmingly
 /// common path where nothing gets closed.
-pub fn render(plan: &TriagePlan, summary: &str, cross_link: Option<u64>) -> Option<String> {
-    if plan.add_labels.is_empty() && plan.close.is_none() && cross_link.is_none() {
+pub fn render(
+    plan: &TriagePlan,
+    summary: &str,
+    cross_link: Option<u64>,
+    promotion: Option<&str>,
+) -> Option<String> {
+    if plan.add_labels.is_empty()
+        && plan.close.is_none()
+        && cross_link.is_none()
+        && promotion.is_none()
+    {
         return None;
     }
 
     let mut body = format!("{MARKER}\n");
     if !summary.trim().is_empty() {
         let _ = write!(body, "\n{}\n", summary.trim());
+    }
+
+    // Before the labels, because it is the part a human is being asked to look
+    // at. A label that accuses somebody has to carry its evidence and the way
+    // to disagree with it, or it is just a slur with a colour.
+    if let Some(why) = promotion {
+        let _ = write!(
+            body,
+            "\nThis reads like self-promotion: it matched {why}. That is a set \
+             of textual signals rather than a verdict, nothing was closed on \
+             account of it, and if the signals are wrong just say so and clear \
+             the label.\n"
+        );
     }
 
     if !plan.add_labels.is_empty() {
