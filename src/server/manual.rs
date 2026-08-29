@@ -404,18 +404,134 @@ mod tests {
         }
     }
 
+    /// Records which pull requests the triage route asked about, and answers
+    /// with one close and one refusal — the two outcomes an operator presses
+    /// the button to read.
+    #[derive(Default)]
+    struct TriageRecorder {
+        asked: Mutex<Vec<(String, Option<u64>)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Triages for TriageRecorder {
+        async fn triage(
+            &self,
+            repo: &RepoId,
+            number: Option<u64>,
+        ) -> crate::error::Result<Vec<crate::pr_triage::Report>> {
+            self.asked
+                .lock()
+                .expect("not poisoned")
+                .push((repo.to_string(), number));
+            Ok(vec![
+                crate::pr_triage::Report {
+                    number: 20,
+                    verdict: "triage: duplicate",
+                    outcome: crate::pr_triage::apply::Outcome::Closed,
+                },
+                crate::pr_triage::Report {
+                    number: 21,
+                    verdict: "triage: review",
+                    outcome: crate::pr_triage::apply::Outcome::Labelled,
+                },
+            ])
+        }
+    }
+
     fn app(reviews: Arc<Recorder>) -> axum::Router {
         app_with(reviews, Arc::new(MergeRecorder::default()))
     }
 
     fn app_with(reviews: Arc<Recorder>, merges: Arc<MergeRecorder>) -> axum::Router {
+        app_with_triage(reviews, merges, Arc::new(TriageRecorder::default()))
+    }
+
+    fn app_with_triage(
+        reviews: Arc<Recorder>,
+        merges: Arc<MergeRecorder>,
+        triages: Arc<TriageRecorder>,
+    ) -> axum::Router {
         router(
             Some(AdminAuth::new(TOKEN).expect("a long enough token")),
             "tinyhumansai".into(),
             reviews,
             merges,
+            triages,
         )
         .expect("a token mounts the router")
+    }
+
+    #[tokio::test]
+    async fn an_unauthenticated_triage_sweep_is_refused() {
+        let triages = Arc::new(TriageRecorder::default());
+        let response = app_with_triage(
+            Arc::new(Recorder::default()),
+            Arc::new(MergeRecorder::default()),
+            triages.clone(),
+        )
+        .oneshot(post_request(
+            "/admin/pr-triage/tinyhumansai/tinysweeper",
+            None,
+            "{}",
+        ))
+        .await
+        .expect("a response");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            triages.asked.lock().expect("not poisoned").is_empty(),
+            "an anonymous caller reached the sweep"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_triage_sweep_reports_what_it_closed() {
+        let triages = Arc::new(TriageRecorder::default());
+        let response = app_with_triage(
+            Arc::new(Recorder::default()),
+            Arc::new(MergeRecorder::default()),
+            triages.clone(),
+        )
+        .oneshot(post_request(
+            "/admin/pr-triage/tinyhumansai/tinysweeper",
+            Some(TOKEN),
+            "{}",
+        ))
+        .await
+        .expect("a response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            *triages.asked.lock().expect("not poisoned"),
+            vec![("tinyhumansai/tinysweeper".to_string(), None)]
+        );
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("a body");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(json["closed"], serde_json::json!([20]));
+        assert_eq!(json["considered"], 2);
+    }
+
+    #[tokio::test]
+    async fn a_triage_sweep_outside_the_allowed_org_is_refused() {
+        let triages = Arc::new(TriageRecorder::default());
+        let response = app_with_triage(
+            Arc::new(Recorder::default()),
+            Arc::new(MergeRecorder::default()),
+            triages.clone(),
+        )
+        .oneshot(post_request(
+            "/admin/pr-triage/someone-else/their-repo",
+            Some(TOKEN),
+            "{}",
+        ))
+        .await
+        .expect("a response");
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(triages.asked.lock().expect("not poisoned").is_empty());
     }
 
     #[tokio::test]
@@ -524,7 +640,8 @@ mod tests {
                 None,
                 "tinyhumansai".into(),
                 Arc::new(Recorder::default()),
-                Arc::new(MergeRecorder::default())
+                Arc::new(MergeRecorder::default()),
+                Arc::new(TriageRecorder::default())
             )
             .is_none(),
             "an unauthenticated way to spend money on reviews is not a supported deployment"
