@@ -254,4 +254,5 @@ pub fn landed(
 }
 
 #[cfg(test)]
+#[path = "landed_test.rs"]
 mod tests;
