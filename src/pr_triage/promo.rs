@@ -231,9 +231,13 @@ fn inspect_lines(
             if referral {
                 finding.signals.insert(Signal::ReferralLink);
             }
-            if author_hosts
+            // Against the URL's **host**, not the whole line. A substring
+            // match calls an author named `docs` the owner of
+            // `https://api.example.com/docs`, and two signals is all it takes
+            // to put an accusatory label on an ordinary integration.
+            if hosts_in(&lower)
                 .iter()
-                .any(|host| !host.is_empty() && lower.contains(host))
+                .any(|host| author_hosts.iter().any(|mine| host_matches(host, mine)))
             {
                 finding.signals.insert(Signal::AuthorsOwnLink);
             }
@@ -254,6 +258,52 @@ fn inspect_lines(
             finding.signals.insert(Signal::MarketingCopy);
         }
     }
+}
+
+/// The hosts of every URL on a line.
+///
+/// A deliberately small parser: from `http` to the next `/`, `?`, `#`, quote or
+/// space, with any userinfo and port removed. It is not a URL library and does
+/// not need to be — everything it feeds is compared against a host we already
+/// hold, so the failure mode of a sloppy parse is a signal that does not fire.
+fn hosts_in(line: &str) -> Vec<String> {
+    let mut hosts = Vec::new();
+    let mut rest = line;
+
+    while let Some(at) = rest.find("http") {
+        rest = &rest[at..];
+        let Some(after_scheme) = rest
+            .strip_prefix("https://")
+            .or_else(|| rest.strip_prefix("http://"))
+        else {
+            rest = &rest[4..];
+            continue;
+        };
+        let authority: String = after_scheme
+            .chars()
+            .take_while(|c| !matches!(c, '/' | '?' | '#' | '"' | '\'' | ')' | '>' | ' ' | ','))
+            .collect();
+        // Userinfo before an `@` is not the host, and `evil.example@mine.test`
+        // is exactly how somebody would try to borrow one.
+        let host = authority.rsplit('@').next().unwrap_or(&authority);
+        let host = host.split(':').next().unwrap_or(host);
+        if !host.is_empty() {
+            hosts.push(host.trim_start_matches("www.").to_string());
+        }
+        rest = &after_scheme[authority.len().min(after_scheme.len())..];
+    }
+
+    hosts
+}
+
+/// Whether `host` is, or is a subdomain of, `mine`.
+fn host_matches(host: &str, mine: &str) -> bool {
+    if mine.is_empty() {
+        return false;
+    }
+    // A login is compared against the host's *labels*, so `acme` matches
+    // `acme.example` and `docs.acme.example` but not `acmecorp.example`.
+    host == mine || host.ends_with(&format!(".{mine}")) || host.split('.').any(|part| part == mine)
 }
 
 /// The credential-shaped identifier on a line, if there is one.
