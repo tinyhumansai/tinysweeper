@@ -208,3 +208,33 @@ fn a_short_base_list_cannot_silently_skip_files() {
         Err(NotLanded::NoReadableDiff)
     );
 }
+
+#[test]
+fn deleting_a_file_the_base_branch_still_has_is_not_landed() {
+    // The `after` image of a whole-file deletion is empty, and the empty run is
+    // "present" in every file — so the images say nothing here and existence is
+    // the only question worth asking.
+    let file = ChangedFile {
+        path: "alive.rs".into(),
+        status: FileStatus::Removed,
+        patch: Some("@@ -1,3 +0,0 @@\n-fn alive() {}\n-// still here\n-// really\n".into()),
+        ..ChangedFile::default()
+    };
+    assert_eq!(
+        file_landed(&file, Some("fn alive() {}\n// edited since\n")),
+        Err(NotLanded::FileStillThere)
+    );
+    // Gone from the branch is still landed.
+    assert_eq!(file_landed(&file, None), Ok(3));
+}
+
+#[test]
+fn an_addition_with_no_surviving_context_has_nothing_to_locate_it_by() {
+    // Blank context is dropped, so this hunk keeps no anchor at all. Its lines
+    // exist in the base — somewhere — and that is precisely not enough.
+    let file = changed("a.rs", "@@ -1,1 +1,4 @@\n \n+alpha\n+beta\n+gamma\n");
+    assert_eq!(
+        file_landed(&file, Some("something();\nalpha\nbeta\ngamma\n")),
+        Err(NotLanded::NoAnchor)
+    );
+}
