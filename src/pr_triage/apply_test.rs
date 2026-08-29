@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::config::types::{Config, PrClose, PrTriage};
-use crate::forge::mock::{MockForge, Write};
+use crate::forge::mock::{MockForge, MockState, Write};
 use crate::forge::types::PullRequest;
 use crate::pr_triage::comment::MARKER;
 use crate::pr_triage::types::{ClosePlan, TriagePlan, Verdict};
@@ -439,5 +439,69 @@ async fn a_push_to_the_original_also_stops_the_close() {
     assert_eq!(
         plan.close_refusal,
         Some("the pull request it duplicates changed after the sweep read it")
+    );
+}
+
+#[tokio::test]
+async fn a_duplicate_of_something_itself_closed_unmerged_is_not_closed() {
+    // Closing a contribution as a duplicate of a pull request that has itself
+    // been abandoned loses both, which is the one outcome nobody wants: the
+    // change simply disappears.
+    let forge = MockForge::new()
+        .with_pull_request(closeable(), vec![], vec![])
+        .with_pull_request(
+            PullRequest {
+                number: 5789,
+                head_sha: ORIGINAL.into(),
+                open: false,
+                merged: false,
+                ..closeable()
+            },
+            vec![],
+            vec![],
+        );
+
+    let mut plan = closing_plan();
+    revalidate(&forge, &config(), &repo(), &mut plan, &[]).await;
+
+    assert!(plan.close.is_none(), "{plan:?}");
+    assert_eq!(
+        plan.close_refusal,
+        Some("the pull request it duplicates was itself closed unmerged")
+    );
+}
+
+#[tokio::test]
+async fn a_superseded_close_is_dropped_when_the_base_branch_moves() {
+    // A force-push or a revert between the sweep and the write takes the lines
+    // back off the branch, and the whole finding with them.
+    let mut plan = TriagePlan::new(
+        5798,
+        Verdict::Superseded {
+            base_ref: "main".into(),
+            base_sha: "1111111111111111111111111111111111111111".into(),
+            lines_checked: 12,
+        },
+    );
+    plan.close = Some(ClosePlan {
+        number: 5798,
+        head_sha: HEAD.into(),
+        dry_run: false,
+    });
+
+    let mut moved = MockState::default();
+    moved.pull_requests.insert(5798, closeable());
+    moved.branches.insert(
+        "main".into(),
+        "2222222222222222222222222222222222222222".into(),
+    );
+    let forge = MockForge::with_state(moved);
+
+    revalidate(&forge, &config(), &repo(), &mut plan, &[]).await;
+
+    assert!(plan.close.is_none(), "{plan:?}");
+    assert_eq!(
+        plan.close_refusal,
+        Some("its base branch moved after the sweep compared against it")
     );
 }
