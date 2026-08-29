@@ -47,8 +47,23 @@ fn diff_headers_are_not_mistaken_for_content() {
 }
 
 #[test]
-fn indentation_does_not_make_the_same_line_a_different_one() {
-    assert_eq!(normalise("    let  x =   1;"), "let x = 1;");
+fn indentation_is_kept_because_in_some_languages_it_is_the_change() {
+    // Only trailing whitespace goes. Moving a call out of a Python `if` alters
+    // nothing but the indentation, and a comparison that collapsed it would
+    // find the line still inside the block and call the change applied.
+    assert_eq!(normalise("    let  x =   1;   "), "    let  x =   1;");
+}
+
+#[test]
+fn a_python_dedent_is_not_landed_against_the_indented_original() {
+    let file = changed(
+        "run.py",
+        "@@ -1,3 +1,3 @@\n if ready:\n-    new()\n+new()\n",
+    );
+    assert_eq!(
+        file_landed(&file, Some("if ready:\n    new()\n")),
+        Err(NotLanded::RemovedLineStillPresent)
+    );
 }
 
 #[test]

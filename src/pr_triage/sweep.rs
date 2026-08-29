@@ -95,7 +95,17 @@ pub async fn sweep(
             .iter()
             .any(|pull_request| pull_request.number == number)
     {
-        pulls.push(read.pull_request(repo, number).await?);
+        let requested = read.pull_request(repo, number).await?;
+        // Only if it is actually open. It was absent from the open list for a
+        // reason, and an operator naming it explicitly is not a reason to
+        // label, comment on and consider closing something already finished.
+        if !requested.open || requested.merged {
+            return Ok(SweepOutcome {
+                skipped: Some("the requested pull request is not open"),
+                ..SweepOutcome::default()
+            });
+        }
+        pulls.push(requested);
     }
 
     // Loud, because it is the failure that hides: a repository that outgrows

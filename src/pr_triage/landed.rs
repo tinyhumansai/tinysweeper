@@ -207,13 +207,20 @@ fn push_normalised(text: &str, into: &mut Vec<String>) -> bool {
 
 /// The comparable form of a line.
 ///
-/// Leading and trailing whitespace is dropped, and interior runs of whitespace
-/// are collapsed to one space. Re-indenting a block is the single most common
-/// reason the same code looks different in two places, and treating that as a
-/// different change would make this module useless on exactly the pull requests
-/// it is for.
+/// **Trailing** whitespace only. Leading indentation is kept, and interior
+/// spacing is kept, because in a whitespace-sensitive language they are the
+/// change: moving a call out of a Python `if` alters nothing but its
+/// indentation, and a comparison that collapsed it would find the same line
+/// still inside the block on the base branch and call the pull request already
+/// applied.
+///
+/// This used to collapse all whitespace, on the argument that re-indenting a
+/// block is a common reason the same code reads differently in two places. That
+/// is true and it is the wrong trade here: the cost of the loose version is
+/// closing a pull request that would have changed behaviour, and the cost of
+/// the strict one is leaving a re-indented change for a human.
 pub fn normalise(line: &str) -> String {
-    line.split_whitespace().collect::<Vec<_>>().join(" ")
+    line.trim_end().to_string()
 }
 
 /// The base-branch text of a file, in comparable form.
