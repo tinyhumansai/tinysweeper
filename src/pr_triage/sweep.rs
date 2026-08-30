@@ -238,10 +238,10 @@ async fn attach_previous_comment(read: &dyn ForgeRead, repo: &RepoId, plan: &mut
     // a self-hosted app with a different slug — posting a fresh comment every
     // sweep — and would simultaneously trust an account called
     // `tinysweeper-evil[bot]`, which anyone can register.
-    let Some(previous) = existing
-        .iter()
-        .find(|comment| comment.body.contains(comment::MARKER) && crate::findings::prior::is_own_login(&comment.author))
-    else {
+    let Some(previous) = existing.iter().find(|comment| {
+        comment.body.contains(comment::MARKER)
+            && crate::findings::prior::is_own_login(&comment.author)
+    }) else {
         return;
     };
 
