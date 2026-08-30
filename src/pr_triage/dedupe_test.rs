@@ -319,8 +319,16 @@ fn many_tiny_shared_hunks_do_not_outvote_one_large_distinct_one() {
         format!("@@ -900,1 +900,501 @@\n anchor\n{body} tail\n")
     };
 
-    let one = Shape::of(1, "main", &[changed("a.rs", &format!("{shared}{}", big("alpha")))]);
-    let two = Shape::of(2, "main", &[changed("a.rs", &format!("{shared}{}", big("beta")))]);
+    let one = Shape::of(
+        1,
+        "main",
+        &[changed("a.rs", &format!("{shared}{}", big("alpha")))],
+    );
+    let two = Shape::of(
+        2,
+        "main",
+        &[changed("a.rs", &format!("{shared}{}", big("beta")))],
+    );
 
     let score = overlap(&one, &two);
     assert!(score.edits < 0.9, "scored {}", score.edits);

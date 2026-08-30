@@ -619,3 +619,27 @@ async fn a_kill_switch_stops_a_plan_that_was_not_going_to_close_anything() {
     let recheck = revalidate(&forge, &config(), &repo(), &mut plan, &[]).await;
     assert_eq!(recheck, Recheck::LeaveAlone);
 }
+
+#[tokio::test]
+async fn a_push_stops_the_labels_too_not_only_the_close() {
+    // The label is read off the same diff the close is. Applying it after a
+    // push would retire the pull request's current facet label in favour of a
+    // conclusion about a revision that is no longer there.
+    let forge = forge_with(PullRequest {
+        head_sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+        ..closeable()
+    });
+
+    // A plan with no close at all — closing disabled, or refused on age.
+    let plan = duplicate_plan();
+    assert!(plan.close.is_none());
+
+    let reports = apply_all(&forge, &forge, &config(), &repo(), &[plan], &[]).await;
+
+    assert_eq!(reports[0].outcome, Outcome::LeftAlone);
+    assert!(forge.writes().is_empty(), "{:?}", forge.writes());
+    assert_eq!(
+        reports[0].close_refusal,
+        Some("it was pushed to after the sweep read its diff")
+    );
+}

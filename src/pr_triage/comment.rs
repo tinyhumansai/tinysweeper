@@ -157,7 +157,11 @@ mod tests {
     #[test]
     fn a_pull_request_worth_reading_gets_no_comment() {
         assert_eq!(
-            render(&TriagePlan::new(1, "abc1234", Verdict::Review { because: "-" })),
+            render(&TriagePlan::new(
+                1,
+                "abc1234",
+                Verdict::Review { because: "-" }
+            )),
             None
         );
     }

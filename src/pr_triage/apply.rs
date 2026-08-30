@@ -160,7 +160,6 @@ pub async fn revalidate_at(
         return Recheck::LeaveAlone;
     }
 
-
     // The evidence has to still describe the pull request, and this is checked
     // for *every* plan rather than only the closing ones. Every verdict here is
     // read off a diff, and a push replaces that diff — so a moved head makes
