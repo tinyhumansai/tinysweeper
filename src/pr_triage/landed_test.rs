@@ -345,13 +345,15 @@ fn a_blank_line_is_a_change_like_any_other() {
         "README.md",
         "@@ -1,2 +1,3 @@\n first paragraph\n+\n second paragraph\n",
     );
+    // The two paragraphs still sit together on the branch, which is the
+    // conclusive form of "the blank line is not there".
     assert_eq!(
         file_landed(&file, Some("first paragraph\nsecond paragraph\n")),
-        Err(NotLanded::AddedLineMissing)
+        Err(NotLanded::RemovedLineStillPresent)
     );
     assert_eq!(
         file_landed(&file, Some("first paragraph\n\nsecond paragraph\n")),
-        Ok(0)
+        Ok(1)
     );
 }
 
