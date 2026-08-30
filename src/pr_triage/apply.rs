@@ -192,6 +192,14 @@ pub async fn revalidate_at(
         },
     };
 
+    // Only where a close was actually planned. Running the gate on a plan that
+    // never proposed one records "the sweep found nothing that justifies a
+    // close" as a refusal on every ordinary pull request — a fact nobody asked
+    // about, printed in every report line.
+    if plan.close.is_none() {
+        return Recheck::Unchanged;
+    }
+
     if let GateOutcome::Refuse(reason) = gate::decide(gate::Inputs {
         subject: &current,
         verdict: &plan.verdict,
