@@ -328,8 +328,13 @@ fn occurrences(haystack: &[String], run: &[String]) -> usize {
 
 /// Whether `run` appears as consecutive lines of `haystack`.
 fn contains_run(haystack: &[String], run: &[String]) -> bool {
+    // An empty run is *not* found. Returning true for it reads as "yes, that
+    // change is already on the branch" for a hunk that supplied no evidence,
+    // and no caller wants that answer — the whole-file deletion path, which is
+    // the only place an empty image legitimately arises, is decided before this
+    // is ever reached.
     if run.is_empty() {
-        return true;
+        return false;
     }
     if run.len() > haystack.len() {
         return false;

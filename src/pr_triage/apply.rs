@@ -166,7 +166,10 @@ pub async fn revalidate_at(
     // the label as stale as the close, and applying it would retire whatever
     // facet label the pull request currently carries in favour of a conclusion
     // about a revision that is gone.
-    if !plan.head_sha.is_empty() && plan.head_sha != current.head_sha {
+    // An empty recorded head is *not* a pass. A plan with no revision evidence
+    // cannot be shown to still describe the pull request, and "we cannot tell"
+    // is the same answer as "no" for a write we would not be able to take back.
+    if plan.head_sha.is_empty() || plan.head_sha != current.head_sha {
         // The whole plan, not only the close. Every verdict here is read off a
         // diff, so a moved head makes the *label* stale too — and applying it
         // would retire the pull request's current `triage:` label in favour of
