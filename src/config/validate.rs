@@ -643,6 +643,17 @@ fn validate_pr_triage(config: &Config, problems: &mut Vec<String>) {
         );
     }
 
+    // A close with no comment is a close with no evidence. The module's whole
+    // promise to a contributor is that the reasoning is on the pull request and
+    // can be argued with; closing silently is the version of this feature
+    // nobody should be able to configure by accident.
+    if close.enabled && !close.dry_run && !triage.comment {
+        problems.push(
+            "`pr_triage.close` is live with `pr_triage.comment = false`, which would close pull requests with no explanation on them. Turn the comment on, or keep `dry_run = true`"
+                .into(),
+        );
+    }
+
     if let Some(every) = triage.sweep_every_minutes.filter(|every| *every > 0) {
         if triage.sweep_repositories.is_empty() {
             problems.push(format!(

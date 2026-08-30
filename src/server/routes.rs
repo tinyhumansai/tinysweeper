@@ -772,7 +772,13 @@ fn spawn_triage_sweeps(state: AppState, triages: Arc<dyn Triages>) {
 /// "review everything" twice must not enqueue the same twenty oldest pull
 /// requests both times and starve everything opened since. So they read a wider
 /// window and take the newest end of it.
-const MANUAL_SCAN_LIMIT: usize = 300;
+///
+/// Wide enough to cover the whole backlog, and that is the point rather than
+/// generosity: a window that truncates from the *oldest* end still hands the
+/// caller the newest of what it read, which on a repository with more open pull
+/// requests than the window is not the newest of what exists. Twenty pages of
+/// a hundred, on a button pressed by hand a few times a year.
+const MANUAL_SCAN_LIMIT: usize = 2_000;
 
 /// The numbers of a repository's most recent open pull requests, capped.
 ///

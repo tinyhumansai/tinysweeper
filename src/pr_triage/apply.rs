@@ -330,30 +330,24 @@ pub async fn apply_all(
                         if plan.close.is_some() && recheck != Recheck::LeaveAlone {
                             match forge.close_pull_request(repo, plan.number).await {
                                 Ok(()) => Outcome::Closed,
-                                Err(err) => Outcome::Failed(err.to_string()),
+                                Err(err) => {
+                                    // The comment above already says the pull
+                                    // request is being closed, and it is not.
+                                    // Leaving that standing hands the
+                                    // contributor a durable false claim from
+                                    // the bot, which is worse than the failure.
+                                    plan.close = None;
+                                    plan.close_refusal = Some("the forge refused the close");
+                                    correct_comment(forge, repo, &plan).await;
+                                    Outcome::Failed(err.to_string())
+                                }
                             }
                         } else {
                             // Refused on the second look. The comment already
                             // posted said a close was coming, so it is corrected
                             // rather than left standing — edited in place, using
                             // the id the write above returned.
-                            // Only where a comment actually went out. With
-                            // `pr_triage.comment` off there is nothing to
-                            // correct, and rendering one here would post the
-                            // first comment of the run to say a close did not
-                            // happen.
-                            if let (Some(_), Some(body)) =
-                                (plan.comment_id, crate::pr_triage::comment::render(&plan))
-                            {
-                                let corrected = TriagePlan {
-                                    comment: Some(body),
-                                    close: None,
-                                    add_labels: Vec::new(),
-                                    remove_labels: Vec::new(),
-                                    ..plan.clone()
-                                };
-                                let _ = apply_plan(forge, repo, &corrected).await;
-                            }
+                            correct_comment(forge, repo, &plan).await;
                             Outcome::of(&plan)
                         }
                     }
@@ -371,6 +365,28 @@ pub async fn apply_all(
     }
 
     reports
+}
+
+/// Rewrite the comment this run already posted, now that the close is off.
+///
+/// Only where a comment actually went out: with `pr_triage.comment` off there
+/// is nothing to correct, and rendering one here would post the run's *first*
+/// comment purely to announce that a close did not happen.
+///
+/// Best effort. Failing to correct the comment is untidy; refusing to finish
+/// the sweep over it would be worse.
+async fn correct_comment(forge: &dyn ForgeWrite, repo: &RepoId, plan: &TriagePlan) {
+    let (Some(_), Some(body)) = (plan.comment_id, crate::pr_triage::comment::render(plan)) else {
+        return;
+    };
+    let corrected = TriagePlan {
+        comment: Some(body),
+        close: None,
+        add_labels: Vec::new(),
+        remove_labels: Vec::new(),
+        ..plan.clone()
+    };
+    let _ = apply_plan(forge, repo, &corrected).await;
 }
 
 /// What happened to one pull request.
