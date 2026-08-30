@@ -196,17 +196,19 @@ pub fn hunks(patch: &str) -> Vec<Hunk> {
             // and discarding it as a header would drop content that is the
             // whole difference between two versions.
             Some(b'+') if in_hunk || !line.starts_with("+++") => {
-                if push_normalised(&line[1..], &mut current.after) {
-                    current.changed += 1;
-                    current.trailing = 0;
-                }
+                // Counted whether or not it is substantive. A hunk that adds
+                // only blank lines still changes the file — a Markdown
+                // paragraph break, a gap in a multiline string — and a hunk
+                // with a `changed` of zero is discarded entirely below.
+                push_normalised(&line[1..], &mut current.after);
+                current.changed += 1;
+                current.trailing = 0;
             }
             Some(b'-') if in_hunk || !line.starts_with("---") => {
-                if push_normalised(&line[1..], &mut current.before) {
-                    current.changed += 1;
-                    current.removes += 1;
-                    current.trailing = 0;
-                }
+                push_normalised(&line[1..], &mut current.before);
+                current.changed += 1;
+                current.removes += 1;
+                current.trailing = 0;
             }
             // Context, and the reason this module can say anything about
             // *location*: a line present on both sides anchors the change to a
