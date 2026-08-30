@@ -378,7 +378,7 @@ pub fn build_plan(
     changed: &[ChangedFile],
     maintainers: &[String],
 ) -> TriagePlan {
-    let mut plan = TriagePlan::new(pull_request.number, verdict);
+    let mut plan = TriagePlan::new(pull_request.number, &pull_request.head_sha, verdict);
 
     // Read from the diff, not from the title or the body. The hosts come from
     // the author's login alone — fetching their profile would cost a request

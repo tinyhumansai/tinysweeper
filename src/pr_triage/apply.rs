@@ -160,19 +160,14 @@ pub async fn revalidate_at(
         return Recheck::LeaveAlone;
     }
 
-    if plan.close.is_none() {
-        return Recheck::Unchanged;
-    }
 
-    // The evidence has to still describe the pull request. Every verdict here
-    // is read off a diff, and a push during the sweep replaces that diff — so a
-    // moved head means the duplicate or superseded finding is about a change
-    // that no longer exists, however well the state guards below pass.
-    if plan
-        .close
-        .as_ref()
-        .is_some_and(|close| close.head_sha != current.head_sha)
-    {
+    // The evidence has to still describe the pull request, and this is checked
+    // for *every* plan rather than only the closing ones. Every verdict here is
+    // read off a diff, and a push replaces that diff — so a moved head makes
+    // the label as stale as the close, and applying it would retire whatever
+    // facet label the pull request currently carries in favour of a conclusion
+    // about a revision that is gone.
+    if !plan.head_sha.is_empty() && plan.head_sha != current.head_sha {
         // The whole plan, not only the close. Every verdict here is read off a
         // diff, so a moved head makes the *label* stale too — and applying it
         // would retire the pull request's current `triage:` label in favour of
@@ -181,6 +176,14 @@ pub async fn revalidate_at(
         plan.close = None;
         plan.close_refusal = Some("it was pushed to after the sweep read its diff");
         return Recheck::LeaveAlone;
+    }
+
+    // Everything past here is about close evidence specifically, so it is
+    // skipped when there is nothing to close: re-reading the original of a
+    // duplicate, or re-resolving a base branch, to decide whether to add a
+    // label costs requests the safe half of the job does not need.
+    if plan.close.is_none() {
+        return Recheck::Unchanged;
     }
 
     // Zeroed on the second pass, for the reason on `Freshness`. Not a widening

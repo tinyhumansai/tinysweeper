@@ -187,6 +187,14 @@ pub struct ClosePlan {
 pub struct TriagePlan {
     /// The pull request this concerns.
     pub number: u64,
+    /// The head commit the whole plan was computed from.
+    ///
+    /// On the plan rather than only on the close, because the *label* is read
+    /// off the same diff. A push between the sweep and the write makes
+    /// `triage: duplicate` a statement about a revision that is no longer
+    /// there, and applying it would also retire whatever facet label the pull
+    /// request currently carries.
+    pub head_sha: String,
     /// What the sweep concluded.
     pub verdict: Verdict,
     /// What a human should see before judging it, and why.
@@ -217,10 +225,11 @@ pub struct TriagePlan {
 }
 
 impl TriagePlan {
-    /// An empty plan for `number` carrying `verdict` and nothing else.
-    pub fn new(number: u64, verdict: Verdict) -> Self {
+    /// An empty plan for `number` at `head_sha`, carrying `verdict`.
+    pub fn new(number: u64, head_sha: &str, verdict: Verdict) -> Self {
         Self {
             number,
+            head_sha: head_sha.to_string(),
             verdict,
             flags: Vec::new(),
             add_labels: Vec::new(),
