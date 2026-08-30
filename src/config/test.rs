@@ -706,6 +706,32 @@ min_age_days = 0
 }
 
 #[test]
+fn live_pull_request_closing_with_no_comment_is_rejected() {
+    // A close with no comment is a close with no evidence, and the module's
+    // whole promise to a contributor is that the reasoning is on the pull
+    // request and can be argued with.
+    let config = parse(
+        r#"
+version = 1
+[pr_triage]
+enabled = true
+comment = false
+[pr_triage.close]
+enabled = true
+dry_run = false
+min_age_days = 1
+"#,
+    );
+    assert!(
+        validate::validate(&config)
+            .iter()
+            .any(|p| p.contains("close pull requests with no explanation on them")),
+        "{:#?}",
+        validate::validate(&config)
+    );
+}
+
+#[test]
 fn a_periodic_sweep_with_nothing_to_sweep_is_rejected() {
     let config = parse(
         r#"

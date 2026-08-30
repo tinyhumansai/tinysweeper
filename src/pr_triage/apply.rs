@@ -180,7 +180,6 @@ pub async fn revalidate_at(
         return Recheck::LeaveAlone;
     }
 
-
     // Zeroed on the second pass, for the reason on `Freshness`. Not a widening
     // of the gate: the full pass already applied these against the state before
     // any of our own writes touched it.

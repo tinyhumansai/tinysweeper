@@ -697,6 +697,9 @@ async fn a_close_the_forge_refuses_does_not_leave_the_comment_claiming_otherwise
         })
         .next_back()
         .expect("the comment was corrected");
-    assert!(!corrected.contains("Closing it on that basis"), "{corrected}");
+    assert!(
+        !corrected.contains("Closing it on that basis"),
+        "{corrected}"
+    );
     assert!(corrected.contains("Left open: the forge refused the close"));
 }
