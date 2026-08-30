@@ -214,9 +214,14 @@ pub fn hunks(patch: &str) -> Vec<Hunk> {
             Some(b' ') | None => {
                 let text = line.strip_prefix(' ').unwrap_or(line);
                 let normalised = normalise(text);
-                if !normalised.is_empty() {
-                    current.before.push(normalised.clone());
-                    current.after.push(normalised);
+                let substantive = !normalised.is_empty();
+                // Kept on both sides whether or not it is substantive, so the
+                // images stay exact line sequences. Only a substantive line
+                // counts as an *anchor*, though: a hunk located by nothing but
+                // blank lines is not located.
+                current.before.push(normalised.clone());
+                current.after.push(normalised);
+                if substantive {
                     current.anchors += 1;
                     if current.changed == 0 {
                         current.leading += 1;
@@ -248,14 +253,19 @@ fn new_side_start(header: &str) -> usize {
         .unwrap_or(0)
 }
 
-/// Add one diff line to an image, reporting whether it counted.
+/// Add one diff line to an image, reporting whether it is substantive.
+///
+/// A blank line is **kept** in the image and reported as not substantive. Both
+/// halves matter: dropping it made a pull request that adds only blank lines —
+/// a Markdown paragraph break, a gap in a multiline string — compare equal to a
+/// base branch that has none, and the change would read as already applied.
+/// Reporting it as substantive would let a hunk anchored on nothing but blanks
+/// count as located.
 fn push_normalised(text: &str, into: &mut Vec<String>) -> bool {
     let normalised = normalise(text);
-    if normalised.is_empty() {
-        return false;
-    }
+    let substantive = !normalised.is_empty();
     into.push(normalised);
-    true
+    substantive
 }
 
 /// The comparable form of a line.
@@ -284,12 +294,10 @@ pub fn normalise(line: &str) -> String {
 /// caller is responsible for distinguishing "not there" from "could not read
 /// it" — see [`landed`], which refuses the second.
 pub fn base_lines(content: Option<&str>) -> Vec<String> {
-    content
-        .unwrap_or_default()
-        .lines()
-        .map(normalise)
-        .filter(|line| !line.is_empty())
-        .collect()
+    // Blank lines kept, to match the images. Filtering them here and there
+    // would agree with itself and still be wrong: a pull request whose only
+    // addition is a blank line would compare equal to a branch without it.
+    content.unwrap_or_default().lines().map(normalise).collect()
 }
 
 /// How many times `run` appears as consecutive lines of `haystack`.
