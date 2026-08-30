@@ -306,6 +306,17 @@ already went out is corrected rather than left standing.
 
 ## Known gaps
 
+- **A hunk is located by its context, not by applying the patch.** A hunk whose
+  intended block was independently changed to some third version, while an
+  identical after-image happens to exist elsewhere in the file, can match the
+  wrong place: the before image is absent (the block moved on) and the after
+  image is found (somewhere else). The honest fix is to apply the diff and
+  compare trees, which is a different and much larger piece of machinery. The
+  shape is rare, and everything around it is conservative — the context must
+  match exactly, whitespace and blank lines included, and repeated hunks need as
+  many occurrences as the diff has — but it is a real hole and it is why
+  `pr_triage.close` should stay off until a repository has watched the labels
+  for a while.
 - Maintainer protection is expressed through `pr_triage.close.protected_authors`.
   The gate accepts a `maintainers` list, but the server passes an empty one
   because `ForgeRead` cannot yet report a repository's collaborators. Same gap
