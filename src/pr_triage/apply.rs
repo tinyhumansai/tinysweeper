@@ -130,25 +130,26 @@ pub async fn revalidate_at(
     maintainers: &[String],
     freshness: Freshness,
 ) -> Recheck {
-    // The kill-switch check runs for *every* plan, including the ones with
-    // nothing to close. `tinysweeper:human-review` means leave this item alone,
-    // and a maintainer who applies it between the sweep and the write is owed
-    // that whether or not a close happened to be on the table.
-    //
-    // The rest of the re-check is about close evidence, so it is skipped when
-    // there is no close: re-reading every pull request to decide whether to add
-    // a label it may already have would double the cost of the safe half.
-    // Fails closed, and for every plan rather than only the closing ones. If a
-    // maintainer has just applied a kill switch and this read is the request
-    // that gets rate-limited, proceeding would write the stale labels and
-    // comment over their intervention. We cannot establish the item is still
-    // ours to write to, so we do not write to it.
+    // Everything down to the gate runs for *every* plan, closing or not. The
+    // reason is that a stale verdict is not only a bad close — it is also a bad
+    // *label*, and applying it retires whatever facet label the pull request
+    // currently carries in favour of a conclusion about a revision that is
+    // gone. Only the gate itself, which is about whether a close is permitted,
+    // is skipped when there is nothing to close.
+
+    // Fails closed. If a maintainer has just applied a kill switch and this is
+    // the request that gets rate-limited, proceeding would write over their
+    // intervention. We cannot establish the item is still ours to write to, so
+    // we do not write to it.
     let Ok(current) = read.pull_request(repo, plan.number).await else {
         plan.close = None;
         plan.close_refusal = Some("its current state could not be re-checked before writing");
         return Recheck::LeaveAlone;
     };
 
+    // `tinysweeper:human-review` means leave this item alone, and a maintainer
+    // who applies it between the sweep and the write is owed that whether or
+    // not a close happened to be on the table.
     if config.issues.block_labels.iter().any(|blocked| {
         current
             .labels
@@ -160,63 +161,19 @@ pub async fn revalidate_at(
         return Recheck::LeaveAlone;
     }
 
-    // The evidence has to still describe the pull request, and this is checked
-    // for *every* plan rather than only the closing ones. Every verdict here is
-    // read off a diff, and a push replaces that diff — so a moved head makes
-    // the label as stale as the close, and applying it would retire whatever
-    // facet label the pull request currently carries in favour of a conclusion
-    // about a revision that is gone.
-    // An empty recorded head is *not* a pass. A plan with no revision evidence
-    // cannot be shown to still describe the pull request, and "we cannot tell"
-    // is the same answer as "no" for a write we would not be able to take back.
+    // The subject's own evidence. An empty recorded head is *not* a pass: a
+    // plan with no revision behind it cannot be shown to still describe the
+    // pull request, and "we cannot tell" is the same answer as "no" for a write
+    // nobody can take back.
     if plan.head_sha.is_empty() || plan.head_sha != current.head_sha {
-        // The whole plan, not only the close. Every verdict here is read off a
-        // diff, so a moved head makes the *label* stale too — and applying it
-        // would retire the pull request's current `triage:` label in favour of
-        // a conclusion about a revision that is no longer there, then post a
-        // comment asserting it.
         plan.close = None;
         plan.close_refusal = Some("it was pushed to after the sweep read its diff");
         return Recheck::LeaveAlone;
     }
 
-    // Zeroed on the second pass, for the reason on `Freshness`. Not a widening
-    // of the gate: the full pass already applied these against the state before
-    // any of our own writes touched it.
-    let policy = match freshness {
-        Freshness::Full => config.pr_triage.close.clone(),
-        Freshness::SinceOurOwnWrites => crate::config::types::PrClose {
-            min_age_days: 0,
-            quiet_days: 0,
-            ..config.pr_triage.close.clone()
-        },
-    };
-
-    // Only where a close was actually planned. Running the gate on a plan that
-    // never proposed one records "the sweep found nothing that justifies a
-    // close" as a refusal on every ordinary pull request — a fact nobody asked
-    // about, printed in every report line.
-    if plan.close.is_none() {
-        return Recheck::Unchanged;
-    }
-
-    if let GateOutcome::Refuse(reason) = gate::decide(gate::Inputs {
-        subject: &current,
-        verdict: &plan.verdict,
-        maintainers,
-        policy: &policy,
-    }) {
-        plan.close = None;
-        plan.close_refusal = Some(reason);
-        return Recheck::Unchanged;
-    }
-
-    // The rest of the evidence, and it is re-checked for *every* plan rather
-    // than only the closing ones. A duplicate verdict rests on the original's
-    // diff and a superseded one on the base branch's; if either has moved, the
-    // `triage:` label is as wrong as the close would be — and applying it
-    // retires whatever the pull request currently carries. So a moved original
-    // or base abandons the whole plan.
+    // The evidence that is not the subject. A duplicate verdict rests on the
+    // original's diff and a superseded one on the base branch's; if either has
+    // moved, the label is as wrong as the close would be.
     match &plan.verdict {
         Verdict::Duplicate {
             of, of_head_sha, ..
@@ -224,7 +181,7 @@ pub async fn revalidate_at(
             let Ok(original) = read.pull_request(repo, *of).await else {
                 plan.close = None;
                 plan.close_refusal = Some("the pull request it duplicates could not be re-checked");
-                return Recheck::Unchanged;
+                return Recheck::LeaveAlone;
             };
             if original.head_sha != *of_head_sha {
                 plan.close = None;
@@ -265,6 +222,36 @@ pub async fn revalidate_at(
             }
         }
         Verdict::Review { .. } => {}
+    }
+
+    // Only where a close was actually planned. Running the gate on a plan that
+    // never proposed one records "the sweep found nothing that justifies a
+    // close" on every ordinary pull request — a fact nobody asked about, in
+    // every line of every report.
+    if plan.close.is_none() {
+        return Recheck::Unchanged;
+    }
+
+    // Zeroed on the second pass, for the reason on `Freshness`. Not a widening
+    // of the gate: the full pass already applied these against the state before
+    // any of our own writes touched it.
+    let policy = match freshness {
+        Freshness::Full => config.pr_triage.close.clone(),
+        Freshness::SinceOurOwnWrites => crate::config::types::PrClose {
+            min_age_days: 0,
+            quiet_days: 0,
+            ..config.pr_triage.close.clone()
+        },
+    };
+
+    if let GateOutcome::Refuse(reason) = gate::decide(gate::Inputs {
+        subject: &current,
+        verdict: &plan.verdict,
+        maintainers,
+        policy: &policy,
+    }) {
+        plan.close = None;
+        plan.close_refusal = Some(reason);
     }
 
     Recheck::Unchanged
