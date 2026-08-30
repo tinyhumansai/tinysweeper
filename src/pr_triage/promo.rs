@@ -127,7 +127,7 @@ const REFERRAL_PARAMS: [&str; 5] = ["ref", "via", "utm_source", "utm_campaign", 
 /// Matched inside a URL only, never in prose. "We do not allow affiliate
 /// links" is a sentence about policy, and flagging the documentation that says
 /// so as an advertisement is the most embarrassing false positive available.
-const REFERRAL_WORDS: [&str; 3] = ["/affiliate", "affiliate=", "/r/?"];
+const REFERRAL_WORDS: [&str; 4] = ["/affiliate/", "/affiliate?", "affiliate=", "/r/?"];
 
 /// Words that carry no technical content and a lot of register.
 ///
@@ -234,6 +234,9 @@ fn inspect_lines(
             if REFERRAL_PARAMS.iter().any(|name| {
                 rest.contains(&format!("?{name}=")) || rest.contains(&format!("&{name}="))
             }) || REFERRAL_WORDS.iter().any(|word| rest.contains(word))
+                // A trailing `/affiliate` is a path segment too; anything
+                // longer — `/affiliate-policy` — is a different word.
+                || rest.ends_with("/affiliate")
             {
                 finding.signals.insert(Signal::ReferralLink);
             }

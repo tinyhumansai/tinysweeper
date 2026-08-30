@@ -286,3 +286,28 @@ fn a_common_login_does_not_own_every_host_containing_it() {
     assert!(host_matches("acmelabs.example", "acmelabs.example"));
     assert!(host_matches("blog.acmelabs.example", "acmelabs.example"));
 }
+
+#[test]
+fn an_affiliate_shaped_path_segment_is_not_an_affiliate_link() {
+    // `/affiliate-policy` is a page about them, not one of them.
+    let files = vec![changed(
+        "docs/legal.md",
+        "@@ -1,1 +1,2 @@\n # Legal\n+See https://docs.example/affiliate-policy for the rules.\n",
+    )];
+    assert!(
+        !inspect_diff(&files, &[])
+            .signals
+            .contains(&Signal::ReferralLink)
+    );
+
+    // The real thing still matches.
+    let real = vec![changed(
+        "README.md",
+        "@@ -1,1 +1,2 @@\n # Title\n+Buy at https://shop.example/affiliate/12345 now.\n",
+    )];
+    assert!(
+        inspect_diff(&real, &[])
+            .signals
+            .contains(&Signal::ReferralLink)
+    );
+}
