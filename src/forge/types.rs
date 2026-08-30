@@ -38,7 +38,7 @@ impl std::fmt::Display for RepoId {
 }
 
 /// A pull request, reduced to what the lanes actually read.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PullRequest {
     /// The pull request number.
     pub number: u64,
@@ -73,6 +73,18 @@ pub struct PullRequest {
     pub labels: Vec<String>,
     /// Whether GitHub considers it mergeable, when known.
     pub mergeable: Option<bool>,
+    /// Whether it is still open.
+    ///
+    /// Distinct from `merged`, and the distinction matters on both paths that
+    /// read it: a pull request closed *without* merging is neither open nor
+    /// merged, and treating "not merged" as "open" would let the triage sweep
+    /// re-triage — and try to re-close — everything anybody has ever closed.
+    ///
+    /// `serde(default)` would make an old fixture read as closed, which is the
+    /// wrong direction, so it defaults through `Default` on the struct instead
+    /// and adapters set it explicitly. See `open_default`.
+    #[serde(default = "open_default")]
+    pub open: bool,
     /// Whether it was actually merged.
     ///
     /// Distinct from "closed": issue triage may only close an issue as fixed by
@@ -81,6 +93,32 @@ pub struct PullRequest {
     pub merged: bool,
     /// Approving reviews currently on it.
     pub approvals: u32,
+    /// Age in days. Kept as a plain number, exactly as on
+    /// [`Issue`](crate::forge::types::Issue), so the offline mock needs no
+    /// clock and the age guards in `crate::pr_triage::gate` stay trivially
+    /// testable. An adapter that cannot say reports `0`, which only ever makes
+    /// a guard stricter.
+    ///
+    /// `serde(default)` because the committed eval fixtures predate the field,
+    /// and a fixture that never knew a pull request's age should replay as one
+    /// whose age is unknown rather than fail to load.
+    #[serde(default)]
+    pub age_days: u32,
+    /// Days since the last human activity on it, by the same rule.
+    ///
+    /// `0` from an adapter that cannot say, which reads as "active today" and
+    /// therefore refuses a close rather than allowing one.
+    #[serde(default)]
+    pub quiet_days: u32,
+}
+
+/// An unstated `open` is an open pull request.
+///
+/// Every guard that reads it refuses when the pull request is *not* open, so an
+/// old fixture that never knew the field has to read as open or loading it
+/// would silently disable those guards' subjects rather than the guards.
+fn open_default() -> bool {
+    true
 }
 
 /// A file changed by a pull request.
@@ -105,6 +143,37 @@ pub struct ChangedFile {
     /// "a four-megabyte binary entered the history", and those deserve very
     /// different reactions.
     pub size_bytes: Option<u64>,
+}
+
+impl Default for PullRequest {
+    /// Hand-written for one field: `open` defaults to `true`.
+    ///
+    /// Derived, it would be `false`, and every test fixture built with
+    /// `..PullRequest::default()` would describe a closed pull request — which
+    /// the close gate refuses, so a whole file of tests would pass for the
+    /// wrong reason.
+    fn default() -> Self {
+        Self {
+            number: 0,
+            title: String::new(),
+            body: String::new(),
+            author: String::new(),
+            author_is_bot: false,
+            draft: false,
+            base_ref: String::new(),
+            base_sha: String::new(),
+            head_ref: String::new(),
+            head_sha: String::new(),
+            from_fork: false,
+            labels: Vec::new(),
+            mergeable: None,
+            open: true,
+            merged: false,
+            approvals: 0,
+            age_days: 0,
+            quiet_days: 0,
+        }
+    }
 }
 
 impl ChangedFile {

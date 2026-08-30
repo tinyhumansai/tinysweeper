@@ -1,0 +1,497 @@
+//! "Already implemented": deciding whether a pull request's change is already
+//! on the base branch.
+//!
+//! The question is asked in a form that has a checkable answer:
+//!
+//! > Would applying this pull request change anything?
+//!
+//! If every run of lines it adds is already there, and every run of lines it
+//! removes is already gone, then the answer is no and the pull request is a
+//! no-op against the branch it targets. That is a fact a maintainer can verify
+//! with `git grep`, not a judgement — which is why this path calls no model and
+//! why its verdict is allowed to close a pull request.
+//!
+//! ## Why runs, and not lines
+//!
+//! Matching added lines individually would be far too generous. A pull request
+//! adding a single `}` would find one on the base branch and declare itself
+//! landed. So the unit of comparison is a **run**: a maximal stretch of
+//! consecutive added lines in a hunk, which must appear as a consecutive
+//! stretch on the base branch. Ten lines in the same order in the same file is
+//! not a coincidence.
+//!
+//! The removed runs carry the other half of the argument, and it is the half
+//! that makes single-line changes safe. A pull request changing `1.93.0` to
+//! `1.96.1` adds one line and removes one. If the change already landed, the
+//! base has the new line and not the old one. If it did not, the base still has
+//! the old line — the removed run is *present* — and this module refuses.
+//!
+//! ## What it refuses to judge
+//!
+//! Renames, files whose patch the forge would not give us, and changes smaller
+//! than `pr_triage.min_landed_lines`. Each is a case where the diff does not
+//! contain enough to answer the question, and answering it anyway would mean
+//! closing somebody's pull request on a guess.
+
+use std::collections::BTreeMap;
+
+use crate::forge::types::{ChangedFile, FileStatus};
+
+/// Why a pull request could not be called superseded.
+///
+/// Carried as a reason rather than a bare `false` because "we could not tell"
+/// and "we checked, and it has not landed" are different answers, and only the
+/// second one is worth putting in a comment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotLanded {
+    /// The pull request changes nothing this module can read.
+    NoReadableDiff,
+    /// A file was renamed, so "the same path on the base branch" is not a
+    /// question with one answer.
+    Renamed,
+    /// The forge gave no patch for a file — a binary, or a truncated diff.
+    OpaqueFile,
+    /// Too few substantive lines for a match to be evidence.
+    TooSmall,
+    /// A line it adds is not on the base branch.
+    AddedLineMissing,
+    /// A line it removes is still on the base branch.
+    RemovedLineStillPresent,
+    /// It deletes a file the base branch still has.
+    FileStillThere,
+    /// A hunk has no surrounding context to locate it by.
+    NoAnchor,
+    /// The same change appears more times in the diff than on the branch.
+    PartiallyApplied,
+    /// The base branch's copy of a file could not be read.
+    ///
+    /// Distinct from the file being *absent*, and the distinction is the whole
+    /// point of the variant. A rate limit or a permission failure that read as
+    /// "the file is not there" would tell a deletion-only pull request that
+    /// everything it removes is already gone — and close it.
+    BaseUnreadable,
+}
+
+impl NotLanded {
+    /// One phrase, for the log and the triage comment.
+    pub fn reason(self) -> &'static str {
+        match self {
+            NotLanded::NoReadableDiff => "the diff had nothing readable in it",
+            NotLanded::Renamed => "it renames a file, so the base-branch path is ambiguous",
+            NotLanded::OpaqueFile => "the forge gave no patch for one of its files",
+            NotLanded::TooSmall => "the change is too small for a match to mean anything",
+            NotLanded::AddedLineMissing => "it adds lines the base branch does not have",
+            NotLanded::RemovedLineStillPresent => "it removes lines the base branch still has",
+            NotLanded::FileStillThere => "it deletes a file the base branch still has",
+            NotLanded::NoAnchor => "it changes lines with no surrounding context to place them by",
+            NotLanded::PartiallyApplied => {
+                "only some of its repeated changes are on the base branch"
+            }
+            NotLanded::BaseUnreadable => {
+                "the base branch copy of one of its files could not be read"
+            }
+        }
+    }
+}
+
+/// A file as the base branch has it.
+///
+/// Three states, not two, and the third is why this type exists. "Not there"
+/// and "we could not find out" are opposite answers on the deletion path: a
+/// pull request that removes a file is superseded if the file is already gone,
+/// and completely unjudged if the forge simply would not say. Collapsing them
+/// into `Option<String>` is how a rate limit closes somebody's pull request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Base {
+    /// The forge served the file. Carries its text.
+    Present(String),
+    /// The forge answered, and the file is not on the branch.
+    Absent,
+    /// The forge did not answer: an error, a rate limit, a permission failure.
+    Unreadable,
+}
+
+/// One hunk of a diff, as the two versions of the text it describes.
+///
+/// This is the shape that makes the question answerable. A hunk is a *before*
+/// image and an *after* image over the same stretch of file, and "this hunk is
+/// already applied" is exactly "the base branch contains the after image and
+/// not the before image".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Hunk {
+    /// The stretch as it was: context plus removed lines, normalised.
+    pub before: Vec<String>,
+    /// The stretch as it would be: context plus added lines, normalised.
+    pub after: Vec<String>,
+    /// How many lines the hunk actually changes, context excluded.
+    pub changed: usize,
+    /// How many of those it removes.
+    ///
+    /// Tracked separately because the before-image test is only meaningful on
+    /// a hunk that removes something: for a pure addition the before image is
+    /// nothing but context, and context is still on the branch whether or not
+    /// the change landed.
+    pub removes: usize,
+    /// Context lines before the first changed line in the hunk.
+    pub leading: usize,
+    /// The line this hunk starts at on the new side, from its `@@` header.
+    ///
+    /// Carried for duplicate detection rather than for this module: two hunks
+    /// with identical context in two distant places are told apart by where
+    /// they are. `0` when the header could not be parsed, which simply makes
+    /// two such hunks compare equal — the conservative direction is handled by
+    /// the context they also carry.
+    pub start: usize,
+    /// Context lines after the last changed line.
+    ///
+    /// Kept apart from `leading` because a pure addition is only judgeable when
+    /// it has both. With context on one side only, the before image is not
+    /// *broken* by the change — it is just a prefix that still appears — and
+    /// the hunk cannot say which of two identical blocks it meant.
+    pub trailing: usize,
+    /// How many context lines survived normalisation.
+    ///
+    /// Blank context is dropped, so a hunk can end up with none — and a pure
+    /// addition with no context has no location evidence at all. Its lines
+    /// could match anywhere in the file, which is the coincidence the whole
+    /// image comparison exists to refuse.
+    pub anchors: usize,
+}
+
+/// Split a unified diff into its hunks.
+///
+/// Blank and whitespace-only lines are dropped from both images rather than
+/// kept, so re-blanking a file is not mistaken for a change; the images are
+/// still compared as consecutive runs, which is what the location argument in
+/// [`file_landed`] rests on.
+///
+/// `\ No newline at end of file` is diff chrome, not content, and is skipped.
+pub fn hunks(patch: &str) -> Vec<Hunk> {
+    let mut out: Vec<Hunk> = Vec::new();
+    let mut current = Hunk::default();
+
+    let push = |current: &mut Hunk, out: &mut Vec<Hunk>| {
+        if current.changed > 0 {
+            out.push(std::mem::take(current));
+        } else {
+            *current = Hunk::default();
+        }
+    };
+
+    let mut in_hunk = false;
+
+    for line in patch.lines() {
+        if line.starts_with("@@") {
+            push(&mut current, &mut out);
+            in_hunk = true;
+            current.start = new_side_start(line);
+            continue;
+        }
+        if line.starts_with('\\') {
+            continue;
+        }
+        match line.as_bytes().first() {
+            // The `+++`/`---` guard applies only outside a hunk. Inside one,
+            // `++counter;` is a real added line whose diff form starts `+++`,
+            // and discarding it as a header would drop content that is the
+            // whole difference between two versions.
+            Some(b'+') if in_hunk || !line.starts_with("+++") => {
+                // Counted whether or not it is substantive. A hunk that adds
+                // only blank lines still changes the file — a Markdown
+                // paragraph break, a gap in a multiline string — and a hunk
+                // with a `changed` of zero is discarded entirely below.
+                push_normalised(&line[1..], &mut current.after);
+                current.changed += 1;
+                current.trailing = 0;
+            }
+            Some(b'-') if in_hunk || !line.starts_with("---") => {
+                push_normalised(&line[1..], &mut current.before);
+                current.changed += 1;
+                current.removes += 1;
+                current.trailing = 0;
+            }
+            // Context, and the reason this module can say anything about
+            // *location*: a line present on both sides anchors the change to a
+            // place in the file rather than to the file as a whole.
+            Some(b' ') | None => {
+                let text = line.strip_prefix(' ').unwrap_or(line);
+                let normalised = normalise(text);
+                let substantive = !normalised.is_empty();
+                // Kept on both sides whether or not it is substantive, so the
+                // images stay exact line sequences. Only a substantive line
+                // counts as an *anchor*, though: a hunk located by nothing but
+                // blank lines is not located.
+                current.before.push(normalised.clone());
+                current.after.push(normalised);
+                if substantive {
+                    current.anchors += 1;
+                    if current.changed == 0 {
+                        current.leading += 1;
+                    } else {
+                        current.trailing += 1;
+                    }
+                }
+            }
+            // A `diff --git`/`index` header between hunks. Not content.
+            _ => {}
+        }
+    }
+
+    push(&mut current, &mut out);
+    out
+}
+
+/// The new-side start line from an `@@ -a,b +c,d @@` header.
+///
+/// `0` when it will not parse, which is not an error: nothing here *depends* on
+/// the number, and a hunk whose position is unknown simply compares by its
+/// context like it always did.
+fn new_side_start(header: &str) -> usize {
+    header
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix('+'))
+        .and_then(|field| field.split(',').next())
+        .and_then(|number| number.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Add one diff line to an image, reporting whether it is substantive.
+///
+/// A blank line is **kept** in the image and reported as not substantive. Both
+/// halves matter: dropping it made a pull request that adds only blank lines —
+/// a Markdown paragraph break, a gap in a multiline string — compare equal to a
+/// base branch that has none, and the change would read as already applied.
+/// Reporting it as substantive would let a hunk anchored on nothing but blanks
+/// count as located.
+fn push_normalised(text: &str, into: &mut Vec<String>) -> bool {
+    let normalised = normalise(text);
+    let substantive = !normalised.is_empty();
+    into.push(normalised);
+    substantive
+}
+
+/// The comparable form of a line.
+///
+/// **Trailing** whitespace only. Leading indentation is kept, and interior
+/// spacing is kept, because in a whitespace-sensitive language they are the
+/// change: moving a call out of a Python `if` alters nothing but its
+/// indentation, and a comparison that collapsed it would find the same line
+/// still inside the block on the base branch and call the pull request already
+/// applied.
+///
+/// This used to collapse all whitespace, on the argument that re-indenting a
+/// block is a common reason the same code reads differently in two places. That
+/// is true and it is the wrong trade here: the cost of the loose version is
+/// closing a pull request that would have changed behaviour, and the cost of
+/// the strict one is leaving a re-indented change for a human.
+pub fn normalise(line: &str) -> String {
+    line.trim_end().to_string()
+}
+
+/// The base-branch text of a file, in comparable form.
+///
+/// A file that does not exist on the base branch is an empty list, not an
+/// error: a pull request deleting a file somebody already deleted removes lines
+/// that are already gone, which is precisely a superseded pull request. The
+/// caller is responsible for distinguishing "not there" from "could not read
+/// it" — see [`landed`], which refuses the second.
+pub fn base_lines(content: Option<&str>) -> Vec<String> {
+    // Blank lines kept, to match the images. Filtering them here and there
+    // would agree with itself and still be wrong: a pull request whose only
+    // addition is a blank line would compare equal to a branch without it.
+    content.unwrap_or_default().lines().map(normalise).collect()
+}
+
+/// How many times `run` appears as consecutive lines of `haystack`.
+///
+/// Overlapping occurrences are counted, which is the conservative direction: it
+/// can only ever make the branch look like it has *more* of the change than it
+/// does... and that is the wrong direction, so occurrences are counted
+/// non-overlapping instead — a repeated block that overlaps itself is one
+/// place, not two.
+fn occurrences(haystack: &[String], run: &[String]) -> usize {
+    if run.is_empty() || run.len() > haystack.len() {
+        return 0;
+    }
+    let mut found = 0;
+    let mut at = 0;
+    while at + run.len() <= haystack.len() {
+        if &haystack[at..at + run.len()] == run {
+            found += 1;
+            at += run.len();
+        } else {
+            at += 1;
+        }
+    }
+    found
+}
+
+/// Whether `run` appears as consecutive lines of `haystack`.
+fn contains_run(haystack: &[String], run: &[String]) -> bool {
+    // An empty run is *not* found. Returning true for it reads as "yes, that
+    // change is already on the branch" for a hunk that supplied no evidence,
+    // and no caller wants that answer — the whole-file deletion path, which is
+    // the only place an empty image legitimately arises, is decided before this
+    // is ever reached.
+    if run.is_empty() {
+        return false;
+    }
+    if run.len() > haystack.len() {
+        return false;
+    }
+    haystack.windows(run.len()).any(|window| window == run)
+}
+
+/// Whether one file's change is already on the base branch.
+///
+/// `base` is that file's content on the base branch, `None` when it is not
+/// there at all. Returns the number of changed lines checked.
+///
+/// Each hunk has to clear both halves of the test, and both halves are
+/// necessary:
+///
+/// - **the after image is on the branch**, as a consecutive run. Because the
+///   image carries the hunk's context lines, this is a statement about a
+///   *place* in the file and not merely about the lines existing somewhere in
+///   it — which is what stops "adds three lines that already appear in some
+///   other list" from reading as a change that already landed.
+/// - **the before image is not on the branch**, where the hunk has context to
+///   make that meaningful. If the change had not been applied, the stretch
+///   would still read as it did before, and finding it says so conclusively.
+pub fn file_landed(file: &ChangedFile, base: Option<&str>) -> Result<usize, NotLanded> {
+    if file.previous_path.is_some() || file.status == FileStatus::Renamed {
+        return Err(NotLanded::Renamed);
+    }
+    let Some(patch) = file.patch.as_deref() else {
+        return Err(NotLanded::OpaqueFile);
+    };
+
+    // A whole-file deletion, judged on the file's existence rather than on its
+    // lines. The `after` image of such a hunk is empty, and the empty run is
+    // "present" in every file — so without this a pull request deleting a file
+    // that is still on the branch, and has merely been edited since, reads as
+    // already applied. It is the one case where the images say nothing.
+    if file.status == FileStatus::Removed {
+        return match base {
+            // The file is still there, so applying this would still delete it.
+            Some(_) => Err(NotLanded::FileStillThere),
+            // Already gone. Decided here rather than by the images below,
+            // because a whole-file deletion has no context to anchor on and its
+            // after image is empty — the images genuinely say nothing, and
+            // existence is the only question worth asking.
+            None => Ok(hunks(patch).iter().map(|hunk| hunk.changed).sum()),
+        };
+    }
+
+    let hunks = hunks(patch);
+    let base = base_lines(base);
+    let mut changed = 0usize;
+
+    // How many hunks share each after image. A pull request that makes the same
+    // addition in two identical blocks needs *two* occurrences on the branch;
+    // checking each hunk independently would let both match the one occurrence
+    // that is there and call a half-applied change finished.
+    let mut wanted: BTreeMap<&[String], usize> = BTreeMap::new();
+    for hunk in &hunks {
+        *wanted.entry(hunk.after.as_slice()).or_default() += 1;
+    }
+    for (image, count) in &wanted {
+        if *count > 1 && occurrences(&base, image) < *count {
+            return Err(NotLanded::PartiallyApplied);
+        }
+    }
+
+    for hunk in &hunks {
+        // The before image first: it is the conclusive half. A stretch that
+        // still reads the way it did before the change proves the change has
+        // not been applied, whatever the additions look like.
+        //
+        // Only where the hunk removes something. A pure addition's before
+        // image is nothing but its context lines, and those are on the branch
+        // whether or not the change landed — testing them would refuse every
+        // addition there is. Such hunks are judged on the after image alone,
+        // which carries the same context and is therefore still a statement
+        // about a *place* rather than about the file as a whole.
+        // The before image is conclusive whenever the change would actually
+        // *break* it — which is any hunk that removes something, and a pure
+        // addition that has context on both sides of what it inserts. In both
+        // cases, finding the stretch still reading the old way proves the
+        // change is not applied *there*.
+        //
+        // That "there" is the point, and it is what a pure addition needs the
+        // two-sided context for: a file with two identical blocks, one of which
+        // already has the addition, satisfies the after image from the wrong
+        // block. The before image catches it, because the untouched block is
+        // still on the branch.
+        let before_is_conclusive = hunk.removes > 0 || (hunk.leading > 0 && hunk.trailing > 0);
+        if before_is_conclusive && contains_run(&base, &hunk.before) {
+            return Err(NotLanded::RemovedLineStillPresent);
+        }
+        // Every hunk, not only the pure additions. Without context a match says
+        // the lines exist *somewhere*, which is exactly the coincidence the
+        // image comparison exists to refuse — and an empty after image (a
+        // deletion hunk with no context) is "present" in every file on earth.
+        //
+        // A pure addition needs context on *both* sides, because that is what
+        // makes its before image conclusive above. With context on one side the
+        // hunk cannot say which of two identical blocks it meant, and a diff
+        // that cannot say where it applies cannot prove it already has.
+        if hunk.anchors == 0 || (hunk.removes == 0 && !before_is_conclusive) {
+            return Err(NotLanded::NoAnchor);
+        }
+        if !contains_run(&base, &hunk.after) {
+            return Err(NotLanded::AddedLineMissing);
+        }
+        changed += hunk.changed;
+    }
+
+    Ok(changed)
+}
+
+/// Whether a whole pull request's change is already on the base branch.
+///
+/// `bases` supplies each changed file's base-branch state in the same order as
+/// `files`; a caller that could not read one passes [`Base::Unreadable`], which
+/// refuses the whole pull request rather than being read as an absent file.
+///
+/// Returns the number of substantive lines checked, which the verdict carries
+/// so a maintainer reading the comment knows how much evidence is behind it.
+pub fn landed(files: &[ChangedFile], bases: &[Base], min_lines: usize) -> Result<usize, NotLanded> {
+    // A short `bases` would let `zip` drop the tail of `files` silently, and a
+    // pull request judged on the first two of its twenty files is exactly the
+    // wrong thing to close. Callers build the two lists together; a mismatch is
+    // a bug, and the safe reading of a bug here is "we cannot tell".
+    if files.is_empty() || files.len() != bases.len() {
+        return Err(NotLanded::NoReadableDiff);
+    }
+
+    let mut lines = 0usize;
+    for (file, base) in files.iter().zip(bases) {
+        let base = match base {
+            Base::Present(content) => Some(content.as_str()),
+            Base::Absent => None,
+            // Refused rather than guessed at, and refused for the whole pull
+            // request: one file we could not read is one file whose change we
+            // cannot say landed.
+            Base::Unreadable => return Err(NotLanded::BaseUnreadable),
+        };
+        lines += file_landed(file, base)?;
+    }
+
+    if lines == 0 {
+        return Err(NotLanded::NoReadableDiff);
+    }
+    // Checked last, deliberately: a small pull request that has *not* landed
+    // should say so, and reporting "too small to tell" about a change that
+    // plainly conflicts with the base branch would be a worse answer than the
+    // true one.
+    if lines < min_lines {
+        return Err(NotLanded::TooSmall);
+    }
+
+    Ok(lines)
+}
+
+#[cfg(test)]
+#[path = "landed_test.rs"]
+mod tests;

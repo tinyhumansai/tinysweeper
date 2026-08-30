@@ -599,6 +599,186 @@ fn a_label_in_both_allow_and_block_lists_is_flagged_as_dead() {
     );
 }
 
+// --- pull request triage ---------------------------------------------------
+//
+// One test per branch of `validate_pr_triage`. These guard a path that closes
+// contributors' pull requests, so a regression in any of them has to fail a
+// test rather than reach a repository.
+
+#[test]
+fn a_pull_request_overlap_floor_outside_zero_to_one_is_rejected() {
+    let config = parse(
+        r#"
+version = 1
+[pr_triage]
+enabled = true
+duplicate_path_overlap_min = 1.4
+duplicate_line_overlap_min = -0.2
+"#,
+    );
+    let problems = validate::validate(&config);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("duplicate_path_overlap_min")),
+        "{problems:#?}"
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("duplicate_line_overlap_min")),
+        "{problems:#?}"
+    );
+}
+
+#[test]
+fn a_sweep_that_reads_nothing_is_rejected() {
+    let config = parse(
+        r#"
+version = 1
+[pr_triage]
+enabled = true
+max_pull_requests = 0
+"#,
+    );
+    assert!(
+        validate::validate(&config)
+            .iter()
+            .any(|p| p.contains("would read nothing"))
+    );
+}
+
+#[test]
+fn a_zero_line_floor_for_superseded_is_rejected() {
+    // Zero would let a single shared `}` count as proof a whole pull request
+    // had already landed.
+    let config = parse(
+        r#"
+version = 1
+[pr_triage]
+enabled = true
+min_landed_lines = 0
+"#,
+    );
+    assert!(
+        validate::validate(&config)
+            .iter()
+            .any(|p| p.contains("one-line coincidence"))
+    );
+}
+
+#[test]
+fn pull_request_closing_without_the_sweep_is_rejected() {
+    let config = parse(
+        r#"
+version = 1
+[pr_triage]
+enabled = false
+[pr_triage.close]
+enabled = true
+"#,
+    );
+    assert!(
+        validate::validate(&config)
+            .iter()
+            .any(|p| p.contains("has no effect while `pr_triage.enabled = false`"))
+    );
+}
+
+#[test]
+fn live_pull_request_closing_with_no_age_floor_is_rejected() {
+    let config = parse(
+        r#"
+version = 1
+[pr_triage]
+enabled = true
+[pr_triage.close]
+enabled = true
+dry_run = false
+min_age_days = 0
+"#,
+    );
+    assert!(
+        validate::validate(&config)
+            .iter()
+            .any(|p| p.contains("close pull requests the moment they are opened"))
+    );
+}
+
+#[test]
+fn live_pull_request_closing_with_no_comment_is_rejected() {
+    // A close with no comment is a close with no evidence, and the module's
+    // whole promise to a contributor is that the reasoning is on the pull
+    // request and can be argued with.
+    let config = parse(
+        r#"
+version = 1
+[pr_triage]
+enabled = true
+comment = false
+[pr_triage.close]
+enabled = true
+dry_run = false
+min_age_days = 1
+"#,
+    );
+    assert!(
+        validate::validate(&config)
+            .iter()
+            .any(|p| p.contains("close pull requests with no explanation on them")),
+        "{:#?}",
+        validate::validate(&config)
+    );
+}
+
+#[test]
+fn a_periodic_sweep_with_nothing_to_sweep_is_rejected() {
+    let config = parse(
+        r#"
+version = 1
+[pr_triage]
+enabled = true
+sweep_every_minutes = 60
+sweep_repositories = []
+"#,
+    );
+    assert!(
+        validate::validate(&config)
+            .iter()
+            .any(|p| p.contains("sweeps nothing"))
+    );
+}
+
+#[test]
+fn a_sweep_repository_that_is_not_owner_slash_name_is_rejected() {
+    let config = parse(
+        r#"
+version = 1
+[pr_triage]
+enabled = true
+sweep_every_minutes = 60
+sweep_repositories = ["openhuman"]
+"#,
+    );
+    assert!(
+        validate::validate(&config)
+            .iter()
+            .any(|p| p.contains("which is not `owner/name`"))
+    );
+}
+
+#[test]
+fn the_shipped_defaults_have_no_pull_request_triage_problems() {
+    // The defaults are what every deployment starts from, so a rule that
+    // complains about them is a rule nobody can satisfy.
+    let config = Config::default();
+    let problems = validate::validate(&config);
+    assert!(
+        !problems.iter().any(|p| p.contains("pr_triage")),
+        "{problems:#?}"
+    );
+}
+
 #[test]
 fn live_issue_closing_with_no_age_floor_is_rejected() {
     let config = parse(

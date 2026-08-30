@@ -102,6 +102,11 @@ pub enum Write {
         /// The GraphQL node id of the thread.
         thread_id: String,
     },
+    /// A pull request was closed without merging.
+    PullRequestClosed {
+        /// The pull request.
+        number: u64,
+    },
     /// A pull request was merged.
     Merged {
         /// The pull request.
@@ -142,6 +147,10 @@ pub struct MockState {
     pub reviews: BTreeMap<u64, Vec<ReviewVerdict>>,
     /// Review conversations, keyed by pull request number.
     pub review_threads: BTreeMap<u64, Vec<ReviewThread>>,
+    /// Where each branch points, for `branch_head`. A branch that is absent
+    /// resolves to its own name, so tests that do not care about revisions can
+    /// set a file at `"main"` and be read at `"main"`.
+    pub branches: BTreeMap<String, String>,
     /// Repository file contents, keyed by [`file_key`].
     ///
     /// Keyed by commit as well as path because that is the distinction the
@@ -186,6 +195,10 @@ pub struct MockForge {
     ///
     /// Reads still work. This is what `--dry-run` sets.
     read_only: bool,
+    /// Whether editing an unknown comment is refused, as GitHub refuses it.
+    strict_comments: bool,
+    /// Whether closing a pull request is refused.
+    refuse_closes: bool,
 }
 
 impl MockForge {
@@ -215,6 +228,19 @@ impl MockForge {
             state.pull_requests.insert(number, pull_request);
             state.files.insert(number, files);
             state.commits.insert(number, commits);
+        }
+        self
+    }
+
+    /// Serve `content` for `path` at `sha`.
+    ///
+    /// The builder form of [`MockState::set_file`], so a pull request and the
+    /// base-branch text `crate::pr_triage::landed` compares it against can be
+    /// assembled in one expression.
+    pub fn with_file(self, sha: &str, path: &str, content: &str) -> Self {
+        {
+            let mut state = self.state.lock().expect("mock state lock");
+            state.set_file(sha, path, content);
         }
         self
     }
@@ -298,6 +324,27 @@ impl MockForge {
     /// Record writes but never apply them — what `--dry-run` uses.
     pub fn read_only(mut self) -> Self {
         self.read_only = true;
+        self
+    }
+
+    /// Refuse every attempt to close a pull request.
+    ///
+    /// GitHub does refuse them — a repository rule, a permissions change, a
+    /// transient failure — and the interesting behaviour is what the caller
+    /// does about the comment it already posted saying the close was coming.
+    pub fn refusing_closes(mut self) -> Self {
+        self.refuse_closes = true;
+        self
+    }
+
+    /// Refuse an edit to a comment id this forge has never issued.
+    ///
+    /// What GitHub actually does — a `404` — and opt-in rather than the default
+    /// so the many tests that hand this mock an invented id keep working. It
+    /// exists so a test about *recovering* from a failed write can produce a
+    /// real failure instead of asserting on a success and calling it one.
+    pub fn refusing_unknown_comments(mut self) -> Self {
+        self.strict_comments = true;
         self
     }
 
@@ -449,6 +496,36 @@ impl ForgeRead for MockForge {
             .collect())
     }
 
+    async fn branch_head(&self, _repo: &RepoId, branch: &str) -> Result<Option<String>> {
+        let state = self.state.lock().expect("mock state lock");
+        // A branch nobody registered resolves to itself, so a test that sets a
+        // file at `"main"` and never thinks about revisions still works: the
+        // sweep then reads at `"main"`, which is exactly where the file is.
+        Ok(Some(
+            state
+                .branches
+                .get(branch)
+                .cloned()
+                .unwrap_or_else(|| branch.to_string()),
+        ))
+    }
+
+    async fn open_pull_requests(&self, _repo: &RepoId, limit: usize) -> Result<Vec<PullRequest>> {
+        let state = self.state.lock().expect("mock state lock");
+        // `BTreeMap` iterates by key, so this is already oldest-number-first —
+        // the order the port promises and that dedupe's older/newer rule reads.
+        Ok(state
+            .pull_requests
+            .values()
+            // `open`, not `!merged`. A pull request closed without merging is
+            // neither, and a mock that served it as open would let the sweep
+            // re-triage everything anybody has ever closed.
+            .filter(|pull_request| pull_request.open)
+            .take(limit)
+            .cloned()
+            .collect())
+    }
+
     async fn issue_types(&self, _repo: &RepoId) -> Result<Vec<String>> {
         let state = self.state.lock().expect("mock state lock");
         Ok(state.issue_types.clone())
@@ -517,6 +594,19 @@ impl ForgeWrite for MockForge {
             comment_id,
             body: body.to_string(),
         });
+        if self.strict_comments {
+            let known = {
+                let state = self.state.lock().expect("mock state lock");
+                state
+                    .comments
+                    .values()
+                    .flatten()
+                    .any(|comment| comment.id == Some(comment_id))
+            };
+            if !known {
+                return Err(Self::missing("comment", comment_id));
+            }
+        }
         if !self.read_only {
             let mut state = self.state.lock().expect("mock state lock");
             for comments in state.comments.values_mut() {
@@ -630,6 +720,24 @@ impl ForgeWrite for MockForge {
             let mut state = self.state.lock().expect("mock state lock");
             if let Some(issue) = state.issues.get_mut(&number) {
                 issue.open = false;
+            }
+        }
+        Ok(())
+    }
+
+    async fn close_pull_request(&self, _repo: &RepoId, number: u64) -> Result<()> {
+        self.record(Write::PullRequestClosed { number });
+        if self.refuse_closes {
+            return Err(Error::Forge("the forge refused to close it".into()));
+        }
+        if !self.read_only {
+            let mut state = self.state.lock().expect("mock state lock");
+            if let Some(pull_request) = state.pull_requests.get_mut(&number) {
+                // Closed, never merged. Nothing on the write half but `merge`
+                // may set that flag, and this is the path that exists precisely
+                // to end a pull request *without* landing it.
+                pull_request.open = false;
+                pull_request.merged = false;
             }
         }
         Ok(())

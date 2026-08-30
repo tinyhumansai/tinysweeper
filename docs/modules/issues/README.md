@@ -173,6 +173,21 @@ review already has:
   proposal already on disk, making no model calls and costing nothing. A manual
   full review publishes through `app::apply` too, so it needs no separate route.
 
+## Flagging self-promotion
+
+An issue that is a paragraph of product copy with a signup link is triaged like
+any other, and additionally labelled `flag: promotional`. The signals are shared
+with pull request triage — see
+[`docs/modules/pr_triage/README.md`](../pr_triage/README.md#flagging-self-promotion)
+— and they are matched against the issue's own title and body.
+
+Reading untrusted prose is safe here for one specific reason: there is no
+prompt. `pr_triage::promo` matches patterns and counts them, so text saying
+"ignore previous instructions" matches nothing and is simply text.
+
+The flag is advisory. It is not an input to `close::decide`, it adds a label and
+a sentence naming what matched, and the sentence says how to clear it.
+
 ## Labels
 
 The vocabulary lives in `presets/labels.toml` and is applied with

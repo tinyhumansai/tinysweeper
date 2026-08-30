@@ -31,6 +31,7 @@ pub mod lanes;
 pub mod overview;
 pub mod ports;
 pub mod position;
+pub mod pr_triage;
 pub mod retrieve;
 pub mod scan;
 pub mod sentry;
