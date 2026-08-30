@@ -77,6 +77,7 @@ fn repo() -> RepoId {
 fn duplicate_plan() -> TriagePlan {
     let mut plan = TriagePlan::new(
         5798,
+        HEAD,
         Verdict::Duplicate {
             of: 5789,
             of_head_sha: "cccccccccccccccccccccccccccccccccccccccc".into(),
@@ -245,7 +246,7 @@ async fn one_failure_does_not_abandon_the_rest_of_the_sweep() {
 
 #[tokio::test]
 async fn a_plan_with_nothing_to_write_reports_unchanged() {
-    let plan = TriagePlan::new(1, Verdict::Review { because: "-" });
+    let plan = TriagePlan::new(1, HEAD, Verdict::Review { because: "-" });
     let forge = MockForge::new().with_pull_request(
         PullRequest {
             number: 1,
@@ -384,7 +385,7 @@ async fn a_push_during_the_sweep_stops_the_close() {
 
 #[tokio::test]
 async fn a_plan_that_only_retires_a_label_is_not_reported_unchanged() {
-    let mut plan = TriagePlan::new(1, Verdict::Review { because: "-" });
+    let mut plan = TriagePlan::new(1, HEAD, Verdict::Review { because: "-" });
     plan.remove_labels = vec!["triage: duplicate".into()];
 
     let forge = MockForge::new().with_pull_request(
@@ -564,6 +565,7 @@ async fn a_superseded_close_is_dropped_when_the_base_branch_moves() {
     // back off the branch, and the whole finding with them.
     let mut plan = TriagePlan::new(
         5798,
+        HEAD,
         Verdict::Superseded {
             base_ref: "main".into(),
             base_sha: "1111111111111111111111111111111111111111".into(),

@@ -142,6 +142,7 @@ mod tests {
     fn duplicate_plan() -> TriagePlan {
         let mut plan = TriagePlan::new(
             5798,
+            "abc1234",
             Verdict::Duplicate {
                 of: 5789,
                 of_head_sha: "abc1234".into(),
@@ -156,14 +157,14 @@ mod tests {
     #[test]
     fn a_pull_request_worth_reading_gets_no_comment() {
         assert_eq!(
-            render(&TriagePlan::new(1, Verdict::Review { because: "-" })),
+            render(&TriagePlan::new(1, "abc1234", Verdict::Review { because: "-" })),
             None
         );
     }
 
     #[test]
     fn a_flag_is_explained_even_when_the_verdict_is_worth_reading() {
-        let mut plan = TriagePlan::new(1, Verdict::Review { because: "-" });
+        let mut plan = TriagePlan::new(1, "abc1234", Verdict::Review { because: "-" });
         plan.flags.push((
             Flag::Promotional,
             "a link carrying a referral or campaign parameter".into(),
@@ -226,6 +227,7 @@ mod tests {
     fn a_superseded_comment_names_the_branch_and_the_line_count() {
         let mut plan = TriagePlan::new(
             42,
+            "abc1234",
             Verdict::Superseded {
                 base_ref: "main".into(),
                 base_sha: "abc1234".into(),
