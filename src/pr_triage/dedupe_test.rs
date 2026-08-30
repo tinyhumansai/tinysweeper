@@ -304,3 +304,24 @@ fn two_edits_to_identical_distant_blocks_are_told_apart_by_position() {
     assert_eq!(overlap(&first, &second).edits, 0.0);
     assert_eq!(duplicate_of(&second, &[first], 0.8, 0.9), None);
 }
+
+#[test]
+fn many_tiny_shared_hunks_do_not_outvote_one_large_distinct_one() {
+    // Twenty shared one-line edits and one big distinct edit each. Counting
+    // hunks scores 20/22 = 0.91 and closes the newer pull request; counting
+    // lines sees that almost none of the substance is shared.
+    let shared: String = (0..20)
+        .map(|n| format!("@@ -{n},3 +{n},3 @@\n ctx{n}\n-old{n}\n+new{n}\n"))
+        .collect();
+    let big = |tag: &str| -> String {
+        let body: String = (0..500).map(|n| format!("+{tag} line {n}\n")).collect();
+        format!("@@ -900,1 +900,501 @@\n anchor\n{body} tail\n")
+    };
+
+    let one = Shape::of(1, "main", &[changed("a.rs", &format!("{shared}{}", big("alpha")))]);
+    let two = Shape::of(2, "main", &[changed("a.rs", &format!("{shared}{}", big("beta")))]);
+
+    let score = overlap(&one, &two);
+    assert!(score.edits < 0.9, "scored {}", score.edits);
+    assert_eq!(duplicate_of(&two, &[one], 0.8, 0.9), None);
+}

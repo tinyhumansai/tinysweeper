@@ -54,7 +54,9 @@ pub struct Shape {
     /// are what say *where*, so two identical edits in two different places
     /// fingerprint differently.
     ///
-    /// A **multiset**, not a set: the count matters. An older pull request that
+    /// Keyed by fingerprint, valued by **changed lines**, not by occurrences.
+    ///
+    /// A multiset, and weighted, because both matter. An older pull request that
     /// changes one occurrence of a repeated block and a newer one that changes
     /// two identical occurrences collapse to the same single fingerprint under
     /// a set, score 1.0, and the newer one is closed despite its extra edit.
@@ -86,7 +88,12 @@ impl Shape {
                 continue;
             };
             for hunk in hunks(patch) {
-                *edits.entry(fingerprint(file, &hunk)).or_default() += 1;
+                // Weighted by how much the hunk actually changes, not one per
+                // hunk. Twenty shared one-line edits beside one distinct
+                // five-hundred-line edit on each side is 20/22 = 0.91 by count
+                // — over the default floor — and almost none of the substance
+                // is shared. Lines are the unit the substance is measured in.
+                *edits.entry(fingerprint(file, &hunk)).or_default() += hunk.changed.max(1);
             }
         }
 
