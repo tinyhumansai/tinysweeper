@@ -180,13 +180,6 @@ pub async fn revalidate_at(
         return Recheck::LeaveAlone;
     }
 
-    // Everything past here is about close evidence specifically, so it is
-    // skipped when there is nothing to close: re-reading the original of a
-    // duplicate, or re-resolving a base branch, to decide whether to add a
-    // label costs requests the safe half of the job does not need.
-    if plan.close.is_none() {
-        return Recheck::Unchanged;
-    }
 
     // Zeroed on the second pass, for the reason on `Freshness`. Not a widening
     // of the gate: the full pass already applied these against the state before
@@ -211,10 +204,12 @@ pub async fn revalidate_at(
         return Recheck::Unchanged;
     }
 
-    // The other half of a duplicate's evidence. If the original has been pushed
-    // to since the sweep read it, the two changes may no longer overlap and
-    // closing the subject as a copy of it would be closing it over a diff that
-    // no longer exists.
+    // The rest of the evidence, and it is re-checked for *every* plan rather
+    // than only the closing ones. A duplicate verdict rests on the original's
+    // diff and a superseded one on the base branch's; if either has moved, the
+    // `triage:` label is as wrong as the close would be — and applying it
+    // retires whatever the pull request currently carries. So a moved original
+    // or base abandons the whole plan.
     match &plan.verdict {
         Verdict::Duplicate {
             of, of_head_sha, ..
@@ -228,7 +223,7 @@ pub async fn revalidate_at(
                 plan.close = None;
                 plan.close_refusal =
                     Some("the pull request it duplicates changed after the sweep read it");
-                return Recheck::Unchanged;
+                return Recheck::LeaveAlone;
             }
             // And it has to still be somewhere the work can land. Closing a
             // contribution as a duplicate of something that has itself been
@@ -238,7 +233,7 @@ pub async fn revalidate_at(
                 plan.close = None;
                 plan.close_refusal =
                     Some("the pull request it duplicates was itself closed unmerged");
-                return Recheck::Unchanged;
+                return Recheck::LeaveAlone;
             }
         }
         Verdict::Superseded {
@@ -253,12 +248,12 @@ pub async fn revalidate_at(
                     plan.close = None;
                     plan.close_refusal =
                         Some("its base branch moved after the sweep compared against it");
-                    return Recheck::Unchanged;
+                    return Recheck::LeaveAlone;
                 }
                 Err(_) => {
                     plan.close = None;
                     plan.close_refusal = Some("its base branch could not be re-checked");
-                    return Recheck::Unchanged;
+                    return Recheck::LeaveAlone;
                 }
             }
         }
