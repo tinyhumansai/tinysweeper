@@ -197,6 +197,8 @@ pub struct MockForge {
     read_only: bool,
     /// Whether editing an unknown comment is refused, as GitHub refuses it.
     strict_comments: bool,
+    /// Whether closing a pull request is refused.
+    refuse_closes: bool,
 }
 
 impl MockForge {
@@ -322,6 +324,16 @@ impl MockForge {
     /// Record writes but never apply them — what `--dry-run` uses.
     pub fn read_only(mut self) -> Self {
         self.read_only = true;
+        self
+    }
+
+    /// Refuse every attempt to close a pull request.
+    ///
+    /// GitHub does refuse them — a repository rule, a permissions change, a
+    /// transient failure — and the interesting behaviour is what the caller
+    /// does about the comment it already posted saying the close was coming.
+    pub fn refusing_closes(mut self) -> Self {
+        self.refuse_closes = true;
         self
     }
 
@@ -715,6 +727,9 @@ impl ForgeWrite for MockForge {
 
     async fn close_pull_request(&self, _repo: &RepoId, number: u64) -> Result<()> {
         self.record(Write::PullRequestClosed { number });
+        if self.refuse_closes {
+            return Err(Error::Forge("the forge refused to close it".into()));
+        }
         if !self.read_only {
             let mut state = self.state.lock().expect("mock state lock");
             if let Some(pull_request) = state.pull_requests.get_mut(&number) {

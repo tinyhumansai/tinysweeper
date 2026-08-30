@@ -643,3 +643,60 @@ async fn a_push_stops_the_labels_too_not_only_the_close() {
         Some("it was pushed to after the sweep read its diff")
     );
 }
+
+#[tokio::test]
+async fn the_successful_close_path_is_exercised_end_to_end() {
+    // The one write that cannot be undone. Every other test in this file has
+    // the close refused, so without this the branch that actually calls
+    // `close_pull_request` is never run and could be deleted silently.
+    let forge = forge_with(closeable());
+    let reports = apply_all(&forge, &forge, &config(), &repo(), &[closing_plan()], &[]).await;
+
+    assert_eq!(reports[0].outcome, Outcome::Closed);
+
+    let writes = forge.writes();
+    let comment = writes
+        .iter()
+        .position(|write| matches!(write, Write::Comment { .. }))
+        .expect("an evidence comment");
+    let closed = writes
+        .iter()
+        .position(|write| matches!(write, Write::PullRequestClosed { number: 5798 }))
+        .expect("the close");
+    assert!(comment < closed, "the evidence must land first: {writes:?}");
+
+    // And the pull request really is closed in the mock's state, not merged.
+    let after = crate::ports::forge::ForgeRead::pull_request(&forge, &repo(), 5798)
+        .await
+        .expect("still readable");
+    assert!(!after.open);
+    assert!(!after.merged);
+}
+
+#[tokio::test]
+async fn a_close_the_forge_refuses_does_not_leave_the_comment_claiming_otherwise() {
+    // The comment went out saying "closing it on that basis". If the close then
+    // fails, leaving that standing hands the contributor a durable false claim.
+    let forge = forge_with(closeable()).refusing_closes();
+    let mut plan = closing_plan();
+    plan.comment_id = None;
+
+    let reports = apply_all(&forge, &forge, &config(), &repo(), &[plan], &[]).await;
+
+    assert!(
+        matches!(reports[0].outcome, Outcome::Failed(_)),
+        "{:?}",
+        reports[0]
+    );
+    let corrected = forge
+        .writes()
+        .into_iter()
+        .filter_map(|write| match write {
+            Write::CommentUpdate { body, .. } => Some(body),
+            _ => None,
+        })
+        .next_back()
+        .expect("the comment was corrected");
+    assert!(!corrected.contains("Closing it on that basis"), "{corrected}");
+    assert!(corrected.contains("Left open: the forge refused the close"));
+}
