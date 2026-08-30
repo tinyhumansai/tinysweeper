@@ -239,7 +239,8 @@ fn making_the_same_edit_twice_is_not_the_same_as_making_it_once() {
         )],
     );
 
-    assert_eq!(twice.edits.values().sum::<usize>(), 2);
+    // Two occurrences of a two-line edit, weighted by lines.
+    assert_eq!(twice.edits.values().sum::<usize>(), 4);
     assert_eq!(overlap(&once, &twice).edits, 0.5);
     assert_eq!(duplicate_of(&twice, &[once], 0.8, 0.9), None);
 }
