@@ -335,3 +335,33 @@ fn a_pure_addition_at_a_file_boundary_is_refused_rather_than_guessed_at() {
         Err(NotLanded::NoAnchor)
     );
 }
+
+#[test]
+fn a_blank_line_is_a_change_like_any_other() {
+    // A Markdown paragraph break. Dropping blanks made this compare equal to a
+    // base branch that does not have it, and applying it would still alter the
+    // rendering.
+    let file = changed(
+        "README.md",
+        "@@ -1,2 +1,3 @@\n first paragraph\n+\n second paragraph\n",
+    );
+    assert_eq!(
+        file_landed(&file, Some("first paragraph\nsecond paragraph\n")),
+        Err(NotLanded::AddedLineMissing)
+    );
+    assert_eq!(
+        file_landed(&file, Some("first paragraph\n\nsecond paragraph\n")),
+        Ok(0)
+    );
+}
+
+#[test]
+fn a_hunk_anchored_only_on_blank_lines_is_not_anchored() {
+    // Blanks are kept in the images but do not count as anchors: they are
+    // everywhere, so they locate nothing.
+    let file = changed("a.rs", "@@ -1,3 +1,4 @@\n \n+added\n \n");
+    assert_eq!(
+        file_landed(&file, Some("\nadded\n\n")),
+        Err(NotLanded::NoAnchor)
+    );
+}
