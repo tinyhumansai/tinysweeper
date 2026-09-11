@@ -2,24 +2,27 @@
 #
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 #
-# tinysweeper runs on one box as a Compose stack: the mongod/mongot pair from
-# the base file, the server, and Caddy in front of it for TLS. There is no
-# Kubernetes cluster any more; `.github/workflows/deploy.yml` reaches this stack
-# over SSH and runs the two commands in `deploy/README.md`.
+# tinysweeper runs on one shared DigitalOcean box as a Compose stack: the
+# mongod/mongot pair from the base file and the server. TLS is not this
+# stack's job — the box already runs nginx on 80/443 for its other services,
+# and `deploy/nginx/sweeper.tinyhumans.ai.conf` is the vhost that proxies to
+# the port published here. There is no Kubernetes cluster any more;
+# `.github/workflows/deploy.yml` reaches this stack over SSH and runs the two
+# commands in `deploy/README.md`.
 #
 # Three differences from the base file, and only three:
 #
 #   * The server is the image CI published to GHCR, not a local build. The box
-#     never compiles anything — a `cargo build` on a small droplet takes longer
-#     than the rollout it is part of and leaves the host as the only place the
-#     running binary exists.
-#   * The server's port is no longer published on the host. Caddy owns 80/443
-#     and proxies `/webhook`, `/healthz` and `/admin` to it over the Compose
-#     network; nothing else on the box can reach it and GitHub only ever sees
-#     HTTPS.
+#     never compiles anything — a `cargo build` on a shared droplet takes
+#     longer than the rollout it is part of and leaves the host as the only
+#     place the running binary exists.
+#   * The server's port is published on loopback only, and not on 8080, which
+#     another service on the box already holds. nginx is the only thing that
+#     talks to it, and GitHub only ever sees HTTPS.
 #   * The variables the base file does not forward. `TINYSWEEPER_ADMIN_TOKEN`
-#     is what `manual-review.yml` authenticates with, and Langfuse is optional
-#     but production is the one place it is worth turning on.
+#     is what `manual-review.yml` authenticates with, `TINYSWEEPER_ALLOWED_ORG`
+#     is what the server bounds those manual reviews to, and Langfuse is
+#     optional but production is the one place it is worth turning on.
 
 services:
   tinysweeper:
@@ -28,11 +31,11 @@ services:
     # the image is missing, which is precisely the case on a fresh box.
     build: !reset null
     image: ghcr.io/tinyhumansai/tinysweeper:${TINYSWEEPER_IMAGE_TAG:-latest}
-    ports: !reset []
-    expose:
-      - "8080"
+    ports: !override
+      - "127.0.0.1:${TINYSWEEPER_HOST_PORT:-8081}:8080"
     environment:
       TINYSWEEPER_ADMIN_TOKEN: ${TINYSWEEPER_ADMIN_TOKEN:-}
+      TINYSWEEPER_ALLOWED_ORG: ${TINYSWEEPER_ALLOWED_ORG:-tinyhumansai}
       LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
@@ -40,7 +43,7 @@ services:
     healthcheck:
       # The runtime image is debian-slim without curl, so the probe is a raw
       # HTTP request over bash's /dev/tcp. It only has to distinguish "the
-      # server answers" from "it does not"; Caddy's own health is what an
+      # server answers" from "it does not"; nginx's upstream health is what an
       # outside observer sees.
       test:
         [
@@ -53,45 +56,25 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
+    # The box is shared. On the cluster this ran under a 1 GiB limit and was
+    # OOM-killed on full graph builds; 4 GiB is room for that without letting
+    # one runaway index take the other tenants down with it.
+    deploy:
+      resources:
+        limits:
+          memory: 4g
     logging:
       driver: json-file
       options:
         max-size: "50m"
         max-file: "5"
 
-  # TLS termination. Caddy provisions and renews the certificate itself, which
-  # is the whole reason it is here rather than nginx: a box with no cert-manager
-  # and no ingress controller still needs a certificate GitHub will accept.
-  caddy:
-    image: caddy:2-alpine
-    environment:
-      # The public hostname the App's webhook URL points at. Required: Caddy
-      # cannot ask for a certificate for a name it does not know.
-      TINYSWEEPER_DOMAIN: ${TINYSWEEPER_DOMAIN:?set TINYSWEEPER_DOMAIN to the public hostname}
-    volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    depends_on:
-      tinysweeper:
-        condition: service_healthy
-    restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "3"
-
   # The database stays reachable from the host's loopback only, exactly as in
   # the base file; the overlay repeats it so a future edit to the base cannot
   # silently open 27017 to the internet on the production box.
   mongod:
-    ports:
-      - "127.0.0.1:27017:27017"
+    ports: !override
+      - "127.0.0.1:${MONGO_HOST_PORT:-27017}:27017"
     logging:
       driver: json-file
       options:
@@ -104,7 +87,3 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
-
-volumes:
-  caddy-data:
-  caddy-config:
