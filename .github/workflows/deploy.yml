@@ -2,103 +2,158 @@
 #
 # Deliberately manual: this fires only from the Actions tab, never off a push or
 # a green CI run. Landing on `main` publishes an image; a human decides when the
-# cluster takes it. That keeps the deploy an operator action with a name against
-# it, and keeps a merge from being a production event.
+# box takes it. That keeps the deploy an operator action with a name against it,
+# and keeps a merge from being a production event.
 #
 # There is no registry push here and no build: `ci.yml` publishes to GHCR, and
-# the cluster pulls from GHCR itself. This workflow is a *button* in the same
-# sense as `manual-review.yml` — it authenticates to the cluster and asks the
-# workload to restart, which makes the kubelet re-pull the tag the deployment
-# already references. It holds a cluster credential and nothing else: no model
-# credential, no GitHub write token, no checkout of the repository.
+# the box pulls from GHCR itself. This workflow is a *button* in the same sense
+# as `manual-review.yml` — it opens an SSH session to the one host that runs the
+# Compose stack (see `deploy/README.md`) and asks Compose to pull and recreate
+# the server. It holds an SSH key and nothing else: no model credential, no
+# GitHub write token, no checkout of the repository.
 #
-# That the restart is enough depends on two properties of the deployment
-# manifest, which live in the cluster and not in this repository:
-#
-#   * the pod template references a moving tag (`:latest` or `:main`), and
-#   * `imagePullPolicy: Always`.
-#
-# With a pinned digest a restart re-creates the same pods and deploys nothing.
-# If you move to pinned tags, replace the restart with a `kubectl set image`
-# against `${{ github.sha }}` — the CI publish already tags every image with
-# `type=sha,format=long`.
+# The stack on the box tracks a moving tag (`TINYSWEEPER_IMAGE_TAG`, default
+# `latest`), which is why `pull` followed by `up -d` is a deploy. To roll a
+# specific commit instead, pass its SHA as the `image_tag` input — CI already
+# tags every image with `type=sha,format=long`.
 name: Deploy
 
 on:
   workflow_dispatch:
     inputs:
-      # Both inputs exist for the one-off case — rolling a second namespace, or
-      # a single workload out of several. Left empty they fall back to the
-      # repository variables, which is what a routine deploy uses.
-      namespace:
-        description: "Namespace. Empty uses the K8S_NAMESPACE variable"
-        required: false
-        type: string
-      deployments:
-        description: "Comma-separated deployments. Empty uses the K8S_DEPLOYMENTS variable"
+      image_tag:
+        description: "Image tag to deploy. Empty keeps the box on its configured tag (normally `latest`)"
         required: false
         type: string
 
-# Nothing here touches the GitHub API. The cluster credential is a secret, not
-# a permission, so the job's own token is given nothing.
+# Nothing here touches the GitHub API. The SSH credential is a secret, not a
+# permission, so the job's own token is given nothing.
 permissions: {}
 
-# Deploys are serialised and never cancelled: interrupting a rollout mid-flight
-# leaves the cluster in a state neither this run nor the next one described.
+# Deploys are serialised and never cancelled: interrupting a `compose up`
+# mid-flight leaves the box in a state neither this run nor the next described.
 concurrency:
   group: deploy-production
   cancel-in-progress: false
 
 jobs:
   rollout:
-    name: Restart workload
+    name: Pull and recreate
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Point this at a GitHub Environment to get required reviewers, a deploy
-    # log, and environment-scoped secrets. Delete the two lines if you would
-    # rather keep the credential at repository scope.
+    # The `production` GitHub Environment carries required reviewers, the
+    # deploy log, and the environment-scoped secrets below.
     environment:
       name: production
       url: ${{ vars.TINYSWEEPER_SERVER_URL }}
     steps:
-      - uses: azure/setup-kubectl@v5
-
-      - name: Roll the workload
+      - name: Open the SSH session
         env:
-          # A full kubeconfig for a service account scoped to this namespace,
-          # base64-encoded so newlines survive the secret store:
-          #   base64 -w0 < kubeconfig.yaml
-          # It needs no more than `get`/`list`/`watch`/`patch` on deployments
-          # in the one namespace — do not paste a cluster-admin config here.
-          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
-          NAMESPACE: ${{ inputs.namespace || vars.K8S_NAMESPACE || 'tinysweeper' }}
-          # Comma-separated, so a deployment plus its worker can roll together.
-          WORKLOADS: ${{ inputs.deployments || vars.K8S_DEPLOYMENTS || 'tinysweeper' }}
+          # A private key whose public half is in the deploy user's
+          # `authorized_keys` on the box. Generate a dedicated one — never a
+          # personal key — with `ssh-keygen -t ed25519 -f deploy_key -N ''`.
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          # The host key, from `ssh-keyscan -t ed25519 <host>`. Pinning it is
+          # what stops the runner from handing the deploy key's session to
+          # whatever answers at that address.
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER || 'deploy' }}
         run: |
           set -euo pipefail
 
-          if [ -z "${KUBE_CONFIG:-}" ]; then
-            echo "::error::The KUBE_CONFIG secret is not set, so there is no cluster to talk to."
-            exit 1
+          for name in DEPLOY_SSH_KEY DEPLOY_SSH_KNOWN_HOSTS DEPLOY_HOST; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::$name is not set, so there is no box to talk to."
+              exit 1
+            fi
+          done
+
+          # The key is written to the runner's own temp dir at 0600 and passed
+          # by file. It never becomes a command-line argument, which would be
+          # visible in the process table.
+          umask 077
+          mkdir -p "$RUNNER_TEMP/ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$RUNNER_TEMP/ssh/key"
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/ssh/known_hosts"
+
+          cat > "$RUNNER_TEMP/ssh/config" <<CONF
+          Host box
+            HostName $DEPLOY_HOST
+            User $DEPLOY_USER
+            IdentityFile $RUNNER_TEMP/ssh/key
+            IdentitiesOnly yes
+            UserKnownHostsFile $RUNNER_TEMP/ssh/known_hosts
+            StrictHostKeyChecking yes
+            ConnectTimeout 20
+          CONF
+          echo "SSH_CONFIG=$RUNNER_TEMP/ssh/config" >> "$GITHUB_ENV"
+
+      - name: Pull and recreate the server
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          # Where the checkout lives on the box. `deploy/README.md` puts it here.
+          STACK_DIR: ${{ vars.DEPLOY_STACK_DIR || '/opt/tinysweeper' }}
+        run: |
+          set -euo pipefail
+
+          # The script runs on the box under `bash -s`, with the tag and the
+          # directory passed as arguments rather than interpolated into the
+          # script text, so a stray quote in an input cannot become a command.
+          ssh -F "$SSH_CONFIG" box bash -s -- "$STACK_DIR" "$IMAGE_TAG" <<'REMOTE'
+          set -euo pipefail
+          stack_dir="$1"
+          image_tag="$2"
+          cd "$stack_dir"
+
+          compose() {
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml "$@"
+          }
+
+          # An explicit tag for this one run only: exported for the `pull` and
+          # `up` below, not written to `.env`, so the next routine deploy goes
+          # back to the box's configured tag.
+          if [ -n "$image_tag" ]; then
+            export TINYSWEEPER_IMAGE_TAG="$image_tag"
           fi
 
-          # The kubeconfig is written to the runner's own temp dir at 0600 and
-          # passed by environment variable. It never becomes a command-line
-          # argument, which would be visible in the process table.
-          kubeconfig="$RUNNER_TEMP/kubeconfig"
-          umask 077
-          printf '%s' "$KUBE_CONFIG" | base64 -d > "$kubeconfig"
-          export KUBECONFIG="$kubeconfig"
+          echo "::group::pull"
+          compose pull tinysweeper
+          echo "::endgroup::"
 
-          IFS=',' read -ra workloads <<< "$WORKLOADS"
-          for raw in "${workloads[@]}"; do
-            workload="$(printf '%s' "$raw" | tr -d '[:space:]')"
-            [ -n "$workload" ] || continue
+          echo "::group::up"
+          # `--wait` blocks until every service is healthy or gives up, so a
+          # crash-looping image fails the job instead of going green the
+          # instant the container is created.
+          compose up -d --remove-orphans --wait --wait-timeout 300
+          echo "::endgroup::"
 
-            echo "::group::rollout $workload"
-            kubectl -n "$NAMESPACE" rollout restart "deployment/$workload"
-            # Without this the job goes green the instant the patch lands, and
-            # a crash-looping image would look like a successful deploy.
-            kubectl -n "$NAMESPACE" rollout status "deployment/$workload" --timeout=10m
-            echo "::endgroup::"
+          echo "::group::status"
+          compose ps
+          compose images tinysweeper
+          echo "::endgroup::"
+
+          # Reclaim the previous image now that the new one is proven to serve.
+          docker image prune -f >/dev/null
+          REMOTE
+
+      - name: Probe the public endpoint
+        env:
+          SERVER: ${{ vars.TINYSWEEPER_SERVER_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SERVER:-}" ]; then
+            echo "TINYSWEEPER_SERVER_URL is not set; skipping the external probe."
+            exit 0
+          fi
+          # Caddy may still be waiting on the server's healthcheck when `up`
+          # returns, so give the public side a few tries.
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 10 "${SERVER%/}/healthz" >/dev/null; then
+              echo "healthy after $attempt attempt(s)"
+              exit 0
+            fi
+            sleep 10
           done
+          echo "::error::${SERVER%/}/healthz did not answer 200 within a minute of the rollout."
+          exit 1
