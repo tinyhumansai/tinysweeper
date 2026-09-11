@@ -100,7 +100,10 @@ jobs:
           # The script runs on the box under `bash -s`, with the tag and the
           # directory passed as arguments rather than interpolated into the
           # script text, so a stray quote in an input cannot become a command.
-          ssh -F "$SSH_CONFIG" box bash -s -- "$STACK_DIR" "$IMAGE_TAG" <<'REMOTE'
+          # `printf %q` because ssh joins its arguments into one command line
+          # for the remote shell: without it an empty tag simply disappears
+          # and the script reads the wrong positional parameter.
+          ssh -F "$SSH_CONFIG" box "bash -s -- $(printf '%q ' "$STACK_DIR" "$IMAGE_TAG")" <<'REMOTE'
           set -euo pipefail
           stack_dir="$1"
           image_tag="$2"
