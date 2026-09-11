@@ -99,9 +99,10 @@ by CI.
 
 ### Deploying
 
-Production is one box running the Compose stack — mongod, mongot, the server
-and Caddy for TLS — from `docker-compose.yml` plus `docker-compose.prod.yml`.
-`deploy/README.md` is the runbook: droplet setup, configuration, rollback.
+Production is one shared box running the Compose stack — mongod, mongot and
+the server — from `docker-compose.yml` plus `docker-compose.prod.yml`, behind
+the host's nginx (`deploy/nginx/`) and Cloudflare. `deploy/README.md` is the
+runbook: box setup, configuration, rollback.
 
 `.github/workflows/deploy.yml` is an operator button in the Actions tab: it
 opens an SSH session to the box and runs `docker compose pull` and `up -d

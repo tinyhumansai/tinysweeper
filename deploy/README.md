@@ -1,103 +1,89 @@
 # Deploying tinysweeper to one box
 
-tinysweeper runs as a Docker Compose stack on a single DigitalOcean droplet:
-mongod and mongot, the server, and Caddy for TLS. There is no Kubernetes
-cluster. The compose files are the deployment manifest, this file is the
-runbook, and `.github/workflows/deploy.yml` is the button that rolls a new
-image.
+tinysweeper runs as a Docker Compose stack on a shared DigitalOcean droplet:
+mongod and mongot and the server, behind the host's nginx and Cloudflare.
+There is no Kubernetes cluster. The compose files are the deployment manifest,
+this file is the runbook, and `.github/workflows/deploy.yml` is the button that
+rolls a new image.
 
 | File | Role |
 | --- | --- |
 | `docker-compose.yml` | The stack: MongoDB pair, the server built locally |
-| `docker-compose.prod.yml` | Overlay: published image, Caddy, no host ports on the app |
-| `deploy/Caddyfile` | Reverse proxy; only `/webhook`, `/healthz`, `/admin` reach the app |
+| `docker-compose.prod.yml` | Overlay: published image, loopback port, memory cap |
+| `deploy/nginx/sweeper.tinyhumans.ai.conf` | Host nginx vhost; only `/webhook`, `/healthz`, `/admin` reach the app |
 | `deploy/mongo/` | mongod/mongot config, secrets generator, init scripts |
 
-## Sizing
+## The box
 
-The MongoDB pair is the memory floor: mongot holds its indexes in the JVM and
-mongod wants its cache. A **4 GB** droplet runs comfortably; 2 GB will OOM
-mongot during a full index build. Attach a block-storage volume if the indexed
-repositories are large — `mongod-data` and `mongot-data` are named volumes and
-can be pointed at it.
+| | |
+| --- | --- |
+| Host | `174.138.35.76`, SSH as `droid` |
+| Checkout | `/opt/tinysweeper` (owned by `droid`) |
+| Public name | `https://sweeper.tinyhumans.ai`, Cloudflare-proxied to the host's nginx |
+| App port | `127.0.0.1:8081` (8080 belongs to another service on the box) |
+| MongoDB | `127.0.0.1:27017`, loopback only |
 
-Use an Ubuntu 24.04 LTS image. Its 6.8 kernel is below the 6.19 cutoff at
-which the MongoDB community-server image refuses to start (see
-`docker-compose.kernel-bypass.yml`); do not pick a bleeding-edge kernel for
-this host.
+The box is shared with other services and its own nginx on 80/443, which is
+why this stack publishes nothing but a loopback port and the vhost is a file
+in `/etc/nginx/sites-enabled` like the others. It runs Ubuntu 24.04 on a 6.8
+kernel, below the 6.19 cutoff at which the MongoDB community-server image
+refuses to start (see `docker-compose.kernel-bypass.yml`); do not move it to a
+bleeding-edge kernel.
 
 ## First-time setup
 
-Once, by hand, as root on a fresh droplet:
+Done once, on 2026-09-11. Recorded so it can be repeated on a replacement box.
 
 ```sh
-# Docker Engine with the compose plugin, from Docker's own repository.
-curl -fsSL https://get.docker.com | sh
-
-# A dedicated deploy user. It owns the checkout and may talk to Docker, and
-# that is the whole of what it can do.
-useradd --create-home --shell /bin/bash --groups docker deploy
-install -d -m 700 -o deploy -g deploy /home/deploy/.ssh
-# Paste the public half of the key that becomes DEPLOY_SSH_KEY:
-install -m 600 -o deploy -g deploy /dev/stdin /home/deploy/.ssh/authorized_keys <<'KEY'
-ssh-ed25519 AAAA... tinysweeper-deploy
-KEY
-
-# Only 22, 80 and 443 are reachable. MongoDB is bound to loopback by the
-# compose file, but the firewall is what makes that a property of the box
-# rather than of one file.
-ufw allow OpenSSH && ufw allow 80/tcp && ufw allow 443/tcp && ufw allow 443/udp
-ufw --force enable
-
-install -d -o deploy -g deploy /opt/tinysweeper
-```
-
-Then, as `deploy`:
-
-```sh
+ssh droid@174.138.35.76
+sudo install -d -o droid -g droid /opt/tinysweeper
 cd /opt/tinysweeper
 git clone --recurse-submodules https://github.com/tinyhumansai/tinysweeper .
 
-cp .env.example .env
-chmod 600 .env
-$EDITOR .env             # see "Configuration" below
-$EDITOR .tinysweeper.toml  # the deployment's policy: models, budget, embeddings
+cp .env.example .env && chmod 600 .env
+$EDITOR .env               # see "Configuration" below; .tinysweeper.toml is tracked
+
+# nginx: the port 80 block first, so certbot can answer the challenge.
+sudo install -m 644 deploy/nginx/sweeper.tinyhumans.ai.conf /etc/nginx/sites-available/
+sudo ln -s ../sites-available/sweeper.tinyhumans.ai.conf /etc/nginx/sites-enabled/
+sudo certbot certonly --webroot -w /var/www/certbot -d sweeper.tinyhumans.ai
+sudo nginx -t && sudo systemctl reload nginx
 
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --wait
-curl -fsS https://$TINYSWEEPER_DOMAIN/healthz
+curl -fsS https://sweeper.tinyhumans.ai/healthz
 ```
 
 The first `up` generates the MongoDB keyfile and the mongot password into the
 `mongo-secrets` volume, initiates the single-member replica set, and waits for
-mongot to come up before starting the server. It takes a minute or two. Caddy
-asks Let's Encrypt for a certificate as soon as it starts, so the DNS `A`
-record for `TINYSWEEPER_DOMAIN` must already point at the droplet.
+mongot to come up before starting the server. It takes a minute or two.
 
-Point the GitHub App's webhook URL at `https://<TINYSWEEPER_DOMAIN>/webhook`.
+The GitHub App's webhook URL is `https://sweeper.tinyhumans.ai/webhook`; it did
+not change in the move, only the origin behind Cloudflare did.
 
 ## Configuration
 
 Everything the stack reads lives in `/opt/tinysweeper/.env`, which Compose
 loads automatically. Beyond the variables in `.env.example`, the production
-overlay needs:
+overlay reads:
 
 | Variable | Meaning |
 | --- | --- |
-| `TINYSWEEPER_DOMAIN` | Public hostname. Caddy provisions the certificate for it. Required. |
-| `MONGO_ROOT_PASSWORD` | Root password for the bundled MongoDB. Required. Generate with `openssl rand -hex 24`. |
+| `MONGO_ROOT_PASSWORD` | Root password for the bundled MongoDB. Required. |
+| `TINYSWEEPER_HOST_PORT` | Loopback port nginx proxies to. `8081`; the vhost hard-codes the same number. |
 | `TINYSWEEPER_IMAGE_TAG` | Image tag the box tracks. Defaults to `latest`. Set to a `sha-…` tag to pin. |
 | `TINYSWEEPER_ADMIN_TOKEN` | What `manual-review.yml` authenticates with. Unset means no `/admin` router. |
+| `TINYSWEEPER_ALLOWED_ORG` | Organisation manual reviews are bounded to. Defaults to `tinyhumansai`. |
 | `LANGFUSE_*` | Optional tracing; see the README. |
 
-`.env` and `.tinysweeper.toml` are the only two files on the box that are not
-in git. Back them up somewhere with the same care as the App's private key,
-because together they *are* the deployment.
+`.env` is the only file on the box that is not in git; `.tinysweeper.toml` is
+tracked. Back `.env` up somewhere with the same care as the App's private key,
+because it *is* the deployment.
 
 ## Rolling a new image
 
 Merging to `main` publishes `ghcr.io/tinyhumansai/tinysweeper:latest` (and a
 `sha-<commit>` tag). Nothing deploys on its own. Dispatch **Deploy** from the
-Actions tab; it opens an SSH session as `deploy` and runs, in
+Actions tab; it opens an SSH session as `droid` and runs, in
 `/opt/tinysweeper`:
 
 ```sh
@@ -114,21 +100,24 @@ The workflow needs, on the `production` environment:
 
 | Name | Kind | Meaning |
 | --- | --- | --- |
-| `DEPLOY_SSH_KEY` | secret | Private key matching `deploy`'s `authorized_keys`. |
-| `DEPLOY_SSH_KNOWN_HOSTS` | secret | Output of `ssh-keyscan -t ed25519 <host>`. |
-| `DEPLOY_HOST` | variable | The droplet's address. |
-| `DEPLOY_USER` | variable | Defaults to `deploy`. |
+| `DEPLOY_SSH_KEY` | secret | Private key matching `droid`'s `authorized_keys`. |
+| `DEPLOY_SSH_KNOWN_HOSTS` | secret | Output of `ssh-keyscan -t ed25519 174.138.35.76`. |
+| `DEPLOY_HOST` | variable | `174.138.35.76`. |
+| `DEPLOY_USER` | variable | Defaults to `droid`. |
 | `DEPLOY_STACK_DIR` | variable | Defaults to `/opt/tinysweeper`. |
-| `TINYSWEEPER_SERVER_URL` | variable | `https://<TINYSWEEPER_DOMAIN>`; probed after the rollout. |
+| `TINYSWEEPER_SERVER_URL` | variable | `https://sweeper.tinyhumans.ai`; probed after the rollout. |
 
 ### Changing the compose files themselves
 
 The deploy workflow pulls an *image*, not the repository. When a change to
-`docker-compose*.yml`, the `Caddyfile` or anything under `deploy/mongo/`
+`docker-compose*.yml`, `deploy/nginx/` or anything under `deploy/mongo/`
 lands, update the checkout on the box before dispatching:
 
 ```sh
 cd /opt/tinysweeper && git pull --ff-only && git submodule update --init --recursive
+# and, for the vhost:
+sudo install -m 644 deploy/nginx/sweeper.tinyhumans.ai.conf /etc/nginx/sites-available/
+sudo nginx -t && sudo systemctl reload nginx
 ```
 
 This is deliberate: a `git pull` in the deploy path would make the box's
@@ -154,6 +143,6 @@ tsc exec mongod mongosh -u tinysweeper -p "$MONGO_ROOT_PASSWORD" --authenticatio
 together; mongod and mongot are versioned independently and must match. Take a
 snapshot of the droplet first.
 
-**Backups**: the state that matters is the two named volumes plus `.env` and
-`.tinysweeper.toml`. Droplet snapshots cover all of it; for a logical backup,
+**Backups**: the state that matters is the two named volumes plus `.env`.
+Droplet snapshots cover all of it; for a logical backup,
 `tsc exec mongod mongodump --archive -u … | gzip > backup.gz`.

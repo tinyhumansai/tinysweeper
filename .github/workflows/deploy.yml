@@ -58,7 +58,7 @@ jobs:
           # whatever answers at that address.
           DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ vars.DEPLOY_USER || 'deploy' }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER || 'droid' }}
         run: |
           set -euo pipefail
 
@@ -146,8 +146,8 @@ jobs:
             echo "TINYSWEEPER_SERVER_URL is not set; skipping the external probe."
             exit 0
           fi
-          # Caddy may still be waiting on the server's healthcheck when `up`
-          # returns, so give the public side a few tries.
+          # Cloudflare and nginx sit between here and the container, so give
+          # the public side a few tries rather than trusting the first answer.
           for attempt in 1 2 3 4 5 6; do
             if curl -fsS --max-time 10 "${SERVER%/}/healthz" >/dev/null; then
               echo "healthy after $attempt attempt(s)"
