@@ -12,9 +12,10 @@
   operator buttons in *this* repository: `.github/workflows/manual-review.yml`,
   which POSTs to the deployed server's `/admin/reviews` route, and
   `.github/workflows/deploy.yml`, which SSHes to the one box running the
-  Compose stack and has it re-pull the published image. Neither builds anything, runs a lane, or holds a
-  model or GitHub write credential; anything that would need one belongs in
-  `src/server/`, not in a workflow.
+  Compose stack (`deploy/README.md`) and has it re-pull the published image.
+  Neither builds anything, runs a lane, or holds a model or GitHub write
+  credential; anything that would need one belongs in `src/server/`, not in a
+  workflow.
 - `presets/` — review policy as **data**, not code. A preset is a folder with a
   `preset.toml`, a `README.md`, and optional prompt overrides. Adding a preset
   is a new folder, never a new module.
