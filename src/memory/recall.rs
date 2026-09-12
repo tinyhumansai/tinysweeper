@@ -12,10 +12,14 @@
 //!    that job, because two copies of the same function is worse context than
 //!    one.
 //! 2. **Ask by question.** The configured questions are templated over the
-//!    changed paths and put to the engine's grounded-answer route. This is the
-//!    part a keyword store cannot do and the part worth an engine: "which rule
-//!    applies here?" answered with a citation is a pointer a reviewer can act
-//!    on, where the same rule as the seventh-ranked recollection is not.
+//!    changed paths and put to the engine's grounded-answer route, each in
+//!    the section it names. This is the part a keyword store cannot do and
+//!    the part worth an engine: "which rule applies here?" answered with a
+//!    citation is a pointer a reviewer can act on, where the same rule as the
+//!    seventh-ranked recollection is not. Measured against a live engine, the
+//!    section matters: over one section the answer quotes the rule and names
+//!    the file; over the whole repository it comes back with whatever was
+//!    written first.
 //!
 //! Everything comes back under one token budget, answers first — they are the
 //! synthesis, and the recollections are the evidence — then outcomes, then
@@ -337,9 +341,14 @@ impl<'a> Recaller<'a> {
 
         let mut answers = Vec::new();
         if settings.ask {
-            let scope = MemoryScope::repo(repo);
             for template in &settings.questions {
-                let question = fill_question(template, title, &paths);
+                // Validation already refused an unknown section; a question
+                // that somehow carries one is skipped rather than guessed at.
+                let Some(section) = MemorySection::parse(&template.section) else {
+                    continue;
+                };
+                let scope = MemoryScope::section(repo, section);
+                let question = fill_question(&template.ask, title, &paths);
                 match self
                     .memory
                     .answer(&scope, &question, Some(ANSWER_INSTRUCTIONS))
@@ -458,6 +467,13 @@ mod tests {
         config
     }
 
+    fn question(section: &str, ask: &str) -> crate::config::types::MemoryQuestion {
+        crate::config::types::MemoryQuestion {
+            section: section.into(),
+            ask: ask.into(),
+        }
+    }
+
     fn diff(path: &str) -> FileDiff {
         crate::evidence::diff::parse_file_patch(
             path,
@@ -547,8 +563,8 @@ mod tests {
         let recaller = Recaller::new(&memory);
         let mut config = config();
         config.memory.questions = vec![
-            "Which conventions apply to {paths}?".into(),
-            "Who owns {paths}?".into(),
+            question("conventions", "Which conventions apply to {paths}?"),
+            question("reviews", "Who owns {paths}?"),
         ];
         let context = recaller
             .recall(&config, "o/r", "t", &[diff("src/ports/forge.rs")], false)
@@ -567,7 +583,7 @@ mod tests {
             .with_answer("conventions", "Nothing relevant is remembered.");
         let recaller = Recaller::new(&memory);
         let mut config = config();
-        config.memory.questions = vec!["Which conventions apply to {paths}?".into()];
+        config.memory.questions = vec![question("conventions", "Which conventions apply to {paths}?")];
         let context = recaller
             .recall(&config, "o/r", "t", &[diff("src/ports/forge.rs")], false)
             .await;

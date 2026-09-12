@@ -780,13 +780,30 @@ pub struct Memory {
     /// Whether a review asks the engine grounded questions as well as
     /// recalling by query.
     pub ask: bool,
-    /// The questions a review asks, in order. `{paths}` is replaced by the
-    /// changed paths and `{title}` by the pull request title. Each answer is
-    /// bounded by [`Memory::answer_chars`] and the whole block by
+    /// The questions a review asks, in order. Each names the section it is
+    /// put to; `{paths}` in its text is replaced by the changed paths and
+    /// `{title}` by the pull request title. Each answer is bounded by
+    /// [`Memory::answer_chars`] and the whole block by
     /// [`Memory::context_tokens`].
-    pub questions: Vec<String>,
+    pub questions: Vec<MemoryQuestion>,
     /// Character ceiling on one grounded answer.
     pub answer_chars: usize,
+}
+
+/// One question a review puts to the memory engine.
+///
+/// Scoped to a section, and that is measured rather than tidy: an engine's
+/// ranked recall over one section answers "which rule applies here?" with the
+/// rule, while the same question over a whole repository's memory comes back
+/// with whatever was written first. The section is the difference between a
+/// pointer and a listing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MemoryQuestion {
+    /// Which section to ask: `code`, `conventions` or `reviews`.
+    pub section: String,
+    /// The question. `{paths}` and `{title}` are filled in per review.
+    pub ask: String,
 }
 
 /// Model work that is not a lane.

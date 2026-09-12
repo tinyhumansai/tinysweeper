@@ -294,6 +294,18 @@ fn validate_memory(config: &Config, problems: &mut Vec<String>) {
     if memory.ask && memory.questions.is_empty() {
         problems.push("`memory.ask = true` but `memory.questions` is empty".into());
     }
+    for (index, question) in memory.questions.iter().enumerate() {
+        if crate::memory::MemorySection::parse(&question.section).is_none() {
+            problems.push(format!(
+                "`memory.questions[{index}].section = \"{}\"` is not a section; use code, \
+                 conventions or reviews",
+                question.section
+            ));
+        }
+        if question.ask.trim().is_empty() {
+            problems.push(format!("`memory.questions[{index}].ask` is empty"));
+        }
+    }
     if memory.ingest_conventions && memory.convention_files.is_empty() {
         problems.push(
             "`memory.ingest_conventions = true` but `memory.convention_files` names no file".into(),

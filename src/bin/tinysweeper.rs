@@ -271,11 +271,15 @@ enum MemoryCommand {
         limit: usize,
     },
 
-    /// Ask the engine a grounded question about a repository.
+    /// Ask the engine a grounded question about one section of a repository.
     Ask {
         /// The repository, as `owner/name`.
         #[arg(long)]
         repo: String,
+
+        /// Which section to ask: `code`, `conventions` or `reviews`.
+        #[arg(long, default_value = "conventions")]
+        section: String,
 
         /// The question. `{paths}` is left as-is: this is the raw form.
         question: String,
@@ -1270,10 +1274,19 @@ async fn run_memory(command: MemoryCommand) -> Result<()> {
                 }
             }
         }
-        MemoryCommand::Ask { repo, question } => {
+        MemoryCommand::Ask {
+            repo,
+            section,
+            question,
+        } => {
             let (_, memory) = open(std::path::Path::new("."), None)?;
+            let section = MemorySection::parse(&section).ok_or_else(|| {
+                tinysweeper::Error::config(format!(
+                    "`{section}` is not a section; use code, conventions or reviews"
+                ))
+            })?;
             let answer = memory
-                .answer(&MemoryScope::repo(&repo), &question, None)
+                .answer(&MemoryScope::section(&repo, section), &question, None)
                 .await?;
             if !answer.is_grounded() {
                 println!("(nothing relevant is remembered)");
@@ -1297,14 +1310,13 @@ async fn run_memory(command: MemoryCommand) -> Result<()> {
         }
         MemoryCommand::Forget { repo, section, yes } => {
             let (_, memory) = open(std::path::Path::new("."), None)?;
-            let scope = match section.as_deref() {
+            let scope = match section.as_deref().map(MemorySection::parse) {
                 None => MemoryScope::repo(&repo),
-                Some("code") => MemoryScope::section(&repo, MemorySection::Code),
-                Some("conventions") => MemoryScope::section(&repo, MemorySection::Conventions),
-                Some("reviews") => MemoryScope::section(&repo, MemorySection::Reviews),
-                Some(other) => {
+                Some(Some(section)) => MemoryScope::section(&repo, section),
+                Some(None) => {
                     return Err(tinysweeper::Error::config(format!(
-                        "`{other}` is not a section; use code, conventions or reviews"
+                        "`{}` is not a section; use code, conventions or reviews",
+                        section.unwrap_or_default()
                     )));
                 }
             };

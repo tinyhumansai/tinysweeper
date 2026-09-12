@@ -41,6 +41,16 @@ impl MemorySection {
             Self::Reviews => "reviews",
         }
     }
+
+    /// The inverse of [`Self::as_str`], for configuration and the CLI.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.trim() {
+            "code" => Some(Self::Code),
+            "conventions" => Some(Self::Conventions),
+            "reviews" => Some(Self::Reviews),
+            _ => None,
+        }
+    }
 }
 
 /// Where in memory a set of items lives: one repository, one section.
