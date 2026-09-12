@@ -326,6 +326,7 @@ mod tests {
                 reviewed_evidence: "",
                 prior_findings: &[],
                 retrieved_context: "",
+                memory_context: "",
             })
             .await
             .expect("lane runs")

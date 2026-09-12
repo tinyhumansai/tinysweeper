@@ -138,6 +138,7 @@ impl Lane for Security {
             let extracted_rules = input.extracted_rules;
             let prior_findings = input.prior_findings;
             let retrieved_context = input.retrieved_context;
+            let memory_context = input.memory_context;
             let diffs = input.diffs;
             let scanner = &scanner;
             async move {
@@ -152,6 +153,7 @@ impl Lane for Security {
                     extracted_rules,
                     prior_findings,
                     retrieved_context,
+                    memory_context,
                     diff,
                     scanner,
                 )
@@ -185,6 +187,7 @@ async fn review_file(
     extracted_rules: &[String],
     prior_findings: &[String],
     retrieved_context: &str,
+    memory_context: &str,
     diff: &FileDiff,
     scanner: &[&ScanFinding],
 ) -> Result<FileReview> {
@@ -199,6 +202,7 @@ async fn review_file(
         focus_path: Some(&diff.path),
         scanner_evidence: &scanner_evidence,
         retrieved_context,
+        memory_context,
         ..PromptInputs::new(LaneId::Security, config)
     });
 
@@ -442,6 +446,7 @@ mod tests {
                 reviewed_evidence,
                 prior_findings: &[],
                 retrieved_context: "",
+                memory_context: "",
             })
             .await
             .expect("lane runs")
@@ -716,6 +721,7 @@ mod tests {
                 reviewed_evidence: "",
                 prior_findings: &[],
                 retrieved_context: "",
+                memory_context: "",
             })
             .await
             .expect("runs");
