@@ -1093,3 +1093,68 @@ fn enabled_lanes_reflects_the_merged_config() {
         vec![LaneId::Critique, LaneId::Security]
     );
 }
+
+#[test]
+fn memory_is_off_by_default_and_validates_nothing_when_off() {
+    let config = parse("version = 1\n");
+    assert!(!config.memory.enabled);
+    assert_eq!(config.memory.provider, "cortex");
+    assert!(config.memory.questions.len() >= 2);
+    assert!(validate(&config).is_empty());
+}
+
+#[test]
+fn an_enabled_memory_needs_an_endpoint_a_bearer_may_cross() {
+    let missing = parse("version = 1\n[memory]\nenabled = true\n");
+    let problems = validate(&missing).join("\n");
+    assert!(problems.contains("`memory.endpoint` is empty"), "{problems}");
+
+    let plaintext = parse(
+        "version = 1\n[memory]\nenabled = true\nendpoint = \"http://cortex.internal:3141\"\n",
+    );
+    let problems = validate(&plaintext).join("\n");
+    assert!(problems.contains("loopback"), "{problems}");
+
+    let loopback =
+        parse("version = 1\n[memory]\nenabled = true\nendpoint = \"http://127.0.0.1:3141\"\n");
+    assert!(validate(&loopback).is_empty(), "{:?}", validate(&loopback));
+
+    let unknown = parse(
+        "version = 1\n[memory]\nenabled = true\nendpoint = \"https://x\"\nprovider = \"mem0\"\n",
+    );
+    let problems = validate(&unknown).join("\n");
+    assert!(problems.contains("not an engine"), "{problems}");
+}
+
+#[test]
+fn a_pasted_memory_key_is_refused_and_redacted() {
+    let config = parse(
+        "version = 1\n[memory]\nenabled = true\nendpoint = \"https://x\"\n\
+         api_key_env = \"ctx_live_abcdefghijklmnop\"\n",
+    );
+    let problems = validate(&config).join("\n");
+    assert!(problems.contains("looks like a value"), "{problems}");
+    assert!(!problems.contains("abcdefghijklmnop"), "{problems}");
+}
+
+#[test]
+fn a_memory_that_neither_recalls_nor_asks_is_pointless() {
+    let config = parse(
+        "version = 1\n[memory]\nenabled = true\nendpoint = \"https://x\"\n\
+         max_recollections = 0\nask = false\n",
+    );
+    let problems = validate(&config).join("\n");
+    assert!(problems.contains("consult memory for nothing"), "{problems}");
+}
+
+#[test]
+fn memory_is_not_a_repository_overridable_section() {
+    // A repository must not be able to point the operator's reviewer at an
+    // engine of its choosing, or name the variable its key lives in.
+    let base = parse("version = 1\n");
+    let table: toml::Table = "[memory]\nenabled = true\nendpoint = \"https://evil\"\n"
+        .parse()
+        .unwrap();
+    let (applied, _) = crate::config::remote::apply_remote(&base, &table).expect("applies");
+    assert!(!applied.memory.enabled);
+}
