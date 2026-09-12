@@ -30,6 +30,7 @@ use crate::ports::forge::ForgeRead;
 use crate::ports::knowledge::KnowledgeStore;
 use crate::ports::model::{Model, Spend, Usage};
 use crate::ports::review_state::ReviewStateStore;
+use crate::memory::Recaller;
 use crate::retrieve::Retriever;
 use crate::scan;
 use crate::scan::types::ScanKind;
@@ -286,6 +287,36 @@ pub async fn review_with_retrieval(
     knowledge: Option<&dyn KnowledgeStore>,
     retrieval: Option<&Retriever<'_>>,
 ) -> Result<Proposal> {
+    review_with_memory(
+        forge, model, config, repo, number, store, knowledge, retrieval, None,
+    )
+    .await
+}
+
+/// Run the review with the memory engine attached as well.
+///
+/// `memory` is what the reviewer remembers about this repository across pull
+/// requests — see `crate::memory`. It is consulted twice and written twice:
+/// before the lanes run, the threads on this pull request are read for what
+/// became of earlier findings and the memory is asked what it knows about the
+/// change; after they run, the findings they produced are remembered so the
+/// next review can be told what was said.
+///
+/// Like retrieval, it cannot fail this function. An engine that is down
+/// produces a [`crate::memory::MemoryContext`] whose status the check-run
+/// summaries state, and the review runs without it.
+#[allow(clippy::too_many_arguments)]
+pub async fn review_with_memory(
+    forge: &dyn ForgeRead,
+    model: Arc<dyn Model>,
+    config: &Config,
+    repo: &RepoId,
+    number: u64,
+    store: Option<&dyn ReviewStateStore>,
+    knowledge: Option<&dyn KnowledgeStore>,
+    retrieval: Option<&Retriever<'_>>,
+    memory: Option<&Recaller<'_>>,
+) -> Result<Proposal> {
     let context = forge.pull_request_context(repo, number).await?;
     let diffs = reviewable_diffs(config, &context)?;
 
@@ -434,6 +465,58 @@ pub async fn review_with_retrieval(
         );
     }
 
+    // What the reviewer remembers. Two steps, in this order: first the threads
+    // on this pull request are read for what became of earlier findings — a
+    // maintainer's "this is intentional" from the last push is the single most
+    // useful thing to know before reviewing the next — and only then is the
+    // memory asked. Code is recalled only when the index is not already
+    // showing the lane the same functions.
+    let memory_context = match memory.filter(|_| config.memory.enabled) {
+        Some(recaller) => {
+            let observed = match (
+                forge.review_threads(repo, number).await,
+                forge.review_comments(repo, number).await,
+            ) {
+                (Ok(threads), Ok(comments)) => {
+                    recaller
+                        .observe(&repo.to_string(), number, &threads, &comments)
+                        .await
+                }
+                (Err(err), _) | (_, Err(err)) => {
+                    tracing::warn!(%err, "could not read review threads for memory");
+                    Default::default()
+                }
+            };
+            let mut recalled = recaller
+                .recall(
+                    config,
+                    &repo.to_string(),
+                    &context.pull_request.title,
+                    &diffs,
+                    retrieved.is_empty(),
+                )
+                .await;
+            recalled.observed = observed;
+            recalled
+        }
+        None => crate::memory::MemoryContext::off(),
+    };
+    let memory_text = memory_context.render();
+    let memory_note = memory_context.note();
+    if !memory_context.renders_nothing() {
+        let (outcomes, conventions, code) = memory_context.counts();
+        tracing::debug!(
+            answers = memory_context.answers.len(),
+            outcomes,
+            conventions,
+            code,
+            tokens = memory_context.tokens,
+            dropped = memory_context.dropped,
+            observed = memory_context.observed.written,
+            "recalled memory for the review"
+        );
+    }
+
     if spend.cost_usd() > config.models.budget_usd_per_pr {
         return Err(Error::Budget {
             spent: spend.cost_usd(),
@@ -463,6 +546,7 @@ pub async fn review_with_retrieval(
                 reviewed_evidence: &reviewed_evidence,
                 prior_findings: &prior_titles,
                 retrieved_context: &retrieved_context,
+                memory_context: &memory_text,
             })
             .await?;
 
@@ -522,6 +606,7 @@ pub async fn review_with_retrieval(
     // lane, because every lane's verdict is qualified by it.
     for note in [
         retrieval_note.as_ref(),
+        memory_note.as_ref(),
         uninspected_note(&uninspected).as_ref(),
     ]
     .into_iter()
@@ -584,6 +669,27 @@ pub async fn review_with_retrieval(
                 Default::default()
             }
         };
+
+    // Remember what this review concluded, so the next one can be told what
+    // was said and, once the threads settle, what became of it. Best effort,
+    // and on the read side deliberately: the memory records the reviewer's
+    // conclusions, and whether `apply` later posts each one is a separate
+    // decision that the outcome pass reads back off the thread.
+    if let Some(recaller) = memory.filter(|_| config.memory.enabled && config.memory.remember_reviews)
+    {
+        let findings: Vec<Finding> = lanes
+            .iter()
+            .flat_map(|lane| lane.findings.iter().cloned())
+            .collect();
+        let items = crate::memory::ingest::finding_items(&repo.to_string(), number, &findings);
+        if !items.is_empty()
+            && let Err(err) =
+                crate::memory::ingest::remember_all(recaller.memory(), &repo.to_string(), &items)
+                    .await
+        {
+            tracing::warn!(%err, "could not remember this review's findings");
+        }
+    }
 
     // The change map. Built last, from the findings that survived, so the
     // diagram marks the behaviours the review will actually comment on. It
