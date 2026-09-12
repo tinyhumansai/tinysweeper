@@ -1107,7 +1107,10 @@ fn memory_is_off_by_default_and_validates_nothing_when_off() {
 fn an_enabled_memory_needs_an_endpoint_a_bearer_may_cross() {
     let missing = parse("version = 1\n[memory]\nenabled = true\n");
     let problems = validate::validate(&missing).join("\n");
-    assert!(problems.contains("`memory.endpoint` is empty"), "{problems}");
+    assert!(
+        problems.contains("`memory.endpoint` is empty"),
+        "{problems}"
+    );
 
     let plaintext = parse(
         "version = 1\n[memory]\nenabled = true\nendpoint = \"http://cortex.internal:3141\"\n",
@@ -1117,7 +1120,11 @@ fn an_enabled_memory_needs_an_endpoint_a_bearer_may_cross() {
 
     let loopback =
         parse("version = 1\n[memory]\nenabled = true\nendpoint = \"http://127.0.0.1:3141\"\n");
-    assert!(validate::validate(&loopback).is_empty(), "{:?}", validate::validate(&loopback));
+    assert!(
+        validate::validate(&loopback).is_empty(),
+        "{:?}",
+        validate::validate(&loopback)
+    );
 
     let unknown = parse(
         "version = 1\n[memory]\nenabled = true\nendpoint = \"https://x\"\nprovider = \"mem0\"\n",
@@ -1144,7 +1151,10 @@ fn a_memory_that_neither_recalls_nor_asks_is_pointless() {
          max_recollections = 0\nask = false\n",
     );
     let problems = validate::validate(&config).join("\n");
-    assert!(problems.contains("consult memory for nothing"), "{problems}");
+    assert!(
+        problems.contains("consult memory for nothing"),
+        "{problems}"
+    );
 }
 
 #[test]
@@ -1158,5 +1168,8 @@ fn memory_is_not_a_repository_overridable_section() {
     )
     .expect("applies");
     assert!(!applied.memory.enabled);
-    assert!(dropped.iter().any(|k| k.starts_with("memory")), "{dropped:?}");
+    assert!(
+        dropped.iter().any(|k| k.starts_with("memory")),
+        "{dropped:?}"
+    );
 }

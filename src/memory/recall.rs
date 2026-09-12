@@ -583,7 +583,10 @@ mod tests {
             .with_answer("conventions", "Nothing relevant is remembered.");
         let recaller = Recaller::new(&memory);
         let mut config = config();
-        config.memory.questions = vec![question("conventions", "Which conventions apply to {paths}?")];
+        config.memory.questions = vec![question(
+            "conventions",
+            "Which conventions apply to {paths}?",
+        )];
         let context = recaller
             .recall(&config, "o/r", "t", &[diff("src/ports/forge.rs")], false)
             .await;

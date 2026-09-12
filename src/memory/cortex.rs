@@ -337,18 +337,24 @@ fn events_only(limit: usize) -> Value {
     })
 }
 
-/// The recall budget behind an answer: spread across every layer, because the
-/// facts and beliefs the engine extracted are what make its answer better
-/// than a pasted list of events.
-fn balanced(limit: usize) -> Value {
-    const LAYERS: [&str; 5] = ["events", "facts", "beliefs", "episodes", "understanding"];
-    let base = limit / LAYERS.len();
-    let remainder = limit % LAYERS.len();
-    let mut limits = serde_json::Map::new();
-    for (index, layer) in LAYERS.into_iter().enumerate() {
-        limits.insert(layer.into(), json!(base + usize::from(index < remainder)));
-    }
-    json!({ "per_layer_limits": limits })
+/// The recall budget behind an answer.
+///
+/// Weighted to events, because the events are the sections and outcomes
+/// whose words the answer is asked to quote; the extracted layers are kept
+/// because the facts and beliefs the engine drew from them are what make its
+/// answer better than a pasted list. Measured: ten events is enough for the
+/// section a question is about to be in the pack, and a pack that lacks it
+/// answers "not enough information" however good the model.
+fn answer_budget() -> Value {
+    json!({
+        "per_layer_limits": {
+            "events": 10,
+            "facts": 5,
+            "beliefs": 3,
+            "episodes": 2,
+            "understanding": 2,
+        }
+    })
 }
 
 /// Strip anything that could be a query string or a key from an error text.
@@ -365,29 +371,45 @@ fn events_of(answer: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-/// A citation as the answer route reports it: a bare id or an object.
-fn citation_of(value: &Value, index: usize) -> Citation {
-    if let Some(id) = value.as_str() {
-        return Citation {
-            id: id.to_string(),
-            path: None,
-            excerpt: None,
-        };
-    }
-    let content = value
-        .get("content")
-        .or_else(|| value.get("text"))
-        .and_then(Value::as_str);
-    let parsed = content.and_then(parse_envelope);
-    Citation {
-        id: value
+/// The items in a pack's events layer, by event id.
+///
+/// The answer route cites event ids and nothing else — measured: a citation
+/// is `{marker, layer, id, support_strength}` — so the path a citation is
+/// about has to come from the pack the answer was built on, which this
+/// process holds.
+fn items_by_id(pack: &Value) -> BTreeMap<String, MemoryItem> {
+    events_of(pack)
+        .iter()
+        .filter_map(|event| {
+            let id = event.get("id").and_then(Value::as_str)?;
+            let text = event.pointer("/content/text").and_then(Value::as_str)?;
+            Some((id.to_string(), parse_envelope(text)?))
+        })
+        .collect()
+}
+
+/// A citation as the answer route reports it: a bare id or an object,
+/// resolved against the pack's events for its path and text.
+fn citation_of(value: &Value, index: usize, cited: &BTreeMap<String, MemoryItem>) -> Citation {
+    let id = match value.as_str() {
+        Some(id) => id.to_string(),
+        None => value
             .get("id")
             .or_else(|| value.get("event_id"))
             .and_then(Value::as_str)
             .map(str::to_owned)
             .unwrap_or_else(|| format!("citation-{index}")),
-        path: parsed.as_ref().and_then(|item| item.path.clone()),
-        excerpt: content.map(|c| crate::memory::excerpt(c, 200)),
+    };
+    let inline = value
+        .get("content")
+        .or_else(|| value.get("text"))
+        .and_then(Value::as_str)
+        .and_then(parse_envelope);
+    let item = cited.get(&id).cloned().or(inline);
+    Citation {
+        id,
+        path: item.as_ref().and_then(|item| item.path.clone()),
+        excerpt: item.map(|item| crate::memory::excerpt(&item.title, 200)),
     }
 }
 
@@ -516,7 +538,7 @@ impl Memory for CortexMemory {
                 &json!({
                     "scope": scope_path,
                     "query": question,
-                    "budgets": balanced(20),
+                    "budgets": answer_budget(),
                 }),
             )
             .await?;
@@ -556,13 +578,14 @@ impl Memory for CortexMemory {
         if text.is_empty() {
             return Ok(ungrounded());
         }
+        let cited = items_by_id(&pack);
         let citations = response
             .get("citations")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
             .enumerate()
-            .map(|(index, c)| citation_of(c, index))
+            .map(|(index, c)| citation_of(c, index, &cited))
             .collect();
         Ok(MemoryAnswer {
             question: question.to_string(),
