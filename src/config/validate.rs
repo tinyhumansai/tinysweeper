@@ -268,12 +268,12 @@ fn validate_memory(config: &Config, problems: &mut Vec<String>) {
         problems.push("`memory.api_key_env` is empty but `memory.enabled = true`".into());
     } else if memory
         .api_key_env
-        .chars()
-        .any(|c| !(c.is_ascii_alphanumeric() || c == '_'))
+        .contains(|c: char| c.is_ascii_lowercase())
     {
+        // Same heuristic, same reason, same redaction as `models.api_key_env`.
         problems.push(format!(
             "`memory.api_key_env` ({}) looks like a value, not an environment variable name; \
-             name the variable that holds the key",
+             never put a key in the config file",
             crate::scan::types::redact(&memory.api_key_env)
         ));
     }
