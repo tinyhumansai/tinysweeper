@@ -158,3 +158,8 @@ tower = { version = "0.5", features = ["util"] }
 [[example]]
 name = "index_and_retrieve"
 required-features = ["serve"]
+
+# Needs a running CortexDB; see the example's own docs.
+[[example]]
+name = "memory_review"
+required-features = ["cortex"]
