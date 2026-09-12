@@ -83,10 +83,16 @@ pub fn endpoint_allowed(endpoint: &str) -> std::result::Result<(), String> {
         .rsplit_once(':')
         .filter(|(h, _)| !h.contains(':') || h.ends_with(']'))
         .map_or(host, |(h, _)| h.trim_end_matches(']'));
-    match host {
-        "localhost" | "127.0.0.1" | "::1" => Ok(()),
-        host if host.starts_with("127.") => Ok(()),
-        _ => Err("plain `http://` is only allowed to a loopback host; use `https://`".into()),
+    // Parsed, not prefix-matched: `127.0.0.1.evil.com` starts with `127.` and
+    // is not loopback.
+    let loopback = host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    if loopback {
+        Ok(())
+    } else {
+        Err("plain `http://` is only allowed to a loopback host; use `https://`".into())
     }
 }
 
