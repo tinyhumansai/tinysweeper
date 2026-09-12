@@ -28,6 +28,7 @@ pub mod auth;
 pub mod failure;
 pub mod indexing;
 pub mod manual;
+pub mod memory;
 pub mod routes;
 pub mod status;
 pub mod store;

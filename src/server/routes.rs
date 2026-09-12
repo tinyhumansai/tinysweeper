@@ -28,6 +28,7 @@ use crate::server::auth::AppAuth;
 use crate::server::failure;
 use crate::server::indexing::{IndexBackend, index_in_background};
 use crate::server::manual::{self, FullReviews, MergeReport, Merges, Triages};
+use crate::server::memory::{MemoryBackend, ingest_in_background};
 use crate::server::status;
 use crate::server::store::{Store, Trust};
 use crate::server::webhook::{self, Action, Payload};
@@ -84,6 +85,9 @@ struct AppState {
     /// provider. `None` runs every review diff-only, which is what tinysweeper
     /// did before an index existed.
     index: Option<Arc<IndexBackend>>,
+    /// The memory engine, when `[memory]` names one. `None` reviews without
+    /// memory, which is what tinysweeper did before an engine existed.
+    memory: Option<Arc<MemoryBackend>>,
     /// Bounds concurrent indexing separately from concurrent reviewing: a
     /// delivery burst must not turn into a burst of full indexes.
     index_permits: Arc<Semaphore>,
@@ -135,6 +139,18 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
         }
     };
 
+    // Same shape as the index: off is a choice, unreachable is a boot failure.
+    let memory = match MemoryBackend::open(&config.config).await? {
+        Some(backend) => {
+            tracing::info!(engine = backend.memory.name(), "memory is on");
+            Some(Arc::new(backend))
+        }
+        None => {
+            tracing::info!("memory is disabled: no engine configured");
+            None
+        }
+    };
+
     let admin_auth = config.admin_auth.clone();
     let state = AppState {
         config: Arc::new(config),
@@ -143,6 +159,7 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
         auth: Arc::new(auth),
         permits: Arc::new(Semaphore::new(MAX_CONCURRENT_REVIEWS)),
         index: index.clone(),
+        memory,
         index_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_INDEXES)),
     };
 
@@ -1301,6 +1318,19 @@ async fn review_inner(
             read_token.clone(),
         ));
     }
+    // Memory is fed from the *base* tip, not the head: what the repository
+    // has committed to, not what this pull request proposes. See
+    // `server::memory`.
+    if let Some(backend) = &state.memory {
+        tokio::spawn(ingest_in_background(
+            backend.clone(),
+            Arc::new(state.config.config.clone()),
+            state.index_permits.clone(),
+            repo_id.clone(),
+            pull_request.base_sha.clone(),
+            read_token.clone(),
+        ));
+    }
 
     // A manual review deliberately takes a lease of its own: the operator asked
     // for this run *because* the ordinary one already happened, so sharing the
@@ -1433,8 +1463,10 @@ async fn run_and_publish(
     // The mode is layered on top of the *effective* config, so a repository's
     // own `.tinysweeper.toml` still governs a manual review — a full run is the
     // same policy with no memory, not the deployment's policy instead.
+    let recaller = state.memory.as_ref().map(|backend| backend.recaller());
+
     let config = config_for(config, mode);
-    let proposal = crate::app::review::review_with_retrieval(
+    let proposal = crate::app::review::review_with_memory(
         forge,
         model,
         &config,
@@ -1443,6 +1475,7 @@ async fn run_and_publish(
         Some(&state.store),
         state.knowledge.as_deref(),
         retriever.as_ref(),
+        recaller.as_ref(),
     )
     .await?;
 

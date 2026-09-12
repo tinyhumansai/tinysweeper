@@ -372,7 +372,7 @@ where
 }
 
 /// The git host repositories are fetched from.
-fn git_host() -> String {
+pub(crate) fn git_host() -> String {
     std::env::var(GIT_HOST_ENV)
         .ok()
         .map(|host| {
