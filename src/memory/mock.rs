@@ -171,12 +171,12 @@ impl Memory for MockMemory {
                 )));
             }
             let slot = store.entry(filed).or_default();
-            let id = item.content_id();
-            if slot.contains_key(&id) {
-                report.replayed += 1;
-            } else {
-                slot.insert(id, item.clone());
-                report.written += 1;
+            match slot.entry(item.content_id()) {
+                std::collections::btree_map::Entry::Occupied(_) => report.replayed += 1,
+                std::collections::btree_map::Entry::Vacant(slot) => {
+                    slot.insert(item.clone());
+                    report.written += 1;
+                }
             }
         }
         Ok(report)
@@ -271,7 +271,10 @@ mod tests {
         let memory = MockMemory::new();
         let scope = MemoryScope::repo("o/r");
         let item = convention("errors", "CLAUDE.md", "Return Result, never panic.");
-        let first = memory.remember(&scope, &[item.clone()]).await.unwrap();
+        let first = memory
+            .remember(&scope, std::slice::from_ref(&item))
+            .await
+            .unwrap();
         let second = memory.remember(&scope, &[item]).await.unwrap();
         assert_eq!(first.written, 1);
         assert_eq!(second.replayed, 1);

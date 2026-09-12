@@ -346,12 +346,14 @@ pub fn outcome_items(
             let _ = writeln!(body, "Location: {path}");
         }
         let _ = writeln!(body, "Outcome: {}", outcome.as_str());
+        // The latest human word is the one that stands: a maintainer who
+        // said "no" and then "actually, fixed" is remembered as the second.
         let reply = thread
             .comments
             .iter()
             .skip(1)
-            .filter(|c| !c.bot && !is_own_login(&c.author))
-            .last();
+            .rev()
+            .find(|c| !c.bot && !is_own_login(&c.author));
         if let Some(reply) = reply {
             let _ = write!(
                 body,
