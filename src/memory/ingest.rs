@@ -246,7 +246,10 @@ pub fn finding_items(repo: &str, number: u64, findings: &[Finding]) -> Vec<Memor
             );
             let _ = write!(body, "\n{}", finding.body.trim());
             MemoryItem::new(
-                format!("finding:{repo}#{number}:{}", finding.fingerprint()),
+                format!(
+                    "finding:{repo}#{number}:{}",
+                    finding.fingerprint(&finding.title)
+                ),
                 MemoryKind::ReviewFinding,
                 finding.title.clone(),
                 body,
@@ -716,7 +719,12 @@ Tail.
         )
         .unwrap();
         let memory = MockMemory::new();
-        let config = crate::config::defaults().memory;
+        let config: crate::config::Config = crate::config::DEFAULTS
+            .parse::<toml::Table>()
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let config = config.memory;
         let ingestor = Ingestor::new(&memory, &config, &[]).unwrap();
         let report = ingestor.ingest_checkout("o/r", dir.path()).await.unwrap();
         assert_eq!(report.convention_files, 1);
