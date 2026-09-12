@@ -509,6 +509,27 @@ mod tests {
     }
 
     #[test]
+    fn memory_credentials_are_only_wanted_when_memory_is_on() {
+        let dir = repo("version = 1\n");
+        let loaded = config::load(dir.path(), None).expect("loads");
+        assert!(
+            !credentials(&loaded)
+                .iter()
+                .any(|(var, _, _)| var == "CORTEX_API_KEY")
+        );
+
+        let dir = repo(
+            "version = 1\n[memory]\nenabled = true\nendpoint = \"https://api-v1.cortexdb.ai\"\n",
+        );
+        let loaded = config::load(dir.path(), None).expect("loads");
+        assert!(
+            credentials(&loaded)
+                .iter()
+                .any(|(var, _, _)| var == "CORTEX_API_KEY")
+        );
+    }
+
+    #[test]
     fn sentry_credentials_are_only_wanted_when_sentry_is_on() {
         let dir = repo("version = 1\n");
         let loaded = config::load(dir.path(), None).expect("loads");
