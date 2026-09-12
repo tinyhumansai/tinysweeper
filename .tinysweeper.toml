@@ -1,7 +1,0 @@
-version = 1
-[memory]
-enabled = true
-endpoint = "http://127.0.0.1:3141"
-api_key_env = "CORTEX_API_KEY"
-ingest_code = false
-convention_files = ["CLAUDE.md", "docs/modules/retrieve/README.md"]
