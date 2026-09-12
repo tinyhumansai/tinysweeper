@@ -760,29 +760,43 @@ mod tests {
         let only = events_only(7);
         assert_eq!(only["per_layer_limits"]["events"], json!(7));
         assert_eq!(only["per_layer_limits"]["facts"], json!(0));
-        let spread = balanced(7);
-        let total: u64 = spread["per_layer_limits"]
-            .as_object()
-            .unwrap()
-            .values()
-            .map(|v| v.as_u64().unwrap())
-            .sum();
-        assert_eq!(total, 7);
+        let spread = answer_budget();
+        assert_eq!(spread["per_layer_limits"]["events"], json!(10));
+        assert!(spread["per_layer_limits"]["facts"].as_u64().unwrap() > 0);
     }
 
     #[test]
-    fn citations_accept_ids_and_objects() {
-        let bare = citation_of(&json!("ev-1"), 0);
-        assert_eq!(bare.id, "ev-1");
-        let item = MemoryItem::new("k", MemoryKind::Convention, "t", "b").at_path("AGENTS.md");
-        let obj = citation_of(
+    fn citations_resolve_against_the_pack_and_accept_inline_objects() {
+        let item = MemoryItem::new("k", MemoryKind::Convention, "AGENTS.md › Rules", "b")
+            .at_path("AGENTS.md");
+        let pack = json!({ "layers": { "events": [
+            { "id": "ev-1", "content": { "text": envelope(&item) } },
+            { "id": "ev-x", "content": { "text": "not ours" } },
+        ]}});
+        let cited = items_by_id(&pack);
+        assert_eq!(cited.len(), 1);
+
+        // What the engine actually sends: marker, layer, id, strength.
+        let live = citation_of(
+            &json!({ "marker": "[S1]", "layer": "event", "id": "ev-1", "support_strength": 1.0 }),
+            0,
+            &cited,
+        );
+        assert_eq!(live.id, "ev-1");
+        assert_eq!(live.path.as_deref(), Some("AGENTS.md"));
+        assert_eq!(live.excerpt.as_deref(), Some("AGENTS.md › Rules"));
+
+        let bare = citation_of(&json!("ev-1"), 0, &cited);
+        assert_eq!(bare.path.as_deref(), Some("AGENTS.md"));
+        let inline = citation_of(
             &json!({ "event_id": "ev-2", "content": envelope(&item) }),
             1,
+            &cited,
         );
-        assert_eq!(obj.id, "ev-2");
-        assert_eq!(obj.path.as_deref(), Some("AGENTS.md"));
-        let anon = citation_of(&json!({}), 3);
+        assert_eq!(inline.path.as_deref(), Some("AGENTS.md"));
+        let anon = citation_of(&json!({}), 3, &cited);
         assert_eq!(anon.id, "citation-3");
+        assert!(anon.path.is_none());
     }
 
     #[test]
