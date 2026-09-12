@@ -678,7 +678,8 @@ Tail.
             author: "tinysweeper[bot]".into(),
             body: format!("x <!-- tinysweeper:fp={FP} -->"),
             path: "src/lib.rs".into(),
-            ..ReviewComment::default()
+            line: Some(3),
+            start_line: None,
         }];
         let items = outcome_items("o/r", 7, &threads, &comments);
         assert_eq!(items.len(), 1);
