@@ -484,7 +484,7 @@ impl<'a> Ingestor<'a> {
                         report.code_items += items.len();
                         pending.extend(items);
                     }
-                    Err(err) => report.unreadable.push(format!("{path}: {err}")),
+                    Err(err) => report.unreadable.push(format!("{path}: {err:?}")),
                 }
             }
             if pending.len() >= REMEMBER_BATCH {

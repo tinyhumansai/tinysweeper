@@ -114,6 +114,10 @@ default = ["treesitter"]
 harness = ["dep:tinyagents", "dep:reqwest"]
 # The real GitHub adapter behind the `Forge` port.
 github = ["dep:octocrab", "dep:reqwest"]
+# The CortexDB adapter behind the `Memory` port. The whole memory layer —
+# ingest, recall, the prompt block — is always compiled and tested offline
+# against `MockMemory`; only `memory::cortex` speaks HTTP.
+cortex = ["dep:reqwest"]
 # The real Sentry adapter behind the `SentryApi` port. Sweeping polls sentry.io,
 # so it is network and therefore gated; the whole promotion pipeline — the
 # redaction boundary, the four steps, every policy decision — is always
@@ -129,6 +133,7 @@ serve = [
     "dep:subtle",
     "dep:tempfile",
     "dep:tower-http",
+    "cortex",
     "github",
     "harness",
 ]
@@ -137,7 +142,7 @@ serve = [
 # grammar named its enclosing symbol.
 treesitter = []
 # Everything a production run turns on.
-all = ["harness", "github", "sentry", "serve", "treesitter"]
+all = ["cortex", "harness", "github", "sentry", "serve", "treesitter"]
 
 [dev-dependencies]
 tempfile = "3"

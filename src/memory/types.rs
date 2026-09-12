@@ -49,7 +49,7 @@ impl MemorySection {
 /// come from another, which is why the repository id is part of the scope
 /// rather than a label on the item — a label is a filter that can be forgotten,
 /// a scope is an address that cannot.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct MemoryScope {
     /// The repository, as `owner/name`.
     pub repo: String,

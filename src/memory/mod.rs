@@ -81,7 +81,7 @@ pub fn endpoint_allowed(endpoint: &str) -> std::result::Result<(), String> {
         .trim_start_matches('[');
     let host = host
         .rsplit_once(':')
-        .filter(|(h, port)| !h.contains(':') || h.ends_with(']'))
+        .filter(|(h, _)| !h.contains(':') || h.ends_with(']'))
         .map_or(host, |(h, _)| h.trim_end_matches(']'));
     match host {
         "localhost" | "127.0.0.1" | "::1" => Ok(()),
