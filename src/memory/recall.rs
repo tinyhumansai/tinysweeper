@@ -455,10 +455,10 @@ mod tests {
     }
 
     fn diff(path: &str) -> FileDiff {
-        crate::evidence::diff::parse_unified(&format!(
-            "diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1,1 +1,2 @@ fn ports_trait\n fn ports_trait() {{}}\n+fn added_ports_fn() {{}}\n"
-        ))
-        .remove(0)
+        crate::evidence::diff::parse_file_patch(
+            path,
+            "@@ -1,1 +1,2 @@ fn ports_trait\n fn ports_trait() {}\n+fn added_ports_fn() {}\n",
+        )
     }
 
     async fn seeded() -> MockMemory {
