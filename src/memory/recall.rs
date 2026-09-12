@@ -321,41 +321,63 @@ impl<'a> Recaller<'a> {
             sections.push(MemorySection::Code);
         }
 
-        let mut candidates: Vec<Recollection> = Vec::new();
-        if settings.max_recollections > 0 && !query.trim().is_empty() {
-            for section in sections {
-                let scope = MemoryScope::section(repo, section);
-                match self
-                    .memory
-                    .recall(&scope, &query, settings.max_recollections)
-                    .await
-                {
+        // Every recall and every question at once. Each is a round trip to
+        // the engine and a question is a model call behind it — measured at
+        // four to twelve seconds — so running them in sequence puts the
+        // whole list on the review's critical path, and a review is expected
+        // in seconds.
+        let recalls = async {
+            let mut candidates: Vec<Recollection> = Vec::new();
+            if settings.max_recollections == 0 || query.trim().is_empty() {
+                return Ok(candidates);
+            }
+            let scopes: Vec<MemoryScope> = sections
+                .iter()
+                .map(|section| MemoryScope::section(repo, *section))
+                .collect();
+            let results = futures::future::join_all(scopes.iter().map(|scope| {
+                self.memory
+                    .recall(scope, &query, settings.max_recollections)
+            }))
+            .await;
+            for (scope, result) in scopes.iter().zip(results) {
+                match result {
                     Ok(hits) => candidates.extend(hits),
                     Err(err) => {
                         tracing::warn!(%err, %scope, "memory recall failed");
-                        return MemoryContext::unavailable(sanitize(&err.to_string()));
+                        return Err(err);
                     }
                 }
             }
-        }
+            Ok(candidates)
+        };
 
-        let mut answers = Vec::new();
-        if settings.ask {
-            for template in &settings.questions {
-                // Validation already refused an unknown section; a question
-                // that somehow carries one is skipped rather than guessed at.
-                let Some(section) = MemorySection::parse(&template.section) else {
-                    continue;
-                };
-                let scope = MemoryScope::section(repo, section);
-                let question = fill_question(&template.ask, title, &paths);
-                match self
-                    .memory
-                    .answer(&scope, &question, Some(ANSWER_INSTRUCTIONS))
-                    .await
-                {
-                    Ok(answer) if answer.is_grounded() => {
-                        let mut answer = answer;
+        let asks = async {
+            let mut answers = Vec::new();
+            if !settings.ask {
+                return Ok(answers);
+            }
+            // Validation already refused an unknown section; a question that
+            // somehow carries one is skipped rather than guessed at.
+            let wanted: Vec<(MemoryScope, String)> = settings
+                .questions
+                .iter()
+                .filter_map(|template| {
+                    let section = MemorySection::parse(&template.section)?;
+                    Some((
+                        MemoryScope::section(repo, section),
+                        fill_question(&template.ask, title, &paths),
+                    ))
+                })
+                .collect();
+            let results = futures::future::join_all(wanted.iter().map(|(scope, question)| {
+                self.memory
+                    .answer(scope, question, Some(ANSWER_INSTRUCTIONS))
+            }))
+            .await;
+            for ((scope, _), result) in wanted.iter().zip(results) {
+                match result {
+                    Ok(mut answer) if answer.is_grounded() => {
                         answer.answer =
                             crate::memory::excerpt(&answer.answer, settings.answer_chars);
                         answers.push(answer);
@@ -363,11 +385,19 @@ impl<'a> Recaller<'a> {
                     Ok(_) => {}
                     Err(err) => {
                         tracing::warn!(%err, %scope, "memory answer failed");
-                        return MemoryContext::unavailable(sanitize(&err.to_string()));
+                        return Err(err);
                     }
                 }
             }
-        }
+            Ok(answers)
+        };
+
+        let (candidates, answers) = match futures::future::join(recalls, asks).await {
+            (Ok(candidates), Ok(answers)) => (candidates, answers),
+            (Err(err), _) | (_, Err(err)) => {
+                return MemoryContext::unavailable(sanitize(&err.to_string()));
+            }
+        };
 
         assemble(answers, candidates, settings.context_tokens)
     }
