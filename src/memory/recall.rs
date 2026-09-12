@@ -602,7 +602,7 @@ mod tests {
         use crate::forge::types::{ReviewThread, ThreadComment};
         let memory = MockMemory::new();
         let recaller = Recaller::new(&memory);
-        let fp = "0123456789abcdef0123456789abcdef";
+        let fp = "0123456789abcdef";
         let threads = vec![ReviewThread {
             id: "t".into(),
             is_resolved: true,

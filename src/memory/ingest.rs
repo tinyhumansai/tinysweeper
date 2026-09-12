@@ -641,7 +641,7 @@ Tail.
         }
     }
 
-    const FP: &str = "0123456789abcdef0123456789abcdef";
+    const FP: &str = "0123456789abcdef";
 
     #[test]
     fn outcomes_follow_the_deterministic_signals() {
