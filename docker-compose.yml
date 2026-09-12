@@ -104,6 +104,10 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
       COHERE_API_KEY: ${COHERE_API_KEY:-}
+      # Memory is opt-in and configured in `[memory]`; only the engine's key
+      # lives here, under whatever name `memory.api_key_env` gives. The server
+      # refuses to boot when memory is on and the key is missing.
+      CORTEX_API_KEY: ${CORTEX_API_KEY:-}
       TINYSWEEPER_WEBHOOK_SECRET: ${TINYSWEEPER_WEBHOOK_SECRET:?set a webhook secret}
       # These two names are read verbatim by `server::auth::AppAuth::from_env`.
       # They were previously spelled `TINYSWEEPER_GITHUB_*` here, which the
