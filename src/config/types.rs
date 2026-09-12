@@ -231,6 +231,9 @@ pub struct Config {
     pub embeddings: Embeddings,
     /// How much repository context a review retrieves, and what it costs.
     pub retrieval: Retrieval,
+    /// The long-lived memory engine: what the reviewer remembers about a
+    /// repository between pull requests.
+    pub memory: Memory,
     /// Per-lane overrides, keyed by lane id.
     pub lanes: BTreeMap<String, Lane>,
     /// Several reviewers on one lane's evidence.
@@ -727,6 +730,63 @@ pub struct Retrieval {
     /// paths above a diff read as noise rather than as a warning. `0` turns the
     /// block off.
     pub max_impact: usize,
+}
+
+/// The long-lived memory of a repository, and how a review consults it.
+///
+/// A separate section from `[retrieval]` because it is a different thing. The
+/// index is rebuilt from the tree on every push and learns nothing; memory
+/// accumulates — the repository's stated conventions, the findings the
+/// reviewer published, and what the maintainers did with them — and is
+/// consulted by *question* as well as by query. See `docs/modules/memory`.
+///
+/// Off by default. An engine is a network dependency with a credential, and a
+/// deployment that has not named one reviews exactly as it did before this
+/// existed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Memory {
+    /// Whether a memory engine is configured at all.
+    pub enabled: bool,
+    /// The engine. Only `cortex` exists today; the field is here so a second
+    /// one is a value rather than a schema change.
+    pub provider: String,
+    /// The engine's base URL, e.g. `https://api-v1.cortexdb.ai` or a
+    /// self-hosted `http://127.0.0.1:3141`. Plain HTTP is accepted for loopback
+    /// only: the bearer must not cross a network in the clear.
+    pub endpoint: String,
+    /// Environment variable holding the engine's API key. Never the key.
+    pub api_key_env: String,
+    /// Remember the repository's source, chunked as the index chunks it.
+    ///
+    /// The one ingest that costs real money on a large repository, and the
+    /// one the index already half-covers, so it has its own switch.
+    pub ingest_code: bool,
+    /// Remember the repository's instruction files and guides, one section
+    /// per heading. These are the *pointers* a reviewer should hold: the
+    /// conventions, the invariants, the "never do this here" notes.
+    pub ingest_conventions: bool,
+    /// Which files count as conventions, as repo-relative globs.
+    pub convention_files: Vec<String>,
+    /// Character ceiling on one remembered convention section. Longer
+    /// sections are split at paragraph boundaries rather than truncated.
+    pub convention_section_chars: usize,
+    /// Remember what the reviewer published and what became of it.
+    pub remember_reviews: bool,
+    /// Token ceiling on the remembered context handed to one lane.
+    pub context_tokens: usize,
+    /// How many recollections one review asks for, per section.
+    pub max_recollections: usize,
+    /// Whether a review asks the engine grounded questions as well as
+    /// recalling by query.
+    pub ask: bool,
+    /// The questions a review asks, in order. `{paths}` is replaced by the
+    /// changed paths and `{title}` by the pull request title. Each answer is
+    /// bounded by [`Memory::answer_chars`] and the whole block by
+    /// [`Memory::context_tokens`].
+    pub questions: Vec<String>,
+    /// Character ceiling on one grounded answer.
+    pub answer_chars: usize,
 }
 
 /// Model work that is not a lane.
