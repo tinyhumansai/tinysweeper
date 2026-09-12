@@ -26,11 +26,11 @@ use crate::lanes::{
     self, Lane, LaneInput, LaneOutcome, commits::Commits, critique::Critique,
     description::Description, security::Security, tests::Tests,
 };
+use crate::memory::Recaller;
 use crate::ports::forge::ForgeRead;
 use crate::ports::knowledge::KnowledgeStore;
 use crate::ports::model::{Model, Spend, Usage};
 use crate::ports::review_state::ReviewStateStore;
-use crate::memory::Recaller;
 use crate::retrieve::Retriever;
 use crate::scan;
 use crate::scan::types::ScanKind;
@@ -675,7 +675,8 @@ pub async fn review_with_memory(
     // and on the read side deliberately: the memory records the reviewer's
     // conclusions, and whether `apply` later posts each one is a separate
     // decision that the outcome pass reads back off the thread.
-    if let Some(recaller) = memory.filter(|_| config.memory.enabled && config.memory.remember_reviews)
+    if let Some(recaller) =
+        memory.filter(|_| config.memory.enabled && config.memory.remember_reviews)
     {
         let findings: Vec<Finding> = lanes
             .iter()

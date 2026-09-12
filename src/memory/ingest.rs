@@ -239,10 +239,7 @@ pub fn finding_items(repo: &str, number: u64, findings: &[Finding]) -> Vec<Memor
                 body,
                 "Location: {}{}",
                 finding.path,
-                finding
-                    .line
-                    .map(|l| format!(":{l}"))
-                    .unwrap_or_default()
+                finding.line.map(|l| format!(":{l}")).unwrap_or_default()
             );
             let _ = write!(body, "\n{}", finding.body.trim());
             MemoryItem::new(
@@ -428,7 +425,11 @@ pub struct Ingestor<'a> {
 
 impl<'a> Ingestor<'a> {
     /// An ingestor over `memory`, honouring `config` and `ignore` globs.
-    pub fn new(memory: &'a dyn Memory, config: &'a MemoryConfig, ignore: &[String]) -> Result<Self> {
+    pub fn new(
+        memory: &'a dyn Memory,
+        config: &'a MemoryConfig,
+        ignore: &[String],
+    ) -> Result<Self> {
         let mut builder = GlobSetBuilder::new();
         for pattern in &config.convention_files {
             let glob = Glob::new(pattern).map_err(|err| {
@@ -512,7 +513,9 @@ impl<'a> Ingestor<'a> {
         for (section, items) in by_section {
             let scope = MemoryScope::section(repo, section);
             for batch in items.chunks(REMEMBER_BATCH) {
-                report.remembered.merge(self.memory.remember(&scope, batch).await?);
+                report
+                    .remembered
+                    .merge(self.memory.remember(&scope, batch).await?);
             }
         }
         Ok(())
@@ -622,7 +625,12 @@ Tail.
         assert!(items.iter().all(|i| i.key.starts_with("code:src/a.rs#")));
     }
 
-    fn thread(ours: &str, replies: &[(&str, bool)], resolved: bool, outdated: bool) -> ReviewThread {
+    fn thread(
+        ours: &str,
+        replies: &[(&str, bool)],
+        resolved: bool,
+        outdated: bool,
+    ) -> ReviewThread {
         let mut comments = vec![ThreadComment {
             author: "tinysweeper[bot]".into(),
             body: format!("**Title here**\n\nbody\n\n<!-- tinysweeper:fp={ours} -->"),
@@ -660,10 +668,7 @@ Tail.
         );
         assert_eq!(classify(&thread(FP, &[], false, false)), None);
         // A bot's reply is not a human's.
-        assert_eq!(
-            classify(&thread(FP, &[("beep", true)], false, false)),
-            None
-        );
+        assert_eq!(classify(&thread(FP, &[("beep", true)], false, false)), None);
     }
 
     #[test]
@@ -687,7 +692,10 @@ Tail.
         assert_eq!(item.kind, MemoryKind::ReviewOutcome);
         assert_eq!(item.path.as_deref(), Some("src/lib.rs"));
         assert_eq!(item.title, "rejected — Title here");
-        assert!(item.body.contains("Maintainer's reply: This is intentional"));
+        assert!(
+            item.body
+                .contains("Maintainer's reply: This is intentional")
+        );
         assert!(item.labels.contains(&"outcome:rejected".to_string()));
         assert_eq!(item.key, format!("outcome:o/r#7:{FP}"));
     }

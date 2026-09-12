@@ -34,8 +34,7 @@ use crate::evidence::diff::FileDiff;
 use crate::forge::types::{ReviewComment, ReviewThread};
 use crate::memory::ingest;
 use crate::memory::types::{
-    MemoryAnswer, MemoryItem, MemoryKind, MemoryScope, MemorySection, Recollection,
-    RememberReport,
+    MemoryAnswer, MemoryItem, MemoryKind, MemoryScope, MemorySection, Recollection, RememberReport,
 };
 use crate::ports::memory::Memory;
 
@@ -348,7 +347,8 @@ impl<'a> Recaller<'a> {
                 {
                     Ok(answer) if answer.is_grounded() => {
                         let mut answer = answer;
-                        answer.answer = crate::memory::excerpt(&answer.answer, settings.answer_chars);
+                        answer.answer =
+                            crate::memory::excerpt(&answer.answer, settings.answer_chars);
                         answers.push(answer);
                     }
                     Ok(_) => {}
@@ -386,7 +386,11 @@ fn assemble(
     // citation, and it is not worth a line of prompt.
     let answers: Vec<MemoryAnswer> = answers
         .into_iter()
-        .filter(|a| !a.answer.to_lowercase().contains("nothing relevant is remembered"))
+        .filter(|a| {
+            !a.answer
+                .to_lowercase()
+                .contains("nothing relevant is remembered")
+        })
         .collect();
     let mut remaining = budget_tokens;
     for answer in answers {
@@ -591,7 +595,13 @@ mod tests {
         let mut config = config();
         config.memory.context_tokens = 25;
         let context = recaller
-            .recall(&config, "o/r", "ports change", &[diff("src/ports/forge.rs")], true)
+            .recall(
+                &config,
+                "o/r",
+                "ports change",
+                &[diff("src/ports/forge.rs")],
+                true,
+            )
             .await;
         assert!(context.tokens <= 25);
         assert!(context.dropped >= 1);
@@ -635,10 +645,7 @@ mod tests {
         let q = fill_question("Rules for {paths} in {title}?", "T", &paths);
         assert!(q.starts_with("Rules for `src/f0.rs`, "));
         assert!(q.contains("and 8 more in T?"));
-        assert_eq!(
-            fill_question("{paths}", "", &[]),
-            "the changed files"
-        );
+        assert_eq!(fill_question("{paths}", "", &[]), "the changed files");
     }
 
     #[test]

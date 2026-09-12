@@ -230,7 +230,11 @@ fn dec(value: &str) -> String {
 pub fn envelope(item: &MemoryItem) -> String {
     let mut out = String::with_capacity(item.body.len() + 160);
     out.push_str(HEADER);
-    out.push_str(&format!(" kind={}; key={}", item.kind.as_str(), enc(&item.key)));
+    out.push_str(&format!(
+        " kind={}; key={}",
+        item.kind.as_str(),
+        enc(&item.key)
+    ));
     if let Some(path) = &item.path {
         out.push_str(&format!("; path={}", enc(path)));
     }
@@ -427,7 +431,10 @@ impl Memory for CortexMemory {
             return Ok(report);
         }
         let answer = self
-            .post("v1/experience/bulk?wait=indexed", &json!({ "items": bodies }))
+            .post(
+                "v1/experience/bulk?wait=indexed",
+                &json!({ "items": bodies }),
+            )
             .await?;
         let results = answer
             .get("results")
@@ -525,7 +532,9 @@ impl Memory for CortexMemory {
             return Ok(ungrounded());
         }
         let Some(pack_id) = pack.get("pack_id").and_then(Value::as_str) else {
-            return Err(Error::Model("cortex: recall answered without a pack_id".into()));
+            return Err(Error::Model(
+                "cortex: recall answered without a pack_id".into(),
+            ));
         };
         let mut body = json!({
             "scope": scope_path,
@@ -743,7 +752,10 @@ mod tests {
         let bare = citation_of(&json!("ev-1"), 0);
         assert_eq!(bare.id, "ev-1");
         let item = MemoryItem::new("k", MemoryKind::Convention, "t", "b").at_path("AGENTS.md");
-        let obj = citation_of(&json!({ "event_id": "ev-2", "content": envelope(&item) }), 1);
+        let obj = citation_of(
+            &json!({ "event_id": "ev-2", "content": envelope(&item) }),
+            1,
+        );
         assert_eq!(obj.id, "ev-2");
         assert_eq!(obj.path.as_deref(), Some("AGENTS.md"));
         let anon = citation_of(&json!({}), 3);

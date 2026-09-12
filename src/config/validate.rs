@@ -259,7 +259,10 @@ fn validate_memory(config: &Config, problems: &mut Vec<String>) {
     if memory.endpoint.trim().is_empty() {
         problems.push("`memory.endpoint` is empty but `memory.enabled = true`".into());
     } else if let Err(reason) = crate::memory::endpoint_allowed(&memory.endpoint) {
-        problems.push(format!("`memory.endpoint = \"{}\"`: {reason}", memory.endpoint));
+        problems.push(format!(
+            "`memory.endpoint = \"{}\"`: {reason}",
+            memory.endpoint
+        ));
     }
     if memory.api_key_env.trim().is_empty() {
         problems.push("`memory.api_key_env` is empty but `memory.enabled = true`".into());

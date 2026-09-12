@@ -356,7 +356,10 @@ mod tests {
             .unwrap();
         assert!(hit.is_grounded());
         assert_eq!(hit.answer, "Never unwrap.");
-        let miss = memory.answer(&scope, "Who wrote this?", None).await.unwrap();
+        let miss = memory
+            .answer(&scope, "Who wrote this?", None)
+            .await
+            .unwrap();
         assert!(!miss.is_grounded());
     }
 
