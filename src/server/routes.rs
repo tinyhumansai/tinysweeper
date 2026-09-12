@@ -142,7 +142,7 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
     // Same shape as the index: off is a choice, unreachable is a boot failure.
     let memory = match MemoryBackend::open(&config.config).await? {
         Some(backend) => {
-            tracing::info!(engine = backend.memory.name(), "memory is on");
+            tracing::info!(engine = "cortex", "memory is on");
             Some(Arc::new(backend))
         }
         None => {
