@@ -142,6 +142,15 @@ enum Command {
         dry_run: bool,
     },
 
+    /// Feed, query and inspect the memory engine (`[memory]`).
+    ///
+    /// The server does all of this on its own once `[memory]` names an engine;
+    /// these are the operator's buttons for seeding a repository ahead of its
+    /// first review, checking what the engine holds, and asking it a question
+    /// the way a review would. Requires the `cortex` feature.
+    #[command(subcommand)]
+    Memory(MemoryCommand),
+
     /// Merge a pull request if it qualifies under `[automerge]`.
     ///
     /// Deterministic and off unless the repository opts in. Makes no model
@@ -227,6 +236,65 @@ enum Command {
         /// Emit JSON instead of prose.
         #[arg(long)]
         json: bool,
+    },
+}
+
+/// The memory commands.
+#[derive(Debug, Subcommand)]
+enum MemoryCommand {
+    /// Remember a checkout: its code, and its instruction files as conventions.
+    Ingest {
+        /// The repository, as `owner/name`. Names the scope; nothing is fetched.
+        #[arg(long)]
+        repo: String,
+
+        /// The checkout to read. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        dir: std::path::PathBuf,
+
+        /// Path to the config file. Defaults to discovery from `--dir`.
+        #[arg(long)]
+        config: Option<std::path::PathBuf>,
+    },
+
+    /// Recall what the engine holds for a query, section by section.
+    Recall {
+        /// The repository, as `owner/name`.
+        #[arg(long)]
+        repo: String,
+
+        /// The query, in the words a diff would use.
+        query: String,
+
+        /// How many recollections per section.
+        #[arg(long, default_value_t = 5)]
+        limit: usize,
+    },
+
+    /// Ask the engine a grounded question about a repository.
+    Ask {
+        /// The repository, as `owner/name`.
+        #[arg(long)]
+        repo: String,
+
+        /// The question. `{paths}` is left as-is: this is the raw form.
+        question: String,
+    },
+
+    /// Forget everything the engine holds for a repository, or one section.
+    Forget {
+        /// The repository, as `owner/name`.
+        #[arg(long)]
+        repo: String,
+
+        /// Only this section: `code`, `conventions` or `reviews`.
+        #[arg(long)]
+        section: Option<String>,
+
+        /// Actually do it. Without this the command reports what it would
+        /// forget and stops.
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -375,6 +443,7 @@ async fn dispatch(command: Command) -> Result<()> {
             dry_run,
         } => run_pr_triage(&repo, pr, config, dry_run).await,
         Command::Sentry { config, dry_run } => run_sentry(config, dry_run).await,
+        Command::Memory(command) => run_memory(command).await,
         Command::Eval(command) => run_eval(command).await,
         Command::LocalReview {
             base,
@@ -1141,6 +1210,121 @@ async fn run_sentry(config_path: Option<std::path::PathBuf>, dry_run: bool) -> R
     }
 
     Ok(())
+}
+
+/// Drive the memory engine by hand.
+///
+/// Every command builds the same `CortexMemory` the server does, from the same
+/// `[memory]` section, so what the operator sees here is what a review sees.
+#[cfg(feature = "cortex")]
+async fn run_memory(command: MemoryCommand) -> Result<()> {
+    use tinysweeper::memory::cortex::CortexMemory;
+    use tinysweeper::memory::{Ingestor, MemoryScope, MemorySection};
+    use tinysweeper::ports::memory::Memory as _;
+
+    fn open(
+        root: &std::path::Path,
+        config: Option<&std::path::Path>,
+    ) -> Result<(tinysweeper::config::types::Config, CortexMemory)> {
+        let loaded = tinysweeper::config::load_validated(root, config)?;
+        if !loaded.config.memory.enabled {
+            return Err(tinysweeper::Error::config(
+                "`memory.enabled = false`; name an engine under [memory] first",
+            ));
+        }
+        let memory = CortexMemory::from_config(&loaded.config.memory)?;
+        Ok((loaded.config, memory))
+    }
+
+    match command {
+        MemoryCommand::Ingest { repo, dir, config } => {
+            let (config, memory) = open(&dir, config.as_deref())?;
+            memory.health().await?;
+            let ingestor = Ingestor::new(&memory, &config.memory, &config.paths.ignore)?;
+            let report = ingestor.ingest_checkout(&repo, &dir).await?;
+            println!("{}", report.summary());
+            for line in &report.unreadable {
+                println!("  skipped {line}");
+            }
+        }
+        MemoryCommand::Recall { repo, query, limit } => {
+            let (_, memory) = open(std::path::Path::new("."), None)?;
+            for section in MemorySection::ALL {
+                let scope = MemoryScope::section(&repo, section);
+                let hits = memory.recall(&scope, &query, limit).await?;
+                println!("## {} ({})", section.as_str(), hits.len());
+                for hit in hits {
+                    let item = hit.item;
+                    println!(
+                        "- [{}] {}{}",
+                        item.kind.as_str(),
+                        item.title,
+                        item.path
+                            .as_deref()
+                            .map(|p| format!("  ({p})"))
+                            .unwrap_or_default()
+                    );
+                    for line in item.body.lines().take(6) {
+                        println!("    {line}");
+                    }
+                }
+            }
+        }
+        MemoryCommand::Ask { repo, question } => {
+            let (_, memory) = open(std::path::Path::new("."), None)?;
+            let answer = memory
+                .answer(&MemoryScope::repo(&repo), &question, None)
+                .await?;
+            if !answer.is_grounded() {
+                println!("(nothing relevant is remembered)");
+                return Ok(());
+            }
+            println!("{}", answer.answer);
+            if let Some(model) = &answer.model {
+                println!("\n— {model}");
+            }
+            for citation in &answer.citations {
+                println!(
+                    "  cites {}{}",
+                    citation.id,
+                    citation
+                        .path
+                        .as_deref()
+                        .map(|p| format!(" ({p})"))
+                        .unwrap_or_default()
+                );
+            }
+        }
+        MemoryCommand::Forget { repo, section, yes } => {
+            let (_, memory) = open(std::path::Path::new("."), None)?;
+            let scope = match section.as_deref() {
+                None => MemoryScope::repo(&repo),
+                Some("code") => MemoryScope::section(&repo, MemorySection::Code),
+                Some("conventions") => MemoryScope::section(&repo, MemorySection::Conventions),
+                Some("reviews") => MemoryScope::section(&repo, MemorySection::Reviews),
+                Some(other) => {
+                    return Err(tinysweeper::Error::config(format!(
+                        "`{other}` is not a section; use code, conventions or reviews"
+                    )));
+                }
+            };
+            if !yes {
+                println!("would forget everything under {scope}; pass --yes to do it");
+                return Ok(());
+            }
+            let gone = memory.forget(&scope).await?;
+            println!("forgot {gone} memories under {scope}");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "cortex"))]
+async fn run_memory(_command: MemoryCommand) -> Result<()> {
+    Err(tinysweeper::Error::FeatureDisabled(
+        "driving the memory engine",
+        "cortex",
+    ))
 }
 
 #[cfg(not(all(feature = "sentry", feature = "github")))]
