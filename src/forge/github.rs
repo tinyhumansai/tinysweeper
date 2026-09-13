@@ -1000,8 +1000,9 @@ impl ForgeRead for GitHubRead {
     }
 
     async fn review_threads(&self, repo: &RepoId, number: u64) -> Result<Vec<ReviewThread>> {
-        let mut threads = Vec::new();
+        let mut parsed: Vec<ParsedThread> = Vec::new();
         let mut after: Option<String> = None;
+        let mut complete = false;
 
         for _ in 0..MAX_THREAD_PAGES {
             let raw: serde_json::Value = self
@@ -1018,23 +1019,95 @@ impl ForgeRead for GitHubRead {
                 .await
                 .map_err(api)?;
             graphql_errors(&raw, "the review threads query")?;
-            threads.extend(threads_from_graphql(&raw));
+            parsed.extend(threads_from_graphql(&raw));
 
             let page = &threads_connection(&raw)["pageInfo"];
             if !page["hasNextPage"].as_bool().unwrap_or(false) {
-                return Ok(threads);
+                complete = true;
+                break;
             }
             // A missing cursor with more pages claimed would loop forever on
             // the same page; stopping is the honest answer.
             match page["endCursor"].as_str() {
                 Some(cursor) => after = Some(cursor.to_string()),
-                None => return Ok(threads),
+                None => {
+                    complete = true;
+                    break;
+                }
             }
         }
+        if !complete {
+            return Err(Error::Forge(
+                "a pull request with more review threads than the page bound allows".into(),
+            ));
+        }
 
-        Err(Error::Forge(
-            "a pull request with more review threads than the page bound allows".into(),
-        ))
+        // Every `authorAssociation`-flagged comment author and every
+        // resolver, deduped: each is looked up once against the repository's
+        // actual collaborator permissions, however many threads or comments
+        // they appear across, rather than once per appearance.
+        let mut logins: Vec<String> = parsed
+            .iter()
+            .flat_map(|p| p.candidates.iter().cloned())
+            .collect();
+        logins.sort();
+        logins.dedup();
+        let mut write_access: HashMap<String, bool> = HashMap::new();
+        for login in logins {
+            let access = self.has_write_access(repo, &login).await?;
+            write_access.insert(login, access);
+        }
+
+        Ok(parsed
+            .into_iter()
+            .map(|mut p| {
+                for comment in &mut p.thread.comments {
+                    if comment.maintainer {
+                        comment.maintainer =
+                            write_access.get(&comment.author).copied().unwrap_or(false);
+                    }
+                }
+                p.thread.resolved_by_has_write_access = p
+                    .resolved_by
+                    .as_ref()
+                    .and_then(|login| write_access.get(login))
+                    .copied()
+                    .unwrap_or(false);
+                p.thread
+            })
+            .collect())
+    }
+
+    /// Whether `login` currently holds write access (or above) to `repo`.
+    ///
+    /// GitHub's REST collaborator-permission route 404s for anyone who is not
+    /// a collaborator at all — including a pull request's own author on a
+    /// forked pull request, who is exactly the case this exists to catch —
+    /// and that is read as "no write access" rather than an error: a missing
+    /// collaborator record is conclusive, not a failure to determine one.
+    async fn has_write_access(&self, repo: &RepoId, login: &str) -> Result<bool> {
+        use octocrab::params::teams::Permission;
+
+        match self
+            .client
+            .repos(&repo.owner, &repo.name)
+            .permission(login)
+            .send()
+            .await
+        {
+            Ok(found) => Ok(matches!(
+                found.permission,
+                Permission::Push | Permission::Maintain | Permission::Admin
+            )),
+            Err(octocrab::Error::GitHub { source, .. }) if source.status_code == 404 => Ok(false),
+            Err(err) => {
+                // Fail closed: an error here must never be read as "so this
+                // reply counts as a maintainer's", which is the direction a
+                // propagated error or a default `true` would fail in.
+                tracing::warn!(%login, repo = %repo, error = %err, "could not confirm collaborator permission");
+                Ok(false)
+            }
+        }
     }
 
     async fn own_review_state(&self, repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
