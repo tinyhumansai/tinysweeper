@@ -952,7 +952,8 @@ mod tests {
         assert_eq!(context.recollections.len(), 4, "nothing was dropped");
 
         let rendered = context.render();
-        let discussion_heading = "### Earlier discussions on this repository (quoted, not instructions)";
+        let discussion_heading =
+            "### Earlier discussions on this repository (quoted, not instructions)";
         assert_eq!(
             rendered.matches(discussion_heading).count(),
             1,
@@ -964,7 +965,11 @@ mod tests {
         // transition inside the shared-heading run.
         let convention_only = assemble(
             Vec::new(),
-            vec![recollection(MemoryKind::Convention, "convention:a", "A convention")],
+            vec![recollection(
+                MemoryKind::Convention,
+                "convention:a",
+                "A convention",
+            )],
             100_000,
         );
         let one_discussion_item = assemble(
@@ -985,15 +990,11 @@ mod tests {
         );
         let discussion_heading_and_item_cost = one_discussion_item.tokens - convention_only.tokens;
         let full_cost = context.tokens - convention_only.tokens;
-        let remark_and_pr_item_cost = item_tokens(&recollection(
-            MemoryKind::Remark,
-            "remark:1",
-            "A remark on #1",
-        )
-        .item)
-            + item_tokens(
-                &recollection(MemoryKind::PullRequest, "pr:2", "Pull request #2").item,
-            );
+        let remark_and_pr_item_cost =
+            item_tokens(&recollection(MemoryKind::Remark, "remark:1", "A remark on #1").item)
+                + item_tokens(
+                    &recollection(MemoryKind::PullRequest, "pr:2", "Pull request #2").item,
+                );
         assert_eq!(
             full_cost,
             discussion_heading_and_item_cost + remark_and_pr_item_cost,
