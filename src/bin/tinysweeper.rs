@@ -1660,6 +1660,35 @@ mod tests {
         dispatch(cli.command).await.expect("validates the config");
     }
 
+    #[cfg(feature = "cortex")]
+    #[tokio::test]
+    async fn a_noncanonical_repo_is_rejected_before_any_memory_scope_is_built() {
+        // `MemoryScope`'s parser only checks for the first `/`, so `a/b/c`
+        // would otherwise build a scope `RepoId::parse` rejects — every
+        // memory command must canonicalize `--repo` first, and fail before
+        // opening the engine or reading a config, so this needs neither.
+        for command in [
+            MemoryCommand::Recall {
+                repo: "a/b/c".into(),
+                query: "x".into(),
+                limit: 5,
+            },
+            MemoryCommand::Ask {
+                repo: "a/b/c".into(),
+                section: "conventions".into(),
+                question: "x".into(),
+            },
+            MemoryCommand::Forget {
+                repo: "a/b/c".into(),
+                section: None,
+                yes: false,
+            },
+        ] {
+            let err = run_memory(command).await.unwrap_err().to_string();
+            assert!(err.contains("is not `owner/name`"), "{err}");
+        }
+    }
+
     #[cfg(feature = "serve")]
     #[test]
     fn a_missing_webhook_secret_is_rejected() {
