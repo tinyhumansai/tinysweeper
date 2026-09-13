@@ -562,6 +562,51 @@ mod tests {
     }
 
     #[test]
+    fn a_chunk_failure_does_not_stop_the_walk_from_reaching_later_chunks() {
+        // Regression: a chunk that has a subject failure reports
+        // `resume_from: None` (see `DiscussionReport::backfill`), which used
+        // to be read as "the whole walk is done" and stopped every later
+        // chunk from ever running. `last_seen` — set whether or not the
+        // chunk had a failure — must still let the walk continue.
+        let cursor = Some("2026-08-01T00:00:00Z".to_string());
+        let last_seen = Some("2026-08-10T00:00:00Z".to_string());
+        assert_eq!(
+            next_chunk_cursor(&cursor, &last_seen, 200, 200),
+            Some("2026-08-10T00:00:00Z".to_string()),
+            "a failed subject must not stop the walk from advancing to the next chunk"
+        );
+    }
+
+    #[test]
+    fn the_walk_stops_once_a_chunk_makes_no_further_progress() {
+        let cursor = Some("2026-08-10T00:00:00Z".to_string());
+        assert_eq!(
+            next_chunk_cursor(&cursor, &cursor, 200, 200),
+            None,
+            "the same cursor twice means nothing new was found"
+        );
+    }
+
+    #[test]
+    fn the_walk_stops_when_there_is_nothing_to_back_a_cursor_off_from() {
+        assert_eq!(
+            next_chunk_cursor(&None, &None, 0, 200),
+            None,
+            "an empty listing has no cursor to continue from"
+        );
+    }
+
+    #[test]
+    fn the_walk_stops_once_a_chunk_comes_back_smaller_than_requested() {
+        // Fewer entries than the chunk asked for means the listing reached
+        // the end of history; there is nothing more to walk regardless of
+        // whether the cursor moved.
+        let cursor = Some("2026-08-01T00:00:00Z".to_string());
+        let last_seen = Some("2026-08-10T00:00:00Z".to_string());
+        assert_eq!(next_chunk_cursor(&cursor, &last_seen, 3, 200), None);
+    }
+
+    #[test]
     fn freshness_key_changes_with_the_effective_ingestion_policy() {
         // Regression: freshness used to be keyed on the revision alone. If
         // the first delivery for a base SHA ingested under the deployment's
