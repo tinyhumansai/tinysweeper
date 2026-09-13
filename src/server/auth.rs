@@ -15,6 +15,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tokio::sync::Mutex;
 
 use crate::error::{Error, Result};
@@ -44,11 +45,18 @@ struct CachedToken {
     expires: SystemTime,
 }
 
+/// The permission envelope requested for an installation token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum TokenScope {
+    Full,
+    ReviewRead,
+}
+
 /// Mints and caches GitHub App credentials.
 pub struct AppAuth {
     app_id: String,
     key: EncodingKey,
-    cache: Arc<Mutex<HashMap<u64, CachedToken>>>,
+    cache: Arc<Mutex<HashMap<(u64, TokenScope), CachedToken>>>,
     http: reqwest::Client,
 }
 
@@ -154,23 +162,35 @@ impl AppAuth {
 
     /// An installation token, from cache when one is still good.
     pub async fn installation_token(&self, installation: u64) -> Result<String> {
-        if let Some(cached) = self.cache.lock().await.get(&installation)
+        self.token(installation, TokenScope::Full).await
+    }
+
+    /// An installation token that cannot mutate the reviewed repository.
+    pub async fn review_read_token(&self, installation: u64) -> Result<String> {
+        self.token(installation, TokenScope::ReviewRead).await
+    }
+
+    async fn token(&self, installation: u64, scope: TokenScope) -> Result<String> {
+        if let Some(cached) = self.cache.lock().await.get(&(installation, scope))
             && cached.expires > SystemTime::now() + RENEW_MARGIN
         {
             return Ok(cached.token.clone());
         }
 
         let jwt = self.app_jwt()?;
-        let response = self
+        let request = self
             .http
             .post(format!(
                 "https://api.github.com/app/installations/{installation}/access_tokens"
             ))
             .bearer_auth(jwt)
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .await
-            .map_err(|err| Error::Forge(format!("token exchange failed: {err}")))?;
+            .header("Accept", "application/vnd.github+json");
+        let response = match permissions(scope) {
+            Some(body) => request.json(&body).send(),
+            None => request.send(),
+        }
+        .await
+        .map_err(|err| Error::Forge(format!("token exchange failed: {err}")))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -190,7 +210,7 @@ impl AppAuth {
             .unwrap_or_else(|| SystemTime::now() + Duration::from_secs(3600));
 
         self.cache.lock().await.insert(
-            installation,
+            (installation, scope),
             CachedToken {
                 token: minted.token.clone(),
                 expires,
@@ -198,6 +218,20 @@ impl AppAuth {
         );
 
         Ok(minted.token)
+    }
+}
+
+/// The optional permission restriction for an installation-token exchange.
+fn permissions(scope: TokenScope) -> Option<serde_json::Value> {
+    match scope {
+        TokenScope::Full => None,
+        TokenScope::ReviewRead => Some(json!({
+            "permissions": {
+                "contents": "read",
+                "pull_requests": "read",
+                "checks": "read"
+            }
+        })),
     }
 }
 
@@ -345,6 +379,21 @@ mod tests {
         // anyway — so the failure mode is renewing slightly early.
         assert!(parse_expiry("whenever").is_none());
         assert!(parse_expiry("").is_none());
+    }
+
+    #[test]
+    fn review_tokens_request_only_the_permissions_the_review_needs() {
+        assert_eq!(permissions(TokenScope::Full), None);
+        assert_eq!(
+            permissions(TokenScope::ReviewRead),
+            Some(json!({
+                "permissions": {
+                    "contents": "read",
+                    "pull_requests": "read",
+                    "checks": "read"
+                }
+            }))
+        );
     }
 
     fn base64_decode(text: &str) -> Option<Vec<u8>> {
