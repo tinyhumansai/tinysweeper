@@ -83,8 +83,13 @@ pub const DEFAULT_BACKFILL_LIMIT: usize = 1000;
 pub enum Subject {
     /// An issue.
     Issue(Issue),
-    /// A pull request.
-    PullRequest(PullRequest),
+    /// A pull request, and when it was last touched (RFC 3339) when known.
+    ///
+    /// The timestamp rides beside the pull request rather than on it because
+    /// [`PullRequest`] carries ages in days for the triage guards, not
+    /// instants; the listing a backfill walks knows the instant, and a live
+    /// re-read falls back to the newest remark's.
+    PullRequest(PullRequest, Option<String>),
 }
 
 impl Subject {
@@ -92,7 +97,7 @@ impl Subject {
     pub fn number(&self) -> u64 {
         match self {
             Self::Issue(issue) => issue.number,
-            Self::PullRequest(pr) => pr.number,
+            Self::PullRequest(pr, _) => pr.number,
         }
     }
 
@@ -100,13 +105,13 @@ impl Subject {
     pub fn title(&self) -> &str {
         match self {
             Self::Issue(issue) => &issue.title,
-            Self::PullRequest(pr) => &pr.title,
+            Self::PullRequest(pr, _) => &pr.title,
         }
     }
 
     /// Whether this is a pull request.
     pub fn is_pull_request(&self) -> bool {
-        matches!(self, Self::PullRequest(_))
+        matches!(self, Self::PullRequest(..))
     }
 
     /// `issue` or `pull request`, for prose.
@@ -182,7 +187,7 @@ pub fn subject_item(repo: &str, subject: &Subject, max_chars: usize) -> MemoryIt
             }
             item
         }
-        Subject::PullRequest(pr) => {
+        Subject::PullRequest(pr, updated_at) => {
             let _ = writeln!(body, "Pull request {repo}#{number}: {}", pr.title.trim());
             let state = if pr.merged {
                 "merged"
@@ -220,12 +225,15 @@ pub fn subject_item(repo: &str, subject: &Subject, max_chars: usize) -> MemoryIt
             for label in pr.labels.iter().take(MAX_ISSUE_LABELS) {
                 item = item.labelled(format!("label:{label}"));
             }
+            if let Some(at) = updated_at {
+                item = item.observed(at.clone());
+            }
             item
         }
     };
     let text = match subject {
         Subject::Issue(issue) => issue.body.as_str(),
-        Subject::PullRequest(pr) => pr.body.as_str(),
+        Subject::PullRequest(pr, _) => pr.body.as_str(),
     };
     if !text.trim().is_empty() {
         let _ = write!(body, "\n{}", crate::memory::excerpt(text, max_chars));
@@ -361,6 +369,21 @@ pub fn discussion_items(
     remarks: &[Remark],
     max_chars: usize,
 ) -> Vec<MemoryItem> {
+    // A pull request read live carries no instant of its own: date it to the
+    // newest remark, so recall can rank it by recency like an issue.
+    let dated;
+    let subject = match subject {
+        Subject::PullRequest(pr, None) => {
+            let newest = remarks
+                .iter()
+                .filter_map(|r| r.updated_at.as_ref().or(r.created_at.as_ref()))
+                .max()
+                .cloned();
+            dated = Subject::PullRequest(pr.clone(), newest);
+            &dated
+        }
+        other => other,
+    };
     let mut items = vec![subject_item(repo, subject, max_chars)];
     items.extend(remark_items(repo, subject, remarks, max_chars));
     items
@@ -381,7 +404,7 @@ fn who(login: &str, bot: bool, association: &str) -> String {
 fn subject_is_bot(subject: &Subject) -> bool {
     match subject {
         Subject::Issue(issue) => issue.author_is_bot,
-        Subject::PullRequest(pr) => pr.author_is_bot,
+        Subject::PullRequest(pr, _) => pr.author_is_bot,
     }
 }
 
@@ -482,7 +505,10 @@ impl<'a> Discussions<'a> {
         pull_request: bool,
     ) -> Result<DiscussionReport> {
         let subject = if pull_request {
-            Subject::PullRequest(self.forge.pull_request(repo, number).await?)
+            // The instant it was last touched is not on the type; the
+            // newest remark's is the next best evidence, filled in by
+            // `discussion_items`.
+            Subject::PullRequest(self.forge.pull_request(repo, number).await?, None)
         } else {
             Subject::Issue(self.forge.issue(repo, number).await?)
         };
@@ -552,7 +578,7 @@ impl<'a> Discussions<'a> {
             // uses — on a repository of thousands of pull requests, hours of
             // rate-limit budget for two branch names.
             let subject = if entry.pull_request {
-                Subject::PullRequest(pull_request_from_listing(entry))
+                Subject::PullRequest(pull_request_from_listing(entry), entry.updated_at.clone())
             } else {
                 Subject::Issue(entry.clone())
             };
@@ -715,17 +741,22 @@ mod tests {
 
     #[test]
     fn a_merged_pull_request_is_remembered_as_merged_not_closed() {
-        let item = subject_item("o/r", &Subject::PullRequest(pull_request(9)), 2000);
+        let item = subject_item(
+            "o/r",
+            &Subject::PullRequest(pull_request(9), Some("2026-08-12T00:00:00Z".into())),
+            2000,
+        );
         assert_eq!(item.key, "pr:o/r#9");
         assert_eq!(item.kind, MemoryKind::PullRequest);
         assert!(item.body.contains("State: merged"), "{}", item.body);
         assert!(item.body.contains("ack-first into main"));
         assert!(item.labels.contains(&"pr:9".to_string()));
         assert!(item.labels.contains(&"state:merged".to_string()));
+        assert_eq!(item.observed_at.as_deref(), Some("2026-08-12T00:00:00Z"));
 
         let mut closed = pull_request(9);
         closed.merged = false;
-        let item = subject_item("o/r", &Subject::PullRequest(closed), 2000);
+        let item = subject_item("o/r", &Subject::PullRequest(closed, None), 2000);
         assert!(item.body.contains("State: closed without merging"));
         assert!(
             item.labels
@@ -735,7 +766,7 @@ mod tests {
 
     #[test]
     fn remarks_from_other_agents_are_kept_and_the_reviewers_own_are_not() {
-        let subject = Subject::PullRequest(pull_request(9));
+        let subject = Subject::PullRequest(pull_request(9), None);
         let mut inline = remark(
             3,
             RemarkKind::ReviewComment,
@@ -800,7 +831,7 @@ mod tests {
 
     #[test]
     fn a_dismissed_review_and_an_edited_comment_are_remembered_for_what_they_are() {
-        let subject = Subject::PullRequest(pull_request(9));
+        let subject = Subject::PullRequest(pull_request(9), None);
         let mut dismissed = remark(4, RemarkKind::Review, "maintainer", "");
         dismissed.dismissed = true;
         let mut edited = remark(5, RemarkKind::Comment, "someone", "second thoughts");
@@ -829,6 +860,25 @@ mod tests {
             edit.body
         );
         assert!(edit.body.contains("Edited on 2026-08-15T09:00:00Z"));
+    }
+
+    #[test]
+    fn a_pull_request_read_live_is_dated_to_its_newest_remark() {
+        let subject = Subject::PullRequest(pull_request(9), None);
+        let remarks = [
+            remark(1, RemarkKind::Comment, "someone", "first"),
+            remark(3, RemarkKind::Comment, "someone", "third"),
+            remark(2, RemarkKind::Comment, "someone", "second"),
+        ];
+        let items = discussion_items("o/r", &subject, &remarks, 2000);
+        assert_eq!(items[0].kind, MemoryKind::PullRequest);
+        assert_eq!(
+            items[0].observed_at.as_deref(),
+            Some("2026-08-14T10:03:00Z")
+        );
+
+        let bare = discussion_items("o/r", &subject, &[], 2000);
+        assert_eq!(bare[0].observed_at, None, "nothing to date it to");
     }
 
     #[test]

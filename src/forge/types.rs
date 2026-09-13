@@ -182,6 +182,7 @@ impl Default for PullRequest {
             approvals: 0,
             age_days: 0,
             quiet_days: 0,
+            updated_at: None,
         }
     }
 }
