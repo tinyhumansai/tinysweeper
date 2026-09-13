@@ -902,7 +902,9 @@ mod tests {
         }];
 
         let started = std::time::Instant::now();
-        let report = recaller.observe("o/r", 9, &threads, &[]).await;
+        let report = recaller
+            .observe_bounded("o/r", 9, &threads, &[], Duration::from_millis(20))
+            .await;
         assert!(
             started.elapsed() < Duration::from_millis(150),
             "observe must return long before the engine's own delay does: {:?}",
