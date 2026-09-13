@@ -923,6 +923,31 @@ fn load_validated_collects_the_problems_into_one_error() {
 }
 
 #[test]
+fn load_reports_every_unknown_key_with_its_dotted_path() {
+    let dir = repo(
+        Some(
+            "version = 1\nunknown_root = true\n[review]\nunknown_review = true\n\
+             [models.provider]\nunknown_provider = true\n\
+             [[memory.questions]]\nsection = \"reviews\"\nask = \"What changed?\"\nunknown_question = true\n\
+             [lanes.custom]\nunknown_lane = true\n",
+        ),
+        &[],
+    );
+
+    let err = load(dir.path(), None).unwrap_err().to_string();
+
+    for key in [
+        "unknown_root",
+        "review.unknown_review",
+        "models.provider.unknown_provider",
+        "memory.questions[0].unknown_question",
+        "lanes.custom.unknown_lane",
+    ] {
+        assert!(err.contains(key), "{key} missing from: {err}");
+    }
+}
+
+#[test]
 fn an_explicit_config_path_is_used_verbatim() {
     let dir = repo(Some("version = 1\n[review]\nstrictness = 1\n"), &[]);
     let other = dir.path().join("other.toml");
