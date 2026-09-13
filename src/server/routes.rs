@@ -1376,6 +1376,23 @@ async fn review_inner(
         tracing::info!(%repo, source, "reviewing under the repository's own configuration");
     }
 
+    // Memory is fed from the *base* tip, not the head: what the repository
+    // has committed to, not what this pull request proposes. See
+    // `server::memory`. Spawned only now, under `overlay.config` rather than
+    // the deployment's own, so a repository's own `paths.ignore` — which is
+    // repository-overridable — is honored before anything from an excluded
+    // path is persisted into the engine.
+    if let Some(backend) = &state.memory {
+        tokio::spawn(ingest_in_background(
+            backend.clone(),
+            Arc::new(overlay.config.clone()),
+            state.index_permits.clone(),
+            repo_id.clone(),
+            pull_request.base_sha.clone(),
+            read_token.clone(),
+        ));
+    }
+
     let outcome = std::panic::AssertUnwindSafe(run_and_publish(
         state,
         &overlay.config,
