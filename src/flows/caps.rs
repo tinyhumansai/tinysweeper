@@ -343,6 +343,9 @@ pub fn with_llm(llm: Arc<ModelCapability>, children: ChildGraphs) -> Capabilitie
         shell: None,
         memory: None,
         tasks: None,
+        // A review lane has no human-in-the-loop approval channel. Leaving it
+        // absent keeps an added `approval` node from pausing work indefinitely.
+        approvals: None,
     }
 }
 
