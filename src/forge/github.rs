@@ -547,7 +547,6 @@ pub struct GitHubRead {
 }
 
 impl GitHubRead {
-
     /// Whether `login` currently holds write access (or above) to `repo`.
     ///
     /// GitHub's REST collaborator-permission route 404s for anyone who is not

@@ -786,15 +786,16 @@ Tail.
         // actually resolved it, an unauthorized contributor could silently
         // dismiss a bot's finding on their own fork's pull request and have
         // memory tell future reviews never to raise it again.
-        let silently_resolved =
-            thread_with_permissions(FP, &[], true, false, false, false);
+        let silently_resolved = thread_with_permissions(FP, &[], true, false, false, false);
         assert_eq!(classify(&silently_resolved), None);
 
         // The same thread, resolved by someone who does have write access, is
         // an ordinary dismissal.
-        let resolved_by_a_maintainer =
-            thread_with_permissions(FP, &[], true, false, false, true);
-        assert_eq!(classify(&resolved_by_a_maintainer), Some(Outcome::Dismissed));
+        let resolved_by_a_maintainer = thread_with_permissions(FP, &[], true, false, false, true);
+        assert_eq!(
+            classify(&resolved_by_a_maintainer),
+            Some(Outcome::Dismissed)
+        );
     }
 
     #[test]
