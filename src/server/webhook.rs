@@ -260,9 +260,17 @@ pub struct Conversation {
 /// so this is asked alongside routing rather than folded into an [`Action`]
 /// that can only be one thing. It runs *before* the bot guard in `route`, and
 /// must: the whole point is to remember what other agents said, and their
-/// comments arrive from a `Bot` sender. The reviewer's own activity is the one
-/// sender skipped — its comments are filtered out of memory anyway, so a
-/// re-read they triggered would find nothing new.
+/// comments arrive from a `Bot` sender.
+///
+/// The reviewer's own activity is skipped, but only for the *remark* events —
+/// `issue_comment`, `pull_request_review_comment`, `pull_request_review` —
+/// whose own remarks are filtered out of memory anyway downstream, so a
+/// re-read they triggered would find nothing new. `issues` and `pull_request`
+/// events carry the subject's *state* — open or closed, its labels — which is
+/// remembered regardless of who changed it: an auto-merge close or a triage
+/// label is exactly the kind of state change nothing else is guaranteed to
+/// deliver a follow-up for, and skipping it here would let memory hold a
+/// closed issue or a stale label set indefinitely.
 ///
 /// No loop can form. Remembering writes to the engine and never to GitHub,
 /// so a delivery here produces no further delivery.
@@ -273,10 +281,15 @@ pub struct Conversation {
 pub fn remember_trigger(event: &str, payload: &Payload) -> Option<Conversation> {
     let repository = payload.repository.as_ref()?;
     let installation = payload.installation.as_ref()?;
-    if payload
-        .sender
-        .as_ref()
-        .is_some_and(|sender| crate::findings::prior::is_own_login(&sender.login))
+    let is_remark_event = matches!(
+        event,
+        "issue_comment" | "pull_request_review_comment" | "pull_request_review"
+    );
+    if is_remark_event
+        && payload
+            .sender
+            .as_ref()
+            .is_some_and(|sender| crate::findings::prior::is_own_login(&sender.login))
     {
         return None;
     }
