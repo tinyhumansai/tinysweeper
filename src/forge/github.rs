@@ -2064,6 +2064,48 @@ mod tests {
     }
 
     #[test]
+    fn a_truncated_comment_page_is_flagged_with_its_cursor() {
+        // Regression: a thread with more than one page of comments must not
+        // silently stop at the first `GRAPHQL_PAGE` — `review_threads`
+        // follows this cursor to fetch the rest before `classify` ever sees
+        // the thread, or a later maintainer correction past comment 50 would
+        // be invisible to it.
+        let raw = json!({
+            "data": {"repository": {"pullRequest": {"reviewThreads": {
+                "pageInfo": {"hasNextPage": false, "endCursor": null},
+                "nodes": [
+                    {
+                        "id": "PRRT_1",
+                        "isResolved": false,
+                        "isOutdated": false,
+                        "comments": {
+                            "pageInfo": {"hasNextPage": true, "endCursor": "c2"},
+                            "nodes": [
+                                {"author": {"login": "tinysweeper", "__typename": "Bot"},
+                                 "body": "finding"}
+                            ]
+                        }
+                    },
+                    {
+                        "id": "PRRT_2",
+                        "isResolved": false,
+                        "isOutdated": false,
+                        "comments": {
+                            "pageInfo": {"hasNextPage": false, "endCursor": null},
+                            "nodes": []
+                        }
+                    }
+                ]
+            }}}}
+        });
+
+        let parsed = threads_from_graphql(&raw);
+
+        assert_eq!(parsed[0].more_comments, Some("c2".to_string()));
+        assert_eq!(parsed[1].more_comments, None);
+    }
+
+    #[test]
     fn a_thread_resolved_by_someone_without_write_access_is_not_dismissible() {
         let raw = json!({
             "data": {"repository": {"pullRequest": {"reviewThreads": {
