@@ -72,7 +72,7 @@ tree-sitter-typescript = "0.23"
 # tinyagents unconditionally links reqwest, so it is gated even though it is
 # central to the product. The `Model` port and `MockModel` compile without it;
 # only `harness::model::TinyAgentsModel` needs it.
-tinyagents = { path = "vendor/tinyagents", optional = true }
+tinyagents = { package = "tinyagents-harness", path = "vendor/tinyagents/crates/tinyagents-harness", optional = true }
 
 # --- the orchestration graph ---
 # Not optional, and that is the point: with default features tinyflows links no
@@ -81,7 +81,7 @@ tinyagents = { path = "vendor/tinyagents", optional = true }
 # the offline default build. Every outside-world call it makes goes through a
 # capability trait this crate implements in `src/flows/caps.rs`, so the model
 # still reaches the network through exactly one adapter.
-tinyflows = { path = "vendor/tinyflows", default-features = false }
+tinyflows = { path = "vendor/tinyflows/crates/tinyflows", default-features = false }
 
 # --- optional: the webhook server ---
 # Reversed an earlier decision to go Actions-only. The arguments that changed

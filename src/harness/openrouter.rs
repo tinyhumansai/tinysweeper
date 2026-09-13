@@ -9,12 +9,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::json;
-use tinyagents::harness::context::{RunConfig, RunContext};
-use tinyagents::harness::events::EventSink;
-use tinyagents::harness::message::Message as TaMessage;
-use tinyagents::harness::model::ResponseFormat;
-use tinyagents::harness::providers::openai::OpenAiModel;
-use tinyagents::harness::runtime::{AgentHarness, PayloadCapture, RunPolicy};
+use tinyagents::context::{RunConfig, RunContext};
+use tinyagents::events::EventSink;
+use tinyagents::message::Message as TaMessage;
+use tinyagents::model::ResponseFormat;
+use tinyagents::providers::openai::OpenAiModel;
+use tinyagents::runtime::{AgentHarness, PayloadCapture, RunPolicy};
 use tinyagents::{
     HarnessEventJournal, InMemoryEventJournal, JournalSink, LangfuseClient, LangfuseTraceConfig,
 };
