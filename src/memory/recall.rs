@@ -847,15 +847,19 @@ mod tests {
                 false,
             )
             .await;
+        // One failure per default question — conventions, reviews and
+        // discussions — and none for the recalls.
+        let questions = config().memory.questions.len();
+        assert_eq!(questions, 3);
         assert!(
-            matches!(context.status, MemoryStatus::Partial { failed: 2, .. }),
+            matches!(context.status, MemoryStatus::Partial { failed, .. } if failed == questions),
             "{:?}",
             context.status
         );
         assert!(!context.recollections.is_empty());
         assert!(context.answers.is_empty());
         let note = context.note().unwrap();
-        assert!(note.contains("2 memory call(s) failed"), "{note}");
+        assert!(note.contains("3 memory call(s) failed"), "{note}");
         assert!(context.render().contains("deliberately wide"));
     }
 
