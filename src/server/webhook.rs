@@ -1049,7 +1049,7 @@ mod tests {
     fn a_bots_comment_on_a_pull_request_is_a_conversation_to_remember() {
         // The review-trigger path ignores bot senders; memory must not, or
         // nothing another agent says would ever be remembered.
-        let payload = payload(json!({
+        let payload = payload(serde_json::json!({
             "action": "created",
             "repository": {"full_name": "o/r"},
             "installation": {"id": 5},
@@ -1071,7 +1071,7 @@ mod tests {
 
     #[test]
     fn the_reviewers_own_comment_is_not_a_conversation_to_remember() {
-        let payload = payload(json!({
+        let payload = payload(serde_json::json!({
             "action": "created",
             "repository": {"full_name": "o/r"},
             "installation": {"id": 5},
@@ -1085,7 +1085,7 @@ mod tests {
     #[test]
     fn closed_issues_reviews_and_inline_comments_are_conversations_and_deletions_are_not() {
         let base = |event_bits: serde_json::Value| {
-            let mut v = json!({
+            let mut v = serde_json::json!({
                 "repository": {"full_name": "o/r"},
                 "installation": {"id": 5},
                 "sender": {"login": "maintainer", "type": "User"}
@@ -1095,29 +1095,29 @@ mod tests {
                 .extend(event_bits.as_object().unwrap().clone());
             payload(v)
         };
-        let closed = base(json!({"action": "closed", "issue": {"number": 3, "user": {"login": "a"}}}));
+        let closed = base(serde_json::json!({"action": "closed", "issue": {"number": 3, "user": {"login": "a"}}}));
         let got = remember_trigger("issues", &closed).expect("a closed issue is remembered");
         assert_eq!((got.number, got.pull_request), (3, false));
 
-        let review = base(json!({
+        let review = base(serde_json::json!({
             "action": "submitted",
             "pull_request": {"number": 8, "head": {"sha": "abc"}, "user": {"login": "a"}}
         }));
         let got = remember_trigger("pull_request_review", &review).expect("a review");
         assert_eq!((got.number, got.pull_request), (8, true));
 
-        let inline = base(json!({
+        let inline = base(serde_json::json!({
             "action": "created",
             "pull_request": {"number": 8, "head": {"sha": "abc"}, "user": {"login": "a"}},
             "comment": {"body": "nit", "user": {"login": "maintainer"}}
         }));
         assert!(remember_trigger("pull_request_review_comment", &inline).is_some());
 
-        let deleted = base(json!({"action": "deleted", "issue": {"number": 3, "user": {"login": "a"}}}));
+        let deleted = base(serde_json::json!({"action": "deleted", "issue": {"number": 3, "user": {"login": "a"}}}));
         assert_eq!(remember_trigger("issue_comment", &deleted), None);
         assert_eq!(remember_trigger("issues", &deleted), None);
 
-        let check = base(json!({"action": "completed", "check_run": {"pull_requests": []}}));
+        let check = base(serde_json::json!({"action": "completed", "check_run": {"pull_requests": []}}));
         assert_eq!(remember_trigger("check_run", &check), None);
     }
 
