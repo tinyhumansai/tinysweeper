@@ -754,6 +754,38 @@ pub async fn review_with_memory(
     })
 }
 
+/// Write `items` to `memory`, bounded by `timeout` rather than spawned.
+///
+/// `Recaller` borrows `memory` for the lifetime of the caller's review, so
+/// backgrounding this write would need an owned, `'static` handle to the
+/// engine — a larger change than fixing what this guards against. The
+/// adapter gives each sequential batch its own 120-second timeout, and more
+/// than `REMEMBER_BATCH` findings is multiple batches, so an unreachable or
+/// slow engine could otherwise hold this review's permit — and `apply`'s
+/// publish behind it — for minutes. Best-effort either way: a timeout here
+/// is logged and never returned as an error the caller must handle.
+async fn remember_findings_bounded(
+    memory: &dyn crate::ports::memory::Memory,
+    repo: &str,
+    items: &[crate::memory::MemoryItem],
+    timeout: std::time::Duration,
+) {
+    match tokio::time::timeout(timeout, crate::memory::ingest::remember_all(memory, repo, items))
+        .await
+    {
+        Ok(Ok(_)) => {}
+        Ok(Err(err)) => {
+            tracing::warn!(%err, "could not remember this review's findings");
+        }
+        Err(_) => {
+            tracing::warn!(
+                seconds = timeout.as_secs(),
+                "remembering this review's findings took too long; the review is not held for it"
+            );
+        }
+    }
+}
+
 /// Build the change map for this review, or `None` when it is switched off.
 ///
 /// The walk is its own bounded query rather than a by-product of retrieval: the
