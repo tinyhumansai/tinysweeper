@@ -42,8 +42,8 @@ use crate::ports::forge::ForgeRead;
 
 /// Build the durable marker for one Sentry issue.
 ///
-/// `short_id` must already be scrubbed — everything reaching this function
-/// comes off a [`crate::sentry::types::SafeIssue`], so it is.
+/// `short_id` is a structural Sentry identifier, normalized only to the
+/// promotion marker's length bound before reaching this function.
 pub fn marker(org: &str, project: &str, short_id: &str) -> String {
     format!(
         "<!-- {}sentry={org}/{project}/{short_id} -->",

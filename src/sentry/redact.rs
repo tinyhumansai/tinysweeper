@@ -125,14 +125,14 @@ pub const MARKER_COMPONENT_BYTES: usize = 128;
 /// Normalise a value the dedupe marker is built from, exactly as promotion does.
 ///
 /// `promote::body` renders the marker from `SafeIssue.short_id` and
-/// `SafeIssue.project`, which have been **scrubbed and then truncated** by
-/// [`project`] + [`enforce_budget`]. A lookup that only scrubs searches for a
-/// marker that was never written, so any value over the cap is re-promoted on
-/// every sweep — the failure mode that scales.
+/// `SafeIssue.project`, which are structural identifiers truncated by
+/// [`project`] + [`enforce_budget`]. They deliberately do not pass through
+/// content scrubbing: lossy redaction could make two Sentry issues share a
+/// marker and silently suppress one promotion.
 ///
 /// Both paths call this so the two cannot drift apart again.
-pub fn marker_component(text: &str, patterns: &[String]) -> String {
-    let mut out = scrub_text(text, patterns);
+pub fn marker_component(text: &str) -> String {
+    let mut out = text.to_string();
     truncate_to(&mut out, MARKER_COMPONENT_BYTES);
     out
 }
@@ -194,11 +194,11 @@ pub fn project(
         .unwrap_or_default();
 
     let mut safe = SafeIssue {
-        // Identifiers, not captured data: Sentry generates the short id and
-        // the permalink. They are scrubbed anyway — the cost is nil and the
-        // alternative is a field nobody re-checks when its provenance changes.
-        short_id: scrub(&issue.short_id),
-        project: scrub(project_slug),
+        // Structural identifiers, not captured event data. Their exact values
+        // are the dedupe key, so scrubbing them could collapse distinct issues
+        // into one marker and silently lose a promotion.
+        short_id: issue.short_id.clone(),
+        project: project_slug.to_string(),
         kind: scrub(issue.metadata.kind.as_deref().unwrap_or_default()),
         value: scrub(issue.metadata.value.as_deref().unwrap_or_default()),
         culprit: scrub(issue.culprit.as_deref().unwrap_or_default()),
