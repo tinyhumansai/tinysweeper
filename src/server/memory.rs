@@ -89,7 +89,16 @@ pub enum BackfillStart {
 
 /// Conversations one `run_backfill` chunk walks before the installation
 /// token backing it is re-minted (from cache, unless it needs renewing).
-const BACKFILL_CHUNK: usize = 200;
+const BACKFILL_CHUNK: usize = 100;
+
+/// How long the token a chunk starts with must still be good for.
+///
+/// A chunk is `BACKFILL_CHUNK` conversations of one to three forge reads and
+/// one indexed engine write each — measured at a few seconds per conversation
+/// — so a token with only the default five-minute renewal margin left could
+/// expire mid-chunk and turn the rest of it into failures. Half an hour is
+/// several times the longest chunk seen, and re-minting costs one request.
+const BACKFILL_TOKEN_MARGIN: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 /// The engine, and what it has been fed.
 pub struct MemoryBackend {
@@ -279,7 +288,9 @@ impl MemoryBackend {
         let outcome: Result<DiscussionReport> = async {
             while walked < limit {
                 let chunk = (limit - walked).min(BACKFILL_CHUNK);
-                let token = auth.installation_token(installation).await?;
+                let token = auth
+                    .installation_token_good_for(installation, BACKFILL_TOKEN_MARGIN)
+                    .await?;
                 let forge = crate::forge::github::GitHubRead::new(&token)?;
                 let report = Discussions::new(self.memory.as_ref(), &forge, &config.memory)
                     .backfill(repo, cursor.as_deref(), chunk)
