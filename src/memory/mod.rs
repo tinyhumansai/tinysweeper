@@ -62,41 +62,39 @@ pub use crate::memory::types::{
 /// local engine and the test harness use. Anything else is refused by name,
 /// because the failure it prevents — the engine's credential crossing a
 /// network in the clear — is silent.
+///
+/// Parsed with [`url::Url`] — the same crate `reqwest` resolves the request
+/// against — rather than a hand-rolled split on `/` and `@`. A manual parser
+/// that disagrees with the HTTP client about where the authority ends is
+/// exactly the gap that let `http://localhost@evil.example` read as host
+/// `localhost` here while the client actually dialled `evil.example` in the
+/// clear.
 pub fn endpoint_allowed(endpoint: &str) -> std::result::Result<(), String> {
     let endpoint = endpoint.trim();
-    if let Some(rest) = endpoint.strip_prefix("https://") {
-        return if rest.is_empty() {
-            Err("no host after `https://`".into())
-        } else {
+    let url = url::Url::parse(endpoint).map_err(|err| format!("not a URL: {err}"))?;
+    match url.scheme() {
+        "https" => {
+            if url.host_str().is_none_or(str::is_empty) {
+                return Err("no host after `https://`".into());
+            }
             Ok(())
-        };
-    }
-    let Some(rest) = endpoint.strip_prefix("http://") else {
-        return Err("must start with `https://` (or `http://` for loopback)".into());
-    };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    // The authority is `[userinfo@]host[:port]`, and a host cannot contain a
-    // literal `@` — so the *last* `@` in the authority always separates
-    // userinfo from host, exactly as a URL parser resolves it. Skipping this
-    // let `http://localhost@evil.example` read as host `localhost`, while the
-    // HTTP client that actually sends the bearer token resolves the real
-    // destination — `evil.example` — over cleartext.
-    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
-    let host = host.trim_start_matches('[');
-    let host = host
-        .rsplit_once(':')
-        .filter(|(h, _)| !h.contains(':') || h.ends_with(']'))
-        .map_or(host, |(h, _)| h.trim_end_matches(']'));
-    // Parsed, not prefix-matched: `127.0.0.1.evil.com` starts with `127.` and
-    // is not loopback.
-    let loopback = host == "localhost"
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback());
-    if loopback {
-        Ok(())
-    } else {
-        Err("plain `http://` is only allowed to a loopback host; use `https://`".into())
+        }
+        "http" => {
+            // Parsed, not prefix-matched: `127.0.0.1.evil.com` starts with
+            // `127.` and is not loopback.
+            let loopback = match url.host() {
+                Some(url::Host::Domain(domain)) => domain == "localhost",
+                Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+                Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+                None => false,
+            };
+            if loopback {
+                Ok(())
+            } else {
+                Err("plain `http://` is only allowed to a loopback host; use `https://`".into())
+            }
+        }
+        _ => Err("must start with `https://` (or `http://` for loopback)".into()),
     }
 }
 
