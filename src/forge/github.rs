@@ -561,18 +561,21 @@ fn remark_from_review(raw: &serde_json::Value) -> Option<Remark> {
     })
 }
 
-/// Whether `since` is safe to put in a query string as-is.
+/// Whether `since` is safe to put in a query string.
 ///
-/// An RFC 3339 timestamp is digits, `T`, `Z`, `:`, `+`, `-` and `.`; anything
-/// else is not a timestamp and is refused rather than encoded, because a
-/// value that reached here from an operator's request is not something to be
-/// clever about.
+/// A UTC RFC 3339 timestamp is digits, `T`, `Z`, `:`, `-` and `.`; anything
+/// else is refused rather than encoded, because a value that reached here from
+/// an operator's request is not something to be clever about. A `+` offset is
+/// refused too, deliberately: `+` is the one timestamp character whose
+/// query-string encoding is contested between parsers, every value this
+/// receives in practice is GitHub's own `Z` form, and an operator with an
+/// offset can write it as `Z` or `-hh:mm`.
 fn is_timestamp(since: &str) -> bool {
     !since.is_empty()
         && since.len() <= 40
         && since
             .bytes()
-            .all(|b| b.is_ascii_digit() || matches!(b, b'T' | b'Z' | b':' | b'+' | b'-' | b'.'))
+            .all(|b| b.is_ascii_digit() || matches!(b, b'T' | b'Z' | b':' | b'-' | b'.'))
 }
 
 /// How many pages the whole-history listing will walk.
@@ -966,7 +969,7 @@ impl ForgeRead for GitHubRead {
         }
         // `:` and `+` are reserved in a query string; nothing else a
         // timestamp contains is, and `is_timestamp` has refused the rest.
-        let since = since.map(|s| s.replace(':', "%3A").replace('+', "%2B"));
+        let since = since.map(|s| s.replace(':', "%3A"));
         let mut out = Vec::new();
         let pages = limit.div_ceil(PER_PAGE).clamp(1, MAX_LISTING_PAGES);
         for page in 1..=pages {
