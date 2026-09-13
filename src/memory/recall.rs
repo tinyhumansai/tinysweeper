@@ -641,17 +641,21 @@ fn assemble(
     let mut ranked: Vec<(usize, Recollection)> = candidates.into_iter().enumerate().collect();
     ranked.sort_by_key(|(position, r)| (order(r.item.kind), *position));
 
-    // Mirrors `render`'s `last_kind` tracking exactly, so the heading each new
-    // kind prints is charged against the first item of that kind that
-    // survives the budget, rather than left uncounted.
-    let mut last_kind: Option<MemoryKind> = None;
+    // Mirrors `render`'s heading tracking exactly, so the heading each new
+    // *heading* prints is charged against the first item under it that
+    // survives the budget, rather than left uncounted. Grouped by the
+    // heading text rather than the raw kind: `Issue`, `PullRequest` and
+    // `Remark` share one heading and must not be charged for it twice just
+    // because they interleave.
+    let mut last_heading: Option<&'static str> = None;
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for (_, recollection) in ranked {
         if !seen.insert(recollection.item.key.clone()) {
             context.dropped += 1;
             continue;
         }
-        let heading = if last_kind == Some(recollection.item.kind) {
+        let heading_text = kind_heading(recollection.item.kind);
+        let heading = if last_heading == Some(heading_text) {
             0
         } else {
             kind_heading_tokens(recollection.item.kind)
@@ -663,7 +667,7 @@ fn assemble(
         }
         remaining -= cost;
         context.tokens += cost;
-        last_kind = Some(recollection.item.kind);
+        last_heading = Some(heading_text);
         context.recollections.push(recollection);
     }
     context
