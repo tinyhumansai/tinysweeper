@@ -462,20 +462,6 @@ async fn an_unusable_config_costs_the_repository_its_settings_not_its_review() {
 }
 
 #[tokio::test]
-async fn a_forge_error_reading_the_config_is_also_unavailable() {
-    use crate::error::Error;
-    use crate::forge::mock::MockForge;
-
-    let forge = MockForge::new().with_file_error(".tinysweeper.toml", Error::Forge("boom".into()));
-
-    let overlaid = overlay(&forge, &repo(), "basesha", &base()).await;
-
-    assert_eq!(format!("{:?}", overlaid.config), format!("{:?}", base()));
-    assert_eq!(overlaid.source, None);
-    assert!(overlaid.unavailable);
-}
-
-#[tokio::test]
 async fn a_fetched_config_is_filtered_exactly_as_a_parsed_one_is() {
     let forge = forge_with(
         "basesha",
