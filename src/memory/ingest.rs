@@ -739,13 +739,8 @@ Tail.
         // untrusted input by the security boundary in CLAUDE.md — get their
         // own reply recorded as maintainer judgement and suppress the
         // finding from ever being raised again.
-        let resolved = thread_with_reply_permission(
-            FP,
-            &[("looks fine to me", false)],
-            true,
-            false,
-            false,
-        );
+        let resolved =
+            thread_with_reply_permission(FP, &[("looks fine to me", false)], true, false, false);
         assert_eq!(classify(&resolved), Some(Outcome::Dismissed));
 
         // Nor should it settle an open thread as `Disputed`.
@@ -877,8 +872,14 @@ Tail.
             1,
             "the edited rule must replace the old one, not join it: {conventions:?}"
         );
-        assert!(conventions[0].body.contains("Always use"), "{conventions:?}");
-        assert!(!conventions[0].body.contains("Never unwrap"), "{conventions:?}");
+        assert!(
+            conventions[0].body.contains("Always use"),
+            "{conventions:?}"
+        );
+        assert!(
+            !conventions[0].body.contains("Never unwrap"),
+            "{conventions:?}"
+        );
     }
 
     #[test]

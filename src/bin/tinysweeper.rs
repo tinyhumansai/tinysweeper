@@ -1248,9 +1248,7 @@ async fn run_memory(command: MemoryCommand) -> Result<()> {
     fn canonical_repo(repo: &str) -> Result<String> {
         tinysweeper::forge::RepoId::parse(repo)
             .map(|id| id.to_string())
-            .ok_or_else(|| {
-                tinysweeper::Error::config(format!("`{repo}` is not `owner/name`"))
-            })
+            .ok_or_else(|| tinysweeper::Error::config(format!("`{repo}` is not `owner/name`")))
     }
 
     match command {

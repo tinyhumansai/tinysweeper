@@ -250,7 +250,11 @@ fn answers_heading_tokens() -> usize {
 /// `render` adds when the answer carries citations — omitting it let a
 /// response with many long citation paths under-report its real cost.
 fn answer_tokens(answer: &MemoryAnswer) -> usize {
-    let mut text = format!("Q: {}\nA: {}\n", answer.question.trim(), answer.answer.trim());
+    let mut text = format!(
+        "Q: {}\nA: {}\n",
+        answer.question.trim(),
+        answer.answer.trim()
+    );
     let cited: Vec<&str> = answer
         .citations
         .iter()
@@ -739,8 +743,7 @@ mod tests {
         assert!(outcomes >= 1 && conventions >= 1 && code >= 1);
         assert!(!context.answers.is_empty());
 
-        let rendered_tokens =
-            crate::harness::pricing::estimate_tokens(&context.render()) as usize;
+        let rendered_tokens = crate::harness::pricing::estimate_tokens(&context.render()) as usize;
         assert!(
             rendered_tokens <= context.tokens,
             "render emitted {rendered_tokens} tokens but the budget only accounted for {}",
