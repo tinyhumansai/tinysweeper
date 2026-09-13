@@ -748,14 +748,30 @@ impl Memory for CortexMemory {
 /// truncation case it guards against — running out of `MAX_PAGES` while the
 /// engine still says there is more — is a plain unit test over JSON, not
 /// something that needs hundreds of real HTTP round trips to exercise.
-fn next_page_cursor(page: &Value) -> Option<String> {
+/// What a listing page in [`CortexMemory::forget`] says about the next one.
+#[derive(Debug, PartialEq, Eq)]
+enum PageContinuation {
+    /// Fetch another page with this cursor.
+    Next(String),
+    /// This was the last page.
+    Done,
+    /// `has_more: true` with no cursor to actually continue: a contradictory
+    /// shape that must not be read as `Done`, or `forget` would delete only
+    /// the ids collected so far and report success on a listing it never
+    /// actually finished.
+    Malformed,
+}
+
+fn next_page_cursor(page: &Value) -> PageContinuation {
+    let has_more = page.get("has_more").and_then(Value::as_bool).unwrap_or(false);
     let next = page
         .get("next_cursor")
         .and_then(Value::as_str)
         .map(str::to_string);
-    match (page.get("has_more").and_then(Value::as_bool), next) {
-        (Some(true), Some(next)) => Some(next),
-        _ => None,
+    match (has_more, next) {
+        (true, Some(next)) => PageContinuation::Next(next),
+        (true, None) => PageContinuation::Malformed,
+        (false, _) => PageContinuation::Done,
     }
 }
 
