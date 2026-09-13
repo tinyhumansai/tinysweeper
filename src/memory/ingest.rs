@@ -330,20 +330,24 @@ pub fn classify(thread: &ReviewThread) -> Option<Outcome> {
         .iter()
         .skip(1)
         .any(|c| !c.bot && !is_own_login(&c.author) && c.maintainer);
-    match (thread.is_resolved, thread.is_outdated, human_replied) {
-        (true, true, _) => Some(Outcome::Fixed),
-        (true, false, true) => Some(Outcome::Rejected),
-        // Silence, then a resolve, is the weakest of these signals — and
-        // GitHub lets the pull request's own author resolve a thread
-        // regardless of their permission on the repository. Without
-        // requiring the resolver to actually have write access, an
-        // unauthorized contributor could silently dismiss a finding on their
-        // own fork's pull request and have memory tell future reviews never
-        // to raise it again.
-        (true, false, false) if thread.resolved_by_has_write_access => Some(Outcome::Dismissed),
-        (true, false, false) => None,
-        (false, _, true) => Some(Outcome::Disputed),
-        (false, _, false) => None,
+    // GitHub lets the pull request's own author resolve a thread regardless
+    // of their permission on the repository — the reply and the resolve are
+    // two separate authorizations, and a maintainer's reply says nothing
+    // about who acted on it. A maintainer's "please fix this" resolved by
+    // the unauthorized author it was aimed at is not a rejection; only a
+    // resolve by someone who actually holds write access settles anything.
+    match (
+        thread.is_resolved,
+        thread.is_outdated,
+        human_replied,
+        thread.resolved_by_has_write_access,
+    ) {
+        (true, true, _, _) => Some(Outcome::Fixed),
+        (true, false, true, true) => Some(Outcome::Rejected),
+        (true, false, false, true) => Some(Outcome::Dismissed),
+        (true, false, _, false) => None,
+        (false, _, true, _) => Some(Outcome::Disputed),
+        (false, _, false, _) => None,
     }
 }
 
