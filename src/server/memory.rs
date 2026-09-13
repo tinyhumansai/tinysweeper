@@ -554,7 +554,7 @@ mod tests {
     fn timestamps_render_as_rfc3339() {
         assert_eq!(rfc3339(0), "1970-01-01T00:00:00Z");
         assert_eq!(rfc3339(951_782_400), "2000-02-29T00:00:00Z");
-        assert_eq!(rfc3339(1_755_165_000), "2025-08-14T10:30:00Z");
+        assert_eq!(rfc3339(1_755_167_400), "2025-08-14T10:30:00Z");
     }
 
     #[test]
