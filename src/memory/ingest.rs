@@ -422,6 +422,22 @@ impl IngestReport {
     }
 }
 
+/// Which section [`MemoryKind`] files under, restricted to the two sections
+/// a checkout ingest writes. [`MemorySection::Reviews`] is never one of
+/// them: outcomes come from review threads, not the tree, and retiring a
+/// section this ingest does not own would erase a maintainer's judgement
+/// this pass had nothing to do with.
+fn ingested_sections(config: &MemoryConfig) -> Vec<crate::memory::types::MemorySection> {
+    let mut sections = Vec::new();
+    if config.ingest_code {
+        sections.push(crate::memory::types::MemorySection::Code);
+    }
+    if config.ingest_conventions {
+        sections.push(crate::memory::types::MemorySection::Conventions);
+    }
+    sections
+}
+
 /// Walks a checkout and remembers it.
 pub struct Ingestor<'a> {
     memory: &'a dyn Memory,
