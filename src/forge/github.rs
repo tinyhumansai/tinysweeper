@@ -30,6 +30,18 @@ fn api(err: octocrab::Error) -> Error {
     Error::Forge(chain(&err))
 }
 
+/// Whether a rendered forge error is GitHub refusing for want of budget.
+///
+/// Matched on the message because octocrab's typed error carries the body
+/// and not the headers, and GitHub's two refusals — the primary limit
+/// (`API rate limit exceeded for installation ID …`) and the secondary one
+/// (`You have exceeded a secondary rate limit`) — share these words and
+/// nothing else.
+fn is_rate_limit_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("rate limit exceeded") || lower.contains("secondary rate limit")
+}
+
 /// Render an error together with everything it wraps.
 ///
 /// `err.to_string()` alone is not enough here, and the reason is specific
@@ -715,6 +727,30 @@ pub struct GitHubRead {
 }
 
 impl GitHubRead {
+    /// Turn a forge error into [`Error::RateLimited`] when that is what it
+    /// is, asking `/rate_limit` — which GitHub does not count against the
+    /// budget — when the primary limit resets. Any other error is returned
+    /// as it came.
+    ///
+    /// Only the reads the memory backfill makes go through this: those are
+    /// the ones a caller will wait for and retry, and the wait is what the
+    /// reset instant is for. A review's reads keep failing fast.
+    async fn classify(&self, err: Error) -> Error {
+        let Error::Forge(message) = &err else {
+            return err;
+        };
+        if !is_rate_limit_message(message) {
+            return err;
+        }
+        let reset_at = self
+            .client
+            .get("/rate_limit", None::<&()>)
+            .await
+            .ok()
+            .and_then(|raw: serde_json::Value| raw["resources"]["core"]["reset"].as_u64());
+        Error::RateLimited { reset_at }
+    }
+
     /// Every page of one conversation listing under `/repos/{owner}/{name}/`,
     /// as raw JSON, read to exhaustion with the same bound `comments` uses.
     async fn conversation_pages(
@@ -723,7 +759,7 @@ impl GitHubRead {
         path: &str,
     ) -> Result<Vec<serde_json::Value>> {
         let route = format!("/repos/{}/{}/{path}", repo.owner, repo.name);
-        read_all_pages(
+        match read_all_pages(
             |page| {
                 let route = format!("{route}?per_page={PER_PAGE}&page={page}");
                 async move { self.client.get(route, None::<&()>).await.map_err(api) }
@@ -734,6 +770,10 @@ impl GitHubRead {
             "the conversation on this item",
         )
         .await
+        {
+            Ok(pages) => Ok(pages),
+            Err(err) => Err(self.classify(err).await),
+        }
     }
 
     /// Whether `login` currently holds write access (or above) to `repo`.
@@ -982,7 +1022,10 @@ impl ForgeRead for GitHubRead {
                 route.push_str("&since=");
                 route.push_str(since);
             }
-            let raw: serde_json::Value = self.client.get(route, None::<&()>).await.map_err(api)?;
+            let raw: serde_json::Value = match self.client.get(route, None::<&()>).await {
+                Ok(raw) => raw,
+                Err(err) => return Err(self.classify(api(err)).await),
+            };
             let Some(items) = raw.as_array() else { break };
             out.extend(items.iter().map(issue_from_json));
             if items.len() < PER_PAGE {
@@ -2485,6 +2528,18 @@ mod tests {
                 .map(|i| serde_json::json!({"user": {"login": format!("r{i}"), "type": "User"}, "state": "APPROVED"}))
                 .collect(),
         )
+    }
+
+    #[test]
+    fn githubs_two_rate_limit_refusals_are_recognised_and_nothing_else_is() {
+        assert!(is_rate_limit_message(
+            "GitHub: API rate limit exceeded for installation ID 152184043. If you reach out…"
+        ));
+        assert!(is_rate_limit_message(
+            "GitHub: You have exceeded a secondary rate limit. Please wait a few minutes"
+        ));
+        assert!(!is_rate_limit_message("GitHub: Not Found"));
+        assert!(!is_rate_limit_message("GitHub: Resource not accessible by integration"));
     }
 
     #[test]
