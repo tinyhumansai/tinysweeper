@@ -37,6 +37,9 @@ pub struct MockMemory {
     /// When set, `remember` sleeps this long before completing. For the
     /// tests that prove a slow engine does not hold the review path open.
     delay: Arc<Mutex<Option<std::time::Duration>>>,
+    /// When set, only `answer` fails. For the tests that prove one lost call
+    /// does not throw away the others.
+    answer_failure: Arc<Mutex<Option<String>>>,
 }
 
 impl MockMemory {
