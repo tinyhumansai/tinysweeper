@@ -70,6 +70,12 @@ impl MockMemory {
         *self.failure.lock().expect("failure lock") = Some(message.into());
     }
 
+    /// Make `remember` sleep for `delay` before completing, from now on.
+    pub fn with_delay(self, delay: std::time::Duration) -> Self {
+        *self.delay.lock().expect("delay lock") = Some(delay);
+        self
+    }
+
     /// Everything remembered in `scope`, in key order.
     pub fn remembered(&self, scope: &MemoryScope) -> Vec<MemoryItem> {
         let items = self.items.lock().expect("items lock");
