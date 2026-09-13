@@ -156,13 +156,21 @@ impl CortexMemory {
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
         if !status.is_success() {
-            // The body is the engine's error envelope, bounded: it is not a
-            // credential, but it is not for a check-run summary either.
+            // The body is the engine's error envelope: not a credential, but
+            // still the engine's own text, on a route this process does not
+            // control. It goes to the operator's logs only. The error this
+            // call returns carries just the route and status — that is what
+            // an unavailable-memory note ends up quoting on the check-run
+            // summary, and a one-line response body is not a stable, generic
+            // reason a repository's collaborators should ever see there.
             let route = path.split('?').next().unwrap_or(path);
-            return Err(Error::Model(format!(
-                "cortex: {route} answered {status}: {}",
-                crate::memory::excerpt(&text, 200)
-            )));
+            tracing::warn!(
+                route,
+                %status,
+                body = %crate::memory::excerpt(&text, 200),
+                "cortex answered with an error"
+            );
+            return Err(Error::Model(format!("cortex: {route} answered {status}")));
         }
         if text.trim().is_empty() {
             return Ok(Value::Null);
