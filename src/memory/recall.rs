@@ -761,6 +761,7 @@ mod tests {
             id: "t".into(),
             is_resolved: true,
             is_outdated: false,
+            resolved_by_has_write_access: false,
             comments: vec![
                 ThreadComment {
                     author: "tinysweeper[bot]".into(),

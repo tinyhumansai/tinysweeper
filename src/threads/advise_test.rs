@@ -14,6 +14,7 @@ fn thread(reply: &str) -> ReviewThread {
         id: "PRRT_1".into(),
         is_resolved: false,
         is_outdated: false,
+        resolved_by_has_write_access: false,
         comments: vec![
             ThreadComment {
                 author: "tinysweeper[bot]".into(),

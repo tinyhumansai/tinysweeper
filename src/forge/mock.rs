@@ -1199,6 +1199,7 @@ mod tests {
                 id: "PRRT_open".into(),
                 is_resolved: false,
                 is_outdated: true,
+                resolved_by_has_write_access: false,
                 comments: vec![ThreadComment {
                     author: "tinysweeper[bot]".into(),
                     body: "<!-- tinysweeper:fp=0123456789abcdef -->".into(),
@@ -1231,6 +1232,7 @@ mod tests {
                 id: "PRRT_open".into(),
                 is_resolved: false,
                 is_outdated: true,
+                resolved_by_has_write_access: false,
                 comments: Vec::new(),
             }],
         );
