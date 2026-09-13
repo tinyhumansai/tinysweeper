@@ -299,7 +299,14 @@ pub fn remember_trigger(event: &str, payload: &Payload) -> Option<Conversation> 
             let ok = match event {
                 "issues" => matches!(
                     action,
-                    "opened" | "edited" | "closed" | "reopened" | "labeled" | "unlabeled"
+                    "opened"
+                        | "edited"
+                        | "closed"
+                        | "reopened"
+                        | "labeled"
+                        | "unlabeled"
+                        | "typed"
+                        | "untyped"
                 ),
                 _ => matches!(action, "created" | "edited"),
             };

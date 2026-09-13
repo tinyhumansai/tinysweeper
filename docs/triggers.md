@@ -39,7 +39,7 @@ activity is the one sender skipped.
 
 | Event | Actions that trigger a re-read |
 | --- | --- |
-| `issues` | `opened`, `edited`, `closed`, `reopened`, `labeled`, `unlabeled` |
+| `issues` | `opened`, `edited`, `closed`, `reopened`, `labeled`, `unlabeled`, `typed`, `untyped` |
 | `issue_comment` | `created`, `edited` |
 | `pull_request` | `opened`, `edited`, `closed`, `reopened`, `ready_for_review`, `labeled`, `unlabeled` |
 | `pull_request_review_comment` | `created`, `edited` |

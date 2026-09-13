@@ -127,6 +127,11 @@ while :; do
 done
 echo
 printf '%s\n' "$BODY" | show
+# A fatal error, or any conversation the walk had to skip: either way the
+# history is not fully imported and there is no usable resume_from, so say so
+# with the exit code rather than let automation read the walk as complete.
 case "$BODY" in
     *'"error":"'*) exit 1 ;;
+    *'"failed":[]'*) ;;
+    *) echo "some conversations could not be remembered; see failed above" >&2; exit 1 ;;
 esac
