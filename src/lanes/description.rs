@@ -90,6 +90,7 @@ impl Lane for Description {
             new_evidence: &evidence,
             changed_paths: &changed_paths,
             pull_request_text: &pull_request_text,
+            memory_context: input.memory_context,
             ..PromptInputs::new(LaneId::Description, input.config)
         });
 
