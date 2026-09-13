@@ -357,7 +357,7 @@ pub fn outcome_items(
             .iter()
             .skip(1)
             .rev()
-            .find(|c| !c.bot && !is_own_login(&c.author));
+            .find(|c| !c.bot && !is_own_login(&c.author) && c.maintainer);
         if let Some(reply) = reply {
             let _ = write!(
                 body,
