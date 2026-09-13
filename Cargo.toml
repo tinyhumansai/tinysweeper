@@ -7,7 +7,12 @@ members = ["."]
 # The vendored dependencies are independent Cargo workspaces. They remain path
 # dependencies of this workspace, but excluding them keeps Cargo from treating
 # their roots as nested tinysweeper workspace members.
-exclude = ["vendor/tinyagents/*", "vendor/tinyflows/*"]
+exclude = [
+    "vendor/tinyagents",
+    "vendor/tinyagents/*",
+    "vendor/tinyflows",
+    "vendor/tinyflows/*",
+]
 resolver = "3"
 
 [workspace.package]
