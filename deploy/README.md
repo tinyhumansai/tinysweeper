@@ -43,58 +43,56 @@ cd /opt/tinysweeper
 git clone --recurse-submodules https://github.com/tinyhumansai/tinysweeper .
 
 cp .env.example .env && chmod 600 .env
-$EDITOR .env               # see "Configuration" below; .tinysweeper.toml is tracked
+$EDITOR .env               # see "Configuration" below (CORTEX_API_KEY included); .tinysweeper.toml is tracked
 
 # nginx: the port 80 block first, so certbot can answer the challenge.
 sudo install -m 644 deploy/nginx/sweeper.tinyhumans.ai.conf /etc/nginx/sites-available/
 sudo ln -s ../sites-available/sweeper.tinyhumans.ai.conf /etc/nginx/sites-enabled/
 sudo certbot certonly --webroot -w /var/www/certbot -d sweeper.tinyhumans.ai
 sudo nginx -t && sudo systemctl reload nginx
-
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --wait
-curl -fsS https://sweeper.tinyhumans.ai/healthz
 ```
 
-### The memory engine
+### The memory engine, before the first `up`
 
 `.tinysweeper.toml` turns `[memory]` on against `http://cortexdb:3141`, and
 the server **refuses to boot** when an enabled engine cannot be reached — a
-silently forgetful reviewer would be worse. So the engine has to exist before
-the stack's first `up`, and `CORTEX_API_KEY` has to be in `.env`.
+silently forgetful reviewer would be worse. So the engine comes up *before*
+the stack does, and `CORTEX_API_KEY` goes in `.env` alongside the rest.
 
 On the box it is one shared CortexDB for every service (teeny and tinysweeper
 today), run from `/opt/cortexdb` with the files in `deploy/cortexdb/`. It joins
 each client's compose network, which is what makes the name `cortexdb` resolve
-from the server container, and it needs the client network to exist first:
+from the server container, so the client network is created first:
 
 ```sh
-# once: the client network, so the engine can join it
 docker network create --label com.docker.compose.project=tinysweeper \
   --label com.docker.compose.network=default tinysweeper_default
 
 sudo install -d -o droid -g droid /opt/cortexdb
-cp deploy/cortexdb/docker-compose.yml /opt/cortexdb/
+cp deploy/cortexdb/docker-compose.yml deploy/cortexdb/docker-compose.teeny.yml /opt/cortexdb/
 cp deploy/cortexdb/.env.example /opt/cortexdb/.env && chmod 600 /opt/cortexdb/.env
 $EDITOR /opt/cortexdb/.env      # CORTEX_API_KEY, LADDER_API_KEY
-cd /opt/cortexdb && docker compose up -d --wait
+cd /opt/cortexdb
+# With teeny on the box: its network and its data volume already exist.
+docker compose -f docker-compose.yml -f docker-compose.teeny.yml up -d --wait
+# Without teeny (a replacement host, a laptop): the base file alone.
+docker compose up -d --wait
 docker network connect cortexdb_default ladder   # repeat if the ladder is recreated
+cd /opt/tinysweeper
 ```
 
-Then put the same `CORTEX_API_KEY` in `/opt/tinysweeper/.env`. A checkout
-that has no engine at all — a laptop — runs the same two files locally, or
-edits `[memory] enabled = false` out of the mounted config; there is no
-environment switch, deliberately, because a config that says memory is on
-and a server that quietly runs without it is the failure this refuses.
+The teeny overlay adopts `teeny_cortexdb-data`, the volume teeny's own
+CortexDB wrote before the engine became shared on 2026-09-13; back it up with
+the others. A checkout that wants no engine at all edits
+`[memory] enabled = false` out of the mounted config — there is deliberately no
+environment switch, because a config that says memory is on and a server that
+quietly runs without it is the failure this refuses.
 
-The engine's data volume is `teeny_cortexdb-data`: teeny's, adopted when the
-stack became shared on 2026-09-13. Back it up with the others.
-
-The first `up` generates the MongoDB keyfile and the mongot password into the
-`mongo-secrets` volume, initiates the single-member replica set, and waits for
-mongot to come up before starting the server. It takes a minute or two.
-
-The GitHub App's webhook URL is `https://sweeper.tinyhumans.ai/webhook`; it did
-not change in the move, only the origin behind Cloudflare did.
+```sh
+cd /opt/tinysweeper
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --wait
+curl -fsS https://sweeper.tinyhumans.ai/healthz
+```
 
 ## Configuration
 

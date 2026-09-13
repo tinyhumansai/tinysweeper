@@ -1,18 +1,24 @@
 # The box's shared CortexDB: one long-term memory engine for every service on
 # it — teeny and tinysweeper today. Lifted from teeny's own stack on
 # 2026-09-13 (teeny/deploy/compose.prod.yaml), configuration unchanged, and
-# it keeps teeny's data: the volume below is the one teeny's CortexDB wrote
-# for months, adopted here rather than copied, so nothing was re-ingested.
+# on the box it keeps teeny's data: the overlay points the volume at the one
+# teeny's CortexDB wrote for months, adopted rather than copied, so nothing
+# was re-ingested.
 #
 #   cd /opt/cortexdb && docker compose up -d --wait
 #
 # Each client stack reaches it by the name `cortexdb` because this service
-# joins every client's compose network. Adding a client is one more entry
-# under `networks:` (the network must exist first — bring the client stack
-# up once, then add it here and `up -d`). Isolation between clients is by
-# CortexDB scope, not by network: every client authenticates with the same
-# bearer, and scope ids are what keep one service's memories out of
-# another's recall.
+# joins every client's compose network. This file joins tinysweeper's; the
+# `docker-compose.teeny.yml` overlay beside it adds teeny's network and
+# adopts teeny's data volume, which is what the box runs:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.teeny.yml up -d --wait
+#
+# A client network must exist before this stack starts (create it as
+# deploy/README.md shows, or bring the client up once). Isolation between
+# clients is by CortexDB scope, not by network: every client authenticates
+# with the same bearer, and scope ids are what keep one service's memories
+# out of another's recall.
 #
 # The ladder is a container no project owns and it binds the host's loopback
 # only, so `http://ladder:6969` resolves here the same way it does for teeny:
@@ -78,7 +84,6 @@ services:
       - "127.0.0.1:${CORTEX_PORT:-3142}:3141"
     networks:
       - default
-      - teeny
       - tinysweeper
     depends_on:
       tika:
@@ -108,16 +113,11 @@ services:
 
 networks:
   default:
-  teeny:
-    name: teeny_default
-    external: true
   tinysweeper:
     name: tinysweeper_default
     external: true
 
 volumes:
-  # teeny's volume, adopted. `external` means compose never creates or
-  # removes it: a `down -v` here leaves the memory where it is.
+  # Created by compose on a fresh host. The teeny overlay replaces it with
+  # the volume teeny's own CortexDB wrote, adopted rather than copied.
   cortexdb-data:
-    name: teeny_cortexdb-data
-    external: true
