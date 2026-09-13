@@ -690,6 +690,28 @@ Tail.
         outdated: bool,
         replies_are_maintainers: bool,
     ) -> ReviewThread {
+        // A resolved thread in most of these tests is resolved by someone
+        // with write access — the tests that specifically exercise an
+        // unauthorized resolve build their own `ReviewThread` directly.
+        thread_with_permissions(
+            ours,
+            replies,
+            resolved,
+            outdated,
+            replies_are_maintainers,
+            resolved,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn thread_with_permissions(
+        ours: &str,
+        replies: &[(&str, bool)],
+        resolved: bool,
+        outdated: bool,
+        replies_are_maintainers: bool,
+        resolved_by_has_write_access: bool,
+    ) -> ReviewThread {
         let mut comments = vec![ThreadComment {
             author: "tinysweeper[bot]".into(),
             body: format!("**Title here**\n\nbody\n\n<!-- tinysweeper:fp={ours} -->"),
@@ -707,6 +729,7 @@ Tail.
             is_resolved: resolved,
             is_outdated: outdated,
             comments,
+            resolved_by_has_write_access,
         }
     }
 
