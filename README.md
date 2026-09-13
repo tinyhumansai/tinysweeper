@@ -68,10 +68,12 @@ which parts it could not see rather than drawing an empty picture. See
   suite never touches the network.
 - **It remembers.** With a [CortexDB](https://cortexdb.ai) engine configured,
   the reviewer keeps a memory of each repository — its guides, one item per
-  heading; its code; and what the maintainers did with every earlier finding —
-  and asks it cited questions before it reads the diff. A finding a maintainer
-  rejected on pull request 40 is remembered *as rejected* on pull request 41.
-  See [docs/modules/memory/README.md](docs/modules/memory/README.md).
+  heading; its code; what the maintainers did with every earlier finding; and
+  every issue and pull request, open or closed, with everything anybody said
+  on them, other review bots included — and asks it cited questions before it
+  reads the diff. A finding a maintainer rejected on pull request 40 is
+  remembered *as rejected* on pull request 41. See
+  [docs/modules/memory/README.md](docs/modules/memory/README.md).
 
 ## How it runs
 
