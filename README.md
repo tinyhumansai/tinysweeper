@@ -97,6 +97,14 @@ cp .env.example .env    # fill it in
 ./target/release/tinysweeper serve
 ```
 
+The checkout's `.tinysweeper.toml` is the production config: it turns
+`[memory]` on against `http://cortexdb:3141`, a name that only resolves inside
+the Compose stack, and the server refuses to boot when an enabled engine is
+unreachable. A server run straight from the checkout therefore points
+`memory.endpoint` at the engine's host port (`http://127.0.0.1:3142`, loopback,
+so no `allow_private_http` needed) or sets `memory.enabled = false`. See
+[deploy/README.md](deploy/README.md) for the engine itself.
+
 The App needs `checks:write`, `contents:read`, `issues:write`,
 `pull_requests:write` and `metadata:read`, and a webhook pointed at
 `/webhook`. `deploy/github-app-manifest.json` and `scripts/create-github-app.sh`

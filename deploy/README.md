@@ -81,6 +81,14 @@ docker network connect cortexdb_default ladder   # repeat if the ladder is recre
 cd /opt/tinysweeper
 ```
 
+The engine's own model calls — embeddings, extraction, answers — go to the
+`ladder`, the box's model router, which no project here provisions: it is a
+container of its own that binds the host's loopback, which is why it is
+attached to `cortexdb_default` by hand above. A host without one sets
+`LADDER_URL` in `/opt/cortexdb/.env` to any OpenAI-compatible endpoint that
+serves the `vectors` (3072-dimensional), `flash` and `reasoning` model names,
+with `LADDER_API_KEY` its bearer, and skips the `network connect` line.
+
 The teeny overlay adopts `teeny_cortexdb-data`, the volume teeny's own
 CortexDB wrote before the engine became shared on 2026-09-13; back it up with
 the others. A checkout that wants no engine at all edits
