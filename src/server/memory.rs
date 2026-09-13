@@ -128,7 +128,7 @@ impl MemoryBackend {
         token: &str,
     ) -> Result<Option<IngestReport>> {
         let repo_id = repo.to_string();
-        if self.is_fresh(&repo_id, revision) {
+        if self.is_fresh(&repo_id, revision, config) {
             return Ok(None);
         }
         if !config.memory.ingest_code && !config.memory.ingest_conventions {
@@ -138,7 +138,7 @@ impl MemoryBackend {
         let _guard = lock.lock().await;
         // Re-check now that this call holds the repository's lock: another
         // task may have ingested this exact revision while this one waited.
-        if self.is_fresh(&repo_id, revision) {
+        if self.is_fresh(&repo_id, revision, config) {
             return Ok(None);
         }
         // Read-only, like the index's checkout: the same boundary the review
@@ -151,9 +151,31 @@ impl MemoryBackend {
         self.fresh
             .lock()
             .expect("freshness lock")
-            .insert(repo_id, revision.to_string());
+            .insert(repo_id, freshness_key(revision, config));
         Ok(Some(report))
     }
+}
+
+/// The freshness cache key for `revision` under `config`.
+///
+/// Keyed on the *effective ingestion policy*, not the revision alone: if the
+/// first delivery for a base SHA races a transient failure to fetch the
+/// repository's own configuration overlay and falls back to the
+/// deployment's, ingesting under that fallback and marking the plain
+/// revision fresh would make a later delivery — one that *did* load the
+/// repository's real `paths.ignore` — skip re-ingesting, leaving paths the
+/// repository explicitly excluded stored and recallable until the base
+/// branch moves again. `paths.ignore`, `memory.ingest_code`,
+/// `memory.ingest_conventions`, and `memory.convention_files` are exactly
+/// what `Ingestor::new` and the selector it builds are constructed from.
+fn freshness_key(revision: &str, config: &Config) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    config.paths.ignore.hash(&mut hasher);
+    config.memory.ingest_code.hash(&mut hasher);
+    config.memory.ingest_conventions.hash(&mut hasher);
+    config.memory.convention_files.hash(&mut hasher);
+    format!("{revision}#{:x}", hasher.finish())
 }
 
 /// Ingest `repo` in the background.
