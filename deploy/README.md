@@ -12,6 +12,7 @@ rolls a new image.
 | `docker-compose.prod.yml` | Overlay: published image, loopback port, memory cap |
 | `deploy/nginx/sweeper.tinyhumans.ai.conf` | Host nginx vhost; only `/webhook`, `/healthz`, `/admin` reach the app |
 | `deploy/mongo/` | mongod/mongot config, secrets generator, init scripts |
+| `deploy/cortexdb/` | The box's shared CortexDB stack — the memory engine `.tinysweeper.toml` points at |
 
 ## The box
 
@@ -22,6 +23,7 @@ rolls a new image.
 | Public name | `https://sweeper.tinyhumans.ai`, Cloudflare-proxied to the host's nginx |
 | App port | `127.0.0.1:8081` (8080 belongs to another service on the box) |
 | MongoDB | `127.0.0.1:27017`, loopback only |
+| CortexDB | `/opt/cortexdb`, reached as `http://cortexdb:3141` on `tinysweeper_default`; `127.0.0.1:3142` on the host |
 
 The box is shared with other services and its own nginx on 80/443, which is
 why this stack publishes nothing but a loopback port and the vhost is a file
@@ -41,24 +43,88 @@ cd /opt/tinysweeper
 git clone --recurse-submodules https://github.com/tinyhumansai/tinysweeper .
 
 cp .env.example .env && chmod 600 .env
-$EDITOR .env               # see "Configuration" below; .tinysweeper.toml is tracked
+$EDITOR .env               # see "Configuration" below (CORTEX_API_KEY included); .tinysweeper.toml is tracked
 
 # nginx: the port 80 block first, so certbot can answer the challenge.
 sudo install -m 644 deploy/nginx/sweeper.tinyhumans.ai.conf /etc/nginx/sites-available/
 sudo ln -s ../sites-available/sweeper.tinyhumans.ai.conf /etc/nginx/sites-enabled/
 sudo certbot certonly --webroot -w /var/www/certbot -d sweeper.tinyhumans.ai
 sudo nginx -t && sudo systemctl reload nginx
+```
 
+### The memory engine, before the first `up`
+
+`.tinysweeper.toml` turns `[memory]` on against `http://cortexdb:3141`, and
+the server **refuses to boot** when an enabled engine cannot be reached — a
+silently forgetful reviewer would be worse. So the engine comes up *before*
+the stack does, and `CORTEX_API_KEY` goes in `.env` alongside the rest.
+
+On the box it is one shared CortexDB for every service (teeny and tinysweeper
+today), run from `/opt/cortexdb` with the files in `deploy/cortexdb/`. It joins
+each client's compose network, which is what makes the name `cortexdb` resolve
+from the server container, so the client network is created first:
+
+```sh
+docker network create --label com.docker.compose.project=tinysweeper \
+  --label com.docker.compose.network=default tinysweeper_default
+
+sudo install -d -o droid -g droid /opt/cortexdb
+cp deploy/cortexdb/docker-compose.yml deploy/cortexdb/docker-compose.teeny.yml /opt/cortexdb/
+cp deploy/cortexdb/.env.example /opt/cortexdb/.env && chmod 600 /opt/cortexdb/.env
+$EDITOR /opt/cortexdb/.env      # CORTEX_API_KEY, LADDER_API_KEY
+cd /opt/cortexdb
+```
+
+Then **one** of the two starts below — they are alternatives, and running the
+second after the first would recreate the engine on an empty volume and cut
+teeny off, because `compose up` re-applies whatever files it is given.
+
+With teeny on the box (its network and its data volume already exist, and its
+own CortexDB has to be stopped first — two engines on one volume is corruption,
+and the old one holds port 3142; this is the handoff the box went through on
+2026-09-13, after which teeny's compose file drops its cortexdb and tika
+services and `up -d --remove-orphans` retires them):
+
+```sh
+docker compose --project-directory /home/droid/teeny/deploy \
+  -f /home/droid/teeny/deploy/compose.prod.yaml \
+  --env-file /home/droid/teeny/deploy/.env stop cortexdb tika
+docker compose -f docker-compose.yml -f docker-compose.teeny.yml up -d --wait
+```
+
+Without teeny (a replacement host, a laptop), the base file alone:
+
+```sh
+docker compose up -d --wait
+```
+
+Either way, finish with:
+
+```sh
+docker network connect cortexdb_default ladder   # repeat if the ladder is recreated
+cd /opt/tinysweeper
+```
+
+The engine's own model calls — embeddings, extraction, answers — go to the
+`ladder`, the box's model router, which no project here provisions: it is a
+container of its own that binds the host's loopback, which is why it is
+attached to `cortexdb_default` by hand above. A host without one sets
+`LADDER_URL` in `/opt/cortexdb/.env` to any OpenAI-compatible endpoint that
+serves the `vectors` (3072-dimensional), `flash` and `reasoning` model names,
+with `LADDER_API_KEY` its bearer, and skips the `network connect` line.
+
+The teeny overlay adopts `teeny_cortexdb-data`, the volume teeny's own
+CortexDB wrote before the engine became shared on 2026-09-13; back it up with
+the others. A checkout that wants no engine at all edits
+`[memory] enabled = false` out of the mounted config — there is deliberately no
+environment switch, because a config that says memory is on and a server that
+quietly runs without it is the failure this refuses.
+
+```sh
+cd /opt/tinysweeper
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --wait
 curl -fsS https://sweeper.tinyhumans.ai/healthz
 ```
-
-The first `up` generates the MongoDB keyfile and the mongot password into the
-`mongo-secrets` volume, initiates the single-member replica set, and waits for
-mongot to come up before starting the server. It takes a minute or two.
-
-The GitHub App's webhook URL is `https://sweeper.tinyhumans.ai/webhook`; it did
-not change in the move, only the origin behind Cloudflare did.
 
 ## Configuration
 
@@ -74,6 +140,7 @@ overlay reads:
 | `TINYSWEEPER_ADMIN_TOKEN` | What `manual-review.yml` authenticates with. Unset means no `/admin` router. |
 | `TINYSWEEPER_ALLOWED_ORG` | Organisation manual reviews are bounded to. Defaults to `tinyhumansai`. |
 | `LANGFUSE_*` | Optional tracing; see the README. |
+| `CORTEX_API_KEY` | The shared CortexDB's bearer, the value `/opt/cortexdb/.env` was started with. Required while `[memory]` is on. |
 
 `.env` is the only file on the box that is not in git; `.tinysweeper.toml` is
 tracked. Back `.env` up somewhere with the same care as the App's private key,

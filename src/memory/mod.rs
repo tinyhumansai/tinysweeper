@@ -70,6 +70,20 @@ pub use crate::memory::types::{
 /// `localhost` here while the client actually dialled `evil.example` in the
 /// clear.
 pub fn endpoint_allowed(endpoint: &str) -> std::result::Result<(), String> {
+    endpoint_allowed_with(endpoint, false)
+}
+
+/// [`endpoint_allowed`], with the operator's private-network statement.
+///
+/// `allow_private_http` widens plain `http://` from loopback to any host —
+/// the case is an engine on the server's own Docker network, which never
+/// leaves the box. The scheme still has to be `http` or `https` and the host
+/// still has to exist; a userinfo-carrying URL is parsed, not prefix-matched,
+/// so `http://127.0.0.1@evil` remains the host `evil`.
+pub fn endpoint_allowed_with(
+    endpoint: &str,
+    allow_private_http: bool,
+) -> std::result::Result<(), String> {
     let endpoint = endpoint.trim();
     let url = url::Url::parse(endpoint).map_err(|err| format!("not a URL: {err}"))?;
     match url.scheme() {
@@ -88,10 +102,15 @@ pub fn endpoint_allowed(endpoint: &str) -> std::result::Result<(), String> {
                 Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
                 None => false,
             };
-            if loopback {
+            let named = url.host_str().is_some_and(|h| !h.is_empty());
+            if loopback || (allow_private_http && named) {
                 Ok(())
             } else {
-                Err("plain `http://` is only allowed to a loopback host; use `https://`".into())
+                Err(
+                    "plain `http://` is only allowed to a loopback host; use `https://`, or set \
+                     `memory.allow_private_http = true` for an engine on a private network"
+                        .into(),
+                )
             }
         }
         _ => Err("must start with `https://` (or `http://` for loopback)".into()),
@@ -123,6 +142,11 @@ mod tests {
         assert!(endpoint_allowed("http://cortex.internal:3141").is_err());
         assert!(endpoint_allowed("http://127.0.0.1.evil.com").is_err());
         assert!(endpoint_allowed("ftp://x").is_err());
+        // The operator's statement widens http to any named host, and only that.
+        assert!(endpoint_allowed_with("http://cortexdb:3141", true).is_ok());
+        assert!(endpoint_allowed_with("http://10.0.0.5:3141", true).is_ok());
+        assert!(endpoint_allowed_with("ftp://cortexdb", true).is_err());
+        assert!(endpoint_allowed_with("http://", true).is_err());
         assert!(endpoint_allowed("https://").is_err());
     }
 

@@ -39,6 +39,16 @@ model = "openai/text-embedding-3-small"
 dimensions = 1536
 api_key_env = "OPENROUTER_API_KEY"
 
+# The memory engine: the CortexDB the production box already runs, shared
+# with the other services on it and reached over the box's own Docker
+# network — which is why plain HTTP is allowed here. Enabling it makes the
+# server refuse to boot without CORTEX_API_KEY, so a local `serve` needs the
+# key in the environment (the compose file forwards it).
+[memory]
+enabled = true
+endpoint = "http://cortexdb:3141"
+allow_private_http = true
+
 # Issue triage, turned on for this repository so the job is exercised on real
 # issues. Closing stays off: the labels and the duplicate cross-links are the
 # useful half, and closing someone else's issue is the expensive mistake.

@@ -1187,3 +1187,21 @@ fn memory_is_not_a_repository_overridable_section() {
         "{dropped:?}"
     );
 }
+
+#[test]
+fn a_private_network_engine_needs_the_operators_say_so() {
+    let refused =
+        parse("version = 1\n[memory]\nenabled = true\nendpoint = \"http://cortexdb:3141\"\n");
+    let problems = validate::validate(&refused).join("\n");
+    assert!(problems.contains("allow_private_http"), "{problems}");
+
+    let allowed = parse(
+        "version = 1\n[memory]\nenabled = true\nendpoint = \"http://cortexdb:3141\"\n\
+         allow_private_http = true\n",
+    );
+    assert!(
+        validate::validate(&allowed).is_empty(),
+        "{:?}",
+        validate::validate(&allowed)
+    );
+}
