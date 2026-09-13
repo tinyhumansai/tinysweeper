@@ -2539,7 +2539,9 @@ mod tests {
             "GitHub: You have exceeded a secondary rate limit. Please wait a few minutes"
         ));
         assert!(!is_rate_limit_message("GitHub: Not Found"));
-        assert!(!is_rate_limit_message("GitHub: Resource not accessible by integration"));
+        assert!(!is_rate_limit_message(
+            "GitHub: Resource not accessible by integration"
+        ));
     }
 
     #[test]

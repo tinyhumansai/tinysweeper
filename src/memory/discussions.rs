@@ -614,7 +614,9 @@ impl<'a> Discussions<'a> {
             match self.forge.issues_updated_since(repo, since, limit).await {
                 Ok(listing) => break listing,
                 Err(crate::error::Error::RateLimited { reset_at }) => {
-                    report.waited_secs += self.wait_out(repo, reset_at, report.rate_limit_waits).await?;
+                    report.waited_secs += self
+                        .wait_out(repo, reset_at, report.rate_limit_waits)
+                        .await?;
                     report.rate_limit_waits += 1;
                 }
                 Err(err) => return Err(err),
@@ -644,8 +646,9 @@ impl<'a> Discussions<'a> {
             let outcome = loop {
                 match self.remember_subject(repo, &subject).await {
                     Err(crate::error::Error::RateLimited { reset_at }) => {
-                        report.waited_secs +=
-                            self.wait_out(repo, reset_at, report.rate_limit_waits).await?;
+                        report.waited_secs += self
+                            .wait_out(repo, reset_at, report.rate_limit_waits)
+                            .await?;
                         report.rate_limit_waits += 1;
                     }
                     other => break other,
@@ -1163,6 +1166,80 @@ mod tests {
             report.resume_from, None,
             "a resume point past a failure would skip it forever"
         );
+    }
+
+    #[tokio::test]
+    async fn a_walk_waits_out_the_forges_rate_limit_and_carries_on() {
+        // The listing is refused once and the first conversation once; both
+        // name a reset ten minutes out. The walk must pause until just past
+        // that reset each time, then finish as if nothing happened.
+        let mut one = issue(1, false);
+        one.updated_at = Some("2026-08-01T00:00:00Z".into());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let forge = MockForge::new()
+            .with_issue(one)
+            .with_remarks(1, vec![remark(1, RemarkKind::Comment, "someone", "hi")])
+            .with_rate_limit(2, Some(now + 600));
+        let memory = MockMemory::new();
+        let config = config();
+        let repo = RepoId::parse("o/r").unwrap();
+        let waits = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+        let seen = waits.clone();
+        let report = Discussions::new(&memory, &forge, &config)
+            .paused_by(Box::new(move |for_how_long| {
+                seen.lock().unwrap().push(for_how_long.as_secs());
+                Box::pin(async {})
+            }))
+            .backfill(&repo, None, 100)
+            .await
+            .unwrap();
+        assert_eq!(report.subjects, 1, "{}", report.summary());
+        assert!(
+            report.failed.is_empty(),
+            "a rate limit is waited out, not recorded as a failure"
+        );
+        assert_eq!(report.rate_limit_waits, 2);
+        let waited = waits.lock().unwrap().clone();
+        assert_eq!(waited.len(), 2);
+        for secs in waited {
+            assert!(
+                (600..=660).contains(&secs),
+                "waited {secs}s; wanted the reset plus a margin"
+            );
+        }
+        assert!(
+            report
+                .summary()
+                .contains("waited out the rate limit 2 time(s)")
+        );
+        assert_eq!(report.resume_from.as_deref(), Some("2026-08-01T00:00:00Z"));
+    }
+
+    #[tokio::test]
+    async fn a_rate_limit_with_no_reset_waits_an_hour_and_a_walk_eventually_gives_up() {
+        let forge = MockForge::new()
+            .with_issue(issue(1, true))
+            .with_rate_limit(u64::MAX, None);
+        let memory = MockMemory::new();
+        let config = config();
+        let repo = RepoId::parse("o/r").unwrap();
+        let waits = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+        let seen = waits.clone();
+        let err = Discussions::new(&memory, &forge, &config)
+            .paused_by(Box::new(move |for_how_long| {
+                seen.lock().unwrap().push(for_how_long.as_secs());
+                Box::pin(async {})
+            }))
+            .backfill(&repo, None, 100)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("gave up"), "{err}");
+        let waited = waits.lock().unwrap().clone();
+        assert_eq!(waited.len(), MAX_RATE_LIMIT_WAITS);
+        assert!(waited.iter().all(|s| *s == 3600 + RESET_MARGIN.as_secs()));
     }
 
     #[tokio::test]
