@@ -672,6 +672,10 @@ pub struct Remark {
     pub body: String,
     /// When it was written, as RFC 3339, when the adapter knows.
     pub created_at: Option<String>,
+    /// When it was last edited, as RFC 3339, when it was and the adapter
+    /// knows. What memory dates an observation to, so an edit outranks the
+    /// text it replaced; `created_at` stays the timeline position.
+    pub updated_at: Option<String>,
     /// The file an inline comment anchors to.
     pub path: Option<String>,
     /// The line an inline comment anchors to, in the head revision.
@@ -680,6 +684,13 @@ pub struct Remark {
     pub in_reply_to: Option<u64>,
     /// The verdict, on a review.
     pub verdict: Option<ReviewEvent>,
+    /// Whether this review was dismissed: a verdict a human retired.
+    ///
+    /// Carried apart from `verdict`, which is `None` for a dismissed review
+    /// because it no longer blocks or approves anything — and yet "the
+    /// maintainer dismissed that request for changes" is a fact the
+    /// conversation should remember.
+    pub dismissed: bool,
 }
 
 /// Everything a lane needs about one pull request, fetched once.
