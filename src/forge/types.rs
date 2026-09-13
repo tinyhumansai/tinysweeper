@@ -604,6 +604,15 @@ pub struct Issue {
     /// When it was closed, as RFC 3339, when it was and the adapter knows.
     #[serde(default)]
     pub closed_at: Option<String>,
+    /// When a pull request listed as an issue was merged, as RFC 3339.
+    ///
+    /// The issues listing carries this under `pull_request.merged_at`, and it
+    /// is the one fact the memory backfill needs from a pull request that the
+    /// listing would otherwise not say — so reading it here saves a
+    /// `pull_request` round trip (and the reviews page behind it) per entry.
+    /// Always `None` on a real issue.
+    #[serde(default)]
+    pub merged_at: Option<String>,
 }
 
 /// What kind of contribution a [`Remark`] is.

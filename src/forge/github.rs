@@ -483,6 +483,9 @@ fn issue_from_json(raw: &serde_json::Value) -> Issue {
         created_at: raw["created_at"].as_str().map(str::to_string),
         updated_at: raw["updated_at"].as_str().map(str::to_string),
         closed_at: raw["closed_at"].as_str().map(str::to_string),
+        merged_at: raw["pull_request"]["merged_at"]
+            .as_str()
+            .map(str::to_string),
     }
 }
 

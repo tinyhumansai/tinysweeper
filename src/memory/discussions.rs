@@ -192,13 +192,20 @@ pub fn subject_item(repo: &str, subject: &Subject, max_chars: usize) -> MemoryIt
                 "closed without merging"
             };
             let _ = writeln!(body, "State: {state}");
-            let _ = writeln!(
-                body,
-                "Opened by {}; {} into {}",
-                who(&pr.author, pr.author_is_bot, ""),
-                pr.head_ref,
-                pr.base_ref
-            );
+            // The branches are known from a pull request read directly and
+            // not from one lifted out of the issues listing; say nothing
+            // rather than "` into `".
+            if pr.head_ref.is_empty() || pr.base_ref.is_empty() {
+                let _ = writeln!(body, "Opened by {}", who(&pr.author, pr.author_is_bot, ""));
+            } else {
+                let _ = writeln!(
+                    body,
+                    "Opened by {}; {} into {}",
+                    who(&pr.author, pr.author_is_bot, ""),
+                    pr.head_ref,
+                    pr.base_ref
+                );
+            }
             if !pr.labels.is_empty() {
                 let _ = writeln!(body, "Labels: {}", pr.labels.join(", "));
             }
@@ -522,17 +529,18 @@ impl<'a> Discussions<'a> {
         let mut report = DiscussionReport::default();
         for entry in &listing {
             let number = entry.number;
-            let outcome = if entry.pull_request {
-                // The listing renders a pull request as an issue and does not
-                // know whether it merged; the pull request itself does.
-                match self.forge.pull_request(repo, number).await {
-                    Ok(pr) => self.remember_subject(repo, &Subject::PullRequest(pr)).await,
-                    Err(err) => Err(err),
-                }
+            // A pull request is lifted straight out of the listing rather
+            // than read again: the listing already says whether it merged
+            // (`merged_at`), and a `pull_request` read costs a round trip
+            // plus a walk of its reviews for an approval count nothing here
+            // uses — on a repository of thousands of pull requests, hours of
+            // rate-limit budget for two branch names.
+            let subject = if entry.pull_request {
+                Subject::PullRequest(pull_request_from_listing(entry))
             } else {
-                self.remember_subject(repo, &Subject::Issue(entry.clone()))
-                    .await
+                Subject::Issue(entry.clone())
             };
+            let outcome = self.remember_subject(repo, &subject).await;
             match outcome {
                 Ok(one) => report.absorb(one),
                 Err(err) => {
@@ -558,6 +566,32 @@ impl<'a> Discussions<'a> {
             report.resume_from = boundary;
         }
         Ok(report)
+    }
+}
+
+/// A pull request as the issues listing describes it: everything the
+/// subject item renders, with the branches — which the listing does not
+/// carry — left empty, which [`subject_item`] renders as their absence.
+fn pull_request_from_listing(entry: &Issue) -> PullRequest {
+    PullRequest {
+        number: entry.number,
+        title: entry.title.clone(),
+        body: entry.body.clone(),
+        author: entry.author.clone(),
+        author_is_bot: entry.author_is_bot,
+        draft: false,
+        base_ref: String::new(),
+        base_sha: String::new(),
+        head_ref: String::new(),
+        head_sha: String::new(),
+        from_fork: false,
+        labels: entry.labels.clone(),
+        mergeable: None,
+        open: entry.open,
+        merged: entry.merged_at.is_some(),
+        approvals: 0,
+        age_days: 0,
+        quiet_days: 0,
     }
 }
 
