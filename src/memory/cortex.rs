@@ -161,6 +161,23 @@ impl CortexMemory {
         Self::read(path, response).await
     }
 
+    /// `post`, bounded by `timeout` instead of the client's own default.
+    ///
+    /// A per-request override rather than a second client: this is the one
+    /// engine, the one bearer, the one base URL — only how long a caller is
+    /// willing to wait differs by route.
+    async fn post_bounded(&self, path: &str, body: &Value, timeout: Duration) -> Result<Value> {
+        let response = self
+            .client
+            .post(format!("{}/{path}", self.base_url))
+            .timeout(timeout)
+            .json(body)
+            .send()
+            .await
+            .map_err(|err| Error::Model(format!("cortex: {path}: {}", scrub(&err.to_string()))))?;
+        Self::read(path, response).await
+    }
+
     async fn get(&self, path: &str) -> Result<Value> {
         let response = self
             .client
