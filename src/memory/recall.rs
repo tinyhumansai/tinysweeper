@@ -174,12 +174,17 @@ impl MemoryContext {
                 out.push('\n');
             }
         }
-        let mut last_kind = None;
+        // Compared by the *heading text*, not the raw kind: `Issue`,
+        // `PullRequest` and `Remark` share one heading, and comparing kinds
+        // directly would reprint it (and `assemble` would recharge its
+        // tokens) at every transition between them.
+        let mut last_heading = None;
         for recollection in &self.recollections {
             let item = &recollection.item;
-            if last_kind != Some(item.kind) {
-                let _ = writeln!(out, "{}\n", kind_heading(item.kind));
-                last_kind = Some(item.kind);
+            let heading = kind_heading(item.kind);
+            if last_heading != Some(heading) {
+                let _ = writeln!(out, "{heading}\n");
+                last_heading = Some(heading);
             }
             out.push_str(&render_item(item));
             out.push('\n');
