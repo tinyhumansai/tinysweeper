@@ -82,7 +82,8 @@ One trait, one adapter, four sections. What the reviewer remembers about a
 repository *between* pull requests: its code, the conventions its own guides
 state, what the maintainers did with the reviewer's earlier findings, and what
 was said on its issues and pull requests by anyone — humans and other agents
-alike. The last is fed through two read-only `ForgeRead` methods added for it,
+alike, except the reviewer's own remarks, which are excluded. The last is fed
+through two read-only `ForgeRead` methods added for it,
 `issues_updated_since` (the whole history, closed items and pull requests
 included) and `remarks` (one conversation as a single timeline). The
 index answers what the code looks like and the graph what a change reaches;
