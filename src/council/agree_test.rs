@@ -97,8 +97,7 @@ fn two_unplaceable_findings_on_one_file_corroborate_only_on_the_same_rule() {
     // produced exactly that: an unpinned `dtolnay/rust-toolchain` and an
     // unpinned `Swatinem/rust-cache`, both real, both unplaceable.
     let unpinned_toolchain = finding(".github/workflows/eval.yml", None, "unpinned-action");
-    let also_unpinned_toolchain =
-        finding(".github/workflows/eval.yml", None, " UNPINNED-ACTION ");
+    let also_unpinned_toolchain = finding(".github/workflows/eval.yml", None, " UNPINNED-ACTION ");
     assert!(corroborates(&unpinned_toolchain, &also_unpinned_toolchain));
 
     let unpinned_cache = finding(".github/workflows/eval.yml", None, "mutable-action-tag");
