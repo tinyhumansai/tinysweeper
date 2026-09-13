@@ -549,12 +549,21 @@ impl ForgeRead for MockForge {
             (Some(_), None) => false,
             (None, _) => true,
         });
-        items.sort_by(|a, b| a.updated_at.cmp(&b.updated_at).then(a.number.cmp(&b.number)));
+        items.sort_by(|a, b| {
+            a.updated_at
+                .cmp(&b.updated_at)
+                .then(a.number.cmp(&b.number))
+        });
         items.truncate(limit);
         Ok(items)
     }
 
-    async fn remarks(&self, _repo: &RepoId, number: u64, _pull_request: bool) -> Result<Vec<Remark>> {
+    async fn remarks(
+        &self,
+        _repo: &RepoId,
+        number: u64,
+        _pull_request: bool,
+    ) -> Result<Vec<Remark>> {
         let state = self.state.lock().expect("mock state lock");
         Ok(state.remarks.get(&number).cloned().unwrap_or_default())
     }

@@ -568,15 +568,24 @@ mod tests {
             pull_request: true,
             installation: 1,
         };
-        assert!(backend.claim(&conversation), "the first delivery owns the re-read");
+        assert!(
+            backend.claim(&conversation),
+            "the first delivery owns the re-read"
+        );
         assert!(!backend.claim(&conversation), "a burst rides along");
         let other = Conversation {
             number: 8,
             ..conversation.clone()
         };
-        assert!(backend.claim(&other), "a different conversation is its own slot");
+        assert!(
+            backend.claim(&other),
+            "a different conversation is its own slot"
+        );
         backend.release(&conversation);
-        assert!(backend.claim(&conversation), "released, the next delivery owns it again");
+        assert!(
+            backend.claim(&conversation),
+            "released, the next delivery owns it again"
+        );
     }
 
     #[test]
@@ -606,7 +615,10 @@ mod tests {
         assert!(!done.running);
         assert!(done.finished_at.is_some());
         assert_eq!(done.report.as_ref().map(|r| r.subjects), Some(3));
-        assert!(backend.start_backfill(&repo, None, 50).is_ok(), "finished, so a new one may start");
+        assert!(
+            backend.start_backfill(&repo, None, 50).is_ok(),
+            "finished, so a new one may start"
+        );
     }
 
     #[tokio::test]

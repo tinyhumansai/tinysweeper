@@ -28,7 +28,9 @@ use crate::server::auth::AppAuth;
 use crate::server::failure;
 use crate::server::indexing::{IndexBackend, index_in_background};
 use crate::server::manual::{self, FullReviews, MergeReport, Merges, Remembers, Triages};
-use crate::server::memory::{BackfillStatus, MemoryBackend, ingest_in_background, remember_in_background};
+use crate::server::memory::{
+    BackfillStatus, MemoryBackend, ingest_in_background, remember_in_background,
+};
 use crate::server::status;
 use crate::server::store::{Store, Trust};
 use crate::server::webhook::{self, Action, Payload};
@@ -943,7 +945,13 @@ impl Remembers for MemoryDispatch {
         let backend = self.backend()?;
         let token = self.read_token(repo).await?;
         backend
-            .remember_conversation(&self.state.config.config, repo, number, pull_request, &token)
+            .remember_conversation(
+                &self.state.config.config,
+                repo,
+                number,
+                pull_request,
+                &token,
+            )
             .await
     }
 

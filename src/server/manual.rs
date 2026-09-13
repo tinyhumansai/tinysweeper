@@ -178,8 +178,12 @@ pub struct BackfillRequest {
 #[async_trait]
 pub trait Remembers: Send + Sync {
     /// Remember one conversation now, waiting for the answer.
-    async fn remember(&self, repo: &RepoId, number: u64, pull_request: bool)
-    -> Result<DiscussionReport>;
+    async fn remember(
+        &self,
+        repo: &RepoId,
+        number: u64,
+        pull_request: bool,
+    ) -> Result<DiscussionReport>;
 
     /// Start a backfill in the background, or report the one already running.
     ///
@@ -664,10 +668,11 @@ mod tests {
             number: u64,
             pull_request: bool,
         ) -> crate::error::Result<DiscussionReport> {
-            self.remembered
-                .lock()
-                .expect("not poisoned")
-                .push((repo.to_string(), number, pull_request));
+            self.remembered.lock().expect("not poisoned").push((
+                repo.to_string(),
+                number,
+                pull_request,
+            ));
             Ok(DiscussionReport {
                 subjects: 1,
                 remarks: 4,

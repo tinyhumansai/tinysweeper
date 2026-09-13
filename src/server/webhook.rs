@@ -1057,7 +1057,10 @@ mod tests {
             "issue": {"number": 12, "pull_request": {}, "user": {"login": "someone"}},
             "comment": {"body": "Consider bounding this.", "user": {"login": "coderabbitai[bot]", "type": "Bot"}}
         }));
-        assert_eq!(route("issue_comment", &payload), Action::Ignore("sender is a bot"));
+        assert_eq!(
+            route("issue_comment", &payload),
+            Action::Ignore("sender is a bot")
+        );
         assert_eq!(
             remember_trigger("issue_comment", &payload),
             Some(Conversation {
@@ -1095,7 +1098,9 @@ mod tests {
                 .extend(event_bits.as_object().unwrap().clone());
             payload(v)
         };
-        let closed = base(serde_json::json!({"action": "closed", "issue": {"number": 3, "user": {"login": "a"}}}));
+        let closed = base(
+            serde_json::json!({"action": "closed", "issue": {"number": 3, "user": {"login": "a"}}}),
+        );
         let got = remember_trigger("issues", &closed).expect("a closed issue is remembered");
         assert_eq!((got.number, got.pull_request), (3, false));
 
@@ -1113,11 +1118,14 @@ mod tests {
         }));
         assert!(remember_trigger("pull_request_review_comment", &inline).is_some());
 
-        let deleted = base(serde_json::json!({"action": "deleted", "issue": {"number": 3, "user": {"login": "a"}}}));
+        let deleted = base(
+            serde_json::json!({"action": "deleted", "issue": {"number": 3, "user": {"login": "a"}}}),
+        );
         assert_eq!(remember_trigger("issue_comment", &deleted), None);
         assert_eq!(remember_trigger("issues", &deleted), None);
 
-        let check = base(serde_json::json!({"action": "completed", "check_run": {"pull_requests": []}}));
+        let check =
+            base(serde_json::json!({"action": "completed", "check_run": {"pull_requests": []}}));
         assert_eq!(remember_trigger("check_run", &check), None);
     }
 

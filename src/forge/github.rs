@@ -506,7 +506,9 @@ fn remark_from_comment(raw: &serde_json::Value, kind: RemarkKind) -> Option<Rema
         body: raw["body"].as_str().unwrap_or_default().to_string(),
         created_at: raw["created_at"].as_str().map(str::to_string),
         path: raw["path"].as_str().map(str::to_string),
-        line: raw["line"].as_u64().or_else(|| raw["original_line"].as_u64()),
+        line: raw["line"]
+            .as_u64()
+            .or_else(|| raw["original_line"].as_u64()),
         in_reply_to: raw["in_reply_to_id"].as_u64(),
         verdict: None,
     })

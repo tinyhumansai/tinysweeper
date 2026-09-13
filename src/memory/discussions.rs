@@ -149,7 +149,11 @@ pub fn subject_item(repo: &str, subject: &Subject, max_chars: usize) -> MemoryIt
                 }
             };
             let _ = writeln!(body, "State: {state}");
-            let _ = writeln!(body, "Opened by {}", who(&issue.author, issue.author_is_bot, ""));
+            let _ = writeln!(
+                body,
+                "Opened by {}",
+                who(&issue.author, issue.author_is_bot, "")
+            );
             if let Some(at) = &issue.created_at {
                 let _ = writeln!(body, "Opened on {at}");
             }
@@ -165,7 +169,10 @@ pub fn subject_item(repo: &str, subject: &Subject, max_chars: usize) -> MemoryIt
                 format!("Issue #{number}: {}", issue.title.trim()),
                 String::new(),
             )
-            .labelled(format!("state:{}", if issue.open { "open" } else { "closed" }))
+            .labelled(format!(
+                "state:{}",
+                if issue.open { "open" } else { "closed" }
+            ))
             .labelled(format!("author:{}", issue.author));
             for label in issue.labels.iter().take(MAX_ISSUE_LABELS) {
                 item = item.labelled(format!("label:{label}"));
@@ -255,7 +262,11 @@ pub fn remark_items(
                 subject.noun(),
                 subject.title().trim()
             );
-            let _ = writeln!(body, "By {}", who(&remark.author, remark.bot, &remark.association));
+            let _ = writeln!(
+                body,
+                "By {}",
+                who(&remark.author, remark.bot, &remark.association)
+            );
             if let Some(at) = &remark.created_at {
                 let _ = writeln!(body, "On {at}");
             }
@@ -286,7 +297,11 @@ pub fn remark_items(
                 .or_else(|| remark.verdict.map(|v| verdict_word(v).to_string()))
                 .unwrap_or_default();
             let mut item = MemoryItem::new(
-                format!("remark:{repo}#{number}:{}:{}", remark.kind.as_str(), remark.id),
+                format!(
+                    "remark:{repo}#{number}:{}:{}",
+                    remark.kind.as_str(),
+                    remark.id
+                ),
                 MemoryKind::Remark,
                 format!("{} on #{number}: {headline}", remark.author),
                 body,
@@ -299,7 +314,10 @@ pub fn remark_items(
                 item = item.labelled(format!("association:{}", remark.association));
             }
             if let Some(verdict) = remark.verdict {
-                item = item.labelled(format!("verdict:{}", verdict_word(verdict).replace(' ', "-")));
+                item = item.labelled(format!(
+                    "verdict:{}",
+                    verdict_word(verdict).replace(' ', "-")
+                ));
             }
             if let Some(path) = &remark.path {
                 item = item.at_path(path.clone());
@@ -579,7 +597,11 @@ mod tests {
         assert_eq!(item.key, "issue:o/r#7");
         assert_eq!(item.kind, MemoryKind::Issue);
         assert_eq!(item.section(), MemorySection::Discussions);
-        assert!(item.body.contains("State: closed on 2026-08-14T10:00:00Z"), "{}", item.body);
+        assert!(
+            item.body.contains("State: closed on 2026-08-14T10:00:00Z"),
+            "{}",
+            item.body
+        );
         assert!(item.body.contains("Labels: bug, server"));
         assert!(item.body.contains("claim_delivery takes over ten seconds"));
         assert!(item.labels.contains(&"issue:7".to_string()));
@@ -602,7 +624,10 @@ mod tests {
         closed.merged = false;
         let item = subject_item("o/r", &Subject::PullRequest(closed), 2000);
         assert!(item.body.contains("State: closed without merging"));
-        assert!(item.labels.contains(&"state:closed-without-merging".to_string()));
+        assert!(
+            item.labels
+                .contains(&"state:closed-without-merging".to_string())
+        );
     }
 
     #[test]
@@ -620,7 +645,12 @@ mod tests {
         review.verdict = Some(ReviewEvent::Approve);
         let remarks = vec![
             remark(1, RemarkKind::Comment, "tinysweeper", "## Change map\n..."),
-            remark(2, RemarkKind::Comment, "maintainer", "Intentional: the caller checks.\nMore."),
+            remark(
+                2,
+                RemarkKind::Comment,
+                "maintainer",
+                "Intentional: the caller checks.\nMore.",
+            ),
             inline,
             review,
             remark(5, RemarkKind::Comment, "someone", "   "),
@@ -639,8 +669,15 @@ mod tests {
 
         let human = &items[0];
         assert_eq!(human.kind, MemoryKind::Remark);
-        assert_eq!(human.title, "maintainer on #9: Intentional: the caller checks.");
-        assert!(human.body.contains("By maintainer, owner"), "{}", human.body);
+        assert_eq!(
+            human.title,
+            "maintainer on #9: Intentional: the caller checks."
+        );
+        assert!(
+            human.body.contains("By maintainer, owner"),
+            "{}",
+            human.body
+        );
         assert!(human.labels.contains(&"association:owner".to_string()));
         assert!(human.labels.contains(&"human".to_string()));
         assert_eq!(human.observed_at.as_deref(), Some("2026-08-14T10:02:00Z"));
@@ -772,8 +809,14 @@ mod tests {
         let keys: std::collections::BTreeSet<&str> = held.iter().map(|i| i.key.as_str()).collect();
         assert!(keys.contains("issue:o/r#1"), "closed issue remembered");
         assert!(keys.contains("issue:o/r#2"));
-        assert!(keys.contains("pr:o/r#9"), "the listing's pull request is read as one");
-        assert!(held.iter().any(|i| i.key == "pr:o/r#9" && i.body.contains("State: merged")));
+        assert!(
+            keys.contains("pr:o/r#9"),
+            "the listing's pull request is read as one"
+        );
+        assert!(
+            held.iter()
+                .any(|i| i.key == "pr:o/r#9" && i.body.contains("State: merged"))
+        );
 
         // Resuming from the report walks only what changed after it.
         let resumed = Discussions::new(&memory, &forge, &config)

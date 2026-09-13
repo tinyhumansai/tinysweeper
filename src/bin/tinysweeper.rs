@@ -1425,7 +1425,11 @@ async fn backfill_discussions(
     let forge = tinysweeper::forge::github::GitHubRead::from_env()?;
     let discussions = tinysweeper::memory::Discussions::new(memory, &forge, config);
     match one {
-        Some((number, pull_request)) => discussions.remember_number(repo, number, pull_request).await,
+        Some((number, pull_request)) => {
+            discussions
+                .remember_number(repo, number, pull_request)
+                .await
+        }
         None => discussions.backfill(repo, since, limit).await,
     }
 }
