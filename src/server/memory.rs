@@ -94,6 +94,10 @@ pub enum BackfillStart {
 /// token backing it is re-minted (from cache, unless it needs renewing).
 const BACKFILL_CHUNK: usize = 100;
 
+/// Rate-limit waits one walk sits through before it gives up: a dozen
+/// hours, the same bound the walk itself uses when it waits in place.
+const MAX_RATE_LIMIT_WAITS: usize = 12;
+
 /// How long the token a chunk starts with must still be good for.
 ///
 /// A chunk is `BACKFILL_CHUNK` conversations of one to three forge reads and
@@ -306,13 +310,40 @@ impl MemoryBackend {
         let outcome: Result<DiscussionReport> = async {
             while walked < limit {
                 let chunk = (limit - walked).min(BACKFILL_CHUNK);
-                let token = auth
-                    .installation_token_good_for(installation, BACKFILL_TOKEN_MARGIN)
-                    .await?;
-                let forge = crate::forge::github::GitHubRead::new(&token)?;
-                let report = Discussions::new(self.memory.as_ref(), &forge, &config.memory)
-                    .backfill(repo, cursor.as_deref(), chunk)
-                    .await?;
+                // A rate limit is waited out *here*, with the chunk retried on
+                // a freshly minted token, rather than inside the walk: an
+                // installation token expires within the hour the limit takes
+                // to reset, so a walk that waited in place would wake to a
+                // credential that no longer works. The chunk's conversations
+                // are re-read on the retry; the engine replays them for free.
+                let report = loop {
+                    let token = auth
+                        .installation_token_good_for(installation, BACKFILL_TOKEN_MARGIN)
+                        .await?;
+                    let forge = crate::forge::github::GitHubRead::new(&token)?;
+                    match Discussions::new(self.memory.as_ref(), &forge, &config.memory)
+                        .without_waiting()
+                        .backfill(repo, cursor.as_deref(), chunk)
+                        .await
+                    {
+                        Ok(report) => break report,
+                        Err(crate::error::Error::RateLimited { reset_at }) => {
+                            if combined.rate_limit_waits >= MAX_RATE_LIMIT_WAITS {
+                                return Err(crate::error::Error::RateLimited { reset_at });
+                            }
+                            let wait = crate::memory::discussions::rate_limit_wait(reset_at);
+                            tracing::info!(
+                                %repo,
+                                secs = wait.as_secs(),
+                                "the forge's rate limit is spent; the backfill waits for it to reset"
+                            );
+                            tokio::time::sleep(wait).await;
+                            combined.rate_limit_waits += 1;
+                            combined.waited_secs += wait.as_secs();
+                        }
+                        Err(err) => return Err(err),
+                    }
+                };
                 let processed = report.subjects + report.failed.len();
                 let last_seen = report.last_seen.clone();
                 combined.absorb(report);

@@ -498,6 +498,9 @@ pub struct Discussions<'a> {
     forge: &'a dyn ForgeRead,
     config: &'a MemoryConfig,
     pause: Pause,
+    /// Rate-limit waits this walk may sit through before the refusal is
+    /// handed back to the caller as [`Error::RateLimited`].
+    max_waits: usize,
 }
 
 impl<'a> Discussions<'a> {
@@ -508,7 +511,21 @@ impl<'a> Discussions<'a> {
             forge,
             config,
             pause: Box::new(|for_how_long| Box::pin(tokio::time::sleep(for_how_long))),
+            max_waits: MAX_RATE_LIMIT_WAITS,
         }
+    }
+
+    /// Hand a rate limit back as [`Error::RateLimited`] instead of waiting
+    /// it out here.
+    ///
+    /// For a caller whose forge credential cannot outlive the wait: the
+    /// server's installation tokens expire within the hour a limit takes to
+    /// reset, so it waits, re-mints, and calls again (see
+    /// `server::memory::MemoryBackend::run_backfill`). The CLI, on a
+    /// personal token, lets the walk wait in place.
+    pub fn without_waiting(mut self) -> Self {
+        self.max_waits = 0;
+        self
     }
 
     /// Pause through `pause` instead of sleeping. For tests.
@@ -521,19 +538,15 @@ impl<'a> Discussions<'a> {
     /// that took. `waits` is how many this walk has already sat through; the
     /// error past [`MAX_RATE_LIMIT_WAITS`] is the walk giving up.
     async fn wait_out(&self, repo: &RepoId, reset_at: Option<u64>, waits: usize) -> Result<u64> {
-        if waits >= MAX_RATE_LIMIT_WAITS {
-            return Err(crate::error::Error::Forge(format!(
-                "gave up walking {repo} after {waits} rate-limit waits"
-            )));
+        if waits >= self.max_waits {
+            // The refusal itself, not a wrapper: the caller may be able to
+            // wait where this walk cannot, and needs the reset to do it.
+            if waits > 0 {
+                tracing::warn!(%repo, waits, "giving up on the forge's rate limit resetting");
+            }
+            return Err(crate::error::Error::RateLimited { reset_at });
         }
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or_default();
-        let until_reset = reset_at
-            .map(|at| Duration::from_secs(at.saturating_sub(now)))
-            .unwrap_or(UNKNOWN_RESET_WAIT);
-        let wait = until_reset + RESET_MARGIN;
+        let wait = rate_limit_wait(reset_at);
         tracing::info!(
             %repo,
             secs = wait.as_secs(),
@@ -680,6 +693,21 @@ impl<'a> Discussions<'a> {
         }
         Ok(report)
     }
+}
+
+/// How long to wait for a rate limit that resets at `reset_at` (Unix
+/// seconds): until the reset plus a margin, or an hour when the forge did
+/// not say. Shared with the server's chunk loop, which waits on the same
+/// terms with a fresh credential.
+pub fn rate_limit_wait(reset_at: Option<u64>) -> Duration {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    let until_reset = reset_at
+        .map(|at| Duration::from_secs(at.saturating_sub(now)))
+        .unwrap_or(UNKNOWN_RESET_WAIT);
+    until_reset + RESET_MARGIN
 }
 
 /// A pull request as the issues listing describes it: everything the
@@ -1236,10 +1264,38 @@ mod tests {
             .backfill(&repo, None, 100)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("gave up"), "{err}");
+        assert!(
+            matches!(err, crate::error::Error::RateLimited { reset_at: None }),
+            "{err}"
+        );
         let waited = waits.lock().unwrap().clone();
         assert_eq!(waited.len(), MAX_RATE_LIMIT_WAITS);
         assert!(waited.iter().all(|s| *s == 3600 + RESET_MARGIN.as_secs()));
+    }
+
+    #[tokio::test]
+    async fn a_walk_told_not_to_wait_hands_the_refusal_back_with_its_reset() {
+        let forge = MockForge::new()
+            .with_issue(issue(1, true))
+            .with_rate_limit(1, Some(1_800_000_000));
+        let memory = MockMemory::new();
+        let config = config();
+        let repo = RepoId::parse("o/r").unwrap();
+        let err = Discussions::new(&memory, &forge, &config)
+            .without_waiting()
+            .paused_by(Box::new(|_| panic!("must not pause")))
+            .backfill(&repo, None, 100)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                crate::error::Error::RateLimited {
+                    reset_at: Some(1_800_000_000)
+                }
+            ),
+            "{err}"
+        );
     }
 
     #[tokio::test]
