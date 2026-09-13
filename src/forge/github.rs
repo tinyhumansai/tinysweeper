@@ -211,6 +211,15 @@ fn threads_connection(raw: &serde_json::Value) -> &serde_json::Value {
     &raw["data"]["repository"]["pullRequest"]["reviewThreads"]
 }
 
+/// The `comments` connection of a thread-comments page, wrapped or not.
+fn node_comments(raw: &serde_json::Value) -> &serde_json::Value {
+    let unwrapped = &raw["node"]["comments"];
+    if unwrapped.is_object() {
+        return unwrapped;
+    }
+    &raw["data"]["node"]["comments"]
+}
+
 /// Map one page of review threads.
 ///
 /// A comment whose author is gone — a deleted account — keeps its place with an
@@ -1195,7 +1204,12 @@ impl ForgeRead for GitHubRead {
                     .await
                     .map_err(api)?;
                 graphql_errors(&raw, "the review thread comments query")?;
-                let comments = &raw["data"]["node"]["comments"];
+                // Same two shapes as `threads_connection`: octocrab may hand
+                // back the `data` object already unwrapped. Reading only the
+                // wrapped form saw `Null`, appended nothing, and — because a
+                // missing `hasNextPage` reads as false — quietly called the
+                // thread complete without the reply that settled it.
+                let comments = node_comments(&raw);
                 for comment in comments["nodes"].as_array().into_iter().flatten() {
                     let (comment, candidate) = comment_from_json(comment);
                     if candidate && !comment.author.is_empty() {

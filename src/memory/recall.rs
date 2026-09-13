@@ -63,6 +63,15 @@ pub enum MemoryStatus {
     Off,
     /// The engine answered.
     Ready,
+    /// Some calls answered and some did not. What came back is used; what
+    /// did not is stated. `failed` is how many calls were lost and `reason`
+    /// is the first failure's operator-facing sentence.
+    Partial {
+        /// How many recall or answer calls failed.
+        failed: usize,
+        /// What went wrong first, in one line.
+        reason: String,
+    },
     /// The engine could not be reached, or refused. `reason` is the
     /// operator-facing sentence; it never carries a credential.
     Unavailable {
@@ -192,6 +201,10 @@ impl MemoryContext {
                 Some("Memory held nothing relevant to this change.".into())
             }
             MemoryStatus::Ready => None,
+            MemoryStatus::Partial { failed, reason } => Some(format!(
+                "{failed} memory call(s) failed ({reason}), so this review saw part of what \
+                 the engine holds."
+            )),
             MemoryStatus::Unavailable { reason } => Some(format!(
                 "Memory was unavailable ({reason}), so this review ran without it."
             )),
@@ -437,10 +450,15 @@ impl<'a> Recaller<'a> {
         // four to twelve seconds — so running them in sequence puts the
         // whole list on the review's critical path, and a review is expected
         // in seconds.
+        // Each call is independent, so one failure costs that call and not
+        // the others: a timed-out answer must not throw away the conventions
+        // and outcomes that already came back. Failures are counted and the
+        // first is named, and the status says the review saw part of memory.
         let recalls = async {
             let mut candidates: Vec<Recollection> = Vec::new();
+            let mut failures: Vec<String> = Vec::new();
             if settings.max_recollections == 0 || query.trim().is_empty() {
-                return Ok(candidates);
+                return (candidates, failures);
             }
             let scopes: Vec<MemoryScope> = sections
                 .iter()
@@ -456,17 +474,18 @@ impl<'a> Recaller<'a> {
                     Ok(hits) => candidates.extend(hits),
                     Err(err) => {
                         tracing::warn!(%err, %scope, "memory recall failed");
-                        return Err(err);
+                        failures.push(err.to_string());
                     }
                 }
             }
-            Ok(candidates)
+            (candidates, failures)
         };
 
         let asks = async {
             let mut answers = Vec::new();
+            let mut failures: Vec<String> = Vec::new();
             if !settings.ask {
-                return Ok(answers);
+                return (answers, failures);
             }
             // Validation already refused an unknown section; a question that
             // somehow carries one is skipped rather than guessed at.
@@ -496,21 +515,34 @@ impl<'a> Recaller<'a> {
                     Ok(_) => {}
                     Err(err) => {
                         tracing::warn!(%err, %scope, "memory answer failed");
-                        return Err(err);
+                        failures.push(err.to_string());
                     }
                 }
             }
-            Ok(answers)
+            (answers, failures)
         };
 
-        let (candidates, answers) = match futures::future::join(recalls, asks).await {
-            (Ok(candidates), Ok(answers)) => (candidates, answers),
-            (Err(err), _) | (_, Err(err)) => {
-                return MemoryContext::unavailable(sanitize(&err.to_string()));
-            }
-        };
-
-        assemble(answers, candidates, settings.context_tokens)
+        let ((candidates, mut failures), (answers, more)) =
+            futures::future::join(recalls, asks).await;
+        failures.extend(more);
+        let attempted = sections.len() + settings.questions.len();
+        let failed = failures.len();
+        let mut context = assemble(answers, candidates, settings.context_tokens);
+        if let Some(first) = failures.first() {
+            // Every call lost is the engine being unreachable; anything less
+            // is a partial answer worth keeping.
+            context.status = if failed >= attempted && context.renders_nothing() {
+                MemoryStatus::Unavailable {
+                    reason: sanitize(first),
+                }
+            } else {
+                MemoryStatus::Partial {
+                    failed,
+                    reason: sanitize(first),
+                }
+            };
+        }
+        context
     }
 }
 
