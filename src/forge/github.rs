@@ -967,8 +967,8 @@ impl ForgeRead for GitHubRead {
                 "`{since}` is not an RFC 3339 timestamp"
             )));
         }
-        // `:` and `+` are reserved in a query string; nothing else a
-        // timestamp contains is, and `is_timestamp` has refused the rest.
+        // `:` is the one reserved character a UTC timestamp contains;
+        // `is_timestamp` has refused everything else worth encoding.
         let since = since.map(|s| s.replace(':', "%3A"));
         let mut out = Vec::new();
         let pages = limit.div_ceil(PER_PAGE).clamp(1, MAX_LISTING_PAGES);
@@ -2484,6 +2484,19 @@ mod tests {
                 .map(|i| serde_json::json!({"user": {"login": format!("r{i}"), "type": "User"}, "state": "APPROVED"}))
                 .collect(),
         )
+    }
+
+    #[test]
+    fn only_utc_rfc3339_timestamps_reach_the_query_string() {
+        assert!(is_timestamp("2026-08-08T20:21:19Z"));
+        assert!(is_timestamp("2026-08-08T20:21:19.123Z"));
+        assert!(is_timestamp("2026-08-08T20:21:19-05:00"));
+        assert!(
+            !is_timestamp("2026-08-08T20:21:19+05:00"),
+            "a + offset is refused"
+        );
+        assert!(!is_timestamp("2026-08-08T20:21:19Z&per_page=1"));
+        assert!(!is_timestamp(""));
     }
 
     #[tokio::test]
