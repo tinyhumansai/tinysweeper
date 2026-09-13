@@ -131,8 +131,16 @@ pub fn convention_items(path: &str, content: &str, max_chars: usize) -> Vec<Memo
     let mut stack: Vec<(usize, String)> = Vec::new();
     let mut body = String::new();
     let mut in_fence = false;
+    // Counts every part emitted under a slug so far, across *every* heading
+    // that produced it — not reset per heading. Two distinct headings can
+    // normalize to the same slug (a repeated heading path, or `C++` and `C#`
+    // both slugging to `c`), and without a counter shared across headings
+    // each would restart at the plain, unsuffixed key and collide: their
+    // different bodies become separate Cortex events, but recall dedupes by
+    // key, so one repository rule is silently discarded.
+    let mut slug_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
-    let flush = |stack: &[(usize, String)], body: &mut String, items: &mut Vec<MemoryItem>| {
+    let mut flush = |stack: &[(usize, String)], body: &mut String, items: &mut Vec<MemoryItem>| {
         let text = body.trim();
         if !text.is_empty() {
             let heading = stack
@@ -146,12 +154,14 @@ pub fn convention_items(path: &str, content: &str, max_chars: usize) -> Vec<Memo
                 format!("{path} › {heading}")
             };
             let slug = slug(&heading);
-            for (index, part) in split_paragraphs(text, max_chars).into_iter().enumerate() {
-                let key = if index == 0 {
+            for part in split_paragraphs(text, max_chars) {
+                let occurrence = slug_counts.entry(slug.clone()).or_insert(0);
+                let key = if *occurrence == 0 {
                     format!("convention:{path}#{slug}")
                 } else {
-                    format!("convention:{path}#{slug}~{index}")
+                    format!("convention:{path}#{slug}~{occurrence}")
                 };
+                *occurrence += 1;
                 items.push(
                     MemoryItem::new(key, MemoryKind::Convention, title.clone(), part)
                         .at_path(path.to_string())
