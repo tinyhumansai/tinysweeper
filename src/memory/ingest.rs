@@ -917,6 +917,34 @@ Tail.
     }
 
     #[tokio::test]
+    async fn an_extensionless_convention_file_is_still_ingested() {
+        // Regression: `Selector` rejects any file whose extension the source
+        // grammars don't recognise, including no extension at all, before
+        // `ingest_checkout` ever checks whether it names a convention file —
+        // so `.cursorrules`, which the default config names explicitly
+        // (`memory.convention_files`), was silently absent from memory.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".cursorrules"), "Never use `unwrap`.\n").unwrap();
+        let memory = MockMemory::new();
+        let mut config: crate::config::Config = crate::config::DEFAULTS
+            .parse::<toml::Table>()
+            .unwrap()
+            .try_into()
+            .unwrap();
+        config.memory.ingest_code = false;
+        config.memory.convention_files = vec![".cursorrules".into()];
+        let config = config.memory;
+        let ingestor = Ingestor::new(&memory, &config, &[]).unwrap();
+        let report = ingestor.ingest_checkout("o/r", dir.path()).await.unwrap();
+
+        assert_eq!(report.convention_files, 1, "{report:?}");
+        let conventions =
+            memory.remembered(&MemoryScope::section("o/r", MemorySection::Conventions));
+        assert_eq!(conventions.len(), 1);
+        assert!(conventions[0].body.contains("Never use"), "{conventions:?}");
+    }
+
+    #[tokio::test]
     async fn a_re_ingest_retires_an_edited_convention_rather_than_stacking_it() {
         // The bug this guards: editing a convention's body keeps its key but
         // changes its `content_id`, so without retiring the section first,
