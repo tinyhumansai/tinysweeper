@@ -361,23 +361,34 @@ impl<'a> Recaller<'a> {
         threads: &[ReviewThread],
         comments: &[ReviewComment],
     ) -> RememberReport {
+        self.observe_bounded(repo, number, threads, comments, OBSERVE_TIMEOUT)
+            .await
+    }
+
+    /// [`Self::observe`], with the timeout as a parameter — kept separate so
+    /// a test can prove the abandonment path without a real 10-second wait.
+    ///
+    /// Bounded, not spawned: this borrows `self.memory` for the recaller's
+    /// lifetime, so backgrounding it would need an owned, `'static` handle to
+    /// the engine, and this runs *before* recall and every lane on the same
+    /// review path the later finding write-back
+    /// (`app::review::remember_findings_bounded`) is bounded for. Without
+    /// this, a slow-but-connected engine could occupy a review permit for the
+    /// adapter's own per-batch timeout, times however many batches this pull
+    /// request's settled threads need.
+    async fn observe_bounded(
+        &self,
+        repo: &str,
+        number: u64,
+        threads: &[ReviewThread],
+        comments: &[ReviewComment],
+        timeout: std::time::Duration,
+    ) -> RememberReport {
         let items = ingest::outcome_items(repo, number, threads, comments);
         if items.is_empty() {
             return RememberReport::default();
         }
-        // Bounded, not spawned — this borrows `self.memory` for the
-        // recaller's lifetime, so backgrounding it would need an owned,
-        // `'static` handle to the engine, and this runs *before* recall and
-        // every lane on the same review path the later finding write-back
-        // (`app::review::remember_findings_bounded`) is bounded for. Without
-        // this, a slow-but-connected engine could occupy a review permit for
-        // the adapter's own per-batch timeout, times however many batches
-        // this pull request's settled threads need.
-        match tokio::time::timeout(
-            OBSERVE_TIMEOUT,
-            ingest::remember_all(self.memory, repo, &items),
-        )
-        .await
+        match tokio::time::timeout(timeout, ingest::remember_all(self.memory, repo, &items)).await
         {
             Ok(Ok(report)) => report,
             Ok(Err(err)) => {
@@ -388,7 +399,7 @@ impl<'a> Recaller<'a> {
                 tracing::warn!(
                     repo,
                     number,
-                    seconds = OBSERVE_TIMEOUT.as_secs(),
+                    seconds = timeout.as_secs(),
                     "remembering review outcomes took too long; the review is not held for it"
                 );
                 RememberReport::default()
