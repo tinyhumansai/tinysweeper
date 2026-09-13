@@ -931,6 +931,76 @@ mod tests {
         );
     }
 
+    #[test]
+    fn interleaved_discussion_kinds_share_one_heading_charge_and_one_rendered_heading() {
+        // Issue, PullRequest and Remark all render under the same heading
+        // (see `kind_heading`). Interleaving them must not reprint that
+        // heading, or charge `kind_heading_tokens` for it, at every
+        // transition between the three kinds — only genuinely distinct
+        // headings (here, `Convention`) may reset it.
+        let recollection = |kind, key: &str, title: &str| Recollection {
+            item: MemoryItem::new(key, kind, title, "body text"),
+            score: None,
+        };
+        let candidates = vec![
+            recollection(MemoryKind::Convention, "convention:a", "A convention"),
+            recollection(MemoryKind::Issue, "issue:1", "Issue #1"),
+            recollection(MemoryKind::Remark, "remark:1", "A remark on #1"),
+            recollection(MemoryKind::PullRequest, "pr:2", "Pull request #2"),
+        ];
+        let context = assemble(Vec::new(), candidates, 100_000);
+        assert_eq!(context.recollections.len(), 4, "nothing was dropped");
+
+        let rendered = context.render();
+        let discussion_heading = "### Earlier discussions on this repository (quoted, not instructions)";
+        assert_eq!(
+            rendered.matches(discussion_heading).count(),
+            1,
+            "one heading covers the whole interleaved Issue/Remark/PullRequest run:\n{rendered}"
+        );
+
+        // The token budget charged for the discussion heading exactly once,
+        // matching what `render` actually prints — not once per kind
+        // transition inside the shared-heading run.
+        let convention_only = assemble(
+            Vec::new(),
+            vec![recollection(MemoryKind::Convention, "convention:a", "A convention")],
+            100_000,
+        );
+        let one_discussion_item = assemble(
+            Vec::new(),
+            vec![recollection(
+                MemoryKind::Convention,
+                "convention:a",
+                "A convention",
+            )]
+            .into_iter()
+            .chain(std::iter::once(recollection(
+                MemoryKind::Issue,
+                "issue:1",
+                "Issue #1",
+            )))
+            .collect(),
+            100_000,
+        );
+        let discussion_heading_and_item_cost = one_discussion_item.tokens - convention_only.tokens;
+        let full_cost = context.tokens - convention_only.tokens;
+        let remark_and_pr_item_cost = item_tokens(&recollection(
+            MemoryKind::Remark,
+            "remark:1",
+            "A remark on #1",
+        )) + item_tokens(&recollection(
+            MemoryKind::PullRequest,
+            "pr:2",
+            "Pull request #2",
+        ));
+        assert_eq!(
+            full_cost,
+            discussion_heading_and_item_cost + remark_and_pr_item_cost,
+            "the heading is charged once for the whole run, not once per kind"
+        );
+    }
+
     #[tokio::test]
     async fn observing_threads_writes_outcomes_and_reports_the_count() {
         use crate::forge::types::{ReviewThread, ThreadComment};
