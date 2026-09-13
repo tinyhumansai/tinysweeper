@@ -197,6 +197,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ingest_lock_is_shared_per_repository_and_serializes_holders() {
+        // Regression for the freshness race: two concurrent `ensure_ingested`
+        // calls for the same repository must contend on the *same* lock, not
+        // each get their own, or the check-then-ingest window stays racy.
+        let backend = MemoryBackend {
+            memory: Arc::new(
+                CortexMemory::from_config(&crate::config::types::Memory {
+                    enabled: true,
+                    provider: "cortex".into(),
+                    endpoint: "http://127.0.0.1:1".into(),
+                    api_key_env: "TINYSWEEPER_TEST_LOCK_KEY".into(),
+                    ..Default::default()
+                })
+                .unwrap_or_else(|_| {
+                    // SAFETY-free fallback: the key env need not exist for this
+                    // test, which never calls the engine — only the lock table.
+                    std::env::set_var("TINYSWEEPER_TEST_LOCK_KEY", "x");
+                    CortexMemory::from_config(&crate::config::types::Memory {
+                        enabled: true,
+                        provider: "cortex".into(),
+                        endpoint: "http://127.0.0.1:1".into(),
+                        api_key_env: "TINYSWEEPER_TEST_LOCK_KEY".into(),
+                        ..Default::default()
+                    })
+                    .expect("engine constructs once the key exists")
+                }),
+            ),
+            fresh: Mutex::new(HashMap::new()),
+            ingesting: Mutex::new(HashMap::new()),
+        };
+
+        let a = backend.ingest_lock("o/same");
+        let b = backend.ingest_lock("o/same");
+        assert!(
+            Arc::ptr_eq(&a, &b),
+            "the same repository must contend on one lock"
+        );
+
+        let other = backend.ingest_lock("o/other");
+        assert!(
+            !Arc::ptr_eq(&a, &other),
+            "a different repository must not share the lock"
+        );
+
+        // While `a` is held, a second acquisition on the same lock must not
+        // resolve until it is released.
+        let guard = a.lock().await;
+        let held = Arc::clone(&b);
+        let mut waiter = Box::pin(held.lock());
+        assert!(
+            futures::poll!(&mut waiter).is_pending(),
+            "a held lock must block a second acquisition on the same repository"
+        );
+        drop(guard);
+        let _second_guard = waiter.await;
+    }
+
+    #[tokio::test]
     async fn an_enabled_memory_with_no_key_refuses_to_open() {
         let mut config: Config = crate::config::DEFAULTS
             .parse::<toml::Table>()
