@@ -630,28 +630,19 @@ mod tests {
         let cursor = Some("2026-08-01T00:00:00Z".to_string());
         let last_seen = Some("2026-08-10T00:00:00Z".to_string());
         assert!(!should_continue_chunking(&cursor, &last_seen, 3, 200));
-    }
-
-    #[test]
-    fn a_single_chunk_backfill_reports_its_own_last_seen_as_the_resume_point() {
-        // Regression: the very common case of one chunk covering the whole
-        // walk (any repository with fewer conversations than
-        // `BACKFILL_CHUNK`) returned `processed < chunk`, so
-        // `should_continue_chunking` correctly says stop — but the loop used
-        // to read that as "leave the cursor alone" too, discarding the
-        // chunk's own `last_seen` and reporting the walk's *starting* cursor
-        // (often `None`) as where to resume from. A first backfill of a
-        // small repository would then never advance past its own start.
-        let cursor: Option<String> = None;
-        let last_seen = Some("2026-08-10T00:00:00Z".to_string());
-        let processed = 3;
-        let chunk = 200;
-        assert!(!should_continue_chunking(&cursor, &last_seen, processed, chunk));
-        // The cursor the loop actually advances to (mirroring run_backfill's
-        // own `if let Some(seen) = last_seen { cursor = Some(seen) }`) must
-        // still be the chunk's last_seen, not the untouched incoming cursor.
-        let advanced = last_seen.clone().or(cursor);
-        assert_eq!(advanced, Some("2026-08-10T00:00:00Z".to_string()));
+        // Regression: `should_continue_chunking` correctly says stop here —
+        // the walk reached the end of history — but `run_backfill`'s loop
+        // used to read "stop" as "leave the cursor alone" too, discarding
+        // this very common last chunk's own progress and reporting the
+        // walk's *starting* cursor (often `None`, for a repository small
+        // enough to finish in one chunk) as where to resume from. The fix
+        // advances the cursor from `last_seen` unconditionally, independently
+        // of whether the walk continues; this is exactly the case where it
+        // must still happen even though the walk is ending.
+        assert_ne!(
+            last_seen, cursor,
+            "the chunk's own progress must differ from the stale starting cursor"
+        );
     }
 
     #[test]
