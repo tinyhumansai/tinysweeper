@@ -438,6 +438,10 @@ async fn a_repository_with_no_config_runs_on_the_deployments_own() {
     assert_eq!(format!("{:?}", overlaid.config), format!("{:?}", base()));
     assert_eq!(overlaid.source, None);
     assert!(overlaid.ignored.is_empty());
+    // No override file is not the same as one that could not be read: a
+    // repository that simply has none must not look `unavailable` to a
+    // caller — like memory ingestion — that treats that flag as "skip".
+    assert!(!overlaid.unavailable);
 }
 
 #[tokio::test]
@@ -450,6 +454,25 @@ async fn an_unusable_config_costs_the_repository_its_settings_not_its_review() {
 
     assert_eq!(format!("{:?}", overlaid.config), format!("{:?}", base()));
     assert_eq!(overlaid.source, None);
+    // Unlike "no override file", this fell back *because* the repository's
+    // own config could not be used — `unavailable` is what lets a caller
+    // like memory ingestion tell the two apart and skip rather than trust
+    // `config.paths.ignore` as the repository's real policy.
+    assert!(overlaid.unavailable);
+}
+
+#[tokio::test]
+async fn a_forge_error_reading_the_config_is_also_unavailable() {
+    use crate::error::Error;
+    use crate::forge::mock::MockForge;
+
+    let forge = MockForge::new().with_file_error(".tinysweeper.toml", Error::Forge("boom".into()));
+
+    let overlaid = overlay(&forge, &repo(), "basesha", &base()).await;
+
+    assert_eq!(format!("{:?}", overlaid.config), format!("{:?}", base()));
+    assert_eq!(overlaid.source, None);
+    assert!(overlaid.unavailable);
 }
 
 #[tokio::test]
