@@ -130,8 +130,8 @@ curl -fsS https://sweeper.tinyhumans.ai/healthz
 
 Webhooks keep the engine's `discussions` section current from the moment the
 server is up; the history before that — every earlier issue and pull request
-and what was said on them — is walked once, from any machine that holds the
-admin token:
+and what was said on them, the reviewer's own remarks excluded — is walked
+once, from any machine that holds the admin token:
 
 ```sh
 TINYSWEEPER_SERVER_URL=https://sweeper.tinyhumans.ai \
