@@ -444,6 +444,9 @@ enabled = false
 provider = "cortex"
 endpoint = ""
 api_key_env = "CORTEX_API_KEY"
+# Plain http:// is loopback-only unless this says the engine sits on a private
+# network that never leaves the host, such as the server's own Docker network.
+allow_private_http = false
 ingest_code = true
 ingest_conventions = true
 # Globs, repo-relative. The defaults are the files a repository uses to tell

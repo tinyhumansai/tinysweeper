@@ -116,15 +116,22 @@ impl CortexMemory {
         } else {
             config.endpoint.trim()
         };
-        Self::new(endpoint, &key)
+        Self::connect(endpoint, &key, config.allow_private_http)
     }
 
-    /// Connect to `endpoint` with `api_key` as the bearer.
+    /// Connect to `endpoint` with `api_key` as the bearer, plain HTTP to
+    /// loopback only.
     pub fn new(endpoint: &str, api_key: &str) -> Result<Self> {
+        Self::connect(endpoint, api_key, false)
+    }
+
+    /// [`Self::new`], with the operator's private-network statement — see
+    /// `memory.allow_private_http`.
+    pub fn connect(endpoint: &str, api_key: &str, allow_private_http: bool) -> Result<Self> {
         if api_key.trim().is_empty() {
             return Err(Error::config("the CortexDB API key is empty"));
         }
-        crate::memory::endpoint_allowed(endpoint)
+        crate::memory::endpoint_allowed_with(endpoint, allow_private_http)
             .map_err(|reason| Error::config(format!("memory.endpoint: {reason}")))?;
         let mut value = HeaderValue::from_str(&format!("Bearer {}", api_key.trim()))
             .map_err(|_| Error::config("the CortexDB API key is not a valid header value"))?;
@@ -933,6 +940,7 @@ mod tests {
     #[test]
     fn a_plain_http_endpoint_off_loopback_is_refused_and_the_key_never_debugs() {
         assert!(CortexMemory::new("http://cortex.internal:3141", "k").is_err());
+        assert!(CortexMemory::connect("http://cortex.internal:3141", "k", true).is_ok());
         assert!(CortexMemory::new("https://api-v1.cortexdb.ai", "").is_err());
         let memory = CortexMemory::new("http://127.0.0.1:3141", "sk-secret-value").unwrap();
         let debug = format!("{memory:?}");

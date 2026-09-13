@@ -757,6 +757,15 @@ pub struct Memory {
     pub endpoint: String,
     /// Environment variable holding the engine's API key. Never the key.
     pub api_key_env: String,
+    /// Accept a plain `http://` endpoint on a host that is not loopback.
+    ///
+    /// Off by default, because the bearer then crosses whatever network sits
+    /// between the server and the engine in the clear. The one deployment it
+    /// exists for is an engine on the same Docker network as the server —
+    /// `http://cortexdb:3141` — where that network never leaves the host. It
+    /// is a statement the operator makes about their network, not a
+    /// convenience, and `doctor` reports it.
+    pub allow_private_http: bool,
     /// Remember the repository's source, chunked as the index chunks it.
     ///
     /// The one ingest that costs real money on a large repository, and the

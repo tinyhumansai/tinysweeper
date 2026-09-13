@@ -258,7 +258,9 @@ fn validate_memory(config: &Config, problems: &mut Vec<String>) {
     }
     if memory.endpoint.trim().is_empty() {
         problems.push("`memory.endpoint` is empty but `memory.enabled = true`".into());
-    } else if let Err(reason) = crate::memory::endpoint_allowed(&memory.endpoint) {
+    } else if let Err(reason) =
+        crate::memory::endpoint_allowed_with(&memory.endpoint, memory.allow_private_http)
+    {
         problems.push(format!(
             "`memory.endpoint = \"{}\"`: {reason}",
             memory.endpoint
