@@ -1,3 +1,8 @@
+# This checkout is a single package. Keeping an empty workspace root prevents
+# Cargo from inheriting the superproject workspace that owns `worktrees/`, while
+# still allowing the vendored dependencies to retain their own workspaces.
+[workspace]
+
 [package]
 name = "tinysweeper"
 version = "0.1.0"
