@@ -366,6 +366,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recalled_memory_reaches_the_description_prompt() {
+        // Regression: `PromptInputs`'s `..Default`-style spread left
+        // `memory_context` unset here, so `PromptInputs::new`'s empty string
+        // silently won — recalled conventions and earlier rejected
+        // description findings never reached this lane even though the
+        // review path had already recalled them.
+        let model = MockModel::always(json!({"summary": "Fine.", "findings": []}));
+        let config = config();
+        let pr = pull_request("A real description of the change, long enough to pass the gate.");
+        let diffs = diffs();
+        Description::new(Arc::new(model.clone()))
+            .run(LaneInput {
+                config: &config,
+                pull_request: &pr,
+                diffs: &diffs,
+                file_contents: &BTreeMap::new(),
+                scan_findings: &[],
+                commits: &[],
+                repo_policy: None,
+                extracted_rules: &[],
+                reviewed_evidence: "",
+                prior_findings: &[],
+                retrieved_context: "",
+                memory_context: "- **rejected — an earlier finding**\n  Maintainer's reply: no.",
+            })
+            .await
+            .expect("lane runs");
+
+        let request = model.requests().into_iter().next().expect("the lane called the model");
+        assert!(
+            request.messages.iter().any(|m| m.content.contains("an earlier finding")),
+            "the recalled memory must reach the description prompt: {request:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn an_empty_body_fails_without_calling_the_model() {
         let model = MockModel::new();
         let pr = pull_request("");
