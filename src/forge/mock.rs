@@ -552,6 +552,7 @@ impl ForgeRead for MockForge {
                 open: pr.open,
                 pull_request: true,
                 author_is_bot: pr.author_is_bot,
+                updated_at: pr.updated_at.clone(),
                 merged_at: pr.merged.then(|| "1970-01-01T00:00:00Z".to_string()),
                 ..Issue::default()
             });

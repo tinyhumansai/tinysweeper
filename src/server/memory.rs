@@ -537,9 +537,13 @@ pub async fn remember_in_background(
         config.memory.discussion_debounce_secs,
     ))
     .await;
+    // The claim is held across the permit wait, or a delivery landing
+    // while every permit is busy would schedule a second task for the same
+    // conversation on every debounce interval; released only once this task
+    // is about to read, so a delivery landing mid-read still gets its own.
+    let permit = permits.acquire_owned().await;
     backend.release(&conversation);
-
-    let Ok(_permit) = permits.acquire_owned().await else {
+    let Ok(_permit) = permit else {
         return;
     };
 
