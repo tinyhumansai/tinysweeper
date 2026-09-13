@@ -102,9 +102,8 @@ pub fn endpoint_allowed_with(
                 Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
                 None => false,
             };
-            if loopback {
-                Ok(())
-            } else if allow_private_http && url.host_str().is_some_and(|h| !h.is_empty()) {
+            let named = url.host_str().is_some_and(|h| !h.is_empty());
+            if loopback || (allow_private_http && named) {
                 Ok(())
             } else {
                 Err(
