@@ -1325,6 +1325,7 @@ async fn run_memory(command: MemoryCommand) -> Result<()> {
             }
         }
         MemoryCommand::Forget { repo, section, yes } => {
+            let repo = canonical_repo(&repo)?;
             let (_, memory) = open(std::path::Path::new("."), None)?;
             let scope = match section.as_deref().map(MemorySection::parse) {
                 None => MemoryScope::repo(&repo),
