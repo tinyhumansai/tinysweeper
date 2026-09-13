@@ -145,6 +145,12 @@ pub struct MockState {
     /// for a deleted or inaccessible item. For the tests that prove a walk
     /// continues past one.
     pub unreadable_conversations: std::collections::BTreeSet<u64>,
+    /// How many more backfill reads (`issues_updated_since`, `remarks`)
+    /// answer `RateLimited` before the budget "refills". For the tests that
+    /// prove a walk waits and retries rather than fails.
+    pub rate_limited_reads: u64,
+    /// The reset instant those refusals carry.
+    pub rate_limit_reset_at: Option<u64>,
     /// The issue type names the owning organisation defines.
     ///
     /// Empty by default, which is what an organisation that never enabled
@@ -275,6 +281,27 @@ impl MockForge {
             state.remarks.insert(number, remarks);
         }
         self
+    }
+
+    /// Answer the next `reads` backfill reads with `RateLimited { reset_at }`.
+    pub fn with_rate_limit(self, reads: u64, reset_at: Option<u64>) -> Self {
+        {
+            let mut state = self.state.lock().expect("mock state lock");
+            state.rate_limited_reads = reads;
+            state.rate_limit_reset_at = reset_at;
+        }
+        self
+    }
+
+    /// Take one rate-limited refusal, if any are left.
+    fn rate_limited(state: &mut MockState) -> Option<Error> {
+        if state.rate_limited_reads == 0 {
+            return None;
+        }
+        state.rate_limited_reads -= 1;
+        Some(Error::RateLimited {
+            reset_at: state.rate_limit_reset_at,
+        })
     }
 
     /// Make `remarks` fail for item `number`.
@@ -534,7 +561,10 @@ impl ForgeRead for MockForge {
         since: Option<&str>,
         limit: usize,
     ) -> Result<Vec<Issue>> {
-        let state = self.state.lock().expect("mock state lock");
+        let mut state = self.state.lock().expect("mock state lock");
+        if let Some(err) = Self::rate_limited(&mut state) {
+            return Err(err);
+        }
         // Pull requests are listed as GitHub lists them — through the issues
         // endpoint — so a fixture's `pull_requests` are folded in as issues
         // flagged `pull_request`, unless the fixture stated one explicitly.
@@ -579,7 +609,10 @@ impl ForgeRead for MockForge {
         number: u64,
         _pull_request: bool,
     ) -> Result<Vec<Remark>> {
-        let state = self.state.lock().expect("mock state lock");
+        let mut state = self.state.lock().expect("mock state lock");
+        if let Some(err) = Self::rate_limited(&mut state) {
+            return Err(err);
+        }
         if state.unreadable_conversations.contains(&number) {
             return Err(Self::missing("conversation", number));
         }

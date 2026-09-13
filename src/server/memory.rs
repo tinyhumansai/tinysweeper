@@ -71,10 +71,13 @@ pub struct BackfillStatus {
     pub started_at: String,
     /// When it finished, RFC 3339, once it has.
     pub finished_at: Option<String>,
-    /// What it did, once it has finished without a fatal error.
+    /// What it did: the whole walk when it finished, or the chunks that
+    /// completed before a fatal error stopped it — in which case `error` is
+    /// set too, and `report.resume_from` is where those chunks got to.
     pub report: Option<DiscussionReport>,
-    /// Why it stopped early, when it did. The listing itself failing is the
-    /// one fatal error; a single conversation failing is in the report.
+    /// Why it stopped early, when it did. A rate limit is not one: the walk
+    /// waits those out itself (see `crate::memory::discussions`). A single
+    /// conversation failing is in the report, not here.
     pub error: Option<String>,
 }
 
@@ -245,14 +248,26 @@ impl MemoryBackend {
     }
 
     /// Record how `repo`'s backfill ended.
-    fn finish_backfill(&self, repo: &RepoId, outcome: Result<DiscussionReport>) {
+    fn finish_backfill(
+        &self,
+        repo: &RepoId,
+        outcome: Result<DiscussionReport>,
+        partial: DiscussionReport,
+    ) {
         let mut backfills = self.backfills.lock().expect("backfill lock");
         if let Some(status) = backfills.get_mut(&repo.to_string()) {
             status.running = false;
             status.finished_at = Some(now());
             match outcome {
                 Ok(report) => status.report = Some(report),
-                Err(err) => status.error = Some(err.to_string()),
+                Err(err) => {
+                    // What the completed chunks did is kept beside the error:
+                    // a walk that stopped after four hours of progress must
+                    // not report that progress as nothing, and its cursor is
+                    // what the operator restarts from.
+                    status.report = Some(partial);
+                    status.error = Some(err.to_string());
+                }
             }
         }
     }
@@ -283,21 +298,54 @@ impl MemoryBackend {
         // polling it sees it finish.
         let _walking = self.walking.lock().await;
         let mut cursor = since.map(str::to_string);
+        // Progress across chunks, kept outside the fallible block so a fatal
+        // error still reports the chunks that completed (see
+        // `finish_backfill`).
         let mut combined = DiscussionReport::default();
         let mut walked = 0usize;
         let outcome: Result<DiscussionReport> = async {
             while walked < limit {
                 let chunk = (limit - walked).min(BACKFILL_CHUNK);
-                let token = auth
-                    .installation_token_good_for(installation, BACKFILL_TOKEN_MARGIN)
-                    .await?;
-                let forge = crate::forge::github::GitHubRead::new(&token)?;
-                let report = Discussions::new(self.memory.as_ref(), &forge, &config.memory)
-                    .backfill(repo, cursor.as_deref(), chunk)
-                    .await?;
+                // A rate limit is waited out *here*, with the chunk retried on
+                // a freshly minted token, rather than inside the walk: an
+                // installation token expires within the hour the limit takes
+                // to reset, so a walk that waited in place would wake to a
+                // credential that no longer works. The chunk's conversations
+                // are re-read on the retry; the engine replays them for free.
+                let report = loop {
+                    let token = auth
+                        .installation_token_good_for(installation, BACKFILL_TOKEN_MARGIN)
+                        .await?;
+                    let forge = crate::forge::github::GitHubRead::new(&token)?;
+                    match Discussions::new(self.memory.as_ref(), &forge, &config.memory)
+                        .without_waiting()
+                        .backfill(repo, cursor.as_deref(), chunk)
+                        .await
+                    {
+                        Ok(report) => break report,
+                        Err(crate::error::Error::RateLimited { reset_at }) => {
+                            if combined.rate_limit_waits
+                                >= crate::memory::discussions::MAX_RATE_LIMIT_WAITS
+                            {
+                                return Err(crate::error::Error::RateLimited { reset_at });
+                            }
+                            let wait = crate::memory::discussions::rate_limit_wait(reset_at);
+                            tracing::info!(
+                                %repo,
+                                secs = wait.as_secs(),
+                                "the forge's rate limit is spent; the backfill waits for it to reset"
+                            );
+                            tokio::time::sleep(wait).await;
+                            combined.rate_limit_waits += 1;
+                            combined.waited_secs += wait.as_secs();
+                        }
+                        Err(err) => return Err(err),
+                    }
+                };
                 let processed = report.subjects + report.failed.len();
                 let last_seen = report.last_seen.clone();
                 combined.absorb(report);
+                combined.last_seen = last_seen.clone().or(combined.last_seen.clone());
                 walked += chunk;
                 // Whether to keep chunking is decided *before* the cursor is
                 // updated, from the chunk's own progress — but the cursor
@@ -325,14 +373,29 @@ impl MemoryBackend {
             } else {
                 None
             };
-            Ok(combined)
+            Ok(combined.clone())
         }
         .await;
         match &outcome {
             Ok(report) => tracing::info!(%repo, "memory backfill finished: {}", report.summary()),
-            Err(err) => tracing::warn!(%repo, %err, "memory backfill failed"),
+            Err(err) => tracing::warn!(
+                %repo,
+                %err,
+                "memory backfill stopped after {}",
+                combined.summary()
+            ),
         }
-        self.finish_backfill(repo, outcome);
+        // On a fatal error the partial report's `resume_from` is the cursor
+        // the completed chunks reached, offered on the same terms as a
+        // finished walk's: only when none of them recorded a failure.
+        if outcome.is_err() {
+            combined.resume_from = if combined.failed.is_empty() {
+                combined.last_seen.clone()
+            } else {
+                None
+            };
+        }
+        self.finish_backfill(repo, outcome, combined);
     }
 
     /// A recaller over the engine, for one review.
@@ -793,6 +856,7 @@ mod tests {
                 subjects: 3,
                 ..DiscussionReport::default()
             }),
+            DiscussionReport::default(),
         );
         let done = backend.backfill_status(&repo).expect("recorded");
         assert!(!done.running);
@@ -804,6 +868,36 @@ mod tests {
                 BackfillStart::Started(_)
             ),
             "finished, so a new one may start"
+        );
+    }
+
+    #[test]
+    fn a_walk_that_stops_early_keeps_what_it_did_beside_the_error() {
+        let backend = MemoryBackend::over(
+            CortexMemory::new("http://127.0.0.1:1", "test-key").expect("client builds"),
+        );
+        let repo = RepoId::parse("o/r").unwrap();
+        let BackfillStart::Started(_) = backend.start_backfill(&repo, None, 500) else {
+            panic!("nothing was running");
+        };
+        backend.finish_backfill(
+            &repo,
+            Err(crate::error::Error::Forge("token exchange failed".into())),
+            DiscussionReport {
+                subjects: 200,
+                resume_from: Some("2026-08-10T00:00:00Z".into()),
+                ..DiscussionReport::default()
+            },
+        );
+        let status = backend.backfill_status(&repo).unwrap();
+        assert!(!status.running);
+        assert!(status.error.as_deref().unwrap().contains("token exchange"));
+        let report = status.report.expect("the completed chunks are reported");
+        assert_eq!(report.subjects, 200);
+        assert_eq!(
+            report.resume_from.as_deref(),
+            Some("2026-08-10T00:00:00Z"),
+            "the operator restarts from where the walk got to"
         );
     }
 

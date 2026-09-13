@@ -49,6 +49,9 @@
 //! stranger's text one remark can carry into a review.
 
 use std::fmt::Write as _;
+use std::future::Future;
+use std::pin::Pin;
+use std::time::Duration;
 
 use crate::config::types::Memory as MemoryConfig;
 use crate::error::Result;
@@ -77,6 +80,25 @@ const TITLE_CHARS: usize = 80;
 /// the admin route both take an explicit larger number when a repository
 /// needs it.
 pub const DEFAULT_BACKFILL_LIMIT: usize = 1000;
+
+/// How long a walk waits for a rate limit whose reset the forge did not
+/// name. GitHub's primary window is an hour; a full hour is the pessimistic
+/// answer that is never too short.
+const UNKNOWN_RESET_WAIT: Duration = Duration::from_secs(60 * 60);
+
+/// Added to every wait, so the retry lands after the reset rather than on
+/// it: the forge's clock and this one need not agree to the second.
+const RESET_MARGIN: Duration = Duration::from_secs(30);
+
+/// Rate-limit waits one walk will sit through before giving up.
+///
+/// A dozen hours of a repository the size of a distribution; past that,
+/// something other than the budget is wrong, and the error says so.
+pub const MAX_RATE_LIMIT_WAITS: usize = 12;
+
+/// How a walk pauses. Injected so the offline suite can prove a walk waits
+/// for the right duration and then retries, without sleeping through it.
+type Pause = Box<dyn Fn(Duration) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// The thing a conversation hangs off.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -414,6 +436,12 @@ pub struct DiscussionReport {
     /// anything in the walk failed, so an operator resuming from it never
     /// skips past a failure.
     pub resume_from: Option<String>,
+    /// Rate-limit pauses this walk sat through, and the seconds they cost.
+    /// Reported so an operator reading a slow walk's status can see that it
+    /// was waiting on the forge's budget rather than stuck.
+    pub rate_limit_waits: usize,
+    /// Seconds spent in those pauses.
+    pub waited_secs: u64,
     /// Where this walk actually got to, whether or not everything in it
     /// succeeded. Unlike `resume_from`, set whenever the listing was
     /// non-empty: a caller chunking a longer walk across several of these
@@ -435,6 +463,13 @@ impl DiscussionReport {
         if !self.failed.is_empty() {
             let _ = write!(out, ", {} failed", self.failed.len());
         }
+        if self.rate_limit_waits > 0 {
+            let _ = write!(
+                out,
+                "; waited out the rate limit {} time(s), {}s in all",
+                self.rate_limit_waits, self.waited_secs
+            );
+        }
         if let Some(at) = &self.resume_from {
             let _ = write!(out, "; resume from {at}");
         }
@@ -452,6 +487,8 @@ impl DiscussionReport {
         self.remarks += other.remarks;
         self.remembered.merge(other.remembered);
         self.failed.extend(other.failed);
+        self.rate_limit_waits += other.rate_limit_waits;
+        self.waited_secs += other.waited_secs;
     }
 }
 
@@ -460,6 +497,10 @@ pub struct Discussions<'a> {
     memory: &'a dyn Memory,
     forge: &'a dyn ForgeRead,
     config: &'a MemoryConfig,
+    pause: Pause,
+    /// Rate-limit waits this walk may sit through before the refusal is
+    /// handed back to the caller as [`Error::RateLimited`].
+    max_waits: usize,
 }
 
 impl<'a> Discussions<'a> {
@@ -469,7 +510,50 @@ impl<'a> Discussions<'a> {
             memory,
             forge,
             config,
+            pause: Box::new(|for_how_long| Box::pin(tokio::time::sleep(for_how_long))),
+            max_waits: MAX_RATE_LIMIT_WAITS,
         }
+    }
+
+    /// Hand a rate limit back as [`Error::RateLimited`] instead of waiting
+    /// it out here.
+    ///
+    /// For a caller whose forge credential cannot outlive the wait: the
+    /// server's installation tokens expire within the hour a limit takes to
+    /// reset, so it waits, re-mints, and calls again (see
+    /// `server::memory::MemoryBackend::run_backfill`). The CLI, on a
+    /// personal token, lets the walk wait in place.
+    pub fn without_waiting(mut self) -> Self {
+        self.max_waits = 0;
+        self
+    }
+
+    /// Pause through `pause` instead of sleeping. For tests.
+    pub fn paused_by(mut self, pause: Pause) -> Self {
+        self.pause = pause;
+        self
+    }
+
+    /// Wait out a rate limit that resets at `reset_at`, then return how long
+    /// that took. `waits` is how many this walk has already sat through; the
+    /// error past [`MAX_RATE_LIMIT_WAITS`] is the walk giving up.
+    async fn wait_out(&self, repo: &RepoId, reset_at: Option<u64>, waits: usize) -> Result<u64> {
+        if waits >= self.max_waits {
+            // The refusal itself, not a wrapper: the caller may be able to
+            // wait where this walk cannot, and needs the reset to do it.
+            if waits > 0 {
+                tracing::warn!(%repo, waits, "giving up on the forge's rate limit resetting");
+            }
+            return Err(crate::error::Error::RateLimited { reset_at });
+        }
+        let wait = rate_limit_wait(reset_at);
+        tracing::info!(
+            %repo,
+            secs = wait.as_secs(),
+            "the forge's rate limit is spent; the walk waits for it to reset"
+        );
+        (self.pause)(wait).await;
+        Ok(wait.as_secs())
     }
 
     /// Remember one issue or pull request by number, reading it first.
@@ -515,9 +599,7 @@ impl<'a> Discussions<'a> {
             subjects: 1,
             remarks: items.len() - 1,
             remembered,
-            failed: Vec::new(),
-            resume_from: None,
-            last_seen: None,
+            ..DiscussionReport::default()
         })
     }
 
@@ -536,7 +618,23 @@ impl<'a> Discussions<'a> {
         since: Option<&str>,
         limit: usize,
     ) -> Result<DiscussionReport> {
-        let listing = self.forge.issues_updated_since(repo, since, limit).await?;
+        let mut report = DiscussionReport::default();
+        // The forge's rate limit is waited out, here and per subject below,
+        // rather than surfaced: a walk is hours of requests against a budget
+        // that refills hourly, and a walk that fails on the refill boundary
+        // is a walk an operator has to babysit. See `wait_out`.
+        let listing = loop {
+            match self.forge.issues_updated_since(repo, since, limit).await {
+                Ok(listing) => break listing,
+                Err(crate::error::Error::RateLimited { reset_at }) => {
+                    report.waited_secs += self
+                        .wait_out(repo, reset_at, report.rate_limit_waits)
+                        .await?;
+                    report.rate_limit_waits += 1;
+                }
+                Err(err) => return Err(err),
+            }
+        };
         // `since` only ever excludes what is strictly before it (see
         // `MockForge` and the GitHub adapter), so a cursor landing inside a
         // group of entries sharing a second-resolution `updated_at` would
@@ -545,7 +643,6 @@ impl<'a> Discussions<'a> {
         // group; below that, the walk reached the end of history and every
         // entry it saw is accounted for.
         let truncated = listing.len() >= limit;
-        let mut report = DiscussionReport::default();
         for entry in &listing {
             let number = entry.number;
             // A pull request is lifted straight out of the listing rather
@@ -559,7 +656,17 @@ impl<'a> Discussions<'a> {
             } else {
                 Subject::Issue(entry.clone())
             };
-            let outcome = self.remember_subject(repo, &subject).await;
+            let outcome = loop {
+                match self.remember_subject(repo, &subject).await {
+                    Err(crate::error::Error::RateLimited { reset_at }) => {
+                        report.waited_secs += self
+                            .wait_out(repo, reset_at, report.rate_limit_waits)
+                            .await?;
+                        report.rate_limit_waits += 1;
+                    }
+                    other => break other,
+                }
+            };
             match outcome {
                 Ok(one) => report.absorb(one),
                 Err(err) => {
@@ -586,6 +693,21 @@ impl<'a> Discussions<'a> {
         }
         Ok(report)
     }
+}
+
+/// How long to wait for a rate limit that resets at `reset_at` (Unix
+/// seconds): until the reset plus a margin, or an hour when the forge did
+/// not say. Shared with the server's chunk loop, which waits on the same
+/// terms with a fresh credential.
+pub fn rate_limit_wait(reset_at: Option<u64>) -> Duration {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    let until_reset = reset_at
+        .map(|at| Duration::from_secs(at.saturating_sub(now)))
+        .unwrap_or(UNKNOWN_RESET_WAIT);
+    until_reset + RESET_MARGIN
 }
 
 /// A pull request as the issues listing describes it: everything the
@@ -1071,6 +1193,108 @@ mod tests {
         assert_eq!(
             report.resume_from, None,
             "a resume point past a failure would skip it forever"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_walk_waits_out_the_forges_rate_limit_and_carries_on() {
+        // The listing is refused once and the first conversation once; both
+        // name a reset ten minutes out. The walk must pause until just past
+        // that reset each time, then finish as if nothing happened.
+        let mut one = issue(1, false);
+        one.updated_at = Some("2026-08-01T00:00:00Z".into());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let forge = MockForge::new()
+            .with_issue(one)
+            .with_remarks(1, vec![remark(1, RemarkKind::Comment, "someone", "hi")])
+            .with_rate_limit(2, Some(now + 600));
+        let memory = MockMemory::new();
+        let config = config();
+        let repo = RepoId::parse("o/r").unwrap();
+        let waits = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+        let seen = waits.clone();
+        let report = Discussions::new(&memory, &forge, &config)
+            .paused_by(Box::new(move |for_how_long| {
+                seen.lock().unwrap().push(for_how_long.as_secs());
+                Box::pin(async {})
+            }))
+            .backfill(&repo, None, 100)
+            .await
+            .unwrap();
+        assert_eq!(report.subjects, 1, "{}", report.summary());
+        assert!(
+            report.failed.is_empty(),
+            "a rate limit is waited out, not recorded as a failure"
+        );
+        assert_eq!(report.rate_limit_waits, 2);
+        let waited = waits.lock().unwrap().clone();
+        assert_eq!(waited.len(), 2);
+        for secs in waited {
+            assert!(
+                (600..=660).contains(&secs),
+                "waited {secs}s; wanted the reset plus a margin"
+            );
+        }
+        assert!(
+            report
+                .summary()
+                .contains("waited out the rate limit 2 time(s)")
+        );
+        assert_eq!(report.resume_from.as_deref(), Some("2026-08-01T00:00:00Z"));
+    }
+
+    #[tokio::test]
+    async fn a_rate_limit_with_no_reset_waits_an_hour_and_a_walk_eventually_gives_up() {
+        let forge = MockForge::new()
+            .with_issue(issue(1, true))
+            .with_rate_limit(u64::MAX, None);
+        let memory = MockMemory::new();
+        let config = config();
+        let repo = RepoId::parse("o/r").unwrap();
+        let waits = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+        let seen = waits.clone();
+        let err = Discussions::new(&memory, &forge, &config)
+            .paused_by(Box::new(move |for_how_long| {
+                seen.lock().unwrap().push(for_how_long.as_secs());
+                Box::pin(async {})
+            }))
+            .backfill(&repo, None, 100)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::error::Error::RateLimited { reset_at: None }),
+            "{err}"
+        );
+        let waited = waits.lock().unwrap().clone();
+        assert_eq!(waited.len(), MAX_RATE_LIMIT_WAITS);
+        assert!(waited.iter().all(|s| *s == 3600 + RESET_MARGIN.as_secs()));
+    }
+
+    #[tokio::test]
+    async fn a_walk_told_not_to_wait_hands_the_refusal_back_with_its_reset() {
+        let forge = MockForge::new()
+            .with_issue(issue(1, true))
+            .with_rate_limit(1, Some(1_800_000_000));
+        let memory = MockMemory::new();
+        let config = config();
+        let repo = RepoId::parse("o/r").unwrap();
+        let err = Discussions::new(&memory, &forge, &config)
+            .without_waiting()
+            .paused_by(Box::new(|_| panic!("must not pause")))
+            .backfill(&repo, None, 100)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                crate::error::Error::RateLimited {
+                    reset_at: Some(1_800_000_000)
+                }
+            ),
+            "{err}"
         );
     }
 
