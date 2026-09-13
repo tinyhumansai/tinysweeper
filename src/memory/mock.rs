@@ -168,7 +168,8 @@ impl Memory for MockMemory {
 
     async fn remember(&self, scope: &MemoryScope, items: &[MemoryItem]) -> Result<RememberReport> {
         self.check()?;
-        if let Some(delay) = *self.delay.lock().expect("delay lock") {
+        let delay = *self.delay.lock().expect("delay lock");
+        if let Some(delay) = delay {
             tokio::time::sleep(delay).await;
         }
         let mut report = RememberReport::default();
