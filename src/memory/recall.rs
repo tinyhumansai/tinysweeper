@@ -671,11 +671,13 @@ mod tests {
                     author: "tinysweeper[bot]".into(),
                     body: format!("**Use the crate error**\n\nx\n\n<!-- tinysweeper:fp={fp} -->"),
                     bot: true,
+                    maintainer: false,
                 },
                 ThreadComment {
                     author: "alice".into(),
                     body: "Intentional here.".into(),
                     bot: false,
+                    maintainer: true,
                 },
             ],
         }];
