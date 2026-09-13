@@ -129,6 +129,18 @@ mod tests {
     }
 
     #[test]
+    fn userinfo_in_the_authority_does_not_disguise_the_real_host() {
+        // The URL client resolves the host after the last `@`; the loopback
+        // check must reject anything this could actually reach off-box.
+        assert!(endpoint_allowed("http://localhost:80@evil.example").is_err());
+        assert!(endpoint_allowed("http://localhost@evil.example").is_err());
+        assert!(endpoint_allowed("http://127.0.0.1@evil.example").is_err());
+        // A userinfo-prefixed loopback host is still loopback.
+        assert!(endpoint_allowed("http://user:pass@localhost:3141").is_ok());
+        assert!(endpoint_allowed("http://user:pass@127.0.0.1:3141").is_ok());
+    }
+
+    #[test]
     fn excerpts_cut_on_character_boundaries() {
         assert_eq!(excerpt("short", 10), "short");
         assert_eq!(excerpt("héllo wörld", 6), "héllo…");
