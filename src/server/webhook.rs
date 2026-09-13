@@ -1099,6 +1099,58 @@ mod tests {
     }
 
     #[test]
+    fn a_state_change_tinysweeper_itself_made_is_still_a_conversation_to_remember() {
+        // Regression: the own-sender guard used to apply to every event, not
+        // just remarks. An auto-merge close or a triage label is state —
+        // open/closed, labels — attributed to `tinysweeper[bot]` as the
+        // sender, and nothing else is guaranteed to deliver a follow-up that
+        // would otherwise pick it up; skipping it here left memory holding a
+        // stale open state or label set indefinitely.
+        let closed_by_us = payload(serde_json::json!({
+            "action": "closed",
+            "repository": {"full_name": "o/r"},
+            "installation": {"id": 5},
+            "sender": {"login": "tinysweeper[bot]", "type": "Bot"},
+            "pull_request": {"number": 12, "head": {"sha": "abc"}, "user": {"login": "someone"}}
+        }));
+        assert_eq!(
+            remember_trigger("pull_request", &closed_by_us),
+            Some(Conversation {
+                repo: "o/r".into(),
+                number: 12,
+                pull_request: true,
+                installation: 5,
+            }),
+            "tinysweeper's own auto-merge close must still refresh the subject's state"
+        );
+
+        let labeled_by_us = payload(serde_json::json!({
+            "action": "labeled",
+            "repository": {"full_name": "o/r"},
+            "installation": {"id": 5},
+            "sender": {"login": "tinysweeper[bot]", "type": "Bot"},
+            "issue": {"number": 9, "user": {"login": "someone"}}
+        }));
+        assert!(
+            remember_trigger("issues", &labeled_by_us).is_some(),
+            "tinysweeper's own triage label must still refresh the subject's labels"
+        );
+
+        // Remarks stay excluded: a comment is filtered out of memory by
+        // login downstream regardless, so re-reading for it would find
+        // nothing new.
+        let commented_by_us = payload(serde_json::json!({
+            "action": "created",
+            "repository": {"full_name": "o/r"},
+            "installation": {"id": 5},
+            "sender": {"login": "tinysweeper[bot]", "type": "Bot"},
+            "issue": {"number": 9, "user": {"login": "someone"}},
+            "comment": {"body": "## Change map", "user": {"login": "tinysweeper[bot]", "type": "Bot"}}
+        }));
+        assert_eq!(remember_trigger("issue_comment", &commented_by_us), None);
+    }
+
+    #[test]
     fn closed_issues_reviews_and_inline_comments_are_conversations_and_deletions_are_not() {
         let base = |event_bits: serde_json::Value| {
             let mut v = serde_json::json!({
