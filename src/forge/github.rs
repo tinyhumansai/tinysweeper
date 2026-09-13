@@ -280,6 +280,49 @@ fn threads_from_graphql(raw: &serde_json::Value) -> Vec<ParsedThread> {
         .collect()
 }
 
+/// Every login named as a write-access candidate across `parsed`, in the
+/// order they first appear (not yet deduped — `review_threads` sorts and
+/// dedups its own copy before looking each one up).
+fn candidate_logins(parsed: &[ParsedThread]) -> Vec<String> {
+    parsed
+        .iter()
+        .flat_map(|p| p.candidates.iter().cloned())
+        .collect()
+}
+
+/// The second half of [`GithubForge::review_threads`]: given the parsed
+/// threads and a real write-access answer for each candidate login,
+/// produce the final [`ReviewThread`]s a caller sees.
+///
+/// Pure and synchronous on purpose — it is the part of this pipeline worth
+/// testing without a real collaborator-permission lookup per case: a login
+/// missing from `write_access` (nobody's real error path in `review_threads`,
+/// but a test's shorthand for "unknown") is treated the same as `false`,
+/// which is the fail-closed direction this exists to enforce.
+fn resolve_write_access(
+    parsed: Vec<ParsedThread>,
+    write_access: &HashMap<String, bool>,
+) -> Vec<ReviewThread> {
+    parsed
+        .into_iter()
+        .map(|mut p| {
+            for comment in &mut p.thread.comments {
+                if comment.maintainer {
+                    comment.maintainer =
+                        write_access.get(&comment.author).copied().unwrap_or(false);
+                }
+            }
+            p.thread.resolved_by_has_write_access = p
+                .resolved_by
+                .as_ref()
+                .and_then(|login| write_access.get(login))
+                .copied()
+                .unwrap_or(false);
+            p.thread
+        })
+        .collect()
+}
+
 /// Fail on a GraphQL response that carried errors.
 ///
 /// GraphQL answers HTTP 200 with an `errors` array, so a caller that only
