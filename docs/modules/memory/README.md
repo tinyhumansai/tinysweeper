@@ -261,7 +261,10 @@ text and a recollection comes back typed.
 
 The credential is read by name from `memory.api_key_env`, held as a sensitive
 header, and never rendered by `Debug`, an error or a log. Plain HTTP is
-accepted to loopback only; `config::validate` refuses anything else.
+accepted to loopback only; `config::validate` refuses anything else unless
+`memory.allow_private_http = true`, which is the operator stating that the
+engine sits on a network that never leaves the host — the server's own Docker
+network, `http://cortexdb:3141` — and which `doctor` reports.
 
 CortexDB also ships a native code-intelligence plane (`CORTEX_CODE_PLANE`,
 SCIP imports, a separate embedding provider). It is off by default and not

@@ -107,9 +107,11 @@ pub fn endpoint_allowed_with(
             } else if allow_private_http && url.host_str().is_some_and(|h| !h.is_empty()) {
                 Ok(())
             } else {
-                Err("plain `http://` is only allowed to a loopback host; use `https://`, or set \
+                Err(
+                    "plain `http://` is only allowed to a loopback host; use `https://`, or set \
                      `memory.allow_private_http = true` for an engine on a private network"
-                    .into())
+                        .into(),
+                )
             }
         }
         _ => Err("must start with `https://` (or `http://` for loopback)".into()),

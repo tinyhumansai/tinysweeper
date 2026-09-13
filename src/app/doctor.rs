@@ -295,6 +295,15 @@ fn print_prose(loaded: &Loaded) {
     ] {
         println!("  {:<16} {}", name, if enabled { "on" } else { "off" });
     }
+    // Said out loud because it is a statement about the network, not a
+    // tuning knob: the engine's bearer crosses whatever sits between the
+    // server and `memory.endpoint` in the clear.
+    if config.memory.enabled && config.memory.allow_private_http {
+        println!(
+            "  memory engine    {} over plain HTTP (memory.allow_private_http = true)",
+            config.memory.endpoint
+        );
+    }
 
     // Routing is reported here rather than as a validation problem, because an
     // unrouted project is a loud runtime skip and not a refusal to start. But
