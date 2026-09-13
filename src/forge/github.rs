@@ -196,36 +196,86 @@ fn threads_connection(raw: &serde_json::Value) -> &serde_json::Value {
 /// empty login rather than being dropped: the login is only ever compared for
 /// equality against our own, and an empty one matches nothing, while a dropped
 /// comment would change which comment looks like the thread's opener.
-fn threads_from_graphql(raw: &serde_json::Value) -> Vec<ReviewThread> {
+/// A thread as GraphQL reports it, before the [`ThreadComment::maintainer`]
+/// and [`ReviewThread::resolved_by_has_write_access`] candidates it names are
+/// checked against the repository's actual collaborator permissions.
+///
+/// `authorAssociation` only says whether GitHub considers someone a
+/// `COLLABORATOR` at all, which includes read-only and triage access — not
+/// whether they hold write access, which is the only thing that makes a
+/// reply or a resolve a maintainer's judgement. The login each `maintainer`
+/// candidate carries is what [`GithubForge::review_threads`] resolves against
+/// [`GithubForge::has_write_access`] before this thread is handed back.
+struct ParsedThread {
+    thread: ReviewThread,
+    /// The login of everyone [`threads_from_graphql`] marked as a write-access
+    /// candidate: each comment author whose `authorAssociation` was
+    /// `OWNER`/`MEMBER`/`COLLABORATOR`, and whoever resolved the thread.
+    /// `review_threads` looks each of these up once, however many threads
+    /// they appear across.
+    candidates: Vec<String>,
+    /// The login of whoever resolved this thread, if anyone and if GitHub
+    /// reported it.
+    resolved_by: Option<String>,
+}
+
+fn threads_from_graphql(raw: &serde_json::Value) -> Vec<ParsedThread> {
     let Some(nodes) = threads_connection(raw)["nodes"].as_array() else {
         return Vec::new();
     };
     nodes
         .iter()
-        .map(|node| ReviewThread {
-            id: node["id"].as_str().unwrap_or_default().to_string(),
-            is_resolved: node["isResolved"].as_bool().unwrap_or(false),
-            is_outdated: node["isOutdated"].as_bool().unwrap_or(false),
-            comments: node["comments"]["nodes"]
+        .map(|node| {
+            let mut candidates = Vec::new();
+            let comments = node["comments"]["nodes"]
                 .as_array()
                 .map(|comments| {
                     comments
                         .iter()
-                        .map(|comment| ThreadComment {
-                            author: comment["author"]["login"]
+                        .map(|comment| {
+                            let author = comment["author"]["login"]
                                 .as_str()
                                 .unwrap_or_default()
-                                .to_string(),
-                            body: comment["body"].as_str().unwrap_or_default().to_string(),
-                            bot: comment["author"]["__typename"].as_str() == Some("Bot"),
-                            maintainer: matches!(
+                                .to_string();
+                            // A candidate only: `review_threads` still has to
+                            // confirm this against a real permission lookup.
+                            let candidate = matches!(
                                 comment["authorAssociation"].as_str(),
                                 Some("OWNER") | Some("MEMBER") | Some("COLLABORATOR")
-                            ),
+                            );
+                            if candidate && !author.is_empty() {
+                                candidates.push(author.clone());
+                            }
+                            ThreadComment {
+                                author,
+                                body: comment["body"].as_str().unwrap_or_default().to_string(),
+                                bot: comment["author"]["__typename"].as_str() == Some("Bot"),
+                                maintainer: candidate,
+                            }
                         })
                         .collect()
                 })
-                .unwrap_or_default(),
+                .unwrap_or_default();
+            let resolved_by = node["resolvedBy"]["login"]
+                .as_str()
+                .filter(|login| !login.is_empty())
+                .map(str::to_string);
+            if let Some(login) = &resolved_by {
+                candidates.push(login.clone());
+            }
+            ParsedThread {
+                thread: ReviewThread {
+                    id: node["id"].as_str().unwrap_or_default().to_string(),
+                    is_resolved: node["isResolved"].as_bool().unwrap_or(false),
+                    is_outdated: node["isOutdated"].as_bool().unwrap_or(false),
+                    comments,
+                    // Resolved below, once `review_threads` has looked up
+                    // every candidate in this page.
+                    resolved_by_has_write_access: false,
+                },
+                candidates,
+                resolved_by,
+            }
         })
         .collect()
 }
