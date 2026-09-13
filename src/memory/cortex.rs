@@ -155,29 +155,40 @@ impl CortexMemory {
     async fn read(path: &str, response: reqwest::Response) -> Result<Value> {
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            // The body is the engine's error envelope: not a credential, but
-            // still the engine's own text, on a route this process does not
-            // control. It goes to the operator's logs only. The error this
-            // call returns carries just the route and status — that is what
-            // an unavailable-memory note ends up quoting on the check-run
-            // summary, and a one-line response body is not a stable, generic
-            // reason a repository's collaborators should ever see there.
-            let route = path.split('?').next().unwrap_or(path);
-            tracing::warn!(
-                route,
-                %status,
-                body = %crate::memory::excerpt(&text, 200),
-                "cortex answered with an error"
-            );
-            return Err(Error::Model(format!("cortex: {route} answered {status}")));
-        }
-        if text.trim().is_empty() {
-            return Ok(Value::Null);
-        }
-        serde_json::from_str(&text)
-            .map_err(|err| Error::Model(format!("cortex: {path}: unparseable answer: {err}")))
+        parse_response(path, status, &text)
     }
+}
+
+/// The synchronous half of [`CortexMemory::read`]: given the status and body
+/// text already read off the wire, decide what to return.
+///
+/// Split out so the leak this guards against — a response body reaching an
+/// unavailable-memory note on a check-run summary — is a plain unit test
+/// against strings, with no socket in the test suite the module doc promises
+/// stays offline.
+fn parse_response(path: &str, status: reqwest::StatusCode, text: &str) -> Result<Value> {
+    if !status.is_success() {
+        // The body is the engine's error envelope: not a credential, but
+        // still the engine's own text, on a route this process does not
+        // control. It goes to the operator's logs only. The error this call
+        // returns carries just the route and status — that is what an
+        // unavailable-memory note ends up quoting on the check-run summary,
+        // and a one-line response body is not a stable, generic reason a
+        // repository's collaborators should ever see there.
+        let route = path.split('?').next().unwrap_or(path);
+        tracing::warn!(
+            route,
+            %status,
+            body = %crate::memory::excerpt(text, 200),
+            "cortex answered with an error"
+        );
+        return Err(Error::Model(format!("cortex: {route} answered {status}")));
+    }
+    if text.trim().is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_str(text)
+        .map_err(|err| Error::Model(format!("cortex: {path}: unparseable answer: {err}")))
 }
 
 /// One `type:id` scope segment, hex-encoded under a marked type when the id
