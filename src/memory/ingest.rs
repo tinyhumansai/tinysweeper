@@ -362,7 +362,7 @@ pub fn classify(thread: &ReviewThread) -> Option<Outcome> {
         (true, true, _, true) => Some(Outcome::Fixed),
         (true, false, true, true) => Some(Outcome::Rejected),
         (true, false, false, true) => Some(Outcome::Dismissed),
-        (true, false, _, false) => None,
+        (true, _, _, false) => None,
         (false, _, true, _) => Some(Outcome::Disputed),
         (false, _, false, _) => None,
     }
