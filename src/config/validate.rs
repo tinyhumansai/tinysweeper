@@ -311,6 +311,13 @@ fn validate_memory(config: &Config, problems: &mut Vec<String>) {
             "`memory.ingest_conventions = true` but `memory.convention_files` names no file".into(),
         );
     }
+    for pattern in &memory.convention_files {
+        if let Err(err) = Glob::new(pattern) {
+            problems.push(format!(
+                "`memory.convention_files` contains invalid glob `{pattern}`: {err}"
+            ));
+        }
+    }
     if memory.convention_section_chars < 200 {
         problems.push(format!(
             "`memory.convention_section_chars = {}` is below one paragraph; 2000 is the default",
