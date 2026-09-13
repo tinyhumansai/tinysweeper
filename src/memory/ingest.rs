@@ -906,6 +906,20 @@ Tail.
     }
 
     #[test]
+    fn a_resolve_by_an_unauthorized_actor_is_never_fixed() {
+        // `is_outdated` is GitHub's own fact about the code, but resolving
+        // the thread is still an action, and the pull request's own author
+        // can perform it regardless of permission — an unrelated nearby edit
+        // ages the anchor out, and resolving their own bot thread must not
+        // be recorded as `Fixed` without anyone with write access agreeing.
+        let resolved_by_the_author = thread_with_permissions(FP, &[], true, true, false, false);
+        assert_eq!(classify(&resolved_by_the_author), None);
+
+        let resolved_by_a_maintainer = thread_with_permissions(FP, &[], true, true, false, true);
+        assert_eq!(classify(&resolved_by_a_maintainer), Some(Outcome::Fixed));
+    }
+
+    #[test]
     fn a_reply_from_someone_without_write_access_is_never_a_rejection() {
         // A resolved, non-outdated thread with a non-maintainer reply must
         // not be classified as `Rejected`: that would let any contributor —
