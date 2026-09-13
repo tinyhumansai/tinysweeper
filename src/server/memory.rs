@@ -627,7 +627,10 @@ mod tests {
         assert!(done.finished_at.is_some());
         assert_eq!(done.report.as_ref().map(|r| r.subjects), Some(3));
         assert!(
-            backend.start_backfill(&repo, None, 50).is_ok(),
+            matches!(
+                backend.start_backfill(&repo, None, 50),
+                BackfillStart::Started(_)
+            ),
             "finished, so a new one may start"
         );
     }
