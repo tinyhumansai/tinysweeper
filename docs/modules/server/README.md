@@ -213,7 +213,10 @@ A walk runs in the background, one at a time across the whole deployment —
 every walk spends the installation rate-limit budget reviews need, so a second
 request queues behind the first (its status says `running`) rather than
 doubling the spend; it reads through an installation token minted for it, and
-never re-reads a pull request the listing already describes. The status
+never re-reads a pull request the listing already describes. When GitHub's
+rate limit runs out mid-walk the walk waits for the reset with a fresh token
+and carries on — the status stays `running`, and the finished report counts
+the waits. The status
 records `report.resume_from` when it finishes cleanly, which is what to pass as
 `since` next time. `scripts/memory-backfill.sh` drives the pair from a shell.
 

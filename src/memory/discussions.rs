@@ -94,7 +94,7 @@ const RESET_MARGIN: Duration = Duration::from_secs(30);
 ///
 /// A dozen hours of a repository the size of a distribution; past that,
 /// something other than the budget is wrong, and the error says so.
-const MAX_RATE_LIMIT_WAITS: usize = 12;
+pub const MAX_RATE_LIMIT_WAITS: usize = 12;
 
 /// How a walk pauses. Injected so the offline suite can prove a walk waits
 /// for the right duration and then retries, without sleeping through it.

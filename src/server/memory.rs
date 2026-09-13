@@ -94,10 +94,6 @@ pub enum BackfillStart {
 /// token backing it is re-minted (from cache, unless it needs renewing).
 const BACKFILL_CHUNK: usize = 100;
 
-/// Rate-limit waits one walk sits through before it gives up: a dozen
-/// hours, the same bound the walk itself uses when it waits in place.
-const MAX_RATE_LIMIT_WAITS: usize = 12;
-
 /// How long the token a chunk starts with must still be good for.
 ///
 /// A chunk is `BACKFILL_CHUNK` conversations of one to three forge reads and
@@ -328,7 +324,9 @@ impl MemoryBackend {
                     {
                         Ok(report) => break report,
                         Err(crate::error::Error::RateLimited { reset_at }) => {
-                            if combined.rate_limit_waits >= MAX_RATE_LIMIT_WAITS {
+                            if combined.rate_limit_waits
+                                >= crate::memory::discussions::MAX_RATE_LIMIT_WAITS
+                            {
                                 return Err(crate::error::Error::RateLimited { reset_at });
                             }
                             let wait = crate::memory::discussions::rate_limit_wait(reset_at);

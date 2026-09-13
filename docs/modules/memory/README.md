@@ -215,6 +215,20 @@ It is only offered when every conversation succeeded, so a resumed backfill
 never skips past a failure; one bad conversation is recorded and skipped, not
 the end of the walk.
 
+**The forge's rate limit is waited out, not surfaced.** A backfill is hours of
+requests against a budget that refills hourly, and the first org-wide walk
+proved that a walk which fails on the refill boundary is a walk an operator
+has to babysit. The GitHub adapter turns GitHub's refusal into
+`Error::RateLimited { reset_at }`, reading the reset from `/rate_limit` (which
+costs nothing); the walk sleeps until just past it and retries, up to twelve
+times, and the report says how often it waited and for how long. The server
+waits at its chunk loop rather than inside the walk — an installation token
+expires within the hour the limit takes to reset, so it re-mints one and
+re-reads the chunk (free at the engine, which replays) — while the CLI, on a
+personal token, waits in place. Any other fatal error still ends the walk, but
+the status keeps the completed chunks' report and their cursor beside the
+error, so nothing walked is reported as nothing.
+
 Both feeds go through `Discussions::remember_subject`, so a comment
 remembered live and the same comment remembered by a later backfill are the
 same bytes, and the engine replays rather than duplicates. An edited comment
