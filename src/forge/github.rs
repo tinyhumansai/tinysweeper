@@ -108,10 +108,32 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
           id
           isResolved
           isOutdated
+          resolvedBy { login }
           comments(first: $first) {
-            nodes { body author { login __typename } }
+            pageInfo { hasNextPage endCursor }
+            nodes { body authorAssociation author { login __typename } }
           }
         }
+      }
+    }
+  }
+}
+"#;
+
+/// A thread's own comments, paged separately.
+///
+/// Only reached for a thread whose first page (fetched by
+/// [`REVIEW_THREADS_QUERY`]) said `hasNextPage`: more than `GRAPHQL_PAGE`
+/// comments on one conversation is rare, and paying for a per-thread query on
+/// every delivery to cover it would cost every ordinary review for the one
+/// with an unusually long back-and-forth.
+const THREAD_COMMENTS_QUERY: &str = r#"
+query($id: ID!, $after: String) {
+  node(id: $id) {
+    ... on PullRequestReviewThread {
+      comments(first: $first, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { body authorAssociation author { login __typename } }
       }
     }
   }
@@ -189,38 +211,174 @@ fn threads_connection(raw: &serde_json::Value) -> &serde_json::Value {
     &raw["data"]["repository"]["pullRequest"]["reviewThreads"]
 }
 
+/// The `comments` connection of a thread-comments page, wrapped or not.
+fn node_comments(raw: &serde_json::Value) -> &serde_json::Value {
+    let unwrapped = &raw["node"]["comments"];
+    if unwrapped.is_object() {
+        return unwrapped;
+    }
+    &raw["data"]["node"]["comments"]
+}
+
 /// Map one page of review threads.
 ///
 /// A comment whose author is gone — a deleted account — keeps its place with an
 /// empty login rather than being dropped: the login is only ever compared for
 /// equality against our own, and an empty one matches nothing, while a dropped
 /// comment would change which comment looks like the thread's opener.
-fn threads_from_graphql(raw: &serde_json::Value) -> Vec<ReviewThread> {
+/// A thread as GraphQL reports it, before the [`ThreadComment::maintainer`]
+/// and [`ReviewThread::resolved_by_has_write_access`] candidates it names are
+/// checked against the repository's actual collaborator permissions.
+///
+/// `authorAssociation` only says whether GitHub considers someone a
+/// `COLLABORATOR` at all, which includes read-only and triage access — not
+/// whether they hold write access, which is the only thing that makes a
+/// reply or a resolve a maintainer's judgement. The login each `maintainer`
+/// candidate carries is what [`GithubForge::review_threads`] resolves against
+/// [`GithubForge::has_write_access`] before this thread is handed back.
+struct ParsedThread {
+    thread: ReviewThread,
+    /// The login of everyone [`threads_from_graphql`] marked as a write-access
+    /// candidate: each comment author whose `authorAssociation` was
+    /// `OWNER`/`MEMBER`/`COLLABORATOR`, and whoever resolved the thread.
+    /// `review_threads` looks each of these up once, however many threads
+    /// they appear across.
+    candidates: Vec<String>,
+    /// The login of whoever resolved this thread, if anyone and if GitHub
+    /// reported it.
+    resolved_by: Option<String>,
+    /// The cursor to fetch this thread's next page of comments with, when
+    /// the first page didn't hold them all.
+    ///
+    /// Without following this, a thread with more than one page of comments
+    /// would have its later comments — including a later maintainer
+    /// correction of an earlier reply — silently invisible to `classify`,
+    /// which reads the *latest* reply as the settled word.
+    more_comments: Option<String>,
+}
+
+/// One comment, parsed, plus whether it names a write-access candidate.
+///
+/// Shared between the thread listing and [`comments_page`]'s follow-up
+/// pages for a thread whose comments didn't fit in one, so both parse a
+/// candidate the same way.
+fn comment_from_json(comment: &serde_json::Value) -> (ThreadComment, bool) {
+    let author = comment["author"]["login"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    // A candidate only: `review_threads` still has to confirm this against a
+    // real permission lookup.
+    let candidate = matches!(
+        comment["authorAssociation"].as_str(),
+        Some("OWNER") | Some("MEMBER") | Some("COLLABORATOR")
+    );
+    (
+        ThreadComment {
+            bot: comment["author"]["__typename"].as_str() == Some("Bot"),
+            maintainer: candidate,
+            body: comment["body"].as_str().unwrap_or_default().to_string(),
+            author,
+        },
+        candidate,
+    )
+}
+
+fn threads_from_graphql(raw: &serde_json::Value) -> Vec<ParsedThread> {
     let Some(nodes) = threads_connection(raw)["nodes"].as_array() else {
         return Vec::new();
     };
     nodes
         .iter()
-        .map(|node| ReviewThread {
-            id: node["id"].as_str().unwrap_or_default().to_string(),
-            is_resolved: node["isResolved"].as_bool().unwrap_or(false),
-            is_outdated: node["isOutdated"].as_bool().unwrap_or(false),
-            comments: node["comments"]["nodes"]
+        .map(|node| {
+            let mut candidates = Vec::new();
+            let comments = node["comments"]["nodes"]
                 .as_array()
                 .map(|comments| {
                     comments
                         .iter()
-                        .map(|comment| ThreadComment {
-                            author: comment["author"]["login"]
-                                .as_str()
-                                .unwrap_or_default()
-                                .to_string(),
-                            body: comment["body"].as_str().unwrap_or_default().to_string(),
-                            bot: comment["author"]["__typename"].as_str() == Some("Bot"),
+                        .map(|comment| {
+                            let (comment, candidate) = comment_from_json(comment);
+                            if candidate && !comment.author.is_empty() {
+                                candidates.push(comment.author.clone());
+                            }
+                            comment
                         })
                         .collect()
                 })
-                .unwrap_or_default(),
+                .unwrap_or_default();
+            let resolved_by = node["resolvedBy"]["login"]
+                .as_str()
+                .filter(|login| !login.is_empty())
+                .map(str::to_string);
+            if let Some(login) = &resolved_by {
+                candidates.push(login.clone());
+            }
+            let more_comments = node["comments"]["pageInfo"]["hasNextPage"]
+                .as_bool()
+                .unwrap_or(false);
+            let comments_cursor = node["comments"]["pageInfo"]["endCursor"]
+                .as_str()
+                .map(str::to_string);
+            ParsedThread {
+                thread: ReviewThread {
+                    id: node["id"].as_str().unwrap_or_default().to_string(),
+                    is_resolved: node["isResolved"].as_bool().unwrap_or(false),
+                    is_outdated: node["isOutdated"].as_bool().unwrap_or(false),
+                    comments,
+                    // Resolved below, once `review_threads` has looked up
+                    // every candidate in this page.
+                    resolved_by_has_write_access: false,
+                },
+                candidates,
+                resolved_by,
+                // Only ever `Some` when `more_comments` is also true and
+                // GitHub actually gave a cursor to keep paging with.
+                more_comments: more_comments.then_some(comments_cursor).flatten(),
+            }
+        })
+        .collect()
+}
+
+/// Every login named as a write-access candidate across `parsed`, in the
+/// order they first appear (not yet deduped — `review_threads` sorts and
+/// dedups its own copy before looking each one up).
+fn candidate_logins(parsed: &[ParsedThread]) -> Vec<String> {
+    parsed
+        .iter()
+        .flat_map(|p| p.candidates.iter().cloned())
+        .collect()
+}
+
+/// The second half of [`GithubForge::review_threads`]: given the parsed
+/// threads and a real write-access answer for each candidate login,
+/// produce the final [`ReviewThread`]s a caller sees.
+///
+/// Pure and synchronous on purpose — it is the part of this pipeline worth
+/// testing without a real collaborator-permission lookup per case: a login
+/// missing from `write_access` (nobody's real error path in `review_threads`,
+/// but a test's shorthand for "unknown") is treated the same as `false`,
+/// which is the fail-closed direction this exists to enforce.
+fn resolve_write_access(
+    parsed: Vec<ParsedThread>,
+    write_access: &HashMap<String, bool>,
+) -> Vec<ReviewThread> {
+    parsed
+        .into_iter()
+        .map(|mut p| {
+            for comment in &mut p.thread.comments {
+                if comment.maintainer {
+                    comment.maintainer =
+                        write_access.get(&comment.author).copied().unwrap_or(false);
+                }
+            }
+            p.thread.resolved_by_has_write_access = p
+                .resolved_by
+                .as_ref()
+                .and_then(|login| write_access.get(login))
+                .copied()
+                .unwrap_or(false);
+            p.thread
         })
         .collect()
 }
@@ -449,6 +607,38 @@ pub struct GitHubRead {
 }
 
 impl GitHubRead {
+    /// Whether `login` currently holds write access (or above) to `repo`.
+    ///
+    /// GitHub's REST collaborator-permission route 404s for anyone who is not
+    /// a collaborator at all — including a pull request's own author on a
+    /// forked pull request, who is exactly the case this exists to catch —
+    /// and that is read as "no write access" rather than an error: a missing
+    /// collaborator record is conclusive, not a failure to determine one.
+    pub(crate) async fn has_write_access(&self, repo: &RepoId, login: &str) -> Result<bool> {
+        use octocrab::params::teams::Permission;
+
+        match self
+            .client
+            .repos(&repo.owner, &repo.name)
+            .get_contributor_permission(login)
+            .send()
+            .await
+        {
+            Ok(found) => Ok(matches!(
+                found.permission,
+                Permission::Push | Permission::Maintain | Permission::Admin
+            )),
+            Err(octocrab::Error::GitHub { source, .. }) if source.status_code == 404 => Ok(false),
+            Err(err) => {
+                // Fail closed: an error here must never be read as "so this
+                // reply counts as a maintainer's", which is the direction a
+                // propagated error or a default `true` would fail in.
+                tracing::warn!(%login, repo = %repo, error = %err, "could not confirm collaborator permission");
+                Ok(false)
+            }
+        }
+    }
+
     /// Build from a token.
     pub fn new(token: &str) -> Result<Self> {
         Ok(Self {
@@ -634,6 +824,16 @@ impl ForgeRead for GitHubRead {
             Err(octocrab::Error::GitHub { source, .. }) if source.status_code == 404 => Ok(None),
             Err(err) => Err(api(err)),
         }
+    }
+
+    async fn default_branch(&self, repo: &RepoId) -> Result<String> {
+        let route = format!("/repos/{}/{}", repo.owner, repo.name);
+        let repository: serde_json::Value =
+            self.client.get(&route, None::<&()>).await.map_err(api)?;
+        repository["default_branch"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| Error::Forge(format!("{repo} reported no default branch")))
     }
 
     async fn open_pull_requests(&self, repo: &RepoId, limit: usize) -> Result<Vec<PullRequest>> {
@@ -945,8 +1145,9 @@ impl ForgeRead for GitHubRead {
     }
 
     async fn review_threads(&self, repo: &RepoId, number: u64) -> Result<Vec<ReviewThread>> {
-        let mut threads = Vec::new();
+        let mut parsed: Vec<ParsedThread> = Vec::new();
         let mut after: Option<String> = None;
+        let mut complete = false;
 
         for _ in 0..MAX_THREAD_PAGES {
             let raw: serde_json::Value = self
@@ -963,23 +1164,104 @@ impl ForgeRead for GitHubRead {
                 .await
                 .map_err(api)?;
             graphql_errors(&raw, "the review threads query")?;
-            threads.extend(threads_from_graphql(&raw));
+            parsed.extend(threads_from_graphql(&raw));
 
             let page = &threads_connection(&raw)["pageInfo"];
             if !page["hasNextPage"].as_bool().unwrap_or(false) {
-                return Ok(threads);
+                complete = true;
+                break;
             }
             // A missing cursor with more pages claimed would loop forever on
             // the same page; stopping is the honest answer.
             match page["endCursor"].as_str() {
                 Some(cursor) => after = Some(cursor.to_string()),
-                None => return Ok(threads),
+                None => {
+                    complete = true;
+                    break;
+                }
+            }
+        }
+        if !complete {
+            return Err(Error::Forge(
+                "a pull request with more review threads than the page bound allows".into(),
+            ));
+        }
+
+        // A thread whose first page said `hasNextPage` gets the rest of its
+        // comments fetched here, one thread at a time — rare enough that
+        // this is never the common path, but a later maintainer correction
+        // must not go unread just because it arrived past comment 50.
+        for parsed_thread in &mut parsed {
+            let thread_id = parsed_thread.thread.id.clone();
+            let mut cursor = parsed_thread.more_comments.take();
+            // Mirrors the outer thread-listing bound: exhausting the page
+            // budget while GitHub still says there is more must fail rather
+            // than silently classify a partial comment history as complete
+            // — the same "moved the truncation threshold without keeping
+            // the completeness check" gap the outer loop already closes.
+            // `truncated` is set from the cursor each page *after* the page
+            // was read, so it reflects whether the last page fetched within
+            // the budget still pointed at another one.
+            let mut truncated = false;
+            for _ in 0..MAX_THREAD_PAGES {
+                let Some(after) = cursor.take() else {
+                    truncated = false;
+                    break;
+                };
+                let raw: serde_json::Value = self
+                    .client
+                    .graphql(&serde_json::json!({
+                        "query": THREAD_COMMENTS_QUERY.replace("$first", &GRAPHQL_PAGE.to_string()),
+                        "variables": { "id": thread_id, "after": after },
+                    }))
+                    .await
+                    .map_err(api)?;
+                graphql_errors(&raw, "the review thread comments query")?;
+                // Same two shapes as `threads_connection`: octocrab may hand
+                // back the `data` object already unwrapped. Reading only the
+                // wrapped form saw `Null`, appended nothing, and — because a
+                // missing `hasNextPage` reads as false — quietly called the
+                // thread complete without the reply that settled it.
+                let comments = node_comments(&raw);
+                for comment in comments["nodes"].as_array().into_iter().flatten() {
+                    let (comment, candidate) = comment_from_json(comment);
+                    if candidate && !comment.author.is_empty() {
+                        parsed_thread.candidates.push(comment.author.clone());
+                    }
+                    parsed_thread.thread.comments.push(comment);
+                }
+                cursor = comments["pageInfo"]["hasNextPage"]
+                    .as_bool()
+                    .unwrap_or(false)
+                    .then(|| {
+                        comments["pageInfo"]["endCursor"]
+                            .as_str()
+                            .map(str::to_string)
+                    })
+                    .flatten();
+                truncated = cursor.is_some();
+            }
+            if truncated {
+                return Err(Error::Forge(format!(
+                    "thread {thread_id} has more comments than the page bound allows"
+                )));
             }
         }
 
-        Err(Error::Forge(
-            "a pull request with more review threads than the page bound allows".into(),
-        ))
+        // Every `authorAssociation`-flagged comment author and every
+        // resolver, deduped: each is looked up once against the repository's
+        // actual collaborator permissions, however many threads or comments
+        // they appear across, rather than once per appearance.
+        let mut logins: Vec<String> = candidate_logins(&parsed);
+        logins.sort();
+        logins.dedup();
+        let mut write_access: HashMap<String, bool> = HashMap::new();
+        for login in logins {
+            let access = self.has_write_access(repo, &login).await?;
+            write_access.insert(login, access);
+        }
+
+        Ok(resolve_write_access(parsed, &write_access))
     }
 
     async fn own_review_state(&self, repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
@@ -1726,6 +2008,7 @@ mod tests {
                             {"author": {"login": "tinysweeper", "__typename": "Bot"},
                              "body": "finding"},
                             {"author": {"login": "author", "__typename": "User"},
+                             "authorAssociation": "COLLABORATOR",
                              "body": "fixed"}
                         ]}
                     },
@@ -1744,16 +2027,206 @@ mod tests {
             }}}}
         });
 
-        let threads = threads_from_graphql(&raw);
+        let parsed = threads_from_graphql(&raw);
 
-        assert_eq!(threads.len(), 2);
-        assert_eq!(threads[0].id, "PRRT_1");
-        assert!(!threads[0].is_resolved);
-        assert!(threads[0].is_outdated);
-        assert!(threads[0].comments[0].bot, "a Bot author is a bot");
-        assert!(!threads[0].comments[1].bot);
-        assert!(threads[1].is_resolved);
-        assert_eq!(threads[1].comments[0].author, "");
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].thread.id, "PRRT_1");
+        assert!(!parsed[0].thread.is_resolved);
+        assert!(parsed[0].thread.is_outdated);
+        assert!(parsed[0].thread.comments[0].bot, "a Bot author is a bot");
+        assert!(!parsed[0].thread.comments[1].bot);
+        assert!(
+            parsed[0].thread.comments[1].maintainer,
+            "a COLLABORATOR association is a write-access candidate, resolved for real by review_threads"
+        );
+        assert_eq!(
+            parsed[0].candidates,
+            vec!["author".to_string()],
+            "the collaborator-association author is queued for a real permission check"
+        );
+        assert!(parsed[1].thread.is_resolved);
+        assert_eq!(parsed[1].thread.comments[0].author, "");
+    }
+
+    #[test]
+    fn a_reply_without_a_recognized_author_association_is_not_a_maintainer() {
+        // Untrusted input: only OWNER, MEMBER, and COLLABORATOR carry write
+        // access. Anything else — including a missing field, NONE, or
+        // CONTRIBUTOR — must not be promoted to that authorization signal.
+        let raw = json!({
+            "data": {"repository": {"pullRequest": {"reviewThreads": {
+                "pageInfo": {"hasNextPage": false, "endCursor": null},
+                "nodes": [{
+                    "id": "PRRT_1",
+                    "isResolved": true,
+                    "isOutdated": false,
+                    "comments": {"nodes": [
+                        {"author": {"login": "tinysweeper", "__typename": "Bot"},
+                         "body": "finding"},
+                        {"author": {"login": "stranger", "__typename": "User"},
+                         "authorAssociation": "NONE",
+                         "body": "looks fine to me"}
+                    ]}
+                }]
+            }}}}
+        });
+
+        let parsed = threads_from_graphql(&raw);
+
+        assert!(!parsed[0].thread.comments[1].maintainer);
+        assert!(
+            parsed[0].candidates.is_empty(),
+            "a non-collaborator association must not even be queued for a permission check"
+        );
+    }
+
+    #[test]
+    fn resolved_by_is_parsed_and_queued_as_a_candidate() {
+        let raw = json!({
+            "data": {"repository": {"pullRequest": {"reviewThreads": {
+                "pageInfo": {"hasNextPage": false, "endCursor": null},
+                "nodes": [{
+                    "id": "PRRT_1",
+                    "isResolved": true,
+                    "isOutdated": false,
+                    "resolvedBy": {"login": "the-author"},
+                    "comments": {"nodes": [
+                        {"author": {"login": "tinysweeper", "__typename": "Bot"},
+                         "body": "finding"}
+                    ]}
+                }]
+            }}}}
+        });
+
+        let parsed = threads_from_graphql(&raw);
+
+        assert_eq!(parsed[0].resolved_by, Some("the-author".to_string()));
+        assert_eq!(parsed[0].candidates, vec!["the-author".to_string()]);
+        // Not yet resolved against a real permission — that is
+        // `review_threads`'s job, exercised by `resolve_write_access`.
+        assert!(!parsed[0].thread.resolved_by_has_write_access);
+    }
+
+    #[test]
+    fn a_comment_page_is_read_wrapped_or_unwrapped() {
+        let page = serde_json::json!({ "comments": { "nodes": [], "pageInfo": { "hasNextPage": false } } });
+        let wrapped = serde_json::json!({ "data": { "node": page } });
+        let unwrapped = serde_json::json!({ "node": page });
+        assert!(node_comments(&wrapped)["nodes"].is_array());
+        assert!(node_comments(&unwrapped)["nodes"].is_array());
+    }
+
+    #[test]
+    fn a_truncated_comment_page_is_flagged_with_its_cursor() {
+        // Regression: a thread with more than one page of comments must not
+        // silently stop at the first `GRAPHQL_PAGE` — `review_threads`
+        // follows this cursor to fetch the rest before `classify` ever sees
+        // the thread, or a later maintainer correction past comment 50 would
+        // be invisible to it.
+        let raw = json!({
+            "data": {"repository": {"pullRequest": {"reviewThreads": {
+                "pageInfo": {"hasNextPage": false, "endCursor": null},
+                "nodes": [
+                    {
+                        "id": "PRRT_1",
+                        "isResolved": false,
+                        "isOutdated": false,
+                        "comments": {
+                            "pageInfo": {"hasNextPage": true, "endCursor": "c2"},
+                            "nodes": [
+                                {"author": {"login": "tinysweeper", "__typename": "Bot"},
+                                 "body": "finding"}
+                            ]
+                        }
+                    },
+                    {
+                        "id": "PRRT_2",
+                        "isResolved": false,
+                        "isOutdated": false,
+                        "comments": {
+                            "pageInfo": {"hasNextPage": false, "endCursor": null},
+                            "nodes": []
+                        }
+                    }
+                ]
+            }}}}
+        });
+
+        let parsed = threads_from_graphql(&raw);
+
+        assert_eq!(parsed[0].more_comments, Some("c2".to_string()));
+        assert_eq!(parsed[1].more_comments, None);
+    }
+
+    #[test]
+    fn a_thread_resolved_by_someone_without_write_access_is_not_dismissible() {
+        let raw = json!({
+            "data": {"repository": {"pullRequest": {"reviewThreads": {
+                "pageInfo": {"hasNextPage": false, "endCursor": null},
+                "nodes": [
+                    {
+                        "id": "PRRT_1",
+                        "isResolved": true,
+                        "isOutdated": false,
+                        "resolvedBy": {"login": "fork-author"},
+                        "comments": {"nodes": [
+                            {"author": {"login": "tinysweeper", "__typename": "Bot"},
+                             "body": "finding"}
+                        ]}
+                    },
+                    {
+                        "id": "PRRT_2",
+                        "isResolved": true,
+                        "isOutdated": false,
+                        "resolvedBy": {"login": "a-maintainer"},
+                        "comments": {"nodes": [
+                            {"author": {"login": "tinysweeper", "__typename": "Bot"},
+                             "body": "finding"}
+                        ]}
+                    }
+                ]
+            }}}}
+        });
+
+        let parsed = threads_from_graphql(&raw);
+        let write_access = HashMap::from([
+            ("fork-author".to_string(), false),
+            ("a-maintainer".to_string(), true),
+        ]);
+        let threads = resolve_write_access(parsed, &write_access);
+
+        assert!(!threads[0].resolved_by_has_write_access);
+        assert!(threads[1].resolved_by_has_write_access);
+    }
+
+    #[test]
+    fn a_collaborator_candidate_without_real_write_access_is_not_a_maintainer() {
+        // The P1 escalation on the earlier `authorAssociation`-only fix:
+        // `COLLABORATOR` includes read-only and triage access, so a
+        // candidate must still fail closed when the real lookup says no.
+        let raw = json!({
+            "data": {"repository": {"pullRequest": {"reviewThreads": {
+                "pageInfo": {"hasNextPage": false, "endCursor": null},
+                "nodes": [{
+                    "id": "PRRT_1",
+                    "isResolved": true,
+                    "isOutdated": false,
+                    "comments": {"nodes": [
+                        {"author": {"login": "tinysweeper", "__typename": "Bot"},
+                         "body": "finding"},
+                        {"author": {"login": "read-only-collaborator", "__typename": "User"},
+                         "authorAssociation": "COLLABORATOR",
+                         "body": "looks fine to me"}
+                    ]}
+                }]
+            }}}}
+        });
+
+        let parsed = threads_from_graphql(&raw);
+        let write_access = HashMap::from([("read-only-collaborator".to_string(), false)]);
+        let threads = resolve_write_access(parsed, &write_access);
+
+        assert!(!threads[0].comments[1].maintainer);
     }
 
     #[test]

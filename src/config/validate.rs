@@ -29,6 +29,7 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_knowledge(config, &mut problems);
     validate_embeddings(config, &mut problems);
     validate_retrieval(config, &mut problems);
+    validate_memory(config, &mut problems);
     validate_overview(config, &mut problems);
     validate_lanes(config, &mut problems);
     validate_council(config, &mut problems);
@@ -232,6 +233,95 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
         problems.push(format!(
             "`models.budget_usd_per_pr = {}` must be a finite number above zero; it is the hard ceiling for one pull request",
             models.budget_usd_per_pr
+        ));
+    }
+}
+
+/// Check `[memory]`.
+///
+/// Like `[embeddings]`, only when it is on: a deployment with no engine must
+/// not be asked to name one. When it is on, the endpoint and the key variable
+/// have to be there, and the endpoint has to be one a bearer may cross — plain
+/// HTTP is loopback-only, because the alternative is the engine's credential
+/// on the wire in the clear.
+fn validate_memory(config: &Config, problems: &mut Vec<String>) {
+    let memory = &config.memory;
+    if !memory.enabled {
+        return;
+    }
+
+    if memory.provider.trim() != "cortex" {
+        problems.push(format!(
+            "`memory.provider = \"{}\"` is not an engine tinysweeper knows; only `cortex` is",
+            memory.provider
+        ));
+    }
+    if memory.endpoint.trim().is_empty() {
+        problems.push("`memory.endpoint` is empty but `memory.enabled = true`".into());
+    } else if let Err(reason) = crate::memory::endpoint_allowed(&memory.endpoint) {
+        problems.push(format!(
+            "`memory.endpoint = \"{}\"`: {reason}",
+            memory.endpoint
+        ));
+    }
+    if memory.api_key_env.trim().is_empty() {
+        problems.push("`memory.api_key_env` is empty but `memory.enabled = true`".into());
+    } else if memory
+        .api_key_env
+        .contains(|c: char| c.is_ascii_lowercase())
+    {
+        // Same heuristic, same reason, same redaction as `models.api_key_env`.
+        problems.push(format!(
+            "`memory.api_key_env` ({}) looks like a value, not an environment variable name; \
+             never put a key in the config file",
+            crate::scan::types::redact(&memory.api_key_env)
+        ));
+    }
+    if memory.context_tokens == 0 {
+        problems.push(
+            "`memory.context_tokens = 0` with `memory.enabled = true` recalls nothing while still \
+             paying for every call; set it above zero or set `memory.enabled = false`"
+                .into(),
+        );
+    }
+    if memory.max_recollections == 0 && !memory.ask {
+        problems.push(
+            "`memory.max_recollections = 0` and `memory.ask = false` together consult memory for \
+             nothing; enable one or set `memory.enabled = false`"
+                .into(),
+        );
+    }
+    if memory.ask && memory.questions.is_empty() {
+        problems.push("`memory.ask = true` but `memory.questions` is empty".into());
+    }
+    for (index, question) in memory.questions.iter().enumerate() {
+        if crate::memory::MemorySection::parse(&question.section).is_none() {
+            problems.push(format!(
+                "`memory.questions[{index}].section = \"{}\"` is not a section; use code, \
+                 conventions or reviews",
+                question.section
+            ));
+        }
+        if question.ask.trim().is_empty() {
+            problems.push(format!("`memory.questions[{index}].ask` is empty"));
+        }
+    }
+    if memory.ingest_conventions && memory.convention_files.is_empty() {
+        problems.push(
+            "`memory.ingest_conventions = true` but `memory.convention_files` names no file".into(),
+        );
+    }
+    for pattern in &memory.convention_files {
+        if let Err(err) = Glob::new(pattern) {
+            problems.push(format!(
+                "`memory.convention_files` contains invalid glob `{pattern}`: {err}"
+            ));
+        }
+    }
+    if memory.convention_section_chars < 200 {
+        problems.push(format!(
+            "`memory.convention_section_chars = {}` is below one paragraph; 2000 is the default",
+            memory.convention_section_chars
         ));
     }
 }

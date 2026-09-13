@@ -75,3 +75,18 @@ Four traits, one adapter module. Their value types live in `src/index/types.rs`
 and the reasoning behind their shape — why `Embedder` must be able to name
 itself, why `ChunkIndex` needs deletes, and what MongoDB has to be — is in
 [`docs/modules/index/README.md`](../index/README.md).
+
+## `Memory`
+
+One trait, one adapter, three sections. What the reviewer remembers about a
+repository *between* pull requests: its code, the conventions its own guides
+state, and what the maintainers did with the reviewer's earlier findings. The
+index answers what the code looks like and the graph what a change reaches;
+neither learns. This one accumulates, and it is consulted by question
+(`answer`, a cited synthesis) as well as by query (`recall`). The reasoning,
+the section split and the CortexDB adapter are in
+[`docs/modules/memory/README.md`](../memory/README.md).
+
+Every call in the review path is best-effort at the call site: the port returns
+errors so the adapter can be honest, and `memory::recall` turns them into a
+status the check-run summary states.

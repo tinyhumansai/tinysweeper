@@ -66,6 +66,12 @@ which parts it could not see rather than drawing an empty picture. See
   preferences is treated as a defect.
 - **Offline by default.** The default build links no HTTP client, and the test
   suite never touches the network.
+- **It remembers.** With a [CortexDB](https://cortexdb.ai) engine configured,
+  the reviewer keeps a memory of each repository — its guides, one item per
+  heading; its code; and what the maintainers did with every earlier finding —
+  and asks it cited questions before it reads the diff. A finding a maintainer
+  rejected on pull request 40 is remembered *as rejected* on pull request 41.
+  See [docs/modules/memory/README.md](docs/modules/memory/README.md).
 
 ## How it runs
 
@@ -210,6 +216,7 @@ MiniMax are all the same code path.
 - [docs/triggers.md](docs/triggers.md) — what wakes tinysweeper up, and what emits no event at all
 - [docs/modules/server/README.md](docs/modules/server/README.md) — the server, its security boundary, and the admin API
 - [docs/modules/overview/README.md](docs/modules/overview/README.md) — the change map: what gets drawn, and why nothing in it comes from a model
+- [docs/modules/memory/README.md](docs/modules/memory/README.md) — the memory engine: what is remembered, what is asked, and what a rejected finding means
 - `docs/` — module documentation and design notes
 
 ## License

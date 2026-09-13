@@ -47,6 +47,11 @@ toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "fs", "sync", "time"] }
+# `url` only parses; it opens no socket, so it belongs with the offline core
+# above. `crate::memory::endpoint_allowed` needs the exact host resolution
+# `reqwest` itself uses — including how a redirect or `user@host` authority
+# is read — and a hand-rolled parser cannot promise that.
+url = "2"
 
 # --- always compiled: the repository graph's parsers ---
 # tree-sitter links C grammars, not a network client, so it needs no feature
@@ -114,6 +119,10 @@ default = ["treesitter"]
 harness = ["dep:tinyagents", "dep:reqwest"]
 # The real GitHub adapter behind the `Forge` port.
 github = ["dep:octocrab", "dep:reqwest"]
+# The CortexDB adapter behind the `Memory` port. The whole memory layer —
+# ingest, recall, the prompt block — is always compiled and tested offline
+# against `MockMemory`; only `memory::cortex` speaks HTTP.
+cortex = ["dep:reqwest"]
 # The real Sentry adapter behind the `SentryApi` port. Sweeping polls sentry.io,
 # so it is network and therefore gated; the whole promotion pipeline — the
 # redaction boundary, the four steps, every policy decision — is always
@@ -129,6 +138,7 @@ serve = [
     "dep:subtle",
     "dep:tempfile",
     "dep:tower-http",
+    "cortex",
     "github",
     "harness",
 ]
@@ -137,7 +147,7 @@ serve = [
 # grammar named its enclosing symbol.
 treesitter = []
 # Everything a production run turns on.
-all = ["harness", "github", "sentry", "serve", "treesitter"]
+all = ["cortex", "harness", "github", "sentry", "serve", "treesitter"]
 
 [dev-dependencies]
 tempfile = "3"
@@ -153,3 +163,8 @@ tower = { version = "0.5", features = ["util"] }
 [[example]]
 name = "index_and_retrieve"
 required-features = ["serve"]
+
+# Needs a running CortexDB; see the example's own docs.
+[[example]]
+name = "memory_review"
+required-features = ["cortex"]

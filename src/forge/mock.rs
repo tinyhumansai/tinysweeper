@@ -151,6 +151,9 @@ pub struct MockState {
     /// resolves to its own name, so tests that do not care about revisions can
     /// set a file at `"main"` and be read at `"main"`.
     pub branches: BTreeMap<String, String>,
+    /// The default branch. Empty means `main`, so a fixture that never
+    /// thinks about branches still has one.
+    pub default_branch: String,
     /// Repository file contents, keyed by [`file_key`].
     ///
     /// Keyed by commit as well as path because that is the distinction the
@@ -494,6 +497,15 @@ impl ForgeRead for MockForge {
             .take(limit)
             .cloned()
             .collect())
+    }
+
+    async fn default_branch(&self, _repo: &RepoId) -> Result<String> {
+        let state = self.state.lock().expect("mock state lock");
+        Ok(if state.default_branch.is_empty() {
+            "main".to_string()
+        } else {
+            state.default_branch.clone()
+        })
     }
 
     async fn branch_head(&self, _repo: &RepoId, branch: &str) -> Result<Option<String>> {
@@ -1199,10 +1211,12 @@ mod tests {
                 id: "PRRT_open".into(),
                 is_resolved: false,
                 is_outdated: true,
+                resolved_by_has_write_access: false,
                 comments: vec![ThreadComment {
                     author: "tinysweeper[bot]".into(),
                     body: "<!-- tinysweeper:fp=0123456789abcdef -->".into(),
                     bot: true,
+                    maintainer: false,
                 }],
             }],
         );
@@ -1230,6 +1244,7 @@ mod tests {
                 id: "PRRT_open".into(),
                 is_resolved: false,
                 is_outdated: true,
+                resolved_by_has_write_access: false,
                 comments: Vec::new(),
             }],
         );

@@ -28,6 +28,7 @@ use crate::server::auth::AppAuth;
 use crate::server::failure;
 use crate::server::indexing::{IndexBackend, index_in_background};
 use crate::server::manual::{self, FullReviews, MergeReport, Merges, Triages};
+use crate::server::memory::{MemoryBackend, ingest_in_background};
 use crate::server::status;
 use crate::server::store::{Store, Trust};
 use crate::server::webhook::{self, Action, Payload};
@@ -84,6 +85,9 @@ struct AppState {
     /// provider. `None` runs every review diff-only, which is what tinysweeper
     /// did before an index existed.
     index: Option<Arc<IndexBackend>>,
+    /// The memory engine, when `[memory]` names one. `None` reviews without
+    /// memory, which is what tinysweeper did before an engine existed.
+    memory: Option<Arc<MemoryBackend>>,
     /// Bounds concurrent indexing separately from concurrent reviewing: a
     /// delivery burst must not turn into a burst of full indexes.
     index_permits: Arc<Semaphore>,
@@ -135,6 +139,18 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
         }
     };
 
+    // Same shape as the index: off is a choice, unreachable is a boot failure.
+    let memory = match MemoryBackend::open(&config.config).await? {
+        Some(backend) => {
+            tracing::info!(engine = "cortex", "memory is on");
+            Some(Arc::new(backend))
+        }
+        None => {
+            tracing::info!("memory is disabled: no engine configured");
+            None
+        }
+    };
+
     let admin_auth = config.admin_auth.clone();
     let state = AppState {
         config: Arc::new(config),
@@ -143,6 +159,7 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
         auth: Arc::new(auth),
         permits: Arc::new(Semaphore::new(MAX_CONCURRENT_REVIEWS)),
         index: index.clone(),
+        memory,
         index_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_INDEXES)),
     };
 
@@ -978,13 +995,19 @@ pub enum Mode {
 
 /// The configuration a review in `mode` runs under.
 ///
-/// `Mode::Full` is exactly `review.incremental = false` for this one run. That
-/// single flag is what `crate::app::review` gates all three halves of the
-/// memory on — the prior findings read off the pull request, the remembered
-/// state in the store, and the write-back at the end — so turning it off both
-/// ignores the stored state and leaves it intact for the webhook path. Nothing
-/// is deleted: a manual review is an extra opinion, not a reset, and destroying
-/// the record would make the *next* webhook review duplicate its comments too.
+/// `Mode::Full` is exactly `review.incremental = false` for this one run.
+/// That single flag is this pull request's own incremental state — the
+/// prior findings read off it, and the cached evidence in the store — so
+/// turning it off makes this one run argue from scratch, and leaves the
+/// stored state intact for the webhook path. Nothing is deleted: a manual
+/// review is an extra opinion, not a reset, and destroying the record would
+/// make the *next* webhook review duplicate its comments too.
+///
+/// Memory is deliberately untouched by this flag: it is the repository's
+/// accumulated knowledge — conventions, and what became of earlier findings —
+/// not this pull request's incremental state, and a manual full review wants
+/// "you said this before and they said no" exactly as much as an ordinary
+/// one does.
 fn config_for(base: &Config, mode: Mode) -> std::borrow::Cow<'_, Config> {
     match mode {
         Mode::Incremental => std::borrow::Cow::Borrowed(base),
@@ -1291,6 +1314,13 @@ async fn review_inner(
     // index takes minutes; a review is expected in seconds. The review runs
     // against whatever the index holds right now, and `crate::retrieve` says so
     // in the check-run summary when that is nothing. See `server::indexing`.
+    //
+    // This uses the *deployment's* configuration, not the repository's own
+    // overlay fetched below — a pre-existing tradeoff this pull request does
+    // not change. Memory ingestion, spawned after the overlay below, does not
+    // repeat it: `paths.ignore` is repository-overridable, and starting
+    // ingestion before the overlay is read would persist paths the repository
+    // explicitly excluded into an external store the deployment does not own.
     if let Some(backend) = &state.index {
         tokio::spawn(index_in_background(
             backend.clone(),
@@ -1344,6 +1374,59 @@ async fn review_inner(
     .await;
     if let Some(source) = &overlay.source {
         tracing::info!(%repo, source, "reviewing under the repository's own configuration");
+    }
+
+    // Memory is fed from the *base* tip, not the head: what the repository
+    // has committed to, not what this pull request proposes. See
+    // `server::memory`. Spawned only now, under `overlay.config` rather than
+    // the deployment's own, so a repository's own `paths.ignore` — which is
+    // repository-overridable — is honored before anything from an excluded
+    // path is persisted into the engine.
+    //
+    // Skipped entirely when the overlay could not be read or applied:
+    // `overlay.config` is then only a fallback, not the repository's actual
+    // policy, and ingesting under it risks persisting paths the repository
+    // excludes. A later delivery for the same base tip that successfully
+    // loads the real overlay still ingests normally — this delivery just
+    // does not, rather than ingesting under a policy that might be wrong.
+    //
+    // And only from the default branch. Memory is repository-wide, so a
+    // pull request against a release branch must not replace `main`'s
+    // snapshot, and an older base must not roll the memory backwards; the
+    // ingest forgets a section before rewriting it, so either would.
+    if overlay.unavailable {
+        tracing::warn!(
+            %repo,
+            "skipping memory ingestion: the repository's own configuration could not be read"
+        );
+    } else if let Some(backend) = &state.memory {
+        let default_branch = {
+            use crate::ports::forge::ForgeRead;
+            forge.default_branch(&repo_id).await
+        };
+        match default_branch {
+            Ok(branch) if branch == pull_request.base_ref => {
+                tokio::spawn(ingest_in_background(
+                    backend.clone(),
+                    Arc::new(overlay.config.clone()),
+                    state.index_permits.clone(),
+                    repo_id.clone(),
+                    pull_request.base_sha.clone(),
+                    read_token.clone(),
+                ));
+            }
+            Ok(branch) => tracing::debug!(
+                %repo,
+                base = %pull_request.base_ref,
+                default = %branch,
+                "skipping memory ingestion: the base is not the default branch"
+            ),
+            Err(err) => tracing::warn!(
+                %repo,
+                %err,
+                "skipping memory ingestion: could not read the default branch"
+            ),
+        }
     }
 
     let outcome = std::panic::AssertUnwindSafe(run_and_publish(
@@ -1433,8 +1516,10 @@ async fn run_and_publish(
     // The mode is layered on top of the *effective* config, so a repository's
     // own `.tinysweeper.toml` still governs a manual review — a full run is the
     // same policy with no memory, not the deployment's policy instead.
+    let recaller = state.memory.as_ref().map(|backend| backend.recaller());
+
     let config = config_for(config, mode);
-    let proposal = crate::app::review::review_with_retrieval(
+    let proposal = crate::app::review::review_with_memory(
         forge,
         model,
         &config,
@@ -1443,6 +1528,7 @@ async fn run_and_publish(
         Some(&state.store),
         state.knowledge.as_deref(),
         retriever.as_ref(),
+        recaller.as_ref(),
     )
     .await?;
 

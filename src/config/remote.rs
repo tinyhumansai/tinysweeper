@@ -220,6 +220,20 @@ pub struct RepoOverlay {
     pub source: Option<String>,
     /// Keys the repository set that this deployment does not let it set.
     pub ignored: Vec<String>,
+    /// Whether `config` is the deployment's own because the repository's
+    /// config could not be read or used — a forge error, unparseable TOML, or
+    /// a config that failed validation — rather than because the repository
+    /// genuinely has no override file.
+    ///
+    /// Both cases return the same `source: None`, since a review must run
+    /// under *some* config either way and distinguishing them there would
+    /// change what every review path — not just memory — reads off this
+    /// struct. This field exists for the one caller that needs the
+    /// distinction: memory ingestion trusts `config.paths.ignore` as the
+    /// repository's real policy, and running under a policy this is only a
+    /// fallback for, rather than skipping, would risk persisting paths the
+    /// repository actually excludes.
+    pub unavailable: bool,
 }
 
 /// Fetch the reviewed repository's own config at `sha` and lay it over `base`.
@@ -239,6 +253,13 @@ pub async fn overlay(
         config: base.clone(),
         source: None,
         ignored: Vec::new(),
+        unavailable: false,
+    };
+    let unavailable = || RepoOverlay {
+        config: base.clone(),
+        source: None,
+        ignored: Vec::new(),
+        unavailable: true,
     };
 
     // In `CONFIG_NAMES` order, the same order the filesystem path searches, so
@@ -249,7 +270,7 @@ pub async fn overlay(
             Ok(None) => continue,
             Err(err) => {
                 tracing::warn!(%err, %repo, %name, "could not read the repository's config");
-                return unmodified();
+                return unavailable();
             }
         };
 
@@ -270,11 +291,12 @@ pub async fn overlay(
                     config,
                     source: Some(name.to_string()),
                     ignored,
+                    unavailable: false,
                 }
             }
             Err(err) => {
                 tracing::warn!(%err, %repo, %name, "the repository's config is unusable; reviewing on the deployment's own");
-                unmodified()
+                unavailable()
             }
         };
     }

@@ -120,6 +120,14 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
       COHERE_API_KEY: ${COHERE_API_KEY:-}
+      # Memory is opt-in and configured in `[memory]`; only the engine's key
+      # lives here. Compose cannot forward a variable by a name it only
+      # learns from `.tinysweeper.toml` at runtime, so this name is fixed:
+      # `memory.api_key_env` in `.tinysweeper.toml` must be `CORTEX_API_KEY`,
+      # matching the default this deployment ships. Renaming one without the
+      # other is a mistake this comment exists to prevent: the server would
+      # refuse to boot rather than run without the credential, but silently.
+      CORTEX_API_KEY: ${CORTEX_API_KEY:-}
       TINYSWEEPER_WEBHOOK_SECRET: ${TINYSWEEPER_WEBHOOK_SECRET:?set a webhook secret}
       # These two names are read verbatim by `server::auth::AppAuth::from_env`.
       # They were previously spelled `TINYSWEEPER_GITHUB_*` here, which the

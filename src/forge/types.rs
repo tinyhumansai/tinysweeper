@@ -505,6 +505,15 @@ pub struct ReviewThread {
     pub is_outdated: bool,
     /// Its comments, oldest first. The first one is whoever opened the thread.
     pub comments: Vec<ThreadComment>,
+    /// Whether whoever resolved this thread currently has write access (or
+    /// above) to the repository.
+    ///
+    /// GitHub lets a thread be resolved by the pull request's own author, not
+    /// only by someone with write access — so a silent, unauthorized
+    /// contributor resolving a bot's finding on their own fork's pull request
+    /// must not be recorded as a settled dismissal. `false` when nobody
+    /// resolved it, or the adapter could not confirm who did.
+    pub resolved_by_has_write_access: bool,
 }
 
 /// One comment inside a [`ReviewThread`].
@@ -520,6 +529,19 @@ pub struct ThreadComment {
     /// decides whether a reply counts as a human asking for another look. Two
     /// bots replying to each other is the failure mode this field prevents.
     pub bot: bool,
+    /// Whether this author currently holds write access (or above) to the
+    /// repository.
+    ///
+    /// Checked against the repository's actual collaborator permission, not
+    /// guessed from GitHub's `authorAssociation` — that field is `COLLABORATOR`
+    /// for an invited collaborator at *any* permission level, including
+    /// read-only and triage, neither of which is a maintainer's judgement. A
+    /// thread's comments are untrusted input — any contributor, including an
+    /// attacker on a forked pull request, can reply to a bot's finding.
+    /// Without this, `classify` would record any non-bot reply as a
+    /// "maintainer rejection" and memory would carry a stranger's opinion as
+    /// settled judgement.
+    pub maintainer: bool,
 }
 
 /// An issue comment, either a new one or an edit of an existing one.

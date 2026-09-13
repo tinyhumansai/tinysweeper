@@ -1,0 +1,1150 @@
+//! Turning a repository, and what happened on its pull requests, into memory.
+//!
+//! Always compiled: everything here is a pure function from source, files and
+//! forge types to [`MemoryItem`]s, plus one walker that runs against the
+//! [`Memory`] port. So the whole ingest is tested offline against
+//! [`MockMemory`](crate::memory::MockMemory).
+//!
+//! Three sources, three shapes:
+//!
+//! - **Code** is chunked exactly as the index chunks it, by symbol where a
+//!   grammar allows it, so a recollection and a retrieved chunk name the same
+//!   span and the reviewer is never shown two versions of one function.
+//! - **Conventions** are the repository's own instruction files and guides,
+//!   split one item per heading. A heading is the unit a maintainer wrote in
+//!   and the unit a question is answered from: "which rule covers this?" wants
+//!   the paragraph under *Security Boundary*, not the whole of `AGENTS.md`.
+//! - **Review outcomes** are what the maintainers did with the reviewer's own
+//!   findings, read back off the pull request's review threads. This is the
+//!   half that makes reviews improve rather than merely repeat: a finding a
+//!   human pushed back on is remembered *as pushed back on*, with their words.
+//!
+//! What is deliberately not here: the pull request's branch. Conventions are
+//! read from a checkout of the default branch at ingest time, which is the
+//! policy the repository committed to, not the one a pull request proposes.
+//! They still reach the prompt as fenced data, because a merged file is still
+//! prose somebody wrote.
+
+use std::fmt::Write as _;
+use std::path::Path;
+
+use globset::{Glob, GlobSet, GlobSetBuilder};
+
+use crate::chunk::{Chunker, Selector};
+use crate::config::types::Memory as MemoryConfig;
+use crate::error::{Error, Result};
+use crate::findings::prior::{fingerprint_in, is_own_login, title_in};
+use crate::findings::types::Finding;
+use crate::forge::types::{ReviewComment, ReviewThread};
+use crate::index::types::Chunk;
+use crate::memory::types::{MemoryItem, MemoryKind, MemoryScope, RememberReport};
+use crate::ports::memory::Memory;
+
+/// How many items go to the engine in one `remember` call.
+///
+/// Bounds one request, not the run: an engine that waits for indexing before
+/// it answers takes seconds per batch, and a batch the size of a monorepo
+/// would hold one connection open for the whole of it.
+pub const REMEMBER_BATCH: usize = 32;
+
+/// How much of a human's reply is remembered with an outcome.
+///
+/// Enough to carry "this is intentional, the caller already checks it" and
+/// not enough to carry an essay. It is quoted back into a prompt, so it is
+/// also a bound on how much attacker-authored text an outcome can smuggle.
+pub const MAX_REPLY_CHARS: usize = 400;
+
+/// Build one memory item per code chunk.
+///
+/// The key is the chunk's span within its file, by symbol when there is one:
+/// re-chunking an unchanged file offers the same keys with the same bodies
+/// and the engine replays them all, so a re-ingest of an unchanged tree costs
+/// the network and nothing else.
+pub fn code_items(chunks: &[Chunk]) -> Vec<MemoryItem> {
+    // A bare symbol name is not unique within a file — two `impl` blocks each
+    // naming a method `new` chunk to the same `code:{path}#new` key with
+    // different bodies. Recall dedupes by key, so the second silently loses
+    // to whichever the engine ranks first. Counted per `(path, symbol)`
+    // first, so a symbol that only appears once — the common case — keeps
+    // exactly the plain key re-chunking an unchanged file already relies on
+    // to replay rather than rewrite; only a real collision pays for a
+    // disambiguating suffix.
+    let mut seen: std::collections::HashMap<(&str, &str), usize> = std::collections::HashMap::new();
+    for chunk in chunks {
+        if let Some(symbol) = &chunk.symbol {
+            *seen
+                .entry((chunk.path.as_str(), symbol.as_str()))
+                .or_insert(0) += 1;
+        }
+    }
+    let mut index: std::collections::HashMap<(&str, &str), usize> =
+        std::collections::HashMap::new();
+    chunks
+        .iter()
+        .filter(|chunk| !chunk.text.trim().is_empty())
+        .map(|chunk| {
+            let span = match &chunk.symbol {
+                Some(symbol) => {
+                    let key = (chunk.path.as_str(), symbol.as_str());
+                    if seen.get(&key).copied().unwrap_or(0) > 1 {
+                        let occurrence = index.entry(key).or_insert(0);
+                        let suffixed = format!("{symbol}~{occurrence}");
+                        *occurrence += 1;
+                        suffixed
+                    } else {
+                        symbol.clone()
+                    }
+                }
+                None => format!("{}-{}", chunk.start_line, chunk.end_line),
+            };
+            let title = match &chunk.symbol {
+                Some(symbol) => format!("{} — {symbol}", chunk.path),
+                None => format!("{}:{}-{}", chunk.path, chunk.start_line, chunk.end_line),
+            };
+            let mut item = MemoryItem::new(
+                format!("code:{}#{span}", chunk.path),
+                MemoryKind::CodeChunk,
+                title,
+                chunk.text.clone(),
+            )
+            .at_path(chunk.path.clone());
+            if let Some(symbol) = &chunk.symbol {
+                item = item.at_symbol(symbol.clone());
+            }
+            if let Some(lang) = &chunk.lang {
+                item = item.labelled(format!("lang:{lang}"));
+            }
+            item
+        })
+        .collect()
+}
+
+/// Split one markdown file into one item per heading.
+///
+/// The title is the heading path — `AGENTS.md › Security Boundary` — so a
+/// recollection reads as a pointer into the file rather than as a loose
+/// paragraph. Text before the first heading is filed under the file name.
+/// A section longer than `max_chars` is split at paragraph boundaries, never
+/// mid-sentence, and each part carries the same heading.
+pub fn convention_items(path: &str, content: &str, max_chars: usize) -> Vec<MemoryItem> {
+    let mut items = Vec::new();
+    let mut stack: Vec<(usize, String)> = Vec::new();
+    let mut body = String::new();
+    let mut in_fence = false;
+    // Counts every part emitted under a slug so far, across *every* heading
+    // that produced it — not reset per heading. Two distinct headings can
+    // normalize to the same slug (a repeated heading path, or `C++` and `C#`
+    // both slugging to `c`), and without a counter shared across headings
+    // each would restart at the plain, unsuffixed key and collide: their
+    // different bodies become separate Cortex events, but recall dedupes by
+    // key, so one repository rule is silently discarded.
+    let mut slug_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+
+    let mut flush = |stack: &[(usize, String)], body: &mut String, items: &mut Vec<MemoryItem>| {
+        let text = body.trim();
+        if !text.is_empty() {
+            let heading = stack
+                .iter()
+                .map(|(_, h)| h.as_str())
+                .collect::<Vec<_>>()
+                .join(" › ");
+            let title = if heading.is_empty() {
+                path.to_string()
+            } else {
+                format!("{path} › {heading}")
+            };
+            let slug = slug(&heading);
+            for part in split_paragraphs(text, max_chars) {
+                let occurrence = slug_counts.entry(slug.clone()).or_insert(0);
+                let key = if *occurrence == 0 {
+                    format!("convention:{path}#{slug}")
+                } else {
+                    format!("convention:{path}#{slug}~{occurrence}")
+                };
+                *occurrence += 1;
+                items.push(
+                    MemoryItem::new(key, MemoryKind::Convention, title.clone(), part)
+                        .at_path(path.to_string())
+                        .labelled("source:instruction-file"),
+                );
+            }
+        }
+        body.clear();
+    };
+
+    for line in content.lines() {
+        // A `#` inside a code fence is a comment, not a heading.
+        if line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~") {
+            in_fence = !in_fence;
+        }
+        let heading = (!in_fence).then(|| heading_of(line)).flatten();
+        match heading {
+            Some((level, text)) => {
+                flush(&stack, &mut body, &mut items);
+                while stack.last().is_some_and(|(l, _)| *l >= level) {
+                    stack.pop();
+                }
+                stack.push((level, text));
+            }
+            None => {
+                body.push_str(line);
+                body.push('\n');
+            }
+        }
+    }
+    flush(&stack, &mut body, &mut items);
+    items
+}
+
+/// `(level, text)` when `line` is an ATX heading.
+fn heading_of(line: &str) -> Option<(usize, String)> {
+    let trimmed = line.trim_start();
+    let level = trimmed.chars().take_while(|c| *c == '#').count();
+    if level == 0 || level > 6 {
+        return None;
+    }
+    let rest = &trimmed[level..];
+    if !rest.starts_with(' ') && !rest.is_empty() {
+        return None;
+    }
+    let text = rest.trim().trim_end_matches('#').trim();
+    (!text.is_empty()).then(|| (level, text.to_string()))
+}
+
+/// Split `text` into parts of at most `max_chars`, at blank lines.
+///
+/// A single paragraph longer than the ceiling is kept whole rather than cut:
+/// a truncated rule is a rule that says the opposite of what it said.
+fn split_paragraphs(text: &str, max_chars: usize) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    for paragraph in text.split("\n\n") {
+        let paragraph = paragraph.trim();
+        if paragraph.is_empty() {
+            continue;
+        }
+        if !current.is_empty() && current.len() + paragraph.len() + 2 > max_chars {
+            parts.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push_str("\n\n");
+        }
+        current.push_str(paragraph);
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    parts
+}
+
+/// A lowercase, hyphenated form of `text` for keys.
+fn slug(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last_dash = true;
+    for c in text.chars() {
+        if c.is_alphanumeric() {
+            out.extend(c.to_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    let out = out.trim_end_matches('-').to_string();
+    if out.is_empty() { "top".into() } else { out }
+}
+
+/// One item per finding the reviewer is about to publish.
+///
+/// Remembered on the *read* side, before anything is posted, so the memory
+/// reflects what the reviewer concluded even when the apply step later
+/// decides not to post it. The outcome, when there is one, comes separately
+/// from [`outcome_items`].
+pub fn finding_items(repo: &str, number: u64, findings: &[Finding]) -> Vec<MemoryItem> {
+    findings
+        .iter()
+        .map(|finding| {
+            let mut body = String::new();
+            let _ = writeln!(body, "Pull request {repo}#{number}");
+            let _ = writeln!(
+                body,
+                "Lane: {}. Severity: {}. Rule: {}.",
+                finding.lane.as_str(),
+                finding.severity.as_str(),
+                finding.rule
+            );
+            let _ = writeln!(
+                body,
+                "Location: {}{}",
+                finding.path,
+                finding.line.map(|l| format!(":{l}")).unwrap_or_default()
+            );
+            let _ = write!(body, "\n{}", finding.body.trim());
+            MemoryItem::new(
+                format!(
+                    "finding:{repo}#{number}:{}",
+                    finding.fingerprint(&finding.title)
+                ),
+                MemoryKind::ReviewFinding,
+                finding.title.clone(),
+                body,
+            )
+            .at_path(finding.path.clone())
+            .labelled(format!("lane:{}", finding.lane.as_str()))
+            .labelled(format!("severity:{}", finding.severity.as_str()))
+            .labelled(format!("pr:{number}"))
+        })
+        .collect()
+}
+
+/// What became of a finding, as far as the thread it opened can tell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// Resolved, and the code it pointed at changed.
+    Fixed,
+    /// Resolved without the code changing, after a human replied — the
+    /// "this is fine" case, and the one worth the most to remember.
+    Rejected,
+    /// Resolved without the code changing and without a word: dismissed.
+    Dismissed,
+    /// A human replied and the thread is still open.
+    Disputed,
+}
+
+impl Outcome {
+    /// The word used in keys, labels and the prompt.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fixed => "fixed",
+            Self::Rejected => "rejected",
+            Self::Dismissed => "dismissed",
+            Self::Disputed => "disputed",
+        }
+    }
+}
+
+/// Classify a thread the reviewer opened, or `None` when nothing has
+/// happened to it yet.
+///
+/// Only the deterministic signals GitHub carries are used — resolved,
+/// outdated, and whether someone with write access wrote back. No model is
+/// consulted: an outcome is evidence about the maintainers' judgement, and
+/// inferring it with a model would remember the model's judgement instead.
+/// A reply is untrusted input from whoever can comment on the pull request,
+/// so only a reply from an author GitHub reports as `OWNER`, `MEMBER`, or
+/// `COLLABORATOR` counts as that judgement — otherwise any contributor could
+/// get their own finding recorded as a settled "maintainer rejection".
+pub fn classify(thread: &ReviewThread) -> Option<Outcome> {
+    let human_replied = thread
+        .comments
+        .iter()
+        .skip(1)
+        .any(|c| !c.bot && !is_own_login(&c.author) && c.maintainer);
+    // GitHub lets the pull request's own author resolve a thread regardless
+    // of their permission on the repository — the reply and the resolve are
+    // two separate authorizations, and a maintainer's reply says nothing
+    // about who acted on it. A maintainer's "please fix this" resolved by
+    // the unauthorized author it was aimed at is not a rejection; only a
+    // resolve by someone who actually holds write access settles anything.
+    // `is_outdated` is GitHub's own fact about the code, not a claim anyone
+    // makes — but *resolving* the thread is still an action, and the same
+    // unauthorized-author loophole applies to it: a contributor could make
+    // an unrelated nearby edit that ages the anchor out, resolve their own
+    // bot thread, and have it recorded as `Fixed` without anyone with write
+    // access ever having agreed the finding was actually addressed.
+    match (
+        thread.is_resolved,
+        thread.is_outdated,
+        human_replied,
+        thread.resolved_by_has_write_access,
+    ) {
+        (true, true, _, true) => Some(Outcome::Fixed),
+        (true, false, true, true) => Some(Outcome::Rejected),
+        (true, false, false, true) => Some(Outcome::Dismissed),
+        (true, _, _, false) => None,
+        (false, _, true, _) => Some(Outcome::Disputed),
+        (false, _, false, _) => None,
+    }
+}
+
+/// One item per settled thread the reviewer opened on a pull request.
+///
+/// `comments` are the flat review comments, which is where the path lives —
+/// a thread knows its comments but not its file. The two are paired by the
+/// fingerprint marker the reviewer wrote, so a thread somebody else opened
+/// contributes nothing however it resolved.
+pub fn outcome_items(
+    repo: &str,
+    number: u64,
+    threads: &[ReviewThread],
+    comments: &[ReviewComment],
+) -> Vec<MemoryItem> {
+    let mut items = Vec::new();
+    for thread in threads {
+        let Some(opener) = thread.comments.first() else {
+            continue;
+        };
+        if !is_own_login(&opener.author) {
+            continue;
+        }
+        let Some(fingerprint) = fingerprint_in(&opener.body) else {
+            continue;
+        };
+        let Some(outcome) = classify(thread) else {
+            continue;
+        };
+        let title = title_in(&opener.body).unwrap_or_else(|| "untitled finding".into());
+        let path = comments
+            .iter()
+            .find(|c| fingerprint_in(&c.body).as_deref() == Some(fingerprint.as_str()))
+            .map(|c| c.path.clone());
+
+        let mut body = String::new();
+        let _ = writeln!(body, "Pull request {repo}#{number}");
+        let _ = writeln!(body, "Finding: {title}");
+        if let Some(path) = &path {
+            let _ = writeln!(body, "Location: {path}");
+        }
+        let _ = writeln!(body, "Outcome: {}", outcome.as_str());
+        // The latest human word is the one that stands: a maintainer who
+        // said "no" and then "actually, fixed" is remembered as the second.
+        let reply = thread
+            .comments
+            .iter()
+            .skip(1)
+            .rev()
+            .find(|c| !c.bot && !is_own_login(&c.author) && c.maintainer);
+        if let Some(reply) = reply {
+            let _ = write!(
+                body,
+                "Maintainer's reply: {}",
+                crate::memory::excerpt(&reply.body, MAX_REPLY_CHARS)
+            );
+        }
+
+        let mut item = MemoryItem::new(
+            format!("outcome:{repo}#{number}:{fingerprint}"),
+            MemoryKind::ReviewOutcome,
+            format!("{} — {title}", outcome.as_str()),
+            body,
+        )
+        .labelled(format!("outcome:{}", outcome.as_str()))
+        .labelled(format!("pr:{number}"));
+        if let Some(path) = path {
+            item = item.at_path(path);
+        }
+        items.push(item);
+    }
+    items
+}
+
+/// What a checkout ingest wrote.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IngestReport {
+    /// Files read for code.
+    pub code_files: usize,
+    /// Code chunks offered.
+    pub code_items: usize,
+    /// Files read for conventions.
+    pub convention_files: usize,
+    /// Convention sections offered.
+    pub convention_items: usize,
+    /// What the engine reported, over every batch.
+    pub remembered: RememberReport,
+    /// Files that could not be read, with the reason.
+    pub unreadable: Vec<String>,
+    /// Items retired ahead of this ingest — see [`Ingestor::ingest_checkout`].
+    pub retired: u64,
+}
+
+impl IngestReport {
+    /// One line for a log or a CLI.
+    pub fn summary(&self) -> String {
+        format!(
+            "{} code chunks from {} files, {} convention sections from {} files; \
+             {} retired, {} written, {} already remembered{}",
+            self.code_items,
+            self.code_files,
+            self.convention_items,
+            self.convention_files,
+            self.retired,
+            self.remembered.written,
+            self.remembered.replayed,
+            if self.unreadable.is_empty() {
+                String::new()
+            } else {
+                format!(", {} unreadable", self.unreadable.len())
+            }
+        )
+    }
+}
+
+/// Which section [`MemoryKind`] files under, restricted to the two sections
+/// a checkout ingest writes. [`MemorySection::Reviews`] is never one of
+/// them: outcomes come from review threads, not the tree, and retiring a
+/// section this ingest does not own would erase a maintainer's judgement
+/// this pass had nothing to do with.
+fn ingested_sections(config: &MemoryConfig) -> Vec<crate::memory::types::MemorySection> {
+    let mut sections = Vec::new();
+    if config.ingest_code {
+        sections.push(crate::memory::types::MemorySection::Code);
+    }
+    if config.ingest_conventions {
+        sections.push(crate::memory::types::MemorySection::Conventions);
+    }
+    sections
+}
+
+/// Walks a checkout and remembers it.
+pub struct Ingestor<'a> {
+    memory: &'a dyn Memory,
+    config: &'a MemoryConfig,
+    selector: Selector,
+    chunker: Chunker,
+    conventions: GlobSet,
+}
+
+impl<'a> Ingestor<'a> {
+    /// An ingestor over `memory`, honouring `config` and `ignore` globs.
+    pub fn new(
+        memory: &'a dyn Memory,
+        config: &'a MemoryConfig,
+        ignore: &[String],
+    ) -> Result<Self> {
+        let mut builder = GlobSetBuilder::new();
+        for pattern in &config.convention_files {
+            let glob = Glob::new(pattern).map_err(|err| {
+                Error::config(format!("memory.convention_files `{pattern}`: {err}"))
+            })?;
+            builder.add(glob);
+        }
+        let conventions = builder
+            .build()
+            .map_err(|err| Error::config(format!("memory.convention_files: {err}")))?;
+        Ok(Self {
+            memory,
+            config,
+            selector: Selector::new(ignore)?,
+            chunker: Chunker::new(),
+            conventions,
+        })
+    }
+
+    /// Whether `path` is one of the configured convention files.
+    pub fn is_convention(&self, path: &str) -> bool {
+        self.conventions.is_match(path)
+    }
+
+    /// Remember everything under `root` for `repo`.
+    ///
+    /// # Stale versions are retired first
+    ///
+    /// A changed section or chunk hashes to a new [`MemoryItem::content_id`]
+    /// — the same key, a different body — and CortexDB has no update route,
+    /// so writing it is a second, independent event, never a replacement. A
+    /// key-set diff against what was ingested last would still miss exactly
+    /// that case (the key did not disappear, its body did) and only catch a
+    /// deleted file or heading. The only version of this fix that is honest
+    /// about what the [`Memory`] port can actually do is section-wide: every
+    /// call here forgets the whole `code` and/or `conventions` section for
+    /// `repo` before writing this pass's items, so recall can never rank a
+    /// superseded convention or code chunk above (or alongside) the version
+    /// this checkout actually holds. `ensure_ingested` already gates calling
+    /// this on the base tip having moved, so the section is never forgotten
+    /// without this same call immediately repopulating it in full.
+    pub async fn ingest_checkout(&self, repo: &str, root: &Path) -> Result<IngestReport> {
+        let selection = self.selector.walk(root)?;
+        let mut report = IngestReport::default();
+        let mut pending: Vec<MemoryItem> = Vec::new();
+
+        for section in ingested_sections(self.config) {
+            let scope = MemoryScope::section(repo, section);
+            report.retired += self.memory.forget(&scope).await?;
+        }
+
+        // `Selector` also rejects a file with no extension the source
+        // grammars recognise — correct for code, wrong for a convention file
+        // like `.cursorrules`, which the default config names explicitly. A
+        // convention match is pulled back in from what the selector only
+        // skipped for its extension, never from what it ignored outright or
+        // judged too large: those are the operator's own stated policy and a
+        // convention file is not exempt from either.
+        let extra_conventions: Vec<&str> = if self.config.ingest_conventions {
+            selection
+                .skipped
+                .iter()
+                .filter(|skipped| {
+                    matches!(
+                        skipped.reason,
+                        crate::chunk::types::SkipReason::UnsupportedExtension { .. }
+                    ) && self.is_convention(&skipped.path)
+                })
+                .map(|skipped| skipped.path.as_str())
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        for path in selection
+            .selected
+            .iter()
+            .map(String::as_str)
+            .chain(extra_conventions)
+        {
+            let bytes = match std::fs::read(root.join(path)) {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    report.unreadable.push(format!("{path}: {err}"));
+                    continue;
+                }
+            };
+            // A path pulled back in above only ever skipped the *extension*
+            // check — the size cap, which `Selector::reject` never reached
+            // for it, still applies. `selection.selected` already passed it.
+            if bytes.len() as u64 > crate::chunk::select::DEFAULT_MAX_BYTES {
+                report
+                    .unreadable
+                    .push(format!("{path}: over the convention size cap"));
+                continue;
+            }
+            if self.config.ingest_conventions && self.is_convention(path) {
+                let Ok(text) = std::str::from_utf8(&bytes) else {
+                    report.unreadable.push(format!("{path}: not UTF-8"));
+                    continue;
+                };
+                let items = convention_items(path, text, self.config.convention_section_chars);
+                report.convention_files += 1;
+                report.convention_items += items.len();
+                pending.extend(items);
+            } else if self.config.ingest_code {
+                match self.chunker.chunk_bytes(repo, path, &bytes) {
+                    Ok(chunks) => {
+                        let items = code_items(&chunks);
+                        report.code_files += 1;
+                        report.code_items += items.len();
+                        pending.extend(items);
+                    }
+                    Err(err) => report.unreadable.push(format!("{path}: {err:?}")),
+                }
+            }
+            if pending.len() >= REMEMBER_BATCH {
+                self.flush(repo, &mut pending, &mut report).await?;
+            }
+        }
+        self.flush(repo, &mut pending, &mut report).await?;
+        Ok(report)
+    }
+
+    /// Write `pending` in section-homogeneous batches.
+    async fn flush(
+        &self,
+        repo: &str,
+        pending: &mut Vec<MemoryItem>,
+        report: &mut IngestReport,
+    ) -> Result<()> {
+        let items = std::mem::take(pending);
+        // One `remember` per section: the port files by section scope, and a
+        // batch that mixes them would have to be split anyway.
+        let mut by_section: std::collections::BTreeMap<_, Vec<MemoryItem>> = Default::default();
+        for item in items {
+            by_section.entry(item.section()).or_default().push(item);
+        }
+        for (section, items) in by_section {
+            let scope = MemoryScope::section(repo, section);
+            for batch in items.chunks(REMEMBER_BATCH) {
+                report
+                    .remembered
+                    .merge(self.memory.remember(&scope, batch).await?);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Remember `items` for `repo`, batched by section. Best-effort: the first
+/// failure is returned, and everything before it stays written.
+pub async fn remember_all(
+    memory: &dyn Memory,
+    repo: &str,
+    items: &[MemoryItem],
+) -> Result<RememberReport> {
+    let mut report = RememberReport::default();
+    let mut by_section: std::collections::BTreeMap<_, Vec<&MemoryItem>> = Default::default();
+    for item in items {
+        by_section.entry(item.section()).or_default().push(item);
+    }
+    for (section, items) in by_section {
+        let scope = MemoryScope::section(repo, section);
+        for batch in items.chunks(REMEMBER_BATCH) {
+            let owned: Vec<MemoryItem> = batch.iter().map(|i| (*i).clone()).collect();
+            report.merge(memory.remember(&scope, &owned).await?);
+        }
+    }
+    Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::forge::types::ThreadComment;
+    use crate::memory::MockMemory;
+    use crate::memory::types::MemorySection;
+
+    #[test]
+    fn conventions_split_one_item_per_heading_with_the_heading_path_as_title() {
+        let md = "\
+Intro line.
+
+# Repository Guidelines
+
+## Security Boundary
+
+The model never holds a write token.
+
+```sh
+# not a heading
+cargo test
+```
+
+## Testing
+
+Tests live in-crate.
+
+# Other
+
+Tail.
+";
+        let items = convention_items("AGENTS.md", md, 2000);
+        let titles: Vec<&str> = items.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            [
+                "AGENTS.md",
+                "AGENTS.md › Repository Guidelines › Security Boundary",
+                "AGENTS.md › Repository Guidelines › Testing",
+                "AGENTS.md › Other",
+            ]
+        );
+        assert!(items[1].body.contains("# not a heading"));
+        assert_eq!(
+            items[1].key,
+            "convention:AGENTS.md#repository-guidelines-security-boundary"
+        );
+        assert!(items.iter().all(|i| i.kind == MemoryKind::Convention));
+        assert!(items.iter().all(|i| i.path.as_deref() == Some("AGENTS.md")));
+    }
+
+    #[test]
+    fn long_sections_split_at_paragraphs_and_share_a_title() {
+        let para = "x".repeat(150);
+        let md = format!("# H\n\n{para}\n\n{para}\n\n{para}\n");
+        let items = convention_items("CLAUDE.md", &md, 320);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].title, items[1].title);
+        assert_eq!(items[0].key, "convention:CLAUDE.md#h");
+        assert_eq!(items[1].key, "convention:CLAUDE.md#h~1");
+        assert!(items[0].body.len() <= 320);
+    }
+
+    #[test]
+    fn two_headings_that_slug_the_same_get_distinct_keys() {
+        // Regression: `C++` and `C#` both slug to `c`, and a repeated
+        // heading path slugs identically to itself — either way, two
+        // distinct sections used to key to the same `convention:{path}#c`,
+        // and recall's dedupe-by-key would silently discard whichever
+        // ranked second.
+        let md = "# C++\n\nUse RAII.\n\n# C#\n\nUse `using`.\n";
+        let items = convention_items("CONVENTIONS.md", md, 2000);
+
+        assert_eq!(items.len(), 2, "{items:?}");
+        let keys: Vec<&str> = items.iter().map(|i| i.key.as_str()).collect();
+        assert_eq!(
+            keys.iter().collect::<std::collections::BTreeSet<_>>().len(),
+            2,
+            "every key must be distinct: {keys:?}"
+        );
+        assert!(items.iter().any(|i| i.body.contains("RAII")));
+        assert!(items.iter().any(|i| i.body.contains("using")));
+    }
+
+    #[test]
+    fn a_paragraph_over_the_ceiling_is_kept_whole() {
+        let para = "y".repeat(500);
+        let items = convention_items("CLAUDE.md", &format!("# H\n\n{para}\n"), 200);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].body, para);
+    }
+
+    #[test]
+    fn code_items_key_on_the_symbol_and_carry_the_path() {
+        let chunks = Chunker::new().chunk("o/r", "src/a.rs", "fn alpha() {}\n\nfn beta() {}\n");
+        let items = code_items(&chunks);
+        assert!(!items.is_empty());
+        assert!(items.iter().all(|i| i.kind == MemoryKind::CodeChunk));
+        assert!(items.iter().all(|i| i.path.as_deref() == Some("src/a.rs")));
+        assert!(items.iter().all(|i| i.key.starts_with("code:src/a.rs#")));
+    }
+
+    #[test]
+    fn repeated_symbol_names_in_one_file_get_distinct_keys() {
+        // Regression: two `impl` blocks each naming a method `new` used to
+        // chunk to the same `code:{path}#new` key with different bodies —
+        // recall dedupes by key, so the second was silently discarded
+        // whenever memory supplied code context, and identical bodies would
+        // even collapse at the engine's own idempotency.
+        fn chunk(symbol: &str, body: &str) -> crate::index::types::Chunk {
+            crate::index::types::Chunk {
+                path: "src/a.rs".into(),
+                symbol: Some(symbol.into()),
+                text: body.into(),
+                ..Default::default()
+            }
+        }
+        let chunks = vec![
+            chunk("new", "impl A { fn new() -> Self { A } }"),
+            chunk("new", "impl B { fn new() -> Self { B } }"),
+            chunk("unique", "fn unique() {}"),
+        ];
+        let items = code_items(&chunks);
+
+        let keys: Vec<&str> = items.iter().map(|i| i.key.as_str()).collect();
+        assert_eq!(keys.len(), 3, "{keys:?}");
+        assert_eq!(
+            keys.iter().collect::<std::collections::BTreeSet<_>>().len(),
+            3,
+            "every key must be distinct: {keys:?}"
+        );
+        // A symbol with no collision keeps its plain key — the property that
+        // lets re-chunking an unchanged file replay rather than rewrite.
+        assert!(keys.contains(&"code:src/a.rs#unique"), "{keys:?}");
+        assert!(!keys.contains(&"code:src/a.rs#new"), "{keys:?}");
+    }
+
+    /// `alice`, a non-bot reply, is a maintainer by default — most tests
+    /// exercise the settled-outcome path, where a human with write access
+    /// spoke. [`thread_with_reply_permission`] covers the unauthorized case.
+    fn thread(
+        ours: &str,
+        replies: &[(&str, bool)],
+        resolved: bool,
+        outdated: bool,
+    ) -> ReviewThread {
+        thread_with_reply_permission(ours, replies, resolved, outdated, true)
+    }
+
+    fn thread_with_reply_permission(
+        ours: &str,
+        replies: &[(&str, bool)],
+        resolved: bool,
+        outdated: bool,
+        replies_are_maintainers: bool,
+    ) -> ReviewThread {
+        // A resolved thread in most of these tests is resolved by someone
+        // with write access — the tests that specifically exercise an
+        // unauthorized resolve build their own `ReviewThread` directly.
+        thread_with_permissions(
+            ours,
+            replies,
+            resolved,
+            outdated,
+            replies_are_maintainers,
+            resolved,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn thread_with_permissions(
+        ours: &str,
+        replies: &[(&str, bool)],
+        resolved: bool,
+        outdated: bool,
+        replies_are_maintainers: bool,
+        resolved_by_has_write_access: bool,
+    ) -> ReviewThread {
+        let mut comments = vec![ThreadComment {
+            author: "tinysweeper[bot]".into(),
+            body: format!("**Title here**\n\nbody\n\n<!-- tinysweeper:fp={ours} -->"),
+            bot: true,
+            maintainer: false,
+        }];
+        comments.extend(replies.iter().map(|(body, bot)| ThreadComment {
+            author: if *bot { "other-bot[bot]" } else { "alice" }.into(),
+            body: (*body).into(),
+            bot: *bot,
+            maintainer: !*bot && replies_are_maintainers,
+        }));
+        ReviewThread {
+            id: "t".into(),
+            is_resolved: resolved,
+            is_outdated: outdated,
+            comments,
+            resolved_by_has_write_access,
+        }
+    }
+
+    const FP: &str = "0123456789abcdef";
+
+    #[test]
+    fn outcomes_follow_the_deterministic_signals() {
+        assert_eq!(classify(&thread(FP, &[], true, true)), Some(Outcome::Fixed));
+        assert_eq!(
+            classify(&thread(FP, &[("fine", false)], true, false)),
+            Some(Outcome::Rejected)
+        );
+        assert_eq!(
+            classify(&thread(FP, &[], true, false)),
+            Some(Outcome::Dismissed)
+        );
+        assert_eq!(
+            classify(&thread(FP, &[("no", false)], false, false)),
+            Some(Outcome::Disputed)
+        );
+        assert_eq!(classify(&thread(FP, &[], false, false)), None);
+        // A bot's reply is not a human's.
+        assert_eq!(classify(&thread(FP, &[("beep", true)], false, false)), None);
+    }
+
+    #[test]
+    fn a_resolve_by_an_unauthorized_actor_is_never_fixed() {
+        // `is_outdated` is GitHub's own fact about the code, but resolving
+        // the thread is still an action, and the pull request's own author
+        // can perform it regardless of permission — an unrelated nearby edit
+        // ages the anchor out, and resolving their own bot thread must not
+        // be recorded as `Fixed` without anyone with write access agreeing.
+        let resolved_by_the_author = thread_with_permissions(FP, &[], true, true, false, false);
+        assert_eq!(classify(&resolved_by_the_author), None);
+
+        let resolved_by_a_maintainer = thread_with_permissions(FP, &[], true, true, false, true);
+        assert_eq!(classify(&resolved_by_a_maintainer), Some(Outcome::Fixed));
+    }
+
+    #[test]
+    fn a_reply_from_someone_without_write_access_is_never_a_rejection() {
+        // A resolved, non-outdated thread with a non-maintainer reply must
+        // not be classified as `Rejected`: that would let any contributor —
+        // untrusted input by the security boundary in CLAUDE.md — get their
+        // own reply recorded as maintainer judgement and suppress the
+        // finding from ever being raised again.
+        let resolved =
+            thread_with_reply_permission(FP, &[("looks fine to me", false)], true, false, false);
+        assert_eq!(classify(&resolved), Some(Outcome::Dismissed));
+
+        // Nor should it settle an open thread as `Disputed`.
+        let open = thread_with_reply_permission(FP, &[("nope", false)], false, false, false);
+        assert_eq!(classify(&open), None);
+    }
+
+    #[test]
+    fn a_silent_resolve_by_someone_without_write_access_is_not_a_dismissal() {
+        // GitHub lets a pull request's own author resolve their own
+        // conversations regardless of permission level. Without checking who
+        // actually resolved it, an unauthorized contributor could silently
+        // dismiss a bot's finding on their own fork's pull request and have
+        // memory tell future reviews never to raise it again.
+        let silently_resolved = thread_with_permissions(FP, &[], true, false, false, false);
+        assert_eq!(classify(&silently_resolved), None);
+
+        // The same thread, resolved by someone who does have write access, is
+        // an ordinary dismissal.
+        let resolved_by_a_maintainer = thread_with_permissions(FP, &[], true, false, false, true);
+        assert_eq!(
+            classify(&resolved_by_a_maintainer),
+            Some(Outcome::Dismissed)
+        );
+    }
+
+    #[test]
+    fn a_maintainer_reply_resolved_by_an_unauthorized_actor_is_not_a_rejection() {
+        // The reply and the resolve are two separate authorizations: GitHub
+        // lets the pull request's own author resolve a thread regardless of
+        // permission, so a maintainer's "please fix this" resolved by the
+        // unauthorized author it was aimed at must not settle as `Rejected`
+        // — that would let the author turn any maintainer response into a
+        // finding memory is told never to raise again.
+        let resolved_by_the_author =
+            thread_with_permissions(FP, &[("please fix this", false)], true, false, true, false);
+        assert_eq!(classify(&resolved_by_the_author), None);
+
+        // The identical reply, resolved by someone with write access, is an
+        // ordinary rejection.
+        let resolved_by_a_maintainer = thread_with_permissions(
+            FP,
+            &[("looks fine, leave it", false)],
+            true,
+            false,
+            true,
+            true,
+        );
+        assert_eq!(classify(&resolved_by_a_maintainer), Some(Outcome::Rejected));
+    }
+
+    #[test]
+    fn outcome_items_pair_the_path_by_fingerprint_and_quote_the_reply() {
+        let threads = vec![thread(
+            FP,
+            &[("This is intentional; see the caller.", false)],
+            true,
+            false,
+        )];
+        let comments = vec![ReviewComment {
+            author: "tinysweeper[bot]".into(),
+            body: format!("x <!-- tinysweeper:fp={FP} -->"),
+            path: "src/lib.rs".into(),
+            line: Some(3),
+            start_line: None,
+        }];
+        let items = outcome_items("o/r", 7, &threads, &comments);
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(item.kind, MemoryKind::ReviewOutcome);
+        assert_eq!(item.path.as_deref(), Some("src/lib.rs"));
+        assert_eq!(item.title, "rejected — Title here");
+        assert!(
+            item.body
+                .contains("Maintainer's reply: This is intentional")
+        );
+        assert!(item.labels.contains(&"outcome:rejected".to_string()));
+        assert_eq!(item.key, format!("outcome:o/r#7:{FP}"));
+    }
+
+    #[test]
+    fn threads_opened_by_others_and_unsettled_threads_contribute_nothing() {
+        let mut theirs = thread(FP, &[("x", false)], true, false);
+        theirs.comments[0].author = "alice".into();
+        theirs.comments[0].bot = false;
+        let open = thread(FP, &[], false, false);
+        assert!(outcome_items("o/r", 1, &[theirs, open], &[]).is_empty());
+    }
+
+    #[test]
+    fn a_long_reply_is_cut_to_the_ceiling() {
+        let long = "z".repeat(2000);
+        let threads = vec![thread(FP, &[(long.as_str(), false)], true, false)];
+        let items = outcome_items("o/r", 1, &threads, &[]);
+        assert!(items[0].body.len() < 700, "{}", items[0].body.len());
+    }
+
+    #[tokio::test]
+    async fn ingesting_a_checkout_files_code_and_conventions_apart() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "pub fn f() {}\n").unwrap();
+        std::fs::write(
+            dir.path().join("AGENTS.md"),
+            "# Rules\n\n## Errors\n\nNever unwrap.\n",
+        )
+        .unwrap();
+        let memory = MockMemory::new();
+        let config: crate::config::Config = crate::config::DEFAULTS
+            .parse::<toml::Table>()
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let config = config.memory;
+        let ingestor = Ingestor::new(&memory, &config, &[]).unwrap();
+        let report = ingestor.ingest_checkout("o/r", dir.path()).await.unwrap();
+        assert_eq!(report.convention_files, 1);
+        assert_eq!(report.code_files, 1);
+        assert!(report.remembered.written > 0);
+        let code = memory.remembered(&MemoryScope::section("o/r", MemorySection::Code));
+        let conventions =
+            memory.remembered(&MemoryScope::section("o/r", MemorySection::Conventions));
+        assert!(code.iter().all(|i| i.path.as_deref() == Some("src/lib.rs")));
+        assert_eq!(conventions.len(), 1);
+        assert_eq!(conventions[0].title, "AGENTS.md › Rules › Errors");
+
+        // A second pass over an unchanged tree retires the stale versions of
+        // every item first — CortexDB has no update route, so the only way
+        // to guarantee recall never ranks a superseded convention or code
+        // chunk is to forget the section and write this pass's items fresh —
+        // so it writes everything again rather than replaying.
+        let again = ingestor.ingest_checkout("o/r", dir.path()).await.unwrap();
+        assert!(again.retired > 0, "{again:?}");
+        assert_eq!(again.remembered.written, report.remembered.written);
+        assert_eq!(again.remembered.replayed, 0);
+    }
+
+    #[tokio::test]
+    async fn an_extensionless_convention_file_is_still_ingested() {
+        // Regression: `Selector` rejects any file whose extension the source
+        // grammars don't recognise, including no extension at all, before
+        // `ingest_checkout` ever checks whether it names a convention file —
+        // so `.cursorrules`, which the default config names explicitly
+        // (`memory.convention_files`), was silently absent from memory.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".cursorrules"), "Never use `unwrap`.\n").unwrap();
+        let memory = MockMemory::new();
+        let mut config: crate::config::Config = crate::config::DEFAULTS
+            .parse::<toml::Table>()
+            .unwrap()
+            .try_into()
+            .unwrap();
+        config.memory.ingest_code = false;
+        config.memory.convention_files = vec![".cursorrules".into()];
+        let config = config.memory;
+        let ingestor = Ingestor::new(&memory, &config, &[]).unwrap();
+        let report = ingestor.ingest_checkout("o/r", dir.path()).await.unwrap();
+
+        assert_eq!(report.convention_files, 1, "{report:?}");
+        let conventions =
+            memory.remembered(&MemoryScope::section("o/r", MemorySection::Conventions));
+        assert_eq!(conventions.len(), 1);
+        assert!(conventions[0].body.contains("Never use"), "{conventions:?}");
+    }
+
+    #[tokio::test]
+    async fn a_re_ingest_retires_an_edited_convention_rather_than_stacking_it() {
+        // The bug this guards: editing a convention's body keeps its key but
+        // changes its `content_id`, so without retiring the section first,
+        // the previous version stays recallable alongside the edit — the
+        // "multiple contradictory versions sharing the same logical key"
+        // failure a stale AGENTS.md rule would produce.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("AGENTS.md"),
+            "# Rules\n\n## Errors\n\nNever unwrap.\n",
+        )
+        .unwrap();
+        let memory = MockMemory::new();
+        let mut config: crate::config::Config = crate::config::DEFAULTS
+            .parse::<toml::Table>()
+            .unwrap()
+            .try_into()
+            .unwrap();
+        config.memory.ingest_code = false;
+        let config = config.memory;
+        let ingestor = Ingestor::new(&memory, &config, &[]).unwrap();
+        ingestor.ingest_checkout("o/r", dir.path()).await.unwrap();
+
+        std::fs::write(
+            dir.path().join("AGENTS.md"),
+            "# Rules\n\n## Errors\n\nAlways use `?`.\n",
+        )
+        .unwrap();
+        ingestor.ingest_checkout("o/r", dir.path()).await.unwrap();
+
+        let conventions =
+            memory.remembered(&MemoryScope::section("o/r", MemorySection::Conventions));
+        assert_eq!(
+            conventions.len(),
+            1,
+            "the edited rule must replace the old one, not join it: {conventions:?}"
+        );
+        assert!(
+            conventions[0].body.contains("Always use"),
+            "{conventions:?}"
+        );
+        assert!(
+            !conventions[0].body.contains("Never unwrap"),
+            "{conventions:?}"
+        );
+    }
+
+    #[test]
+    fn slugs_are_lowercase_hyphenated_and_never_empty() {
+        assert_eq!(slug("Security Boundary"), "security-boundary");
+        assert_eq!(slug("  A › B  "), "a-b");
+        assert_eq!(slug("!!!"), "top");
+    }
+}

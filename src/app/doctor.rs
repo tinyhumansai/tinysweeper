@@ -105,7 +105,11 @@ fn print_json(loaded: &Loaded) -> Result<()> {
 fn redacted_config(config: &Config) -> Result<serde_json::Value> {
     let mut value = serde_json::to_value(config)?;
 
-    for (section, field) in [("models", "api_key_env"), ("sentry", "token_env")] {
+    for (section, field) in [
+        ("models", "api_key_env"),
+        ("sentry", "token_env"),
+        ("memory", "api_key_env"),
+    ] {
         if let Some(current) = value
             .get_mut(section)
             .and_then(|s| s.get_mut(field))
@@ -287,6 +291,7 @@ fn print_prose(loaded: &Loaded) {
         ("automation", config.automation.enabled),
         ("stale sweep", config.automation.stale.enabled),
         ("sentry promotion", config.sentry.enabled),
+        ("memory", config.memory.enabled),
     ] {
         println!("  {:<16} {}", name, if enabled { "on" } else { "off" });
     }
@@ -360,6 +365,9 @@ fn credentials(loaded: &Loaded) -> Vec<(String, bool, &'static str)> {
 
     if config.sentry.enabled {
         wanted.push((config.sentry.token_env.clone(), "Sentry promotion"));
+    }
+    if config.memory.enabled {
+        wanted.push((config.memory.api_key_env.clone(), "the memory engine"));
     }
 
     wanted
@@ -498,6 +506,27 @@ mod tests {
                 .any(|(var, _, _)| var == "OPENROUTER_API_KEY")
         );
         assert!(reported.iter().any(|(var, _, _)| var == "GITHUB_TOKEN"));
+    }
+
+    #[test]
+    fn memory_credentials_are_only_wanted_when_memory_is_on() {
+        let dir = repo("version = 1\n");
+        let loaded = config::load(dir.path(), None).expect("loads");
+        assert!(
+            !credentials(&loaded)
+                .iter()
+                .any(|(var, _, _)| var == "CORTEX_API_KEY")
+        );
+
+        let dir = repo(
+            "version = 1\n[memory]\nenabled = true\nendpoint = \"https://api-v1.cortexdb.ai\"\n",
+        );
+        let loaded = config::load(dir.path(), None).expect("loads");
+        assert!(
+            credentials(&loaded)
+                .iter()
+                .any(|(var, _, _)| var == "CORTEX_API_KEY")
+        );
     }
 
     #[test]

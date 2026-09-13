@@ -14,16 +14,19 @@ fn thread(reply: &str) -> ReviewThread {
         id: "PRRT_1".into(),
         is_resolved: false,
         is_outdated: false,
+        resolved_by_has_write_access: false,
         comments: vec![
             ThreadComment {
                 author: "tinysweeper[bot]".into(),
                 body: "**Guard the index** <!-- tinysweeper:fp=0123456789abcdef -->".into(),
                 bot: true,
+                maintainer: false,
             },
             ThreadComment {
                 author: "author".into(),
                 body: reply.into(),
                 bot: false,
+                maintainer: false,
             },
         ],
     }
