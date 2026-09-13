@@ -122,6 +122,7 @@ async fn main() -> Result<()> {
                         "**Mint the token lazily**\n\nx\n\n<!-- tinysweeper:fp={fingerprint} -->"
                     ),
                     bot: true,
+                    maintainer: false,
                 },
                 ThreadComment {
                     author: "maintainer".into(),
@@ -129,6 +130,7 @@ async fn main() -> Result<()> {
                            that ordering is the security boundary."
                         .into(),
                     bot: false,
+                    maintainer: true,
                 },
             ],
         }],
