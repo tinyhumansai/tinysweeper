@@ -713,12 +713,32 @@ pub async fn review_with_memory(
             .flat_map(|lane| lane.findings.iter().cloned())
             .collect();
         let items = crate::memory::ingest::finding_items(&repo.to_string(), number, &findings);
-        if !items.is_empty()
-            && let Err(err) =
-                crate::memory::ingest::remember_all(recaller.memory(), &repo.to_string(), &items)
-                    .await
-        {
-            tracing::warn!(%err, "could not remember this review's findings");
+        if !items.is_empty() {
+            // Bounded rather than spawned: `Recaller` borrows `memory` for
+            // the lifetime of this call, so backgrounding the write would
+            // need an owned, 'static handle to the engine. A bound is enough
+            // to fix what this guards against — the adapter gives each
+            // sequential batch its own 120-second timeout, and more than
+            // `REMEMBER_BATCH` findings is multiple batches, so an
+            // unreachable or slow engine could otherwise hold this review's
+            // permit, and `apply`'s publish behind it, for minutes.
+            match tokio::time::timeout(
+                REMEMBER_FINDINGS_TIMEOUT,
+                crate::memory::ingest::remember_all(recaller.memory(), &repo.to_string(), &items),
+            )
+            .await
+            {
+                Ok(Ok(_)) => {}
+                Ok(Err(err)) => {
+                    tracing::warn!(%err, "could not remember this review's findings");
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        seconds = REMEMBER_FINDINGS_TIMEOUT.as_secs(),
+                        "remembering this review's findings took too long; the review is not held for it"
+                    );
+                }
+            }
         }
     }
 
