@@ -720,11 +720,7 @@ mod tests {
 
     #[test]
     fn a_merged_pull_request_is_remembered_as_merged_not_closed() {
-        let item = subject_item(
-            "o/r",
-            &Subject::PullRequest(pull_request(9), Some("2026-08-12T00:00:00Z".into())),
-            2000,
-        );
+        let item = subject_item("o/r", &Subject::PullRequest(pull_request(9)), 2000);
         assert_eq!(item.key, "pr:o/r#9");
         assert_eq!(item.kind, MemoryKind::PullRequest);
         assert!(item.body.contains("State: merged"), "{}", item.body);
