@@ -108,6 +108,7 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
           id
           isResolved
           isOutdated
+          resolvedBy { login }
           comments(first: $first) {
             nodes { body authorAssociation author { login __typename } }
           }
