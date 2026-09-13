@@ -397,6 +397,8 @@ pub struct IngestReport {
     pub remembered: RememberReport,
     /// Files that could not be read, with the reason.
     pub unreadable: Vec<String>,
+    /// Items retired ahead of this ingest — see [`Ingestor::ingest_checkout`].
+    pub retired: u64,
 }
 
 impl IngestReport {
