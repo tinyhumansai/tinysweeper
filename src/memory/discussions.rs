@@ -491,6 +491,7 @@ impl<'a> Discussions<'a> {
             remembered,
             failed: Vec::new(),
             resume_from: None,
+            last_seen: None,
         })
     }
 
