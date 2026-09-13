@@ -1951,6 +1951,74 @@ mod tests {
     }
 
     #[test]
+    fn resolved_by_is_parsed_and_queued_as_a_candidate() {
+        let raw = json!({
+            "data": {"repository": {"pullRequest": {"reviewThreads": {
+                "pageInfo": {"hasNextPage": false, "endCursor": null},
+                "nodes": [{
+                    "id": "PRRT_1",
+                    "isResolved": true,
+                    "isOutdated": false,
+                    "resolvedBy": {"login": "the-author"},
+                    "comments": {"nodes": [
+                        {"author": {"login": "tinysweeper", "__typename": "Bot"},
+                         "body": "finding"}
+                    ]}
+                }]
+            }}}}
+        });
+
+        let parsed = threads_from_graphql(&raw);
+
+        assert_eq!(parsed[0].resolved_by, Some("the-author".to_string()));
+        assert_eq!(parsed[0].candidates, vec!["the-author".to_string()]);
+        // Not yet resolved against a real permission — that is
+        // `review_threads`'s job, exercised by `resolve_write_access`.
+        assert!(!parsed[0].thread.resolved_by_has_write_access);
+    }
+
+    #[test]
+    fn a_thread_resolved_by_someone_without_write_access_is_not_dismissible() {
+        let raw = json!({
+            "data": {"repository": {"pullRequest": {"reviewThreads": {
+                "pageInfo": {"hasNextPage": false, "endCursor": null},
+                "nodes": [
+                    {
+                        "id": "PRRT_1",
+                        "isResolved": true,
+                        "isOutdated": false,
+                        "resolvedBy": {"login": "fork-author"},
+                        "comments": {"nodes": [
+                            {"author": {"login": "tinysweeper", "__typename": "Bot"},
+                             "body": "finding"}
+                        ]}
+                    },
+                    {
+                        "id": "PRRT_2",
+                        "isResolved": true,
+                        "isOutdated": false,
+                        "resolvedBy": {"login": "a-maintainer"},
+                        "comments": {"nodes": [
+                            {"author": {"login": "tinysweeper", "__typename": "Bot"},
+                             "body": "finding"}
+                        ]}
+                    }
+                ]
+            }}}}
+        });
+
+        let parsed = threads_from_graphql(&raw);
+        let write_access = HashMap::from([
+            ("fork-author".to_string(), false),
+            ("a-maintainer".to_string(), true),
+        ]);
+        let threads = resolve_write_access(parsed, &write_access);
+
+        assert!(!threads[0].resolved_by_has_write_access);
+        assert!(threads[1].resolved_by_has_write_access);
+    }
+
+    #[test]
     fn no_reviews_is_no_approvals() {
         // Conservative direction: nothing gates on having *fewer* approvals.
         assert_eq!(approvals_of(&[]), 0);
