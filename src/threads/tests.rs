@@ -33,11 +33,13 @@ fn ours() -> ReviewThread {
                 author: "tinysweeper[bot]".into(),
                 body: format!("**{TITLE}**\n\n<!-- tinysweeper:fp={FINGERPRINT} -->"),
                 bot: true,
+                maintainer: false,
             },
             ThreadComment {
                 author: "author".into(),
                 body: "fixed in the last push".into(),
                 bot: false,
+                maintainer: false,
             },
         ],
     }

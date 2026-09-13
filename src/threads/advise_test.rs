@@ -19,11 +19,13 @@ fn thread(reply: &str) -> ReviewThread {
                 author: "tinysweeper[bot]".into(),
                 body: "**Guard the index** <!-- tinysweeper:fp=0123456789abcdef -->".into(),
                 bot: true,
+                maintainer: false,
             },
             ThreadComment {
                 author: "author".into(),
                 body: reply.into(),
                 bot: false,
+                maintainer: false,
             },
         ],
     }
