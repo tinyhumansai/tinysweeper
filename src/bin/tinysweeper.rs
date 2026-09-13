@@ -1296,7 +1296,7 @@ async fn run_memory(command: MemoryCommand) -> Result<()> {
             let (_, memory) = open(std::path::Path::new("."), None)?;
             let section = MemorySection::parse(&section).ok_or_else(|| {
                 tinysweeper::Error::config(format!(
-                    "`{section}` is not a section; use code, conventions or reviews"
+                    "`{section}` is not a section; use code, conventions, reviews or discussions"
                 ))
             })?;
             let answer = memory
@@ -1330,7 +1330,7 @@ async fn run_memory(command: MemoryCommand) -> Result<()> {
                 Some(Some(section)) => MemoryScope::section(&repo, section),
                 Some(None) => {
                     return Err(tinysweeper::Error::config(format!(
-                        "`{}` is not a section; use code, conventions or reviews",
+                        "`{}` is not a section; use code, conventions, reviews or discussions",
                         section.unwrap_or_default()
                     )));
                 }
