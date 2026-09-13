@@ -289,15 +289,19 @@ impl Outcome {
 /// happened to it yet.
 ///
 /// Only the deterministic signals GitHub carries are used — resolved,
-/// outdated, and whether a human wrote back. No model is consulted: an
-/// outcome is evidence about the maintainers' judgement, and inferring it
-/// with a model would remember the model's judgement instead.
+/// outdated, and whether someone with write access wrote back. No model is
+/// consulted: an outcome is evidence about the maintainers' judgement, and
+/// inferring it with a model would remember the model's judgement instead.
+/// A reply is untrusted input from whoever can comment on the pull request,
+/// so only a reply from an author GitHub reports as `OWNER`, `MEMBER`, or
+/// `COLLABORATOR` counts as that judgement — otherwise any contributor could
+/// get their own finding recorded as a settled "maintainer rejection".
 pub fn classify(thread: &ReviewThread) -> Option<Outcome> {
     let human_replied = thread
         .comments
         .iter()
         .skip(1)
-        .any(|c| !c.bot && !is_own_login(&c.author));
+        .any(|c| !c.bot && !is_own_login(&c.author) && c.maintainer);
     match (thread.is_resolved, thread.is_outdated, human_replied) {
         (true, true, _) => Some(Outcome::Fixed),
         (true, false, true) => Some(Outcome::Rejected),
