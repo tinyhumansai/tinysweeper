@@ -253,6 +253,13 @@ pub async fn overlay(
         config: base.clone(),
         source: None,
         ignored: Vec::new(),
+        unavailable: false,
+    };
+    let unavailable = || RepoOverlay {
+        config: base.clone(),
+        source: None,
+        ignored: Vec::new(),
+        unavailable: true,
     };
 
     // In `CONFIG_NAMES` order, the same order the filesystem path searches, so
@@ -263,7 +270,7 @@ pub async fn overlay(
             Ok(None) => continue,
             Err(err) => {
                 tracing::warn!(%err, %repo, %name, "could not read the repository's config");
-                return unmodified();
+                return unavailable();
             }
         };
 
@@ -284,11 +291,12 @@ pub async fn overlay(
                     config,
                     source: Some(name.to_string()),
                     ignored,
+                    unavailable: false,
                 }
             }
             Err(err) => {
                 tracing::warn!(%err, %repo, %name, "the repository's config is unusable; reviewing on the deployment's own");
-                unmodified()
+                unavailable()
             }
         };
     }
