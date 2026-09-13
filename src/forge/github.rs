@@ -2095,6 +2095,15 @@ mod tests {
     }
 
     #[test]
+    fn a_comment_page_is_read_wrapped_or_unwrapped() {
+        let page = serde_json::json!({ "comments": { "nodes": [], "pageInfo": { "hasNextPage": false } } });
+        let wrapped = serde_json::json!({ "data": { "node": page } });
+        let unwrapped = serde_json::json!({ "node": page });
+        assert!(node_comments(&wrapped)["nodes"].is_array());
+        assert!(node_comments(&unwrapped)["nodes"].is_array());
+    }
+
+    #[test]
     fn a_truncated_comment_page_is_flagged_with_its_cursor() {
         // Regression: a thread with more than one page of comments must not
         // silently stop at the first `GRAPHQL_PAGE` — `review_threads`

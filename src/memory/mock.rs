@@ -70,6 +70,11 @@ impl MockMemory {
         *self.failure.lock().expect("failure lock") = Some(message.into());
     }
 
+    /// Make only `answer` fail from now on; recall keeps working.
+    pub fn fail_answers_with(&self, message: impl Into<String>) {
+        *self.answer_failure.lock().expect("answer failure lock") = Some(message.into());
+    }
+
     /// Make `remember` sleep for `delay` before completing, from now on.
     pub fn with_delay(self, delay: std::time::Duration) -> Self {
         *self.delay.lock().expect("delay lock") = Some(delay);
@@ -233,6 +238,14 @@ impl Memory for MockMemory {
         _instructions: Option<&str>,
     ) -> Result<MemoryAnswer> {
         self.check()?;
+        if let Some(message) = self
+            .answer_failure
+            .lock()
+            .expect("answer failure lock")
+            .as_deref()
+        {
+            return Err(Error::Model(format!("mock memory: {message}")));
+        }
         let canned = self
             .answers
             .lock()

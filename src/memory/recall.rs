@@ -806,6 +806,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_lost_answer_keeps_the_recollections_and_says_so() {
+        // One timed-out question must not throw away the conventions and
+        // outcomes that already came back: memory is best-effort per call.
+        let memory = seeded().await;
+        memory.fail_answers_with("timed out");
+        let recaller = Recaller::new(&memory);
+        let context = recaller
+            .recall(
+                &config(),
+                "o/r",
+                "ports change",
+                &[diff("src/ports/forge.rs")],
+                false,
+            )
+            .await;
+        assert!(
+            matches!(context.status, MemoryStatus::Partial { failed: 2, .. }),
+            "{:?}",
+            context.status
+        );
+        assert!(!context.recollections.is_empty());
+        assert!(context.answers.is_empty());
+        let note = context.note().unwrap();
+        assert!(note.contains("2 memory call(s) failed"), "{note}");
+        assert!(context.render().contains("deliberately wide"));
+    }
+
+    #[tokio::test]
     async fn the_budget_drops_and_counts() {
         let memory = seeded().await;
         let recaller = Recaller::new(&memory);
