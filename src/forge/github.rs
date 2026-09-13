@@ -240,6 +240,33 @@ struct ParsedThread {
     resolved_by: Option<String>,
 }
 
+/// One comment, parsed, plus whether it names a write-access candidate.
+///
+/// Shared between the thread listing and [`comments_page`]'s follow-up
+/// pages for a thread whose comments didn't fit in one, so both parse a
+/// candidate the same way.
+fn comment_from_json(comment: &serde_json::Value) -> (ThreadComment, bool) {
+    let author = comment["author"]["login"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    // A candidate only: `review_threads` still has to confirm this against a
+    // real permission lookup.
+    let candidate = matches!(
+        comment["authorAssociation"].as_str(),
+        Some("OWNER") | Some("MEMBER") | Some("COLLABORATOR")
+    );
+    (
+        ThreadComment {
+            bot: comment["author"]["__typename"].as_str() == Some("Bot"),
+            maintainer: candidate,
+            body: comment["body"].as_str().unwrap_or_default().to_string(),
+            author,
+        },
+        candidate,
+    )
+}
+
 fn threads_from_graphql(raw: &serde_json::Value) -> Vec<ParsedThread> {
     let Some(nodes) = threads_connection(raw)["nodes"].as_array() else {
         return Vec::new();
@@ -254,25 +281,11 @@ fn threads_from_graphql(raw: &serde_json::Value) -> Vec<ParsedThread> {
                     comments
                         .iter()
                         .map(|comment| {
-                            let author = comment["author"]["login"]
-                                .as_str()
-                                .unwrap_or_default()
-                                .to_string();
-                            // A candidate only: `review_threads` still has to
-                            // confirm this against a real permission lookup.
-                            let candidate = matches!(
-                                comment["authorAssociation"].as_str(),
-                                Some("OWNER") | Some("MEMBER") | Some("COLLABORATOR")
-                            );
-                            if candidate && !author.is_empty() {
-                                candidates.push(author.clone());
+                            let (comment, candidate) = comment_from_json(comment);
+                            if candidate && !comment.author.is_empty() {
+                                candidates.push(comment.author.clone());
                             }
-                            ThreadComment {
-                                author,
-                                body: comment["body"].as_str().unwrap_or_default().to_string(),
-                                bot: comment["author"]["__typename"].as_str() == Some("Bot"),
-                                maintainer: candidate,
-                            }
+                            comment
                         })
                         .collect()
                 })
@@ -284,6 +297,12 @@ fn threads_from_graphql(raw: &serde_json::Value) -> Vec<ParsedThread> {
             if let Some(login) = &resolved_by {
                 candidates.push(login.clone());
             }
+            let more_comments = node["comments"]["pageInfo"]["hasNextPage"]
+                .as_bool()
+                .unwrap_or(false);
+            let comments_cursor = node["comments"]["pageInfo"]["endCursor"]
+                .as_str()
+                .map(str::to_string);
             ParsedThread {
                 thread: ReviewThread {
                     id: node["id"].as_str().unwrap_or_default().to_string(),
@@ -296,6 +315,9 @@ fn threads_from_graphql(raw: &serde_json::Value) -> Vec<ParsedThread> {
                 },
                 candidates,
                 resolved_by,
+                // Only ever `Some` when `more_comments` is also true and
+                // GitHub actually gave a cursor to keep paging with.
+                more_comments: more_comments.then_some(comments_cursor).flatten(),
             }
         })
         .collect()
