@@ -285,11 +285,31 @@ pub fn paths_clause(paths: &[String]) -> String {
     out
 }
 
+/// The tag [`fill_question`] wraps every substitution in, and
+/// [`ANSWER_INSTRUCTIONS`] names, so the engine's own model — which this
+/// adapter does not control the prompt of — has some signal that a title or
+/// a path is pull-request-controlled text, not part of the question.
+const UNTRUSTED_TAG: &str = "untrusted-pull-request-data";
+
 /// Fill a configured question's placeholders.
+///
+/// `{title}` and `{paths}` are a contributor's own words — the pull request
+/// title and the changed paths — put to CortexDB's grounded-answer route,
+/// which is itself model-backed. Backticks around a path are formatting, not
+/// a data boundary, so both substitutions are wrapped in a labelled tag
+/// instead: the same "fence untrusted content" rule this codebase applies to
+/// its own prompts, applied here to the one question this adapter cannot
+/// fence with a full multi-message boundary.
 pub fn fill_question(template: &str, title: &str, paths: &[String]) -> String {
     template
-        .replace("{paths}", &paths_clause(paths))
-        .replace("{title}", title.trim())
+        .replace(
+            "{paths}",
+            &format!("<{UNTRUSTED_TAG}>{}</{UNTRUSTED_TAG}>", paths_clause(paths)),
+        )
+        .replace(
+            "{title}",
+            &format!("<{UNTRUSTED_TAG}>{}</{UNTRUSTED_TAG}>", title.trim()),
+        )
 }
 
 /// Consults memory for one review.
