@@ -861,6 +861,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_truncated_page_resumes_before_a_tied_timestamp_group_instead_of_inside_it() {
+        // #3, #4 and #5 all update at the same second. A `limit` of 4 lands
+        // the page in the middle of that group: #3 and #4 are walked, #5 is
+        // not. Resuming from the last-seen timestamp (`T3`) would use
+        // `since`'s after-only semantics and skip #5 forever, since it never
+        // compares greater than the cursor it shares. Resuming from before
+        // the group instead replays #3 and #4 (free, since remembering an
+        // already-held conversation is idempotent) and also picks up #5.
+        let mut one = issue(1, false);
+        one.updated_at = Some("2026-08-01T00:00:00Z".into());
+        let mut two = issue(2, false);
+        two.updated_at = Some("2026-08-05T00:00:00Z".into());
+        let mut three = issue(3, false);
+        three.updated_at = Some("2026-08-10T00:00:00Z".into());
+        let mut four = issue(4, false);
+        four.updated_at = Some("2026-08-10T00:00:00Z".into());
+        let mut five = issue(5, false);
+        five.updated_at = Some("2026-08-10T00:00:00Z".into());
+
+        let forge = MockForge::new()
+            .with_issue(one)
+            .with_issue(two)
+            .with_issue(three)
+            .with_issue(four)
+            .with_issue(five);
+        let memory = MockMemory::new();
+        let config = config();
+        let repo = RepoId::parse("o/r").unwrap();
+
+        let report = Discussions::new(&memory, &forge, &config)
+            .backfill(&repo, None, 4)
+            .await
+            .unwrap();
+        assert_eq!(report.subjects, 4, "walked #1, #2, #3 and #4");
+        assert!(report.failed.is_empty());
+        assert_eq!(
+            report.resume_from.as_deref(),
+            Some("2026-08-05T00:00:00Z"),
+            "backs off to before the tied group at #3/#4, not #4's own timestamp"
+        );
+
+        let resumed = Discussions::new(&memory, &forge, &config)
+            .backfill(&repo, report.resume_from.as_deref(), 100)
+            .await
+            .unwrap();
+        assert_eq!(
+            resumed.subjects, 3,
+            "#3 and #4 replay (idempotent) and #5 is finally reached"
+        );
+        let held = memory.remembered(&MemoryScope::section("o/r", MemorySection::Discussions));
+        let keys: std::collections::BTreeSet<&str> = held.iter().map(|i| i.key.as_str()).collect();
+        assert!(keys.contains("issue:o/r#5"), "#5 was not skipped");
+    }
+
+    #[tokio::test]
     async fn a_backfill_continues_past_a_subject_it_cannot_read_and_does_not_offer_a_resume_point()
     {
         let mut missing = issue(9, false);
