@@ -693,6 +693,27 @@ Tail.
     }
 
     #[test]
+    fn a_reply_from_someone_without_write_access_is_never_a_rejection() {
+        // A resolved, non-outdated thread with a non-maintainer reply must
+        // not be classified as `Rejected`: that would let any contributor —
+        // untrusted input by the security boundary in CLAUDE.md — get their
+        // own reply recorded as maintainer judgement and suppress the
+        // finding from ever being raised again.
+        let resolved = thread_with_reply_permission(
+            FP,
+            &[("looks fine to me", false)],
+            true,
+            false,
+            false,
+        );
+        assert_eq!(classify(&resolved), Some(Outcome::Dismissed));
+
+        // Nor should it settle an open thread as `Disputed`.
+        let open = thread_with_reply_permission(FP, &[("nope", false)], false, false, false);
+        assert_eq!(classify(&open), None);
+    }
+
+    #[test]
     fn outcome_items_pair_the_path_by_fingerprint_and_quote_the_reply() {
         let threads = vec![thread(
             FP,
