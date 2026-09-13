@@ -87,6 +87,10 @@ pub enum BackfillStart {
     AlreadyRunning(BackfillStatus),
 }
 
+/// Conversations one `run_backfill` chunk walks before the installation
+/// token backing it is re-minted (from cache, unless it needs renewing).
+const BACKFILL_CHUNK: usize = 200;
+
 /// The engine, and what it has been fed.
 pub struct MemoryBackend {
     /// The engine. `Arc` so a background ingest can hold it past the request.
