@@ -225,12 +225,43 @@ fn item_tokens(item: &MemoryItem) -> usize {
     crate::harness::pricing::estimate_tokens(&render_item(item)) as usize
 }
 
-/// Estimated tokens of one rendered answer.
+/// The heading `render` prints once before the first item of `kind` in a
+/// contiguous run. Charged separately, in [`assemble`], at the point where a
+/// new kind starts — matching exactly when `render` would print it — rather
+/// than folded into every item's cost, which is what let a heading go
+/// uncounted and the rendered prompt exceed `context_tokens`.
+fn kind_heading_tokens(kind: MemoryKind) -> usize {
+    let heading = match kind {
+        MemoryKind::ReviewOutcome => "### Earlier findings and what became of them",
+        MemoryKind::ReviewFinding => "### Earlier findings",
+        MemoryKind::Convention => "### Conventions the repository states",
+        MemoryKind::CodeChunk => "### Remembered code",
+    };
+    crate::harness::pricing::estimate_tokens(&format!("{heading}\n\n")) as usize
+}
+
+/// The heading `render` prints once, before the first answer, when any
+/// answer survives filtering.
+fn answers_heading_tokens() -> usize {
+    crate::harness::pricing::estimate_tokens("### Answers from memory\n\n") as usize
+}
+
+/// Estimated tokens of one rendered answer, including the `Cites:` line
+/// `render` adds when the answer carries citations — omitting it let a
+/// response with many long citation paths under-report its real cost.
 fn answer_tokens(answer: &MemoryAnswer) -> usize {
-    crate::harness::pricing::estimate_tokens(&format!(
-        "Q: {}\nA: {}\n",
-        answer.question, answer.answer
-    )) as usize
+    let mut text = format!("Q: {}\nA: {}\n", answer.question.trim(), answer.answer.trim());
+    let cited: Vec<&str> = answer
+        .citations
+        .iter()
+        .filter_map(|c| c.path.as_deref())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if !cited.is_empty() {
+        let _ = writeln!(text, "Cites: {}", cited.join(", "));
+    }
+    crate::harness::pricing::estimate_tokens(&text) as usize
 }
 
 /// The `{paths}` substitution: the changed paths, bounded.
