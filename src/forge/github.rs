@@ -1175,8 +1175,15 @@ impl ForgeRead for GitHubRead {
         for parsed_thread in &mut parsed {
             let thread_id = parsed_thread.thread.id.clone();
             let mut cursor = parsed_thread.more_comments.take();
+            // Mirrors the outer thread-listing bound: exhausting the page
+            // budget while GitHub still says there is more must fail rather
+            // than silently classify a partial comment history as complete
+            // — the same "moved the truncation threshold without keeping
+            // the completeness check" gap the outer loop already closes.
+            let mut truncated = cursor.is_some();
             for _ in 0..MAX_THREAD_PAGES {
                 let Some(after) = cursor.take() else {
+                    truncated = false;
                     break;
                 };
                 let raw: serde_json::Value = self
@@ -1205,6 +1212,12 @@ impl ForgeRead for GitHubRead {
                             .map(str::to_string)
                     })
                     .flatten();
+                truncated = cursor.is_some();
+            }
+            if truncated {
+                return Err(Error::Forge(format!(
+                    "thread {thread_id} has more comments than the page bound allows"
+                )));
             }
         }
 
