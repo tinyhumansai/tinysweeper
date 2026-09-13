@@ -989,11 +989,11 @@ mod tests {
             MemoryKind::Remark,
             "remark:1",
             "A remark on #1",
-        )) + item_tokens(&recollection(
-            MemoryKind::PullRequest,
-            "pr:2",
-            "Pull request #2",
-        ));
+        )
+        .item)
+            + item_tokens(
+                &recollection(MemoryKind::PullRequest, "pr:2", "Pull request #2").item,
+            );
         assert_eq!(
             full_cost,
             discussion_heading_and_item_cost + remark_and_pr_item_cost,
