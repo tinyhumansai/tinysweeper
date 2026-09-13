@@ -857,6 +857,49 @@ mod tests {
         assert!(remembered[0].body.contains("Intentional here."));
     }
 
+    #[tokio::test]
+    async fn a_slow_engine_does_not_hold_observe_open() {
+        // Regression: only the later finding write-back was bounded; this
+        // runs *before* recall and every lane, so an unreachable-but-slow
+        // engine here could occupy a review permit for the adapter's own
+        // per-batch timeout.
+        use crate::forge::types::{ReviewThread, ThreadComment};
+        use std::time::Duration;
+
+        let memory = MockMemory::new().with_delay(Duration::from_millis(200));
+        let recaller = Recaller::new(&memory);
+        let fp = "0123456789abcdef";
+        let threads = vec![ReviewThread {
+            id: "t".into(),
+            is_resolved: true,
+            is_outdated: false,
+            resolved_by_has_write_access: true,
+            comments: vec![
+                ThreadComment {
+                    author: "tinysweeper[bot]".into(),
+                    body: format!("**Use the crate error**\n\nx\n\n<!-- tinysweeper:fp={fp} -->"),
+                    bot: true,
+                    maintainer: false,
+                },
+                ThreadComment {
+                    author: "alice".into(),
+                    body: "Intentional here.".into(),
+                    bot: false,
+                    maintainer: true,
+                },
+            ],
+        }];
+
+        let started = std::time::Instant::now();
+        let report = recaller.observe("o/r", 9, &threads, &[]).await;
+        assert!(
+            started.elapsed() < Duration::from_millis(150),
+            "observe must return long before the engine's own delay does: {:?}",
+            started.elapsed()
+        );
+        assert_eq!(report.written, 0, "the timed-out write never lands");
+    }
+
     #[test]
     fn questions_are_templated_and_long_path_lists_are_elided() {
         let paths: Vec<String> = (0..20).map(|i| format!("src/f{i}.rs")).collect();
