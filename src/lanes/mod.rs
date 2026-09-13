@@ -20,9 +20,11 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 
 use crate::config::types::{Config, LaneId, Severity};
+use crate::council::Reviewer;
 use crate::error::Result;
 use crate::evidence::diff::FileDiff;
 use crate::findings::types::Finding;
+use crate::flows::runner::Answer;
 use crate::forge::types::{CheckConclusion, Commit, PullRequest};
 use crate::harness::schema::LaneResponse;
 use crate::ports::model::Spend;
@@ -222,6 +224,95 @@ impl LaneOutcome {
         }
         CheckConclusion::Success
     }
+}
+
+/// One response that was both received and valid for its lane's schema.
+///
+/// Failed calls and malformed responses are kept out of the returned list, so
+/// the caller can decide whether an empty list fails one file or skips a
+/// whole-pull-request lane.
+pub struct ReviewerResponse {
+    /// The configured reviewer that produced the response.
+    pub id: String,
+    /// The model selected after any fallback.
+    pub model: String,
+    /// The lane-shaped response, before anchoring or lane-specific placement.
+    pub response: LaneResponse,
+}
+
+/// Decode every usable council response, consistently across lanes.
+///
+/// A member failure never discards its peers. A malformed solo response remains
+/// fatal, while a malformed council member is treated like a failed member;
+/// callers retain the policy decision for the no-usable-response case.
+pub fn reviewer_responses(
+    lane: LaneId,
+    reviewers: &[Reviewer<'_>],
+    answers: &[Answer],
+) -> Result<Vec<ReviewerResponse>> {
+    let mut responses = Vec::with_capacity(reviewers.len());
+    for (reviewer, answer) in reviewers.iter().zip(answers) {
+        let Some(value) = answer.value.clone() else {
+            tracing::warn!(
+                agent = reviewer.id,
+                err = answer.error.as_deref().unwrap_or("no answer"),
+                "a council reviewer failed"
+            );
+            continue;
+        };
+
+        let response = match crate::harness::schema::parse(lane, value) {
+            Ok(response) => response,
+            Err(err) if reviewers.len() > 1 => {
+                tracing::warn!(agent = reviewer.id, %err, "a council reviewer failed");
+                continue;
+            }
+            Err(err) => return Err(err),
+        };
+
+        responses.push(ReviewerResponse {
+            id: reviewer.id.to_string(),
+            model: answer.model.clone(),
+            response,
+        });
+    }
+    Ok(responses)
+}
+
+/// Anchor and merge successful reviewer responses into one lane outcome.
+///
+/// This intentionally leaves the empty-response decision to its caller: a
+/// per-file lane must surface an error, while a whole-pull-request lane must
+/// return Neutral rather than claim a successful review.
+pub fn aggregate_reviewer_responses(
+    lane: LaneId,
+    responses: Vec<ReviewerResponse>,
+    diffs: &[FileDiff],
+    anchoring: Anchoring,
+    corroboration: bool,
+) -> Option<LaneOutcome> {
+    let mut per_reviewer = Vec::with_capacity(responses.len());
+    let mut first = None;
+    let mut spend = Spend::default();
+
+    for response in responses {
+        spend.note(&response.model);
+        let anchored =
+            LaneOutcome::from_response(lane, response.response, diffs, anchoring, Spend::default());
+        per_reviewer.push(anchored.findings.clone());
+        if first.is_none() {
+            first = Some(anchored);
+        }
+    }
+
+    let mut outcome = first?;
+    outcome.findings = if corroboration {
+        crate::council::merge(per_reviewer)
+    } else {
+        per_reviewer.into_iter().flatten().collect()
+    };
+    outcome.spend = spend;
+    Some(outcome)
 }
 
 /// One reviewing lane.
