@@ -536,7 +536,8 @@ impl<'a> Discussions<'a> {
             // module docs). When every entry shares one timestamp there is no
             // earlier boundary to back off to, so the cursor is left where it
             // came in and the same page is walked again next time.
-            report.resume_from = resume_boundary(&listing, truncated).or_else(|| since.map(str::to_string));
+            report.resume_from =
+                resume_boundary(&listing, truncated).or_else(|| since.map(str::to_string));
         }
         Ok(report)
     }
