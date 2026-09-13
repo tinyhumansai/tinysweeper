@@ -1240,8 +1240,22 @@ async fn run_memory(command: MemoryCommand) -> Result<()> {
         Ok((loaded.config, memory))
     }
 
+    // `MemoryScope`'s own parser only checks for the first `/`, so a value
+    // like `a/b/c` builds a scope `RepoId::parse` would reject — a
+    // noncanonical key that ingest, recall, ask and forget would each treat
+    // differently. Canonicalizing through `RepoId` here is what keeps every
+    // memory command keying on the same string the review path uses.
+    fn canonical_repo(repo: &str) -> Result<String> {
+        tinysweeper::forge::RepoId::parse(repo)
+            .map(|id| id.to_string())
+            .ok_or_else(|| {
+                tinysweeper::Error::config(format!("`{repo}` is not `owner/name`"))
+            })
+    }
+
     match command {
         MemoryCommand::Ingest { repo, dir, config } => {
+            let repo = canonical_repo(&repo)?;
             let (config, memory) = open(&dir, config.as_deref())?;
             memory.health().await?;
             let ingestor = Ingestor::new(&memory, &config.memory, &config.paths.ignore)?;
