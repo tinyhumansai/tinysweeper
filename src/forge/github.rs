@@ -1730,6 +1730,7 @@ mod tests {
                             {"author": {"login": "tinysweeper", "__typename": "Bot"},
                              "body": "finding"},
                             {"author": {"login": "author", "__typename": "User"},
+                             "authorAssociation": "COLLABORATOR",
                              "body": "fixed"}
                         ]}
                     },
