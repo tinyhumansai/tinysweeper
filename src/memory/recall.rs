@@ -49,6 +49,10 @@ use crate::ports::memory::Memory;
 /// path list can.
 const MAX_QUESTION_PATHS: usize = 12;
 
+/// How long [`Recaller::observe`] may wait to remember this pull request's
+/// settled thread outcomes before it gives up and continues without them.
+const OBSERVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// The fence label the rendered block goes under in a prompt.
 pub const FENCE_LABEL: &str = "repository-memory";
 
