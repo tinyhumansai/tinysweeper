@@ -73,7 +73,14 @@ cp deploy/cortexdb/docker-compose.yml deploy/cortexdb/docker-compose.teeny.yml /
 cp deploy/cortexdb/.env.example /opt/cortexdb/.env && chmod 600 /opt/cortexdb/.env
 $EDITOR /opt/cortexdb/.env      # CORTEX_API_KEY, LADDER_API_KEY
 cd /opt/cortexdb
-# With teeny on the box: its network and its data volume already exist.
+# With teeny on the box: its network and its data volume already exist, and
+# its own CortexDB has to be stopped first — two engines on one volume is
+# corruption, and the old one holds port 3142. This is the handoff the box
+# went through on 2026-09-13; afterwards teeny's compose file drops its
+# cortexdb and tika services and `up -d --remove-orphans` retires them.
+docker compose --project-directory /home/droid/teeny/deploy \
+  -f /home/droid/teeny/deploy/compose.prod.yaml \
+  --env-file /home/droid/teeny/deploy/.env stop cortexdb tika
 docker compose -f docker-compose.yml -f docker-compose.teeny.yml up -d --wait
 # Without teeny (a replacement host, a laptop): the base file alone.
 docker compose up -d --wait
