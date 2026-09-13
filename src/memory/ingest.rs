@@ -741,6 +741,27 @@ Tail.
     }
 
     #[test]
+    fn two_headings_that_slug_the_same_get_distinct_keys() {
+        // Regression: `C++` and `C#` both slug to `c`, and a repeated
+        // heading path slugs identically to itself — either way, two
+        // distinct sections used to key to the same `convention:{path}#c`,
+        // and recall's dedupe-by-key would silently discard whichever
+        // ranked second.
+        let md = "# C++\n\nUse RAII.\n\n# C#\n\nUse `using`.\n";
+        let items = convention_items("CONVENTIONS.md", md, 2000);
+
+        assert_eq!(items.len(), 2, "{items:?}");
+        let keys: Vec<&str> = items.iter().map(|i| i.key.as_str()).collect();
+        assert_eq!(
+            keys.iter().collect::<std::collections::BTreeSet<_>>().len(),
+            2,
+            "every key must be distinct: {keys:?}"
+        );
+        assert!(items.iter().any(|i| i.body.contains("RAII")));
+        assert!(items.iter().any(|i| i.body.contains("using")));
+    }
+
+    #[test]
     fn a_paragraph_over_the_ceiling_is_kept_whole() {
         let para = "y".repeat(500);
         let items = convention_items("CLAUDE.md", &format!("# H\n\n{para}\n"), 200);
