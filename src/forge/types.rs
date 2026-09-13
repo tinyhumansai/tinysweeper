@@ -505,6 +505,15 @@ pub struct ReviewThread {
     pub is_outdated: bool,
     /// Its comments, oldest first. The first one is whoever opened the thread.
     pub comments: Vec<ThreadComment>,
+    /// Whether whoever resolved this thread currently has write access (or
+    /// above) to the repository.
+    ///
+    /// GitHub lets a thread be resolved by the pull request's own author, not
+    /// only by someone with write access — so a silent, unauthorized
+    /// contributor resolving a bot's finding on their own fork's pull request
+    /// must not be recorded as a settled dismissal. `false` when nobody
+    /// resolved it, or the adapter could not confirm who did.
+    pub resolved_by_has_write_access: bool,
 }
 
 /// One comment inside a [`ReviewThread`].
