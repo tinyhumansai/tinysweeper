@@ -271,20 +271,13 @@ impl MemoryBackend {
                     .backfill(repo, cursor.as_deref(), chunk)
                     .await?;
                 let processed = report.subjects + report.failed.len();
-                // `last_seen` is where this chunk actually got to whether or
-                // not everything in it succeeded, unlike `resume_from` (which
-                // this walk does not read per chunk): a failure partway
-                // through must not stop later chunks from ever being walked,
-                // only stop the *externally reported* cursor from advancing
-                // past it. See `DiscussionReport::last_seen`.
-                let advanced = report.last_seen.clone();
-                let stalled = advanced == cursor;
+                let last_seen = report.last_seen.clone();
                 combined.absorb(report);
                 walked += chunk;
-                if stalled || advanced.is_none() || processed < chunk {
-                    break;
+                match next_chunk_cursor(&cursor, &last_seen, processed, chunk) {
+                    Some(next) => cursor = Some(next),
+                    None => break,
                 }
-                cursor = advanced;
             }
             // Safe to hand back only once nothing anywhere in the walk
             // failed: a resume must never skip past a failure, even one an
