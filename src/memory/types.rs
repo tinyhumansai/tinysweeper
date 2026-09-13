@@ -11,7 +11,10 @@
 //! are three different kinds of fact, asked for by three different questions.
 //! Keeping them in separate sections of one scope means "did the maintainers
 //! reject a finding like this before?" can be answered without the answer
-//! being drowned by a thousand similar-looking code chunks.
+//! being drowned by a thousand similar-looking code chunks. The fourth
+//! section, discussions, is everything *else* that was said on the
+//! repository's issues and pull requests — by maintainers, contributors and
+//! other review bots alike — which is where the reasons behind the code live.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -27,11 +30,20 @@ pub enum MemorySection {
     Conventions,
     /// What the reviewer said before and what the maintainers did with it.
     Reviews,
+    /// What was said on the repository's issues and pull requests: the
+    /// issues themselves, open and closed, and every comment, inline review
+    /// comment and review anybody — human or another agent — left on them.
+    Discussions,
 }
 
 impl MemorySection {
     /// Every section, in the order a full ingest writes them.
-    pub const ALL: [Self; 3] = [Self::Code, Self::Conventions, Self::Reviews];
+    pub const ALL: [Self; 4] = [
+        Self::Code,
+        Self::Conventions,
+        Self::Reviews,
+        Self::Discussions,
+    ];
 
     /// The stable, lowercase name used in scope ids and configuration.
     pub fn as_str(self) -> &'static str {
@@ -39,6 +51,7 @@ impl MemorySection {
             Self::Code => "code",
             Self::Conventions => "conventions",
             Self::Reviews => "reviews",
+            Self::Discussions => "discussions",
         }
     }
 
@@ -48,6 +61,7 @@ impl MemorySection {
             "code" => Some(Self::Code),
             "conventions" => Some(Self::Conventions),
             "reviews" => Some(Self::Reviews),
+            "discussions" => Some(Self::Discussions),
             _ => None,
         }
     }
@@ -120,6 +134,13 @@ pub enum MemoryKind {
     ReviewFinding,
     /// What happened to a published finding: fixed, rejected, or left open.
     ReviewOutcome,
+    /// An issue: its title, body and how it ended.
+    Issue,
+    /// A pull request: its title, body and how it ended.
+    PullRequest,
+    /// One thing somebody said on an issue or a pull request — a comment,
+    /// an inline review comment, or a review — whoever said it.
+    Remark,
 }
 
 impl MemoryKind {
@@ -129,6 +150,7 @@ impl MemoryKind {
             Self::CodeChunk => MemorySection::Code,
             Self::Convention => MemorySection::Conventions,
             Self::ReviewFinding | Self::ReviewOutcome => MemorySection::Reviews,
+            Self::Issue | Self::PullRequest | Self::Remark => MemorySection::Discussions,
         }
     }
 
@@ -139,6 +161,9 @@ impl MemoryKind {
             Self::Convention => "convention",
             Self::ReviewFinding => "finding",
             Self::ReviewOutcome => "outcome",
+            Self::Issue => "issue",
+            Self::PullRequest => "pull-request",
+            Self::Remark => "remark",
         }
     }
 }
