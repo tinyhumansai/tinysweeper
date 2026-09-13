@@ -37,7 +37,7 @@ A repository's memory is one scope with four sections (`MemorySection`):
 | `code` | the source, chunked exactly as `src/chunk` chunks it for the index | ingest of a checkout |
 | `conventions` | the repository's instruction files and guides, one item per heading | ingest of a checkout |
 | `reviews` | the findings the reviewer published, and what became of each | the review itself |
-| `discussions` | every issue and pull request, open or closed, and everything anybody said on them | webhooks live; a backfill for the history |
+| `discussions` | every issue and pull request, open or closed, and everything anybody said on them, the reviewer's own remarks excluded | webhooks live; a backfill for the history |
 
 They are separate on purpose. "Did the maintainers reject a finding like this?"
 has to be answerable without the answer being drowned by a thousand
