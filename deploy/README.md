@@ -73,17 +73,34 @@ cp deploy/cortexdb/docker-compose.yml deploy/cortexdb/docker-compose.teeny.yml /
 cp deploy/cortexdb/.env.example /opt/cortexdb/.env && chmod 600 /opt/cortexdb/.env
 $EDITOR /opt/cortexdb/.env      # CORTEX_API_KEY, LADDER_API_KEY
 cd /opt/cortexdb
-# With teeny on the box: its network and its data volume already exist, and
-# its own CortexDB has to be stopped first — two engines on one volume is
-# corruption, and the old one holds port 3142. This is the handoff the box
-# went through on 2026-09-13; afterwards teeny's compose file drops its
-# cortexdb and tika services and `up -d --remove-orphans` retires them.
+```
+
+Then **one** of the two starts below — they are alternatives, and running the
+second after the first would recreate the engine on an empty volume and cut
+teeny off, because `compose up` re-applies whatever files it is given.
+
+With teeny on the box (its network and its data volume already exist, and its
+own CortexDB has to be stopped first — two engines on one volume is corruption,
+and the old one holds port 3142; this is the handoff the box went through on
+2026-09-13, after which teeny's compose file drops its cortexdb and tika
+services and `up -d --remove-orphans` retires them):
+
+```sh
 docker compose --project-directory /home/droid/teeny/deploy \
   -f /home/droid/teeny/deploy/compose.prod.yaml \
   --env-file /home/droid/teeny/deploy/.env stop cortexdb tika
 docker compose -f docker-compose.yml -f docker-compose.teeny.yml up -d --wait
-# Without teeny (a replacement host, a laptop): the base file alone.
+```
+
+Without teeny (a replacement host, a laptop), the base file alone:
+
+```sh
 docker compose up -d --wait
+```
+
+Either way, finish with:
+
+```sh
 docker network connect cortexdb_default ladder   # repeat if the ladder is recreated
 cd /opt/tinysweeper
 ```
