@@ -495,19 +495,29 @@ fn assemble(
     let mut ranked: Vec<(usize, Recollection)> = candidates.into_iter().enumerate().collect();
     ranked.sort_by_key(|(position, r)| (order(r.item.kind), *position));
 
+    // Mirrors `render`'s `last_kind` tracking exactly, so the heading each new
+    // kind prints is charged against the first item of that kind that
+    // survives the budget, rather than left uncounted.
+    let mut last_kind: Option<MemoryKind> = None;
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for (_, recollection) in ranked {
         if !seen.insert(recollection.item.key.clone()) {
             context.dropped += 1;
             continue;
         }
-        let cost = item_tokens(&recollection.item);
+        let heading = if last_kind == Some(recollection.item.kind) {
+            0
+        } else {
+            kind_heading_tokens(recollection.item.kind)
+        };
+        let cost = heading + item_tokens(&recollection.item);
         if cost > remaining {
             context.dropped += 1;
             continue;
         }
         remaining -= cost;
         context.tokens += cost;
+        last_kind = Some(recollection.item.kind);
         context.recollections.push(recollection);
     }
     context
