@@ -1314,6 +1314,13 @@ async fn review_inner(
     // index takes minutes; a review is expected in seconds. The review runs
     // against whatever the index holds right now, and `crate::retrieve` says so
     // in the check-run summary when that is nothing. See `server::indexing`.
+    //
+    // This uses the *deployment's* configuration, not the repository's own
+    // overlay fetched below — a pre-existing tradeoff this pull request does
+    // not change. Memory ingestion, spawned after the overlay below, does not
+    // repeat it: `paths.ignore` is repository-overridable, and starting
+    // ingestion before the overlay is read would persist paths the repository
+    // explicitly excluded into an external store the deployment does not own.
     if let Some(backend) = &state.index {
         tokio::spawn(index_in_background(
             backend.clone(),
@@ -1321,19 +1328,6 @@ async fn review_inner(
             state.index_permits.clone(),
             repo_id.clone(),
             pull_request.head_sha.clone(),
-            read_token.clone(),
-        ));
-    }
-    // Memory is fed from the *base* tip, not the head: what the repository
-    // has committed to, not what this pull request proposes. See
-    // `server::memory`.
-    if let Some(backend) = &state.memory {
-        tokio::spawn(ingest_in_background(
-            backend.clone(),
-            Arc::new(state.config.config.clone()),
-            state.index_permits.clone(),
-            repo_id.clone(),
-            pull_request.base_sha.clone(),
             read_token.clone(),
         ));
     }
