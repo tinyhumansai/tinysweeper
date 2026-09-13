@@ -74,11 +74,15 @@ pub fn endpoint_allowed(endpoint: &str) -> std::result::Result<(), String> {
     let Some(rest) = endpoint.strip_prefix("http://") else {
         return Err("must start with `https://` (or `http://` for loopback)".into());
     };
-    let host = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default()
-        .trim_start_matches('[');
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    // The authority is `[userinfo@]host[:port]`, and a host cannot contain a
+    // literal `@` — so the *last* `@` in the authority always separates
+    // userinfo from host, exactly as a URL parser resolves it. Skipping this
+    // let `http://localhost@evil.example` read as host `localhost`, while the
+    // HTTP client that actually sends the bearer token resolves the real
+    // destination — `evil.example` — over cleartext.
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host = host.trim_start_matches('[');
     let host = host
         .rsplit_once(':')
         .filter(|(h, _)| !h.contains(':') || h.ends_with(']'))
