@@ -1,0 +1,17 @@
+{
+  "key": "54aff3b6a782151c",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2963,
+    "output_tokens": 79,
+    "cached_tokens": 768,
+    "embed_tokens": 0,
+    "cost_usd": 0.000123525248
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change adds an embeddings configuration section pointing to an external provider and referencing an API key via environment variable. No security issues are introduced: the key is not hardcoded, there is no new network call in code (this is configuration only), and the change does not widen permissions or alter authentication/authorization logic."
+  }
+}

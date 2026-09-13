@@ -1,0 +1,17 @@
+{
+  "key": "1bf3a52c02ec1ab4",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2834,
+    "output_tokens": 68,
+    "cached_tokens": 2471,
+    "embed_tokens": 0,
+    "cost_usd": 0.000497591952
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a `summarise` module declaration to `src/findings/mod.rs`; it is a trivial, safe addition with no security-relevant impact."
+  }
+}

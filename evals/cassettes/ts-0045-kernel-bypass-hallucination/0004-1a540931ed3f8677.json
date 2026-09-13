@@ -1,0 +1,17 @@
+{
+  "key": "1a540931ed3f8677",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3440,
+    "output_tokens": 102,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00017957632
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change fixes two bugs in the docker-compose environment: the GitHub App credentials were previously using unreferenced environment variable names (the binary never reads `TINYSWEEPER_GITHUB_*`) and correctly renames them to the names the binary actually reads (`TINYSWEEPER_APP_*`). It also adds several API keys and mounts the configuration file. The change is safe to merge."
+  }
+}

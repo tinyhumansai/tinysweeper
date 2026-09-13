@@ -1,0 +1,17 @@
+{
+  "key": "e4a524a1ccade807",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 2855,
+    "output_tokens": 113,
+    "cached_tokens": 2164,
+    "embed_tokens": 0,
+    "cost_usd": 0.000695748768
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a `pub mod summarise;` declaration alongside the existing module exports. With only this one-line diff visible there is nothing to flag as a bug or regression."
+  }
+}
