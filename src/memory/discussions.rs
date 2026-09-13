@@ -493,6 +493,14 @@ impl<'a> Discussions<'a> {
         limit: usize,
     ) -> Result<DiscussionReport> {
         let listing = self.forge.issues_updated_since(repo, since, limit).await?;
+        // `since` only ever excludes what is strictly before it (see
+        // `MockForge` and the GitHub adapter), so a cursor landing inside a
+        // group of entries sharing a second-resolution `updated_at` would
+        // let a resumed walk skip whichever of that group fell after the
+        // cut. `listing.len() == limit` means the page may have ended mid
+        // group; below that, the walk reached the end of history and every
+        // entry it saw is accounted for.
+        let truncated = listing.len() >= limit;
         let mut report = DiscussionReport::default();
         let mut last_seen: Option<String> = None;
         for entry in &listing {
@@ -520,10 +528,34 @@ impl<'a> Discussions<'a> {
             }
         }
         if report.failed.is_empty() {
-            report.resume_from = last_seen;
+            // Back the cursor off to before the trailing run of entries that
+            // share their `updated_at`, when the page may have been cut mid
+            // group, so the whole tied run is replayed rather than any of it
+            // silently dropped. Replaying it is free: remembering a
+            // conversation the pipeline already holds is idempotent (see the
+            // module docs). When every entry shares one timestamp there is no
+            // earlier boundary to back off to, so the cursor is left where it
+            // came in and the same page is walked again next time.
+            report.resume_from = resume_boundary(&listing, truncated).or_else(|| since.map(str::to_string));
         }
         Ok(report)
     }
+}
+
+/// The `since` to resume from after a (possibly truncated) `listing`.
+///
+/// See [`Discussions::backfill`] for why a truncated page cannot simply
+/// resume from its last entry's timestamp.
+fn resume_boundary(listing: &[Issue], truncated: bool) -> Option<String> {
+    let last = listing.last()?.updated_at.clone()?;
+    if !truncated {
+        return Some(last);
+    }
+    listing
+        .iter()
+        .rev()
+        .find(|entry| entry.updated_at.as_deref() != Some(last.as_str()))
+        .and_then(|entry| entry.updated_at.clone())
 }
 
 #[cfg(test)]
