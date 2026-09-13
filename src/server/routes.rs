@@ -963,10 +963,18 @@ impl Remembers for MemoryDispatch {
         limit: usize,
     ) -> Result<BackfillStart> {
         let backend = self.backend()?;
-        // The token is minted before the walk is recorded as started, so a
-        // repository the app is not installed on is a plain error to the
-        // operator rather than a backfill that fails in the background.
-        let token = self.read_token(repo).await?;
+        // Resolved and minted once up front, so a repository the app is not
+        // installed on is a plain error to the operator rather than a
+        // backfill that fails only once the background task gets around to
+        // it. The token itself is not carried into the walk: `run_backfill`
+        // re-mints per chunk from `installation`, since a walk long enough to
+        // renew several times cannot ride on one snapshot of it.
+        let installation = self
+            .state
+            .auth
+            .installation_for_repo(&repo.owner, &repo.name)
+            .await?;
+        self.state.auth.installation_token(installation).await?;
         let started = match backend.start_backfill(repo, since.clone(), limit) {
             BackfillStart::Started(status) => status,
             running @ BackfillStart::AlreadyRunning(_) => return Ok(running),
@@ -974,6 +982,7 @@ impl Remembers for MemoryDispatch {
         let config = Arc::new(self.state.config.config.clone());
         let repo = repo.clone();
         let permits = self.state.index_permits.clone();
+        let auth = self.state.auth.clone();
         tokio::spawn(async move {
             // Shares the index permit pool: a backfill is thousands of
             // forge reads, and two of them beside a clone is enough.
@@ -981,7 +990,7 @@ impl Remembers for MemoryDispatch {
                 return;
             };
             backend
-                .run_backfill(&config, &repo, since.as_deref(), limit, &token)
+                .run_backfill(&config, &repo, since.as_deref(), limit, &auth, installation)
                 .await;
         });
         Ok(BackfillStart::Started(started))
