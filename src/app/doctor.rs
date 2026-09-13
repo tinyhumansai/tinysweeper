@@ -300,7 +300,7 @@ fn print_prose(loaded: &Loaded) {
     // server and `memory.endpoint` in the clear.
     if config.memory.enabled
         && config.memory.allow_private_http
-        && config.memory.endpoint.trim().starts_with("http://")
+        && url::Url::parse(config.memory.endpoint.trim()).is_ok_and(|url| url.scheme() == "http")
     {
         println!(
             "  memory engine    {} over plain HTTP (memory.allow_private_http = true)",
