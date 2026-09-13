@@ -1294,6 +1294,7 @@ async fn run_memory(command: MemoryCommand) -> Result<()> {
             section,
             question,
         } => {
+            let repo = canonical_repo(&repo)?;
             let (_, memory) = open(std::path::Path::new("."), None)?;
             let section = MemorySection::parse(&section).ok_or_else(|| {
                 tinysweeper::Error::config(format!(
