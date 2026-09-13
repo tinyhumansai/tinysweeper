@@ -421,10 +421,19 @@ fn rfc3339(secs: u64) -> String {
 /// delivery or by a backfill, and must not fail the delivery that mentioned
 /// it. The installation token is minted *after* the wait, so a long window
 /// cannot hand an expired one to the read.
+///
+/// Shares the index permit pool with `ensure_ingested` and a running
+/// backfill: the debounce only coalesces repeat deliveries for the *same*
+/// conversation, so a comment burst spread across many issues would
+/// otherwise still spawn one unbounded task per conversation, each
+/// paginating its own timeline concurrently. Bounding them here caps how
+/// much of the installation's shared read budget live re-reads can spend at
+/// once, the same way a backfill's own walk is capped.
 pub async fn remember_in_background(
     backend: Arc<MemoryBackend>,
     config: Arc<Config>,
     auth: Arc<AppAuth>,
+    permits: Arc<tokio::sync::Semaphore>,
     conversation: Conversation,
 ) {
     if !backend.claim(&conversation) {
@@ -440,6 +449,10 @@ pub async fn remember_in_background(
     ))
     .await;
     backend.release(&conversation);
+
+    let Ok(_permit) = permits.acquire_owned().await else {
+        return;
+    };
 
     let outcome = async {
         let repo = RepoId::parse(&conversation.repo).ok_or_else(|| {
