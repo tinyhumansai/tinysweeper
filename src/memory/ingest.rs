@@ -631,21 +631,36 @@ Tail.
         assert!(items.iter().all(|i| i.key.starts_with("code:src/a.rs#")));
     }
 
+    /// `alice`, a non-bot reply, is a maintainer by default — most tests
+    /// exercise the settled-outcome path, where a human with write access
+    /// spoke. [`thread_with_reply_permission`] covers the unauthorized case.
     fn thread(
         ours: &str,
         replies: &[(&str, bool)],
         resolved: bool,
         outdated: bool,
     ) -> ReviewThread {
+        thread_with_reply_permission(ours, replies, resolved, outdated, true)
+    }
+
+    fn thread_with_reply_permission(
+        ours: &str,
+        replies: &[(&str, bool)],
+        resolved: bool,
+        outdated: bool,
+        replies_are_maintainers: bool,
+    ) -> ReviewThread {
         let mut comments = vec![ThreadComment {
             author: "tinysweeper[bot]".into(),
             body: format!("**Title here**\n\nbody\n\n<!-- tinysweeper:fp={ours} -->"),
             bot: true,
+            maintainer: false,
         }];
         comments.extend(replies.iter().map(|(body, bot)| ThreadComment {
             author: if *bot { "other-bot[bot]" } else { "alice" }.into(),
             body: (*body).into(),
             bot: *bot,
+            maintainer: !*bot && replies_are_maintainers,
         }));
         ReviewThread {
             id: "t".into(),
