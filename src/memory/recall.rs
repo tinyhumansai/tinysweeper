@@ -388,8 +388,7 @@ impl<'a> Recaller<'a> {
         if items.is_empty() {
             return RememberReport::default();
         }
-        match tokio::time::timeout(timeout, ingest::remember_all(self.memory, repo, &items)).await
-        {
+        match tokio::time::timeout(timeout, ingest::remember_all(self.memory, repo, &items)).await {
             Ok(Ok(report)) => report,
             Ok(Err(err)) => {
                 tracing::warn!(%err, repo, number, "could not remember review outcomes");

@@ -768,7 +768,10 @@ enum PageContinuation {
 }
 
 fn next_page_cursor(page: &Value) -> PageContinuation {
-    let has_more = page.get("has_more").and_then(Value::as_bool).unwrap_or(false);
+    let has_more = page
+        .get("has_more")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let next = page
         .get("next_cursor")
         .and_then(Value::as_str)
