@@ -4,6 +4,10 @@
 # crates — adding a preset is a new folder, never a new member. Downstream
 # repos configure the bot with a `.tinysweeper.toml`, also data.
 members = ["."]
+# The vendored dependencies are independent Cargo workspaces. They remain path
+# dependencies of this workspace, but excluding them keeps Cargo from treating
+# their roots as nested tinysweeper workspace members.
+exclude = ["vendor/tinyagents", "vendor/tinyflows"]
 resolver = "3"
 
 [workspace.package]
