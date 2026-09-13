@@ -893,7 +893,11 @@ mod tests {
         );
         // Exactly one open and one close tag survive — the wrapper's own.
         assert_eq!(q.matches("<untrusted-pull-request-data>").count(), 1, "{q}");
-        assert_eq!(q.matches("</untrusted-pull-request-data>").count(), 1, "{q}");
+        assert_eq!(
+            q.matches("</untrusted-pull-request-data>").count(),
+            1,
+            "{q}"
+        );
     }
 
     #[test]

@@ -138,7 +138,8 @@ pub fn convention_items(path: &str, content: &str, max_chars: usize) -> Vec<Memo
     // each would restart at the plain, unsuffixed key and collide: their
     // different bodies become separate Cortex events, but recall dedupes by
     // key, so one repository rule is silently discarded.
-    let mut slug_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut slug_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
 
     let mut flush = |stack: &[(usize, String)], body: &mut String, items: &mut Vec<MemoryItem>| {
         let text = body.trim();
@@ -941,20 +942,20 @@ Tail.
         // unauthorized author it was aimed at must not settle as `Rejected`
         // — that would let the author turn any maintainer response into a
         // finding memory is told never to raise again.
-        let resolved_by_the_author = thread_with_permissions(
-            FP,
-            &[("please fix this", false)],
-            true,
-            false,
-            true,
-            false,
-        );
+        let resolved_by_the_author =
+            thread_with_permissions(FP, &[("please fix this", false)], true, false, true, false);
         assert_eq!(classify(&resolved_by_the_author), None);
 
         // The identical reply, resolved by someone with write access, is an
         // ordinary rejection.
-        let resolved_by_a_maintainer =
-            thread_with_permissions(FP, &[("looks fine, leave it", false)], true, false, true, true);
+        let resolved_by_a_maintainer = thread_with_permissions(
+            FP,
+            &[("looks fine, leave it", false)],
+            true,
+            false,
+            true,
+            true,
+        );
         assert_eq!(classify(&resolved_by_a_maintainer), Some(Outcome::Rejected));
     }
 
