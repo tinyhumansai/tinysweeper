@@ -741,6 +741,41 @@ Tail.
         assert!(items.iter().all(|i| i.key.starts_with("code:src/a.rs#")));
     }
 
+    #[test]
+    fn repeated_symbol_names_in_one_file_get_distinct_keys() {
+        // Regression: two `impl` blocks each naming a method `new` used to
+        // chunk to the same `code:{path}#new` key with different bodies —
+        // recall dedupes by key, so the second was silently discarded
+        // whenever memory supplied code context, and identical bodies would
+        // even collapse at the engine's own idempotency.
+        fn chunk(symbol: &str, body: &str) -> crate::index::types::Chunk {
+            crate::index::types::Chunk {
+                path: "src/a.rs".into(),
+                symbol: Some(symbol.into()),
+                text: body.into(),
+                ..Default::default()
+            }
+        }
+        let chunks = vec![
+            chunk("new", "impl A { fn new() -> Self { A } }"),
+            chunk("new", "impl B { fn new() -> Self { B } }"),
+            chunk("unique", "fn unique() {}"),
+        ];
+        let items = code_items(&chunks);
+
+        let keys: Vec<&str> = items.iter().map(|i| i.key.as_str()).collect();
+        assert_eq!(keys.len(), 3, "{keys:?}");
+        assert_eq!(
+            keys.iter().collect::<std::collections::BTreeSet<_>>().len(),
+            3,
+            "every key must be distinct: {keys:?}"
+        );
+        // A symbol with no collision keeps its plain key — the property that
+        // lets re-chunking an unchanged file replay rather than rewrite.
+        assert!(keys.contains(&"code:src/a.rs#unique"), "{keys:?}");
+        assert!(!keys.contains(&"code:src/a.rs#new"), "{keys:?}");
+    }
+
     /// `alice`, a non-bot reply, is a maintainer by default — most tests
     /// exercise the settled-outcome path, where a human with write access
     /// spoke. [`thread_with_reply_permission`] covers the unauthorized case.
