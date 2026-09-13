@@ -61,12 +61,37 @@ pub const MAX_REPLY_CHARS: usize = 400;
 /// and the engine replays them all, so a re-ingest of an unchanged tree costs
 /// the network and nothing else.
 pub fn code_items(chunks: &[Chunk]) -> Vec<MemoryItem> {
+    // A bare symbol name is not unique within a file — two `impl` blocks each
+    // naming a method `new` chunk to the same `code:{path}#new` key with
+    // different bodies. Recall dedupes by key, so the second silently loses
+    // to whichever the engine ranks first. Counted per `(path, symbol)`
+    // first, so a symbol that only appears once — the common case — keeps
+    // exactly the plain key re-chunking an unchanged file already relies on
+    // to replay rather than rewrite; only a real collision pays for a
+    // disambiguating suffix.
+    let mut seen: std::collections::HashMap<(&str, &str), usize> = std::collections::HashMap::new();
+    for chunk in chunks {
+        if let Some(symbol) = &chunk.symbol {
+            *seen.entry((chunk.path.as_str(), symbol.as_str())).or_insert(0) += 1;
+        }
+    }
+    let mut index: std::collections::HashMap<(&str, &str), usize> = std::collections::HashMap::new();
     chunks
         .iter()
         .filter(|chunk| !chunk.text.trim().is_empty())
         .map(|chunk| {
             let span = match &chunk.symbol {
-                Some(symbol) => symbol.clone(),
+                Some(symbol) => {
+                    let key = (chunk.path.as_str(), symbol.as_str());
+                    if seen.get(&key).copied().unwrap_or(0) > 1 {
+                        let occurrence = index.entry(key).or_insert(0);
+                        let suffixed = format!("{symbol}~{occurrence}");
+                        *occurrence += 1;
+                        suffixed
+                    } else {
+                        symbol.clone()
+                    }
+                }
                 None => format!("{}-{}", chunk.start_line, chunk.end_line),
             };
             let title = match &chunk.symbol {
