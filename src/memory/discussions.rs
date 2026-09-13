@@ -336,7 +336,7 @@ pub fn remark_items(
                     "verdict:{}",
                     verdict_word(verdict).replace(' ', "-")
                 ));
-             else if remark.dismissed {
+            } else if remark.dismissed {
                 item = item.labelled("verdict:dismissed");
             }
             if let Some(path) = &remark.path {
@@ -810,7 +810,11 @@ mod tests {
 
         let dismissal = &items[0];
         assert_eq!(dismissal.title, "maintainer on #9: dismissed");
-        assert!(dismissal.body.contains("Verdict: dismissed"), "{}", dismissal.body);
+        assert!(
+            dismissal.body.contains("Verdict: dismissed"),
+            "{}",
+            dismissal.body
+        );
         assert!(dismissal.labels.contains(&"verdict:dismissed".to_string()));
 
         let edit = &items[1];
@@ -819,7 +823,11 @@ mod tests {
             Some("2026-08-15T09:00:00Z"),
             "dated to the edit, so the newer text wins on freshness"
         );
-        assert!(edit.body.contains("On 2026-08-14T10:05:00Z"), "{}", edit.body);
+        assert!(
+            edit.body.contains("On 2026-08-14T10:05:00Z"),
+            "{}",
+            edit.body
+        );
         assert!(edit.body.contains("Edited on 2026-08-15T09:00:00Z"));
     }
 
