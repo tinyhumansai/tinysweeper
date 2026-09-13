@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use crate::error::{Error, Result};
 use crate::forge::types::{
     ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, Issue, IssueComment, PullRequest,
-    RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict,
+    Remark, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -134,6 +134,17 @@ pub struct MockState {
     pub review_comments: BTreeMap<u64, Vec<ReviewComment>>,
     /// Issues, keyed by number.
     pub issues: BTreeMap<u64, Issue>,
+    /// Conversations for `remarks`, keyed by item number.
+    ///
+    /// Kept apart from `comments`, `review_comments` and `reviews` on purpose:
+    /// those three carry the projections the review path reads, and a test of
+    /// the memory backfill states its timeline once, as the timeline the real
+    /// adapter would fold.
+    pub remarks: BTreeMap<u64, Vec<Remark>>,
+    /// Items whose conversation `remarks` refuses to serve, as GitHub does
+    /// for a deleted or inaccessible item. For the tests that prove a walk
+    /// continues past one.
+    pub unreadable_conversations: std::collections::BTreeSet<u64>,
     /// The issue type names the owning organisation defines.
     ///
     /// Empty by default, which is what an organisation that never enabled
@@ -253,6 +264,24 @@ impl MockForge {
         {
             let mut state = self.state.lock().expect("mock state lock");
             state.issues.insert(issue.number, issue);
+        }
+        self
+    }
+
+    /// Serve `remarks` as the conversation on item `number`.
+    pub fn with_remarks(self, number: u64, remarks: Vec<Remark>) -> Self {
+        {
+            let mut state = self.state.lock().expect("mock state lock");
+            state.remarks.insert(number, remarks);
+        }
+        self
+    }
+
+    /// Make `remarks` fail for item `number`.
+    pub fn with_unreadable_conversation(self, number: u64) -> Self {
+        {
+            let mut state = self.state.lock().expect("mock state lock");
+            state.unreadable_conversations.insert(number);
         }
         self
     }
@@ -497,6 +526,64 @@ impl ForgeRead for MockForge {
             .take(limit)
             .cloned()
             .collect())
+    }
+
+    async fn issues_updated_since(
+        &self,
+        _repo: &RepoId,
+        since: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Issue>> {
+        let state = self.state.lock().expect("mock state lock");
+        // Pull requests are listed as GitHub lists them — through the issues
+        // endpoint — so a fixture's `pull_requests` are folded in as issues
+        // flagged `pull_request`, unless the fixture stated one explicitly.
+        let mut items: Vec<Issue> = state.issues.values().cloned().collect();
+        for pr in state.pull_requests.values() {
+            if state.issues.contains_key(&pr.number) {
+                continue;
+            }
+            items.push(Issue {
+                number: pr.number,
+                title: pr.title.clone(),
+                body: pr.body.clone(),
+                author: pr.author.clone(),
+                labels: pr.labels.clone(),
+                open: pr.open,
+                pull_request: true,
+                author_is_bot: pr.author_is_bot,
+                updated_at: pr.updated_at.clone(),
+                merged_at: pr.merged.then(|| "1970-01-01T00:00:00Z".to_string()),
+                ..Issue::default()
+            });
+        }
+        // RFC 3339 timestamps compare lexically, which is the whole reason
+        // they are kept as strings here: the mock needs no clock.
+        items.retain(|issue| match (since, &issue.updated_at) {
+            (Some(since), Some(updated)) => updated.as_str() > since,
+            (Some(_), None) => false,
+            (None, _) => true,
+        });
+        items.sort_by(|a, b| {
+            a.updated_at
+                .cmp(&b.updated_at)
+                .then(a.number.cmp(&b.number))
+        });
+        items.truncate(limit);
+        Ok(items)
+    }
+
+    async fn remarks(
+        &self,
+        _repo: &RepoId,
+        number: u64,
+        _pull_request: bool,
+    ) -> Result<Vec<Remark>> {
+        let state = self.state.lock().expect("mock state lock");
+        if state.unreadable_conversations.contains(&number) {
+            return Err(Self::missing("conversation", number));
+        }
+        Ok(state.remarks.get(&number).cloned().unwrap_or_default())
     }
 
     async fn default_branch(&self, _repo: &RepoId) -> Result<String> {

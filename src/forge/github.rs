@@ -14,7 +14,8 @@ use crate::error::{Error, Result};
 use crate::evidence::diff::truncate_patch;
 use crate::forge::types::{
     ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, FileStatus, Issue, IssueComment,
-    PullRequest, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict, ThreadComment,
+    PullRequest, Remark, RemarkKind, RepoId, ReviewComment, ReviewEvent, ReviewThread,
+    ReviewVerdict, ThreadComment,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -476,8 +477,114 @@ fn issue_from_json(raw: &serde_json::Value) -> Issue {
         // Absent, null, or an object without a name all mean "nobody has
         // chosen a type", which is the only state triage may write into.
         issue_type: raw["type"]["name"].as_str().map(str::to_string),
+        // The issues endpoint lists pull requests too, marked by this key.
+        pull_request: raw.get("pull_request").is_some_and(|pr| !pr.is_null()),
+        author_is_bot: raw["user"]["type"].as_str() == Some("Bot"),
+        created_at: raw["created_at"].as_str().map(str::to_string),
+        updated_at: raw["updated_at"].as_str().map(str::to_string),
+        closed_at: raw["closed_at"].as_str().map(str::to_string),
+        merged_at: raw["pull_request"]["merged_at"]
+            .as_str()
+            .map(str::to_string),
     }
 }
+
+/// One remark, from an issue comment or an inline review comment as REST
+/// renders them. The two payloads share every field read here; the inline one
+/// additionally carries a path and a line, which are simply absent on the
+/// other and read as `None`.
+fn remark_from_comment(raw: &serde_json::Value, kind: RemarkKind) -> Option<Remark> {
+    Some(Remark {
+        id: raw["id"].as_u64()?,
+        kind,
+        author: raw["user"]["login"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        bot: raw["user"]["type"].as_str() == Some("Bot"),
+        association: raw["author_association"]
+            .as_str()
+            .unwrap_or_default()
+            .to_ascii_lowercase(),
+        body: raw["body"].as_str().unwrap_or_default().to_string(),
+        created_at: raw["created_at"].as_str().map(str::to_string),
+        // Only when it differs: GitHub sets `updated_at` on creation too.
+        updated_at: raw["updated_at"]
+            .as_str()
+            .filter(|at| Some(*at) != raw["created_at"].as_str())
+            .map(str::to_string),
+        path: raw["path"].as_str().map(str::to_string),
+        line: raw["line"]
+            .as_u64()
+            .or_else(|| raw["original_line"].as_u64()),
+        in_reply_to: raw["in_reply_to_id"].as_u64(),
+        verdict: None,
+        dismissed: false,
+    })
+}
+
+/// One remark from a submitted review.
+///
+/// Unlike [`verdicts_from_page`], a review with no verdict is kept when it
+/// has a body — what was said is still part of the conversation even when
+/// the verdict was retired — and a `DISMISSED` review is kept regardless,
+/// because the dismissal itself is what the conversation should remember.
+/// A `PENDING` review with no body is nothing anybody said, and is dropped.
+fn remark_from_review(raw: &serde_json::Value) -> Option<Remark> {
+    let state = raw["state"].as_str();
+    let verdict = state.and_then(ReviewEvent::from_api);
+    let dismissed = state == Some("DISMISSED");
+    let body = raw["body"].as_str().unwrap_or_default().to_string();
+    if verdict.is_none() && !dismissed && body.trim().is_empty() {
+        return None;
+    }
+    Some(Remark {
+        id: raw["id"].as_u64()?,
+        kind: RemarkKind::Review,
+        author: raw["user"]["login"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        bot: raw["user"]["type"].as_str() == Some("Bot"),
+        association: raw["author_association"]
+            .as_str()
+            .unwrap_or_default()
+            .to_ascii_lowercase(),
+        body,
+        created_at: raw["submitted_at"].as_str().map(str::to_string),
+        updated_at: None,
+        path: None,
+        line: None,
+        in_reply_to: None,
+        verdict,
+        dismissed,
+    })
+}
+
+/// Whether `since` is safe to put in a query string.
+///
+/// A UTC RFC 3339 timestamp is digits, `T`, `Z`, `:`, `-` and `.`; anything
+/// else is refused rather than encoded, because a value that reached here from
+/// an operator's request is not something to be clever about. A `+` offset is
+/// refused too, deliberately: `+` is the one timestamp character whose
+/// query-string encoding is contested between parsers, every value this
+/// receives in practice is GitHub's own `Z` form, and an operator with an
+/// offset can write it as `Z` or `-hh:mm`.
+fn is_timestamp(since: &str) -> bool {
+    !since.is_empty()
+        && since.len() <= 40
+        && since
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'T' | b'Z' | b':' | b'-' | b'.'))
+}
+
+/// How many pages the whole-history listing will walk.
+///
+/// A hundred items a page, so fifty thousand issues and pull requests in one
+/// call. The caller's `limit` is the real bound; this only stops a listing
+/// with no limit worth the name from spending a rate-limit budget on a
+/// repository the size of a distribution.
+const MAX_LISTING_PAGES: usize = 500;
 
 /// How many pages of issue comments one read will walk.
 ///
@@ -582,6 +689,7 @@ fn pull_request_from(
         // allowed, where one that read too high would allow a close on a pull
         // request somebody commented on this morning.
         quiet_days: days_since(pr.updated_at.map(|at| at.timestamp())),
+        updated_at: pr.updated_at.map(|at| at.to_rfc3339()),
     }
 }
 
@@ -607,6 +715,27 @@ pub struct GitHubRead {
 }
 
 impl GitHubRead {
+    /// Every page of one conversation listing under `/repos/{owner}/{name}/`,
+    /// as raw JSON, read to exhaustion with the same bound `comments` uses.
+    async fn conversation_pages(
+        &self,
+        repo: &RepoId,
+        path: &str,
+    ) -> Result<Vec<serde_json::Value>> {
+        let route = format!("/repos/{}/{}/{path}", repo.owner, repo.name);
+        read_all_pages(
+            |page| {
+                let route = format!("{route}?per_page={PER_PAGE}&page={page}");
+                async move { self.client.get(route, None::<&()>).await.map_err(api) }
+            },
+            |raw| raw.as_array(),
+            |items| items.to_vec(),
+            MAX_COMMENT_PAGES,
+            "the conversation on this item",
+        )
+        .await
+    }
+
     /// Whether `login` currently holds write access (or above) to `repo`.
     ///
     /// GitHub's REST collaborator-permission route 404s for anyone who is not
@@ -824,6 +953,71 @@ impl ForgeRead for GitHubRead {
             Err(octocrab::Error::GitHub { source, .. }) if source.status_code == 404 => Ok(None),
             Err(err) => Err(api(err)),
         }
+    }
+
+    async fn issues_updated_since(
+        &self,
+        repo: &RepoId,
+        since: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Issue>> {
+        if let Some(since) = since
+            && !is_timestamp(since)
+        {
+            return Err(Error::Forge(format!(
+                "`{since}` is not an RFC 3339 timestamp"
+            )));
+        }
+        // `:` is the one reserved character a UTC timestamp contains;
+        // `is_timestamp` has refused everything else worth encoding.
+        let since = since.map(|s| s.replace(':', "%3A"));
+        let mut out = Vec::new();
+        let pages = limit.div_ceil(PER_PAGE).clamp(1, MAX_LISTING_PAGES);
+        for page in 1..=pages {
+            let mut route = format!(
+                "/repos/{}/{}/issues?state=all&sort=updated&direction=asc&per_page={PER_PAGE}&page={page}",
+                repo.owner, repo.name
+            );
+            if let Some(since) = &since {
+                route.push_str("&since=");
+                route.push_str(since);
+            }
+            let raw: serde_json::Value = self.client.get(route, None::<&()>).await.map_err(api)?;
+            let Some(items) = raw.as_array() else { break };
+            out.extend(items.iter().map(issue_from_json));
+            if items.len() < PER_PAGE {
+                break;
+            }
+        }
+        out.truncate(limit);
+        Ok(out)
+    }
+
+    async fn remarks(&self, repo: &RepoId, number: u64, pull_request: bool) -> Result<Vec<Remark>> {
+        let mut remarks: Vec<Remark> = self
+            .conversation_pages(repo, &format!("issues/{number}/comments"))
+            .await?
+            .iter()
+            .filter_map(|raw| remark_from_comment(raw, RemarkKind::Comment))
+            .collect();
+        if pull_request {
+            remarks.extend(
+                self.conversation_pages(repo, &format!("pulls/{number}/comments"))
+                    .await?
+                    .iter()
+                    .filter_map(|raw| remark_from_comment(raw, RemarkKind::ReviewComment)),
+            );
+            remarks.extend(
+                self.conversation_pages(repo, &format!("pulls/{number}/reviews"))
+                    .await?
+                    .iter()
+                    .filter_map(remark_from_review),
+            );
+        }
+        // One timeline: RFC 3339 sorts lexically, and an entry with no
+        // timestamp sorts first rather than being dropped.
+        remarks.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
+        Ok(remarks)
     }
 
     async fn default_branch(&self, repo: &RepoId) -> Result<String> {
@@ -1382,6 +1576,7 @@ impl ForgeRead for GitHubRead {
                 // compared for similarity, and asking for two hundred issues'
                 // types would cost a request each.
                 issue_type: None,
+                ..Issue::default()
             })
             .collect())
     }
@@ -1418,6 +1613,7 @@ impl ForgeRead for GitHubRead {
                 quiet_days: 0,
                 comments: i.comments,
                 issue_type: None,
+                ..Issue::default()
             })
             .collect())
     }
@@ -2289,6 +2485,19 @@ mod tests {
                 .map(|i| serde_json::json!({"user": {"login": format!("r{i}"), "type": "User"}, "state": "APPROVED"}))
                 .collect(),
         )
+    }
+
+    #[test]
+    fn only_utc_rfc3339_timestamps_reach_the_query_string() {
+        assert!(is_timestamp("2026-08-08T20:21:19Z"));
+        assert!(is_timestamp("2026-08-08T20:21:19.123Z"));
+        assert!(is_timestamp("2026-08-08T20:21:19-05:00"));
+        assert!(
+            !is_timestamp("2026-08-08T20:21:19+05:00"),
+            "a + offset is refused"
+        );
+        assert!(!is_timestamp("2026-08-08T20:21:19Z&per_page=1"));
+        assert!(!is_timestamp(""));
     }
 
     #[tokio::test]

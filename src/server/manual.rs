@@ -21,14 +21,16 @@ use async_trait::async_trait;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::error::Result;
 use crate::forge::RepoId;
+use crate::memory::DiscussionReport;
 use crate::server::admin::AdminAuth;
+use crate::server::memory::{BackfillStart, BackfillStatus};
 
 /// Environment variable naming the organisation manual reviews may target.
 pub const ORG_ENV: &str = "TINYSWEEPER_ALLOWED_ORG";
@@ -147,6 +149,57 @@ pub trait Triages: Send + Sync {
     ) -> Result<Vec<crate::pr_triage::Report>>;
 }
 
+/// What a memory backfill request may say beyond the repository in its path.
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct BackfillRequest {
+    /// Walk only conversations updated after this RFC 3339 instant. Absent
+    /// means the whole history — the first backfill of a repository — and a
+    /// finished backfill's `resume_from` is what to pass next time.
+    pub since: Option<String>,
+    /// How many conversations to walk at most. Absent means
+    /// [`crate::memory::discussions::DEFAULT_BACKFILL_LIMIT`].
+    pub limit: Option<usize>,
+    /// One conversation to remember now, synchronously, instead of a walk.
+    /// The way an operator re-reads a single issue or pull request.
+    pub number: Option<u64>,
+    /// With `number`: whether it is a pull request. Wrong is harmless — see
+    /// [`crate::memory::Discussions::remember_number`].
+    pub pull_request: bool,
+}
+
+/// How the route reaches the memory engine's discussion pipeline.
+///
+/// A fourth trait, and the same reasoning as the third: memory shares only a
+/// repository with the other buttons. It spends no model calls and writes
+/// nothing to GitHub — it reads conversations and writes them to the engine —
+/// so it sits behind the credential for what it *reads*: an installation
+/// token, on the operator's say-so.
+#[async_trait]
+pub trait Remembers: Send + Sync {
+    /// Remember one conversation now, waiting for the answer.
+    async fn remember(
+        &self,
+        repo: &RepoId,
+        number: u64,
+        pull_request: bool,
+    ) -> Result<DiscussionReport>;
+
+    /// Start a backfill in the background, or report the one already running.
+    ///
+    /// The walk is minutes long and an operator pressing twice wants to be
+    /// told, not doubled up.
+    async fn backfill(
+        &self,
+        repo: &RepoId,
+        since: Option<String>,
+        limit: usize,
+    ) -> Result<BackfillStart>;
+
+    /// Where the last backfill of `repo` stands, if one was ever started.
+    async fn status(&self, repo: &RepoId) -> Result<Option<BackfillStatus>>;
+}
+
 /// What the policy decided about one pull request.
 #[derive(Debug, Clone, Serialize)]
 pub struct MergeReport {
@@ -168,6 +221,9 @@ struct ManualState {
     reviews: Arc<dyn FullReviews>,
     merges: Arc<dyn Merges>,
     triages: Arc<dyn Triages>,
+    /// `None` when the deployment has no memory engine; the memory routes
+    /// then answer 503 rather than vanish, so an operator is told which.
+    remembers: Option<Arc<dyn Remembers>>,
 }
 
 /// Build the manual review router, or nothing when no token is configured.
@@ -181,6 +237,7 @@ pub fn router(
     reviews: Arc<dyn FullReviews>,
     merges: Arc<dyn Merges>,
     triages: Arc<dyn Triages>,
+    remembers: Option<Arc<dyn Remembers>>,
 ) -> Option<Router> {
     let auth = Arc::new(auth?);
     let state = ManualState {
@@ -188,6 +245,7 @@ pub fn router(
         reviews,
         merges,
         triages,
+        remembers,
     };
 
     Some(
@@ -195,6 +253,11 @@ pub fn router(
             .route("/admin/reviews/{owner}/{name}", post(full_review))
             .route("/admin/merges/{owner}/{name}", post(auto_merge))
             .route("/admin/pr-triage/{owner}/{name}", post(pull_request_triage))
+            .route(
+                "/admin/memory/{owner}/{name}/backfill",
+                post(memory_backfill),
+            )
+            .route("/admin/memory/{owner}/{name}", get(memory_status))
             // `route_layer`, so the token is checked before the `Json`
             // extractor parses anything an anonymous caller sent.
             .route_layer(axum::middleware::from_fn_with_state(
@@ -337,6 +400,104 @@ async fn pull_request_triage(
         .into_response())
 }
 
+/// Feed the memory engine a repository's conversations.
+///
+/// With `number`, one conversation, synchronously, and the report comes back.
+/// Without, a walk over the history since `since`, in the background; the
+/// answer is `202` with where it stands, `409` when one is already walking,
+/// and [`memory_status`] is how to watch it finish. `503` when this
+/// deployment has no engine: the route exists so the answer can say so.
+async fn memory_backfill(
+    State(state): State<ManualState>,
+    Path((owner, name)): Path<(String, String)>,
+    Json(body): Json<BackfillRequest>,
+) -> std::result::Result<Response, ApiError> {
+    let repo = checked_target(&owner, &name, &state.allowed_org)
+        .map_err(|message| ApiError(StatusCode::FORBIDDEN, message))?;
+    let remembers = state.remembers.as_ref().ok_or_else(|| {
+        ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "this deployment has no memory engine configured".into(),
+        )
+    })?;
+
+    if let Some(number) = body.number {
+        let report = remembers
+            .remember(&repo, number, body.pull_request)
+            .await
+            .map_err(|err| ApiError(StatusCode::BAD_GATEWAY, err.to_string()))?;
+        tracing::info!(%repo, number, "remembered a conversation on request: {}", report.summary());
+        return Ok((
+            StatusCode::OK,
+            Json(json!({ "repo": repo.to_string(), "number": number, "report": report })),
+        )
+            .into_response());
+    }
+
+    let limit = body
+        .limit
+        .unwrap_or(crate::memory::discussions::DEFAULT_BACKFILL_LIMIT)
+        .max(1);
+    match remembers
+        .backfill(&repo, body.since.clone(), limit)
+        .await
+        .map_err(|err| ApiError(StatusCode::BAD_GATEWAY, err.to_string()))?
+    {
+        BackfillStart::Started(status) => {
+            // Logged deliberately: a backfill reads every conversation in a
+            // repository through an installation token, and should be
+            // reconstructable from the logs.
+            tracing::info!(%repo, since = ?body.since, limit, "started a memory backfill on request");
+            Ok((
+                StatusCode::ACCEPTED,
+                Json(json!({ "repo": repo.to_string(), "backfill": status })),
+            )
+                .into_response())
+        }
+        BackfillStart::AlreadyRunning(running) => Ok((
+            StatusCode::CONFLICT,
+            Json(json!({
+                "repo": repo.to_string(),
+                "error": "a backfill of this repository is already running",
+                "backfill": running,
+            })),
+        )
+            .into_response()),
+    }
+}
+
+/// Where the last memory backfill of a repository stands.
+async fn memory_status(
+    State(state): State<ManualState>,
+    Path((owner, name)): Path<(String, String)>,
+) -> std::result::Result<Response, ApiError> {
+    let repo = checked_target(&owner, &name, &state.allowed_org)
+        .map_err(|message| ApiError(StatusCode::FORBIDDEN, message))?;
+    let remembers = state.remembers.as_ref().ok_or_else(|| {
+        ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "this deployment has no memory engine configured".into(),
+        )
+    })?;
+    let status = remembers
+        .status(&repo)
+        .await
+        .map_err(|err| ApiError(StatusCode::BAD_GATEWAY, err.to_string()))?
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "no memory backfill has been started for this repository since the server \
+                 booted"
+                    .into(),
+            )
+        })?;
+    Ok((
+        StatusCode::OK,
+        Json(json!({ "repo": repo.to_string(), "backfill": status })),
+    )
+        .into_response())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,14 +618,207 @@ mod tests {
         merges: Arc<MergeRecorder>,
         triages: Arc<TriageRecorder>,
     ) -> axum::Router {
+        app_with_memory(reviews, merges, triages, None)
+    }
+
+    fn app_with_memory(
+        reviews: Arc<Recorder>,
+        merges: Arc<MergeRecorder>,
+        triages: Arc<TriageRecorder>,
+        remembers: Option<Arc<MemoryRecorder>>,
+    ) -> axum::Router {
         router(
             Some(AdminAuth::new(TOKEN).expect("a long enough token")),
             "tinyhumansai".into(),
             reviews,
             merges,
             triages,
+            remembers.map(|r| r as Arc<dyn Remembers>),
         )
         .expect("a token mounts the router")
+    }
+
+    /// Records what the memory routes asked for. `running` makes the
+    /// backfill answer "already running", which is the refusal an operator
+    /// pressing twice needs to see.
+    #[derive(Default)]
+    struct MemoryRecorder {
+        remembered: Mutex<Vec<(String, u64, bool)>>,
+        backfills: Mutex<Vec<(String, Option<String>, usize)>>,
+        running: bool,
+    }
+
+    fn status(running: bool) -> BackfillStatus {
+        BackfillStatus {
+            running,
+            since: None,
+            limit: 1000,
+            started_at: "2026-09-13T00:00:00Z".into(),
+            finished_at: None,
+            report: None,
+            error: None,
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Remembers for MemoryRecorder {
+        async fn remember(
+            &self,
+            repo: &RepoId,
+            number: u64,
+            pull_request: bool,
+        ) -> crate::error::Result<DiscussionReport> {
+            self.remembered.lock().expect("not poisoned").push((
+                repo.to_string(),
+                number,
+                pull_request,
+            ));
+            Ok(DiscussionReport {
+                subjects: 1,
+                remarks: 4,
+                ..DiscussionReport::default()
+            })
+        }
+
+        async fn backfill(
+            &self,
+            repo: &RepoId,
+            since: Option<String>,
+            limit: usize,
+        ) -> crate::error::Result<BackfillStart> {
+            if self.running {
+                return Ok(BackfillStart::AlreadyRunning(status(true)));
+            }
+            self.backfills
+                .lock()
+                .expect("not poisoned")
+                .push((repo.to_string(), since, limit));
+            Ok(BackfillStart::Started(status(true)))
+        }
+
+        async fn status(&self, _repo: &RepoId) -> crate::error::Result<Option<BackfillStatus>> {
+            Ok(self.running.then(|| status(true)))
+        }
+    }
+
+    fn memory_app(remembers: Option<Arc<MemoryRecorder>>) -> axum::Router {
+        app_with_memory(
+            Arc::new(Recorder::default()),
+            Arc::new(MergeRecorder::default()),
+            Arc::new(TriageRecorder::default()),
+            remembers,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_backfill_is_started_in_the_background_with_the_default_limit() {
+        let memory = Arc::new(MemoryRecorder::default());
+        let response = memory_app(Some(memory.clone()))
+            .oneshot(post(
+                "/admin/memory/tinyhumansai/tinysweeper/backfill",
+                Some(TOKEN),
+                r#"{"since":"2026-01-01T00:00:00Z"}"#,
+            ))
+            .await
+            .expect("a response");
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            *memory.backfills.lock().unwrap(),
+            vec![(
+                "tinyhumansai/tinysweeper".to_string(),
+                Some("2026-01-01T00:00:00Z".to_string()),
+                crate::memory::discussions::DEFAULT_BACKFILL_LIMIT,
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_backfill_while_one_runs_is_a_conflict_not_a_second_walk() {
+        let memory = Arc::new(MemoryRecorder {
+            running: true,
+            ..MemoryRecorder::default()
+        });
+        let response = memory_app(Some(memory.clone()))
+            .oneshot(post(
+                "/admin/memory/tinyhumansai/tinysweeper/backfill",
+                Some(TOKEN),
+                "{}",
+            ))
+            .await
+            .expect("a response");
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert!(memory.backfills.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn one_conversation_is_remembered_synchronously() {
+        let memory = Arc::new(MemoryRecorder::default());
+        let response = memory_app(Some(memory.clone()))
+            .oneshot(post(
+                "/admin/memory/tinyhumansai/tinysweeper/backfill",
+                Some(TOKEN),
+                r#"{"number":131,"pull_request":true}"#,
+            ))
+            .await
+            .expect("a response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            *memory.remembered.lock().unwrap(),
+            vec![("tinyhumansai/tinysweeper".to_string(), 131, true)]
+        );
+        assert!(memory.backfills.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn without_an_engine_the_memory_routes_say_so_rather_than_vanish() {
+        let response = memory_app(None)
+            .oneshot(post(
+                "/admin/memory/tinyhumansai/tinysweeper/backfill",
+                Some(TOKEN),
+                "{}",
+            ))
+            .await
+            .expect("a response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let response = memory_app(None)
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/admin/memory/tinyhumansai/tinysweeper")
+                    .header("authorization", format!("Bearer {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("a response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn memory_routes_refuse_another_organisation_and_an_unauthenticated_caller() {
+        let memory = Arc::new(MemoryRecorder::default());
+        let response = memory_app(Some(memory.clone()))
+            .oneshot(post(
+                "/admin/memory/someone-else/tinysweeper/backfill",
+                Some(TOKEN),
+                "{}",
+            ))
+            .await
+            .expect("a response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let response = memory_app(Some(memory.clone()))
+            .oneshot(post(
+                "/admin/memory/tinyhumansai/tinysweeper/backfill",
+                None,
+                "{ not json",
+            ))
+            .await
+            .expect("a response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(memory.backfills.lock().unwrap().is_empty());
+        assert!(memory.remembered.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -647,7 +1001,8 @@ mod tests {
                 "tinyhumansai".into(),
                 Arc::new(Recorder::default()),
                 Arc::new(MergeRecorder::default()),
-                Arc::new(TriageRecorder::default())
+                Arc::new(TriageRecorder::default()),
+                None,
             )
             .is_none(),
             "an unauthenticated way to spend money on reviews is not a supported deployment"
