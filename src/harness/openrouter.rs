@@ -11,13 +11,13 @@ use async_trait::async_trait;
 use serde_json::json;
 use tinyagents::context::{RunConfig, RunContext};
 use tinyagents::events::EventSink;
-use tinyinference::message::Message as TaMessage;
-use tinyinference::model::ResponseFormat;
-use tinyinference::providers::openai::OpenAiModel;
 use tinyagents::runtime::{AgentHarness, PayloadCapture, RunPolicy};
 use tinyagents::{
     HarnessEventJournal, InMemoryEventJournal, JournalSink, LangfuseClient, LangfuseTraceConfig,
 };
+use tinyinference::message::Message as TaMessage;
+use tinyinference::model::ResponseFormat;
+use tinyinference::providers::openai::OpenAiModel;
 
 use crate::config::types::{Models, ProviderRouting, StructuredOutput};
 use crate::error::{Error, Result};
