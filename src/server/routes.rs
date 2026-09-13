@@ -995,13 +995,19 @@ pub enum Mode {
 
 /// The configuration a review in `mode` runs under.
 ///
-/// `Mode::Full` is exactly `review.incremental = false` for this one run. That
-/// single flag is what `crate::app::review` gates all three halves of the
-/// memory on — the prior findings read off the pull request, the remembered
-/// state in the store, and the write-back at the end — so turning it off both
-/// ignores the stored state and leaves it intact for the webhook path. Nothing
-/// is deleted: a manual review is an extra opinion, not a reset, and destroying
-/// the record would make the *next* webhook review duplicate its comments too.
+/// `Mode::Full` is exactly `review.incremental = false` for this one run.
+/// That single flag is this pull request's own incremental state — the
+/// prior findings read off it, and the cached evidence in the store — so
+/// turning it off makes this one run argue from scratch, and leaves the
+/// stored state intact for the webhook path. Nothing is deleted: a manual
+/// review is an extra opinion, not a reset, and destroying the record would
+/// make the *next* webhook review duplicate its comments too.
+///
+/// Memory is deliberately untouched by this flag: it is the repository's
+/// accumulated knowledge — conventions, and what became of earlier findings —
+/// not this pull request's incremental state, and a manual full review wants
+/// "you said this before and they said no" exactly as much as an ordinary
+/// one does.
 fn config_for(base: &Config, mode: Mode) -> std::borrow::Cow<'_, Config> {
     match mode {
         Mode::Incremental => std::borrow::Cow::Borrowed(base),
