@@ -217,6 +217,10 @@ fn threads_from_graphql(raw: &serde_json::Value) -> Vec<ReviewThread> {
                                 .to_string(),
                             body: comment["body"].as_str().unwrap_or_default().to_string(),
                             bot: comment["author"]["__typename"].as_str() == Some("Bot"),
+                            maintainer: matches!(
+                                comment["authorAssociation"].as_str(),
+                                Some("OWNER") | Some("MEMBER") | Some("COLLABORATOR")
+                            ),
                         })
                         .collect()
                 })
