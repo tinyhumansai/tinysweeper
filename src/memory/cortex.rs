@@ -817,16 +817,21 @@ mod tests {
     fn next_page_cursor_follows_has_more_and_next_cursor_together() {
         assert_eq!(
             next_page_cursor(&json!({"has_more": true, "next_cursor": "c2"})),
-            Some("c2".to_string())
+            PageContinuation::Next("c2".to_string())
         );
-        // Any of these must stop the walk: a missing `has_more`, an explicit
-        // `false`, or `has_more: true` with no cursor to actually continue.
-        assert_eq!(next_page_cursor(&json!({})), None);
+        // Both of these are genuinely done: a missing `has_more`, or an
+        // explicit `false`.
+        assert_eq!(next_page_cursor(&json!({})), PageContinuation::Done);
         assert_eq!(
             next_page_cursor(&json!({"has_more": false, "next_cursor": "c2"})),
-            None
+            PageContinuation::Done
         );
-        assert_eq!(next_page_cursor(&json!({"has_more": true})), None);
+        // `has_more: true` with no cursor is contradictory, not done: `forget`
+        // must fail rather than read it as "nothing more to delete".
+        assert_eq!(
+            next_page_cursor(&json!({"has_more": true})),
+            PageContinuation::Malformed
+        );
     }
 
     #[test]
@@ -834,14 +839,14 @@ mod tests {
         // Regression for `forget` reporting success on a partial delete: if
         // every page this engine could return keeps saying "there is more",
         // the `for _ in 0..MAX_PAGES` loop in `forget` runs out without ever
-        // taking the `None` branch that clears `truncated`. This proves that
+        // taking the `Done` branch that clears `truncated`. This proves that
         // exhaustion, over `MAX_PAGES` calls to the same decision function
         // `forget` uses per page — no HTTP involved.
         let always_more = json!({"has_more": true, "next_cursor": "same"});
         for _ in 0..MAX_PAGES {
             assert_eq!(
                 next_page_cursor(&always_more),
-                Some("same".to_string()),
+                PageContinuation::Next("same".to_string()),
                 "a page that always says more must never look exhausted on its own"
             );
         }
