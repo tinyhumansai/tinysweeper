@@ -668,13 +668,9 @@ impl Memory for CortexMemory {
                         ids.push(id.to_string());
                     }
                 }
-                let next = page
-                    .get("next_cursor")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                match (page.get("has_more").and_then(Value::as_bool), next) {
-                    (Some(true), Some(next)) => cursor = Some(next),
-                    _ => {
+                match next_page_cursor(&page) {
+                    Some(next) => cursor = Some(next),
+                    None => {
                         truncated = false;
                         break;
                     }
