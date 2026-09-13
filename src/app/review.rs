@@ -770,8 +770,11 @@ async fn remember_findings_bounded(
     items: &[crate::memory::MemoryItem],
     timeout: std::time::Duration,
 ) {
-    match tokio::time::timeout(timeout, crate::memory::ingest::remember_all(memory, repo, items))
-        .await
+    match tokio::time::timeout(
+        timeout,
+        crate::memory::ingest::remember_all(memory, repo, items),
+    )
+    .await
     {
         Ok(Ok(_)) => {}
         Ok(Err(err)) => {
