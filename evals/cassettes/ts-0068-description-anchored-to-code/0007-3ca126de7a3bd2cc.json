@@ -1,0 +1,17 @@
+{
+  "key": "3ca126de7a3bd2cc",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3791,
+    "output_tokens": 139,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00020052032
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request updates model configurations in `src/config/defaults.toml`, switching from a two-tier model setup (scan/deep) using different models to a single model for both tiers with a higher reasoning effort setting. The change appears to be a configuration update only, with no introduction of untrusted input handling, authentication/authorisation changes, network calls, deserialization, path traversal, secrets exposure, dependency changes, or CI permission changes. The diff modifies static configuration values and comments; no code logic is altered, and no dangerous sinks are introduced. The change is safe to merge from a security perspective."
+  }
+}

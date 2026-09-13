@@ -1,0 +1,29 @@
+{
+  "key": "aa5e25e9a01eaa2f",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3375,
+    "output_tokens": 2639,
+    "cached_tokens": 2536,
+    "embed_tokens": 0,
+    "cost_usd": 0.004614516192
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "Adding `reasoning_effort` as a plain required field to a config struct in `src/config/types.rs` will break deserialization of any existing config file that does not yet include this key, unless the field carries `#[serde(default)]` or the struct has a struct-level default. Even with `#[serde(default)]`, `String` defaults to an empty string, which is not one of the documented valid values (`off`, `low`, `medium`, `high`) and may cause downstream validation failures. I cannot see the serde derives from the diff, so this depends on whether the struct derives `Deserialize` — common for config types but unconfirmed here.",
+        "confidence": 0.45,
+        "existing_code": "    pub reasoning_effort: String,",
+        "late": false,
+        "path": "src/config/types.rs",
+        "rule": "missing-serde-default",
+        "severity": "high",
+        "suggestion": null,
+        "title": "Add serde default for new required config field"
+      }
+    ],
+    "summary": "The pull request adds a `reasoning_effort: String` field with documentation to a config struct. It is likely safe to merge, but if this struct deserializes from config files via serde, the new required field may break existing configs that omit it."
+  }
+}
