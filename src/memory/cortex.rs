@@ -699,10 +699,15 @@ impl Memory for CortexMemory {
                     }
                 }
                 match next_page_cursor(&page) {
-                    Some(next) => cursor = Some(next),
-                    None => {
+                    PageContinuation::Next(next) => cursor = Some(next),
+                    PageContinuation::Done => {
                         truncated = false;
                         break;
+                    }
+                    PageContinuation::Malformed => {
+                        return Err(Error::Model(format!(
+                            "cortex: forget: {path} answered has_more with no cursor"
+                        )));
                     }
                 }
             }
