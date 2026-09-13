@@ -680,7 +680,9 @@ mod tests {
         assert_eq!(context.answers.len(), 1);
         let rendered = context.render();
         assert!(rendered.starts_with("### Answers from memory"));
-        assert!(rendered.contains("Q: Which conventions apply to `src/ports/forge.rs`?"));
+        assert!(rendered.contains(
+            "Q: Which conventions apply to <untrusted-pull-request-data>`src/ports/forge.rs`</untrusted-pull-request-data>?"
+        ));
         assert!(rendered.contains("A: One trait per file"));
     }
 
