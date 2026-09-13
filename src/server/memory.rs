@@ -93,12 +93,12 @@ impl MemoryBackend {
     }
 
     /// Whether `repo` has been ingested at `revision` by this process.
-    pub fn is_fresh(&self, repo: &str, revision: &str) -> bool {
+    pub fn is_fresh(&self, repo: &str, revision: &str, config: &Config) -> bool {
         self.fresh
             .lock()
             .expect("freshness lock")
             .get(repo)
-            .is_some_and(|known| known == revision)
+            .is_some_and(|known| *known == freshness_key(revision, config))
     }
 
     /// The per-repository lock that serializes `ensure_ingested`, creating it
