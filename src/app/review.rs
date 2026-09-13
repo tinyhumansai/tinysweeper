@@ -36,6 +36,11 @@ use crate::scan;
 use crate::scan::types::ScanKind;
 use crate::state::types::ReviewedState;
 
+/// How long the post-review write-back to memory may run before it is
+/// abandoned. Best-effort, and bounded rather than backgrounded: see the
+/// comment where it is used.
+const REMEMBER_FINDINGS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// What a review run concluded, ready for `apply` to publish.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Proposal {
