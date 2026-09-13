@@ -763,6 +763,40 @@ mod tests {
     }
 
     #[test]
+    fn next_page_cursor_follows_has_more_and_next_cursor_together() {
+        assert_eq!(
+            next_page_cursor(&json!({"has_more": true, "next_cursor": "c2"})),
+            Some("c2".to_string())
+        );
+        // Any of these must stop the walk: a missing `has_more`, an explicit
+        // `false`, or `has_more: true` with no cursor to actually continue.
+        assert_eq!(next_page_cursor(&json!({})), None);
+        assert_eq!(
+            next_page_cursor(&json!({"has_more": false, "next_cursor": "c2"})),
+            None
+        );
+        assert_eq!(next_page_cursor(&json!({"has_more": true})), None);
+    }
+
+    #[test]
+    fn a_listing_that_never_stops_would_exhaust_max_pages_still_truncated() {
+        // Regression for `forget` reporting success on a partial delete: if
+        // every page this engine could return keeps saying "there is more",
+        // the `for _ in 0..MAX_PAGES` loop in `forget` runs out without ever
+        // taking the `None` branch that clears `truncated`. This proves that
+        // exhaustion, over `MAX_PAGES` calls to the same decision function
+        // `forget` uses per page — no HTTP involved.
+        let always_more = json!({"has_more": true, "next_cursor": "same"});
+        for _ in 0..MAX_PAGES {
+            assert_eq!(
+                next_page_cursor(&always_more),
+                Some("same".to_string()),
+                "a page that always says more must never look exhausted on its own"
+            );
+        }
+    }
+
+    #[test]
     fn an_error_response_body_never_reaches_the_returned_error() {
         // Regression: the error this returns is what an unavailable-memory
         // note quotes on a check-run summary, so the engine's response body
