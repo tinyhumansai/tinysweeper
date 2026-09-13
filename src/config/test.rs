@@ -1158,6 +1158,20 @@ fn a_memory_that_neither_recalls_nor_asks_is_pointless() {
 }
 
 #[test]
+fn an_invalid_convention_glob_is_rejected_at_validate_rather_than_at_ingest() {
+    // Without this, an invalid pattern passes startup validation, the server
+    // boots, and `Ingestor::new` only fails later — during background
+    // ingestion, where the error is logged and the review continues without
+    // the new memory instead of refusing to start.
+    let config = parse(
+        "version = 1\n[memory]\nenabled = true\nendpoint = \"https://x\"\n\
+         ingest_conventions = true\nconvention_files = [\"[\"]\n",
+    );
+    let problems = validate::validate(&config).join("\n");
+    assert!(problems.contains("invalid glob"), "{problems}");
+}
+
+#[test]
 fn memory_is_not_a_repository_overridable_section() {
     // A repository must not be able to point the operator's reviewer at an
     // engine of its choosing, or name the variable its key lives in.
