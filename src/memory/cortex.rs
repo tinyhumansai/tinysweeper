@@ -544,13 +544,14 @@ impl Memory for CortexMemory {
             return Ok(Vec::new());
         }
         let answer = self
-            .post(
+            .post_bounded(
                 "v1/recall",
                 &json!({
                     "scope": scope_path(scope)?,
                     "query": query,
                     "budgets": events_only(limit),
                 }),
+                READ_TIMEOUT,
             )
             .await?;
         let mut out = Vec::new();
@@ -588,13 +589,14 @@ impl Memory for CortexMemory {
     ) -> Result<MemoryAnswer> {
         let scope_path = scope_path(scope)?;
         let pack = self
-            .post(
+            .post_bounded(
                 "v1/recall",
                 &json!({
                     "scope": scope_path,
                     "query": question,
                     "budgets": answer_budget(),
                 }),
+                READ_TIMEOUT,
             )
             .await?;
         let ungrounded = || MemoryAnswer {
@@ -623,7 +625,7 @@ impl Memory for CortexMemory {
         if let Some(instructions) = instructions {
             body["answer_instructions"] = json!(instructions);
         }
-        let response = self.post("v1/answer", &body).await?;
+        let response = self.post_bounded("v1/answer", &body, READ_TIMEOUT).await?;
         let text = response
             .get("answer")
             .and_then(Value::as_str)
