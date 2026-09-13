@@ -110,9 +110,30 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
           isOutdated
           resolvedBy { login }
           comments(first: $first) {
+            pageInfo { hasNextPage endCursor }
             nodes { body authorAssociation author { login __typename } }
           }
         }
+      }
+    }
+  }
+}
+"#;
+
+/// A thread's own comments, paged separately.
+///
+/// Only reached for a thread whose first page (fetched by
+/// [`REVIEW_THREADS_QUERY`]) said `hasNextPage`: more than `GRAPHQL_PAGE`
+/// comments on one conversation is rare, and paying for a per-thread query on
+/// every delivery to cover it would cost every ordinary review for the one
+/// with an unusually long back-and-forth.
+const THREAD_COMMENTS_QUERY: &str = r#"
+query($id: ID!, $after: String) {
+  node(id: $id) {
+    ... on PullRequestReviewThread {
+      comments(first: $first, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { body authorAssociation author { login __typename } }
       }
     }
   }
