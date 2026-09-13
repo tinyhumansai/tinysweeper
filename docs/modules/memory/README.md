@@ -185,7 +185,7 @@ and both have an offline mock.
 **Live.** Every webhook delivery that touches a conversation asks for it to be
 re-read: `issues` opened/edited/closed/reopened/(un)labeled, `issue_comment`
 and `pull_request_review_comment` created/edited, `pull_request_review`
-submitted/edited, `pull_request` opened/edited/closed/reopened/ready/(un)labeled.
+submitted/edited/dismissed, `pull_request` opened/edited/closed/reopened/ready/(un)labeled.
 `webhook::remember_trigger` decides this *alongside* `route`, not inside it,
 because whether memory remembers a delivery is independent of whether the
 delivery starts a review — and it runs before the bot guard, which is the
