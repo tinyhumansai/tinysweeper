@@ -406,11 +406,12 @@ impl IngestReport {
     pub fn summary(&self) -> String {
         format!(
             "{} code chunks from {} files, {} convention sections from {} files; \
-             {} written, {} already remembered{}",
+             {} retired, {} written, {} already remembered{}",
             self.code_items,
             self.code_files,
             self.convention_items,
             self.convention_files,
+            self.retired,
             self.remembered.written,
             self.remembered.replayed,
             if self.unreadable.is_empty() {
