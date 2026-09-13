@@ -92,13 +92,42 @@ one — whichever the engine ranks first wins, which is exactly how an obsolete
 So every `ingest_checkout` call forgets the whole `code` and/or `conventions`
 section for the repository — whichever it is about to (re-)ingest — before
 writing this pass's items. `ensure_ingested` only calls it once the base tip
-has actually moved, so a section is never left empty: the same call that
-forgets it repopulates it in full, in the same background task. The cost is
-real — a repeat ingest of an unchanged tree now always rewrites it rather than
-replaying content-idempotent no-ops — and it is the trade this adapter makes
-for never serving a superseded rule as current. Review outcomes are a separate
-section and are never touched by this: they come from review threads, not the
-tree.
+has actually moved, so a section is never left empty for long: the same call
+that forgets it repopulates it in full, in the same background task. The cost
+is real — a repeat ingest of an unchanged tree now always rewrites it rather
+than replaying content-idempotent no-ops — and it is the trade this adapter
+makes for never serving a superseded rule as current. Review outcomes are a
+separate section and are never touched by this: they come from review
+threads, not the tree, and are covered in the next section.
+
+**Not versioned, not atomic.** Forget and repopulate are two calls, not one:
+a recall landing on this process between them sees a partially rebuilt
+section rather than either the old or the new one whole. `ensure_ingested`'s
+per-repository lock (`server::memory::MemoryBackend::ingest_lock`) keeps two
+*ingests* of the same repository from racing each other, but it does not
+block a concurrent *recall* — that would need the [`Memory`] port to support
+either a per-item delete (so retiring one stale item never requires emptying
+the section) or a versioned scope recall could be atomically retargeted to,
+neither of which CortexDB's public API gave evidence of supporting safely
+when this was built. Until one of those exists, the honest tradeoff is: a
+recall mid-window degrades to *less remembered*, never to something wrong.
+
+### Review outcomes are append-only by design, and that is a known gap
+
+Unlike code and conventions, an outcome's key is never retired the same way:
+`ingest_checkout` only forgets the `code` and `conventions` sections, because
+outcomes accumulate one pull request's write-back at a time and there is no
+single "whole tree" moment to recompute a full replacement from, the way a
+checkout gives one for the other two sections. A thread first observed as
+`rejected` and later reopened, fixed, or reversed by a maintainer still
+appends a *new* outcome event under the same logical key rather than
+replacing the old one — and recall's dedupe-by-key only runs after relevance
+ranking, so an old, since-superseded verdict can still be the one a future
+review sees. Fixing this for real needs one of: a per-key delete the
+[`Memory`] port does not have, or reading the engine's own event recency
+(`recorded_at`) back through recall to prefer the newest version, which needs
+a datetime dependency and a round-trip this adapter does not currently make.
+Tracked as a known limitation rather than fixed here.
 
 ## The review path
 
