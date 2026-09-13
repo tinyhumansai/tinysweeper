@@ -123,6 +123,14 @@ impl CortexMemory {
         let client = reqwest::Client::builder()
             .default_headers(headers)
             .timeout(TIMEOUT)
+            // This adapter only ever calls the one configured endpoint and
+            // never needs a redirect to get there. `reqwest` already strips
+            // `Authorization` across a host, port, or scheme change, but a
+            // same-origin `307`/`308` still replays the request — including
+            // this header — to wherever the engine's own response pointed.
+            // Refusing every redirect keeps the bearer's destination exactly
+            // the endpoint this process was configured with.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|err| Error::Model(format!("cortex: could not build client: {err}")))?;
         Ok(Self {
