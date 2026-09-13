@@ -404,7 +404,13 @@ impl DiscussionReport {
         out
     }
 
-    fn absorb(&mut self, other: DiscussionReport) {
+    /// Fold another report's counts and failures into this one.
+    ///
+    /// `pub(crate)` so a caller chunking a long backfill across several
+    /// re-minted tokens (see `server::memory::MemoryBackend::run_backfill`)
+    /// can combine each chunk's report into one, the same way this walk
+    /// combines each subject's.
+    pub(crate) fn absorb(&mut self, other: DiscussionReport) {
         self.subjects += other.subjects;
         self.remarks += other.remarks;
         self.remembered.merge(other.remembered);
