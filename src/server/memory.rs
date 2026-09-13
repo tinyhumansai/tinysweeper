@@ -345,7 +345,7 @@ impl MemoryBackend {
                 let processed = report.subjects + report.failed.len();
                 let last_seen = report.last_seen.clone();
                 combined.absorb(report);
-                combined.last_seen = last_seen.clone().or(combined.last_seen.take());
+                combined.last_seen = last_seen.clone().or(combined.last_seen.clone());
                 walked += chunk;
                 // Whether to keep chunking is decided *before* the cursor is
                 // updated, from the chunk's own progress — but the cursor
