@@ -305,7 +305,15 @@ pub fn classify(thread: &ReviewThread) -> Option<Outcome> {
     match (thread.is_resolved, thread.is_outdated, human_replied) {
         (true, true, _) => Some(Outcome::Fixed),
         (true, false, true) => Some(Outcome::Rejected),
-        (true, false, false) => Some(Outcome::Dismissed),
+        // Silence, then a resolve, is the weakest of these signals — and
+        // GitHub lets the pull request's own author resolve a thread
+        // regardless of their permission on the repository. Without
+        // requiring the resolver to actually have write access, an
+        // unauthorized contributor could silently dismiss a finding on their
+        // own fork's pull request and have memory tell future reviews never
+        // to raise it again.
+        (true, false, false) if thread.resolved_by_has_write_access => Some(Outcome::Dismissed),
+        (true, false, false) => None,
         (false, _, true) => Some(Outcome::Disputed),
         (false, _, false) => None,
     }
