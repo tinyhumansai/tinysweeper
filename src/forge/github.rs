@@ -14,7 +14,8 @@ use crate::error::{Error, Result};
 use crate::evidence::diff::truncate_patch;
 use crate::forge::types::{
     ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, FileStatus, Issue, IssueComment,
-    PullRequest, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict, ThreadComment,
+    PullRequest, Remark, RemarkKind, RepoId, ReviewComment, ReviewEvent, ReviewThread,
+    ReviewVerdict, ThreadComment,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -701,6 +702,27 @@ impl GitHubRead {
     /// forked pull request, who is exactly the case this exists to catch —
     /// and that is read as "no write access" rather than an error: a missing
     /// collaborator record is conclusive, not a failure to determine one.
+    /// Every page of one conversation listing under `/repos/{owner}/{name}/`,
+    /// as raw JSON, read to exhaustion with the same bound `comments` uses.
+    async fn conversation_pages(
+        &self,
+        repo: &RepoId,
+        path: &str,
+    ) -> Result<Vec<serde_json::Value>> {
+        let route = format!("/repos/{}/{}/{path}", repo.owner, repo.name);
+        read_all_pages(
+            |page| {
+                let route = format!("{route}?per_page={PER_PAGE}&page={page}");
+                async move { self.client.get(route, None::<&()>).await.map_err(api) }
+            },
+            |raw| raw.as_array(),
+            |items| items.to_vec(),
+            MAX_COMMENT_PAGES,
+            "the conversation on this item",
+        )
+        .await
+    }
+
     pub(crate) async fn has_write_access(&self, repo: &RepoId, login: &str) -> Result<bool> {
         use octocrab::params::teams::Permission;
 
@@ -952,40 +974,25 @@ impl ForgeRead for GitHubRead {
     }
 
     async fn remarks(&self, repo: &RepoId, number: u64, pull_request: bool) -> Result<Vec<Remark>> {
-        let paged = |path: &'static str| {
-            let route = format!("/repos/{}/{}/{path}", repo.owner, repo.name);
-            async move {
-                read_all_pages(
-                    |page| {
-                        let route = format!("{route}?per_page={PER_PAGE}&page={page}");
-                        async move { self.client.get(route, None::<&()>).await.map_err(api) }
-                    },
-                    |raw| raw.as_array(),
-                    |items| items.to_vec(),
-                    MAX_COMMENT_PAGES,
-                    "the conversation on this item",
-                )
-                .await
-            }
-        };
-        // The routes name the item by number inside a `'static` template, so
-        // they are built here and the closure only appends the page.
-        let comments_route: &'static str = Box::leak(format!("issues/{number}/comments").into_boxed_str());
-        let mut remarks: Vec<Remark> = paged(comments_route)
+        let mut remarks: Vec<Remark> = self
+            .conversation_pages(repo, &format!("issues/{number}/comments"))
             .await?
             .iter()
             .filter_map(|raw| remark_from_comment(raw, RemarkKind::Comment))
             .collect();
         if pull_request {
-            let inline_route: &'static str = Box::leak(format!("pulls/{number}/comments").into_boxed_str());
-            let reviews_route: &'static str = Box::leak(format!("pulls/{number}/reviews").into_boxed_str());
             remarks.extend(
-                paged(inline_route)
+                self.conversation_pages(repo, &format!("pulls/{number}/comments"))
                     .await?
                     .iter()
                     .filter_map(|raw| remark_from_comment(raw, RemarkKind::ReviewComment)),
             );
-            remarks.extend(paged(reviews_route).await?.iter().filter_map(remark_from_review));
+            remarks.extend(
+                self.conversation_pages(repo, &format!("pulls/{number}/reviews"))
+                    .await?
+                    .iter()
+                    .filter_map(remark_from_review),
+            );
         }
         // One timeline: RFC 3339 sorts lexically, and an entry with no
         // timestamp sorts first rather than being dropped.
