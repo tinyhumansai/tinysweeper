@@ -83,6 +83,7 @@ impl MemoryBackend {
         Ok(Some(Self {
             memory: Arc::new(memory),
             fresh: Mutex::new(HashMap::new()),
+            ingesting: Mutex::new(HashMap::new()),
         }))
     }
 
