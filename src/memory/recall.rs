@@ -817,7 +817,10 @@ mod tests {
             q.starts_with("Rules for <untrusted-pull-request-data>`src/f0.rs`, "),
             "{q}"
         );
-        assert!(q.contains("and 8 more</untrusted-pull-request-data> in"), "{q}");
+        assert!(
+            q.contains("and 8 more</untrusted-pull-request-data> in"),
+            "{q}"
+        );
         assert!(
             q.contains("<untrusted-pull-request-data>T</untrusted-pull-request-data>?"),
             "{q}"
