@@ -363,7 +363,16 @@ async fn dispatch(state: AppState, action: Action, delivery: String, event: Stri
             author,
             installation,
         } => {
-            handle_review(state, repo, number, author, installation, Mode::Incremental).await;
+            handle_review(
+                state,
+                repo,
+                number,
+                author,
+                installation,
+                Mode::Incremental,
+                Some(delivery),
+            )
+            .await;
         }
         Action::TriageIssue {
             repo,
@@ -870,6 +879,7 @@ impl FullReviews for ManualDispatch {
                 author,
                 installation,
                 Mode::Full,
+                None,
             ));
             queued.push(number);
         }
@@ -1163,6 +1173,7 @@ async fn handle_review(
     author: String,
     installation: u64,
     mode: Mode,
+    delivery: Option<String>,
 ) {
     let slot: StatusSlot = Arc::new(std::sync::Mutex::new(None));
 
@@ -1212,14 +1223,21 @@ async fn handle_review(
     let opened = slot.lock().expect("status slot").is_some();
     if opened {
         close_status(&state, &slot, Conclusion::Failed(&err)).await;
-        return;
-    }
-
-    if let Err(report) = report_failure(&state, &repo, number, installation, &err).await {
+    } else if let Err(report) = report_failure(&state, &repo, number, installation, &err).await {
         // Reporting is best-effort by necessity: the most likely reason it
         // fails is the same forge outage that failed the review. Log both, so
         // the pod still carries the whole story even when GitHub does not.
         tracing::error!(%report, %repo, number, "could not report the failed review");
+    }
+
+    // A delivery has already been acknowledged, so this is the only recovery
+    // available to a transiently failed worker without a durable job queue.
+    // Keep successful claims for dedupe; only terminal failures become
+    // retryable through a later GitHub redelivery.
+    if let Some(delivery) = delivery
+        && let Err(release) = state.store.release_delivery(&delivery).await
+    {
+        tracing::error!(%release, %delivery, "could not release the failed delivery claim");
     }
 }
 
