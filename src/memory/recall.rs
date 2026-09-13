@@ -708,6 +708,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_reported_budget_never_undercounts_what_render_actually_emits() {
+        // Regression: `item_tokens`/`answer_tokens` used to omit the section
+        // heading `render` prints once per kind and the `Cites:` line an
+        // answer with citations carries, so a rendered prompt spanning
+        // several kinds (or citations) could exceed `context_tokens` even
+        // though the reported `tokens` count said otherwise.
+        let memory = seeded()
+            .await
+            .with_answer("conventions", "One trait per file, per AGENTS.md.");
+        let recaller = Recaller::new(&memory);
+        let mut config = config();
+        config.memory.questions = vec![question(
+            "conventions",
+            "Which conventions apply to {paths}?",
+        )];
+        let context = recaller
+            .recall(
+                &config,
+                "o/r",
+                "ports change",
+                &[diff("src/ports/forge.rs")],
+                true,
+            )
+            .await;
+        // Every kind is represented, and there is a grounded answer, so the
+        // render carries both an "Answers" heading and multiple kind
+        // headings — exactly the fragments the old cost functions dropped.
+        let (outcomes, conventions, code) = context.counts();
+        assert!(outcomes >= 1 && conventions >= 1 && code >= 1);
+        assert!(!context.answers.is_empty());
+
+        let rendered_tokens =
+            crate::harness::pricing::estimate_tokens(&context.render()) as usize;
+        assert!(
+            rendered_tokens <= context.tokens,
+            "render emitted {rendered_tokens} tokens but the budget only accounted for {}",
+            context.tokens
+        );
+    }
+
+    #[tokio::test]
     async fn observing_threads_writes_outcomes_and_reports_the_count() {
         use crate::forge::types::{ReviewThread, ThreadComment};
         let memory = MockMemory::new();
