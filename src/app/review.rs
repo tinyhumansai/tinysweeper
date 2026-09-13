@@ -471,7 +471,14 @@ pub async fn review_with_memory(
     // useful thing to know before reviewing the next — and only then is the
     // memory asked. Code is recalled only when the index is not already
     // showing the lane the same functions.
-    let memory_context = match memory.filter(|_| config.memory.enabled) {
+    //
+    // Also gated on `review.incremental`: a manual full review promises to
+    // run "as though this pull request had never been seen"
+    // (`server::routes::config_for`), and recalling or observing prior
+    // outcomes here would both contradict that and write the extra opinion
+    // back into memory as if it were an ordinary cycle.
+    let memory_context = match memory.filter(|_| config.memory.enabled && config.review.incremental)
+    {
         Some(recaller) => {
             let observed = match (
                 forge.review_threads(repo, number).await,
