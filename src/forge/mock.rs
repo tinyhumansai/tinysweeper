@@ -141,6 +141,10 @@ pub struct MockState {
     /// the memory backfill states its timeline once, as the timeline the real
     /// adapter would fold.
     pub remarks: BTreeMap<u64, Vec<Remark>>,
+    /// Items whose conversation `remarks` refuses to serve, as GitHub does
+    /// for a deleted or inaccessible item. For the tests that prove a walk
+    /// continues past one.
+    pub unreadable_conversations: std::collections::BTreeSet<u64>,
     /// The issue type names the owning organisation defines.
     ///
     /// Empty by default, which is what an organisation that never enabled
@@ -269,6 +273,15 @@ impl MockForge {
         {
             let mut state = self.state.lock().expect("mock state lock");
             state.remarks.insert(number, remarks);
+        }
+        self
+    }
+
+    /// Make `remarks` fail for item `number`.
+    pub fn with_unreadable_conversation(self, number: u64) -> Self {
+        {
+            let mut state = self.state.lock().expect("mock state lock");
+            state.unreadable_conversations.insert(number);
         }
         self
     }
@@ -566,6 +579,9 @@ impl ForgeRead for MockForge {
         _pull_request: bool,
     ) -> Result<Vec<Remark>> {
         let state = self.state.lock().expect("mock state lock");
+        if state.unreadable_conversations.contains(&number) {
+            return Err(Self::missing("conversation", number));
+        }
         Ok(state.remarks.get(&number).cloned().unwrap_or_default())
     }
 

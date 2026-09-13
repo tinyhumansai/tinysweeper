@@ -868,13 +868,15 @@ mod tests {
         newer.updated_at = Some("2026-08-20T00:00:00Z".into());
         let mut pr_listing = issue(9, false);
         pr_listing.pull_request = true;
+        pr_listing.merged_at = Some("2026-08-10T00:00:00Z".into());
         pr_listing.updated_at = Some("2026-08-10T00:00:00Z".into());
 
+        // No `with_pull_request(9)`: the walk must not read the pull request
+        // itself — the listing already says everything it remembers.
         let forge = MockForge::new()
             .with_issue(older)
             .with_issue(newer)
             .with_issue(pr_listing)
-            .with_pull_request(pull_request(9), vec![], vec![])
             .with_remarks(1, vec![remark(1, RemarkKind::Comment, "someone", "me too")])
             .with_remarks(9, vec![remark(2, RemarkKind::Review, "maintainer", "LGTM")]);
         let memory = MockMemory::new();
@@ -898,9 +900,12 @@ mod tests {
             keys.contains("pr:o/r#9"),
             "the listing's pull request is read as one"
         );
+        let pr = held.iter().find(|i| i.key == "pr:o/r#9").unwrap();
+        assert!(pr.body.contains("State: merged"), "{}", pr.body);
         assert!(
-            held.iter()
-                .any(|i| i.key == "pr:o/r#9" && i.body.contains("State: merged"))
+            !pr.body.contains(" into "),
+            "branches the listing does not know are not rendered: {}",
+            pr.body
         );
 
         // Resuming from the report walks only what changed after it.
@@ -979,8 +984,10 @@ mod tests {
         missing.updated_at = Some("2026-08-10T00:00:00Z".into());
         let mut fine = issue(2, true);
         fine.updated_at = Some("2026-08-20T00:00:00Z".into());
-        // No `with_pull_request(9)`: the forge 404s the pull request read.
-        let forge = MockForge::new().with_issue(missing).with_issue(fine);
+        let forge = MockForge::new()
+            .with_issue(missing)
+            .with_issue(fine)
+            .with_unreadable_conversation(9);
         let memory = MockMemory::new();
         let config = config();
         let repo = RepoId::parse("o/r").unwrap();
