@@ -718,6 +718,13 @@ impl GitHubRead {
         .await
     }
 
+    /// Whether `login` currently holds write access (or above) to `repo`.
+    ///
+    /// GitHub's REST collaborator-permission route 404s for anyone who is not
+    /// a collaborator at all — including a pull request's own author on a
+    /// forked pull request, who is exactly the case this exists to catch —
+    /// and that is read as "no write access" rather than an error: a missing
+    /// collaborator record is conclusive, not a failure to determine one.
     pub(crate) async fn has_write_access(&self, repo: &RepoId, login: &str) -> Result<bool> {
         use octocrab::params::teams::Permission;
 
