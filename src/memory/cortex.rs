@@ -60,12 +60,23 @@ use crate::ports::memory::Memory;
 /// Default base URL for CortexDB's managed API.
 pub const CORTEX_API_ENDPOINT: &str = "https://api-v1.cortexdb.ai";
 
-/// How long one call may take.
+/// How long a write, or the client's default, may take.
 ///
 /// Generous, because `?wait=indexed` holds a write until the engine has
 /// embedded and extracted it — measured at one to four seconds per event,
 /// and a bulk batch of [`crate::memory::ingest::REMEMBER_BATCH`] is many.
+/// This is the client's own default timeout; [`READ_TIMEOUT`] overrides it
+/// per request for the calls on the review's critical path.
 const TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How long `recall` or `answer` may take.
+///
+/// Neither waits on indexing the way a write does, and both run before every
+/// lane — a review is best-effort without memory, but it must not queue
+/// behind an engine that accepted the connection and then stopped
+/// responding. [`TIMEOUT`]'s 120 seconds, held here, would occupy one of the
+/// server's review permits for that long per lane that recalls or asks.
+const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The header line that opens every event this adapter writes.
 const HEADER: &str = "tinysweeper-memory:";
