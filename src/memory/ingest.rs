@@ -545,6 +545,15 @@ impl<'a> Ingestor<'a> {
                     continue;
                 }
             };
+            // A path pulled back in above only ever skipped the *extension*
+            // check — the size cap, which `Selector::reject` never reached
+            // for it, still applies. `selection.selected` already passed it.
+            if bytes.len() as u64 > crate::chunk::select::DEFAULT_MAX_BYTES {
+                report
+                    .unreadable
+                    .push(format!("{path}: over the convention size cap"));
+                continue;
+            }
             if self.config.ingest_conventions && self.is_convention(path) {
                 let Ok(text) = std::str::from_utf8(&bytes) else {
                     report.unreadable.push(format!("{path}: not UTF-8"));
