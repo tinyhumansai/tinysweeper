@@ -28,8 +28,22 @@
 //! deduplicates on content, so a second process ingesting the same tip pays
 //! the network and writes nothing; a manifest for memory would save that cost
 //! and nothing else, and is not worth a collection yet.
+//!
+//! # Conversations are remembered live, debounced
+//!
+//! Every delivery that touches a conversation — a comment, a review, an issue
+//! closing — asks for that conversation to be re-read and remembered, through
+//! [`crate::memory::Discussions`]. The re-read is debounced per conversation
+//! by `memory.discussion_debounce_secs`: a review bot posting twenty inline
+//! comments produces twenty deliveries in a few seconds, and one re-read
+//! after the burst remembers all twenty. Replays are free at the engine, so
+//! the debounce saves GitHub reads, not correctness.
+//!
+//! The history from before the server was listening comes from a backfill,
+//! started from the admin API and run here in the background; its progress
+//! is kept per repository so the operator can poll for it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::Mutex as AsyncMutex;
@@ -39,8 +53,30 @@ use crate::error::Result;
 use crate::forge::RepoId;
 use crate::indexer::fetch::Checkout;
 use crate::memory::cortex::CortexMemory;
-use crate::memory::{IngestReport, Ingestor, Recaller};
+use crate::memory::{DiscussionReport, Discussions, IngestReport, Ingestor, Recaller};
 use crate::ports::memory::Memory;
+use crate::server::auth::AppAuth;
+use crate::server::webhook::Conversation;
+
+/// Where one repository's backfill stands.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct BackfillStatus {
+    /// Whether it is still walking.
+    pub running: bool,
+    /// The `since` it was started with.
+    pub since: Option<String>,
+    /// How many conversations it was allowed to walk.
+    pub limit: usize,
+    /// When it started, RFC 3339.
+    pub started_at: String,
+    /// When it finished, RFC 3339, once it has.
+    pub finished_at: Option<String>,
+    /// What it did, once it has finished without a fatal error.
+    pub report: Option<DiscussionReport>,
+    /// Why it stopped early, when it did. The listing itself failing is the
+    /// one fatal error; a single conversation failing is in the report.
+    pub error: Option<String>,
+}
 
 /// The engine, and what it has been fed.
 pub struct MemoryBackend {
@@ -56,6 +92,12 @@ pub struct MemoryBackend {
     /// an ingest, and holding a sync lock across an `.await` blocks the
     /// runtime thread rather than yielding it.
     ingesting: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
+    /// Conversations with a re-read already scheduled, as `repo#number`. A
+    /// delivery that finds its conversation here has nothing to do: the
+    /// scheduled re-read will see its comment too.
+    pending: Mutex<HashSet<String>>,
+    /// The last backfill per repository, running or finished.
+    backfills: Mutex<HashMap<String, BackfillStatus>>,
 }
 
 impl std::fmt::Debug for MemoryBackend {
@@ -80,11 +122,132 @@ impl MemoryBackend {
         }
         let memory = CortexMemory::from_config(&config.memory)?;
         memory.health().await?;
-        Ok(Some(Self {
+        Ok(Some(Self::over(memory)))
+    }
+
+    /// A backend over an already-built engine, with nothing ingested.
+    fn over(memory: CortexMemory) -> Self {
+        Self {
             memory: Arc::new(memory),
             fresh: Mutex::new(HashMap::new()),
             ingesting: Mutex::new(HashMap::new()),
-        }))
+            pending: Mutex::new(HashSet::new()),
+            backfills: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Claim the debounce slot for `conversation`.
+    ///
+    /// `true` means the caller owns the re-read and must call
+    /// [`Self::release`] when it is done; `false` means one is already
+    /// scheduled and this delivery rides along with it.
+    pub fn claim(&self, conversation: &Conversation) -> bool {
+        self.pending
+            .lock()
+            .expect("pending lock")
+            .insert(conversation_key(conversation))
+    }
+
+    /// Give the debounce slot back once the re-read has started reading.
+    ///
+    /// Released *before* the read rather than after it, deliberately: a
+    /// comment that lands while the read is in flight may or may not be in
+    /// the page GitHub serves, and letting its delivery schedule a fresh
+    /// re-read is what makes sure it is remembered either way.
+    pub fn release(&self, conversation: &Conversation) {
+        self.pending
+            .lock()
+            .expect("pending lock")
+            .remove(&conversation_key(conversation));
+    }
+
+    /// Remember one conversation now, through the shared pipeline.
+    pub async fn remember_conversation(
+        &self,
+        config: &Config,
+        repo: &RepoId,
+        number: u64,
+        pull_request: bool,
+        token: &str,
+    ) -> Result<DiscussionReport> {
+        let forge = crate::forge::github::GitHubRead::new(token)?;
+        Discussions::new(self.memory.as_ref(), &forge, &config.memory)
+            .remember_number(repo, number, pull_request)
+            .await
+    }
+
+    /// The last backfill started for `repo`, if any.
+    pub fn backfill_status(&self, repo: &RepoId) -> Option<BackfillStatus> {
+        self.backfills
+            .lock()
+            .expect("backfill lock")
+            .get(&repo.to_string())
+            .cloned()
+    }
+
+    /// Record that a backfill of `repo` is starting, unless one is running.
+    ///
+    /// `Err` carries the running status: two walks over one repository would
+    /// read every conversation twice for nothing.
+    pub fn start_backfill(
+        &self,
+        repo: &RepoId,
+        since: Option<String>,
+        limit: usize,
+    ) -> std::result::Result<BackfillStatus, BackfillStatus> {
+        let mut backfills = self.backfills.lock().expect("backfill lock");
+        if let Some(running) = backfills.get(&repo.to_string()).filter(|s| s.running) {
+            return Err(running.clone());
+        }
+        let status = BackfillStatus {
+            running: true,
+            since,
+            limit,
+            started_at: now(),
+            finished_at: None,
+            report: None,
+            error: None,
+        };
+        backfills.insert(repo.to_string(), status.clone());
+        Ok(status)
+    }
+
+    /// Record how `repo`'s backfill ended.
+    fn finish_backfill(&self, repo: &RepoId, outcome: Result<DiscussionReport>) {
+        let mut backfills = self.backfills.lock().expect("backfill lock");
+        if let Some(status) = backfills.get_mut(&repo.to_string()) {
+            status.running = false;
+            status.finished_at = Some(now());
+            match outcome {
+                Ok(report) => status.report = Some(report),
+                Err(err) => status.error = Some(err.to_string()),
+            }
+        }
+    }
+
+    /// Walk `repo`'s history since `since` and remember it, recording the
+    /// outcome under [`Self::backfill_status`]. Call only after
+    /// [`Self::start_backfill`] said yes.
+    pub async fn run_backfill(
+        &self,
+        config: &Config,
+        repo: &RepoId,
+        since: Option<&str>,
+        limit: usize,
+        token: &str,
+    ) {
+        let outcome = async {
+            let forge = crate::forge::github::GitHubRead::new(token)?;
+            Discussions::new(self.memory.as_ref(), &forge, &config.memory)
+                .backfill(repo, since, limit)
+                .await
+        }
+        .await;
+        match &outcome {
+            Ok(report) => tracing::info!(%repo, "memory backfill finished: {}", report.summary()),
+            Err(err) => tracing::warn!(%repo, %err, "memory backfill failed"),
+        }
+        self.finish_backfill(repo, outcome);
     }
 
     /// A recaller over the engine, for one review.
@@ -203,6 +366,79 @@ pub async fn ingest_in_background(
     }
 }
 
+/// The debounce key for a conversation.
+fn conversation_key(conversation: &Conversation) -> String {
+    format!("{}#{}", conversation.repo, conversation.number)
+}
+
+/// Now, as RFC 3339 to the second.
+fn now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    crate::server::status::rfc3339(secs)
+}
+
+/// Remember `conversation` after the debounce window, in the background.
+///
+/// Spawned by the webhook path and never awaited by it. Errors are logged:
+/// a conversation that could not be re-read is remembered by its next
+/// delivery or by a backfill, and must not fail the delivery that mentioned
+/// it. The installation token is minted *after* the wait, so a long window
+/// cannot hand an expired one to the read.
+pub async fn remember_in_background(
+    backend: Arc<MemoryBackend>,
+    config: Arc<Config>,
+    auth: Arc<AppAuth>,
+    conversation: Conversation,
+) {
+    if !backend.claim(&conversation) {
+        tracing::debug!(
+            repo = %conversation.repo,
+            number = conversation.number,
+            "a re-read of this conversation is already scheduled"
+        );
+        return;
+    }
+    tokio::time::sleep(std::time::Duration::from_secs(
+        config.memory.discussion_debounce_secs,
+    ))
+    .await;
+    backend.release(&conversation);
+
+    let outcome = async {
+        let repo = RepoId::parse(&conversation.repo).ok_or_else(|| {
+            crate::error::Error::Forge(format!("`{}` is not owner/name", conversation.repo))
+        })?;
+        let token = auth.installation_token(conversation.installation).await?;
+        backend
+            .remember_conversation(
+                &config,
+                &repo,
+                conversation.number,
+                conversation.pull_request,
+                &token,
+            )
+            .await
+    }
+    .await;
+    match outcome {
+        Ok(report) => tracing::info!(
+            repo = %conversation.repo,
+            number = conversation.number,
+            "remembered a conversation: {}",
+            report.summary()
+        ),
+        Err(err) => tracing::warn!(
+            repo = %conversation.repo,
+            number = conversation.number,
+            %err,
+            "could not remember a conversation; the next delivery or a backfill will"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,13 +493,9 @@ mod tests {
         // each get their own, or the check-then-ingest window stays racy.
         // `CortexMemory::new` performs no I/O — it only builds an HTTP client
         // — so it is safe to construct directly here without a real engine.
-        let backend = MemoryBackend {
-            memory: Arc::new(
-                CortexMemory::new("http://127.0.0.1:1", "test-key").expect("client builds"),
-            ),
-            fresh: Mutex::new(HashMap::new()),
-            ingesting: Mutex::new(HashMap::new()),
-        };
+        let backend = MemoryBackend::over(
+            CortexMemory::new("http://127.0.0.1:1", "test-key").expect("client builds"),
+        );
 
         let a = backend.ingest_lock("o/same");
         let b = backend.ingest_lock("o/same");
@@ -291,6 +523,58 @@ mod tests {
         assert!(!waiter.is_finished(), "the second acquisition must block");
         drop(guard);
         waiter.await.expect("the waiter completes once released");
+    }
+
+    #[test]
+    fn a_conversation_is_claimed_once_until_released() {
+        let backend = MemoryBackend::over(
+            CortexMemory::new("http://127.0.0.1:1", "test-key").expect("client builds"),
+        );
+        let conversation = Conversation {
+            repo: "o/r".into(),
+            number: 7,
+            pull_request: true,
+            installation: 1,
+        };
+        assert!(backend.claim(&conversation), "the first delivery owns the re-read");
+        assert!(!backend.claim(&conversation), "a burst rides along");
+        let other = Conversation {
+            number: 8,
+            ..conversation.clone()
+        };
+        assert!(backend.claim(&other), "a different conversation is its own slot");
+        backend.release(&conversation);
+        assert!(backend.claim(&conversation), "released, the next delivery owns it again");
+    }
+
+    #[test]
+    fn one_backfill_per_repository_at_a_time() {
+        let backend = MemoryBackend::over(
+            CortexMemory::new("http://127.0.0.1:1", "test-key").expect("client builds"),
+        );
+        let repo = RepoId::parse("o/r").unwrap();
+        assert!(backend.backfill_status(&repo).is_none());
+        let started = backend
+            .start_backfill(&repo, Some("2026-01-01T00:00:00Z".into()), 50)
+            .expect("nothing running");
+        assert!(started.running);
+        let refused = backend
+            .start_backfill(&repo, None, 50)
+            .expect_err("a second walk is refused");
+        assert_eq!(refused.since.as_deref(), Some("2026-01-01T00:00:00Z"));
+
+        backend.finish_backfill(
+            &repo,
+            Ok(DiscussionReport {
+                subjects: 3,
+                ..DiscussionReport::default()
+            }),
+        );
+        let done = backend.backfill_status(&repo).expect("recorded");
+        assert!(!done.running);
+        assert!(done.finished_at.is_some());
+        assert_eq!(done.report.as_ref().map(|r| r.subjects), Some(3));
+        assert!(backend.start_backfill(&repo, None, 50).is_ok(), "finished, so a new one may start");
     }
 
     #[tokio::test]

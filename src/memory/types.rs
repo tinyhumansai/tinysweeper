@@ -258,7 +258,7 @@ impl MemoryItem {
 }
 
 /// What a batch write reported.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RememberReport {
     /// Items the engine had not seen before.
     pub written: usize,

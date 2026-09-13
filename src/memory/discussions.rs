@@ -354,7 +354,7 @@ fn verdict_word(verdict: ReviewEvent) -> &'static str {
 }
 
 /// What a discussion ingest did.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DiscussionReport {
     /// Issues and pull requests whose conversations were read.
     pub subjects: usize,
