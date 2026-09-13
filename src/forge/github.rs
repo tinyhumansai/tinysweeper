@@ -109,7 +109,7 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
           isResolved
           isOutdated
           comments(first: $first) {
-            nodes { body author { login __typename } }
+            nodes { body authorAssociation author { login __typename } }
           }
         }
       }
