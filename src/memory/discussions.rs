@@ -857,7 +857,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resumed.subjects, 0);
-        assert_eq!(resumed.resume_from, None);
+        // An empty listing has no last entry to back a cursor off from, so
+        // the cursor is left exactly where it came in rather than reset to
+        // `None` — which a caller could otherwise read as "start over from
+        // the beginning of history" instead of "nothing changed since here".
+        assert_eq!(resumed.resume_from.as_deref(), Some("2026-08-20T00:00:00Z"));
     }
 
     #[tokio::test]
