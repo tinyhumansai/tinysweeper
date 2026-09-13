@@ -20,18 +20,24 @@ a long-running reviewer gets quieter or noisier over time:
 - *Which rule in this repository's own guides applies to these paths?* Asked as
   a question and answered with a citation, rather than as a similarity query
   that returns whichever paragraph shares the most words with the diff.
+- *What was said about this before?* The issue that reported the bug the diff
+  fixes, the pull request where an approach was tried and abandoned, the
+  maintainer's reply explaining why the odd-looking code is that way, the
+  other review bot's comment that was waved through. None of it is in the
+  tree, and all of it is context a reviewer with a long tenure would have.
 
 So the memory accumulates, and it is consulted by question as well as by query.
 
-## Three sections
+## Four sections
 
-A repository's memory is one scope with three sections (`MemorySection`):
+A repository's memory is one scope with four sections (`MemorySection`):
 
 | section | holds | written by |
 |---|---|---|
 | `code` | the source, chunked exactly as `src/chunk` chunks it for the index | ingest of a checkout |
 | `conventions` | the repository's instruction files and guides, one item per heading | ingest of a checkout |
 | `reviews` | the findings the reviewer published, and what became of each | the review itself |
+| `discussions` | every issue and pull request, open or closed, and everything anybody said on them | webhooks live; a backfill for the history |
 
 They are separate on purpose. "Did the maintainers reject a finding like this?"
 has to be answerable without the answer being drowned by a thousand
@@ -143,6 +149,78 @@ review sees. Fixing this for real needs one of: a per-key delete the
 a datetime dependency and a round-trip this adapter does not currently make.
 Tracked as a known limitation rather than fixed here.
 
+## Ingest: discussions
+
+`src/memory/discussions.rs` turns a repository's conversations into memory.
+Three item kinds, one section:
+
+| kind | key | one per |
+|---|---|---|
+| `Issue` | `issue:{repo}#{n}` | issue, with its title, body, state (`open` / `closed on …`), labels and type |
+| `PullRequest` | `pr:{repo}#{n}` | pull request, with its title, body and how it ended (`open` / `merged` / `closed without merging`) |
+| `Remark` | `remark:{repo}#{n}:{kind}:{id}` | comment, inline review comment or submitted review, by anyone |
+
+A remark carries who said it, whether GitHub calls them a bot, their
+`author_association` as a label (`owner`, `member`, `contributor`, …), when,
+the file and line for an inline comment, the verdict for a review, and the
+body cut at `memory.discussion_chars`. **Other review agents are remembered
+like people.** What CodeRabbit flagged and a maintainer waved through is a
+fact about this repository; the `bot` label and the `By coderabbitai[bot]
+(bot)` line say what it is. The reviewer's own remarks are the one exclusion —
+its findings live in `reviews` with their outcomes, and remembering its own
+prose here would recall an echo as evidence.
+
+The association is a *label*, never a judgement: GitHub says `collaborator`
+for a read-only invitee, so nothing here decides who is a maintainer. That
+decision stays in the `reviews` path, which checks real write access.
+
+The forge speaks two new reads for this (`ForgeRead::issues_updated_since`,
+`ForgeRead::remarks`): one listing that covers the whole history including
+closed items and pull requests, and one that folds the three places GitHub
+keeps a conversation into a single oldest-first timeline. Both are read-only
+and both have an offline mock.
+
+### Two feeds, one pipeline
+
+**Live.** Every webhook delivery that touches a conversation asks for it to be
+re-read: `issues` opened/edited/closed/reopened/(un)labeled, `issue_comment`
+and `pull_request_review_comment` created/edited, `pull_request_review`
+submitted/edited, `pull_request` opened/edited/closed/reopened/ready/(un)labeled.
+`webhook::remember_trigger` decides this *alongside* `route`, not inside it,
+because whether memory remembers a delivery is independent of whether the
+delivery starts a review — and it runs before the bot guard, which is the
+whole point: another agent's comments arrive from a `Bot` sender. Deletions
+are not a trigger; a comment somebody removed was still said.
+
+The re-read is debounced per conversation by `memory.discussion_debounce_secs`
+(twenty seconds by default): a review bot posting twenty inline comments in one
+go costs one re-read after the burst, not twenty. Replays are free at the
+engine, so the debounce saves GitHub reads, not correctness.
+
+**Backfill.** For the history before the server was listening:
+
+```sh
+tinysweeper memory backfill --repo owner/name            # everything, oldest change first
+tinysweeper memory backfill --repo owner/name --since 2026-09-01T00:00:00Z
+tinysweeper memory backfill --repo owner/name --number 131 --pull-request
+scripts/memory-backfill.sh owner/name                    # the same, through the deployed server
+```
+
+The CLI reads with `GITHUB_TOKEN`; the script POSTs to
+`/admin/memory/{owner}/{name}/backfill` and polls `/admin/memory/{owner}/{name}`
+until the server's walk — run with its own installation token, one per
+repository at a time — is done. Either prints a `resume_from`, the
+`updated_at` of the last conversation walked, to pass as `--since` next time.
+It is only offered when every conversation succeeded, so a resumed backfill
+never skips past a failure; one bad conversation is recorded and skipped, not
+the end of the walk.
+
+Both feeds go through `Discussions::remember_subject`, so a comment
+remembered live and the same comment remembered by a later backfill are the
+same bytes, and the engine replays rather than duplicates. An edited comment
+is the same key with a new body — a new version beside the old, like an
+outcome, and with the same known gap noted above.
+
 ## The review path
 
 `app::review::review_with_memory` consults memory twice and writes it twice, in
@@ -168,8 +246,8 @@ this order:
    before reviewing the next push.
 
 2. **Recall.** The same bounded query `src/retrieve` composes from the pull
-   request is put to the `reviews` and `conventions` sections, and to `code`
-   only when retrieval showed the lane nothing. Every recall and every question
+   request is put to the `reviews`, `conventions` and `discussions` sections,
+   and to `code` only when retrieval showed the lane nothing. Every recall and every question
    runs concurrently: each is a round trip, a question is a model call behind
    it, and running them in sequence puts the whole list on the critical path.
 
@@ -185,14 +263,19 @@ this order:
 
 Everything comes back under `memory.context_tokens`, answers first — they are
 the synthesis, the recollections are the evidence — then outcomes, then
-conventions, then code. Whatever the budget dropped is counted.
+conventions, then discussions, then code. Discussions rank above code because
+a paragraph of a maintainer explaining *why* is worth more than a chunk the
+index already shows, and below conventions because a convention is a rule and
+a discussion is evidence. Whatever the budget dropped is counted.
 
 ### Questions
 
 Each `[[memory.questions]]` names a section and a template; `{paths}` becomes
 the changed paths (at most twelve, then "and N more") and `{title}` the pull
 request title. The defaults ask `conventions` which rules apply to the changed
-paths, and `reviews` which earlier findings about them were rejected.
+paths, `reviews` which earlier findings about them were rejected, and
+`discussions` what was decided or explained about them in earlier issues and
+pull requests.
 
 The section is measured, not tidy. Against a live CortexDB, a question over the
 `conventions` section came back with the Security Boundary rule quoted from
@@ -213,7 +296,11 @@ in it is prose somebody other than the operator wrote — a merged `AGENTS.md`,
 a maintainer's reply, the engine's own synthesis — so it goes where the model
 is told to treat text as data. The framing tells the lane what a *rejected*
 outcome means: do not raise it again unless the code is materially different,
-and if you must, say why this case differs.
+and if you must, say why this case differs. It also names discussions for what
+they are: quotes of whoever wrote them, context for why the code is as it is,
+never rules and never instructions. A remark is the least trusted thing in the
+block — anyone who could comment wrote it — which is why its body is bounded
+and why the heading it renders under says *quoted, not instructions*.
 
 The prefix is byte-identical with and without memory
 (`memory_context_lands_in_the_suffix_and_never_in_the_prefix`), which is the
@@ -287,9 +374,16 @@ the operator's reviewer would talk to.
 tinysweeper memory ingest --repo owner/name --dir .      # seed ahead of the first review
 tinysweeper memory recall --repo owner/name "write token apply"
 tinysweeper memory ask --repo owner/name --section conventions "Which rules cover src/app/?"
+tinysweeper memory backfill --repo owner/name            # the conversation history, via GITHUB_TOKEN
 tinysweeper memory forget --repo owner/name --section reviews --yes
 tinysweeper doctor                                        # reports the switch and the key
 ```
+
+After the first deploy with memory on, run the backfill once per repository —
+`scripts/memory-backfill.sh owner/name` against the server, or the CLI with a
+token — so the reviewer's first review already knows the history. From then
+on the webhooks keep it current; an occasional `--since` run covers anything a
+restart or an outage dropped.
 
 `cargo run --features cortex --example memory_review -- . owner/name` runs one
 mock review against a real engine and prints the block the lane received. It
