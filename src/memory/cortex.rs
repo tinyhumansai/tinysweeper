@@ -711,6 +711,24 @@ impl Memory for CortexMemory {
     }
 }
 
+/// Whether a `/v1/events` listing page says there is another page, and if
+/// so, the cursor to fetch it with.
+///
+/// Kept separate from the HTTP loop in [`CortexMemory::forget`] so the
+/// truncation case it guards against — running out of `MAX_PAGES` while the
+/// engine still says there is more — is a plain unit test over JSON, not
+/// something that needs hundreds of real HTTP round trips to exercise.
+fn next_page_cursor(page: &Value) -> Option<String> {
+    let next = page
+        .get("next_cursor")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    match (page.get("has_more").and_then(Value::as_bool), next) {
+        (Some(true), Some(next)) => Some(next),
+        _ => None,
+    }
+}
+
 /// Percent-encode a query-string value.
 fn urlencode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
