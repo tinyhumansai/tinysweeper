@@ -529,15 +529,18 @@ pub struct ThreadComment {
     /// decides whether a reply counts as a human asking for another look. Two
     /// bots replying to each other is the failure mode this field prevents.
     pub bot: bool,
-    /// Whether GitHub reports this author with write access to the
-    /// repository (`OWNER`, `MEMBER`, or `COLLABORATOR` author association).
+    /// Whether this author currently holds write access (or above) to the
+    /// repository.
     ///
-    /// A thread's comments are untrusted input — any contributor, including
-    /// an attacker on a forked pull request, can reply to a bot's finding.
+    /// Checked against the repository's actual collaborator permission, not
+    /// guessed from GitHub's `authorAssociation` — that field is `COLLABORATOR`
+    /// for an invited collaborator at *any* permission level, including
+    /// read-only and triage, neither of which is a maintainer's judgement. A
+    /// thread's comments are untrusted input — any contributor, including an
+    /// attacker on a forked pull request, can reply to a bot's finding.
     /// Without this, `classify` would record any non-bot reply as a
     /// "maintainer rejection" and memory would carry a stranger's opinion as
-    /// settled judgement. Only a reply from someone with write access is
-    /// promoted to that authorization signal.
+    /// settled judgement.
     pub maintainer: bool,
 }
 
