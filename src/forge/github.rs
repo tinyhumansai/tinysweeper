@@ -504,6 +504,39 @@ pub struct GitHubRead {
 }
 
 impl GitHubRead {
+
+    /// Whether `login` currently holds write access (or above) to `repo`.
+    ///
+    /// GitHub's REST collaborator-permission route 404s for anyone who is not
+    /// a collaborator at all — including a pull request's own author on a
+    /// forked pull request, who is exactly the case this exists to catch —
+    /// and that is read as "no write access" rather than an error: a missing
+    /// collaborator record is conclusive, not a failure to determine one.
+    pub(crate) async fn has_write_access(&self, repo: &RepoId, login: &str) -> Result<bool> {
+        use octocrab::params::teams::Permission;
+
+        match self
+            .client
+            .repos(&repo.owner, &repo.name)
+            .get_contributor_permission(login)
+            .send()
+            .await
+        {
+            Ok(found) => Ok(matches!(
+                found.permission,
+                Permission::Push | Permission::Maintain | Permission::Admin
+            )),
+            Err(octocrab::Error::GitHub { source, .. }) if source.status_code == 404 => Ok(false),
+            Err(err) => {
+                // Fail closed: an error here must never be read as "so this
+                // reply counts as a maintainer's", which is the direction a
+                // propagated error or a default `true` would fail in.
+                tracing::warn!(%login, repo = %repo, error = %err, "could not confirm collaborator permission");
+                Ok(false)
+            }
+        }
+    }
+
     /// Build from a token.
     pub fn new(token: &str) -> Result<Self> {
         Ok(Self {
@@ -1076,38 +1109,6 @@ impl ForgeRead for GitHubRead {
                 p.thread
             })
             .collect())
-    }
-
-    /// Whether `login` currently holds write access (or above) to `repo`.
-    ///
-    /// GitHub's REST collaborator-permission route 404s for anyone who is not
-    /// a collaborator at all — including a pull request's own author on a
-    /// forked pull request, who is exactly the case this exists to catch —
-    /// and that is read as "no write access" rather than an error: a missing
-    /// collaborator record is conclusive, not a failure to determine one.
-    async fn has_write_access(&self, repo: &RepoId, login: &str) -> Result<bool> {
-        use octocrab::params::teams::Permission;
-
-        match self
-            .client
-            .repos(&repo.owner, &repo.name)
-            .get_contributor_permission(login)
-            .send()
-            .await
-        {
-            Ok(found) => Ok(matches!(
-                found.permission,
-                Permission::Push | Permission::Maintain | Permission::Admin
-            )),
-            Err(octocrab::Error::GitHub { source, .. }) if source.status_code == 404 => Ok(false),
-            Err(err) => {
-                // Fail closed: an error here must never be read as "so this
-                // reply counts as a maintainer's", which is the direction a
-                // propagated error or a default `true` would fail in.
-                tracing::warn!(%login, repo = %repo, error = %err, "could not confirm collaborator permission");
-                Ok(false)
-            }
-        }
     }
 
     async fn own_review_state(&self, repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
