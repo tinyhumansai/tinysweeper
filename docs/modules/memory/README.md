@@ -76,9 +76,29 @@ Ingest runs in the background and never blocks a review, for the same reason
 indexing does not: a full ingest of a large repository is thousands of engine
 writes, each held until indexed, and a review is expected in seconds. The
 review recalls whatever the engine holds right now and says so when that is
-nothing. Freshness is tracked per process (one ingest per base tip); the
-engine's content idempotency makes a second process's repeat ingest cost the
-network and nothing else.
+nothing. Freshness is tracked per process, so one process ingests a given base
+tip once.
+
+### Stale versions are retired, not stacked
+
+CortexDB is an append-only event log with no update route: the same key
+offered with an edited body hashes to a different `content_id` and is written
+as a second, independent event, never a replacement (see [The CortexDB
+adapter](#the-cortexdb-adapter)). Recall would then have no principled way to
+prefer the current version of an edited or deleted convention over the stale
+one — whichever the engine ranks first wins, which is exactly how an obsolete
+`AGENTS.md` rule could keep being recalled as current policy.
+
+So every `ingest_checkout` call forgets the whole `code` and/or `conventions`
+section for the repository — whichever it is about to (re-)ingest — before
+writing this pass's items. `ensure_ingested` only calls it once the base tip
+has actually moved, so a section is never left empty: the same call that
+forgets it repopulates it in full, in the same background task. The cost is
+real — a repeat ingest of an unchanged tree now always rewrites it rather than
+replaying content-idempotent no-ops — and it is the trade this adapter makes
+for never serving a superseded rule as current. Review outcomes are a separate
+section and are never touched by this: they come from review threads, not the
+tree.
 
 ## The review path
 
