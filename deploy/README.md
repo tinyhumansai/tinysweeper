@@ -12,6 +12,7 @@ rolls a new image.
 | `docker-compose.prod.yml` | Overlay: published image, loopback port, memory cap |
 | `deploy/nginx/sweeper.tinyhumans.ai.conf` | Host nginx vhost; only `/webhook`, `/healthz`, `/admin` reach the app |
 | `deploy/mongo/` | mongod/mongot config, secrets generator, init scripts |
+| `deploy/cortexdb/` | The box's shared CortexDB stack — the memory engine `.tinysweeper.toml` points at |
 
 ## The box
 
@@ -22,6 +23,7 @@ rolls a new image.
 | Public name | `https://sweeper.tinyhumans.ai`, Cloudflare-proxied to the host's nginx |
 | App port | `127.0.0.1:8081` (8080 belongs to another service on the box) |
 | MongoDB | `127.0.0.1:27017`, loopback only |
+| CortexDB | `/opt/cortexdb`, reached as `http://cortexdb:3141` on `tinysweeper_default`; `127.0.0.1:3142` on the host |
 
 The box is shared with other services and its own nginx on 80/443, which is
 why this stack publishes nothing but a loopback port and the vhost is a file
@@ -53,6 +55,40 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --wait
 curl -fsS https://sweeper.tinyhumans.ai/healthz
 ```
 
+### The memory engine
+
+`.tinysweeper.toml` turns `[memory]` on against `http://cortexdb:3141`, and
+the server **refuses to boot** when an enabled engine cannot be reached — a
+silently forgetful reviewer would be worse. So the engine has to exist before
+the stack's first `up`, and `CORTEX_API_KEY` has to be in `.env`.
+
+On the box it is one shared CortexDB for every service (teeny and tinysweeper
+today), run from `/opt/cortexdb` with the files in `deploy/cortexdb/`. It joins
+each client's compose network, which is what makes the name `cortexdb` resolve
+from the server container, and it needs the client network to exist first:
+
+```sh
+# once: the client network, so the engine can join it
+docker network create --label com.docker.compose.project=tinysweeper \
+  --label com.docker.compose.network=default tinysweeper_default
+
+sudo install -d -o droid -g droid /opt/cortexdb
+cp deploy/cortexdb/docker-compose.yml /opt/cortexdb/
+cp deploy/cortexdb/.env.example /opt/cortexdb/.env && chmod 600 /opt/cortexdb/.env
+$EDITOR /opt/cortexdb/.env      # CORTEX_API_KEY, LADDER_API_KEY
+cd /opt/cortexdb && docker compose up -d --wait
+docker network connect cortexdb_default ladder   # repeat if the ladder is recreated
+```
+
+Then put the same `CORTEX_API_KEY` in `/opt/tinysweeper/.env`. A checkout
+that has no engine at all — a laptop — runs the same two files locally, or
+edits `[memory] enabled = false` out of the mounted config; there is no
+environment switch, deliberately, because a config that says memory is on
+and a server that quietly runs without it is the failure this refuses.
+
+The engine's data volume is `teeny_cortexdb-data`: teeny's, adopted when the
+stack became shared on 2026-09-13. Back it up with the others.
+
 The first `up` generates the MongoDB keyfile and the mongot password into the
 `mongo-secrets` volume, initiates the single-member replica set, and waits for
 mongot to come up before starting the server. It takes a minute or two.
@@ -74,6 +110,7 @@ overlay reads:
 | `TINYSWEEPER_ADMIN_TOKEN` | What `manual-review.yml` authenticates with. Unset means no `/admin` router. |
 | `TINYSWEEPER_ALLOWED_ORG` | Organisation manual reviews are bounded to. Defaults to `tinyhumansai`. |
 | `LANGFUSE_*` | Optional tracing; see the README. |
+| `CORTEX_API_KEY` | The shared CortexDB's bearer, the value `/opt/cortexdb/.env` was started with. Required while `[memory]` is on. |
 
 `.env` is the only file on the box that is not in git; `.tinysweeper.toml` is
 tracked. Back `.env` up somewhere with the same care as the App's private key,

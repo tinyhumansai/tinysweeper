@@ -1,0 +1,123 @@
+# The box's shared CortexDB: one long-term memory engine for every service on
+# it — teeny and tinysweeper today. Lifted from teeny's own stack on
+# 2026-09-13 (teeny/deploy/compose.prod.yaml), configuration unchanged, and
+# it keeps teeny's data: the volume below is the one teeny's CortexDB wrote
+# for months, adopted here rather than copied, so nothing was re-ingested.
+#
+#   cd /opt/cortexdb && docker compose up -d --wait
+#
+# Each client stack reaches it by the name `cortexdb` because this service
+# joins every client's compose network. Adding a client is one more entry
+# under `networks:` (the network must exist first — bring the client stack
+# up once, then add it here and `up -d`). Isolation between clients is by
+# CortexDB scope, not by network: every client authenticates with the same
+# bearer, and scope ids are what keep one service's memories out of
+# another's recall.
+#
+# The ladder is a container no project owns and it binds the host's loopback
+# only, so `http://ladder:6969` resolves here the same way it does for teeny:
+# the ladder is attached to this stack's network by hand —
+#
+#   docker network connect cortexdb_default ladder
+#
+# — and that has to be repeated whenever the ladder container is recreated.
+
+name: cortexdb
+
+services:
+  cortexdb:
+    image: cortexdb/cortexdb:latest
+    restart: unless-stopped
+    environment:
+      CORTEX_DEPLOYMENT_PRESET: on_prem_enterprise
+      CORTEX_API_KEY: ${CORTEX_API_KEY:?set CORTEX_API_KEY in /opt/cortexdb/.env}
+      CORTEX_BIND_ALL: "1"
+      CORTEX_V1_MINTER_ENABLE: "1"
+      CORTEX_V1_LAYERS_AUTO: "1"
+
+      CORTEX_LLM_URL: ${LADDER_URL:-http://ladder:6969/v1}
+      CORTEX_LLM_MODEL: ${CORTEX_LLM_MODEL:-flash}
+      OPENAI_API_KEY: ${LADDER_API_KEY}
+      LLM_API_KEY: ${LADDER_API_KEY}
+
+      # Pinned on first ingest and irreversible after it: the volume was
+      # written at 3072 by the ladder's `vectors` tier. Never change either.
+      CORTEX_EMBEDDING_PROVIDER: ""
+      CORTEX_EMBEDDING_URL: ${LADDER_URL:-http://ladder:6969/v1}
+      CORTEX_EMBEDDING_MODEL: ${CORTEX_EMBEDDING_MODEL:-vectors}
+      CORTEX_EMBEDDING_DIMS: ${CORTEX_EMBEDDING_DIMS:-3072}
+
+      CORTEX_ENRICHMENT_URL: ${LADDER_URL:-http://ladder:6969/v1}
+      CORTEX_ENRICHMENT_MODEL: ${CORTEX_ENRICHMENT_MODEL:-flash}
+      CORTEX_ENRICHMENT_API_KEY: ${LADDER_API_KEY}
+      CORTEX_ENRICHMENT_CONCURRENCY: "2"
+      CORTEX_ENRICHMENT_DELAY_SECONDS: "60"
+
+      CORTEX_ANSWER_PROVIDER: openai
+      CORTEX_ANSWER_URL: ${LADDER_URL:-http://ladder:6969/v1}
+      CORTEX_ANSWER_MODEL: ${CORTEX_ANSWER_MODEL:-reasoning}
+      CORTEX_ANSWER_API_KEY: ${LADDER_API_KEY}
+      CORTEX_ANSWER_MAX_TOKENS: "1500"
+      CORTEX_VERIFIER_URL: ${LADDER_URL:-http://ladder:6969/v1}
+      CORTEX_VERIFIER_MODEL: ${CORTEX_VERIFIER_MODEL:-reasoning}
+      CORTEX_VERIFIER_API_KEY: ${LADDER_API_KEY}
+
+      CORTEX_ENTITY_GRAPH: "1"
+      CORTEX_ENTITY_GROUNDING: "1"
+      CORTEX_FACT_JOIN_MULTIHOP: "1"
+      CORTEX_BITEMPORAL_MODE: enforce
+      CORTEX_HYBRID_RERANK: "1"
+
+      CORTEX_ARTIFACT_PIPELINE: "1"
+      CORTEX_ARTIFACT_WORKERS: "2"
+      CORTEX_DOCUMENT_PROVIDER: tika
+      CORTEX_DOCUMENT_API_URL: http://tika:9998
+    volumes:
+      - cortexdb-data:/data
+    ports:
+      - "127.0.0.1:${CORTEX_PORT:-3142}:3141"
+    networks:
+      - default
+      - teeny
+      - tinysweeper
+    depends_on:
+      tika:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3141/v1/admin/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # Text extraction for anything CortexDB ingests that is not already text.
+  tika:
+    image: apache/tika:latest-full
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:9998/tika || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+networks:
+  default:
+  teeny:
+    name: teeny_default
+    external: true
+  tinysweeper:
+    name: tinysweeper_default
+    external: true
+
+volumes:
+  # teeny's volume, adopted. `external` means compose never creates or
+  # removes it: a `down -v` here leaves the memory where it is.
+  cortexdb-data:
+    name: teeny_cortexdb-data
+    external: true
