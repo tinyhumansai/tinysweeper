@@ -537,7 +537,12 @@ impl<'a> Ingestor<'a> {
             Vec::new()
         };
 
-        for path in selection.selected.iter().map(String::as_str).chain(extra_conventions) {
+        for path in selection
+            .selected
+            .iter()
+            .map(String::as_str)
+            .chain(extra_conventions)
+        {
             let bytes = match std::fs::read(root.join(path)) {
                 Ok(bytes) => bytes,
                 Err(err) => {

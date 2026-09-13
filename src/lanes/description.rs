@@ -394,9 +394,16 @@ mod tests {
             .await
             .expect("lane runs");
 
-        let request = model.requests().into_iter().next().expect("the lane called the model");
+        let request = model
+            .requests()
+            .into_iter()
+            .next()
+            .expect("the lane called the model");
         assert!(
-            request.messages.iter().any(|m| m.content.contains("an earlier finding")),
+            request
+                .messages
+                .iter()
+                .any(|m| m.content.contains("an earlier finding")),
             "the recalled memory must reach the description prompt: {request:?}"
         );
     }

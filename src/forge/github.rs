@@ -1199,7 +1199,11 @@ impl ForgeRead for GitHubRead {
                 cursor = comments["pageInfo"]["hasNextPage"]
                     .as_bool()
                     .unwrap_or(false)
-                    .then(|| comments["pageInfo"]["endCursor"].as_str().map(str::to_string))
+                    .then(|| {
+                        comments["pageInfo"]["endCursor"]
+                            .as_str()
+                            .map(str::to_string)
+                    })
                     .flatten();
             }
         }
