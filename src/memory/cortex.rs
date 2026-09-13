@@ -722,6 +722,38 @@ mod tests {
     }
 
     #[test]
+    fn an_error_response_body_never_reaches_the_returned_error() {
+        // Regression: the error this returns is what an unavailable-memory
+        // note quotes on a check-run summary, so the engine's response body
+        // — its own text, not ours to publish — must never appear in it,
+        // even though it is still worth a log line for the operator.
+        let err = parse_response(
+            "v1/recall",
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            "upstream dial tcp 10.0.4.12:5432: connection refused (secret-project-x)",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(!err.contains("10.0.4.12"), "{err}");
+        assert!(!err.contains("secret-project-x"), "{err}");
+        assert!(err.contains("v1/recall"), "{err}");
+        assert!(err.contains("500"), "{err}");
+    }
+
+    #[test]
+    fn a_query_string_is_stripped_from_the_route_an_error_names() {
+        let err = parse_response(
+            "v1/recall?scope=owner:o/repo:r&secret=shh",
+            reqwest::StatusCode::FORBIDDEN,
+            "",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(!err.contains("secret=shh"), "{err}");
+        assert!(err.contains("v1/recall"), "{err}");
+    }
+
+    #[test]
     fn envelopes_round_trip_through_a_speaker_prefixed_recall() {
         let item = MemoryItem::new(
             "convention:AGENTS.md#a=b;c",
