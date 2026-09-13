@@ -43,7 +43,7 @@ activity is the one sender skipped.
 | `issue_comment` | `created`, `edited` |
 | `pull_request` | `opened`, `edited`, `closed`, `reopened`, `ready_for_review`, `labeled`, `unlabeled` |
 | `pull_request_review_comment` | `created`, `edited` |
-| `pull_request_review` | `submitted`, `edited` |
+| `pull_request_review` | `submitted`, `edited`, `dismissed` |
 
 `deleted` is never a trigger: memory is append-only about what was said.
 Re-reads are debounced per conversation (`memory.discussion_debounce_secs`),
