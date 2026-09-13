@@ -519,7 +519,6 @@ impl<'a> Discussions<'a> {
         // entry it saw is accounted for.
         let truncated = listing.len() >= limit;
         let mut report = DiscussionReport::default();
-        let mut last_seen: Option<String> = None;
         for entry in &listing {
             let number = entry.number;
             let outcome = if entry.pull_request {
@@ -534,27 +533,28 @@ impl<'a> Discussions<'a> {
                     .await
             };
             match outcome {
-                Ok(one) => {
-                    report.absorb(one);
-                    last_seen = entry.updated_at.clone().or(last_seen);
-                }
+                Ok(one) => report.absorb(one),
                 Err(err) => {
                     tracing::warn!(%repo, number, %err, "could not remember a conversation");
                     report.failed.push(format!("#{number}: {err}"));
                 }
             }
         }
+        // Back the cursor off to before the trailing run of entries that
+        // share their `updated_at`, when the page may have been cut mid
+        // group, so the whole tied run is replayed rather than any of it
+        // silently dropped. Replaying it is free: remembering a conversation
+        // the pipeline already holds is idempotent (see the module docs).
+        // When every entry shares one timestamp there is no earlier boundary
+        // to back off to, so the cursor is left where it came in and the
+        // same page is walked again next time.
+        let boundary = resume_boundary(&listing, truncated).or_else(|| since.map(str::to_string));
+        // Set unconditionally: a caller chunking a longer walk across
+        // several of these calls needs to keep making forward progress
+        // through later chunks even after this one recorded a failure.
+        report.last_seen = boundary.clone();
         if report.failed.is_empty() {
-            // Back the cursor off to before the trailing run of entries that
-            // share their `updated_at`, when the page may have been cut mid
-            // group, so the whole tied run is replayed rather than any of it
-            // silently dropped. Replaying it is free: remembering a
-            // conversation the pipeline already holds is idempotent (see the
-            // module docs). When every entry shares one timestamp there is no
-            // earlier boundary to back off to, so the cursor is left where it
-            // came in and the same page is walked again next time.
-            report.resume_from =
-                resume_boundary(&listing, truncated).or_else(|| since.map(str::to_string));
+            report.resume_from = boundary;
         }
         Ok(report)
     }
