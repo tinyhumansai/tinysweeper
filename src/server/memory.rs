@@ -298,7 +298,6 @@ impl MemoryBackend {
     }
 
     /// A recaller over the engine, for one review.
-    ///
     pub fn recaller(&self) -> Recaller<'_> {
         Recaller::new(self.memory.as_ref())
     }
