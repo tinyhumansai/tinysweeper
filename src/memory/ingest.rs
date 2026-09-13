@@ -514,7 +514,30 @@ impl<'a> Ingestor<'a> {
             report.retired += self.memory.forget(&scope).await?;
         }
 
-        for path in &selection.selected {
+        // `Selector` also rejects a file with no extension the source
+        // grammars recognise — correct for code, wrong for a convention file
+        // like `.cursorrules`, which the default config names explicitly. A
+        // convention match is pulled back in from what the selector only
+        // skipped for its extension, never from what it ignored outright or
+        // judged too large: those are the operator's own stated policy and a
+        // convention file is not exempt from either.
+        let extra_conventions: Vec<&str> = if self.config.ingest_conventions {
+            selection
+                .skipped
+                .iter()
+                .filter(|skipped| {
+                    matches!(
+                        skipped.reason,
+                        crate::chunk::types::SkipReason::UnsupportedExtension { .. }
+                    ) && self.is_convention(&skipped.path)
+                })
+                .map(|skipped| skipped.path.as_str())
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        for path in selection.selected.iter().map(String::as_str).chain(extra_conventions) {
             let bytes = match std::fs::read(root.join(path)) {
                 Ok(bytes) => bytes,
                 Err(err) => {
