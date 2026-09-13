@@ -27,8 +27,8 @@ use crate::server::admin::{self, AdminAuth};
 use crate::server::auth::AppAuth;
 use crate::server::failure;
 use crate::server::indexing::{IndexBackend, index_in_background};
-use crate::server::manual::{self, FullReviews, MergeReport, Merges, Triages};
-use crate::server::memory::{MemoryBackend, ingest_in_background};
+use crate::server::manual::{self, FullReviews, MergeReport, Merges, Remembers, Triages};
+use crate::server::memory::{BackfillStatus, MemoryBackend, ingest_in_background, remember_in_background};
 use crate::server::status;
 use crate::server::store::{Store, Trust};
 use crate::server::webhook::{self, Action, Payload};
@@ -202,6 +202,14 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
     let triages: Arc<dyn Triages> = Arc::new(TriageDispatch {
         state: manual_state.clone(),
     });
+    // Only when there is an engine: the routes then answer 503 instead of
+    // 404, so an operator learns the deployment has no memory rather than
+    // that they mistyped the path.
+    let remembers: Option<Arc<dyn Remembers>> = manual_state.memory.is_some().then(|| {
+        Arc::new(MemoryDispatch {
+            state: manual_state.clone(),
+        }) as Arc<dyn Remembers>
+    });
 
     // The periodic sweep, spawned only when it has both a switch and an
     // interval. It is what makes triage automatic rather than a button: a
@@ -215,6 +223,7 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
         dispatch,
         merges,
         triages,
+        remembers,
     ) {
         app = app.merge(routes);
         tracing::info!(
@@ -291,6 +300,23 @@ async fn receive(
             return (StatusCode::BAD_REQUEST, "unparseable payload").into_response();
         }
     };
+
+    // Memory listens to every delivery that touches a conversation,
+    // independently of what the delivery is routed to below — including the
+    // ones routed to nothing, which is where every other agent's comment
+    // lands. Spawned and forgotten: it reads GitHub and writes the engine,
+    // never the other way round, so nothing about the delivery waits on it.
+    if let (Some(backend), Some(conversation)) =
+        (&state.memory, webhook::remember_trigger(&event, &payload))
+        && state.config.config.memory.ingest_discussions
+    {
+        tokio::spawn(remember_in_background(
+            backend.clone(),
+            Arc::new(state.config.config.clone()),
+            state.auth.clone(),
+            conversation,
+        ));
+    }
 
     // Routing is pure — headers and the parsed body, no I/O — so the two
     // outcomes that do no work are answered without touching the database at
@@ -875,6 +901,85 @@ impl FullReviews for ManualDispatch {
         }
 
         Ok(queued)
+    }
+}
+
+/// The memory backfill button's way into the engine.
+///
+/// The installation is resolved from the repository, as the review button
+/// does; the token it mints is a read token, used for nothing but listing
+/// conversations. The walk runs in the background because it is minutes
+/// long; one conversation is remembered inline because it is one request.
+struct MemoryDispatch {
+    state: AppState,
+}
+
+impl MemoryDispatch {
+    async fn read_token(&self, repo: &RepoId) -> Result<String> {
+        let installation = self
+            .state
+            .auth
+            .installation_for_repo(&repo.owner, &repo.name)
+            .await?;
+        self.state.auth.installation_token(installation).await
+    }
+
+    fn backend(&self) -> Result<Arc<MemoryBackend>> {
+        self.state
+            .memory
+            .clone()
+            .ok_or_else(|| Error::Forge("no memory engine is configured".into()))
+    }
+}
+
+#[async_trait::async_trait]
+impl Remembers for MemoryDispatch {
+    async fn remember(
+        &self,
+        repo: &RepoId,
+        number: u64,
+        pull_request: bool,
+    ) -> Result<crate::memory::DiscussionReport> {
+        let backend = self.backend()?;
+        let token = self.read_token(repo).await?;
+        backend
+            .remember_conversation(&self.state.config.config, repo, number, pull_request, &token)
+            .await
+    }
+
+    async fn backfill(
+        &self,
+        repo: &RepoId,
+        since: Option<String>,
+        limit: usize,
+    ) -> Result<std::result::Result<BackfillStatus, BackfillStatus>> {
+        let backend = self.backend()?;
+        // The token is minted before the walk is recorded as started, so a
+        // repository the app is not installed on is a plain error to the
+        // operator rather than a backfill that fails in the background.
+        let token = self.read_token(repo).await?;
+        let started = match backend.start_backfill(repo, since.clone(), limit) {
+            Ok(status) => status,
+            Err(running) => return Ok(Err(running)),
+        };
+        let config = Arc::new(self.state.config.config.clone());
+        let repo = repo.clone();
+        let permits = self.state.index_permits.clone();
+        tokio::spawn(async move {
+            // Shares the index permit pool: a backfill is thousands of
+            // forge reads, and two of them beside a clone is enough.
+            let Ok(_permit) = permits.acquire_owned().await else {
+                return;
+            };
+            backend
+                .run_backfill(&config, &repo, since.as_deref(), limit, &token)
+                .await;
+        });
+        Ok(Ok(started))
+    }
+
+    async fn status(&self, repo: &RepoId) -> Result<Option<BackfillStatus>> {
+        Ok(self.backend()?.backfill_status(repo))
     }
 }
 
