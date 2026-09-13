@@ -94,13 +94,30 @@ the box, and the old volume is still there — it is the only copy of the
 pre-migration data, so leave it until nobody wants the rollback.
 
 A host without a shared engine (a replacement box, a laptop) runs its own
-CortexDB against the ladder or any OpenAI-compatible endpoint, joins it to
-`tinysweeper_default` under the same alias, and sets the key in `.env`. The
-[README](../README.md) has the `docker run` shape for a local one. A checkout
-that wants no engine at all edits `[memory] enabled = false` out of the mounted
-config — there is deliberately no environment switch, because a config that
-says memory is on and a server that quietly runs without it is the failure
-this refuses.
+CortexDB, joins it to `tinysweeper_default` under the same alias, and sets the
+key in `.env`. The minimum is one container against any OpenAI-compatible
+endpoint `$U` that serves an embedding model and a chat model — the ladder
+serves them as `vectors` (1024-dimensional) and `flash`:
+
+```sh
+docker run -d --name cortex --restart unless-stopped \
+  -p 127.0.0.1:3141:3141 -v cortex-data:/data \
+  -e CORTEX_API_KEY=<bearer> -e CORTEX_DEPLOYMENT_PRESET=on_prem_enterprise -e CORTEX_BIND_ALL=1 \
+  -e CORTEX_EMBEDDING_URL=$U -e CORTEX_EMBEDDING_MODEL=vectors -e CORTEX_EMBEDDING_DIMS=1024 \
+  -e CORTEX_LLM_URL=$U -e CORTEX_LLM_MODEL=flash \
+  -e CORTEX_ENRICHMENT_URL=$U -e CORTEX_ENRICHMENT_MODEL=flash \
+  -e CORTEX_ANSWER_PROVIDER=openai -e CORTEX_ANSWER_URL=$U -e CORTEX_ANSWER_MODEL=flash \
+  -e CORTEX_VERIFIER_URL=$U -e CORTEX_VERIFIER_MODEL=flash \
+  -e OPENAI_API_KEY=<endpoint key> -e LLM_API_KEY=<endpoint key> \
+  cortexdb/cortexdb:latest 3141 /data
+docker network connect --alias cortexdb tinysweeper_default cortex
+```
+
+The embedding size is pinned by the first write and cannot change afterwards,
+so pick it before ingesting anything. A checkout that wants no engine at all
+edits `[memory] enabled = false` out of the mounted config — there is
+deliberately no environment switch, because a config that says memory is on
+and a server that quietly runs without it is the failure this refuses.
 
 ```sh
 cd /opt/tinysweeper
