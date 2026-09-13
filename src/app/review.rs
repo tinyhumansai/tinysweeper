@@ -480,19 +480,27 @@ pub async fn review_with_memory(
     let memory_context = match memory.filter(|_| config.memory.enabled && config.review.incremental)
     {
         Some(recaller) => {
-            let observed = match (
-                forge.review_threads(repo, number).await,
-                forge.review_comments(repo, number).await,
-            ) {
-                (Ok(threads), Ok(comments)) => {
-                    recaller
-                        .observe(&repo.to_string(), number, &threads, &comments)
-                        .await
+            // `remember_reviews` is "remember what the reviewer published and
+            // what became of it" end to end: observing outcomes here is the
+            // read half of the same setting the write-back gates below, and
+            // must not run when the operator turned it off.
+            let observed = if config.memory.remember_reviews {
+                match (
+                    forge.review_threads(repo, number).await,
+                    forge.review_comments(repo, number).await,
+                ) {
+                    (Ok(threads), Ok(comments)) => {
+                        recaller
+                            .observe(&repo.to_string(), number, &threads, &comments)
+                            .await
+                    }
+                    (Err(err), _) | (_, Err(err)) => {
+                        tracing::warn!(%err, "could not read review threads for memory");
+                        Default::default()
+                    }
                 }
-                (Err(err), _) | (_, Err(err)) => {
-                    tracing::warn!(%err, "could not read review threads for memory");
-                    Default::default()
-                }
+            } else {
+                Default::default()
             };
             let mut recalled = recaller
                 .recall(
