@@ -1079,10 +1079,7 @@ impl ForgeRead for GitHubRead {
         // resolver, deduped: each is looked up once against the repository's
         // actual collaborator permissions, however many threads or comments
         // they appear across, rather than once per appearance.
-        let mut logins: Vec<String> = parsed
-            .iter()
-            .flat_map(|p| p.candidates.iter().cloned())
-            .collect();
+        let mut logins: Vec<String> = candidate_logins(&parsed);
         logins.sort();
         logins.dedup();
         let mut write_access: HashMap<String, bool> = HashMap::new();
@@ -1091,24 +1088,7 @@ impl ForgeRead for GitHubRead {
             write_access.insert(login, access);
         }
 
-        Ok(parsed
-            .into_iter()
-            .map(|mut p| {
-                for comment in &mut p.thread.comments {
-                    if comment.maintainer {
-                        comment.maintainer =
-                            write_access.get(&comment.author).copied().unwrap_or(false);
-                    }
-                }
-                p.thread.resolved_by_has_write_access = p
-                    .resolved_by
-                    .as_ref()
-                    .and_then(|login| write_access.get(login))
-                    .copied()
-                    .unwrap_or(false);
-                p.thread
-            })
-            .collect())
+        Ok(resolve_write_access(parsed, &write_access))
     }
 
     async fn own_review_state(&self, repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
