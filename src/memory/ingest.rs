@@ -828,10 +828,57 @@ Tail.
         assert_eq!(conventions.len(), 1);
         assert_eq!(conventions[0].title, "AGENTS.md › Rules › Errors");
 
-        // A second pass replays everything and writes nothing.
+        // A second pass over an unchanged tree retires the stale versions of
+        // every item first — CortexDB has no update route, so the only way
+        // to guarantee recall never ranks a superseded convention or code
+        // chunk is to forget the section and write this pass's items fresh —
+        // so it writes everything again rather than replaying.
         let again = ingestor.ingest_checkout("o/r", dir.path()).await.unwrap();
-        assert_eq!(again.remembered.written, 0);
-        assert_eq!(again.remembered.replayed, report.remembered.written);
+        assert!(again.retired > 0, "{again:?}");
+        assert_eq!(again.remembered.written, report.remembered.written);
+        assert_eq!(again.remembered.replayed, 0);
+    }
+
+    #[tokio::test]
+    async fn a_re_ingest_retires_an_edited_convention_rather_than_stacking_it() {
+        // The bug this guards: editing a convention's body keeps its key but
+        // changes its `content_id`, so without retiring the section first,
+        // the previous version stays recallable alongside the edit — the
+        // "multiple contradictory versions sharing the same logical key"
+        // failure a stale AGENTS.md rule would produce.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("AGENTS.md"),
+            "# Rules\n\n## Errors\n\nNever unwrap.\n",
+        )
+        .unwrap();
+        let memory = MockMemory::new();
+        let mut config: crate::config::Config = crate::config::DEFAULTS
+            .parse::<toml::Table>()
+            .unwrap()
+            .try_into()
+            .unwrap();
+        config.memory.ingest_code = false;
+        let config = config.memory;
+        let ingestor = Ingestor::new(&memory, &config, &[]).unwrap();
+        ingestor.ingest_checkout("o/r", dir.path()).await.unwrap();
+
+        std::fs::write(
+            dir.path().join("AGENTS.md"),
+            "# Rules\n\n## Errors\n\nAlways use `?`.\n",
+        )
+        .unwrap();
+        ingestor.ingest_checkout("o/r", dir.path()).await.unwrap();
+
+        let conventions =
+            memory.remembered(&MemoryScope::section("o/r", MemorySection::Conventions));
+        assert_eq!(
+            conventions.len(),
+            1,
+            "the edited rule must replace the old one, not join it: {conventions:?}"
+        );
+        assert!(conventions[0].body.contains("Always use"), "{conventions:?}");
+        assert!(!conventions[0].body.contains("Never unwrap"), "{conventions:?}");
     }
 
     #[test]
