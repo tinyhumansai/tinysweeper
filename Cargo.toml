@@ -57,6 +57,7 @@ tree-sitter-typescript = "0.23"
 # central to the product. The `Model` port and `MockModel` compile without it;
 # only `harness::model::TinyAgentsModel` needs it.
 tinyagents = { package = "tinyagents-harness", git = "https://github.com/tinyhumansai/tinyagents.git", rev = "44afb2e6884690a59eb43e268a09868a9852c410", optional = true }
+tinyinference = { git = "https://github.com/tinyhumansai/tinyagents.git", rev = "44afb2e6884690a59eb43e268a09868a9852c410", optional = true }
 
 # --- the orchestration graph ---
 # Not optional, and that is the point: with default features tinyflows links no
@@ -99,7 +100,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 default = ["treesitter"]
 # The tinyagents-backed model provider (OpenRouter / Moonshot / MiniMax, all
 # one OpenAI-compatible code path).
-harness = ["dep:tinyagents", "dep:reqwest"]
+harness = ["dep:tinyagents", "dep:tinyinference", "dep:reqwest"]
 # The real GitHub adapter behind the `Forge` port.
 github = ["dep:octocrab", "dep:reqwest"]
 # The real Sentry adapter behind the `SentryApi` port. Sweeping polls sentry.io,

@@ -11,9 +11,9 @@ use async_trait::async_trait;
 use serde_json::json;
 use tinyagents::context::{RunConfig, RunContext};
 use tinyagents::events::EventSink;
-use tinyagents::message::Message as TaMessage;
-use tinyagents::model::ResponseFormat;
-use tinyagents::providers::openai::OpenAiModel;
+use tinyinference::message::Message as TaMessage;
+use tinyinference::model::ResponseFormat;
+use tinyinference::providers::openai::OpenAiModel;
 use tinyagents::runtime::{AgentHarness, PayloadCapture, RunPolicy};
 use tinyagents::{
     HarnessEventJournal, InMemoryEventJournal, JournalSink, LangfuseClient, LangfuseTraceConfig,
