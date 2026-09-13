@@ -321,6 +321,112 @@ fn issue_from_json(raw: &serde_json::Value) -> Issue {
     }
 }
 
+/// How many pages of issue comments one read will walk.
+///
+/// A hundred per page, so ten thousand comments — far past any real
+/// conversation, and low enough that a pathological thread cannot spend a
+/// sweep's whole rate-limit budget on one pull request.
+const MAX_COMMENT_PAGES: usize = 100;
+
+/// Whole days between `then` (a Unix timestamp) and now.
+///
+/// `None` — a timestamp GitHub did not send — is **zero days**, not an error
+/// and not a large number. Every guard that reads an age refuses when the item
+/// is too *young*, so an unknown age has to read as "brand new" or a missing
+/// field would unlock the close it was meant to gate.
+fn days_since(then: Option<i64>) -> u32 {
+    let Some(then) = then else { return 0 };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs() as i64)
+        .unwrap_or(then);
+    ((now - then).max(0) / 86_400) as u32
+}
+
+/// Map octocrab's pull request onto the crate's, with `approvals` supplied.
+///
+/// The approval count is a parameter rather than a fetch because it costs a
+/// request of its own: the single-pull-request path pays for it, and the list
+/// path — which reads a hundred at a time and does not use the figure — does
+/// not.
+fn pull_request_from(
+    pr: octocrab::models::pulls::PullRequest,
+    repo: &RepoId,
+    approvals: u32,
+) -> PullRequest {
+    let number = pr.number;
+    let base = pr.base;
+    let head = pr.head;
+
+    PullRequest {
+        number,
+        title: pr.title.unwrap_or_default(),
+        body: pr.body.unwrap_or_default(),
+        author: pr
+            .user
+            .as_ref()
+            .map(|u| u.login.clone())
+            .unwrap_or_default(),
+        // GitHub's own answer, not a guess from the login. Auto-merge's
+        // dependency-bump exemption is only as safe as this field.
+        author_is_bot: pr
+            .user
+            .as_ref()
+            .map(|u| u.r#type.eq_ignore_ascii_case("bot"))
+            .unwrap_or(false),
+        draft: pr.draft.unwrap_or(false),
+        base_ref: base.ref_field,
+        base_sha: base.sha,
+        head_ref: head.ref_field.clone(),
+        head_sha: head.sha,
+        // `head.repo` differing from `base.repo` is what makes a pull
+        // request a fork one, and that changes which token can post.
+        //
+        // Both halves of the name, not only the owner: an organisation's own
+        // fork — `org/fork` targeting `org/upstream` — shares the owner and is
+        // still a fork, and comparing only the login calls it a branch.
+        from_fork: head
+            .repo
+            .as_ref()
+            .map(|head_repo| {
+                let owner = head_repo
+                    .owner
+                    .as_ref()
+                    .map(|o| o.login.as_str())
+                    .unwrap_or_default();
+                owner != repo.owner || head_repo.name != repo.name
+            })
+            .unwrap_or(false),
+        labels: pr
+            .labels
+            .unwrap_or_default()
+            .into_iter()
+            .map(|l| l.name)
+            .collect(),
+        mergeable: pr.mergeable,
+        // `merged_at` rather than `merged`: octocrab only populates the
+        // latter on some endpoints, and a missing bool would read as "not
+        // merged" on exactly the path that decides whether an issue closes.
+        merged: pr.merged_at.is_some(),
+        // Absent reads as open: the endpoints that omit `state` are the ones
+        // that only ever return open pull requests, and reading an omission as
+        // "closed" would make the triage sweep skip every one of them.
+        open: pr
+            .state
+            .map(|state| matches!(state, octocrab::models::IssueState::Open))
+            .unwrap_or(true),
+        approvals,
+        age_days: days_since(pr.created_at.map(|at| at.timestamp())),
+        // `updated_at` counts *any* write, tinysweeper's own labels and
+        // comments included, so this is a floor on how quiet the pull request
+        // really is and never an overstatement. That asymmetry is the safe one:
+        // a quiet guard that reads too low refuses a close it might have
+        // allowed, where one that read too high would allow a close on a pull
+        // request somebody commented on this morning.
+        quiet_days: days_since(pr.updated_at.map(|at| at.timestamp())),
+    }
+}
+
 /// The type names in an `/orgs/{org}/issue-types` answer.
 ///
 /// Anything that is not a list — a 404 body from a user account, an error
@@ -442,34 +548,6 @@ impl GitHubRead {
             }
         }
     }
-
-    /// The numbers of the open pull requests, most recently updated first.
-    ///
-    /// Inherent rather than part of `ForgeRead`: only the manual full-review
-    /// path asks "which pull requests are open" — every other caller is handed
-    /// a number by a webhook — and widening the port would oblige every mock to
-    /// answer a question nothing else asks. `limit` is a hard cap, because this
-    /// list turns directly into model spend.
-    pub async fn open_pull_requests(&self, repo: &RepoId, limit: usize) -> Result<Vec<u64>> {
-        let page = self
-            .client
-            .pulls(&repo.owner, &repo.name)
-            .list()
-            .state(octocrab::params::State::Open)
-            .sort(octocrab::params::pulls::Sort::Updated)
-            .direction(octocrab::params::Direction::Descending)
-            .per_page(100)
-            .send()
-            .await
-            .map_err(api)?;
-
-        Ok(page
-            .items
-            .into_iter()
-            .map(|pull| pull.number)
-            .take(limit)
-            .collect())
-    }
 }
 
 /// Count the reviewers whose *latest* verdict is an approval.
@@ -535,51 +613,73 @@ impl ForgeRead for GitHubRead {
             .await
             .map_err(api)?;
 
-        let base = pr.base;
-        let head = pr.head;
+        let approvals = self.approvals(repo, number).await;
+        Ok(pull_request_from(pr, repo, approvals))
+    }
 
-        Ok(PullRequest {
-            number,
-            title: pr.title.unwrap_or_default(),
-            body: pr.body.unwrap_or_default(),
-            author: pr
-                .user
-                .as_ref()
-                .map(|u| u.login.clone())
-                .unwrap_or_default(),
-            // GitHub's own answer, not a guess from the login. Auto-merge's
-            // dependency-bump exemption is only as safe as this field.
-            author_is_bot: pr
-                .user
-                .as_ref()
-                .map(|u| u.r#type.eq_ignore_ascii_case("bot"))
-                .unwrap_or(false),
-            draft: pr.draft.unwrap_or(false),
-            base_ref: base.ref_field,
-            base_sha: base.sha,
-            head_ref: head.ref_field.clone(),
-            head_sha: head.sha,
-            // `head.repo` differing from `base.repo` is what makes a pull
-            // request a fork one, and that changes which token can post.
-            from_fork: head
-                .repo
-                .as_ref()
-                .and_then(|r| r.owner.as_ref().map(|o| o.login.clone()))
-                .map(|owner| owner != repo.owner)
-                .unwrap_or(false),
-            labels: pr
-                .labels
-                .unwrap_or_default()
-                .into_iter()
-                .map(|l| l.name)
-                .collect(),
-            mergeable: pr.mergeable,
-            // `merged_at` rather than `merged`: octocrab only populates the
-            // latter on some endpoints, and a missing bool would read as "not
-            // merged" on exactly the path that decides whether an issue closes.
-            merged: pr.merged_at.is_some(),
-            approvals: self.approvals(repo, number).await,
-        })
+    async fn branch_head(&self, repo: &RepoId, branch: &str) -> Result<Option<String>> {
+        // The branch name goes in the path, so a name containing a slash — a
+        // `release/1.2` — is passed through as-is. GitHub resolves it; what it
+        // must not do is escape the route, which `RepoId::parse` and GitHub's
+        // own ref rules already prevent.
+        let route = format!("/repos/{}/{}/commits/{branch}", repo.owner, repo.name);
+        match self
+            .client
+            .get::<serde_json::Value, _, ()>(&route, None)
+            .await
+        {
+            Ok(commit) => Ok(commit["sha"].as_str().map(str::to_string)),
+            // A pull request can outlive the branch it targets, and that is an
+            // answer rather than a failure.
+            Err(octocrab::Error::GitHub { source, .. }) if source.status_code == 404 => Ok(None),
+            Err(err) => Err(api(err)),
+        }
+    }
+
+    async fn open_pull_requests(&self, repo: &RepoId, limit: usize) -> Result<Vec<PullRequest>> {
+        let mut out = Vec::new();
+        let mut page = 1u32;
+
+        // Paged by hand rather than through `into_stream`, so the request count
+        // is bounded by `limit` and visible here. A repository with a thousand
+        // open pull requests must not be able to turn one sweep into a thousand
+        // API calls.
+        while out.len() < limit {
+            let batch = self
+                .client
+                .pulls(&repo.owner, &repo.name)
+                .list()
+                .state(octocrab::params::State::Open)
+                // Ascending by creation, because the port promises oldest
+                // first: dedupe calls the older of two near-identical pull
+                // requests the original, and truncating the originals away
+                // would leave a shortlist that can find no duplicates at all.
+                .sort(octocrab::params::pulls::Sort::Created)
+                .direction(octocrab::params::Direction::Ascending)
+                .per_page(100)
+                .page(page)
+                .send()
+                .await
+                .map_err(api)?;
+
+            if batch.items.is_empty() {
+                break;
+            }
+            for pr in batch.items {
+                // Zero approvals rather than a per-pull-request call. Counting
+                // them properly costs one request each, and a hundred-pull
+                // sweep would spend its whole rate-limit budget on a figure
+                // triage does not read — only `[automerge]` does, and that path
+                // fetches the pull request singly.
+                out.push(pull_request_from(pr, repo, 0));
+                if out.len() >= limit {
+                    break;
+                }
+            }
+            page += 1;
+        }
+
+        Ok(out)
     }
 
     async fn changed_files(&self, repo: &RepoId, number: u64) -> Result<Vec<ChangedFile>> {
@@ -711,23 +811,50 @@ impl ForgeRead for GitHubRead {
     }
 
     async fn comments(&self, repo: &RepoId, number: u64) -> Result<Vec<IssueComment>> {
-        let page = self
+        // Read to exhaustion, like `review_comments` beside it. Truncating at
+        // the first page is not a smaller answer here, it is a wrong one: the
+        // callers that look for tinysweeper's own durable comment conclude it
+        // does not exist and post a second — so on a pull request with a busy
+        // conversation, every sweep would append another one.
+        let mut page = self
             .client
             .issues(&repo.owner, &repo.name)
             .list_comments(number)
+            .per_page(100)
             .send()
             .await
             .map_err(api)?;
 
-        Ok(page
-            .items
-            .into_iter()
-            .map(|c| IssueComment {
-                id: Some(*c.id),
-                author: c.user.login,
-                body: c.body.unwrap_or_default(),
-            })
-            .collect())
+        let mut comments = Vec::new();
+        let mut pages = 0;
+        loop {
+            for c in &page.items {
+                comments.push(IssueComment {
+                    id: Some(*c.id),
+                    author: c.user.login.clone(),
+                    body: c.body.clone().unwrap_or_default(),
+                });
+            }
+            pages += 1;
+            // Bounded, and an *error* rather than a short list at the bound.
+            // Callers read this to decide whether their own durable comment
+            // exists, and a truncated answer would read as "it does not" — so
+            // a thousand-comment thread would collect one new bot comment per
+            // sweep. Failing loudly is the only safe way to be short here.
+            if pages >= MAX_COMMENT_PAGES && page.next.is_some() {
+                return Err(Error::Forge(format!(
+                    "{repo}#{number} has more than {} pages of comments; \
+                     refusing to act on a partial list",
+                    MAX_COMMENT_PAGES
+                )));
+            }
+            match self.client.get_page(&page.next).await.map_err(api)? {
+                Some(next) => page = next,
+                None => break,
+            }
+        }
+
+        Ok(comments)
     }
 
     async fn review_comments(&self, repo: &RepoId, number: u64) -> Result<Vec<ReviewComment>> {
@@ -1161,6 +1288,21 @@ impl ForgeWrite for GitHubWrite {
             .issues(&repo.owner, &repo.name)
             .update(number)
             .state(octocrab::models::IssueState::Closed)
+            .send()
+            .await
+            .map_err(api)?;
+        Ok(())
+    }
+
+    async fn close_pull_request(&self, repo: &RepoId, number: u64) -> Result<()> {
+        // The pulls endpoint rather than the issues one, even though GitHub
+        // would accept either. `PATCH /pulls/{n}` cannot express a merge — the
+        // merge button is `PUT /pulls/{n}/merge` — so the request this sends is
+        // structurally incapable of landing the branch it is closing.
+        self.client
+            .pulls(&repo.owner, &repo.name)
+            .update(number)
+            .state(octocrab::params::pulls::State::Closed)
             .send()
             .await
             .map_err(api)?;

@@ -1,0 +1,17 @@
+{
+  "key": "c312a6bd2f611374",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3283,
+    "output_tokens": 56,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0001658797
+  },
+  "value": {
+    "summary": "The change fixes environment variable names to match what the binary actually reads, adds missing API keys for embedding providers, and mounts the configuration file so the server doesn't silently run with defaults. No bugs introduced.",
+    "findings": []
+  }
+}

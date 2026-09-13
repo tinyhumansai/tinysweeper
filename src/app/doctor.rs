@@ -282,6 +282,8 @@ fn print_prose(loaded: &Loaded) {
         ("automerge", config.automerge.enabled),
         ("issue triage", config.issues.enabled),
         ("issue closing", config.issues.close.enabled),
+        ("pr triage", config.pr_triage.enabled),
+        ("pr closing", config.pr_triage.close.enabled),
         ("automation", config.automation.enabled),
         ("stale sweep", config.automation.stale.enabled),
         ("sentry promotion", config.sentry.enabled),

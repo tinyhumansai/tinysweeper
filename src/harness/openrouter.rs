@@ -178,7 +178,7 @@ impl GatewayModel {
         })
     }
 
-    fn harness(&self, model: &str) -> Result<AgentHarness<()>> {
+    fn harness(&self, model: &str, routing: &ProviderRouting) -> Result<AgentHarness<()>> {
         let provider = OpenAiModel::new(&self.api_key)
             .with_base_url(&self.base_url)
             .with_model(model)
@@ -225,7 +225,7 @@ impl GatewayModel {
             // The `provider` pin rides in the same object; see
             // [`provider_options`] for why they are merged rather than set
             // separately.
-            .with_default_provider_options(provider_options(&self.reasoning_effort, &self.provider))
+            .with_default_provider_options(provider_options(&self.reasoning_effort, routing))
             // Identifies us to OpenRouter, which is how per-application usage
             // shows up separately in their dashboard.
             .with_header(
@@ -241,8 +241,14 @@ impl GatewayModel {
         Ok(harness)
     }
 
-    async fn call(&self, model: &str, request: &ModelRequest, cap: u32) -> Result<CallOutcome> {
-        let mut harness = self.harness(model)?;
+    async fn call(
+        &self,
+        model: &str,
+        request: &ModelRequest,
+        cap: u32,
+        routing: &ProviderRouting,
+    ) -> Result<CallOutcome> {
+        let mut harness = self.harness(model, routing)?;
         // Who enforces the schema. These two arms are one decision, not two
         // independent settings: `JsonObject` asks the provider for *some* JSON
         // and therefore has to carry the schema in the prompt itself, and the
@@ -452,13 +458,14 @@ impl GatewayModel {
         &self,
         model: &str,
         request: &ModelRequest,
+        routing: &ProviderRouting,
     ) -> Result<ModelResponse> {
         let base = request.max_tokens;
         let ladder = truncation_ladder(base);
         let last = ladder.len() - 1;
 
         for (attempt, cap) in ladder.into_iter().enumerate() {
-            match self.call(model, request, cap).await? {
+            match self.call(model, request, cap, routing).await? {
                 CallOutcome::Answer(response) => return Ok(response),
                 CallOutcome::Truncated {
                     output_tokens,
@@ -579,7 +586,10 @@ fn langfuse_client() -> Option<LangfuseClient> {
 #[async_trait]
 impl Model for GatewayModel {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse> {
-        let mut last = match self.call_until_complete(&request.model, &request).await {
+        let mut last = match self
+            .call_until_complete(&request.model, &request, &self.provider)
+            .await
+        {
             Ok(response) => return Ok(response),
             Err(err) => err,
         };
@@ -594,7 +604,42 @@ impl Model for GatewayModel {
                 error = %last,
                 "model call failed; trying the next model"
             );
-            match self.call_until_complete(fallback, &request).await {
+            match self
+                .call_until_complete(fallback, &request, &self.provider)
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(err) => last = err,
+            }
+        }
+
+        // The last rung, and the only one that changes *provider* rather than
+        // model.
+        //
+        // Every rung above shares `self.provider`, so a pin that cannot serve
+        // these models fails all of them for one reason and the ladder is
+        // decoration. That is the outage this rung exists for: `deepseek` was
+        // pinned while the configured models were served only by StreamLake and
+        // DeepInfra, every rung returned `404 No endpoints found`, and each pull
+        // request was told there was nothing to review.
+        //
+        // Only reached when every priced route has already failed, so it costs
+        // nothing on a healthy deployment. It is loud because an unpinned call
+        // is billed at a price `harness::pricing` did not predict, and an
+        // operator who never learns the pin is broken keeps paying it.
+        if self.provider.last_resort_unpinned && !self.provider.is_empty() {
+            let unpinned = ProviderRouting::unpinned();
+            tracing::warn!(
+                primary = %request.model,
+                pinned_to = %self.provider.order.join(", "),
+                error = %last,
+                "every model failed on the pinned provider; retrying unpinned — \
+                 the cost line for this review is an estimate, and the pin needs fixing"
+            );
+            match self
+                .call_until_complete(&request.model, &request, &unpinned)
+                .await
+            {
                 Ok(response) => return Ok(response),
                 Err(err) => last = err,
             }
@@ -629,7 +674,48 @@ mod tests {
         ProviderRouting {
             order: order.iter().map(|p| (*p).to_string()).collect(),
             allow_fallbacks,
+            ..ProviderRouting::default()
         }
+    }
+
+    #[test]
+    fn the_last_resort_rung_is_on_by_default() {
+        // A pin is only safe to default to because this rung exists. Turning it
+        // off by default would restore the failure it was added for: every rung
+        // of the ladder inheriting one broken pin.
+        assert!(ProviderRouting::default().last_resort_unpinned);
+    }
+
+    #[test]
+    fn the_last_resort_rung_sends_no_provider_block() {
+        // The whole point of the rung: it must not carry the pin that just
+        // failed every other rung, or it is a fourth identical attempt.
+        let unpinned = ProviderRouting::unpinned();
+        assert!(unpinned.is_empty());
+
+        let options = provider_options("high", &unpinned);
+        assert!(
+            options.get("provider").is_none(),
+            "the last rung must route freely: {options}"
+        );
+    }
+
+    #[test]
+    fn the_last_resort_rung_cannot_recurse() {
+        // It is reached from `complete` only when `self.provider` is pinned, and
+        // the routing it swaps in is unpinned — so the guard is false for it and
+        // there is no second last-resort attempt.
+        let unpinned = ProviderRouting::unpinned();
+        assert!(!(unpinned.last_resort_unpinned && !unpinned.is_empty()));
+    }
+
+    #[test]
+    fn an_unpinned_deployment_has_no_last_resort_rung_to_take() {
+        // Nothing to fall back *from*: the primary call already routed freely,
+        // so retrying it unpinned would be a duplicate call on a real outage.
+        let routing = ProviderRouting::default();
+        assert!(routing.is_empty());
+        assert!(!(routing.last_resort_unpinned && !routing.is_empty()));
     }
 
     #[test]

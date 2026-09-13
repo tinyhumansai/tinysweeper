@@ -22,11 +22,12 @@ use crate::error::{Error, Result};
 use crate::forge::RepoId;
 use crate::index::mongo::MongoIndex;
 use crate::ports::knowledge::KnowledgeStore;
+use crate::pr_triage::Report as PrTriageReport;
 use crate::server::admin::{self, AdminAuth};
 use crate::server::auth::AppAuth;
 use crate::server::failure;
 use crate::server::indexing::{IndexBackend, index_in_background};
-use crate::server::manual::{self, FullReviews, MergeReport, Merges};
+use crate::server::manual::{self, FullReviews, MergeReport, Merges, Triages};
 use crate::server::status;
 use crate::server::store::{Store, Trust};
 use crate::server::webhook::{self, Action, Payload};
@@ -179,9 +180,25 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
         state: manual_state.clone(),
     });
     let merges: Arc<dyn Merges> = Arc::new(MergeDispatch {
-        state: manual_state,
+        state: manual_state.clone(),
     });
-    if let Some(routes) = manual::router(manual_auth, manual::allowed_org(), dispatch, merges) {
+    let triages: Arc<dyn Triages> = Arc::new(TriageDispatch {
+        state: manual_state.clone(),
+    });
+
+    // The periodic sweep, spawned only when it has both a switch and an
+    // interval. It is what makes triage automatic rather than a button: a
+    // duplicate opened at midnight is labelled by morning without anybody
+    // pressing anything.
+    spawn_triage_sweeps(manual_state, triages.clone());
+
+    if let Some(routes) = manual::router(
+        manual_auth,
+        manual::allowed_org(),
+        dispatch,
+        merges,
+        triages,
+    ) {
         app = app.merge(routes);
         tracing::info!(
             organisation = %manual::allowed_org(),
@@ -568,6 +585,226 @@ async fn triage_and_apply(
     Ok(outcome.plan)
 }
 
+/// The pull request triage button's and the periodic sweep's way into the job.
+///
+/// Answers synchronously, like the auto-merge button and for the same reason:
+/// there is no model in this path, so the caller can be handed what it
+/// concluded rather than being sent to read the log.
+struct TriageDispatch {
+    state: AppState,
+}
+
+#[async_trait::async_trait]
+impl Triages for TriageDispatch {
+    async fn triage(&self, repo: &RepoId, number: Option<u64>) -> Result<Vec<PrTriageReport>> {
+        // Refused once, up front. An operator who has not turned the sweep on
+        // wants to be told that once rather than a hundred times with a number
+        // attached.
+        if !self.state.config.config.pr_triage.enabled {
+            return Err(Error::Forge(
+                "`[pr_triage] enabled` is false in the deployment's configuration".into(),
+            ));
+        }
+
+        let installation = self
+            .state
+            .auth
+            .installation_for_repo(&repo.owner, &repo.name)
+            .await?;
+
+        // One lease for the whole sweep, keyed on the repository rather than on
+        // a pull request: two sweeps running at once would each read the other
+        // half-applied state, and the second would post a second comment on
+        // everything the first had not finished labelling.
+        let lease = format!("{repo}#pr-triage");
+        if !self.state.store.claim_lease(&lease, "server").await? {
+            return Err(Error::Forge(
+                "another sweep of this repository is already running".into(),
+            ));
+        }
+
+        let outcome = self.sweep_and_apply(repo, number, installation).await;
+
+        if let Err(err) = self.state.store.release_lease(&lease).await {
+            tracing::error!(%err, %lease, "could not release the sweep lease; it will expire");
+        }
+
+        outcome
+    }
+}
+
+impl TriageDispatch {
+    /// Read, decide, then publish with a token minted afterwards.
+    ///
+    /// The read token and the write token are separate mints even though the
+    /// installation is the same, so the sweep keeps the shape every other job
+    /// here has: the half that decides never holds a handle that could write.
+    async fn sweep_and_apply(
+        &self,
+        repo: &RepoId,
+        number: Option<u64>,
+        installation: u64,
+    ) -> Result<Vec<PrTriageReport>> {
+        let read_token = self.state.auth.installation_token(installation).await?;
+        let read = crate::forge::github::GitHubRead::new(&read_token)?;
+
+        let outcome = crate::pr_triage::sweep(
+            &read,
+            &self.state.config.config,
+            repo,
+            number,
+            // Maintainer protection is expressed as
+            // `pr_triage.close.protected_authors` until the forge port can
+            // report a repository's collaborators — the same gap issue triage
+            // has, and an invented list would be worse than an empty one.
+            &[],
+        )
+        .await?;
+
+        if let Some(reason) = outcome.skipped {
+            return Err(Error::Forge(reason.to_string()));
+        }
+
+        for (number, why) in &outcome.unread {
+            tracing::info!(%repo, number, why, "pull request skipped by the sweep");
+        }
+
+        let write_token = self.state.auth.installation_token(installation).await?;
+        let write = crate::forge::github::GitHubWrite::new(&write_token)?;
+        // The same read handle the sweep used. `apply_all` re-fetches every
+        // pull request it is about to close and re-runs the gate against its
+        // live state, because a sweep of a hundred takes minutes and a
+        // maintainer can intervene inside them.
+        Ok(crate::pr_triage::apply_all(
+            &read,
+            &write,
+            &self.state.config.config,
+            repo,
+            &outcome.plans,
+            &[],
+        )
+        .await)
+    }
+}
+
+/// Start the periodic pull request sweep, if it is configured.
+///
+/// Spawned once at boot and never restarted: a task that dies takes the
+/// periodic sweep with it until the next deploy, which is loud enough to
+/// notice and much better than a supervisor quietly retrying a sweep that
+/// fails for a reason nobody has looked at.
+fn spawn_triage_sweeps(state: AppState, triages: Arc<dyn Triages>) {
+    let policy = &state.config.config.pr_triage;
+    if !policy.enabled {
+        tracing::info!("`[pr_triage] enabled` is false; no periodic pull request sweep");
+        return;
+    }
+    let Some(minutes) = policy.sweep_every_minutes.filter(|every| *every > 0) else {
+        tracing::info!(
+            "pull request triage is on but `sweep_every_minutes` is unset;              it runs only from /admin/pr-triage"
+        );
+        return;
+    };
+    let repositories = policy.sweep_repositories.clone();
+    if repositories.is_empty() {
+        tracing::warn!(
+            "`[pr_triage] sweep_every_minutes` is set but `sweep_repositories` is empty;              there is nothing to sweep"
+        );
+        return;
+    }
+
+    tracing::info!(
+        every_minutes = minutes,
+        ?repositories,
+        "the periodic pull request sweep is on"
+    );
+
+    tokio::spawn(async move {
+        let period = std::time::Duration::from_secs(u64::from(minutes) * 60);
+        let mut ticker = tokio::time::interval(period);
+        // A sweep of a large repository can outlast its own interval. Tokio's
+        // default then fires every missed tick back to back, so the sweep
+        // restarts with no pause and keeps the installation permanently rate
+        // limited. `Delay` skips the backlog and waits a full period.
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // The first tick fires immediately, which is not what a deploy wants:
+        // a restart loop would sweep on every crash. Consume it here so the
+        // first real sweep is one interval after boot.
+        ticker.tick().await;
+
+        loop {
+            ticker.tick().await;
+            for name in &repositories {
+                let Some(repo) = RepoId::parse(name) else {
+                    tracing::error!(%name, "`pr_triage.sweep_repositories` has a bad entry");
+                    continue;
+                };
+                match triages.triage(&repo, None).await {
+                    Ok(reports) => {
+                        let closed = reports
+                            .iter()
+                            .filter(|report| {
+                                report.outcome == crate::pr_triage::apply::Outcome::Closed
+                            })
+                            .count();
+                        tracing::info!(
+                            %repo,
+                            considered = reports.len(),
+                            closed,
+                            "periodic pull request sweep finished"
+                        );
+                    }
+                    // One repository failing must not stop the timer: the next
+                    // tick tries again, and a permanent failure shows up as a
+                    // repeating log line rather than as silence.
+                    Err(err) => tracing::error!(%err, %repo, "periodic pull request sweep failed"),
+                }
+            }
+        }
+    });
+}
+
+/// How many open pull requests the manual buttons look at before picking the
+/// newest `MAX_MANUAL_REVIEWS` of them.
+///
+/// The port lists oldest first, because duplicate detection needs the
+/// originals. The manual buttons want the opposite: an operator pressing
+/// "review everything" twice must not enqueue the same twenty oldest pull
+/// requests both times and starve everything opened since. So they read a wider
+/// window and take the newest end of it.
+///
+/// Wide enough to cover the whole backlog, and that is the point rather than
+/// generosity: a window that truncates from the *oldest* end still hands the
+/// caller the newest of what it read, which on a repository with more open pull
+/// requests than the window is not the newest of what exists. Twenty pages of
+/// a hundred, on a button pressed by hand a few times a year.
+const MANUAL_SCAN_LIMIT: usize = 2_000;
+
+/// The numbers of a repository's most recent open pull requests, capped.
+///
+/// A thin wrapper over the port so the two manual buttons do not each grow
+/// their own idea of what "open" means.
+async fn open_numbers(
+    read: &dyn crate::ports::forge::ForgeRead,
+    repo: &RepoId,
+    limit: usize,
+) -> Result<Vec<u64>> {
+    let mut numbers: Vec<u64> = read
+        .open_pull_requests(repo, MANUAL_SCAN_LIMIT)
+        .await?
+        .into_iter()
+        .map(|pull_request| pull_request.number)
+        .collect();
+
+    // Newest first, then capped, so the cap drops the oldest rather than the
+    // newest. Sorted here rather than trusted from the adapter: the port
+    // promises ascending, and a manual button is not the place to depend on
+    // that promise being reversed.
+    numbers.sort_unstable_by(|a, b| b.cmp(a));
+    numbers.truncate(limit);
+    Ok(numbers)
+}
+
 /// The manual review path's way into the worker.
 ///
 /// Everything a webhook delivery supplies and an operator cannot — the
@@ -593,7 +830,10 @@ impl FullReviews for ManualDispatch {
 
         let numbers = match number {
             Some(number) => vec![number],
-            None => forge.open_pull_requests(repo, MAX_MANUAL_REVIEWS).await?,
+            // Through the port, which is also where pull request triage reads
+            // them: one definition of "the open pull requests", so the button
+            // and the sweep can never disagree about what is open.
+            None => open_numbers(&forge, repo, MAX_MANUAL_REVIEWS).await?,
         };
 
         let mut queued = Vec::new();
@@ -653,7 +893,7 @@ impl Merges for MergeDispatch {
 
         let numbers = match number {
             Some(number) => vec![number],
-            None => read.open_pull_requests(repo, MAX_MANUAL_REVIEWS).await?,
+            None => open_numbers(&read, repo, MAX_MANUAL_REVIEWS).await?,
         };
 
         let mut reports = Vec::new();

@@ -1,0 +1,17 @@
+{
+  "key": "67216aa5018d3c92",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_description",
+  "usage": {
+    "input_tokens": 5730,
+    "output_tokens": 99,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00028964208
+  },
+  "value": {
+    "summary": "This pull request adds infrastructure for end-to-end deployment: a kernel-bypass shim for MongoDB on modern Linux kernels, a compose overlay to use it, environment variable and volume fixes so the server can authenticate and load configuration, and an embeddings configuration. It also adds a `findings::summarise` helper for truncating model-authored text. The changes are well-motivated and sound; nothing blocks merge.",
+    "findings": []
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "908b8d5671bc4efe",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 2827,
+    "output_tokens": 70,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00014496762
+  },
+  "value": {
+    "summary": "This pull request adds an `[embeddings]` section to `.tinysweeper.toml` with a table-driven configuration for retrieval, using the same gateway as the completion models. No bugs or regressions are introduced by these three lines of configuration data.",
+    "findings": []
+  }
+}

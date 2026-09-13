@@ -1,0 +1,17 @@
+{
+  "key": "d8a6ea9d1612bf43",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3107,
+    "output_tokens": 312,
+    "cached_tokens": 2656,
+    "embed_tokens": 0,
+    "cost_usd": 0.0006467424
+  },
+  "value": {
+    "summary": "This change updates the default model configuration in defaults.toml, switching both scan and deep tiers to z-ai/glm-5.2, updating fallback models, and enabling reasoning_effort. It introduces no security issues: no secrets, no new network calls, no auth or permission changes.",
+    "findings": []
+  }
+}

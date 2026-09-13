@@ -43,7 +43,12 @@ services:
       # The image runs `rs.initiate()` itself once mongod is up. Doing it by
       # hand from another container does not work: with auth enabled and no
       # users yet, only a localhost connection is exempt.
-      MONGODB_INITDB_REPL_SET_MEMBER: mongod:27017
+      #
+      # `_HOST` is the name the image's entrypoint actually reads. This was
+      # `_MEMBER` for a while, which it ignores, so mongod came up as a
+      # standalone that answered `ping` and refused every write with
+      # NotWritablePrimary.
+      MONGODB_INITDB_REPL_SET_HOST: mongod:27017
     volumes:
       - ./deploy/mongo/mongod.conf:/etc/mongod.conf:ro
       - ./deploy/mongo/init-mongot-user.js:/docker-entrypoint-initdb.d/init-mongot-user.js:ro
@@ -55,7 +60,18 @@ services:
       mongo-secrets:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      # Not `ping`: a mongod that is up but has not yet won its own election —
+      # or never had the replica set initiated — answers `ping` and rejects
+      # every write. The server and mongot both need a primary, so that is
+      # what "healthy" means here.
+      test:
+        [
+          "CMD",
+          "mongosh",
+          "--quiet",
+          "--eval",
+          "if (!db.hello().isWritablePrimary) quit(1)",
+        ]
       interval: 5s
       timeout: 10s
       retries: 30

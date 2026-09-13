@@ -98,7 +98,26 @@ pub async fn triage(
     let spend = Spend::of(&response);
     let verdict = parse_verdict(&response.value)?;
 
-    let label_plan = labels::plan(&issue.labels, &suggested_labels(&verdict), policy);
+    // Read from the issue's own text, by pattern and not by prompt — see
+    // `crate::pr_triage::promo` for why that is safe to do here and nowhere
+    // else. Advisory: it adds a label and a sentence, and it is not an input to
+    // the close gate below.
+    let promotion = if config.pr_triage.flag_promotional {
+        let finding = crate::pr_triage::promo::inspect_text(
+            &issue.title,
+            &issue.body,
+            &crate::pr_triage::promo::author_hosts(&issue.author, None),
+        );
+        finding.is_promotional().then(|| finding.summary())
+    } else {
+        None
+    };
+
+    let label_plan = labels::plan(
+        &issue.labels,
+        &suggested_labels(&verdict, promotion.is_some()),
+        policy,
+    );
 
     // Read rather than assumed, and only when the policy is on: an owner's
     // issue types cost a request, and a run that will set no type must not
@@ -170,7 +189,7 @@ pub async fn triage(
     }
 
     if policy.comment {
-        plan.comment = comment::render(&plan, &verdict.summary, cross_link);
+        plan.comment = comment::render(&plan, &verdict.summary, cross_link, promotion.as_deref());
     }
 
     Ok(TriageOutcome {
@@ -305,11 +324,14 @@ fn parse_priority(text: &str) -> Option<Priority> {
 ///
 /// One axis, so at most one label: `priority:`. The `severity:` label that used
 /// to accompany it mapped onto the priority one for one and is gone.
-fn suggested_labels(verdict: &IssueVerdict) -> Vec<String> {
+fn suggested_labels(verdict: &IssueVerdict, promotional: bool) -> Vec<String> {
+    // Priority first, so an `issues.max_labels` of one still says the thing a
+    // triage list is sorted by. The flag is the second opinion, not the first.
     verdict
         .priority
         .map(|p| p.label().to_string())
         .into_iter()
+        .chain(promotional.then(|| crate::pr_triage::Flag::Promotional.label().to_string()))
         .collect()
 }
 

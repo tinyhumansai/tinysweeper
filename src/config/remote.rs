@@ -35,7 +35,7 @@
 //!   `[models]` and `[embeddings]` (model choice, `base_url`, `api_key_env`,
 //!   the per-pull-request budget, and the provider/model/dimensions triple that
 //!   is the index partition key — one repository changing it invalidates every
-//!   other repository's vectors), `[automerge]`, `[issues]`, `[automation]`,
+//!   other repository's vectors), `[automerge]`, `[issues]`, `[pr_triage]`, `[automation]`,
 //!   `[sentry]` (which also names a token environment variable), and
 //!   `review.request_changes_at` / `review.approve_when_clean`, which decide
 //!   whether the review blocks the merge button or produces an approval that

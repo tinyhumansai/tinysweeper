@@ -153,11 +153,50 @@ fn the_shipped_defaults_pin_the_upstream_provider() {
     // no provider routing must not have a stray `provider` block sent).
     let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
 
-    assert_eq!(config.models.provider.order, vec!["deepseek".to_string()]);
+    assert_eq!(
+        config.models.provider.order,
+        vec!["streamlake".to_string(), "deepinfra".to_string()]
+    );
     assert!(
         !config.models.provider.allow_fallbacks,
         "a pin the gateway may route around is not a pin"
     );
+    assert!(
+        config.models.provider.last_resort_unpinned,
+        "a pin every rung of the ladder inherits needs an unpinned rung below it"
+    );
+}
+
+#[test]
+fn every_shipped_model_can_be_served_by_a_pinned_provider() {
+    // The outage this exists to make impossible. `order = ["deepseek"]` was
+    // shipped while every configured model was served by StreamLake and
+    // DeepInfra and by DeepSeek not at all — the vendor prefix on
+    // `deepseek/deepseek-v4-flash` names who trained it, not who hosts it. Every
+    // rung of the ladder 404'd with `No endpoints found`, every lane went
+    // Neutral, and each pull request was told there was nothing to review for a
+    // week.
+    //
+    // Which providers serve which model is catalogue data this test cannot
+    // reach offline, so what is checked here is the shape that made the mistake
+    // survivable: the pin names providers, not vendors, and the ladder has a
+    // rung that drops it. `PROVIDER_IS_NOT_A_VENDOR` lists the gateway-side
+    // names that read like a model vendor and are therefore the ones somebody
+    // reaches for by mistake.
+    const PROVIDER_IS_NOT_A_VENDOR: &[&str] =
+        &["deepseek", "minimax", "z-ai", "moonshotai", "qwen"];
+
+    let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
+
+    for provider in &config.models.provider.order {
+        assert!(
+            !PROVIDER_IS_NOT_A_VENDOR.contains(&provider.as_str()),
+            "`{provider}` is a model vendor, and pinning it routes only to the \
+             subset of models it also hosts. Confirm every id in `[models]` has \
+             an endpoint there before pinning it: \
+             curl -s https://openrouter.ai/api/v1/models/<id>/endpoints"
+        );
+    }
 }
 
 #[test]
@@ -556,6 +595,186 @@ fn a_label_in_both_allow_and_block_lists_is_flagged_as_dead() {
     let problems = validate::validate(&config);
     assert!(
         problems.iter().any(|p| p.contains("blocking wins")),
+        "{problems:#?}"
+    );
+}
+
+// --- pull request triage ---------------------------------------------------
+//
+// One test per branch of `validate_pr_triage`. These guard a path that closes
+// contributors' pull requests, so a regression in any of them has to fail a
+// test rather than reach a repository.
+
+#[test]
+fn a_pull_request_overlap_floor_outside_zero_to_one_is_rejected() {
+    let config = parse(
+        r#"
+version = 1
+[pr_triage]
+enabled = true
+duplicate_path_overlap_min = 1.4
+duplicate_line_overlap_min = -0.2
+"#,
+    );
+    let problems = validate::validate(&config);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("duplicate_path_overlap_min")),
+        "{problems:#?}"
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("duplicate_line_overlap_min")),
+        "{problems:#?}"
+    );
+}
+
+#[test]
+fn a_sweep_that_reads_nothing_is_rejected() {
+    let config = parse(
+        r#"
+version = 1
+[pr_triage]
+enabled = true
+max_pull_requests = 0
+"#,
+    );
+    assert!(
+        validate::validate(&config)
+            .iter()
+            .any(|p| p.contains("would read nothing"))
+    );
+}
+
+#[test]
+fn a_zero_line_floor_for_superseded_is_rejected() {
+    // Zero would let a single shared `}` count as proof a whole pull request
+    // had already landed.
+    let config = parse(
+        r#"
+version = 1
+[pr_triage]
+enabled = true
+min_landed_lines = 0
+"#,
+    );
+    assert!(
+        validate::validate(&config)
+            .iter()
+            .any(|p| p.contains("one-line coincidence"))
+    );
+}
+
+#[test]
+fn pull_request_closing_without_the_sweep_is_rejected() {
+    let config = parse(
+        r#"
+version = 1
+[pr_triage]
+enabled = false
+[pr_triage.close]
+enabled = true
+"#,
+    );
+    assert!(
+        validate::validate(&config)
+            .iter()
+            .any(|p| p.contains("has no effect while `pr_triage.enabled = false`"))
+    );
+}
+
+#[test]
+fn live_pull_request_closing_with_no_age_floor_is_rejected() {
+    let config = parse(
+        r#"
+version = 1
+[pr_triage]
+enabled = true
+[pr_triage.close]
+enabled = true
+dry_run = false
+min_age_days = 0
+"#,
+    );
+    assert!(
+        validate::validate(&config)
+            .iter()
+            .any(|p| p.contains("close pull requests the moment they are opened"))
+    );
+}
+
+#[test]
+fn live_pull_request_closing_with_no_comment_is_rejected() {
+    // A close with no comment is a close with no evidence, and the module's
+    // whole promise to a contributor is that the reasoning is on the pull
+    // request and can be argued with.
+    let config = parse(
+        r#"
+version = 1
+[pr_triage]
+enabled = true
+comment = false
+[pr_triage.close]
+enabled = true
+dry_run = false
+min_age_days = 1
+"#,
+    );
+    assert!(
+        validate::validate(&config)
+            .iter()
+            .any(|p| p.contains("close pull requests with no explanation on them")),
+        "{:#?}",
+        validate::validate(&config)
+    );
+}
+
+#[test]
+fn a_periodic_sweep_with_nothing_to_sweep_is_rejected() {
+    let config = parse(
+        r#"
+version = 1
+[pr_triage]
+enabled = true
+sweep_every_minutes = 60
+sweep_repositories = []
+"#,
+    );
+    assert!(
+        validate::validate(&config)
+            .iter()
+            .any(|p| p.contains("sweeps nothing"))
+    );
+}
+
+#[test]
+fn a_sweep_repository_that_is_not_owner_slash_name_is_rejected() {
+    let config = parse(
+        r#"
+version = 1
+[pr_triage]
+enabled = true
+sweep_every_minutes = 60
+sweep_repositories = ["openhuman"]
+"#,
+    );
+    assert!(
+        validate::validate(&config)
+            .iter()
+            .any(|p| p.contains("which is not `owner/name`"))
+    );
+}
+
+#[test]
+fn the_shipped_defaults_have_no_pull_request_triage_problems() {
+    // The defaults are what every deployment starts from, so a rule that
+    // complains about them is a rule nobody can satisfy.
+    let config = Config::default();
+    let problems = validate::validate(&config);
+    assert!(
+        !problems.iter().any(|p| p.contains("pr_triage")),
         "{problems:#?}"
     );
 }

@@ -7,22 +7,28 @@
 //! # Why not just compare fingerprints
 //!
 //! `Finding::fingerprint` hashes the lane, the path, the **rule** and the
-//! anchored code. That is exactly right for its job — deciding whether this is
-//! the same finding as one already posted — because a rule id is required to be
-//! stable for one class of problem across runs.
+//! anchored code. `rule` is model-authored free text, and two reviewers looking
+//! at the same missing bounds check will write `unchecked-index` and
+//! `missing-bounds-check`. Grouping on the fingerprint would call those two
+//! separate findings and post both, which is the noise the council is supposed
+//! to reduce rather than create.
 //!
-//! It is wrong for this job. `rule` is model-authored free text, and two
-//! reviewers looking at the same missing bounds check will write
-//! `unchecked-index` and `missing-bounds-check`. Grouping on the fingerprint
-//! would call those two separate findings and post both, which is the noise the
-//! council is supposed to reduce rather than create.
+//! So corroboration uses a looser rule — same file, overlapping anchored lines.
 //!
-//! So corroboration uses a looser rule — same file, overlapping anchored lines
-//! — and it is used **only** for grouping. `Finding::identity` is left exactly
-//! as `anchor::stamp` computed it, because that is what the `tinysweeper:fp=`
-//! marker carries onto GitHub and what suppression reads back. Loosening
-//! identity to match this would resurrect comments that were already posted and
-//! answered.
+//! This module used to argue that the strict rule was nonetheless right for
+//! *cross-push* dedupe, because a rule id is stable for one class of problem
+//! across runs. It is not. On `tinyhumansai/backend#1295` one line collected
+//! four comments with the same title and the same suggested patch, filed as
+//! `discarded-error-handling`, `unhandled-error`, `discarded-error` and
+//! `swallowed-error`. One model, one defect, four identities, four comments.
+//! A rule id is as much free text on the second run as it is on the second
+//! reviewer, and the objection above always applied to both.
+//!
+//! [`crate::findings::prior::PriorReview::covers`] is the same looseness
+//! applied across pushes, sharing [`LINE_TOLERANCE`] with this module. It is
+//! deliberately *not* the same function: this one requires the same lane and
+//! groups two live findings, that one ignores the lane and compares a live
+//! finding against a comment already on GitHub.
 
 use crate::findings::types::Finding;
 

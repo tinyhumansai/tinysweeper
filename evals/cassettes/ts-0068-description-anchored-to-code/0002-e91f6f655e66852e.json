@@ -1,0 +1,17 @@
+{
+  "key": "e91f6f655e66852e",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4410,
+    "output_tokens": 72,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00022250844
+  },
+  "value": {
+    "summary": "This change makes reasoning effort configurable per model deployment, replacing the hard-coded disabled reasoning with a `reasoning_options` function that respects a new `reasoning_effort` field. The tests cover the wire from config to gateway, and the change appears safe to merge.",
+    "findings": []
+  }
+}

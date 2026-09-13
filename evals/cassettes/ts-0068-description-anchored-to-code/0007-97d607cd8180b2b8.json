@@ -1,0 +1,17 @@
+{
+  "key": "97d607cd8180b2b8",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4084,
+    "output_tokens": 63,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002057006
+  },
+  "value": {
+    "summary": "The change adds new model price entries and four tests verifying cost calculations and configuration completeness. No security problems are introduced: the new data is static, not derived from untrusted input, and the tests do not execute or communicate outside the harness.",
+    "findings": []
+  }
+}

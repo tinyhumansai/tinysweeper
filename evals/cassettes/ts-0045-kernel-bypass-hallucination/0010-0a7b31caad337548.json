@@ -1,0 +1,17 @@
+{
+  "key": "0a7b31caad337548",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2806,
+    "output_tokens": 60,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00014296436
+  },
+  "value": {
+    "summary": "Adds an `[embeddings]` configuration section for OpenRouter text embeddings. The change is safe: the API key is referenced by environment variable name only, not embedded, and the configuration is static data with no executable logic.",
+    "findings": []
+  }
+}

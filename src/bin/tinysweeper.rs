@@ -92,6 +92,39 @@ enum Command {
         findings: std::path::PathBuf,
     },
 
+    /// Sweep a repository's open pull requests for duplicates and for changes
+    /// that already landed on the base branch.
+    ///
+    /// Makes **no model calls**. A duplicate is two open pull requests whose
+    /// changed paths and added lines overlap past the floors in `[pr_triage]`;
+    /// a superseded pull request is one whose every added block is already on
+    /// the base branch and whose every removed block is already gone. Both are
+    /// facts you can check with `git grep`.
+    ///
+    /// Whether anything is closed is `[pr_triage.close]`'s decision, which is
+    /// off by default and dry-run by default on top of that.
+    PrTriage {
+        /// The repository, as `owner/name`.
+        #[arg(long, env = "GITHUB_REPOSITORY")]
+        repo: String,
+
+        /// One pull request. Omit to sweep every open one, which is the
+        /// ordinary use: a duplicate is a statement about a pair.
+        #[arg(long)]
+        pr: Option<u64>,
+
+        /// Path to the config file. Defaults to discovery from the repo root.
+        #[arg(long)]
+        config: Option<std::path::PathBuf>,
+
+        /// Report what would be written without writing any of it.
+        ///
+        /// Stronger than `pr_triage.close.dry_run`, which stops only the close:
+        /// this writes no label and posts no comment either.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Promote unresolved Sentry issues into tracked GitHub issues.
     ///
     /// Sweeps every project in `sentry.projects`, promoting the ones that
@@ -335,6 +368,12 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Apply { repo, pr, findings } => run_apply(&repo, pr, &findings).await,
         Command::Triage { repo, pr, findings } => run_triage(&repo, pr, &findings).await,
         Command::Automerge { repo, pr, dry_run } => run_automerge(&repo, pr, dry_run).await,
+        Command::PrTriage {
+            repo,
+            pr,
+            config,
+            dry_run,
+        } => run_pr_triage(&repo, pr, config, dry_run).await,
         Command::Sentry { config, dry_run } => run_sentry(config, dry_run).await,
         Command::Eval(command) => run_eval(command).await,
         Command::LocalReview {
@@ -883,6 +922,128 @@ async fn run_automerge(repo: &str, pr: u64, dry_run: bool) -> Result<()> {
 async fn run_automerge(_repo: &str, _pr: u64, _dry_run: bool) -> Result<()> {
     Err(tinysweeper::Error::FeatureDisabled(
         "merging on GitHub",
+        "github",
+    ))
+}
+
+/// Sweep a repository's open pull requests.
+///
+/// Needs only the `github` feature: there is no model on this path at all,
+/// which is what lets a maintainer run it over a hundred pull requests without
+/// thinking about cost.
+#[cfg(feature = "github")]
+async fn run_pr_triage(
+    repo: &str,
+    pr: Option<u64>,
+    config_path: Option<std::path::PathBuf>,
+    dry_run: bool,
+) -> Result<()> {
+    use tinysweeper::forge::RepoId;
+    use tinysweeper::forge::github::{GitHubRead, GitHubWrite};
+    use tinysweeper::forge::mock::MockForge;
+
+    let repo_id = RepoId::parse(repo)
+        .ok_or_else(|| tinysweeper::Error::config(format!("`{repo}` is not owner/name")))?;
+
+    let loaded =
+        tinysweeper::config::load_validated(std::path::Path::new("."), config_path.as_deref())?;
+    let read = GitHubRead::from_env()?;
+
+    let outcome = tinysweeper::pr_triage::sweep(
+        &read,
+        &loaded.config,
+        &repo_id,
+        pr,
+        // Maintainer protection is `pr_triage.close.protected_authors` until
+        // the forge port can report a repository's collaborators.
+        &[],
+    )
+    .await?;
+
+    if let Some(reason) = outcome.skipped {
+        println!("nothing swept: {reason}");
+        return Ok(());
+    }
+
+    // A dry run applies the same plans to the recording mock rather than
+    // taking a different code path — so what it prints is what a real run would
+    // have written, not a separate rendering that could disagree with it.
+    let reports = if dry_run {
+        // The plans are rewritten to dry runs, not merely pointed at a mock.
+        // Without this the report says `Closed` for a run that wrote nothing,
+        // and the summary line underneath says the opposite.
+        let plans: Vec<_> = outcome
+            .plans
+            .iter()
+            .cloned()
+            .map(|mut plan| {
+                if let Some(close) = plan.close.as_mut() {
+                    close.dry_run = true;
+                }
+                plan
+            })
+            .collect();
+        tinysweeper::pr_triage::apply_all(
+            &read,
+            &MockForge::new(),
+            &loaded.config,
+            &repo_id,
+            &plans,
+            &[],
+        )
+        .await
+    } else {
+        let write = GitHubWrite::from_env()?;
+        tinysweeper::pr_triage::apply_all(
+            &read,
+            &write,
+            &loaded.config,
+            &repo_id,
+            &outcome.plans,
+            &[],
+        )
+        .await
+    };
+
+    for (number, why) in &outcome.unread {
+        println!("#{number:<6} skipped              {why}");
+    }
+
+    for report in &reports {
+        println!(
+            "#{:<6} {:<20} {:<12} {}",
+            report.number,
+            report.verdict,
+            format!("{:?}", report.outcome),
+            report.detail
+        );
+        // On their own lines, indented: a flag is a separate fact from the
+        // verdict, and folding it into the row would make one column mean two
+        // things.
+        for (label, why) in &report.flags {
+            println!("        {label:<20} {why}");
+        }
+        if let Some(refusal) = report.close_refusal {
+            println!("        {:<20} {refusal}", "not closed:");
+        }
+    }
+    println!(
+        "\n{} pull request(s) considered{}",
+        reports.len(),
+        if dry_run { "; nothing was written" } else { "" }
+    );
+    Ok(())
+}
+
+#[cfg(not(feature = "github"))]
+async fn run_pr_triage(
+    _repo: &str,
+    _pr: Option<u64>,
+    _config: Option<std::path::PathBuf>,
+    _dry_run: bool,
+) -> Result<()> {
+    Err(tinysweeper::Error::FeatureDisabled(
+        "triaging pull requests on GitHub",
         "github",
     ))
 }

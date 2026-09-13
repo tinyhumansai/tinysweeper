@@ -1,0 +1,17 @@
+{
+  "key": "41900b70dd0627fd",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 6921,
+    "output_tokens": 121,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00034998418
+  },
+  "value": {
+    "summary": "The change updates the default model configuration to use GLM 5.2 for both scan and deep tiers, adds a reasoning_effort config field and wires it through the OpenRouter gateway, and adds test coverage for the new reasoning_options function and model pricing. All behavioural changes are tested: the new reasoning_options function has unit tests, the config-to-gateway wire is tested, the default model set is checked for price entries, and the new pricing logic is pinned against real measured figures. No test gaps were found.",
+    "findings": []
+  }
+}

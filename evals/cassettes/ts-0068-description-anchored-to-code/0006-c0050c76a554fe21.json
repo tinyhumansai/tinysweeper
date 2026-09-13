@@ -1,0 +1,17 @@
+{
+  "key": "c0050c76a554fe21",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 2704,
+    "output_tokens": 1079,
+    "cached_tokens": 2332,
+    "embed_tokens": 0,
+    "cost_usd": 0.0014099328
+  },
+  "value": {
+    "summary": "The diff adds a `reasoning_effort: String` field to the config struct with doc comments on both `max_tokens` and the new field. From what is visible in this file alone the change looks sound; potential concerns about default values or serde deserialization of the new field depend on code not shown here and cannot be confirmed.",
+    "findings": []
+  }
+}
