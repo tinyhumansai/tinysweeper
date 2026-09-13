@@ -640,6 +640,12 @@ impl Memory for CortexMemory {
         for path in paths {
             let mut ids: Vec<String> = Vec::new();
             let mut cursor: Option<String> = None;
+            // Whether the loop below ran out of pages before the engine
+            // said there were no more. Left `true` on a scope that turns out
+            // to have exactly `MAX_PAGES` pages and no more, which trades a
+            // false-positive refusal on that one boundary size for never
+            // reporting a truncated listing as if it were the whole scope.
+            let mut truncated = true;
             for _ in 0..MAX_PAGES {
                 let route = match &cursor {
                     Some(c) => format!(
@@ -668,8 +674,21 @@ impl Memory for CortexMemory {
                     .map(str::to_string);
                 match (page.get("has_more").and_then(Value::as_bool), next) {
                     (Some(true), Some(next)) => cursor = Some(next),
-                    _ => break,
+                    _ => {
+                        truncated = false;
+                        break;
+                    }
                 }
+            }
+            if truncated {
+                // Deleting a partial listing and reporting `Ok(gone)` would
+                // tell a caller — including `tinysweeper memory forget` — that
+                // a scope with more than `MAX_PAGES * PAGE_SIZE` events was
+                // wholly forgotten when most of it was left behind.
+                return Err(Error::Model(format!(
+                    "cortex: forget: {path} has more than {} events; refusing a partial delete",
+                    MAX_PAGES * PAGE_SIZE
+                )));
             }
             if ids.is_empty() {
                 continue;
