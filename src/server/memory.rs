@@ -48,6 +48,14 @@ pub struct MemoryBackend {
     pub memory: Arc<CortexMemory>,
     /// The base revision each repository was last ingested at, this process.
     fresh: Mutex<HashMap<String, String>>,
+    /// One async lock per repository, so that concurrent deliveries for the
+    /// same base tip serialize on the checkout and ingest instead of each
+    /// racing the freshness check and cloning independently.
+    ///
+    /// A plain `Mutex` will not do: the section it guards awaits a clone and
+    /// an ingest, and holding a sync lock across an `.await` blocks the
+    /// runtime thread rather than yielding it.
+    ingesting: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
 }
 
 impl std::fmt::Debug for MemoryBackend {
