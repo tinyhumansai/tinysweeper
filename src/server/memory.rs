@@ -101,11 +101,25 @@ impl MemoryBackend {
             .is_some_and(|known| known == revision)
     }
 
+    /// The per-repository lock that serializes `ensure_ingested`, creating it
+    /// on first use.
+    fn ingest_lock(&self, repo_id: &str) -> Arc<AsyncMutex<()>> {
+        self.ingesting
+            .lock()
+            .expect("ingest lock table")
+            .entry(repo_id.to_string())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone()
+    }
+
     /// Feed the engine `repo`'s tree at `revision`, fetching it if it must.
     ///
     /// `Ok(None)` when this process already did. The freshness check comes
     /// before the fetch so a busy repository's deliveries cost neither a
-    /// clone nor a walk.
+    /// clone nor a walk. Concurrent calls for the same repository serialize
+    /// on [`Self::ingest_lock`]: without it, a burst of deliveries sharing a
+    /// base tip could all observe a miss before any of them recorded the
+    /// revision, and each would clone and ingest it independently.
     pub async fn ensure_ingested(
         &self,
         config: &Config,
@@ -118,6 +132,13 @@ impl MemoryBackend {
             return Ok(None);
         }
         if !config.memory.ingest_code && !config.memory.ingest_conventions {
+            return Ok(None);
+        }
+        let lock = self.ingest_lock(&repo_id);
+        let _guard = lock.lock().await;
+        // Re-check now that this call holds the repository's lock: another
+        // task may have ingested this exact revision while this one waited.
+        if self.is_fresh(&repo_id, revision) {
             return Ok(None);
         }
         // Read-only, like the index's checkout: the same boundary the review
