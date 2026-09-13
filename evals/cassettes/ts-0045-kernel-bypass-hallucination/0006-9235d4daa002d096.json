@@ -1,0 +1,17 @@
+{
+  "key": "9235d4daa002d096",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3186,
+    "output_tokens": 932,
+    "cached_tokens": 2276,
+    "embed_tokens": 0,
+    "cost_usd": 0.002047723392
+  },
+  "value": {
+    "findings": [],
+    "summary": "The overlay adds a kernel-bypass compose profile for MongoDB on newer Linux kernels, overriding the mongod entrypoint with a shim script and setting glibc.pTHREAD.rseq=0 on both mongod and mongo-secrets. Nothing in this file is visibly incorrect; correctness of the referenced entrypoint script and matching of service names against the base compose file cannot be verified from this diff alone."
+  }
+}

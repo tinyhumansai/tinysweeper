@@ -1,0 +1,17 @@
+{
+  "key": "d879bbf10e715b6d",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3240,
+    "output_tokens": 560,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.001730952
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a new module declaration; no security issues are introduced."
+  }
+}

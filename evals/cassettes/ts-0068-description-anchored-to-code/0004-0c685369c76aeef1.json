@@ -1,0 +1,28 @@
+{
+  "key": "0c685369c76aeef1",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4996,
+    "output_tokens": 3825,
+    "cached_tokens": 1280,
+    "embed_tokens": 0,
+    "cost_usd": 0.00494885
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The comment states the test \"asserts the error\", but the test does not call any error-producing function; it builds the GatewayModel directly and then asserts the output of `reasoning_options`. This could mislead future readers into thinking an error path is covered. Update the comment to accurately describe the test's approach.",
+        "confidence": 1.0,
+        "existing_code": "        // SAFETY-adjacent: no env mutation. The key is read from a variable the\n        // config names, so the test names one it sets nowhere and asserts the\n        // error, then builds the gateway directly for the positive case.",
+        "path": "src/harness/openrouter.rs",
+        "rule": "comment-mismatch",
+        "severity": "low",
+        "suggestion": null,
+        "title": "Fix the comment that claims an error is asserted"
+      }
+    ],
+    "summary": "The change adds a configurable reasoning_effort field to GatewayModel and wires it into OpenRouter provider options with tests. The implementation is correct; only a minor comment in a test is misleading."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "8606999583aa2114",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_description",
+  "usage": {
+    "input_tokens": 8728,
+    "output_tokens": 77,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00043770496
+  },
+  "value": {
+    "findings": [],
+    "summary": "This PR moves default models to GLM 5.2, makes reasoning configurable, updates pricing tables, and adds tests. The changes look sound: reasoning is now gated on a setting and well-documented, prices are measured and pinned, and all existing tests pass. It appears safe to merge."
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "key": "2e64e1ff06da60f9",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3808,
+    "output_tokens": 2771,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.003901602
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The `shorten` doc says the result is at most `limit` characters, and `shorten` is used for a GitHub check-run title with a hard cap. When the first `limit` characters contain no space, the `None` branch returns `head` (exactly `limit` characters) plus `…`, so the result is `limit + 1` characters and can exceed the cap. Reserve room for the ellipsis, e.g. take only `limit - 1` characters when adding it, or document that the ellipsis may make the result `limit + 1`.",
+        "confidence": 0.95,
+        "existing_code": "        Some(space) => format!(\"{ }…\", &head[..space]),\n        None => format!(\"{head}…\"),",
+        "path": "src/findings/summarise.rs",
+        "rule": "length-limit",
+        "severity": "medium",
+        "suggestion": null,
+        "title": "Cap `shorten` output at `limit` when no space exists"
+      }
+    ],
+    "summary": "The change adds string shortening and first-sentence helpers with tests. One off-by-one in the no-space branch of `shorten` can make the result exceed the promised limit; otherwise the code looks sound."
+  }
+}

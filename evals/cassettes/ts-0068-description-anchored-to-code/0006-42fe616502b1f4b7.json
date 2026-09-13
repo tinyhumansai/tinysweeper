@@ -1,0 +1,17 @@
+{
+  "key": "42fe616502b1f4b7",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4917,
+    "output_tokens": 4557,
+    "cached_tokens": 3893,
+    "embed_tokens": 0,
+    "cost_usd": 0.007720826256
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds four model price entries to MODEL_PRICES and four tests covering default-model pricing, the new deep tier's cost, cache-rate charging, and argument ordering. The price values are data I cannot verify against an external source, but the test arithmetic checks out: the pinned cost for z-ai/glm-5.2 on 82,914 input / 842 output tokens is ~$0.00599 (within the asserted [0.005, 0.007] band), and the argument-order and cache-rate tests produce the expected inequality directions given the stated parameter order (model, input, cached, output). No bugs introduced."
+  }
+}

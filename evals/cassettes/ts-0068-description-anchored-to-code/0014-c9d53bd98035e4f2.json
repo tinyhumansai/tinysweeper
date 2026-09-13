@@ -1,0 +1,38 @@
+{
+  "key": "c9d53bd98035e4f2",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_description",
+  "usage": {
+    "input_tokens": 8573,
+    "output_tokens": 6204,
+    "cached_tokens": 512,
+    "embed_tokens": 0,
+    "cost_usd": 0.008905871
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The `reasoning_effort` config value is passed through unchanged unless it is `off` or empty. The PR body itself notes that `\"max\"` was tried and is not recommended because it is undocumented and produced malformed JSON, yet the code will happily send `{ \"reasoning\": { \"effort\": \"max\" } }` to OpenRouter. Any typo or unsupported value (e.g. \"max\", \"high \") can cause a runtime API error that fails the request instead of failing fast at config load. Consider validating the value against the documented set (`off`, `low`, `medium`, `high`) when deserializing `Models`, returning a clear error for anything else.",
+        "confidence": 0.6,
+        "existing_code": "fn reasoning_options(effort: &str) -> serde_json::Value {\n    match effort.trim() {\n        \"off\" | \"\" => json!({ \"reasoning\": { \"enabled\": false } }),\n        effort => json!({ \"reasoning\": { \"effort\": effort } }),\n    }\n}",
+        "path": "src/harness/openrouter.rs",
+        "rule": "unvalidated-config-value",
+        "severity": "medium",
+        "suggestion": "Replace the `String` field in `Models` with an enum (or validate in `try_into`) that only accepts `off`, `low`, `medium`, `high`; reject other values with a parse error.",
+        "title": "Validate reasoning_effort against allowed values"
+      },
+      {
+        "body": "The test `the_configured_effort_reaches_the_gateway` is described in its comment as asserting \"the wire between config and gateway\", but it never calls `GatewayModel::harness()` or any method that uses `self.reasoning_effort`. It only calls the free function `reasoning_options` with the field value. If `harness()` accidentally ignored the field or hard-coded an effort, this test would still pass. The behaviour it claims to cover is therefore untested, which could allow the known `max_tokens`-style regression where a config value is read but not forwarded.",
+        "confidence": 0.8,
+        "existing_code": "        let gateway = GatewayModel {\n            api_key: \"unused\".into(),\n            base_url: models.base_url.clone(),\n            fallbacks: models.fallback.clone(),\n            reasoning_effort: models.reasoning_effort.clone(),\n        };\n\n        assert_eq!(\n            reasoning_options(&gateway.reasoning_effort),\n            json!({ \"reasoning\": { \"enabled\": false } })\n        );",
+        "path": "src/harness/openrouter.rs",
+        "rule": "test-does-not-cover-claimed-behaviour",
+        "severity": "low",
+        "suggestion": "Refactor the test to actually invoke the code path that builds provider options from a `GatewayModel` (e.g. by inspecting the options passed to `with_default_provider_options` through a mock harness), or rename the test and remove the misleading comment.",
+        "title": "Test claims to verify gateway wiring but only tests reasoning_options"
+      }
+    ],
+    "summary": "The change swaps scan and deep models to GLM 5.2, adds configurable reasoning effort, and updates pricing with tests that pin the new costs. Overall the implementation is sound, but the reasoning effort value is not validated against the documented set, and one new test claims to verify config-to-gateway forwarding when it only exercises the helper function directly."
+  }
+}

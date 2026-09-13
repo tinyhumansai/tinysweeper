@@ -1,0 +1,28 @@
+{
+  "key": "23065cf20eab3716",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4764,
+    "output_tokens": 847,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00031825024
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The comment `// Not selected. Evaluated as a deep tier and rejected: cheaper per token than kimi-k3 but it reasons 3-6x more, which spends the difference — $0.00598 a call against $0.00556.` appears to be a note to self about a rejected model evaluation. This is acceptable content for a code comment, but the repository rule says \"Comments explain the *decision*, not the code;\" — this comment does explain the decision of why the row is present despite not being selected, so it is compliant. However, the comment reads like a commit message or a design note that would be better placed in the pull request description or in a commit message. The repository rule about comments is not violated, but the comment contains specific cost numbers that may become stale if OpenRouter pricing changes. The test `the_new_deep_tier_costs_what_the_table_says` already anchors a specific cost figure, so the concern is limited to the model being rejected for production use. The comment is not a security finding, just an observation. Decided to not raise a finding for this comment because it does not introduce a security problem, and the repository rule is not violated.",
+        "confidence": 0.9,
+        "existing_code": "    /// tinyagents reports tokens but not cost, and the budget ceiling is\n    /// denominated in dollars, so the conversion happens here.\n    /// Entries exist for models this deployment does not currently select. That is\n    /// deliberate: `completion_cost` fails closed on an unpriced model, so a\n    /// one-line change to `models.deep` would otherwise take the budget ceiling\n    /// with it. Every model here was measured before being priced.\n    const MODEL_PRICES: &[(&str, Price)] = &[\n    (\n        // Not selected. Evaluated as a deep tier and rejected: cheaper per\n        // token than kimi-k3 but it reasons 3-6x more, which spends the\n        // difference — $0.00598 a call against $0.00556.\n        \"qwen/qwen3.8-max\",\n        Price {\n            input: 2.00,\n            output: 6.00,\n            cached: 0.25,\n        },\n    ),\n    (\n        \"z-ai/glm-5.2\",\n        Price {\n            input: 0.07,\n            output: 0.22,\n            cached: 0.013,\n        },\n    ),\n    (\n        \"deepseek/deepseek-v4-pro\",\n        Price {\n            input: 0.435,\n            output: 0.87,\n            // Cache reads are a *hundredth* of the input price here, against a\n            // tenth on kimi-k3. On a re-review that is most of the bill.\n            cached: 0.003625,\n        },\n    ),\n    (\n        \"deepseek/deepseek-v4-flash\",\n        Price {\n            input: 0.14,\n            output: 0.28,\n            cached: 0.028,\n        },\n    ),",
+        "path": "src/harness/pricing.rs",
+        "rule": "suspicious-comment",
+        "severity": "low",
+        "suggestion": "",
+        "title": "Unresolved comment about a commit message in a code file"
+      }
+    ],
+    "summary": "This change adds model price entries and tests for correct cost computation. The addition is safe: all inputs are constants, the module is feature-gated, and the tests verify the behaviour introduced. No untrusted data reaches a dangerous sink; no credentials, network calls, or dependency changes are involved. Merge as-is."
+  }
+}

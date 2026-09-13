@@ -1,0 +1,48 @@
+{
+  "key": "3b5d0ffdb3ff5a04",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3737,
+    "output_tokens": 6797,
+    "cached_tokens": 1280,
+    "embed_tokens": 0,
+    "cost_usd": 0.006986825
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "`\"café \".repeat(40)` creates a temporary `String`, and `.as_str()` borrows it. The temporary is dropped at the end of the statement, so the `&str` element in the array dangles, causing a compile error (E0716) in the test module. Store the repeated `String` in a variable before the loop (or use a `&'static str` if possible) and pass its `as_str()`.",
+        "confidence": 1.0,
+        "existing_code": "            \"café \".repeat(40).as_str(),",
+        "path": "src/findings/summarise.rs",
+        "rule": "compile-error",
+        "severity": "critical",
+        "suggestion": "            let cafe = \"café \".repeat(40);\n            cafe.as_str(),",
+        "title": "Store the repeated string in a variable to avoid a temporary borrow"
+      },
+      {
+        "body": "`shorten`'s doc comment says it returns text of at most `limit` characters, but when no space is found in the first `limit` characters, this arm returns `limit + 1` characters (`head` plus the ellipsis). A caller relying on the limit (e.g., GitHub's title ceiling) could still exceed it. Truncate to `limit - 1` characters before appending the ellipsis, and handle `limit == 0` early.",
+        "confidence": 0.9,
+        "existing_code": "        None => format!(\"{head}…\"),",
+        "path": "src/findings/summarise.rs",
+        "rule": "limit-exceeded",
+        "severity": "high",
+        "suggestion": "        None => {\n            if limit == 0 {\n                return String::new();\n            }\n            let cut = limit - 1;\n            let prefix: String = text.chars().take(cut).collect();\n            format!(\"{prefix}…\")\n        }",
+        "title": "Keep the shortened string within the stated limit"
+      },
+      {
+        "body": "The repository rule requires every file to open with a module doc that describes its role and feature gating. This doc explains the role but does not say whether the module is gated behind a feature; add that information (or explicitly state that there is no feature gating).",
+        "confidence": 0.9,
+        "existing_code": "//! Shortening model-authored text for the places that have a length limit.",
+        "path": "src/findings/summarise.rs",
+        "rule": "missing-doc",
+        "severity": "low",
+        "suggestion": null,
+        "title": "Mention feature gating in the module doc"
+      }
+    ],
+    "summary": "The module adds truncation helpers with tests, but the test uses a reference to a temporary that will not compile, and `shorten` can exceed its stated limit when no space is found; the module doc also omits feature gating. Not safe to merge until these are fixed."
+  }
+}

@@ -111,3 +111,24 @@ See [`harness::prompt`] for the layering that keeps a re-review cheap: the
 prefix is byte-identical across runs so the provider's cache serves it, and only
 the suffix carries new evidence. Anything that reformats the prefix costs a cache
 miss on every call.
+
+## Severity is decided by a rubric, not by taste
+
+`SHARED_RULES` carries a four-level rubric and the schema's `severity` field
+points at it. Both are load-bearing. Severity is not derived from anything the
+model can check, so an enum with no rubric behind it means each run re-guesses
+from scratch: one unchanged finding on `tinysweeper#89` was reported medium,
+then high, then critical, then high across four pushes, and on `tinymemory#13`
+the wobble flipped the verdict from changes-requested to approved with nothing
+between the two but a re-review.
+
+Two rules do the work. Severity is the **consequence** if the change ships, not
+the topic and not how sure the model is — confidence already carries that. And a
+finding raised before keeps the level it was given: prompt layer 5 lists earlier
+findings as `severity — title` precisely so that instruction has something to
+refer to.
+
+Asking is necessary and not sufficient, so `app::review` pins the level of any
+finding whose title it has seen before, ahead of the check-run conclusion and the
+request-changes verdict. The prompt makes the model's own answer stable; the pin
+makes the *verdict* stable whatever the model answers.

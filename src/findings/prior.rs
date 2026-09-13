@@ -23,10 +23,12 @@
 //!    `crate::app::review::lane_proposal`), so even a marker that somehow got
 //!    through hides a repeat comment and cannot unblock a merge.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
+use crate::config::types::{LaneId, Severity};
 use crate::council::agree::LINE_TOLERANCE;
 use crate::error::Result;
+use crate::findings::types::Finding;
 use crate::forge::types::RepoId;
 use crate::ports::forge::ForgeRead;
 
@@ -45,19 +47,44 @@ const STATE_KEY: &str = "state v=1 sha=";
 /// suppress findings.
 const BOT_LOGIN_ENV: &str = "TINYSWEEPER_BOT_LOGIN";
 
-/// Where an earlier comment of ours sits in the file.
+/// Where an earlier finding was anchored, and which lane raised it.
 ///
-/// The fingerprint says *whether* two findings are the same; this says *where*
-/// the last one was, which is what lets the answer survive the model rewording
-/// its own rule id. See [`PriorReview::covers`].
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct PriorAnchor {
-    /// The file the comment is on.
+/// Kept alongside the fingerprints because a fingerprint only recognises a
+/// finding the model described *identically* twice. It hashes the model-authored
+/// `rule` and the snippet the model chose to quote, and neither is stable: one
+/// concern about `src/eval/runner.rs` was posted three times across two pushes —
+/// at lines 146, then 145 and 171 — under three different fingerprints, because
+/// the second run quoted a line either side of the first run's snippet. Dedupe
+/// worked exactly as written and never fired. The anchor is the part that did
+/// not move.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostedAnchor {
+    /// The lane that raised it, when the comment's badge names one.
+    ///
+    /// `None` disables lane matching for this anchor rather than matching every
+    /// lane: a comment we cannot attribute is not evidence that some particular
+    /// lane already spoke.
+    pub lane: Option<LaneId>,
+    /// The file it anchors to.
     pub path: String,
-    /// First line it covers, in the revision it was written against.
-    pub start: u64,
-    /// Last line it covers, inclusive.
-    pub end: u64,
+    /// The head-revision line, when GitHub still places the comment on one.
+    pub line: Option<u64>,
+    /// The first line, when the comment spans a range.
+    pub start_line: Option<u64>,
+    /// The title it was posted under, when the body has the renderer's shape.
+    ///
+    /// The content guard. Position alone says two findings are in the same
+    /// place, which is not the same as saying they are the same finding — two
+    /// defects three lines apart in one function would be one repeat and one
+    /// deletion. `None` disables the anchor for this comment entirely: a body we
+    /// cannot read a title out of is not evidence about anything.
+    ///
+    /// The title rather than the `rule`, on the evidence. The four repeats of
+    /// one concern on `tinysweeper#86` carried the rules `untrusted-repo-rules`,
+    /// `Pin third-party actions to a commit SHA`, and twice nothing at all,
+    /// while the title was identical every time. Keying on the rule would leave
+    /// the fallback catching nothing in the exact case it exists for.
+    pub title: Option<String>,
 }
 
 /// Everything an earlier cycle left behind on the pull request.
@@ -65,16 +92,22 @@ pub struct PriorAnchor {
 pub struct PriorReview {
     /// Fingerprints of findings already posted as inline comments.
     pub posted: BTreeSet<String>,
-    /// Where those comments sit, for the findings GitHub still places.
-    ///
-    /// Only comments carrying one of our fingerprint markers contribute, so a
-    /// reply in a thread does not widen what a single finding suppresses.
-    pub anchors: Vec<PriorAnchor>,
     /// Titles of those findings, in the order they were found.
     ///
     /// This is prompt layer 4: what the model said last time, so it can verify
     /// each one against the current code instead of starting over.
     pub titles: Vec<String>,
+    /// The severity each of those titles was reported at.
+    ///
+    /// Read back off the rendered priority badge, because that is the level the
+    /// author is looking at. It goes back into the prompt beside the title so a
+    /// re-review can be asked to keep the level it already gave — without it the
+    /// model re-decides severity from nothing every cycle, and one unchanged
+    /// concern on `tinysweeper#89` was reported medium, then high, then
+    /// critical, then high again across four pushes.
+    pub severities: BTreeMap<String, Severity>,
+    /// Where each already-posted finding sits.
+    pub anchors: Vec<PostedAnchor>,
     /// The head SHA of the last review, when a marker recorded one.
     pub last_sha: Option<String>,
 }
@@ -85,34 +118,56 @@ impl PriorReview {
         self.posted.contains(identity)
     }
 
-    /// Whether an earlier comment of ours already sits on `range` in `path`.
+    /// The severity this finding carried when it was posted, if it was.
     ///
-    /// The fingerprint is the strict answer and this is the loose one, and the
-    /// loose one is the one that holds across pushes. `Finding::fingerprint`
-    /// hashes the model-authored `rule`, and a model asked the same question
-    /// twice writes `discarded-error`, then `swallowed-error`, then
-    /// `unhandled-error` — three identities for one defect, all of them posted.
-    /// `council::agree::corroborates` already refused to trust `rule` for
-    /// exactly this reason; cross-push dedupe now refuses for the same one.
+    /// Keyed on the title because that is what the model is shown and what it
+    /// echoes back; the fingerprint is not something it can quote.
+    pub fn severity_of(&self, title: &str) -> Option<Severity> {
+        self.severities.get(title).copied()
+    }
+
+    /// Whether an earlier comment already sits where this finding anchors.
     ///
-    /// Deliberately blind to the lane, unlike `corroborates`: two lanes
-    /// reporting one defect on one line is a duplicate to the author reading
-    /// the thread, whatever it is to the pipeline that produced it.
+    /// Same lane, same file, same title, anchors within [`LINE_TOLERANCE`] —
+    /// the positional half of the rule
+    /// [`corroborates`](crate::council::agree::corroborates) uses for one defect
+    /// seen by two reviewers, applied across pushes instead of across agents,
+    /// with a content guard on top.
     ///
-    /// Over-suppression is bounded by design. Dedupe runs *after* the check-run
-    /// conclusion in `app::review::lane_proposal`, so a finding hidden here
-    /// still fails its lane, still blocks the gate, and still appears in the
-    /// summary. The cost of a false positive is a comment the author has to
-    /// find in the summary; the cost of a false negative is the fourth copy of
-    /// a comment they answered three pushes ago.
-    pub fn covers(&self, path: &str, range: Option<(u64, u64)>) -> bool {
-        let Some((start, end)) = range else {
+    /// It is deliberately the *second* thing dedupe asks. A fingerprint match is
+    /// conclusive and this is not, so it only ever catches what the fingerprint
+    /// missed.
+    ///
+    /// Every clause here is a way of refusing to suppress on thin evidence,
+    /// which is the same principle `council::agree` applies to two unplaceable
+    /// findings on one file:
+    ///
+    /// - **The title must match.** Position says two findings are in the same
+    ///   place; it does not say they are the same finding. Two defects three
+    ///   lines apart in one function would otherwise be one repeat and one
+    ///   silent deletion — and a deleted finding can flip a verdict.
+    /// - **Both must be placed.** An unplaceable finding never matches, because
+    ///   `.github/workflows/eval.yml` readily produces two different unplaceable
+    ///   problems and there is no positional evidence to tell them apart.
+    /// - **The lane must match**, and a comment whose lane or title we cannot
+    ///   read matches nothing rather than everything.
+    pub fn covers_anchor(&self, finding: &Finding) -> bool {
+        let Some((start, end)) = finding.range() else {
             return false;
         };
         self.anchors.iter().any(|anchor| {
-            anchor.path == path
-                && start <= anchor.end.saturating_add(LINE_TOLERANCE)
-                && end >= anchor.start.saturating_sub(LINE_TOLERANCE)
+            if anchor.path != finding.path || anchor.lane != Some(finding.lane) {
+                return false;
+            }
+            if anchor.title.as_deref() != Some(finding.title.as_str()) {
+                return false;
+            }
+            let Some(anchor_end) = anchor.line else {
+                return false;
+            };
+            let anchor_start = anchor.start_line.unwrap_or(anchor_end);
+            start <= anchor_end.saturating_add(LINE_TOLERANCE)
+                && end >= anchor_start.saturating_sub(LINE_TOLERANCE)
         })
     }
 }
@@ -163,26 +218,30 @@ pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<Pr
             continue;
         }
         if let Some(fingerprint) = fingerprint_in(&comment.body) {
+            // Recorded for every one of our comments, including the repeats: a
+            // fingerprint we have seen before still tells us that this line is
+            // spoken for, which is the whole reason the anchor is kept.
+            prior.anchors.push(PostedAnchor {
+                lane: lane_in(&comment.body),
+                path: comment.path.clone(),
+                line: comment.line,
+                start_line: comment.start_line,
+                title: title_in(&comment.body),
+            });
+
             // A repeated fingerprint is normal — the same finding across two
             // reviews — so the title is only recorded the first time.
             if prior.posted.insert(fingerprint)
                 && let Some(title) = title_in(&comment.body)
             {
+                if let Some(severity) = severity_in(&comment.body) {
+                    // First writer wins. Two comments for one title means the
+                    // level already drifted; the earliest is the one the author
+                    // has had longest, and re-pinning to it is what stops the
+                    // drift rather than following it.
+                    prior.severities.entry(title.clone()).or_insert(severity);
+                }
                 prior.titles.push(title);
-            }
-            // Recorded per comment rather than per fingerprint: the same
-            // finding re-posted at a second location has already annoyed the
-            // author in both places, and both should stay quiet.
-            //
-            // A comment GitHub no longer attaches to a line — outdated, or
-            // rebased away — contributes no anchor. Its fingerprint still
-            // suppresses; it simply cannot say where it was.
-            if let Some(line) = comment.line {
-                prior.anchors.push(PriorAnchor {
-                    path: comment.path.clone(),
-                    start: comment.start_line.unwrap_or(line).min(line),
-                    end: line,
-                });
             }
         }
     }
@@ -242,13 +301,45 @@ fn is_sha(value: &str) -> bool {
     (7..=40).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// The finding title out of a comment tinysweeper wrote.
+/// The severity a comment tinysweeper wrote was posted at.
 ///
-/// The apply path renders `{badge} **{title}**`, so the title is the first
-/// bold run. A body that does not match that shape simply has no title, which
-/// costs a prompt layer-4 line and nothing else.
+/// Read off the priority badge, whose alt text `apply` renders as
+/// `![priority high](…)`. The badge rather than the colour or the URL: the alt
+/// text is the one part a reader and a parser agree on, and it is the same
+/// string [`Severity::parse`] round-trips.
+pub fn severity_in(body: &str) -> Option<Severity> {
+    const OPENER: &str = "![priority ";
+    let start = body.find(OPENER)? + OPENER.len();
+    let rest = &body[start..];
+    let end = rest.find(']')?;
+    Severity::parse(&rest[..end])
+}
+
+/// The lane that raised a comment tinysweeper wrote.
+///
+/// Taken from the lane/confidence badge, which `render` builds as
+/// `![tests likely](https://img.shields.io/badge/tests-likely-…)`. Scanning the
+/// badge URLs rather than the alt text keeps this from matching a lane name that
+/// happens to appear in the model's own prose: the priority badge is skipped
+/// because no severity is also a lane id, and the first badge whose first
+/// segment parses as a lane is the lane badge.
+fn lane_in(body: &str) -> Option<LaneId> {
+    const BADGE: &str = "img.shields.io/badge/";
+    body.match_indices(BADGE)
+        .filter_map(|(at, _)| {
+            let rest = &body[at + BADGE.len()..];
+            let end = rest.find('-')?;
+            LaneId::parse(&rest[..end])
+        })
+        .next()
+}
+
 /// The finding title rendered in a comment body, when it has the shape that
 /// [`crate::app::apply`] writes.
+///
+/// The apply path renders `{badge} **{title}**`, so the title is the first bold
+/// run. A body that does not match that shape simply has no title, which costs a
+/// prompt layer-5 line and nothing else.
 ///
 /// Thread resolution uses the same title that the review agent receives as
 /// prior context. A body that does not match this renderer-owned shape has no
@@ -264,81 +355,6 @@ pub fn title_in(body: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn anchored(path: &str, start: u64, end: u64) -> PriorReview {
-        PriorReview {
-            anchors: vec![PriorAnchor {
-                path: path.into(),
-                start,
-                end,
-            }],
-            ..PriorReview::default()
-        }
-    }
-
-    #[test]
-    fn a_comment_already_on_the_line_covers_it() {
-        let prior = anchored("src/main.rs", 10, 10);
-        assert!(prior.covers("src/main.rs", Some((10, 10))));
-    }
-
-    #[test]
-    fn a_few_lines_of_drift_is_the_same_place() {
-        // A model anchors to the guard, the call, or the line under it
-        // depending on what it quoted. `council::agree` allows the same slack
-        // between two reviewers for the same reason.
-        let prior = anchored("src/main.rs", 10, 10);
-        assert!(prior.covers("src/main.rs", Some((13, 13))));
-        assert!(prior.covers("src/main.rs", Some((7, 7))));
-    }
-
-    #[test]
-    fn a_finding_further_down_the_file_is_its_own_finding() {
-        // The bound on how much the loose rule may swallow. Without this,
-        // one comment would silence a whole file.
-        let prior = anchored("src/main.rs", 10, 10);
-        assert!(!prior.covers("src/main.rs", Some((14, 14))));
-        assert!(!prior.covers("src/main.rs", Some((200, 200))));
-    }
-
-    #[test]
-    fn another_file_is_never_covered() {
-        let prior = anchored("src/main.rs", 10, 10);
-        assert!(!prior.covers("src/other.rs", Some((10, 10))));
-    }
-
-    #[test]
-    fn a_finding_with_no_line_is_never_covered_by_an_anchor() {
-        // No evidence of where it is, so no evidence it is a repeat. It falls
-        // back to the fingerprint, which is where an unplaceable finding has
-        // always been decided.
-        let prior = anchored("src/main.rs", 10, 10);
-        assert!(!prior.covers("src/main.rs", None));
-    }
-
-    #[tokio::test]
-    async fn an_outdated_comment_contributes_a_fingerprint_but_no_anchor() {
-        // GitHub detaches a comment from its line once the diff moves past it.
-        // That costs the anchor and nothing else: the marker still suppresses.
-        let mut comment = ours("0123456789abcdef", "Guard the index");
-        comment.line = None;
-        let prior = load_from(vec![comment]).await;
-        assert!(prior.already_posted("0123456789abcdef"));
-        assert!(prior.anchors.is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_strangers_comment_contributes_no_anchor_either() {
-        // The same rule the fingerprint marker has always had. An anchor read
-        // from anyone else's comment would let a contributor silence a finding
-        // by commenting on the line first — no marker forgery required.
-        let mut comment = ours("0123456789abcdef", "Guard the index");
-        comment.author = "helpful-contributor".into();
-        let prior = load_from(vec![comment]).await;
-        assert!(prior.anchors.is_empty());
-        assert!(!prior.covers("src/main.rs", Some((2, 2))));
-    }
-
     use crate::forge::types::{IssueComment, ReviewComment};
     use crate::forge::{MockForge, MockState};
 
@@ -494,6 +510,206 @@ mod tests {
         );
         assert_eq!(title_in("no bold here"), None);
         assert_eq!(title_in("**  **"), None);
+    }
+
+    /// A comment body in the shape `apply` actually renders.
+    ///
+    /// Built from the renderer's own badge helpers rather than a hand-written
+    /// lookalike: these parsers read a format another module owns, so the test
+    /// that proves they can read it has to break when that module changes its
+    /// mind. A fixture string would keep passing while production stopped
+    /// parsing.
+    fn rendered(severity: Severity, lane: LaneId, title: &str, fingerprint: &str) -> ReviewComment {
+        use crate::findings::render::{lane_confidence_badge, priority_badge};
+        ReviewComment {
+            path: "src/main.rs".into(),
+            line: Some(40),
+            start_line: None,
+            author: "tinysweeper[bot]".into(),
+            body: format!(
+                "{}  {}\n\n**{title}**\n\nwhy it matters\n\n`rule` · <!-- tinysweeper:fp={fingerprint} -->",
+                priority_badge(severity),
+                lane_confidence_badge(lane, 0.9),
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_severity_a_finding_was_posted_at_is_read_back() {
+        let prior = load_from(vec![rendered(
+            Severity::High,
+            LaneId::Tests,
+            "Guard the index",
+            "0123456789abcdef",
+        )])
+        .await;
+
+        assert_eq!(prior.severity_of("Guard the index"), Some(Severity::High));
+        assert_eq!(prior.severity_of("Something else"), None);
+    }
+
+    #[tokio::test]
+    async fn a_level_that_already_drifted_is_pinned_to_the_earliest() {
+        // Two comments, one title, two levels — the state this whole change
+        // exists to stop. Following the newest would ratify the drift; the
+        // author has had the first one longest, so that is the one that holds.
+        let prior = load_from(vec![
+            rendered(
+                Severity::Medium,
+                LaneId::Critique,
+                "Guard the index",
+                "0123456789abcdef",
+            ),
+            rendered(
+                Severity::Critical,
+                LaneId::Critique,
+                "Guard the index",
+                "fedcba9876543210",
+            ),
+        ])
+        .await;
+
+        assert_eq!(prior.severity_of("Guard the index"), Some(Severity::Medium));
+    }
+
+    #[test]
+    fn the_lane_is_taken_from_the_badge_and_not_from_the_prose() {
+        // `critique` in the body text must not win over the real lane badge:
+        // the model writes the body, so anything read out of it is untrusted.
+        let comment = rendered(
+            Severity::Low,
+            LaneId::Security,
+            "Escape the interpolation",
+            "0123456789abcdef",
+        );
+        let with_prose = format!("{}\n\nthe critique lane would say tests too", comment.body);
+
+        assert_eq!(lane_in(&with_prose), Some(LaneId::Security));
+        assert_eq!(lane_in("no badges at all"), None);
+    }
+
+    #[test]
+    fn a_body_without_a_priority_badge_has_no_severity() {
+        assert_eq!(severity_in("**Guard the index**"), None);
+        assert_eq!(severity_in("![priority urgent](x)"), None);
+    }
+
+    #[tokio::test]
+    async fn a_repeat_of_a_finding_that_moved_a_line_is_recognised_by_its_anchor() {
+        // The failure this closes. `src/eval/runner.rs` carried one concern
+        // posted three times over two pushes — lines 146, then 145 and 171 —
+        // because each run quoted a slightly different snippet and hashed to a
+        // fresh fingerprint. The anchor is what did not move.
+        let prior = load_from(vec![rendered(
+            Severity::Medium,
+            LaneId::Tests,
+            "Track cost from failed cases",
+            "0123456789abcdef",
+        )])
+        .await;
+
+        let mut moved = finding(LaneId::Tests, "src/main.rs", Some(42));
+        moved.title = "Track cost from failed cases".into();
+        moved.identity = Some("aaaaaaaaaaaaaaaa".into());
+        assert!(
+            prior.covers_anchor(&moved),
+            "two lines from a comment we already posted is the same finding"
+        );
+
+        let mut far_away = moved.clone();
+        far_away.line = Some(400);
+        assert!(!prior.covers_anchor(&far_away));
+
+        let mut other_file = moved.clone();
+        other_file.path = "src/other.rs".into();
+        assert!(!prior.covers_anchor(&other_file));
+
+        // A different lane looking at the same line is a different reviewer
+        // with a different job, not a repeat.
+        let mut other_lane = moved.clone();
+        other_lane.lane = LaneId::Security;
+        assert!(!prior.covers_anchor(&other_lane));
+    }
+
+    #[tokio::test]
+    async fn a_different_finding_on_a_nearby_line_is_not_suppressed() {
+        // Position says two findings are in the same place. It does not say they
+        // are the same finding, and two defects a few lines apart in one
+        // function are ordinary. Suppressing on proximity alone would post the
+        // first and silently delete the second — and a deleted finding can flip
+        // a verdict, which is the failure this whole branch is about.
+        let prior = load_from(vec![rendered(
+            Severity::Medium,
+            LaneId::Critique,
+            "Guard the index before dereferencing",
+            "0123456789abcdef",
+        )])
+        .await;
+
+        let mut neighbour = finding(LaneId::Critique, "src/main.rs", Some(41));
+        neighbour.title = "Close the file handle on the error path".into();
+        assert!(
+            !prior.covers_anchor(&neighbour),
+            "a different defect one line away was deleted as a duplicate"
+        );
+
+        // The same title one line away is the repeat this exists to catch.
+        let mut repeat = neighbour.clone();
+        repeat.title = "Guard the index before dereferencing".into();
+        assert!(prior.covers_anchor(&repeat));
+    }
+
+    #[tokio::test]
+    async fn a_comment_with_no_readable_title_anchors_nothing() {
+        // Fails towards repeating ourselves rather than towards deleting a
+        // finding: a body we cannot parse is not evidence about anything.
+        let mut unreadable = rendered(
+            Severity::Medium,
+            LaneId::Critique,
+            "Guard the index before dereferencing",
+            "0123456789abcdef",
+        );
+        unreadable.body = "no bold run here <!-- tinysweeper:fp=0123456789abcdef -->".into();
+        let prior = load_from(vec![unreadable]).await;
+
+        let mut anything = finding(LaneId::Critique, "src/main.rs", Some(40));
+        anything.title = "Guard the index before dereferencing".into();
+        assert!(!prior.covers_anchor(&anything));
+    }
+
+    #[tokio::test]
+    async fn an_unplaceable_finding_is_never_suppressed_by_an_anchor() {
+        // No line means no positional evidence, and suppressing on none of it
+        // deletes a finding rather than de-duplicating one.
+        let prior = load_from(vec![rendered(
+            Severity::Medium,
+            LaneId::Tests,
+            "Pin the action",
+            "0123456789abcdef",
+        )])
+        .await;
+
+        assert!(!prior.covers_anchor(&finding(LaneId::Tests, "src/main.rs", None)));
+    }
+
+    /// A finding placed at `line`, with nothing else that matters here set.
+    fn finding(lane: LaneId, path: &str, line: Option<u64>) -> Finding {
+        Finding {
+            lane,
+            severity: Severity::Medium,
+            confidence: 0.9,
+            path: path.into(),
+            line,
+            end_line: None,
+            rule: "some-rule".into(),
+            title: "t".into(),
+            body: "b".into(),
+            suggestion: None,
+            applicable: None,
+            late: false,
+            identity: None,
+            corroboration: 1,
+        }
     }
 
     #[tokio::test]

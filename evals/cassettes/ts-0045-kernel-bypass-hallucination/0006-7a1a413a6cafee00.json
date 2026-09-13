@@ -1,0 +1,28 @@
+{
+  "key": "7a1a413a6cafee00",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3603,
+    "output_tokens": 4981,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.005735127
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The overlay's comment explains that `GLIBC_TUNABLES` is the real mitigation but a shim is still required to stop the image refusing to start. The `mongod` service gets both the entrypoint override and the environment variable, but `mongo-secrets` only gets the environment variable. If `mongo-secrets` uses the same MongoDB image (likely, given its name and the base compose), its default entrypoint will still hit the kernel version check and refuse to start, causing `docker compose up` to fail on the affected kernels this file is meant to support. The fix is to apply the same entrypoint override to `mongo-secrets` (or otherwise ensure its image entrypoint is bypassed).",
+        "confidence": 0.8,
+        "existing_code": "  mongo-secrets:\n    environment:\n      GLIBC_TUNABLES: glibc.pthread.rseq=0",
+        "path": "docker-compose.kernel-bypass.yml",
+        "rule": "incomplete-bypass",
+        "severity": "high",
+        "suggestion": null,
+        "title": "Also bypass image refusal for mongo-secrets service"
+      }
+    ],
+    "summary": "The overlay sets the GLIBC tunable and bypasses the image refusal for the mongod service, but it omits the same entrypoint override for mongo-secrets, so the database setup will still fail on affected kernels."
+  }
+}

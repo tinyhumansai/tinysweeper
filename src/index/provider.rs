@@ -34,7 +34,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tinyagents::harness::embeddings::{
+use tinyinference::embeddings::{
     CohereEmbeddingModel, EmbeddingModel, MockEmbeddingModel, OllamaEmbeddingModel,
     OpenAiEmbeddingModel, VoyageEmbeddingModel, set_rate_limit,
 };
@@ -148,7 +148,7 @@ fn build_model(config: &Embeddings, signature: &EmbedSignature) -> Result<Arc<dy
     let model: Arc<dyn EmbeddingModel> = match provider {
         "voyage" => {
             let url = if base_url.is_empty() {
-                tinyagents::harness::embeddings::VOYAGE_API_BASE
+                tinyinference::embeddings::VOYAGE_API_BASE
             } else {
                 base_url
             };
@@ -179,7 +179,7 @@ fn build_model(config: &Embeddings, signature: &EmbedSignature) -> Result<Arc<dy
         }
         "ollama" => {
             let url = if base_url.is_empty() {
-                tinyagents::harness::embeddings::DEFAULT_OLLAMA_URL
+                tinyinference::embeddings::DEFAULT_OLLAMA_URL
             } else {
                 base_url
             };

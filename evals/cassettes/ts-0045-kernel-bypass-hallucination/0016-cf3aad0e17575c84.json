@@ -1,0 +1,40 @@
+{
+  "key": "cf3aad0e17575c84",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 5958,
+    "output_tokens": 5078,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.006843942
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The `shorten` function has a branch for when the truncated head contains no space (the `None` arm), and `first_sentence` has a branch for when no `. ` is found. Neither is exercised by the tests: the provided tests cover only the `Some` cases and the short-input path. If these fallback branches were refactored incorrectly, no test would catch it. Add tests with a long string containing no spaces within the limit, and a string without `. `.",
+        "confidence": 0.6,
+        "existing_code": "    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),\n    }",
+        "late": false,
+        "path": "src/findings/summarise.rs",
+        "rule": "missing-test-coverage",
+        "severity": "medium",
+        "suggestion": null,
+        "title": "Add tests for the no-separator branches in summarise"
+      },
+      {
+        "body": "This assignment is never used; the variable is not referenced later in the script. The comment claims it keeps `runpy` imported, but `runpy` is already imported at the top of the file and is not otherwise used. Remove the assignment and the import if it is not needed.",
+        "confidence": 0.9,
+        "existing_code": "    globals_dict = runpy.run_path.__globals__  # noqa: F841 - keep runpy imported",
+        "late": false,
+        "path": "deploy/mongo/kernel-bypass-entrypoint.py",
+        "rule": "dead-code",
+        "severity": "low",
+        "suggestion": null,
+        "title": "Remove unused globals_dict assignment and misleading comment"
+      }
+    ],
+    "summary": "The change introduces a summarise module with sensible in-crate tests and an opt-in kernel-bypass entrypoint for local MongoDB development. The core logic is correct, but two fallback branches lack test coverage and the shim contains a dead assignment; fixing those would make it ready."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "72f76f5bc7555e09",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3311,
+    "output_tokens": 2476,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.003428757
+  },
+  "value": {
+    "findings": [],
+    "summary": "This opt-in Compose overlay adds a read-only Python entrypoint shim and a glibc tunable for local kernel-bypass development. No security-relevant problems are introduced by this file."
+  }
+}

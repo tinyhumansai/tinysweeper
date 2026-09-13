@@ -50,6 +50,17 @@ anchored ranges overlapping within three lines. It never compares titles or
 bodies — two agents describing one defect word it differently by construction,
 which is the entire reason for running more than one.
 
+When *neither* finding could be placed on a line there is no range to overlap,
+and the rule id becomes the only evidence left. Two unplaceable findings on one
+file therefore group only if they name the same rule. This used to group
+unconditionally, on the argument that a reader cannot tell two unplaceable
+findings on one file apart — true of two copies, false of two defects.
+`.github/workflows/eval.yml` on `tinysweeper#86` produced an unpinned
+`dtolnay/rust-toolchain` and an unpinned `Swatinem/rust-cache`, both real, both
+unplaceable, and merging them threw one away. The rule id is weak evidence,
+which is why nothing consults it where a line number exists; on this branch it
+is the difference between a conservative merge and a coin toss.
+
 That looseness is used **only** for grouping. `Finding::identity` stays exactly
 as `anchor::stamp` computed it, and a merge keeps the identity of the *first*
 sighting: it is what the `tinysweeper:fp=` marker carries and what suppression

@@ -1,0 +1,17 @@
+{
+  "key": "7727dd6b34fd7510",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3544,
+    "output_tokens": 1617,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.002782782
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change corrects the GitHub App authentication variable names, adds provider API keys with safe defaults, and mounts the config file read-only so the server runs with intended configuration. It introduces no security issues."
+  }
+}

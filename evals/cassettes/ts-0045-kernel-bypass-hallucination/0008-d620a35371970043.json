@@ -1,0 +1,40 @@
+{
+  "key": "d620a35371970043",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4079,
+    "output_tokens": 6946,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.007651737
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The function's documentation says it shortens to \"at most `limit` characters\", but when the first `limit` characters contain no space, the returned string is `limit + 1` characters long (the ellipsis is added). This breaks any caller that relies on the hard limit, such as a check-run title capped by GitHub. The tests even allow `limit + 1`, but the public contract is explicit. Reserve one character for the ellipsis, or return an empty string for `limit == 0`.",
+        "confidence": 0.9,
+        "existing_code": "pub fn shorten(text: &str, limit: usize) -> String {\n    let text = text.trim();\n    if text.chars().count() <= limit {\n        return text.to_string();\n    }\n\n    // Character boundaries, not byte offsets: `&text[..limit]` panics the\n    // moment a multibyte character straddles the cut, and model-authored text\n    // is full of them — an em dash in a title would take the process down.\n    let head: String = text.chars().take(limit).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),\n    }\n}",
+        "late": false,
+        "path": "src/findings/summarise.rs",
+        "rule": "off-by-one",
+        "severity": "high",
+        "suggestion": "pub fn shorten(text: &str, limit: usize) -> String {\n    let text = text.trim();\n    if limit == 0 {\n        return String::new();\n    }\n    if text.chars().count() <= limit {\n        return text.to_string();\n    }\n\n    // Character boundaries, not byte offsets: `&text[..limit]` panics the\n    // moment a multibyte character straddles the cut, and model-authored text\n    // is full of them — an em dash in a title would take the process down.\n    let max_prefix = limit - 1; // leave room for the ellipsis\n    let head: String = text.chars().take(max_prefix).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),\n    }\n}",
+        "title": "Respect the character limit when no space exists"
+      },
+      {
+        "body": "The repository rule requires every `src/` module to have a corresponding documentation file at `docs/modules/<module>/README.md`. This new module `src/findings/summarise.rs` does not include such a file in the diff, and the module's public functions are not covered by any existing documentation file.",
+        "confidence": 0.6,
+        "existing_code": "//! Shortening model-authored text for the places that have a length limit.",
+        "late": false,
+        "path": "src/findings/summarise.rs",
+        "rule": "missing-docs",
+        "severity": "medium",
+        "suggestion": null,
+        "title": "Add docs/modules/findings/summarise/README.md"
+      }
+    ],
+    "summary": "The new `summarise` module has a length-limit violation in `shorten` and lacks the required documentation file; fix the former before merging."
+  }
+}

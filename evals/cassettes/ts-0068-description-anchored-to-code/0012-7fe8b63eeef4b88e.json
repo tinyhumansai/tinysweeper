@@ -1,0 +1,17 @@
+{
+  "key": "7fe8b63eeef4b88e",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4914,
+    "output_tokens": 1727,
+    "cached_tokens": 1280,
+    "embed_tokens": 0,
+    "cost_usd": 0.00308792
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a configurable reasoning-effort setting wired through to OpenRouter provider options, with tests covering on/off and pass-through behaviour; no security concerns introduced."
+  }
+}

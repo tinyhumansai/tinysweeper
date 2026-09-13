@@ -1,0 +1,37 @@
+{
+  "key": "1085803edd0fdd9e",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 6229,
+    "output_tokens": 5162,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.007034907
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The function's doc comment promises at most `limit` characters, but the `None` branch returns `limit + 1` characters because the ellipsis is appended to a `limit`-character head. The existing test `a_long_string_stops_on_a_word_boundary` only exercises a string that contains a space in the first `limit` characters, so the no-space path is never tested; the multibyte test asserts `<= 21` (i.e. `limit + 1`), codifying the off-by-one. A check-run title produced by this branch would exceed the ceiling by one character.",
+        "confidence": 0.95,
+        "existing_code": "    let head: String = text.chars().take(limit).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),\n    }",
+        "path": "src/findings/summarise.rs",
+        "rule": "contract-violation",
+        "severity": "medium",
+        "suggestion": "    let head: String = text.chars().take(limit.saturating_sub(1)).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),\n    }",
+        "title": "Keep shorten output within the stated limit"
+      },
+      {
+        "body": "This assignment is never used and the comment contradicts itself: the `import runpy` at the top of the file is what keeps the module available, not this line. The script is for local development and is not covered by the Rust test suite, but this leftover is harmless yet confusing. Delete the line and, since `runpy` is then unused, also remove the `import runpy` statement at the top.",
+        "confidence": 0.8,
+        "existing_code": "    globals_dict = runpy.run_path.__globals__  # noqa: F841 - keep runpy imported",
+        "path": "deploy/mongo/kernel-bypass-entrypoint.py",
+        "rule": "dead-code",
+        "severity": "low",
+        "title": "Remove the unused runpy globals assignment"
+      }
+    ],
+    "summary": "The summarise module ships with tests that cover the main truncation and sentence-extraction paths, but `shorten` can exceed the documented length limit when no word boundary exists and the existing tests do not catch it; the Python entrypoint also carries a dead assignment. Fixing the off-by-one and dropping the dead line would make this safe to merge."
+  }
+}

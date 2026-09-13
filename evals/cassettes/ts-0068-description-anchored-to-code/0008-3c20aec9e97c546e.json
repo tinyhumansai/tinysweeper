@@ -1,0 +1,17 @@
+{
+  "key": "3c20aec9e97c546e",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3258,
+    "output_tokens": 230,
+    "cached_tokens": 1280,
+    "embed_tokens": 0,
+    "cost_usd": 0.00106517
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change adds a public field `reasoning_effort` to the config struct with documentation. It does not introduce any security issues."
+  }
+}

@@ -1,26 +1,14 @@
+# This checkout is a single package. Keeping an empty workspace root prevents
+# Cargo from inheriting the superproject workspace that owns `worktrees/`, while
+# still allowing the vendored dependencies to retain their own workspaces.
 [workspace]
-# tinysweeper is a single crate at the root. Review *policy* lives under
-# presets/ as data (a preset.toml + docs per named policy), not as Cargo
-# crates — adding a preset is a new folder, never a new member. Downstream
-# repos configure the bot with a `.tinysweeper.toml`, also data.
-members = ["."]
-resolver = "3"
 
-[workspace.package]
+[package]
+name = "tinysweeper"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
 repository = "https://github.com/tinyhumansai/tinysweeper"
-
-[workspace.dependencies]
-tinysweeper = { path = "." }
-
-[package]
-name = "tinysweeper"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-repository.workspace = true
 description = "A GitHub review bot that fans a pull request out across independently-gated check runs."
 readme = "README.md"
 keywords = ["github", "code-review", "agents", "tinyagents", "bot"]
@@ -73,7 +61,8 @@ tree-sitter-typescript = "0.23"
 # tinyagents unconditionally links reqwest, so it is gated even though it is
 # central to the product. The `Model` port and `MockModel` compile without it;
 # only `harness::model::TinyAgentsModel` needs it.
-tinyagents = { path = "vendor/tinyagents", optional = true }
+tinyagents = { package = "tinyagents-harness", git = "https://github.com/tinyhumansai/tinyagents.git", rev = "44afb2e6884690a59eb43e268a09868a9852c410", optional = true }
+tinyinference = { git = "https://github.com/tinyhumansai/tinyagents.git", rev = "44afb2e6884690a59eb43e268a09868a9852c410", optional = true }
 
 # --- the orchestration graph ---
 # Not optional, and that is the point: with default features tinyflows links no
@@ -82,7 +71,7 @@ tinyagents = { path = "vendor/tinyagents", optional = true }
 # the offline default build. Every outside-world call it makes goes through a
 # capability trait this crate implements in `src/flows/caps.rs`, so the model
 # still reaches the network through exactly one adapter.
-tinyflows = { path = "vendor/tinyflows", default-features = false }
+tinyflows = { git = "https://github.com/tinyhumansai/tinyflows.git", rev = "9dfc7bef09625f149a73642fd8c6b9a2c2ecc62c", default-features = false }
 
 # --- optional: the webhook server ---
 # Reversed an earlier decision to go Actions-only. The arguments that changed
@@ -116,7 +105,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 default = ["treesitter"]
 # The tinyagents-backed model provider (OpenRouter / Moonshot / MiniMax, all
 # one OpenAI-compatible code path).
-harness = ["dep:tinyagents", "dep:reqwest"]
+harness = ["dep:tinyagents", "dep:tinyinference", "dep:reqwest"]
 # The real GitHub adapter behind the `Forge` port.
 github = ["dep:octocrab", "dep:reqwest"]
 # The CortexDB adapter behind the `Memory` port. The whole memory layer —

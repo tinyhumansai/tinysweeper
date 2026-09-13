@@ -1,0 +1,17 @@
+{
+  "key": "ebaf32144fa377f6",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3582,
+    "output_tokens": 1108,
+    "cached_tokens": 384,
+    "embed_tokens": 0,
+    "cost_usd": 0.002356482
+  },
+  "value": {
+    "findings": [],
+    "summary": "The overlay configures a local development workaround for MongoDB on newer kernels, setting GLIBC_TUNABLES and mounting a script. No security issues are introduced by this change."
+  }
+}

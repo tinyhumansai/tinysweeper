@@ -1,0 +1,17 @@
+{
+  "key": "8b2018a9273cbc7b",
+  "model_requested": "deepseek/deepseek-v4-pro-0813",
+  "model_answered": "deepseek/deepseek-v4-pro-0813",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3109,
+    "output_tokens": 547,
+    "cached_tokens": 512,
+    "embed_tokens": 0,
+    "cost_usd": 0.001607441
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds an embeddings configuration section to .tinysweeper.toml, enabling retrieval via OpenRouter with text-embedding-3-small. The change is straightforward and has no apparent issues."
+  }
+}

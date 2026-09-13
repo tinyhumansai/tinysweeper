@@ -1,0 +1,29 @@
+{
+  "key": "3ab293a92d3ad72f",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 5069,
+    "output_tokens": 519,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00030095296
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The `effort` string arrives from the model’s TOML configuration, which is untrusted input.  The `_` branch interpolates it directly into a `serde_json::Value` without checking that it is one of the documented OpenRouter effort values (e.g. `\"low\"`, `\"medium\"`, `\"high\"`).  While injection here is limited to the value of the `\"effort\"` key, an attacker who can control the config could craft a string that breaks the JSON structure (e.g. containing a `}` character) or passes unexpected data to the API.  Add a validation that returns a clear error for any value that is not `\"off\"`, `\"\"`, `\"low\"`, `\"medium\"`, or `\"high\"`.",
+        "confidence": 0.9,
+        "existing_code": "fn reasoning_options(effort: &str) -> serde_json::Value {\n    match effort.trim() {\n        \"off\" | \"\" => json!({ \"reasoning\": { \"enabled\": false } }),\n        effort => json!({ \"reasoning\": { \"effort\": effort } }),\n    }\n}",
+        "path": "src/harness/openrouter.rs",
+        "rule": "unvalidated-input",
+        "severity": "medium",
+        "suggestion": null,
+        "title": "Validate reasoning effort against an allow-list"
+      }
+    ],
+    "resolved": [],
+    "summary": "The change makes reasoning effort configurable, replacing a hard disable with a runtime option.  The `reasoning_options` function accepts an arbitrary string from config and passes it as a JSON value to the provider; the model configuration string is user‑controlled (it comes from a TOML config file which is considered untrusted input).  Because the effort string is interpolated directly into the JSON payload without validation or escaping, a crafted value could inject unexpected JSON keys or break the payload structure.  This is a real but constrained injection: the attacker controls only the value of the `\"effort\"` key, and the field is sent to an HTTP API that already accepts free‑form strings.  In practice the risk is low because the config file itself would need to be modified by the attacker, but the code should still validate the effort string against an allow‑list."
+  }
+}

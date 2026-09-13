@@ -1,0 +1,29 @@
+{
+  "key": "956b76005b8d7e27",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_description",
+  "usage": {
+    "input_tokens": 5939,
+    "output_tokens": 3152,
+    "cached_tokens": 4742,
+    "embed_tokens": 0,
+    "cost_usd": 0.005758044864
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The title says \"Add a helper for shortening model-authored text\" and the body only describes `findings::summarise`, but the diff also adds a MongoDB kernel-bypass shim (`deploy/mongo/kernel-bypass-entrypoint.py`), a docker-compose overlay (`docker-compose.kernel-bypass.yml`), an `[embeddings]` block in `.tinysweeper.toml`, and renames the GitHub auth env vars from `TINYSWEEPER_GITHUB_*` to `TINYSWEEPER_APP_*` with `:?` required-value semantics. A reviewer reading only the description would miss that the compose file now requires `TINYSWEEPER_APP_ID` and `TINYSWEEPER_APP_PRIVATE_KEY` or it will refuse to start — a breaking change for any existing deployment that set the old names.",
+        "confidence": 0.9,
+        "existing_code": "      TINYSWEEPER_APP_ID: ${TINYSWEEPER_APP_ID:?set the GitHub App id}\n      TINYSWEEPER_APP_PRIVATE_KEY: ${TINYSWEEPER_APP_PRIVATE_KEY:?set the GitHub App private key}",
+        "late": false,
+        "path": "docker-compose.yml",
+        "rule": "description-mismatch",
+        "severity": "medium",
+        "suggestion": null,
+        "title": "Mention deployment changes in the PR description"
+      }
+    ],
+    "summary": "The PR adds a text-shortening helper as described, but the diff also includes significant deployment infrastructure changes — a MongoDB kernel-bypass entrypoint, a docker-compose overlay, embeddings config, and GitHub auth env-var renames — none of which the title or body mention. The code itself looks sound."
+  }
+}
