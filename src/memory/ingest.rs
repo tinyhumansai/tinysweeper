@@ -347,13 +347,19 @@ pub fn classify(thread: &ReviewThread) -> Option<Outcome> {
     // about who acted on it. A maintainer's "please fix this" resolved by
     // the unauthorized author it was aimed at is not a rejection; only a
     // resolve by someone who actually holds write access settles anything.
+    // `is_outdated` is GitHub's own fact about the code, not a claim anyone
+    // makes — but *resolving* the thread is still an action, and the same
+    // unauthorized-author loophole applies to it: a contributor could make
+    // an unrelated nearby edit that ages the anchor out, resolve their own
+    // bot thread, and have it recorded as `Fixed` without anyone with write
+    // access ever having agreed the finding was actually addressed.
     match (
         thread.is_resolved,
         thread.is_outdated,
         human_replied,
         thread.resolved_by_has_write_access,
     ) {
-        (true, true, _, _) => Some(Outcome::Fixed),
+        (true, true, _, true) => Some(Outcome::Fixed),
         (true, false, true, true) => Some(Outcome::Rejected),
         (true, false, false, true) => Some(Outcome::Dismissed),
         (true, false, _, false) => None,
