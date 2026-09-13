@@ -496,6 +496,15 @@ impl ForgeRead for MockForge {
             .collect())
     }
 
+    async fn default_branch(&self, _repo: &RepoId) -> Result<String> {
+        Ok(self
+            .state
+            .lock()
+            .expect("mock state lock")
+            .default_branch
+            .clone())
+    }
+
     async fn branch_head(&self, _repo: &RepoId, branch: &str) -> Result<Option<String>> {
         let state = self.state.lock().expect("mock state lock");
         // A branch nobody registered resolves to itself, so a test that sets a

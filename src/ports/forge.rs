@@ -123,6 +123,15 @@ pub trait ForgeRead: Send + Sync {
     /// change can then look landed when no single revision contains all of it.
     async fn branch_head(&self, repo: &RepoId, branch: &str) -> Result<Option<String>>;
 
+    /// The repository's default branch name.
+    ///
+    /// Exists so memory ingest can be gated on it: the reviewer's memory of a
+    /// repository is repository-wide, so it is fed from the default branch
+    /// only. Feeding it from whichever base a pull request happens to target
+    /// would let a release branch's snapshot replace `main`'s, and an older
+    /// base roll the memory backwards.
+    async fn default_branch(&self, repo: &RepoId) -> Result<String>;
+
     /// List open pull requests, oldest first.
     ///
     /// Oldest first, and that ordering is load-bearing rather than cosmetic:

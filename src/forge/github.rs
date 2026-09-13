@@ -826,6 +826,19 @@ impl ForgeRead for GitHubRead {
         }
     }
 
+    async fn default_branch(&self, repo: &RepoId) -> Result<String> {
+        let route = format!("/repos/{}/{}", repo.owner, repo.name);
+        let repository: serde_json::Value = self
+            .client
+            .get(&route, None::<&()>)
+            .await
+            .map_err(api)?;
+        repository["default_branch"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| Error::Forge(format!("{repo} reported no default branch")))
+    }
+
     async fn open_pull_requests(&self, repo: &RepoId, limit: usize) -> Result<Vec<PullRequest>> {
         let mut out = Vec::new();
         let mut page = 1u32;
@@ -1189,7 +1202,10 @@ impl ForgeRead for GitHubRead {
             // than silently classify a partial comment history as complete
             // — the same "moved the truncation threshold without keeping
             // the completeness check" gap the outer loop already closes.
-            let mut truncated = cursor.is_some();
+            // `truncated` is set from the cursor each page *after* the page
+            // was read, so it reflects whether the last page fetched within
+            // the budget still pointed at another one.
+            let mut truncated = false;
             for _ in 0..MAX_THREAD_PAGES {
                 let Some(after) = cursor.take() else {
                     truncated = false;
