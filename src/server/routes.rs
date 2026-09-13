@@ -316,6 +316,7 @@ async fn receive(
             backend.clone(),
             Arc::new(state.config.config.clone()),
             state.auth.clone(),
+            state.index_permits.clone(),
             conversation,
         ));
     }
