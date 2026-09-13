@@ -112,6 +112,20 @@ neither of which CortexDB's public API gave evidence of supporting safely
 when this was built. Until one of those exists, the honest tradeoff is: a
 recall mid-window degrades to *less remembered*, never to something wrong.
 
+**Freshness is keyed on the effective policy, not just the revision** — the
+`paths.ignore`, `ingest_code`, `ingest_conventions`, and `convention_files`
+`ensure_ingested` actually ran under (`server::memory::freshness_key`) — so a
+delivery that loads a different repository overlay for the same base tip does
+not look fresh against an earlier ingest under a different one. One residual
+window remains: `config::remote::overlay` collapses "the repository has no
+override" and "the fetch failed and this fell back to the deployment's
+config" into the same `source: None`, so a transient fetch failure can still
+ingest one pass under the wrong policy. It self-heals on the next delivery
+that successfully loads the real overlay for that base tip, since a different
+effective policy no longer looks fresh — but a real fix needs `RepoOverlay`
+to distinguish those two cases, which is a shared contract every review path
+goes through, not something to change as a side effect of this feature.
+
 ### Review outcomes are append-only by design, and that is a known gap
 
 Unlike code and conventions, an outcome's key is never retired the same way:
