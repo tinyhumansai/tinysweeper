@@ -700,7 +700,7 @@ mod tests {
     #[tokio::test]
     async fn remembering_a_pull_request_reads_its_whole_conversation() {
         let forge = MockForge::new()
-            .with_pull_request(pull_request(9))
+            .with_pull_request(pull_request(9), vec![], vec![])
             .with_remarks(
                 9,
                 vec![
@@ -752,7 +752,7 @@ mod tests {
             .with_issue(older)
             .with_issue(newer)
             .with_issue(pr_listing)
-            .with_pull_request(pull_request(9))
+            .with_pull_request(pull_request(9), vec![], vec![])
             .with_remarks(1, vec![remark(1, RemarkKind::Comment, "someone", "me too")])
             .with_remarks(9, vec![remark(2, RemarkKind::Review, "maintainer", "LGTM")]);
         let memory = MockMemory::new();
@@ -814,7 +814,8 @@ mod tests {
     #[tokio::test]
     async fn an_engine_failure_is_an_error_on_a_live_remember() {
         let forge = MockForge::new().with_issue(issue(1, true));
-        let memory = MockMemory::new().fail_with("engine down");
+        let memory = MockMemory::new();
+        memory.fail_with("engine down");
         let config = config();
         let repo = RepoId::parse("o/r").unwrap();
         let err = Discussions::new(&memory, &forge, &config)
