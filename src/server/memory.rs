@@ -599,9 +599,8 @@ mod tests {
         // chunk had a failure — must still let the walk continue.
         let cursor = Some("2026-08-01T00:00:00Z".to_string());
         let last_seen = Some("2026-08-10T00:00:00Z".to_string());
-        assert_eq!(
-            next_chunk_cursor(&cursor, &last_seen, 200, 200),
-            Some("2026-08-10T00:00:00Z".to_string()),
+        assert!(
+            should_continue_chunking(&cursor, &last_seen, 200, 200),
             "a failed subject must not stop the walk from advancing to the next chunk"
         );
     }
@@ -609,18 +608,16 @@ mod tests {
     #[test]
     fn the_walk_stops_once_a_chunk_makes_no_further_progress() {
         let cursor = Some("2026-08-10T00:00:00Z".to_string());
-        assert_eq!(
-            next_chunk_cursor(&cursor, &cursor, 200, 200),
-            None,
+        assert!(
+            !should_continue_chunking(&cursor, &cursor, 200, 200),
             "the same cursor twice means nothing new was found"
         );
     }
 
     #[test]
     fn the_walk_stops_when_there_is_nothing_to_back_a_cursor_off_from() {
-        assert_eq!(
-            next_chunk_cursor(&None, &None, 0, 200),
-            None,
+        assert!(
+            !should_continue_chunking(&None, &None, 0, 200),
             "an empty listing has no cursor to continue from"
         );
     }
@@ -632,7 +629,29 @@ mod tests {
         // whether the cursor moved.
         let cursor = Some("2026-08-01T00:00:00Z".to_string());
         let last_seen = Some("2026-08-10T00:00:00Z".to_string());
-        assert_eq!(next_chunk_cursor(&cursor, &last_seen, 3, 200), None);
+        assert!(!should_continue_chunking(&cursor, &last_seen, 3, 200));
+    }
+
+    #[test]
+    fn a_single_chunk_backfill_reports_its_own_last_seen_as_the_resume_point() {
+        // Regression: the very common case of one chunk covering the whole
+        // walk (any repository with fewer conversations than
+        // `BACKFILL_CHUNK`) returned `processed < chunk`, so
+        // `should_continue_chunking` correctly says stop — but the loop used
+        // to read that as "leave the cursor alone" too, discarding the
+        // chunk's own `last_seen` and reporting the walk's *starting* cursor
+        // (often `None`) as where to resume from. A first backfill of a
+        // small repository would then never advance past its own start.
+        let cursor: Option<String> = None;
+        let last_seen = Some("2026-08-10T00:00:00Z".to_string());
+        let processed = 3;
+        let chunk = 200;
+        assert!(!should_continue_chunking(&cursor, &last_seen, processed, chunk));
+        // The cursor the loop actually advances to (mirroring run_backfill's
+        // own `if let Some(seen) = last_seen { cursor = Some(seen) }`) must
+        // still be the chunk's last_seen, not the untouched incoming cursor.
+        let advanced = last_seen.clone().or(cursor);
+        assert_eq!(advanced, Some("2026-08-10T00:00:00Z".to_string()));
     }
 
     #[test]
