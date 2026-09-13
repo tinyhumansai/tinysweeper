@@ -1266,6 +1266,7 @@ async fn run_memory(command: MemoryCommand) -> Result<()> {
             }
         }
         MemoryCommand::Recall { repo, query, limit } => {
+            let repo = canonical_repo(&repo)?;
             let (_, memory) = open(std::path::Path::new("."), None)?;
             for section in MemorySection::ALL {
                 let scope = MemoryScope::section(&repo, section);
