@@ -393,26 +393,28 @@ impl MemoryBackend {
     }
 }
 
-/// Whether `run_backfill`'s chunk loop should continue, and the cursor to
-/// continue from if so.
+/// Whether `run_backfill`'s chunk loop should walk another chunk.
 ///
 /// Pure and independent of the forge or the token, so the rule this exists
 /// to enforce — a chunk that had a failure must still let later chunks run,
 /// as long as it made forward progress — is covered without a live GitHub
-/// call. `None` ends the walk: `last_seen` is empty (the listing was, or
+/// call. `false` ends the walk: `last_seen` is empty (the listing was, or
 /// this chunk's own timestamps could not be backed off from), the cursor did
 /// not move (nothing new since last time), or the chunk came back smaller
 /// than requested (the walk reached the end of history).
-fn next_chunk_cursor(
+///
+/// Deliberately does not decide the cursor itself: the caller advances it
+/// from `last_seen` whenever that is `Some`, independently of this answer, so
+/// the *last* chunk of a walk — including a first, single-chunk backfill
+/// that never needed a second one — still reports where it actually got to
+/// rather than leaving the incoming cursor untouched.
+fn should_continue_chunking(
     cursor: &Option<String>,
     last_seen: &Option<String>,
     processed: usize,
     chunk: usize,
-) -> Option<String> {
-    if last_seen.is_none() || last_seen == cursor || processed < chunk {
-        return None;
-    }
-    last_seen.clone()
+) -> bool {
+    last_seen.is_some() && last_seen != cursor && processed >= chunk
 }
 
 /// The freshness cache key for `revision` under `config`.
