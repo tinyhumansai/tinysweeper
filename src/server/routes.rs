@@ -1389,13 +1389,24 @@ async fn review_inner(
     // excludes. A later delivery for the same base tip that successfully
     // loads the real overlay still ingests normally — this delivery just
     // does not, rather than ingesting under a policy that might be wrong.
+    //
+    // And only from the default branch. Memory is repository-wide, so a
+    // pull request against a release branch must not replace `main`'s
+    // snapshot, and an older base must not roll the memory backwards; the
+    // ingest forgets a section before rewriting it, so either would.
     if overlay.unavailable {
         tracing::warn!(
             %repo,
             "skipping memory ingestion: the repository's own configuration could not be read"
         );
     } else if let Some(backend) = &state.memory {
-        tokio::spawn(ingest_in_background(
+        let default_branch = {
+            use crate::ports::forge::ForgeRead;
+            forge.default_branch(&repo_id).await
+        };
+        match default_branch {
+            Ok(branch) if branch == pull_request.base_ref => {
+                tokio::spawn(ingest_in_background(
             backend.clone(),
             Arc::new(overlay.config.clone()),
             state.index_permits.clone(),

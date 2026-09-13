@@ -525,7 +525,18 @@ impl<'a> Recaller<'a> {
         let ((candidates, mut failures), (answers, more)) =
             futures::future::join(recalls, asks).await;
         failures.extend(more);
-        let attempted = sections.len() + settings.questions.len();
+        // Only calls that actually ran: with `ask = false` no question was
+        // asked, and with `max_recollections = 0` no section was recalled,
+        // so counting them would report a total loss as a partial one.
+        let attempted = if settings.max_recollections == 0 || query.trim().is_empty() {
+            0
+        } else {
+            sections.len()
+        } + if settings.ask {
+            settings.questions.len()
+        } else {
+            0
+        };
         let failed = failures.len();
         let mut context = assemble(answers, candidates, settings.context_tokens);
         if let Some(first) = failures.first() {
