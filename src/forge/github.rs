@@ -508,25 +508,34 @@ fn remark_from_comment(raw: &serde_json::Value, kind: RemarkKind) -> Option<Rema
             .to_ascii_lowercase(),
         body: raw["body"].as_str().unwrap_or_default().to_string(),
         created_at: raw["created_at"].as_str().map(str::to_string),
+        // Only when it differs: GitHub sets `updated_at` on creation too.
+        updated_at: raw["updated_at"]
+            .as_str()
+            .filter(|at| Some(*at) != raw["created_at"].as_str())
+            .map(str::to_string),
         path: raw["path"].as_str().map(str::to_string),
         line: raw["line"]
             .as_u64()
             .or_else(|| raw["original_line"].as_u64()),
         in_reply_to: raw["in_reply_to_id"].as_u64(),
         verdict: None,
+        dismissed: false,
     })
 }
 
 /// One remark from a submitted review.
 ///
-/// Unlike [`verdicts_from_page`], a review with no verdict — `DISMISSED`,
-/// `PENDING` — is kept when it has a body: what was said is still part of the
-/// conversation even when the verdict was retired. A review with neither a
-/// verdict nor a body is nothing anybody said, and is dropped.
+/// Unlike [`verdicts_from_page`], a review with no verdict is kept when it
+/// has a body — what was said is still part of the conversation even when
+/// the verdict was retired — and a `DISMISSED` review is kept regardless,
+/// because the dismissal itself is what the conversation should remember.
+/// A `PENDING` review with no body is nothing anybody said, and is dropped.
 fn remark_from_review(raw: &serde_json::Value) -> Option<Remark> {
-    let verdict = raw["state"].as_str().and_then(ReviewEvent::from_api);
+    let state = raw["state"].as_str();
+    let verdict = state.and_then(ReviewEvent::from_api);
+    let dismissed = state == Some("DISMISSED");
     let body = raw["body"].as_str().unwrap_or_default().to_string();
-    if verdict.is_none() && body.trim().is_empty() {
+    if verdict.is_none() && !dismissed && body.trim().is_empty() {
         return None;
     }
     Some(Remark {
@@ -543,10 +552,12 @@ fn remark_from_review(raw: &serde_json::Value) -> Option<Remark> {
             .to_ascii_lowercase(),
         body,
         created_at: raw["submitted_at"].as_str().map(str::to_string),
+        updated_at: None,
         path: None,
         line: None,
         in_reply_to: None,
         verdict,
+        dismissed,
     })
 }
 

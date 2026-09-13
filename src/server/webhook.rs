@@ -331,7 +331,9 @@ pub fn remember_trigger(event: &str, payload: &Payload) -> Option<Conversation> 
             (payload.pull_request.as_ref()?.number, true)
         }
         "pull_request_review" => {
-            if !matches!(action, "submitted" | "edited") {
+            // `dismissed` too: a retired verdict is a fact about the
+            // conversation, and the re-read records the review as dismissed.
+            if !matches!(action, "submitted" | "edited" | "dismissed") {
                 return None;
             }
             (payload.pull_request.as_ref()?.number, true)
@@ -1175,6 +1177,14 @@ mod tests {
         }));
         let got = remember_trigger("pull_request_review", &review).expect("a review");
         assert_eq!((got.number, got.pull_request), (8, true));
+        let dismissed = base(serde_json::json!({
+            "action": "dismissed",
+            "pull_request": {"number": 8, "head": {"sha": "abc"}, "user": {"login": "a"}}
+        }));
+        assert!(
+            remember_trigger("pull_request_review", &dismissed).is_some(),
+            "a dismissal is remembered"
+        );
 
         let inline = base(serde_json::json!({
             "action": "created",

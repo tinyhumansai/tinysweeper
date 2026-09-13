@@ -255,7 +255,9 @@ pub fn remark_items(
     remarks
         .iter()
         .filter(|remark| !is_own_login(&remark.author))
-        .filter(|remark| !remark.body.trim().is_empty() || remark.verdict.is_some())
+        .filter(|remark| {
+            !remark.body.trim().is_empty() || remark.verdict.is_some() || remark.dismissed
+        })
         .map(|remark| {
             let mut body = String::new();
             let what = match remark.kind {
@@ -286,6 +288,14 @@ pub fn remark_items(
             }
             if let Some(verdict) = remark.verdict {
                 let _ = writeln!(body, "Verdict: {}", verdict_word(verdict));
+            } else if remark.dismissed {
+                let _ = writeln!(
+                    body,
+                    "Verdict: dismissed (an earlier approval or request for changes was retired)"
+                );
+            }
+            if let Some(at) = &remark.updated_at {
+                let _ = writeln!(body, "Edited on {at}");
             }
             if let Some(parent) = remark.in_reply_to {
                 let _ = writeln!(body, "In reply to comment {parent}");
@@ -302,6 +312,7 @@ pub fn remark_items(
                 .find(|line| !line.is_empty())
                 .map(|line| crate::memory::excerpt(line, TITLE_CHARS))
                 .or_else(|| remark.verdict.map(|v| verdict_word(v).to_string()))
+                .or_else(|| remark.dismissed.then(|| "dismissed".to_string()))
                 .unwrap_or_default();
             let mut item = MemoryItem::new(
                 format!(
@@ -325,11 +336,16 @@ pub fn remark_items(
                     "verdict:{}",
                     verdict_word(verdict).replace(' ', "-")
                 ));
+             else if remark.dismissed {
+                item = item.labelled("verdict:dismissed");
             }
             if let Some(path) = &remark.path {
                 item = item.at_path(path.clone());
             }
-            if let Some(at) = &remark.created_at {
+            // Dated to the edit when there was one, so a later version of
+            // the same remark outranks the text it replaced on freshness;
+            // the body keeps both dates.
+            if let Some(at) = remark.updated_at.as_ref().or(remark.created_at.as_ref()) {
                 item = item.observed(at.clone());
             }
             item
@@ -669,10 +685,12 @@ mod tests {
             },
             body: body.into(),
             created_at: Some(format!("2026-08-14T10:{id:02}:00Z")),
+            updated_at: None,
             path: None,
             line: None,
             in_reply_to: None,
             verdict: None,
+            dismissed: false,
         }
     }
 
@@ -778,6 +796,31 @@ mod tests {
         assert_eq!(verdict.title, "maintainer on #9: approved");
         assert!(verdict.body.contains("Verdict: approved"));
         assert!(verdict.labels.contains(&"verdict:approved".to_string()));
+    }
+
+    #[test]
+    fn a_dismissed_review_and_an_edited_comment_are_remembered_for_what_they_are() {
+        let subject = Subject::PullRequest(pull_request(9));
+        let mut dismissed = remark(4, RemarkKind::Review, "maintainer", "");
+        dismissed.dismissed = true;
+        let mut edited = remark(5, RemarkKind::Comment, "someone", "second thoughts");
+        edited.updated_at = Some("2026-08-15T09:00:00Z".into());
+        let items = remark_items("o/r", &subject, &[dismissed, edited], 2000);
+        assert_eq!(items.len(), 2, "a bodiless dismissal is still a remark");
+
+        let dismissal = &items[0];
+        assert_eq!(dismissal.title, "maintainer on #9: dismissed");
+        assert!(dismissal.body.contains("Verdict: dismissed"), "{}", dismissal.body);
+        assert!(dismissal.labels.contains(&"verdict:dismissed".to_string()));
+
+        let edit = &items[1];
+        assert_eq!(
+            edit.observed_at.as_deref(),
+            Some("2026-08-15T09:00:00Z"),
+            "dated to the edit, so the newer text wins on freshness"
+        );
+        assert!(edit.body.contains("On 2026-08-14T10:05:00Z"), "{}", edit.body);
+        assert!(edit.body.contains("Edited on 2026-08-15T09:00:00Z"));
     }
 
     #[test]
