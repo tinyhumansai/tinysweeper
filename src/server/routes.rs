@@ -1382,7 +1382,19 @@ async fn review_inner(
     // the deployment's own, so a repository's own `paths.ignore` — which is
     // repository-overridable — is honored before anything from an excluded
     // path is persisted into the engine.
-    if let Some(backend) = &state.memory {
+    //
+    // Skipped entirely when the overlay could not be read or applied:
+    // `overlay.config` is then only a fallback, not the repository's actual
+    // policy, and ingesting under it risks persisting paths the repository
+    // excludes. A later delivery for the same base tip that successfully
+    // loads the real overlay still ingests normally — this delivery just
+    // does not, rather than ingesting under a policy that might be wrong.
+    if overlay.unavailable {
+        tracing::warn!(
+            %repo,
+            "skipping memory ingestion: the repository's own configuration could not be read"
+        );
+    } else if let Some(backend) = &state.memory {
         tokio::spawn(ingest_in_background(
             backend.clone(),
             Arc::new(overlay.config.clone()),
