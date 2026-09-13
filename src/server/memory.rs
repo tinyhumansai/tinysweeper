@@ -201,28 +201,11 @@ mod tests {
         // Regression for the freshness race: two concurrent `ensure_ingested`
         // calls for the same repository must contend on the *same* lock, not
         // each get their own, or the check-then-ingest window stays racy.
+        // `CortexMemory::new` performs no I/O — it only builds an HTTP client
+        // — so it is safe to construct directly here without a real engine.
         let backend = MemoryBackend {
             memory: Arc::new(
-                CortexMemory::from_config(&crate::config::types::Memory {
-                    enabled: true,
-                    provider: "cortex".into(),
-                    endpoint: "http://127.0.0.1:1".into(),
-                    api_key_env: "TINYSWEEPER_TEST_LOCK_KEY".into(),
-                    ..Default::default()
-                })
-                .unwrap_or_else(|_| {
-                    // SAFETY-free fallback: the key env need not exist for this
-                    // test, which never calls the engine — only the lock table.
-                    std::env::set_var("TINYSWEEPER_TEST_LOCK_KEY", "x");
-                    CortexMemory::from_config(&crate::config::types::Memory {
-                        enabled: true,
-                        provider: "cortex".into(),
-                        endpoint: "http://127.0.0.1:1".into(),
-                        api_key_env: "TINYSWEEPER_TEST_LOCK_KEY".into(),
-                        ..Default::default()
-                    })
-                    .expect("engine constructs once the key exists")
-                }),
+                CortexMemory::new("http://127.0.0.1:1", "test-key").expect("client builds"),
             ),
             fresh: Mutex::new(HashMap::new()),
             ingesting: Mutex::new(HashMap::new()),
@@ -241,17 +224,19 @@ mod tests {
             "a different repository must not share the lock"
         );
 
-        // While `a` is held, a second acquisition on the same lock must not
-        // resolve until it is released.
+        // While `a` is held, a second acquisition on the same lock must wait
+        // for it to be released rather than resolving immediately.
         let guard = a.lock().await;
         let held = Arc::clone(&b);
-        let mut waiter = Box::pin(held.lock());
-        assert!(
-            futures::poll!(&mut waiter).is_pending(),
-            "a held lock must block a second acquisition on the same repository"
-        );
+        let waiter = tokio::spawn(async move {
+            let _second_guard = held.lock().await;
+        });
+        // Give the spawned task a chance to run and observe it is still
+        // blocked on the held lock.
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished(), "the second acquisition must block");
         drop(guard);
-        let _second_guard = waiter.await;
+        waiter.await.expect("the waiter completes once released");
     }
 
     #[tokio::test]
