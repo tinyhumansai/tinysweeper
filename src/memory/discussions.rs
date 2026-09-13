@@ -586,9 +586,7 @@ impl<'a> Discussions<'a> {
             subjects: 1,
             remarks: items.len() - 1,
             remembered,
-            failed: Vec::new(),
-            resume_from: None,
-            last_seen: None,
+            ..DiscussionReport::default()
         })
     }
 
