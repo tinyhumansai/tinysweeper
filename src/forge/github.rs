@@ -2019,6 +2019,36 @@ mod tests {
     }
 
     #[test]
+    fn a_collaborator_candidate_without_real_write_access_is_not_a_maintainer() {
+        // The P1 escalation on the earlier `authorAssociation`-only fix:
+        // `COLLABORATOR` includes read-only and triage access, so a
+        // candidate must still fail closed when the real lookup says no.
+        let raw = json!({
+            "data": {"repository": {"pullRequest": {"reviewThreads": {
+                "pageInfo": {"hasNextPage": false, "endCursor": null},
+                "nodes": [{
+                    "id": "PRRT_1",
+                    "isResolved": true,
+                    "isOutdated": false,
+                    "comments": {"nodes": [
+                        {"author": {"login": "tinysweeper", "__typename": "Bot"},
+                         "body": "finding"},
+                        {"author": {"login": "read-only-collaborator", "__typename": "User"},
+                         "authorAssociation": "COLLABORATOR",
+                         "body": "looks fine to me"}
+                    ]}
+                }]
+            }}}}
+        });
+
+        let parsed = threads_from_graphql(&raw);
+        let write_access = HashMap::from([("read-only-collaborator".to_string(), false)]);
+        let threads = resolve_write_access(parsed, &write_access);
+
+        assert!(!threads[0].comments[1].maintainer);
+    }
+
+    #[test]
     fn no_reviews_is_no_approvals() {
         // Conservative direction: nothing gates on having *fewer* approvals.
         assert_eq!(approvals_of(&[]), 0);
