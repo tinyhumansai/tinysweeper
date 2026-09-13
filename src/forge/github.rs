@@ -1091,7 +1091,7 @@ impl ForgeRead for GitHubRead {
         match self
             .client
             .repos(&repo.owner, &repo.name)
-            .permission(login)
+            .get_contributor_permission(login)
             .send()
             .await
         {
