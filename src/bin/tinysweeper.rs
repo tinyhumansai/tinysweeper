@@ -1386,6 +1386,15 @@ async fn run_memory(command: MemoryCommand) -> Result<()> {
             if let Some(at) = &report.resume_from {
                 println!("next time: --since {at}");
             }
+            // A walk with skipped conversations is not a complete import and
+            // offers no safe cursor; say so with the exit code, as the
+            // server-side script does, so automation cannot mistake it.
+            if !report.failed.is_empty() {
+                return Err(tinysweeper::Error::config(format!(
+                    "{} conversation(s) could not be remembered; rerun without --since to retry them",
+                    report.failed.len()
+                )));
+            }
         }
         MemoryCommand::Forget { repo, section, yes } => {
             let repo = canonical_repo(&repo)?;
