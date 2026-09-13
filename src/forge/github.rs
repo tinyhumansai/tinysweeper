@@ -1168,6 +1168,39 @@ impl ForgeRead for GitHubRead {
             ));
         }
 
+        // A thread whose first page said `hasNextPage` gets the rest of its
+        // comments fetched here, one thread at a time — rare enough that
+        // this is never the common path, but a later maintainer correction
+        // must not go unread just because it arrived past comment 50.
+        for parsed_thread in &mut parsed {
+            let thread_id = parsed_thread.thread.id.clone();
+            let mut cursor = parsed_thread.more_comments.take();
+            while let Some(after) = cursor {
+                let raw: serde_json::Value = self
+                    .client
+                    .graphql(&serde_json::json!({
+                        "query": THREAD_COMMENTS_QUERY.replace("$first", &GRAPHQL_PAGE.to_string()),
+                        "variables": { "id": thread_id, "after": after },
+                    }))
+                    .await
+                    .map_err(api)?;
+                graphql_errors(&raw, "the review thread comments query")?;
+                let comments = &raw["data"]["node"]["comments"];
+                for comment in comments["nodes"].as_array().into_iter().flatten() {
+                    let (comment, candidate) = comment_from_json(comment);
+                    if candidate && !comment.author.is_empty() {
+                        parsed_thread.candidates.push(comment.author.clone());
+                    }
+                    parsed_thread.thread.comments.push(comment);
+                }
+                cursor = comments["pageInfo"]["hasNextPage"]
+                    .as_bool()
+                    .unwrap_or(false)
+                    .then(|| comments["pageInfo"]["endCursor"].as_str().map(str::to_string))
+                    .flatten();
+            }
+        }
+
         // Every `authorAssociation`-flagged comment author and every
         // resolver, deduped: each is looked up once against the repository's
         // actual collaborator permissions, however many threads or comments
