@@ -495,8 +495,19 @@ pub async fn review_with_memory(
                             .observe(&repo.to_string(), number, &threads, &comments)
                             .await
                     }
-                    (Err(err), _) | (_, Err(err)) => {
+                    // Two distinct arms rather than one or-pattern binding a
+                    // shared `err`: with a single `(Err(err), _) | (_, Err(err))`
+                    // arm, `err` always binds to the *first* pattern that
+                    // matches, so a failure on the second call alone would
+                    // still log the first call's `Ok` as if it were the
+                    // error — and if both failed, only the first error was
+                    // ever visible.
+                    (Err(err), _) => {
                         tracing::warn!(%err, "could not read review threads for memory");
+                        Default::default()
+                    }
+                    (Ok(_), Err(err)) => {
+                        tracing::warn!(%err, "could not read review comments for memory");
                         Default::default()
                     }
                 }
