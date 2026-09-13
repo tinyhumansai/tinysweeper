@@ -47,6 +47,11 @@ toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "fs", "sync", "time"] }
+# `url` only parses; it opens no socket, so it belongs with the offline core
+# above. `crate::memory::endpoint_allowed` needs the exact host resolution
+# `reqwest` itself uses — including how a redirect or `user@host` authority
+# is read — and a hand-rolled parser cannot promise that.
+url = "2"
 
 # --- always compiled: the repository graph's parsers ---
 # tree-sitter links C grammars, not a network client, so it needs no feature
