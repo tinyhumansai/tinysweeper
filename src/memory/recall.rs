@@ -463,8 +463,17 @@ fn assemble(
         })
         .collect();
     let mut remaining = budget_tokens;
+    // `render` prints the "Answers from memory" heading once, before the
+    // first answer — charged here against the first answer that survives the
+    // budget, exactly where it would actually land in the rendered prompt.
+    let mut answers_heading_charged = false;
     for answer in answers {
-        let cost = answer_tokens(&answer);
+        let heading = if answers_heading_charged {
+            0
+        } else {
+            answers_heading_tokens()
+        };
+        let cost = heading + answer_tokens(&answer);
         if cost > remaining {
             context.dropped += 1;
             continue;
@@ -472,6 +481,7 @@ fn assemble(
         remaining -= cost;
         context.tokens += cost;
         context.answers.push(answer);
+        answers_heading_charged = true;
     }
 
     // Outcomes first: they are the reason this exists. Then conventions, then
