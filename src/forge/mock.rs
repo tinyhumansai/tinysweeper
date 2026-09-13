@@ -1203,6 +1203,7 @@ mod tests {
                     author: "tinysweeper[bot]".into(),
                     body: "<!-- tinysweeper:fp=0123456789abcdef -->".into(),
                     bot: true,
+                    maintainer: false,
                 }],
             }],
         );
