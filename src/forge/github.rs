@@ -1757,8 +1757,40 @@ mod tests {
         assert!(threads[0].is_outdated);
         assert!(threads[0].comments[0].bot, "a Bot author is a bot");
         assert!(!threads[0].comments[1].bot);
+        assert!(
+            threads[0].comments[1].maintainer,
+            "a COLLABORATOR association carries write access"
+        );
         assert!(threads[1].is_resolved);
         assert_eq!(threads[1].comments[0].author, "");
+    }
+
+    #[test]
+    fn a_reply_without_a_recognized_author_association_is_not_a_maintainer() {
+        // Untrusted input: only OWNER, MEMBER, and COLLABORATOR carry write
+        // access. Anything else — including a missing field, NONE, or
+        // CONTRIBUTOR — must not be promoted to that authorization signal.
+        let raw = json!({
+            "data": {"repository": {"pullRequest": {"reviewThreads": {
+                "pageInfo": {"hasNextPage": false, "endCursor": null},
+                "nodes": [{
+                    "id": "PRRT_1",
+                    "isResolved": true,
+                    "isOutdated": false,
+                    "comments": {"nodes": [
+                        {"author": {"login": "tinysweeper", "__typename": "Bot"},
+                         "body": "finding"},
+                        {"author": {"login": "stranger", "__typename": "User"},
+                         "authorAssociation": "NONE",
+                         "body": "looks fine to me"}
+                    ]}
+                }]
+            }}}}
+        });
+
+        let threads = threads_from_graphql(&raw);
+
+        assert!(!threads[0].comments[1].maintainer);
     }
 
     #[test]
