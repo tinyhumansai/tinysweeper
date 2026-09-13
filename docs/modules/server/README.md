@@ -204,7 +204,8 @@ path.
 | `GET` | `/admin/memory/{owner}/{name}` | `200` with where the last walk stands; `404` if none since boot |
 
 Feeds the memory engine a repository's conversation history — every issue and
-pull request, open or closed, and everything anybody said on them (see
+pull request, open or closed, and everything anybody said on them, other
+review bots included but the reviewer's own remarks excluded (see
 `docs/modules/memory`). The body is `{}` for the whole history,
 `{"since": "<rfc3339>", "limit": 1000}` to walk what changed after an instant,
 or `{"number": 131, "pull_request": true}` to remember one conversation now.
