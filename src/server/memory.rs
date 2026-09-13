@@ -218,6 +218,38 @@ mod tests {
         assert!(MemoryBackend::open(&config).await.unwrap().is_none());
     }
 
+    #[test]
+    fn freshness_key_changes_with_the_effective_ingestion_policy() {
+        // Regression: freshness used to be keyed on the revision alone. If
+        // the first delivery for a base SHA ingested under the deployment's
+        // fallback `paths.ignore` (its own repository-overlay fetch having
+        // failed transiently) and a later delivery for the *same* revision
+        // then successfully loaded the repository's real overlay, keying on
+        // revision alone would mark that later, differently-configured
+        // ingest a no-op — leaving paths the repository explicitly excluded
+        // stored and recallable.
+        let mut config: Config = crate::config::DEFAULTS
+            .parse::<toml::Table>()
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let fallback = freshness_key("sha1", &config);
+        assert_eq!(fallback, freshness_key("sha1", &config), "deterministic");
+
+        config.paths.ignore = vec!["vendor/**".into()];
+        let with_overlay = freshness_key("sha1", &config);
+        assert_ne!(
+            fallback, with_overlay,
+            "a different effective paths.ignore must not look fresh"
+        );
+
+        assert_ne!(
+            freshness_key("sha1", &config),
+            freshness_key("sha2", &config),
+            "a different revision must not look fresh either"
+        );
+    }
+
     #[tokio::test]
     async fn ingest_lock_is_shared_per_repository_and_serializes_holders() {
         // Regression for the freshness race: two concurrent `ensure_ingested`
