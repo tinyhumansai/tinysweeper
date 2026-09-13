@@ -238,6 +238,14 @@ struct ParsedThread {
     /// The login of whoever resolved this thread, if anyone and if GitHub
     /// reported it.
     resolved_by: Option<String>,
+    /// The cursor to fetch this thread's next page of comments with, when
+    /// the first page didn't hold them all.
+    ///
+    /// Without following this, a thread with more than one page of comments
+    /// would have its later comments — including a later maintainer
+    /// correction of an earlier reply — silently invisible to `classify`,
+    /// which reads the *latest* reply as the settled word.
+    more_comments: Option<String>,
 }
 
 /// One comment, parsed, plus whether it names a write-access candidate.
