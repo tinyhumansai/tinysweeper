@@ -681,10 +681,13 @@ pub async fn review_with_memory(
     // was said and, once the threads settle, what became of it. Best effort,
     // and on the read side deliberately: the memory records the reviewer's
     // conclusions, and whether `apply` later posts each one is a separate
-    // decision that the outcome pass reads back off the thread.
-    if let Some(recaller) =
-        memory.filter(|_| config.memory.enabled && config.memory.remember_reviews)
-    {
+    // decision that the outcome pass reads back off the thread. Gated on
+    // `review.incremental` for the same reason the recall above is: a manual
+    // full review's extra opinion must not mutate memory for the next
+    // ordinary cycle.
+    if let Some(recaller) = memory.filter(|_| {
+        config.memory.enabled && config.memory.remember_reviews && config.review.incremental
+    }) {
         let findings: Vec<Finding> = lanes
             .iter()
             .flat_map(|lane| lane.findings.iter().cloned())
