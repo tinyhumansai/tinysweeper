@@ -828,11 +828,8 @@ impl ForgeRead for GitHubRead {
 
     async fn default_branch(&self, repo: &RepoId) -> Result<String> {
         let route = format!("/repos/{}/{}", repo.owner, repo.name);
-        let repository: serde_json::Value = self
-            .client
-            .get(&route, None::<&()>)
-            .await
-            .map_err(api)?;
+        let repository: serde_json::Value =
+            self.client.get(&route, None::<&()>).await.map_err(api)?;
         repository["default_branch"]
             .as_str()
             .map(str::to_string)

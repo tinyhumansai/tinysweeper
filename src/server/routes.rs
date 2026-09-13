@@ -1407,13 +1407,26 @@ async fn review_inner(
         match default_branch {
             Ok(branch) if branch == pull_request.base_ref => {
                 tokio::spawn(ingest_in_background(
-            backend.clone(),
-            Arc::new(overlay.config.clone()),
-            state.index_permits.clone(),
-            repo_id.clone(),
-            pull_request.base_sha.clone(),
-            read_token.clone(),
-        ));
+                    backend.clone(),
+                    Arc::new(overlay.config.clone()),
+                    state.index_permits.clone(),
+                    repo_id.clone(),
+                    pull_request.base_sha.clone(),
+                    read_token.clone(),
+                ));
+            }
+            Ok(branch) => tracing::debug!(
+                %repo,
+                base = %pull_request.base_ref,
+                default = %branch,
+                "skipping memory ingestion: the base is not the default branch"
+            ),
+            Err(err) => tracing::warn!(
+                %repo,
+                %err,
+                "skipping memory ingestion: could not read the default branch"
+            ),
+        }
     }
 
     let outcome = std::panic::AssertUnwindSafe(run_and_publish(
