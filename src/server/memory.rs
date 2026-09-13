@@ -237,19 +237,48 @@ impl MemoryBackend {
     /// Walk `repo`'s history since `since` and remember it, recording the
     /// outcome under [`Self::backfill_status`]. Call only after
     /// [`Self::start_backfill`] said yes.
+    ///
+    /// Walked in chunks of [`BACKFILL_CHUNK`] rather than as one pass over
+    /// `limit`: the default walk is thousands of GitHub reads plus a memory
+    /// write per subject, easily long enough to outlast an installation
+    /// token's hour, and a single `GitHubRead` built once up front would
+    /// carry that one token for the whole thing. Re-minting between chunks
+    /// costs nothing extra — `AppAuth::installation_token` answers from
+    /// cache while the token is still good — and renews it before it expires
+    /// when the walk runs long.
     pub async fn run_backfill(
         &self,
         config: &Config,
         repo: &RepoId,
         since: Option<&str>,
         limit: usize,
-        token: &str,
+        auth: &AppAuth,
+        installation: u64,
     ) {
-        let outcome = async {
-            let forge = crate::forge::github::GitHubRead::new(token)?;
-            Discussions::new(self.memory.as_ref(), &forge, &config.memory)
-                .backfill(repo, since, limit)
-                .await
+        let mut cursor = since.map(str::to_string);
+        let mut combined = DiscussionReport::default();
+        let mut walked = 0usize;
+        let outcome: Result<DiscussionReport> = async {
+            while walked < limit {
+                let chunk = (limit - walked).min(BACKFILL_CHUNK);
+                let token = auth.installation_token(installation).await?;
+                let forge = crate::forge::github::GitHubRead::new(&token)?;
+                let report = Discussions::new(self.memory.as_ref(), &forge, &config.memory)
+                    .backfill(repo, cursor.as_deref(), chunk)
+                    .await?;
+                let processed = report.subjects + report.failed.len();
+                let advanced = report.resume_from.clone();
+                let stalled = report.failed.is_empty() && advanced == cursor;
+                combined.absorb(report);
+                walked += chunk;
+                if stalled || advanced.is_none() || processed < chunk {
+                    combined.resume_from = advanced.or(cursor);
+                    return Ok(combined);
+                }
+                cursor = advanced;
+            }
+            combined.resume_from = cursor;
+            Ok(combined)
         }
         .await;
         match &outcome {
