@@ -689,6 +689,7 @@ fn pull_request_from(
         // allowed, where one that read too high would allow a close on a pull
         // request somebody commented on this morning.
         quiet_days: days_since(pr.updated_at.map(|at| at.timestamp())),
+        updated_at: pr.updated_at.map(|at| at.to_rfc3339()),
     }
 }
 
