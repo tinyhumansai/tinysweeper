@@ -331,6 +331,9 @@ pub fn parse_envelope(text: &str) -> Option<MemoryItem> {
         Some("convention") => MemoryKind::Convention,
         Some("finding") => MemoryKind::ReviewFinding,
         Some("outcome") => MemoryKind::ReviewOutcome,
+        Some("issue") => MemoryKind::Issue,
+        Some("pull-request") => MemoryKind::PullRequest,
+        Some("remark") => MemoryKind::Remark,
         _ => return None,
     };
     let key = fields.remove("key")?;
@@ -347,7 +350,11 @@ pub fn parse_envelope(text: &str) -> Option<MemoryItem> {
 fn modality(kind: MemoryKind) -> &'static str {
     match kind {
         MemoryKind::CodeChunk | MemoryKind::Convention => "document",
-        MemoryKind::ReviewFinding | MemoryKind::ReviewOutcome => "observation",
+        MemoryKind::ReviewFinding
+        | MemoryKind::ReviewOutcome
+        | MemoryKind::Issue
+        | MemoryKind::PullRequest
+        | MemoryKind::Remark => "observation",
     }
 }
 
