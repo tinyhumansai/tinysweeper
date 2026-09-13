@@ -34,6 +34,9 @@ pub struct MockMemory {
     /// When set, every call fails with this message. For the tests that prove
     /// an unreachable engine costs context and never the review.
     failure: Arc<Mutex<Option<String>>>,
+    /// When set, `remember` sleeps this long before completing. For the
+    /// tests that prove a slow engine does not hold the review path open.
+    delay: Arc<Mutex<Option<std::time::Duration>>>,
 }
 
 impl MockMemory {
