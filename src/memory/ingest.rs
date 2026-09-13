@@ -479,10 +479,31 @@ impl<'a> Ingestor<'a> {
     }
 
     /// Remember everything under `root` for `repo`.
+    ///
+    /// # Stale versions are retired first
+    ///
+    /// A changed section or chunk hashes to a new [`MemoryItem::content_id`]
+    /// — the same key, a different body — and CortexDB has no update route,
+    /// so writing it is a second, independent event, never a replacement. A
+    /// key-set diff against what was ingested last would still miss exactly
+    /// that case (the key did not disappear, its body did) and only catch a
+    /// deleted file or heading. The only version of this fix that is honest
+    /// about what the [`Memory`] port can actually do is section-wide: every
+    /// call here forgets the whole `code` and/or `conventions` section for
+    /// `repo` before writing this pass's items, so recall can never rank a
+    /// superseded convention or code chunk above (or alongside) the version
+    /// this checkout actually holds. `ensure_ingested` already gates calling
+    /// this on the base tip having moved, so the section is never forgotten
+    /// without this same call immediately repopulating it in full.
     pub async fn ingest_checkout(&self, repo: &str, root: &Path) -> Result<IngestReport> {
         let selection = self.selector.walk(root)?;
         let mut report = IngestReport::default();
         let mut pending: Vec<MemoryItem> = Vec::new();
+
+        for section in ingested_sections(self.config) {
+            let scope = MemoryScope::section(repo, section);
+            report.retired += self.memory.forget(&scope).await?;
+        }
 
         for path in &selection.selected {
             let bytes = match std::fs::read(root.join(path)) {
