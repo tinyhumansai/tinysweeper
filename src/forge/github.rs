@@ -1556,6 +1556,7 @@ impl ForgeRead for GitHubRead {
                 // compared for similarity, and asking for two hundred issues'
                 // types would cost a request each.
                 issue_type: None,
+                ..Issue::default()
             })
             .collect())
     }
@@ -1592,6 +1593,7 @@ impl ForgeRead for GitHubRead {
                 quiet_days: 0,
                 comments: i.comments,
                 issue_type: None,
+                ..Issue::default()
             })
             .collect())
     }
