@@ -384,8 +384,19 @@ pub struct DiscussionReport {
     /// A backfill continues past them; a live remember has at most one.
     pub failed: Vec<String>,
     /// The `updated_at` of the last subject a backfill walked, which is
-    /// where the next incremental backfill resumes from.
+    /// where the next incremental backfill resumes from. `None` whenever
+    /// anything in the walk failed, so an operator resuming from it never
+    /// skips past a failure.
     pub resume_from: Option<String>,
+    /// Where this walk actually got to, whether or not everything in it
+    /// succeeded. Unlike `resume_from`, set whenever the listing was
+    /// non-empty: a caller chunking a longer walk across several of these
+    /// calls (see `server::memory::MemoryBackend::run_backfill`) needs this
+    /// to keep making forward progress through later chunks even after an
+    /// earlier one recorded a failure, while still reporting `resume_from`
+    /// as unsafe to an external caller until nothing has failed anywhere in
+    /// the combined walk.
+    pub(crate) last_seen: Option<String>,
 }
 
 impl DiscussionReport {
