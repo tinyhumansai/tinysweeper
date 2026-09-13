@@ -110,6 +110,16 @@ pub struct PullRequest {
     /// therefore refuses a close rather than allowing one.
     #[serde(default)]
     pub quiet_days: u32,
+    /// When the forge last recorded a write to it, RFC 3339.
+    ///
+    /// The one freshness signal memory has for a pull-request subject item:
+    /// unlike [`Issue`], nothing else here is a timestamp `subject_item` can
+    /// call `.observed()` with. `None` from an adapter that cannot say (or a
+    /// fixture from before this field existed, via `serde(default)`), which
+    /// means that item enters the engine with no freshness signal rather than
+    /// a wrong one.
+    #[serde(default)]
+    pub updated_at: Option<String>,
 }
 
 /// An unstated `open` is an open pull request.
