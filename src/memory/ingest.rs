@@ -72,10 +72,13 @@ pub fn code_items(chunks: &[Chunk]) -> Vec<MemoryItem> {
     let mut seen: std::collections::HashMap<(&str, &str), usize> = std::collections::HashMap::new();
     for chunk in chunks {
         if let Some(symbol) = &chunk.symbol {
-            *seen.entry((chunk.path.as_str(), symbol.as_str())).or_insert(0) += 1;
+            *seen
+                .entry((chunk.path.as_str(), symbol.as_str()))
+                .or_insert(0) += 1;
         }
     }
-    let mut index: std::collections::HashMap<(&str, &str), usize> = std::collections::HashMap::new();
+    let mut index: std::collections::HashMap<(&str, &str), usize> =
+        std::collections::HashMap::new();
     chunks
         .iter()
         .filter(|chunk| !chunk.text.trim().is_empty())
