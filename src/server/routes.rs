@@ -29,7 +29,7 @@ use crate::server::failure;
 use crate::server::indexing::{IndexBackend, index_in_background};
 use crate::server::manual::{self, FullReviews, MergeReport, Merges, Remembers, Triages};
 use crate::server::memory::{
-    BackfillStatus, MemoryBackend, ingest_in_background, remember_in_background,
+    BackfillStart, BackfillStatus, MemoryBackend, ingest_in_background, remember_in_background,
 };
 use crate::server::status;
 use crate::server::store::{Store, Trust};
@@ -960,15 +960,15 @@ impl Remembers for MemoryDispatch {
         repo: &RepoId,
         since: Option<String>,
         limit: usize,
-    ) -> Result<std::result::Result<BackfillStatus, BackfillStatus>> {
+    ) -> Result<BackfillStart> {
         let backend = self.backend()?;
         // The token is minted before the walk is recorded as started, so a
         // repository the app is not installed on is a plain error to the
         // operator rather than a backfill that fails in the background.
         let token = self.read_token(repo).await?;
         let started = match backend.start_backfill(repo, since.clone(), limit) {
-            Ok(status) => status,
-            Err(running) => return Ok(Err(running)),
+            BackfillStart::Started(status) => status,
+            running @ BackfillStart::AlreadyRunning(_) => return Ok(running),
         };
         let config = Arc::new(self.state.config.config.clone());
         let repo = repo.clone();
@@ -983,7 +983,7 @@ impl Remembers for MemoryDispatch {
                 .run_backfill(&config, &repo, since.as_deref(), limit, &token)
                 .await;
         });
-        Ok(Ok(started))
+        Ok(BackfillStart::Started(started))
     }
 
     async fn status(&self, repo: &RepoId) -> Result<Option<BackfillStatus>> {

@@ -607,10 +607,11 @@ pub struct Issue {
 }
 
 /// What kind of contribution a [`Remark`] is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemarkKind {
     /// A comment in the conversation tab of an issue or a pull request.
+    #[default]
     Comment,
     /// An inline comment on a pull request's diff.
     ReviewComment,
@@ -670,12 +671,6 @@ pub struct Remark {
     pub in_reply_to: Option<u64>,
     /// The verdict, on a review.
     pub verdict: Option<ReviewEvent>,
-}
-
-impl Default for RemarkKind {
-    fn default() -> Self {
-        Self::Comment
-    }
 }
 
 /// Everything a lane needs about one pull request, fetched once.

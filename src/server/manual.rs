@@ -30,7 +30,7 @@ use crate::error::Result;
 use crate::forge::RepoId;
 use crate::memory::DiscussionReport;
 use crate::server::admin::AdminAuth;
-use crate::server::memory::BackfillStatus;
+use crate::server::memory::{BackfillStart, BackfillStatus};
 
 /// Environment variable naming the organisation manual reviews may target.
 pub const ORG_ENV: &str = "TINYSWEEPER_ALLOWED_ORG";
@@ -187,14 +187,14 @@ pub trait Remembers: Send + Sync {
 
     /// Start a backfill in the background, or report the one already running.
     ///
-    /// `Err(status)` is the running one; the walk is minutes long and an
-    /// operator pressing twice wants to be told, not doubled up.
+    /// The walk is minutes long and an operator pressing twice wants to be
+    /// told, not doubled up.
     async fn backfill(
         &self,
         repo: &RepoId,
         since: Option<String>,
         limit: usize,
-    ) -> Result<std::result::Result<BackfillStatus, BackfillStatus>>;
+    ) -> Result<BackfillStart>;
 
     /// Where the last backfill of `repo` stands, if one was ever started.
     async fn status(&self, repo: &RepoId) -> Result<Option<BackfillStatus>>;
@@ -443,7 +443,7 @@ async fn memory_backfill(
         .await
         .map_err(|err| ApiError(StatusCode::BAD_GATEWAY, err.to_string()))?
     {
-        Ok(status) => {
+        BackfillStart::Started(status) => {
             // Logged deliberately: a backfill reads every conversation in a
             // repository through an installation token, and should be
             // reconstructable from the logs.
@@ -454,7 +454,7 @@ async fn memory_backfill(
             )
                 .into_response())
         }
-        Err(running) => Ok((
+        BackfillStart::AlreadyRunning(running) => Ok((
             StatusCode::CONFLICT,
             Json(json!({
                 "repo": repo.to_string(),
@@ -685,15 +685,15 @@ mod tests {
             repo: &RepoId,
             since: Option<String>,
             limit: usize,
-        ) -> crate::error::Result<std::result::Result<BackfillStatus, BackfillStatus>> {
+        ) -> crate::error::Result<BackfillStart> {
             if self.running {
-                return Ok(Err(status(true)));
+                return Ok(BackfillStart::AlreadyRunning(status(true)));
             }
             self.backfills
                 .lock()
                 .expect("not poisoned")
                 .push((repo.to_string(), since, limit));
-            Ok(Ok(status(true)))
+            Ok(BackfillStart::Started(status(true)))
         }
 
         async fn status(&self, _repo: &RepoId) -> crate::error::Result<Option<BackfillStatus>> {

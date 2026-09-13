@@ -78,6 +78,15 @@ pub struct BackfillStatus {
     pub error: Option<String>,
 }
 
+/// What asking for a backfill produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackfillStart {
+    /// A walk was recorded as started; the caller runs it.
+    Started(BackfillStatus),
+    /// One is already walking this repository; here is where it stands.
+    AlreadyRunning(BackfillStatus),
+}
+
 /// The engine, and what it has been fed.
 pub struct MemoryBackend {
     /// The engine. `Arc` so a background ingest can hold it past the request.
@@ -187,17 +196,17 @@ impl MemoryBackend {
 
     /// Record that a backfill of `repo` is starting, unless one is running.
     ///
-    /// `Err` carries the running status: two walks over one repository would
-    /// read every conversation twice for nothing.
+    /// Two walks over one repository would read every conversation twice
+    /// for nothing, so a running one is reported instead of doubled.
     pub fn start_backfill(
         &self,
         repo: &RepoId,
         since: Option<String>,
         limit: usize,
-    ) -> std::result::Result<BackfillStatus, BackfillStatus> {
+    ) -> BackfillStart {
         let mut backfills = self.backfills.lock().expect("backfill lock");
         if let Some(running) = backfills.get(&repo.to_string()).filter(|s| s.running) {
-            return Err(running.clone());
+            return BackfillStart::AlreadyRunning(running.clone());
         }
         let status = BackfillStatus {
             running: true,
@@ -209,7 +218,7 @@ impl MemoryBackend {
             error: None,
         };
         backfills.insert(repo.to_string(), status.clone());
-        Ok(status)
+        BackfillStart::Started(status)
     }
 
     /// Record how `repo`'s backfill ended.
@@ -595,13 +604,15 @@ mod tests {
         );
         let repo = RepoId::parse("o/r").unwrap();
         assert!(backend.backfill_status(&repo).is_none());
-        let started = backend
-            .start_backfill(&repo, Some("2026-01-01T00:00:00Z".into()), 50)
-            .expect("nothing running");
+        let BackfillStart::Started(started) =
+            backend.start_backfill(&repo, Some("2026-01-01T00:00:00Z".into()), 50)
+        else {
+            panic!("nothing was running");
+        };
         assert!(started.running);
-        let refused = backend
-            .start_backfill(&repo, None, 50)
-            .expect_err("a second walk is refused");
+        let BackfillStart::AlreadyRunning(refused) = backend.start_backfill(&repo, None, 50) else {
+            panic!("a second walk must be refused");
+        };
         assert_eq!(refused.since.as_deref(), Some("2026-01-01T00:00:00Z"));
 
         backend.finish_backfill(
