@@ -981,14 +981,11 @@ impl Remembers for MemoryDispatch {
         };
         let config = Arc::new(self.state.config.config.clone());
         let repo = repo.clone();
-        let permits = self.state.index_permits.clone();
         let auth = self.state.auth.clone();
         tokio::spawn(async move {
-            // Shares the index permit pool: a backfill is thousands of
-            // forge reads, and two of them beside a clone is enough.
-            let Ok(_permit) = permits.acquire_owned().await else {
-                return;
-            };
+            // Not on the index permit pool: `run_backfill` serializes walks
+            // on a lock of its own, so a minutes-long walk never holds a
+            // permit that code ingestion and live re-reads are waiting for.
             backend
                 .run_backfill(&config, &repo, since.as_deref(), limit, &auth, installation)
                 .await;

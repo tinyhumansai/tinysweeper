@@ -111,6 +111,15 @@ pub struct MemoryBackend {
     pending: Mutex<HashSet<String>>,
     /// The last backfill per repository, running or finished.
     backfills: Mutex<HashMap<String, BackfillStatus>>,
+    /// One backfill walks at a time, across every repository.
+    ///
+    /// Its own lock rather than a slot in the index permit pool: a walk is
+    /// minutes of forge reads, and holding an index permit for that long
+    /// would starve code ingestion and live re-reads of every other
+    /// repository. Serial across repositories on purpose, too — every walk
+    /// spends the same installation's rate-limit budget that reviews need,
+    /// and two walks at once is how a review gets a 403.
+    walking: AsyncMutex<()>,
 }
 
 impl std::fmt::Debug for MemoryBackend {
@@ -146,6 +155,7 @@ impl MemoryBackend {
             ingesting: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashSet::new()),
             backfills: Mutex::new(HashMap::new()),
+            walking: AsyncMutex::new(()),
         }
     }
 
@@ -259,6 +269,10 @@ impl MemoryBackend {
         auth: &AppAuth,
         installation: u64,
     ) {
+        // Queued behind any other repository's walk; the status already says
+        // `running`, which is honest — it is queued to run, and the operator
+        // polling it sees it finish.
+        let _walking = self.walking.lock().await;
         let mut cursor = since.map(str::to_string);
         let mut combined = DiscussionReport::default();
         let mut walked = 0usize;
