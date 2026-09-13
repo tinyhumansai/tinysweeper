@@ -49,6 +49,9 @@
 //! stranger's text one remark can carry into a review.
 
 use std::fmt::Write as _;
+use std::future::Future;
+use std::pin::Pin;
+use std::time::Duration;
 
 use crate::config::types::Memory as MemoryConfig;
 use crate::error::Result;
@@ -77,6 +80,25 @@ const TITLE_CHARS: usize = 80;
 /// the admin route both take an explicit larger number when a repository
 /// needs it.
 pub const DEFAULT_BACKFILL_LIMIT: usize = 1000;
+
+/// How long a walk waits for a rate limit whose reset the forge did not
+/// name. GitHub's primary window is an hour; a full hour is the pessimistic
+/// answer that is never too short.
+const UNKNOWN_RESET_WAIT: Duration = Duration::from_secs(60 * 60);
+
+/// Added to every wait, so the retry lands after the reset rather than on
+/// it: the forge's clock and this one need not agree to the second.
+const RESET_MARGIN: Duration = Duration::from_secs(30);
+
+/// Rate-limit waits one walk will sit through before giving up.
+///
+/// A dozen hours of a repository the size of a distribution; past that,
+/// something other than the budget is wrong, and the error says so.
+const MAX_RATE_LIMIT_WAITS: usize = 12;
+
+/// How a walk pauses. Injected so the offline suite can prove a walk waits
+/// for the right duration and then retries, without sleeping through it.
+type Pause = Box<dyn Fn(Duration) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// The thing a conversation hangs off.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -414,6 +436,12 @@ pub struct DiscussionReport {
     /// anything in the walk failed, so an operator resuming from it never
     /// skips past a failure.
     pub resume_from: Option<String>,
+    /// Rate-limit pauses this walk sat through, and the seconds they cost.
+    /// Reported so an operator reading a slow walk's status can see that it
+    /// was waiting on the forge's budget rather than stuck.
+    pub rate_limit_waits: usize,
+    /// Seconds spent in those pauses.
+    pub waited_secs: u64,
     /// Where this walk actually got to, whether or not everything in it
     /// succeeded. Unlike `resume_from`, set whenever the listing was
     /// non-empty: a caller chunking a longer walk across several of these
@@ -435,6 +463,13 @@ impl DiscussionReport {
         if !self.failed.is_empty() {
             let _ = write!(out, ", {} failed", self.failed.len());
         }
+        if self.rate_limit_waits > 0 {
+            let _ = write!(
+                out,
+                "; waited out the rate limit {} time(s), {}s in all",
+                self.rate_limit_waits, self.waited_secs
+            );
+        }
         if let Some(at) = &self.resume_from {
             let _ = write!(out, "; resume from {at}");
         }
@@ -452,6 +487,8 @@ impl DiscussionReport {
         self.remarks += other.remarks;
         self.remembered.merge(other.remembered);
         self.failed.extend(other.failed);
+        self.rate_limit_waits += other.rate_limit_waits;
+        self.waited_secs += other.waited_secs;
     }
 }
 
@@ -460,6 +497,7 @@ pub struct Discussions<'a> {
     memory: &'a dyn Memory,
     forge: &'a dyn ForgeRead,
     config: &'a MemoryConfig,
+    pause: Pause,
 }
 
 impl<'a> Discussions<'a> {
@@ -469,7 +507,40 @@ impl<'a> Discussions<'a> {
             memory,
             forge,
             config,
+            pause: Box::new(|for_how_long| Box::pin(tokio::time::sleep(for_how_long))),
         }
+    }
+
+    /// Pause through `pause` instead of sleeping. For tests.
+    pub fn paused_by(mut self, pause: Pause) -> Self {
+        self.pause = pause;
+        self
+    }
+
+    /// Wait out a rate limit that resets at `reset_at`, then return how long
+    /// that took. `waits` is how many this walk has already sat through; the
+    /// error past [`MAX_RATE_LIMIT_WAITS`] is the walk giving up.
+    async fn wait_out(&self, repo: &RepoId, reset_at: Option<u64>, waits: usize) -> Result<u64> {
+        if waits >= MAX_RATE_LIMIT_WAITS {
+            return Err(crate::error::Error::Forge(format!(
+                "gave up walking {repo} after {waits} rate-limit waits"
+            )));
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or_default();
+        let until_reset = reset_at
+            .map(|at| Duration::from_secs(at.saturating_sub(now)))
+            .unwrap_or(UNKNOWN_RESET_WAIT);
+        let wait = until_reset + RESET_MARGIN;
+        tracing::info!(
+            %repo,
+            secs = wait.as_secs(),
+            "the forge's rate limit is spent; the walk waits for it to reset"
+        );
+        (self.pause)(wait).await;
+        Ok(wait.as_secs())
     }
 
     /// Remember one issue or pull request by number, reading it first.
@@ -536,7 +607,21 @@ impl<'a> Discussions<'a> {
         since: Option<&str>,
         limit: usize,
     ) -> Result<DiscussionReport> {
-        let listing = self.forge.issues_updated_since(repo, since, limit).await?;
+        let mut report = DiscussionReport::default();
+        // The forge's rate limit is waited out, here and per subject below,
+        // rather than surfaced: a walk is hours of requests against a budget
+        // that refills hourly, and a walk that fails on the refill boundary
+        // is a walk an operator has to babysit. See `wait_out`.
+        let listing = loop {
+            match self.forge.issues_updated_since(repo, since, limit).await {
+                Ok(listing) => break listing,
+                Err(crate::error::Error::RateLimited { reset_at }) => {
+                    report.waited_secs += self.wait_out(repo, reset_at, report.rate_limit_waits).await?;
+                    report.rate_limit_waits += 1;
+                }
+                Err(err) => return Err(err),
+            }
+        };
         // `since` only ever excludes what is strictly before it (see
         // `MockForge` and the GitHub adapter), so a cursor landing inside a
         // group of entries sharing a second-resolution `updated_at` would
@@ -545,7 +630,6 @@ impl<'a> Discussions<'a> {
         // group; below that, the walk reached the end of history and every
         // entry it saw is accounted for.
         let truncated = listing.len() >= limit;
-        let mut report = DiscussionReport::default();
         for entry in &listing {
             let number = entry.number;
             // A pull request is lifted straight out of the listing rather
@@ -559,7 +643,16 @@ impl<'a> Discussions<'a> {
             } else {
                 Subject::Issue(entry.clone())
             };
-            let outcome = self.remember_subject(repo, &subject).await;
+            let outcome = loop {
+                match self.remember_subject(repo, &subject).await {
+                    Err(crate::error::Error::RateLimited { reset_at }) => {
+                        report.waited_secs +=
+                            self.wait_out(repo, reset_at, report.rate_limit_waits).await?;
+                        report.rate_limit_waits += 1;
+                    }
+                    other => break other,
+                }
+            };
             match outcome {
                 Ok(one) => report.absorb(one),
                 Err(err) => {
