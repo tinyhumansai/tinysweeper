@@ -288,9 +288,22 @@ impl MemoryBackend {
                 let last_seen = report.last_seen.clone();
                 combined.absorb(report);
                 walked += chunk;
-                match next_chunk_cursor(&cursor, &last_seen, processed, chunk) {
-                    Some(next) => cursor = Some(next),
-                    None => break,
+                // Whether to keep chunking is decided *before* the cursor is
+                // updated, from the chunk's own progress — but the cursor
+                // itself is advanced whenever `last_seen` moved, even on the
+                // chunk that ends the walk. Deciding to stop and updating the
+                // cursor are separate questions: a final chunk smaller than
+                // requested (the walk reached the end of history) still
+                // walked real conversations whose boundary the *next*
+                // incremental backfill needs, and skipping the update here
+                // left a first, single-chunk backfill reporting no resume
+                // point at all.
+                let keep_going = should_continue_chunking(&cursor, &last_seen, processed, chunk);
+                if let Some(seen) = last_seen {
+                    cursor = Some(seen);
+                }
+                if !keep_going {
+                    break;
                 }
             }
             // Safe to hand back only once nothing anywhere in the walk
