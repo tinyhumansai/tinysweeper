@@ -1874,20 +1874,25 @@ mod tests {
             }}}}
         });
 
-        let threads = threads_from_graphql(&raw);
+        let parsed = threads_from_graphql(&raw);
 
-        assert_eq!(threads.len(), 2);
-        assert_eq!(threads[0].id, "PRRT_1");
-        assert!(!threads[0].is_resolved);
-        assert!(threads[0].is_outdated);
-        assert!(threads[0].comments[0].bot, "a Bot author is a bot");
-        assert!(!threads[0].comments[1].bot);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].thread.id, "PRRT_1");
+        assert!(!parsed[0].thread.is_resolved);
+        assert!(parsed[0].thread.is_outdated);
+        assert!(parsed[0].thread.comments[0].bot, "a Bot author is a bot");
+        assert!(!parsed[0].thread.comments[1].bot);
         assert!(
-            threads[0].comments[1].maintainer,
-            "a COLLABORATOR association carries write access"
+            parsed[0].thread.comments[1].maintainer,
+            "a COLLABORATOR association is a write-access candidate, resolved for real by review_threads"
         );
-        assert!(threads[1].is_resolved);
-        assert_eq!(threads[1].comments[0].author, "");
+        assert_eq!(
+            parsed[0].candidates,
+            vec!["author".to_string()],
+            "the collaborator-association author is queued for a real permission check"
+        );
+        assert!(parsed[1].thread.is_resolved);
+        assert_eq!(parsed[1].thread.comments[0].author, "");
     }
 
     #[test]
@@ -1913,9 +1918,13 @@ mod tests {
             }}}}
         });
 
-        let threads = threads_from_graphql(&raw);
+        let parsed = threads_from_graphql(&raw);
 
-        assert!(!threads[0].comments[1].maintainer);
+        assert!(!parsed[0].thread.comments[1].maintainer);
+        assert!(
+            parsed[0].candidates.is_empty(),
+            "a non-collaborator association must not even be queued for a permission check"
+        );
     }
 
     #[test]
