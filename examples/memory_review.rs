@@ -115,7 +115,7 @@ async fn main() -> Result<()> {
             id: "t1".into(),
             is_resolved: true,
             is_outdated: false,
-            resolved_by_has_write_access: false,
+            resolved_by_has_write_access: true,
             comments: vec![
                 ThreadComment {
                     author: "tinysweeper[bot]".into(),
