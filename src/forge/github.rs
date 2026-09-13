@@ -1175,7 +1175,10 @@ impl ForgeRead for GitHubRead {
         for parsed_thread in &mut parsed {
             let thread_id = parsed_thread.thread.id.clone();
             let mut cursor = parsed_thread.more_comments.take();
-            while let Some(after) = cursor {
+            for _ in 0..MAX_THREAD_PAGES {
+                let Some(after) = cursor.take() else {
+                    break;
+                };
                 let raw: serde_json::Value = self
                     .client
                     .graphql(&serde_json::json!({
