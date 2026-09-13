@@ -26,13 +26,16 @@ exactly that.
 
 ### What memory listens to
 
-With `[memory]` on, a second decision is taken on every delivery beside
-routing: `webhook::remember_trigger` asks whether it touched a conversation,
-and if so the server re-reads that issue or pull request — its body and every
-comment, inline review comment and review on it — and remembers it. The
-trigger runs *before* the bot guard, deliberately: it exists to remember what
-other agents said, and their comments arrive from a `Bot` sender. The
-reviewer's own activity is the one sender skipped.
+With `[memory]` **and** `memory.ingest_discussions` both on, a second decision
+is taken on every delivery beside routing: `webhook::remember_trigger` asks
+whether it touched a conversation, and if so the server re-reads that issue or
+pull request — its body and every comment, inline review comment and review
+on it — and remembers it. `[memory]` alone is not enough: a deployment that
+wants code and conventions remembered but not conversations turns memory on
+and leaves `ingest_discussions` at its default of off. The trigger runs
+*before* the bot guard, deliberately: it exists to remember what other agents
+said, and their comments arrive from a `Bot` sender. The reviewer's own
+activity is the one sender skipped.
 
 | Event | Actions that trigger a re-read |
 | --- | --- |
