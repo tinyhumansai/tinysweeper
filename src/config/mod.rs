@@ -332,6 +332,8 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "ask",
             "questions",
             "answer_chars",
+            "answer_model",
+            "query_terms",
         ]),
         "memory.questions.*" => Some(&["section", "ask"]),
         "lanes" => Some(&[]),
