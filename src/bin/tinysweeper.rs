@@ -1799,6 +1799,7 @@ mod tests {
             MemoryCommand::Ask {
                 repo: "a/b/c".into(),
                 section: "conventions".into(),
+                evidence: None,
                 question: "x".into(),
             },
             MemoryCommand::Forget {
