@@ -42,3 +42,13 @@ test("without a base url the summary names the files instead of linking", () => 
   assert.ok(md.includes("<code>change-01.crop.png</code>"));
   assert.ok(!md.includes("<img"));
 });
+
+test("a clip with no screenshot changes still shows without a base url", () => {
+  const clipOnly = [
+    { id: "f3", title: "Play the intro", status: "ok", clip: { video: "clip-02.mp4", gif: "clip-02.gif" }, changes: [] },
+  ];
+  const m = buildManifest({ repo: "o/r", pullRequest: 7, headSha: "abc", baseSha: "b", run: "run-1", flows: clipOnly });
+  const md = jobSummary(m, null);
+  assert.ok(md.includes("<code>clip-02.gif</code>"), "the clip's own filename is named, not dropped");
+  assert.ok(!md.includes("_No user flow produced a picture"));
+});
