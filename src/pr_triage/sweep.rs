@@ -223,25 +223,14 @@ pub async fn sweep(
 async fn attach_previous_comment(read: &dyn ForgeRead, repo: &RepoId, plan: &mut TriagePlan) {
     // Best effort. Failing to read the comments means posting a second one,
     // which is untidy; refusing to triage over it would be worse.
-    let Ok(existing) = read.comments(repo, plan.number).await else {
-        return;
-    };
-
-    // The marker *and* the author. A contributor who pastes the marker into a
-    // comment of their own would otherwise be picked as "our previous comment":
-    // the edit then fails, because an installation cannot edit somebody else's
-    // comment, and the failure aborts the plan before its explanation or its
-    // close.
-    //
-    // Through `findings::prior::is_own_login`, which compares against the
-    // configured `TINYSWEEPER_BOT_LOGIN` *exactly*. A prefix test would fail on
-    // a self-hosted app with a different slug — posting a fresh comment every
-    // sweep — and would simultaneously trust an account called
-    // `tinysweeper-evil[bot]`, which anyone can register.
-    let Some(previous) = existing.iter().find(|comment| {
-        comment.body.contains(comment::MARKER)
-            && crate::findings::prior::is_own_login(&comment.author)
-    }) else {
+    // The marker *and* the author, through `findings::prior::own_comment`. A
+    // contributor who pastes the marker into a comment of their own would
+    // otherwise be picked as "our previous comment": the edit then fails,
+    // because an installation cannot edit somebody else's comment, and the
+    // failure aborts the plan before its explanation or its close.
+    let Ok(Some(previous)) =
+        crate::findings::prior::own_comment(read, repo, plan.number, comment::MARKER).await
+    else {
         return;
     };
 

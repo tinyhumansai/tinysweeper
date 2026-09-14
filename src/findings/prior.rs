@@ -29,7 +29,7 @@ use crate::config::types::{LaneId, Severity};
 use crate::council::agree::LINE_TOLERANCE;
 use crate::error::Result;
 use crate::findings::types::Finding;
-use crate::forge::types::RepoId;
+use crate::forge::types::{IssueComment, RepoId};
 use crate::ports::forge::ForgeRead;
 
 /// The marker key carrying a finding's fingerprint.
@@ -184,6 +184,35 @@ impl PriorReview {
 pub fn is_own_login(login: &str) -> bool {
     let expected = std::env::var(BOT_LOGIN_ENV).unwrap_or_else(|_| "tinysweeper".to_string());
     login_matches(login, &expected)
+}
+
+/// tinysweeper's own durable comment on an item, found by `marker`.
+///
+/// Ours by author *and* by marker, in that order. The marker alone is not
+/// enough: anyone can copy it into their own comment, and editing a
+/// contributor's comment because it quotes one of our markers is a write we
+/// were tricked into making — the edit then fails, because an installation
+/// cannot edit somebody else's comment, and whatever the caller was about to
+/// publish is lost with it. The author check is [`is_own_login`], the same
+/// exact-login comparison dedupe already trusts; a prefix match would accept
+/// `tinysweeper-evil`, an account anybody can register.
+///
+/// One function rather than one lookup per durable comment, because the
+/// change map, the pull-request triage note and the UI preview each keep
+/// exactly one comment per item and each of them once carried its own copy
+/// of this search. Three copies of a security check is three places to get
+/// it wrong.
+pub async fn own_comment(
+    read: &dyn ForgeRead,
+    repo: &RepoId,
+    number: u64,
+    marker: &str,
+) -> Result<Option<IssueComment>> {
+    Ok(read
+        .comments(repo, number)
+        .await?
+        .into_iter()
+        .find(|comment| is_own_login(&comment.author) && comment.body.contains(marker)))
 }
 
 /// The comparison itself, with the configured login passed in.
