@@ -60,9 +60,10 @@ export async function serve({ command, checkout, port, ready, timeoutMs, log = c
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (exited) {
-      throw new Error(
-        `${tag} exited before ${origin}${ready} was ready (code ${exited.code}, signal ${exited.signal}). Last output:\n${tail.join("\n")}`,
-      );
+      const cause = exited.error
+        ? `could not start (${exited.error.message})`
+        : `exited before ${origin}${ready} was ready (code ${exited.code}, signal ${exited.signal})`;
+      throw new Error(`${tag} ${cause}. Last output:\n${tail.join("\n")}`);
     }
     if (await answers(`${origin}${ready}`)) {
       return {
