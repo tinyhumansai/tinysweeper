@@ -146,7 +146,16 @@ pub async fn next(
     if state.done {
         return Ok(finish(state, "already done"));
     }
-    if observation.steps >= ctx.max_steps {
+    // The ceiling is counted from the commands this server has issued, not
+    // from the `steps` the hands report: an observation is untrusted, and a
+    // caller that reported `0` forever would otherwise drive an unbounded
+    // number of paid turns. `record` and `done` are bookkeeping, not steps.
+    let issued = state
+        .commands
+        .iter()
+        .filter(|c| !matches!(c, Command::Record { .. } | Command::Done { .. }))
+        .count();
+    if issued >= ctx.max_steps || observation.steps >= ctx.max_steps {
         return Ok(finish(state, "step ceiling reached"));
     }
 
