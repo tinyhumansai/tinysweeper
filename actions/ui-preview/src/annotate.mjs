@@ -7,9 +7,12 @@
 // pure function of the image size and the boxes, so it is tested without a
 // browser; `sharp` only composites the SVG this file writes.
 //
-// Coordinates arrive in CSS pixels from Playwright and are multiplied by the
-// device scale factor here, because the screenshot is taken at that scale
-// and a pill drawn at 1x on a 2x image is a pill nobody can read.
+// `callout.box` arrives already scaled to device pixels: `driver.mjs`
+// multiplies Playwright's CSS-pixel `boundingBox()` by the device scale
+// factor before it ever reaches this module, to match the full-page
+// screenshot taken at that same scale. Nothing here re-scales `box`; `scale`
+// is only used for this module's own pill geometry (font, padding, stroke)
+// so a pill drawn at 1x on a 2x image is not one nobody can read.
 
 import sharp from "sharp";
 
@@ -111,8 +114,11 @@ export function cropBox({ width, height, callouts, scale, pad = 48, minW = 900, 
   const cy = (y0 + y1) / 2;
   let left = Math.round(cx - needW / 2);
   let top = Math.round(cy - needH / 2);
-  const w = Math.min(width, Math.round(needW));
-  const h = Math.min(height, Math.round(needH));
+  // `sharp`'s `extract` rejects a zero-area region, which `Math.min(width, …)`
+  // can produce when the image itself is smaller than the scaled minimum —
+  // clamp to at least one device pixel so a small screenshot still crops.
+  const w = Math.max(1, Math.min(width, Math.round(needW)));
+  const h = Math.max(1, Math.min(height, Math.round(needH)));
   left = Math.max(0, Math.min(left, width - w));
   top = Math.max(0, Math.min(top, height - h));
   return { left, top, width: w, height: h };

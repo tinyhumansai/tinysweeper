@@ -60,6 +60,9 @@ export function checkConfig(config, where = "config") {
       throw new Error(`${where}: every entry point needs a "name" and a "path" starting with /`);
     }
   }
+  if (!Array.isArray(merged.mocks)) {
+    throw new Error(`${where}: "mocks" must be a list`);
+  }
   for (const mock of merged.mocks) {
     if (typeof mock?.url !== "string") {
       throw new Error(`${where}: every mock needs a "url" glob`);
@@ -68,10 +71,19 @@ export function checkConfig(config, where = "config") {
       throw new Error(`${where}: mock ${mock.url} needs a "dir" of fixtures or an inline "body"`);
     }
   }
+  if (!Array.isArray(merged.auth.cookies)) {
+    throw new Error(`${where}: "auth.cookies" must be a list`);
+  }
   for (const cookie of merged.auth.cookies) {
     if (typeof cookie?.name !== "string" || typeof cookie?.value !== "string") {
       throw new Error(`${where}: every auth cookie needs a "name" and a "value"`);
     }
+  }
+  if (!Number.isFinite(merged.timeout_s) || merged.timeout_s <= 0) {
+    throw new Error(`${where}: "timeout_s" must be a positive finite number of seconds`);
+  }
+  if (!Array.isArray(merged.mask)) {
+    throw new Error(`${where}: "mask" must be a list`);
   }
   if (!Number.isInteger(merged.max_flows) || merged.max_flows < 1) {
     throw new Error(`${where}: "max_flows" must be a positive integer`);

@@ -59,12 +59,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.base.outputs.sha }}
-          path: ../before
+          path: before
           persist-credentials: false
 
       # Whatever both checkouts need before `serve` can run: toolchains,
       # dependency caches. Keep it to setup; building belongs in `serve`.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@1e3930b4bb0bac7c412d80e6e1c1f3a6d9f0d1b4 # v4.4.0
         with:
           node-version: "22"
 
@@ -72,7 +72,7 @@ jobs:
         with:
           server: ${{ vars.TINYSWEEPER_SERVER_URL }}
           token: ${{ secrets.TINYSWEEPER_PREVIEW_TOKEN }}
-          before-dir: ../before
+          before-dir: before
           base-sha: ${{ steps.base.outputs.sha }}
           head-sha: ${{ github.event.pull_request.head.sha }}
           bucket: ${{ secrets.PREVIEW_S3_BUCKET }}

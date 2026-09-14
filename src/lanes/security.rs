@@ -37,8 +37,10 @@ use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
 use crate::lanes::fanout::{FileReview, per_file};
 use crate::lanes::triage::triage;
-use crate::lanes::{Anchoring, Lane, LaneInput, LaneOutcome};
-use crate::ports::model::{Model, Spend};
+use crate::lanes::{
+    Anchoring, Lane, LaneInput, LaneOutcome, aggregate_reviewer_responses, reviewer_responses,
+};
+use crate::ports::model::Model;
 use crate::scan::types::{Finding as ScanFinding, ScanKind};
 
 /// The scanner findings this lane owns.
@@ -233,68 +235,25 @@ async fn review_file(
     )
     .await?;
 
-    let mut spend = Spend::default();
-    let mut per_reviewer: Vec<Vec<crate::findings::types::Finding>> = Vec::new();
-    let mut first: Option<LaneOutcome> = None;
-
-    for (reviewer, answer) in reviewers.iter().zip(&answers) {
-        let Some(value) = answer.value.clone() else {
-            tracing::warn!(
-                agent = reviewer.id,
-                err = answer.error.as_deref().unwrap_or("no answer"),
-                "a council reviewer failed"
-            );
-            continue;
-        };
-
-        spend.note(&answer.model);
-
-        let parsed = match schema::parse(LaneId::Security, value) {
-            Ok(parsed) => parsed,
-            Err(err) if reviewers.len() > 1 => {
-                tracing::warn!(agent = reviewer.id, %err, "a council reviewer failed");
-                continue;
-            }
-            Err(err) => return Err(err),
-        };
-
-        // Anchored per reviewer, before merging: anchoring resolves a quoted
-        // snippet against this file's diff and drops what it cannot place, and
-        // both are per-answer facts.
-        let anchored = LaneOutcome::from_response(
-            LaneId::Security,
-            parsed,
-            std::slice::from_ref(diff),
-            Anchoring::Strict,
-            Spend::default(),
-        );
-
-        per_reviewer.push(anchored.findings.clone());
-        if first.is_none() {
-            first = Some(anchored);
-        }
-    }
-
     // A file whose every reviewer failed is a file nobody read. Failing here is
     // what puts it in the fan-out's failure list, where the summary names it —
     // the alternative is an unreviewed file that reads as clean.
-    let Some(outcome) = first else {
+    let Some(outcome) = aggregate_reviewer_responses(
+        LaneId::Security,
+        reviewer_responses(LaneId::Security, &reviewers, &answers)?,
+        std::slice::from_ref(diff),
+        Anchoring::Strict,
+        config.council.corroboration,
+    ) else {
         return Err(crate::error::Error::lane(
             LaneId::Security.as_str(),
             format!("no reviewer could review {}", diff.path),
         ));
     };
 
-    // Agreement ranks, it never removes — see `src/council`.
-    let merged = if config.council.corroboration {
-        council::merge(per_reviewer)
-    } else {
-        per_reviewer.into_iter().flatten().collect()
-    };
-
     Ok(FileReview {
         summary: outcome.summary,
-        findings: merged,
+        findings: outcome.findings,
         resolved: outcome.resolved,
         spend: outcome.spend,
     })

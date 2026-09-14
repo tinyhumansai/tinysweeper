@@ -360,9 +360,7 @@ fn truncation_lands_on_a_character_boundary() {
     assert!(excerpt_bytes(&safe) <= MAX_EXCERPT_BYTES);
 }
 
-/// Issue #90 dedupe: the marker is built from values promotion has scrubbed
-/// **and truncated**, so a lookup that only scrubs searches for a marker that
-/// was never written — and re-promotes that issue on every sweep.
+/// The marker is built from structural identifiers promotion has truncated.
 ///
 /// Pins that `marker_component` agrees with what `project` actually stores,
 /// which is the only reason the two paths cannot drift.
@@ -373,7 +371,7 @@ fn a_marker_component_matches_what_promotion_stores() {
     issue.short_id = long.clone();
 
     let safe = project(&issue, None, "api", &config());
-    let looked_up = marker_component(&long, &config().scrub_patterns);
+    let looked_up = marker_component(&long);
 
     assert_eq!(
         safe.short_id, looked_up,
@@ -382,10 +380,21 @@ fn a_marker_component_matches_what_promotion_stores() {
     assert!(safe.short_id.len() <= MARKER_COMPONENT_BYTES);
 }
 
-/// The scrubbing half of the same agreement.
+/// Structural identifiers are never content-scrubbed, because a lossy pattern
+/// could make distinct Sentry issues share a dedupe marker.
 #[test]
-fn a_marker_component_applies_the_configured_patterns() {
-    let patterns = vec!["SECRET".to_string()];
-    let out = marker_component("API-secret-1A2B", &patterns);
-    assert!(!out.contains("secret"), "{out}");
+fn structural_marker_components_ignore_content_scrub_patterns() {
+    let mut issue: RawIssue = serde_json::from_str(&issue_json()).expect("parses");
+    issue.short_id = "API-secret-1A2B".into();
+    let mut configured = config();
+    configured.scrub_patterns = vec!["SECRET".into(), "api".into()];
+
+    let safe = project(&issue, None, "api-secret", &configured);
+    assert_eq!(safe.short_id, "API-secret-1A2B");
+    assert_eq!(safe.project, "api-secret");
+    assert_eq!(marker_component(&issue.short_id), safe.short_id);
+    assert_ne!(
+        legacy_marker_component(&issue.short_id, &configured.scrub_patterns),
+        safe.short_id
+    );
 }

@@ -196,6 +196,34 @@ nobody — see `.github/workflows/manual-review.yml`, which is a button that POS
 here and is the one deliberate exception to tinysweeper shipping no Actions
 path.
 
+### Memory backfill
+
+| Method | Path | Answers |
+| --- | --- | --- |
+| `POST` | `/admin/memory/{owner}/{name}/backfill` | `202` with the walk's status; `409` with the running one; `200` with a report when `number` is given |
+| `GET` | `/admin/memory/{owner}/{name}` | `200` with where the last walk stands; `404` if none since boot |
+
+Feeds the memory engine a repository's conversation history — every issue and
+pull request, open or closed, and everything anybody said on them, other
+review bots included but the reviewer's own remarks excluded (see
+`docs/modules/memory`). The body is `{}` for the whole history,
+`{"since": "<rfc3339>", "limit": 1000}` to walk what changed after an instant,
+or `{"number": 131, "pull_request": true}` to remember one conversation now.
+A walk runs in the background, one at a time across the whole deployment —
+every walk spends the installation rate-limit budget reviews need, so a second
+request queues behind the first (its status says `running`) rather than
+doubling the spend; it reads through an installation token minted for it, and
+never re-reads a pull request the listing already describes. When GitHub's
+rate limit runs out mid-walk the walk waits for the reset with a fresh token
+and carries on — the status stays `running`, and the finished report counts
+the waits. The status
+records `report.resume_from` when it finishes cleanly, which is what to pass as
+`since` next time. `scripts/memory-backfill.sh` drives the pair from a shell.
+
+Both answer `503` on a deployment with no engine configured: the routes exist
+so the answer can say why, rather than 404 like a mistyped path. Same
+organisation check and same installation resolution as the review button.
+
 ### Contributor trust
 
 `Trust::Blocked` is checked before every review. These are how it gets set.

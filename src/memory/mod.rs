@@ -40,6 +40,7 @@
 //! unreachable engine produces a [`recall::MemoryContext`] whose status says
 //! so, and the check-run summary states it.
 
+pub mod discussions;
 pub mod ingest;
 pub mod mock;
 pub mod recall;
@@ -48,6 +49,7 @@ pub mod types;
 #[cfg(feature = "cortex")]
 pub mod cortex;
 
+pub use crate::memory::discussions::{DiscussionReport, Discussions, Subject};
 pub use crate::memory::ingest::{IngestReport, Ingestor};
 pub use crate::memory::mock::MockMemory;
 pub use crate::memory::recall::{MemoryContext, MemoryStatus, Recaller};

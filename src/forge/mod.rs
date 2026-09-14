@@ -11,5 +11,6 @@ pub mod types;
 pub use crate::forge::mock::{MockForge, MockState, Write};
 pub use crate::forge::types::{
     ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, FileStatus, Issue, IssueComment,
-    PullRequest, PullRequestContext, RepoId, ReviewComment, ReviewEvent, ReviewVerdict,
+    PullRequest, PullRequestContext, Remark, RemarkKind, RepoId, ReviewComment, ReviewEvent,
+    ReviewVerdict,
 };

@@ -48,10 +48,16 @@ async function main() {
   // Both builds at once: they are independent and the runner minutes are
   // the bill. A `serve` script that cannot share a machine is a bug in it.
   const timeoutMs = config.timeout_s * 1000;
-  const [after, before] = await Promise.all([
-    serve({ command: config.serve, checkout: opts.afterDir, port: AFTER_PORT, ready: config.ready, timeoutMs, log }),
-    serve({ command: config.serve, checkout: opts.beforeDir, port: BEFORE_PORT, ready: config.ready, timeoutMs, log }),
-  ]);
+  const { after, before } = await serveBoth({
+    command: config.serve,
+    afterDir: opts.afterDir,
+    beforeDir: opts.beforeDir,
+    afterPort: AFTER_PORT,
+    beforePort: BEFORE_PORT,
+    ready: config.ready,
+    timeoutMs,
+    log,
+  });
 
   let exitCode = 0;
   try {
@@ -72,8 +78,13 @@ async function main() {
       await summary(opts, { flows: [] });
       return;
     }
-    log(`[preview] session ${session.id}: ${started.flows.length} flow(s)`);
-    for (const flow of started.flows) log(`[preview]   ${flow.id}: ${flow.title}`);
+    // The server's plan can exceed the repository's own cap: `max_flows` in
+    // `.tinysweeper/ui-preview.json` is documented as a hard ceiling on the
+    // browser work and model turns this run performs, so enforce it here
+    // even if the server already tried to.
+    const flows = started.flows.slice(0, config.max_flows);
+    log(`[preview] session ${session.id}: ${flows.length} flow(s)`);
+    for (const flow of flows) log(`[preview]   ${flow.id}: ${flow.title}`);
 
     // `--disable-dev-shm-usage`: Chromium's frame capture allocates in
     // /dev/shm, which a container gives 64 MB and some hosts quota; without
@@ -83,9 +94,9 @@ async function main() {
     const results = [];
     let changeNumber = 0;
     try {
-      for (const [i, flow] of started.flows.entries()) {
+      for (const [i, flow] of flows.entries()) {
         log(`[preview] ${flow.id}: driving the head build`);
-        const head = await drive({ browser, config, origin: after.origin, session, flow, side: "after", maxSteps: started.max_steps, out: opts.out, log });
+        const head = await drive({ browser, config, origin: after.origin, checkoutDir: opts.afterDir, session, flow, side: "after", maxSteps: started.max_steps, out: opts.out, log });
         const result = { id: flow.id, title: flow.title, status: "ok", changes: [], clip: null };
         if (head.failedAt !== null) {
           result.status = "failed";
@@ -97,7 +108,7 @@ async function main() {
         let base = null;
         if (result.status === "ok" && head.script.length > 0) {
           log(`[preview] ${flow.id}: replaying on the base build`);
-          base = await replay({ browser, config, origin: before.origin, flow, script: head.script, out: opts.out, log });
+          base = await replay({ browser, config, origin: before.origin, checkoutDir: opts.beforeDir, flow, script: head.script, out: opts.out, log });
           if (base.failedAt !== null) {
             result.status = "before_failed";
             result.failedAt = base.failedAt;
@@ -180,9 +191,29 @@ async function main() {
   process.exitCode = exitCode;
 }
 
+/**
+ * Start both servers concurrently. `Promise.all` would reject as soon as one
+ * side fails and leave the other detached — its child process outlives the
+ * job with open stdio pipes, so Node never exits. Settle both, then stop
+ * whichever one survives before propagating the failure.
+ */
+async function serveBoth({ command, afterDir, beforeDir, afterPort, beforePort, ready, timeoutMs, log }) {
+  const [afterResult, beforeResult] = await Promise.allSettled([
+    serve({ command, checkout: afterDir, port: afterPort, ready, timeoutMs, log }),
+    serve({ command, checkout: beforeDir, port: beforePort, ready, timeoutMs, log }),
+  ]);
+  if (afterResult.status === "rejected" || beforeResult.status === "rejected") {
+    if (afterResult.status === "fulfilled") afterResult.value.stop();
+    if (beforeResult.status === "fulfilled") beforeResult.value.stop();
+    const failure = afterResult.status === "rejected" ? afterResult.reason : beforeResult.reason;
+    throw failure;
+  }
+  return { after: afterResult.value, before: beforeResult.value };
+}
+
 /** Drive one flow on the head build, asking the server each turn. */
-async function drive({ browser, config, origin, session, flow, side, maxSteps, out, log }) {
-  const context = await newContext({ browser, config, origin, out, flow, side });
+async function drive({ browser, config, origin, checkoutDir, session, flow, side, maxSteps, out, log }) {
+  const context = await newContext({ browser, config, origin, checkoutDir, out, flow, side });
   const epoch = Date.now();
   const rec = recorder(epoch);
   const page = await context.newPage();
@@ -218,8 +249,8 @@ async function drive({ browser, config, origin, session, flow, side, maxSteps, o
 }
 
 /** Replay a script on the base build; no server, no callouts.*/
-async function replay({ browser, config, origin, flow, script, out, log }) {
-  const context = await newContext({ browser, config, origin, out, flow, side: "before", video: false });
+async function replay({ browser, config, origin, checkoutDir, flow, script, out, log }) {
+  const context = await newContext({ browser, config, origin, checkoutDir, out, flow, side: "before", video: false });
   const page = await context.newPage();
   const ctx = { origin, shots: new Map(), recorder: recorder(), masks: config.mask, scale: SCALE, step: 0, timeoutMs: REPLAY_TIMEOUT_MS };
   let failedAt = null;
@@ -240,7 +271,7 @@ async function replay({ browser, config, origin, flow, script, out, log }) {
 }
 
 /** A context with the repository's auth and mocks applied. */
-async function newContext({ browser, config, origin, out, flow, side, video = true }) {
+async function newContext({ browser, config, origin, checkoutDir, out, flow, side, video = true }) {
   const [width, height] = config.viewport;
   const context = await browser.newContext({
     viewport: { width, height },
@@ -264,7 +295,7 @@ async function newContext({ browser, config, origin, out, flow, side, video = tr
   }
   for (const mock of config.mocks) {
     await context.route(mock.url, async (route) => {
-      const answer = await fixtureFor(mock, route.request(), path.dirname(path.resolve(out)));
+      const answer = await fixtureFor(mock, route.request(), checkoutDir);
       if (answer) await route.fulfill(answer);
       else await route.fallback();
     });
@@ -273,7 +304,7 @@ async function newContext({ browser, config, origin, out, flow, side, video = tr
 }
 
 /** The canned answer for a mocked request, if there is one. */
-async function fixtureFor(mock, request, _root) {
+async function fixtureFor(mock, request, checkoutDir) {
   if (mock.body !== undefined) {
     return {
       status: mock.status ?? 200,
@@ -283,10 +314,15 @@ async function fixtureFor(mock, request, _root) {
   }
   const { pathname } = new URL(request.url());
   const { readFile } = await import("node:fs/promises");
+  // `mock.dir` is relative to the config file (repository root), and
+  // `checkoutDir` is the side-specific checkout (before or after) driving
+  // this context — resolving against it, not the shared output directory,
+  // keeps each side's fixtures separate.
+  const dir = path.resolve(checkoutDir, mock.dir);
   const candidates = [
-    path.join(mock.dir, `${pathname}.${request.method()}.json`),
-    path.join(mock.dir, `${pathname}.json`),
-    path.join(mock.dir, pathname, "index.json"),
+    path.join(dir, `${pathname}.${request.method()}.json`),
+    path.join(dir, `${pathname}.json`),
+    path.join(dir, pathname, "index.json"),
   ];
   for (const candidate of candidates) {
     try {
@@ -319,7 +355,7 @@ function pathOf(url) {
 /** The job summary, and the manifest beside it for the artifact. */
 async function summary(opts, manifest) {
   if (!process.env.GITHUB_STEP_SUMMARY) return;
-  const body = manifest.flows
+  const body = manifest.flows?.length
     ? jobSummary(manifest, opts.publicBaseUrl)
     : "### 🎬 UI preview\n\n_No user flow to show._\n";
   await appendFile(process.env.GITHUB_STEP_SUMMARY, body);

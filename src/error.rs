@@ -37,6 +37,20 @@ pub enum Error {
     #[error("forge: {0}")]
     Forge(String),
 
+    /// The forge refused the request because the caller's request budget is
+    /// spent, and said when it refills.
+    ///
+    /// Its own variant rather than a `Forge` message because one caller —
+    /// the memory backfill, a walk of thousands of requests — must *wait*
+    /// for this and retry, where every other forge error is final. The
+    /// reset is a Unix timestamp when the forge reported one; `None` when
+    /// it did not, and the caller picks a pessimistic wait.
+    #[error("forge: rate limited{}", reset_clause(*.reset_at))]
+    RateLimited {
+        /// When the budget refills, as seconds since the Unix epoch.
+        reset_at: Option<u64>,
+    },
+
     /// A model call failed, timed out, or returned output that did not match
     /// the lane's structured-output schema.
     #[error("model: {0}")]
@@ -75,6 +89,14 @@ pub enum Error {
     /// JSON serialization or deserialization failed.
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+}
+
+/// The tail of the `RateLimited` message.
+fn reset_clause(reset_at: Option<u64>) -> String {
+    match reset_at {
+        Some(at) => format!(" until unix time {at}"),
+        None => String::new(),
+    }
 }
 
 impl Error {

@@ -11,7 +11,8 @@
 use crate::app::review::Proposal;
 use crate::config::types::{Config, Severity};
 use crate::error::{Error, Result};
-use crate::forge::types::{CheckRun, RepoId, ReviewComment, ReviewEvent};
+use crate::evidence::diff::{FileDiff, parse_file_patch};
+use crate::forge::types::{ChangedFile, CheckRun, RepoId, ReviewComment, ReviewEvent};
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 use crate::ports::review_state::ReviewStateStore;
 use crate::{MARKER_PREFIX, VERSION};
@@ -77,7 +78,20 @@ pub async fn apply(
     // restated on every push.
     let previous = own_review_state(read, &repo, proposal.number).await;
     let event = review_event(config, proposal, previous, live.draft);
-    let comments = inline_comments(proposal);
+    // Every lane is expected to leave an unpostable finding without a line,
+    // but `apply` is the final boundary before GitHub sees it. One invalid
+    // anchor makes GitHub reject the entire review, including otherwise valid
+    // comments, so derive the postable set from the live diff here as well.
+    let files = read.changed_files(&repo, proposal.number).await?;
+    let comments = inline_comments(proposal, &files);
+    let posted: std::collections::BTreeSet<String> = comments
+        .iter()
+        .filter_map(|comment| fingerprint(&comment.body))
+        .collect();
+    let unanchored: Vec<&crate::findings::types::Finding> = proposal
+        .findings()
+        .filter(|finding| finding.line.is_some() && !posted.contains(&identity(finding)))
+        .collect();
 
     // The identities about to be posted, so the store can be extended once the
     // write succeeds.
@@ -89,10 +103,9 @@ pub async fn apply(
     // was never extended. The same condition as `inline_comments`: only an
     // anchored finding becomes a comment, and only a posted finding may
     // suppress a later one.
-    let newly_posted: Vec<String> = proposal
-        .findings()
-        .filter(|finding| finding.line.is_some())
-        .filter_map(|finding| finding.identity.clone())
+    let newly_posted: Vec<String> = comments
+        .iter()
+        .filter_map(|comment| fingerprint(&comment.body))
         .collect();
 
     // Submit a review if:
@@ -121,7 +134,7 @@ pub async fn apply(
             .create_review(
                 &repo,
                 proposal.number,
-                &review_body(proposal, event, previous),
+                &review_body(proposal, event, previous, &unanchored),
                 comments,
                 event,
             )
@@ -343,7 +356,25 @@ fn identity(finding: &crate::findings::types::Finding) -> String {
         .unwrap_or_else(|| finding.fingerprint(&finding.title))
 }
 
-fn review_body(proposal: &Proposal, event: ReviewEvent, previous: Option<ReviewEvent>) -> String {
+/// Read the identity from a comment this module just rendered.
+///
+/// The marker is the durable representation written to GitHub, so using it
+/// here keeps state recording tied to the exact comments that survived the
+/// final diff-anchor validation.
+fn fingerprint(body: &str) -> Option<String> {
+    let marker = format!("<!-- {MARKER_PREFIX}fp=");
+    body.split_once(&marker)
+        .and_then(|(_, rest)| rest.split_once(" -->"))
+        .map(|(value, _)| value.to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn review_body(
+    proposal: &Proposal,
+    event: ReviewEvent,
+    previous: Option<ReviewEvent>,
+    unanchored: &[&crate::findings::types::Finding],
+) -> String {
     let blocking = proposal
         .lanes
         .iter()
@@ -377,6 +408,16 @@ fn review_body(proposal: &Proposal, event: ReviewEvent, previous: Option<ReviewE
         ReviewEvent::Comment => format!("tinysweeper: {blocking} lane(s) blocking."),
     };
 
+    if !unanchored.is_empty() {
+        body.push_str("\n\n### Findings not posted inline\n");
+        for finding in unanchored {
+            body.push_str(&format!(
+                "\n- **{}** (`{}`): {}\n\n  {}\n",
+                finding.title, finding.path, finding.rule, finding.body
+            ));
+        }
+    }
+
     // The full token breakdown goes in the body deliberately. Cache hit rate is
     // the difference between a cheap re-review and a ruinous one, and nobody
     // tunes a number they cannot see.
@@ -398,8 +439,17 @@ fn review_body(proposal: &Proposal, event: ReviewEvent, previous: Option<ReviewE
     body
 }
 
-/// Inline comments for findings that name a specific line.
-fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
+/// Inline comments for findings whose anchors GitHub can accept on the live diff.
+fn inline_comments(proposal: &Proposal, files: &[ChangedFile]) -> Vec<ReviewComment> {
+    let diffs: std::collections::BTreeMap<&str, FileDiff> = files
+        .iter()
+        .filter_map(|file| {
+            file.patch
+                .as_deref()
+                .map(|patch| (file.path.as_str(), parse_file_patch(&file.path, patch)))
+        })
+        .collect();
+
     proposal
         .findings()
         .filter_map(|finding| {
@@ -416,6 +466,19 @@ fn inline_comments(proposal: &Proposal) -> Vec<ReviewComment> {
                 Some(suggestion) => (None, suggestion.end_line),
                 None => (None, line),
             };
+            let start = start_line.unwrap_or(line);
+            if !diffs
+                .get(finding.path.as_str())
+                .is_some_and(|diff| diff.within_hunk(start, line))
+            {
+                tracing::warn!(
+                    path = %finding.path,
+                    start_line = start,
+                    end_line = line,
+                    "dropping an inline finding outside the live diff"
+                );
+                return None;
+            }
             let suggestion = finding
                 .applicable
                 .as_ref()
@@ -476,7 +539,7 @@ mod tests {
     use crate::app::review::LaneProposal;
     use crate::config::types::{LaneId, Severity};
     use crate::findings::types::Finding;
-    use crate::forge::types::{CheckConclusion, IssueComment, PullRequest};
+    use crate::forge::types::{ChangedFile, CheckConclusion, IssueComment, PullRequest};
     use crate::forge::{MockForge, MockState, Write};
 
     fn config() -> Config {
@@ -555,6 +618,14 @@ mod tests {
                 draft,
                 ..PullRequest::default()
             },
+        );
+        state.files.insert(
+            7,
+            vec![ChangedFile {
+                path: "src/main.rs".into(),
+                patch: Some("@@ -1,1 +1,2 @@\n fn main() {}\n+let i = 0;\n".into()),
+                ..ChangedFile::default()
+            }],
         );
         MockForge::with_state(state)
     }
@@ -644,6 +715,35 @@ mod tests {
             review[0].body.contains("tinysweeper:fp="),
             "{}",
             review[0].body
+        );
+    }
+
+    #[tokio::test]
+    async fn an_out_of_diff_anchor_is_kept_in_the_review_body_but_not_posted_inline() {
+        let forge = forge("abc123");
+        let mut invalid = finding();
+        invalid.line = Some(99);
+
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![invalid]),
+            None,
+        )
+        .await
+        .expect("applies without asking GitHub to reject the whole review");
+
+        let (body, event) = review_of(&forge).expect("the blocking verdict remains visible");
+        assert_eq!(event, ReviewEvent::RequestChanges);
+        assert!(body.contains("Guard the index"), "{body}");
+        assert!(
+            forge.writes().iter().all(|write| match write {
+                Write::Review { comments, .. } => comments.is_empty(),
+                _ => true,
+            }),
+            "{:#?}",
+            forge.writes()
         );
     }
 

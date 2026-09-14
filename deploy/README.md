@@ -125,6 +125,23 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --wait
 curl -fsS https://sweeper.tinyhumans.ai/healthz
 ```
 
+### Backfilling the memory, once per repository
+
+Webhooks keep the engine's `discussions` section current from the moment the
+server is up; the history before that — every earlier issue and pull request
+and what was said on them, the reviewer's own remarks excluded — is walked
+once, from any machine that holds the admin token:
+
+```sh
+TINYSWEEPER_SERVER_URL=https://sweeper.tinyhumans.ai \
+TINYSWEEPER_ADMIN_TOKEN=… scripts/memory-backfill.sh tinyhumansai/tinysweeper
+```
+
+It prints a `resume_from`; a later run with `--since <that>` walks only what
+changed, which is the thing to do after the server has been down for a while.
+One walk per repository runs at a time; the first over a busy repository takes
+minutes and stays well inside the installation's hourly API budget.
+
 ## Configuration
 
 Everything the stack reads lives in `/opt/tinysweeper/.env`, which Compose

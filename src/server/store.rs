@@ -364,6 +364,20 @@ impl Store {
         }
     }
 
+    /// Release a delivery claim after its worker exhausted retries.
+    ///
+    /// A claim is only an idempotency record while work is still viable. Once a
+    /// worker has failed terminally, retaining it turns a GitHub redelivery
+    /// into a permanent dropped review; deleting it lets the next delivery try
+    /// from a clean state.
+    pub async fn release_delivery(&self, delivery: &str) -> Result<()> {
+        self.deliveries
+            .delete_one(doc! { "delivery": delivery })
+            .await
+            .map_err(|err| Error::Forge(err.to_string()))?;
+        Ok(())
+    }
+
     /// Take a lease, returning false if someone else holds it.
     pub async fn claim_lease(&self, key: &str, holder: &str) -> Result<bool> {
         let now = bson::DateTime::now();
