@@ -26,9 +26,18 @@ export class Session {
     return reply;
   }
 
-  /** One turn of one flow. */
+  /**
+   * One turn of one flow.
+   *
+   * Not retried: `step` is not idempotent server-side (each call charges
+   * spend and appends to the flow's recorded script), so retrying it after a
+   * lost response risks double-charging and double-recording a turn the
+   * server actually already answered. `start` and `finish` are safe to retry
+   * — `start` fails closed on a stale head SHA, and `finish` is idempotent
+   * per head commit (see `preview::apply::publish`).
+   */
   async step(flowId, observation) {
-    return this.post(`/preview/sessions/${this.id}/flows/${flowId}/step`, observation);
+    return this.post(`/preview/sessions/${this.id}/flows/${flowId}/step`, observation, { retry: false });
   }
 
   /** Hand over the manifest. */
@@ -36,10 +45,11 @@ export class Session {
     return this.post(`/preview/sessions/${this.id}/finish`, { manifest });
   }
 
-  async post(path, body) {
+  async post(path, body, { retry = true } = {}) {
     const url = `${this.server}${path}`;
+    const attempts = retry ? RETRIES : 1;
     let last;
-    for (let attempt = 1; attempt <= RETRIES; attempt += 1) {
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
       let response;
       try {
         response = await this.fetch(url, {
