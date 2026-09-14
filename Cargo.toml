@@ -93,7 +93,7 @@ subtle = { version = "2", optional = true }
 # dev-dependency already, so this adds nothing to the lock file — it becomes a
 # runtime dependency only under `serve`.
 tempfile = { version = "3", optional = true }
-tower-http = { version = "0.6", features = ["trace", "limit"], optional = true }
+tower-http = { version = "0.7", features = ["trace", "limit"], optional = true }
 
 # --- optional: the GitHub forge adapter ---
 octocrab = { version = "0.54", optional = true }
