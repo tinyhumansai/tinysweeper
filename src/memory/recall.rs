@@ -1152,6 +1152,89 @@ mod tests {
     }
 
     #[test]
+    fn the_memory_query_is_stems_title_words_and_ranked_identifiers() {
+        let diffs = vec![
+            crate::evidence::diff::parse_file_patch(
+                "src/server/auth.rs",
+                "@@ -1,1 +1,3 @@ fn installation_token\n fn installation_token() {}\n+let scoped = \
+                 mint_scoped(installation_token);\n+let scoped = again(installation_token);\n",
+            ),
+            crate::evidence::diff::parse_file_patch(
+                "docs/modules/server/README.md",
+                "@@ -1,1 +1,2 @@\n # x\n+Tokens are read-only.\n",
+            ),
+        ];
+        let query = memory_query("fix(server): scope review tokens read-only", &diffs, 24);
+        let terms: Vec<&str> = query.split(' ').collect();
+        // Stems first, then the title, then the identifiers by frequency.
+        assert_eq!(&terms[..2], &["auth", "readme"], "{query}");
+        assert!(
+            terms[2..].starts_with(&["fix", "server", "scope", "review", "tokens", "read"]),
+            "{query}"
+        );
+        assert!(
+            terms.iter().position(|t| *t == "installation_token")
+                < terms.iter().position(|t| *t == "mint_scoped"),
+            "the identifier used twice ranks above the one used once: {query}"
+        );
+        // Never a directory, never an extension: `src` is in nearly every
+        // path a large engine holds, and a query that carries it is what
+        // ran into the engine's evidence deadline.
+        for hub in ["src", "docs", "modules", "rs", "md", "src/server/auth.rs"] {
+            assert!(!terms.contains(&hub), "{hub} must not be in {query}");
+        }
+        assert!(terms.len() <= 24, "{query}");
+        assert!(!terms.iter().any(|t| t.is_empty()), "{query}");
+    }
+
+    #[test]
+    fn the_memory_query_is_bounded_and_deduplicated() {
+        let diffs: Vec<FileDiff> = (0..30)
+            .map(|i| {
+                crate::evidence::diff::parse_file_patch(
+                    &format!("src/lane_{i}.rs"),
+                    "@@ -1,1 +1,2 @@\n a\n+shared_helper(shared_helper);\n",
+                )
+            })
+            .collect();
+        let query = memory_query("shared_helper everywhere", &diffs, 12);
+        let terms: Vec<&str> = query.split(' ').collect();
+        assert_eq!(terms.len(), 12, "{query}");
+        assert_eq!(
+            terms.iter().filter(|t| **t == "shared_helper").count(),
+            1,
+            "{query}"
+        );
+        assert_eq!(memory_query("anything", &diffs, 0), "");
+        assert_eq!(memory_query("", &[], 24), "");
+    }
+
+    #[tokio::test]
+    async fn the_engine_is_asked_in_keywords_and_never_in_the_questions_sentence() {
+        let memory = seeded().await;
+        let recaller = Recaller::new(&memory);
+        let mut config = config();
+        config.memory.questions = vec![question(
+            "conventions",
+            "Which conventions apply to changes under {paths}?",
+        )];
+        recaller
+            .recall(&config, "o/r", "Add a port", &[diff("src/ports/forge.rs")], false)
+            .await;
+        let queries = memory.queries();
+        // Three sections recalled, one question asked: four calls, one query.
+        assert_eq!(queries.len(), 4, "{queries:?}");
+        for query in &queries {
+            assert_eq!(query, &queries[0]);
+            assert!(!query.contains("Which conventions"), "{query}");
+            assert!(!query.contains("src/ports"), "{query}");
+            assert!(!query.contains("untrusted"), "{query}");
+            assert!(query.contains("forge"), "{query}");
+            assert!(query.contains("added_ports_fn"), "{query}");
+        }
+    }
+
+    #[test]
     fn questions_are_templated_and_long_path_lists_are_elided() {
         let paths: Vec<String> = (0..20).map(|i| format!("src/f{i}.rs")).collect();
         let q = fill_question("Rules for {paths} in {title}?", "T", &paths);
