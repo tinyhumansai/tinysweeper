@@ -56,7 +56,7 @@ pub async fn publish(
     repo: &str,
     gallery: &Gallery,
     existing_check_id: Option<u64>,
-) -> Result<(Outcome, u64)> {
+) -> Result<(Outcome, Option<u64>)> {
     let repo_id =
         RepoId::parse(repo).ok_or_else(|| Error::Forge(format!("`{repo}` is not owner/name")))?;
 
@@ -69,10 +69,7 @@ pub async fn publish(
         );
         // No check to reuse or create: the caller has nothing new to
         // remember, so its existing id (if any) is handed back unchanged.
-        return Ok((
-            Outcome::HeadMoved,
-            existing_check_id.unwrap_or_default(),
-        ));
+        return Ok((Outcome::HeadMoved, existing_check_id));
     }
 
     let body = render::comment(gallery);
