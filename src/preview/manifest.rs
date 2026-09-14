@@ -25,7 +25,7 @@
 //!   the ones the session was opened for.
 
 use crate::error::{Error, Result};
-use crate::preview::types::{Callout, FlowStatus, Gallery, GalleryChange, GalleryFlow, Manifest};
+use crate::preview::types::{Callout, Flow, FlowStatus, Gallery, GalleryChange, GalleryFlow, Manifest};
 
 /// The manifest schema this crate understands.
 pub const VERSION: u32 = 1;
