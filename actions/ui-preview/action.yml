@@ -71,7 +71,7 @@ runs:
         # container job may have no sudo and no apt.
         if ! command -v ffmpeg >/dev/null; then
           if command -v sudo >/dev/null; then SUDO=sudo; else SUDO=; fi
-          $SUDO apt-get update -qq && $SUDO apt-get install -y -qq ffmpeg || echo "::warning::ffmpeg is not installable here; clips will be skipped"
+          $SUDO apt-get update -qq && $SUDO apt-get install -y -qq --no-install-recommends ffmpeg || echo "::warning::ffmpeg is not installable here; clips will be skipped"
         fi
 
     - name: Drive the preview
