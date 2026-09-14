@@ -347,7 +347,7 @@ pub fn memory_query(title: &str, diffs: &[FileDiff], terms: usize) -> String {
         return String::new();
     }
     let mut picked: Vec<String> = Vec::with_capacity(terms);
-    let mut push = |term: String, picked: &mut Vec<String>| {
+    let push = |term: String, picked: &mut Vec<String>| {
         if picked.len() < terms && !picked.contains(&term) {
             picked.push(term);
         }
@@ -575,15 +575,20 @@ impl<'a> Recaller<'a> {
                     ))
                 })
                 .collect();
-            let results = futures::future::join_all(wanted.iter().map(|(scope, question)| {
-                self.memory.answer(
-                    scope,
-                    &Ask::new(question)
-                        .with_evidence(&query)
-                        .shaped(ANSWER_INSTRUCTIONS),
-                )
-            }))
-            .await;
+            let asks: Vec<(&MemoryScope, Ask<'_>)> = wanted
+                .iter()
+                .map(|(scope, question)| {
+                    (
+                        scope,
+                        Ask::new(question)
+                            .with_evidence(&query)
+                            .shaped(ANSWER_INSTRUCTIONS),
+                    )
+                })
+                .collect();
+            let results =
+                futures::future::join_all(asks.iter().map(|(scope, ask)| self.memory.answer(scope, ask)))
+                    .await;
             for ((scope, _), result) in wanted.iter().zip(results) {
                 match result {
                     Ok(mut answer) if answer.is_grounded() => {
