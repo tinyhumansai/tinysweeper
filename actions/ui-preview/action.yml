@@ -1,0 +1,99 @@
+# The hands of tinysweeper's UI preview.
+#
+# This runs in the *reviewed* repository's CI, with that repository's own
+# secrets, and it is deliberately dumb: it builds nothing itself (the repo's
+# `serve` script does), decides nothing itself (the tinysweeper server does),
+# and holds no model or GitHub-write credential. It has a bearer token for the
+# server's `/preview` routes and a credential for the object store the
+# screenshots go to, and that is all. Everything it sends the server is
+# treated there as untrusted input.
+name: tinysweeper UI preview
+description: >-
+  Drive the pull request's UI through the flows tinysweeper plans, record
+  annotated screenshots and clips of what changed, and upload them.
+
+inputs:
+  server:
+    description: The tinysweeper server, e.g. https://sweeper.example.org
+    required: true
+  token:
+    description: The bearer token for the server's /preview routes (TINYSWEEPER_PREVIEW_TOKEN)
+    required: true
+  config:
+    description: Path to the repository's ui-preview config
+    default: .tinysweeper/ui-preview.json
+  before-dir:
+    description: A checkout of the merge-base
+    required: true
+  after-dir:
+    description: A checkout of the pull request head
+    default: .
+  base-sha:
+    description: The merge-base commit
+    required: true
+  head-sha:
+    description: The pull request head commit (github.event.pull_request.head.sha, never github.sha)
+    required: true
+  bucket:
+    description: The S3-compatible bucket to upload to
+    required: true
+  endpoint:
+    description: The S3-compatible endpoint, e.g. https://<account>.r2.cloudflarestorage.com
+    required: true
+  access-key-id:
+    description: Access key for the bucket
+    required: true
+  secret-access-key:
+    description: Secret key for the bucket
+    required: true
+  region:
+    description: Region for the S3 client; R2 wants `auto`
+    default: auto
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+
+    - name: Install the preview runner
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        npm ci --no-audit --no-fund
+        npx playwright install --with-deps chromium-headless-shell
+        if ! command -v ffmpeg >/dev/null; then
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+        fi
+
+    - name: Drive the preview
+      shell: bash
+      env:
+        TS_SERVER: ${{ inputs.server }}
+        TS_TOKEN: ${{ inputs.token }}
+        TS_CONFIG: ${{ inputs.config }}
+        TS_BEFORE_DIR: ${{ inputs.before-dir }}
+        TS_AFTER_DIR: ${{ inputs.after-dir }}
+        TS_BASE_SHA: ${{ inputs.base-sha }}
+        TS_HEAD_SHA: ${{ inputs.head-sha }}
+        TS_REPO: ${{ github.repository }}
+        TS_PR: ${{ github.event.pull_request.number }}
+        TS_OUT: ${{ runner.temp }}/ui-preview
+        TS_S3_BUCKET: ${{ inputs.bucket }}
+        TS_S3_ENDPOINT: ${{ inputs.endpoint }}
+        TS_S3_REGION: ${{ inputs.region }}
+        AWS_ACCESS_KEY_ID: ${{ inputs.access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.secret-access-key }}
+      run: node "${{ github.action_path }}/run.mjs"
+
+    - name: Keep the run as an artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ui-preview
+        path: ${{ runner.temp }}/ui-preview
+        if-no-files-found: ignore
+        retention-days: 14
