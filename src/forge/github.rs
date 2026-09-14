@@ -13,9 +13,9 @@ use octocrab::Octocrab;
 use crate::error::{Error, Result};
 use crate::evidence::diff::truncate_patch;
 use crate::forge::types::{
-    ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, FileStatus, Issue,
-    IssueComment, MAX_CHECK_IMAGES, PullRequest, RepoId, ReviewComment, ReviewEvent, ReviewThread,
-    ReviewVerdict, ThreadComment,
+    ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, FileStatus, Issue, IssueComment,
+    MAX_CHECK_IMAGES, PullRequest, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict,
+    ThreadComment,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -1721,6 +1721,8 @@ fn review_comment_payload(c: &ReviewComment) -> serde_json::Value {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    use crate::forge::types::CheckImage;
 
     fn check(conclusion: Option<CheckConclusion>) -> CheckRun {
         CheckRun {
