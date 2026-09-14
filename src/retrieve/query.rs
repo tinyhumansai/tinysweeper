@@ -231,6 +231,44 @@ fn sample_into(items: &[String], budget: usize) -> Vec<String> {
     picked
 }
 
+/// Every identifier the change moves, most frequent first.
+///
+/// `(token, count, first appearance)`, over the added and removed lines of
+/// every hunk. Frequency first; ties in **diff order**, not alphabetical
+/// order. That second half is not cosmetic. In a large diff almost every
+/// identifier occurs once, so the tie-break decides nearly the whole list —
+/// and sorting it alphabetically means the tail of the alphabet is cut,
+/// which in practice means the files whose names sort late lose their
+/// vocabulary for no reason anyone chose.
+///
+/// Public because the memory layer composes its own, much shorter query
+/// from the same ranking: the engine behind it is asked in keywords, not in
+/// the index's bag of words, and the keywords worth asking in are the ones
+/// this ranks first.
+pub fn ranked_identifiers(diffs: &[FileDiff]) -> Vec<(String, usize, usize)> {
+    let mut counts: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    let mut seen = 0usize;
+    for diff in diffs {
+        for hunk in &diff.hunks {
+            for line in &hunk.lines {
+                if matches!(line.kind, LineKind::Added | LineKind::Removed) {
+                    for token in tokenise(&line.text) {
+                        let entry = counts.entry(token).or_insert((0, seen));
+                        entry.0 += 1;
+                        seen += 1;
+                    }
+                }
+            }
+        }
+    }
+    let mut ranked: Vec<(String, usize, usize)> = counts
+        .into_iter()
+        .map(|(token, (count, first))| (token, count, first))
+        .collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.2.cmp(&b.2)));
+    ranked
+}
+
 /// Build the bounded query text for one pull request.
 ///
 /// `budget` is a hard ceiling on the returned string, so embedding cost is
@@ -281,34 +319,7 @@ pub fn build_retrieval_query(title: &str, diffs: &[FileDiff], budget: usize) -> 
     // Everything left over, which is at least the identifiers' own share and
     // usually more. Frequency ranking across *every* file is what keeps a late
     // file's vocabulary in the query even when its path was sampled out.
-    // `(count, first appearance)`. The ordinal is what stops the tie-break
-    // being alphabetical — see the band sampling below.
-    let mut counts: BTreeMap<String, (usize, usize)> = BTreeMap::new();
-    let mut seen = 0usize;
-    for diff in diffs {
-        for hunk in &diff.hunks {
-            for line in &hunk.lines {
-                if matches!(line.kind, LineKind::Added | LineKind::Removed) {
-                    for token in tokenise(&line.text) {
-                        let entry = counts.entry(token).or_insert((0, seen));
-                        entry.0 += 1;
-                        seen += 1;
-                    }
-                }
-            }
-        }
-    }
-    let mut ranked: Vec<(String, usize, usize)> = counts
-        .into_iter()
-        .map(|(token, (count, first))| (token, count, first))
-        .collect();
-    // Frequency first; ties in **diff order**, not alphabetical order. That
-    // second half is not cosmetic. In a large diff almost every identifier
-    // occurs once, so the tie-break decides nearly the whole section — and
-    // sorting it alphabetically means the tail of the alphabet is cut, which in
-    // practice means the files whose names sort late lose their vocabulary for
-    // no reason anyone chose.
-    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.2.cmp(&b.2)));
+    let ranked = ranked_identifiers(diffs);
 
     let remaining = budget.saturating_sub(spent);
     let mut identifiers: Vec<String> = Vec::new();
