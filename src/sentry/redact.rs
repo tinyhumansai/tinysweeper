@@ -137,6 +137,16 @@ pub fn marker_component(text: &str) -> String {
     out
 }
 
+/// Reproduce a marker written before structural identifiers bypassed scrubbing.
+///
+/// This exists only for deduplication during the migration: new markers must
+/// use [`marker_component`] so two distinct identifiers cannot collapse.
+pub fn legacy_marker_component(text: &str, patterns: &[String]) -> String {
+    let mut out = scrub_text(text, patterns);
+    truncate_to(&mut out, MARKER_COMPONENT_BYTES);
+    out
+}
+
 /// Remove every case-insensitive occurrence of `needle` from `haystack`.
 fn remove_literal_ci(haystack: &str, needle: &str) -> String {
     let mut out = String::with_capacity(haystack.len());

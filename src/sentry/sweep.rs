@@ -254,7 +254,22 @@ async fn sweep_project(
         // into one and silently suppress a promotion.
         let dedupe_short_id = redact::marker_component(&issue.short_id);
         let dedupe_project = redact::marker_component(project);
-        match dedupe::find_tracked(read, repo, org, &dedupe_project, &dedupe_short_id).await? {
+        let tracked =
+            dedupe::find_tracked(read, repo, org, &dedupe_project, &dedupe_short_id).await?;
+        let tracked = if matches!(tracked, Tracked::No) {
+            let legacy_short_id =
+                redact::legacy_marker_component(&issue.short_id, &config.sentry.scrub_patterns);
+            let legacy_project =
+                redact::legacy_marker_component(project, &config.sentry.scrub_patterns);
+            if legacy_short_id != dedupe_short_id || legacy_project != dedupe_project {
+                dedupe::find_tracked(read, repo, org, &legacy_project, &legacy_short_id).await?
+            } else {
+                tracked
+            }
+        } else {
+            tracked
+        };
+        match tracked {
             Tracked::Yes(tracking) => {
                 tracing::debug!(
                     project,

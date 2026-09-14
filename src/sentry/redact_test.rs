@@ -393,4 +393,8 @@ fn structural_marker_components_ignore_content_scrub_patterns() {
     assert_eq!(safe.short_id, "API-secret-1A2B");
     assert_eq!(safe.project, "api-secret");
     assert_eq!(marker_component(&issue.short_id), safe.short_id);
+    assert_ne!(
+        legacy_marker_component(&issue.short_id, &configured.scrub_patterns),
+        safe.short_id
+    );
 }
