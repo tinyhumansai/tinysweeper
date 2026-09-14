@@ -293,6 +293,13 @@ fn validate_memory(config: &Config, problems: &mut Vec<String>) {
                 .into(),
         );
     }
+    if memory.query_terms == 0 {
+        problems.push(
+            "`memory.query_terms = 0` gives every recall and every question an empty query, so \
+             memory answers nothing; set it above zero or set `memory.enabled = false`"
+                .into(),
+        );
+    }
     if memory.ingest_discussions && memory.discussion_chars == 0 {
         problems.push(
             "`memory.discussion_chars = 0` remembers every remark as an empty body; set it \

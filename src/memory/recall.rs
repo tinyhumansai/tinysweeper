@@ -328,6 +328,30 @@ const MAX_QUERY_STEMS: usize = 8;
 /// How many of the title's words the memory query carries.
 const MAX_QUERY_TITLE_TERMS: usize = 6;
 
+/// Words measured to stall the engine on their own, kept out of the query
+/// whatever source they come from.
+///
+/// Each of these, alone, took a live CortexDB's recall from a second to its
+/// two-minute deadline: they name entities the engine has linked to nearly
+/// everything it holds — the instruction files every repository carries,
+/// the directories every path starts with, the section the conventions
+/// live in. A change to `README.md` or a title about "conventions" is
+/// ordinary, and it must not switch memory off for the review. The list
+/// is what was measured, not a theory of the engine; a word that turns out
+/// to behave the same way is added the same way.
+const ENGINE_HUB_TERMS: &[&str] = &[
+    "agents",
+    "claude",
+    "contributing",
+    "conventions",
+    "convention",
+    "docs",
+    "lib",
+    "readme",
+    "src",
+    "tinysweeper",
+];
+
 /// The query put to the memory engine, for recall and as the evidence
 /// behind every question: the changed files' stems, the title's words, and
 /// the identifiers the diff moves most, `terms` of them in all.
@@ -348,7 +372,10 @@ pub fn memory_query(title: &str, diffs: &[FileDiff], terms: usize) -> String {
     }
     let mut picked: Vec<String> = Vec::with_capacity(terms);
     let push = |term: String, picked: &mut Vec<String>| {
-        if picked.len() < terms && !picked.contains(&term) {
+        if picked.len() < terms
+            && !picked.contains(&term)
+            && !ENGINE_HUB_TERMS.contains(&term.as_str())
+        {
             picked.push(term);
         }
     };
@@ -559,7 +586,12 @@ impl<'a> Recaller<'a> {
         let asks = async {
             let mut answers = Vec::new();
             let mut failures: Vec<String> = Vec::new();
-            if !settings.ask {
+            // No keywords means no evidence query, and a question without
+            // one would fall back to being asked in its own sentence —
+            // exactly the query shape this exists to avoid. A diff with
+            // nothing to say (an empty title over binary files) asks
+            // nothing.
+            if !settings.ask || query.trim().is_empty() {
                 return (answers, failures);
             }
             // Validation already refused an unknown section; a question that
@@ -618,7 +650,7 @@ impl<'a> Recaller<'a> {
             0
         } else {
             sections.len()
-        } + if settings.ask {
+        } + if settings.ask && !query.trim().is_empty() {
             settings.questions.len()
         } else {
             0
@@ -1185,6 +1217,20 @@ mod tests {
         for hub in ["src", "docs", "modules", "rs", "md", "src/server/auth.rs"] {
             assert!(!terms.contains(&hub), "{hub} must not be in {query}");
         }
+        // Nor a measured hub word from any source: the README's stem, a
+        // title about conventions, the crate's own name in the diff.
+        let hubby = vec![crate::evidence::diff::parse_file_patch(
+            "README.md",
+            "@@ -1,1 +1,2 @@\n # x\n+tinysweeper conventions for src layout\n",
+        )];
+        let query = memory_query("Document the conventions", &hubby, 24);
+        for hub in ["readme", "conventions", "src", "tinysweeper"] {
+            assert!(
+                !query.split(' ').any(|t| t == hub),
+                "{hub} must not be in {query}"
+            );
+        }
+        assert!(query.contains("layout"), "{query}");
         assert!(terms.len() <= 24, "{query}");
         assert!(!terms.iter().any(|t| t.is_empty()), "{query}");
     }
@@ -1218,6 +1264,17 @@ mod tests {
         assert_eq!(capped.split(' ').count(), 3, "{capped}");
         assert_eq!(memory_query("anything", &diffs, 0), "");
         assert_eq!(memory_query("", &[], 24), "");
+    }
+
+    #[tokio::test]
+    async fn a_change_with_no_keywords_asks_no_question_in_its_own_words() {
+        let memory = seeded().await;
+        let recaller = Recaller::new(&memory);
+        let config = config();
+        let context = recaller.recall(&config, "o/r", "", &[], false).await;
+        assert!(memory.queries().is_empty(), "{:?}", memory.queries());
+        assert!(context.answers.is_empty());
+        assert_eq!(context.status, MemoryStatus::Ready);
     }
 
     #[tokio::test]
