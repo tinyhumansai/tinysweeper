@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn urls_are_composed_from_the_operators_base_and_never_taken_from_the_file() {
-        let gallery = validate(&manifest(), &expected(), BASE, 4).unwrap();
+        let gallery = validate(&manifest(), &expected(), BASE, 4, &planned()).unwrap();
         let change = &gallery.flows[0].changes[0];
         assert_eq!(
             change.crop_url,
@@ -358,29 +358,29 @@ mod tests {
             let mut m = manifest();
             m.flows[0].changes[0].crop = bad.into();
             assert!(
-                validate(&m, &expected(), BASE, 4).is_err(),
+                validate(&m, &expected(), BASE, 4, &planned()).is_err(),
                 "`{bad}` should be refused"
             );
         }
         let mut m = manifest();
         m.flows[0].changes[0].crop = "shots/change-01.crop.png".into();
-        assert!(validate(&m, &expected(), BASE, 4).is_ok());
+        assert!(validate(&m, &expected(), BASE, 4, &planned()).is_ok());
     }
 
     #[test]
     fn a_manifest_for_another_session_is_refused() {
         let mut other = manifest();
         other.head_sha = "def456".into();
-        assert!(validate(&other, &expected(), BASE, 4).is_err());
+        assert!(validate(&other, &expected(), BASE, 4, &planned()).is_err());
         let mut other = manifest();
         other.pull_request = 8;
-        assert!(validate(&other, &expected(), BASE, 4).is_err());
+        assert!(validate(&other, &expected(), BASE, 4, &planned()).is_err());
         let mut other = manifest();
         other.repo = "o/other".into();
-        assert!(validate(&other, &expected(), BASE, 4).is_err());
+        assert!(validate(&other, &expected(), BASE, 4, &planned()).is_err());
         let mut other = manifest();
         other.version = 2;
-        assert!(validate(&other, &expected(), BASE, 4).is_err());
+        assert!(validate(&other, &expected(), BASE, 4, &planned()).is_err());
     }
 
     #[test]
@@ -393,7 +393,7 @@ mod tests {
                 ..flow.clone()
             })
             .collect();
-        let gallery = validate(&m, &expected(), BASE, 4).unwrap();
+        let gallery = validate(&m, &expected(), BASE, 4, &planned()).unwrap();
         assert_eq!(gallery.flows.len(), 4);
         assert_eq!(gallery.dropped_flows, 6);
     }
@@ -409,7 +409,7 @@ mod tests {
         empty.clip = None;
         empty.changes = vec![];
         m.flows.extend([failed, empty]);
-        let gallery = validate(&m, &expected(), BASE, 4).unwrap();
+        let gallery = validate(&m, &expected(), BASE, 4, &planned()).unwrap();
         assert_eq!(gallery.flows.len(), 1);
         assert_eq!(gallery.empty_flows, 2);
     }
@@ -419,7 +419,7 @@ mod tests {
         let mut m = manifest();
         m.flows[0].status = FlowStatus::BeforeFailed;
         m.flows[0].failed_at = Some(2);
-        let gallery = validate(&m, &expected(), BASE, 4).unwrap();
+        let gallery = validate(&m, &expected(), BASE, 4, &planned()).unwrap();
         assert!(gallery.flows[0].is_new);
     }
 
@@ -451,7 +451,7 @@ mod tests {
                 ..change.clone()
             })
             .collect();
-        let gallery = validate(&m, &expected(), BASE, 4).unwrap();
+        let gallery = validate(&m, &expected(), BASE, 4, &planned()).unwrap();
         assert_eq!(gallery.flows[0].changes.len(), MAX_CHANGES_PER_FLOW);
         assert_eq!(gallery.flows[0].changes[0].callouts.len(), MAX_CALLOUTS);
     }
