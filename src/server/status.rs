@@ -125,6 +125,7 @@ pub fn not_reviewed(head_sha: &str) -> CheckRun {
                   Nothing is wrong with the code, and nothing was checked. Use the \
                   repository's **Manual review** workflow to review it anyway."
             .to_string(),
+        images: vec![],
     }
 }
 
