@@ -40,6 +40,10 @@ pub struct MockMemory {
     /// When set, only `answer` fails. For the tests that prove one lost call
     /// does not throw away the others.
     answer_failure: Arc<Mutex<Option<String>>>,
+    /// Every query put to `recall`, and every evidence query behind an
+    /// `answer`, in call order. For the tests that prove what the engine is
+    /// actually asked: keywords, never the question's sentence.
+    queries: Arc<Mutex<Vec<String>>>,
 }
 
 impl MockMemory {
@@ -66,6 +70,12 @@ impl MockMemory {
             .expect("answers lock")
             .push((needle, answer));
         self
+    }
+
+    /// The queries put to the engine so far — by `recall`, and the evidence
+    /// query behind each `answer` — in call order.
+    pub fn queries(&self) -> Vec<String> {
+        self.queries.lock().expect("queries lock").clone()
     }
 
     /// Make every call fail from now on.
@@ -210,6 +220,10 @@ impl Memory for MockMemory {
         limit: usize,
     ) -> Result<Vec<Recollection>> {
         self.check()?;
+        self.queries
+            .lock()
+            .expect("queries lock")
+            .push(query.to_string());
         let query_terms = terms(query);
         let mut scored: Vec<Recollection> = self
             .remembered(scope)
@@ -236,6 +250,10 @@ impl Memory for MockMemory {
 
     async fn answer(&self, _scope: &MemoryScope, ask: &Ask<'_>) -> Result<MemoryAnswer> {
         self.check()?;
+        self.queries
+            .lock()
+            .expect("queries lock")
+            .push(ask.evidence_query().to_string());
         let question = ask.question;
         if let Some(message) = self
             .answer_failure
