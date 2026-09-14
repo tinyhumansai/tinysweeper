@@ -34,8 +34,10 @@ import { upload } from "./src/upload.mjs";
 import { buildManifest, jobSummary } from "./src/manifest.mjs";
 
 const SCALE = 2;
-const BEFORE_PORT = 3000;
-const AFTER_PORT = 3001;
+// Overridable for a developer machine where something already listens on
+// the defaults; on a CI runner nothing does.
+const BEFORE_PORT = Number(process.env.TS_BEFORE_PORT ?? 3000);
+const AFTER_PORT = Number(process.env.TS_AFTER_PORT ?? 3001);
 
 async function main() {
   const opts = options();
