@@ -330,6 +330,10 @@ files = ["POLICY.md"]
 
 [lanes.critique]
 fail_on = "medium"
+
+[preview]
+enabled = false
+max_flows = 2
 "#;
 
 #[test]

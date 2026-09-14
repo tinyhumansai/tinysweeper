@@ -307,6 +307,7 @@ fn every_scaffolded_capability_is_off_by_default() {
     assert!(!config.automation.stale.enabled);
     assert!(!config.sentry.enabled);
     assert!(!config.automerge.enabled);
+    assert!(!config.preview.enabled);
 }
 
 #[test]

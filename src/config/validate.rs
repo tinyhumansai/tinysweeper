@@ -38,6 +38,7 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_pr_triage(config, &mut problems);
     validate_automation(config, &mut problems);
     validate_sentry(config, &mut problems);
+    validate_preview(config, &mut problems);
 
     problems
 }
@@ -885,6 +886,39 @@ fn validate_sentry(config: &Config, problems: &mut Vec<String>) {
 /// collected here are the ones that are unambiguously mistakes — a malformed
 /// repository, a duplicate project, or a route pointing at a project this
 /// deployment never sweeps.
+fn validate_preview(config: &Config, problems: &mut Vec<String>) {
+    let preview = &config.preview;
+
+    if preview.max_flows == 0 {
+        problems.push("`preview.max_flows` must be at least 1".into());
+    }
+    if preview.max_steps == 0 {
+        problems.push("`preview.max_steps` must be at least 1".into());
+    }
+    if !(preview.budget_usd > 0.0) {
+        problems.push("`preview.budget_usd` must be positive".into());
+    }
+
+    match preview.public_base_url.as_deref().map(str::trim) {
+        // The base URL is composed into every published image URL, so the
+        // rules are the rules of a URL prefix: https only (an http image in a
+        // GitHub comment is blocked by the proxy and renders as a broken
+        // picture), and no query or fragment, because a path is appended.
+        Some(url) if !url.starts_with("https://") => problems.push(format!(
+            "`preview.public_base_url` must use https:// (found `{url}`); GitHub will not render an http image"
+        )),
+        Some(url) if url.contains('?') || url.contains('#') => problems.push(format!(
+            "`preview.public_base_url` must not carry a query or fragment (found `{url}`); paths are appended to it"
+        )),
+        Some(_) => {}
+        None if preview.enabled => problems.push(
+            "`preview.enabled = true` requires `preview.public_base_url`, the origin the CI job uploads to"
+                .into(),
+        ),
+        None => {}
+    }
+}
+
 fn validate_sentry_routes(config: &Config, problems: &mut Vec<String>) {
     let sentry = &config.sentry;
     let mut seen: Vec<&str> = Vec::new();

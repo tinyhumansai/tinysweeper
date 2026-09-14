@@ -77,13 +77,15 @@ use crate::ports::forge::ForgeRead;
 /// is safe. See the module documentation for the split; changing this list is a
 /// change to the security boundary in `AGENTS.md` and needs saying so in the
 /// pull request.
-pub const OVERRIDABLE_KEYS: [&str; 14] = [
+pub const OVERRIDABLE_KEYS: [&str; 16] = [
     "knowledge.extract",
     "knowledge.files",
     "labels.human_review",
     "labels.manual_only",
     "lanes.*.fail_on",
     "paths.ignore",
+    "preview.enabled",
+    "preview.max_flows",
     "review.confidence_min",
     "review.draft_prs",
     "review.incremental",

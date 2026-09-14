@@ -252,6 +252,8 @@ pub struct Config {
     pub automation: Automation,
     /// Sentry issue promotion.
     pub sentry: Sentry,
+    /// UI previews: flows, annotated screenshots and clips on a pull request.
+    pub preview: Preview,
 }
 
 /// Review behaviour and the gates that keep it quiet.
@@ -546,6 +548,14 @@ pub struct Models {
     pub flash: String,
     /// Tried in order when the selected model fails.
     pub fallback: Vec<String>,
+    /// A model that can look at an image, for the UI preview's captions.
+    ///
+    /// Optional, and `None` by default: the captions then describe a flow
+    /// from its transcript alone, which is the honest degradation. Never a
+    /// fallback for a text tier and never given one — see
+    /// `harness::openrouter::GatewayModel::for_vision` for why a vision call
+    /// must not share the review ladder.
+    pub vision: Option<String>,
     /// Which upstream providers the gateway may serve these models from.
     pub provider: ProviderRouting,
     /// Cap on tokens generated per model call.
@@ -1168,6 +1178,33 @@ pub struct Labeler {
     pub area: BTreeMap<String, String>,
 }
 
+/// UI previews: a pull request's user-facing changes, shown.
+///
+/// The server plans user flows from the diff and drives a browser that a job
+/// in the reviewed repository's own CI runs; the job uploads screenshots and
+/// clips to an object store the operator owns, and the server publishes one
+/// comment. See `docs/modules/preview/README.md`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Preview {
+    /// Whether the `/preview` routes accept sessions at all.
+    pub enabled: bool,
+    /// Where the CI job's uploads are served from, e.g. `https://previews.example.org`.
+    ///
+    /// Every image URL the server ever publishes is composed from this and a
+    /// validated relative path. It is the trust anchor of the whole feature,
+    /// which is why a reviewed repository cannot override it.
+    pub public_base_url: Option<String>,
+    /// How many user flows one pull request gets, at most.
+    pub max_flows: usize,
+    /// How many browser steps one flow may take before it is cut off.
+    pub max_steps: usize,
+    /// The model spend one preview session may run up, in USD.
+    pub budget_usd: f64,
+    /// Whether to spend a model call per flow on a title and caption.
+    pub caption: bool,
+}
+
 /// Sentry issue promotion: unresolved Sentry issues become GitHub issues,
 /// deduplicated, PII-scrubbed, and linked back.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1365,6 +1402,19 @@ impl Config {
             | Workload::KnowledgeExtraction
             | Workload::ThreadReview => &self.models.scan,
         }
+    }
+
+    /// The model the UI preview captions with, if one is configured.
+    ///
+    /// An explicit id only — there is no vision tier to name, because there
+    /// is no cheap/deep pair to choose between: either a model can look at a
+    /// screenshot or it cannot.
+    pub fn model_for_vision(&self) -> Option<&str> {
+        self.models
+            .vision
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
     }
 
     /// Resolve the model issue triage runs on.
