@@ -51,6 +51,15 @@ repository graph — no model call, so it is reproducible and free — and it sa
 which parts it could not see rather than drawing an empty picture. See
 [docs/modules/overview/README.md](docs/modules/overview/README.md).
 
+A pull request that changes a user interface also gets a **UI preview**: for
+each user flow the change touches, a clip, a screenshot with numbered callouts
+on the elements that changed, a crop, and a one-line caption, as a gallery in
+one comment. The browser runs in the reviewed repository's own CI — tinysweeper
+never runs contributor code — and the server plans the flows, drives it one
+accessibility snapshot at a time, and publishes. Three files turn it on for a
+repository: see [templates/ui-preview/README.md](templates/ui-preview/README.md)
+and [docs/modules/preview/README.md](docs/modules/preview/README.md).
+
 ## Design commitments
 
 - **The model never holds a write token.** Lanes take a `ForgeRead` and only the
@@ -224,6 +233,7 @@ MiniMax are all the same code path.
 - [docs/triggers.md](docs/triggers.md) — what wakes tinysweeper up, and what emits no event at all
 - [docs/modules/server/README.md](docs/modules/server/README.md) — the server, its security boundary, and the admin API
 - [docs/modules/overview/README.md](docs/modules/overview/README.md) — the change map: what gets drawn, and why nothing in it comes from a model
+- [docs/modules/preview/README.md](docs/modules/preview/README.md) — the UI preview: the brain in the server, the hands in the repository's CI, and what crosses between them
 - [docs/modules/memory/README.md](docs/modules/memory/README.md) — the memory engine: what is remembered, what is asked, and what a rejected finding means
 - `docs/` — module documentation and design notes
 
