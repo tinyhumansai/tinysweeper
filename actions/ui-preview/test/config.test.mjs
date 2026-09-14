@@ -7,7 +7,7 @@ test("an empty config is the defaults", () => {
   const c = checkConfig({});
   assert.equal(c.serve, DEFAULTS.serve);
   assert.deepEqual(c.viewport, [1440, 900]);
-  assert.deepEqual(c.auth, { cookies: [], localStorage: {} });
+  assert.deepEqual(c.auth, { cookies: [], localStorage: {}, visit: null });
 });
 
 test("auth is merged rather than replaced", () => {
