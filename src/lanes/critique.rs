@@ -47,7 +47,7 @@ use crate::flows::runner;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema::{self, RawFinding};
 use crate::lanes::fanout::{FileReview, per_file};
-use crate::lanes::{Lane, LaneInput, LaneOutcome};
+use crate::lanes::{Lane, LaneInput, LaneOutcome, reviewer_responses};
 use crate::ports::model::{Model, Spend};
 use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
 
@@ -180,6 +180,7 @@ async fn review_file(
     )
     .await?;
 
+    let responses = reviewer_responses(LaneId::Critique, &reviewers, &answers)?;
     let mut spend = Spend::default();
     let mut per_reviewer: Vec<Vec<Finding>> = Vec::with_capacity(reviewers.len());
     let mut summary = String::new();
@@ -187,28 +188,13 @@ async fn review_file(
     let mut unanchored = 0usize;
     let mut discarded = 0usize;
 
-    for (reviewer, answer) in reviewers.iter().zip(&answers) {
-        let Some(value) = answer.value.clone() else {
-            // One reviewer's failure is not the lane's. With a council
-            // configured, losing one angle should cost that angle and nothing
-            // else — the same rule `lanes::fanout` applies to a file.
-            tracing::warn!(
-                agent = reviewer.id,
-                err = answer.error.as_deref().unwrap_or("no answer"),
-                "a council reviewer failed"
-            );
-            continue;
-        };
+    for response in responses {
+        spend.note(&response.model);
 
-        spend.note(&answer.model);
-
-        // One reviewer answering off-schema is that reviewer lost, not the
-        // file. With a solo council there is nothing else, so it is fatal —
-        // which is what `per_reviewer.is_empty()` below turns it into.
-        let asked = match place(llm.clone(), input, diff, &evidence, value).await {
+        let asked = match place(llm.clone(), input, diff, &evidence, response.response).await {
             Ok(asked) => asked,
             Err(err) if reviewers.len() > 1 => {
-                tracing::warn!(agent = reviewer.id, %err, "a council reviewer failed");
+                tracing::warn!(agent = response.id, %err, "a council reviewer failed");
                 continue;
             }
             Err(err) => return Err(err),
@@ -314,7 +300,7 @@ async fn place(
     input: &LaneInput<'_>,
     diff: &FileDiff,
     evidence: &str,
-    value: serde_json::Value,
+    parsed: schema::LaneResponse,
 ) -> Result<Asked> {
     let config: &Config = input.config;
 
@@ -322,8 +308,6 @@ async fn place(
     // counted here is only what *placement* adds, which is a relocation call
     // per finding the quote could not anchor.
     let mut spend = Spend::default();
-    let parsed = schema::parse(LaneId::Critique, value)?;
-
     let model = llm.model().as_ref();
     let positioner = Positioner::new(model, config);
     let mut findings = Vec::new();
