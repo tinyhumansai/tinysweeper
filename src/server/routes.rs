@@ -2013,13 +2013,19 @@ impl Previews for PreviewDispatch {
                     model: model_id,
                     vision,
                     max_tokens: config.models.max_tokens,
+                    spent_usd: session.spent_usd,
+                    budget_usd: config.preview.budget_usd,
                 },
                 model,
             )
             .await;
+            // Persisted, not just logged: a retried finish for a still-present
+            // session (see below) must see this spend already accounted for,
+            // not repeat every caption call.
+            session.spent_usd += spend.usage.cost_usd;
             tracing::info!(
                 session = %session.id,
-                cost_usd = session.spent_usd + spend.usage.cost_usd,
+                cost_usd = session.spent_usd,
                 "UI preview session spent"
             );
         }
