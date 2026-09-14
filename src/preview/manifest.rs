@@ -180,7 +180,10 @@ pub fn validate(
         }
         flows.push(GalleryFlow {
             id: text(&flow.id, 16),
-            title: text(&flow.title, MAX_TITLE),
+            // The plan's title, not the manifest's: the manifest is written
+            // by repository CI and the title is what every reviewer reads
+            // next to the pictures.
+            title: text(&plan.title, MAX_TITLE),
             caption: None,
             is_new: flow.status == FlowStatus::BeforeFailed,
             clip,
