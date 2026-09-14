@@ -36,6 +36,9 @@ export async function loadConfig(root, file) {
 
 /** Lay `config` over the defaults and refuse what cannot work. */
 export function checkConfig(config, where = "config") {
+  if (typeof config !== "object" || config === null || Array.isArray(config)) {
+    throw new Error(`${where}: the top-level config must be an object`);
+  }
   const merged = { ...DEFAULTS, ...config };
   merged.auth = { ...DEFAULTS.auth, ...(config.auth ?? {}) };
 
