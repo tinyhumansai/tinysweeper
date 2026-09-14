@@ -445,6 +445,24 @@ mod tests {
     }
 
     #[test]
+    fn a_planned_flow_the_session_never_drove_is_refused_not_published() {
+        // Planned (its id is in `planned()`) but the hands never called
+        // `/step` for it, so it is not in `driven()` — the same-repository
+        // CI job could otherwise skip driving entirely and submit a
+        // fabricated `before_failed` result with invented asset names.
+        let m = manifest();
+        assert_eq!(m.flows[0].id, "f1");
+        let undriven: std::collections::BTreeSet<String> =
+            driven().into_iter().filter(|id| id != "f1").collect();
+        let gallery = validate(&m, &expected(), BASE, 4, &planned(), &undriven).unwrap();
+        assert!(
+            gallery.flows.is_empty(),
+            "an undriven flow publishes nothing even though it was planned"
+        );
+        assert_eq!(gallery.empty_flows, 1);
+    }
+
+    #[test]
     fn the_gallery_title_comes_from_the_plan_not_the_manifest() {
         let mut m = manifest();
         m.flows[0].title = "a hostile title the CI job made up".into();
