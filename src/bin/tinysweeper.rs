@@ -277,9 +277,17 @@ enum MemoryCommand {
         #[arg(long)]
         repo: String,
 
-        /// Which section to ask: `code`, `conventions` or `reviews`.
+        /// Which section to ask: `code`, `conventions`, `reviews` or
+        /// `discussions`.
         #[arg(long, default_value = "conventions")]
         section: String,
+
+        /// Keywords that gather the evidence, in place of the question's own
+        /// words — what a review does. Without it the question itself is
+        /// the query, which is the raw form and the slow one on a large
+        /// engine.
+        #[arg(long)]
+        evidence: Option<String>,
 
         /// The question. `{paths}` is left as-is: this is the raw form.
         question: String,
@@ -1325,6 +1333,7 @@ async fn run_memory(command: MemoryCommand) -> Result<()> {
         MemoryCommand::Ask {
             repo,
             section,
+            evidence,
             question,
         } => {
             let repo = canonical_repo(&repo)?;
@@ -1334,8 +1343,12 @@ async fn run_memory(command: MemoryCommand) -> Result<()> {
                     "`{section}` is not a section; use code, conventions, reviews or discussions"
                 ))
             })?;
+            let mut ask = tinysweeper::memory::Ask::new(&question);
+            if let Some(keywords) = &evidence {
+                ask = ask.with_evidence(keywords);
+            }
             let answer = memory
-                .answer(&MemoryScope::section(&repo, section), &question, None)
+                .answer(&MemoryScope::section(&repo, section), &ask)
                 .await?;
             if !answer.is_grounded() {
                 println!("(nothing relevant is remembered)");
