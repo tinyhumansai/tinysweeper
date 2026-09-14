@@ -371,20 +371,39 @@ pub fn memory_query(title: &str, diffs: &[FileDiff], terms: usize) -> String {
         return String::new();
     }
     let mut picked: Vec<String> = Vec::with_capacity(terms);
-    let push = |term: String, picked: &mut Vec<String>| {
+    let push = |term: String, picked: &mut Vec<String>| -> bool {
         if picked.len() < terms
             && !picked.contains(&term)
             && !ENGINE_HUB_TERMS.contains(&term.as_str())
         {
             picked.push(term);
+            true
+        } else {
+            false
         }
     };
-    let stems = diffs.iter().filter_map(|diff| file_stem(&diff.path));
-    for stem in stems.take(MAX_QUERY_STEMS) {
-        push(stem, &mut picked);
+    // The per-source cap counts *accepted* terms, not candidates offered to
+    // `push`: a `.take(N)` ahead of `push` would burn the whole source quota
+    // on hub words or duplicates and starve every stem or title word behind
+    // them, which is exactly the empty-query failure this query exists to
+    // avoid.
+    let mut stems_picked = 0;
+    for stem in diffs.iter().filter_map(|diff| file_stem(&diff.path)) {
+        if stems_picked >= MAX_QUERY_STEMS || picked.len() >= terms {
+            break;
+        }
+        if push(stem, &mut picked) {
+            stems_picked += 1;
+        }
     }
-    for word in crate::retrieve::query::tokenise(title).take(MAX_QUERY_TITLE_TERMS) {
-        push(word, &mut picked);
+    let mut title_terms_picked = 0;
+    for word in crate::retrieve::query::tokenise(title) {
+        if title_terms_picked >= MAX_QUERY_TITLE_TERMS || picked.len() >= terms {
+            break;
+        }
+        if push(word, &mut picked) {
+            title_terms_picked += 1;
+        }
     }
     for (identifier, _, _) in crate::retrieve::query::ranked_identifiers(diffs) {
         if picked.len() >= terms {
