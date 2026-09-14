@@ -247,6 +247,41 @@ enum Command {
     },
 }
 
+/// The UI preview commands.
+#[derive(Debug, Subcommand)]
+enum PreviewCommand {
+    /// Render the preview comment from a manifest, without touching GitHub.
+    ///
+    /// The manifest is what `actions/ui-preview/` uploads; the base URL
+    /// stands in for `preview.public_base_url`. Prints the comment body, or
+    /// says there is nothing to show.
+    Render {
+        /// Path to a `manifest.json`.
+        #[arg(long)]
+        manifest: std::path::PathBuf,
+
+        /// The origin the run's assets are served from.
+        #[arg(long, default_value = "https://previews.example.org")]
+        base_url: String,
+    },
+
+    /// Plan the user flows for a pull request and print them. Requires the
+    /// `harness` and `github` features.
+    Plan {
+        /// The repository, as `owner/name`.
+        #[arg(long, env = "GITHUB_REPOSITORY")]
+        repo: String,
+
+        /// The pull request number.
+        #[arg(long)]
+        pr: u64,
+
+        /// Path to the config file. Defaults to discovery from the repo root.
+        #[arg(long)]
+        config: Option<std::path::PathBuf>,
+    },
+}
+
 /// The memory commands.
 #[derive(Debug, Subcommand)]
 enum MemoryCommand {
