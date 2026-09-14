@@ -386,6 +386,32 @@ fn modality(kind: MemoryKind) -> &'static str {
     }
 }
 
+/// Which derived layers the engine is asked to extract from an item.
+///
+/// Each named layer is a model call per event, run by the engine in the
+/// background, and the backlog is paid for by every recall that runs while
+/// it drains: measured, a production engine digesting a seventy-repository
+/// backfill sat at five cores for days and answered one-second recalls in
+/// a minute. So the layers are asked for where an answer can use them and
+/// nowhere else. A code chunk is recalled as an event and the index already
+/// does semantic search over code, so it is embedded and nothing more. A
+/// convention or a finding yields facts and entities — the rule, the file,
+/// the maintainer — and a discussion yields an episode too, because "what
+/// happened on that pull request" is what a review asks of it. Beliefs and
+/// understanding are the engine's slowest layers and nothing here cites
+/// them.
+fn extraction(kind: MemoryKind) -> &'static [&'static str] {
+    match kind {
+        MemoryKind::CodeChunk => &[],
+        MemoryKind::Convention | MemoryKind::ReviewFinding | MemoryKind::ReviewOutcome => {
+            &["facts", "entities"]
+        }
+        MemoryKind::Issue | MemoryKind::PullRequest | MemoryKind::Remark => {
+            &["facts", "entities", "episodes"]
+        }
+    }
+}
+
 /// The `/v1/experience` body for one item.
 fn experience(scope: &str, item: &MemoryItem) -> Value {
     let mut context = serde_json::Map::new();
@@ -405,7 +431,7 @@ fn experience(scope: &str, item: &MemoryItem) -> Value {
         "content": { "kind": "text", "text": envelope(item) },
         "context": context,
         "directives": {
-            "extract": ["facts", "entities", "beliefs", "episodes", "understanding"],
+            "extract": extraction(item.kind),
             "embed": "eager",
         },
         "idempotency_key": item.content_id(),
@@ -999,6 +1025,23 @@ mod tests {
         let debug = format!("{memory:?}");
         assert!(!debug.contains("sk-secret-value"));
         assert!(debug.contains("127.0.0.1:3141"));
+    }
+
+    #[test]
+    fn code_is_embedded_without_extraction_and_discussions_yield_episodes() {
+        let code = MemoryItem::new("k", MemoryKind::CodeChunk, "t", "b");
+        assert_eq!(experience("s", &code)["directives"]["extract"], json!([]));
+        assert_eq!(experience("s", &code)["directives"]["embed"], json!("eager"));
+        let rule = MemoryItem::new("k", MemoryKind::Convention, "t", "b");
+        assert_eq!(
+            experience("s", &rule)["directives"]["extract"],
+            json!(["facts", "entities"])
+        );
+        let remark = MemoryItem::new("k", MemoryKind::Remark, "t", "b");
+        assert_eq!(
+            experience("s", &remark)["directives"]["extract"],
+            json!(["facts", "entities", "episodes"])
+        );
     }
 
     #[test]
