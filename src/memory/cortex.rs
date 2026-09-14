@@ -52,8 +52,8 @@ use serde_json::{Value, json};
 
 use crate::error::{Error, Result};
 use crate::memory::types::{
-    Citation, MemoryAnswer, MemoryItem, MemoryKind, MemoryScope, MemorySection, Recollection,
-    RememberReport,
+    Ask, Citation, MemoryAnswer, MemoryItem, MemoryKind, MemoryScope, MemorySection,
+    Recollection, RememberReport,
 };
 use crate::ports::memory::Memory;
 
