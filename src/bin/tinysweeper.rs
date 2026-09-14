@@ -1096,7 +1096,8 @@ async fn run_preview(command: PreviewCommand) -> Result<()> {
             // checkout) and falls back to the default cap; a config that
             // exists but fails to parse or validate is a real mistake the
             // operator should see, not one to silently paper over.
-            let loaded = match tinysweeper::config::load_validated(std::path::Path::new("."), None) {
+            let loaded = match tinysweeper::config::load_validated(std::path::Path::new("."), None)
+            {
                 Ok(loaded) => loaded.config.preview.max_flows,
                 Err(tinysweeper::Error::ConfigNotFound(_)) => 4,
                 Err(err) => return Err(err),

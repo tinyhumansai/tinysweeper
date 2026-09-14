@@ -347,7 +347,11 @@ mod tests {
         let (outcome, _) = publish(&forge, &forge, "o/r", &empty, None).await.unwrap();
         assert_eq!(outcome, Outcome::Published);
         let writes = forge.writes();
-        let Write::CommentUpdate { comment_id: 41, body } = &writes[0] else {
+        let Write::CommentUpdate {
+            comment_id: 41,
+            body,
+        } = &writes[0]
+        else {
             panic!("the earlier comment is edited, not left alone: {writes:?}");
         };
         assert!(body.contains("No visible change"));
