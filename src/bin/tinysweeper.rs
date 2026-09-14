@@ -1091,9 +1091,16 @@ async fn run_preview(command: PreviewCommand) -> Result<()> {
                 number: parsed.pull_request,
                 head_sha: &parsed.head_sha,
             };
-            let loaded = tinysweeper::config::load_validated(std::path::Path::new("."), None)
-                .map(|loaded| loaded.config.preview.max_flows)
-                .unwrap_or(4);
+            // No config at all is the common case for this offline debug
+            // command (run from anywhere, not necessarily a tinysweeper
+            // checkout) and falls back to the default cap; a config that
+            // exists but fails to parse or validate is a real mistake the
+            // operator should see, not one to silently paper over.
+            let loaded = match tinysweeper::config::load_validated(std::path::Path::new("."), None) {
+                Ok(loaded) => loaded.config.preview.max_flows,
+                Err(tinysweeper::Error::ConfigNotFound(_)) => 4,
+                Err(err) => return Err(err),
+            };
             // There is no session's plan to check this manifest against here
             // (see the comment above), so every flow it names is treated as
             // its own plan — an id and title lifted straight off the
