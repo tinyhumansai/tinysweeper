@@ -226,7 +226,9 @@ mod tests {
                     body,
                 }],
             );
-        let outcome = publish(&forge, &forge, "o/r", &gallery()).await.unwrap();
+        let (outcome, _) = publish(&forge, &forge, "o/r", &gallery(), None)
+            .await
+            .unwrap();
         assert_eq!(outcome, Outcome::Unchanged);
         assert!(matches!(forge.writes().as_slice(), [Write::Check(_)]));
     }
