@@ -245,7 +245,9 @@ mod tests {
                     body: format!("{}\nmine", render::MARKER),
                 }],
             );
-        publish(&forge, &forge, "o/r", &gallery()).await.unwrap();
+        publish(&forge, &forge, "o/r", &gallery(), None)
+            .await
+            .unwrap();
         assert!(matches!(&forge.writes()[0], Write::Comment { .. }));
     }
 
