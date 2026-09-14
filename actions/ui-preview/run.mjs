@@ -287,7 +287,12 @@ async function newContext({ browser, config, origin, checkoutDir, out, flow, sid
     baseURL: origin,
     ...(video ? { recordVideo: { dir: path.join(out, "video", `${flow.id}-${side}`), size: { width, height } } } : {}),
   });
-  const host = new URL(origin).hostname;
+  let host;
+  try {
+    host = new URL(origin).hostname;
+  } catch (err) {
+    throw new Error(`invalid served origin ${JSON.stringify(origin)}: ${err.message}`);
+  }
   if (config.auth.cookies.length > 0) {
     await context.addCookies(
       config.auth.cookies.map((c) => ({ domain: host, path: "/", ...c })),
