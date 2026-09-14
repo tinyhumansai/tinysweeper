@@ -103,23 +103,25 @@ pub async fn publish(
 
     // The check is published in every case, including "nothing to show":
     // that is the one message the comment deliberately does not carry.
-    write
-        .publish_check(
-            &repo_id,
-            CheckRun {
-                name: render::CHECK_NAME.into(),
-                head_sha: gallery.head_sha.clone(),
-                conclusion: Some(CheckConclusion::Neutral),
-                title: render::check_title(gallery),
-                summary: body.unwrap_or_else(|| {
-                    "No user flow produced a visible change on this commit.".to_string()
-                }),
-                images: render::check_images(gallery),
-            },
-        )
-        .await?;
+    let check = CheckRun {
+        name: render::CHECK_NAME.into(),
+        head_sha: gallery.head_sha.clone(),
+        conclusion: Some(CheckConclusion::Neutral),
+        title: render::check_title(gallery),
+        summary: body.unwrap_or_else(|| {
+            "No user flow produced a visible change on this commit.".to_string()
+        }),
+        images: render::check_images(gallery),
+    };
+    let check_id = match existing_check_id {
+        Some(id) => {
+            write.update_check(&repo_id, id, check).await?;
+            id
+        }
+        None => write.publish_check(&repo_id, check).await?,
+    };
 
-    Ok(outcome)
+    Ok((outcome, Some(check_id)))
 }
 
 #[cfg(test)]
