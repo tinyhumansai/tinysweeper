@@ -21,6 +21,10 @@ use crate::preview::types::Flow;
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Session {
     /// The session id the hands present on every call. Unguessable.
+    ///
+    /// Serialised as `_id` so the document the store writes is keyed by it
+    /// without a second copy of the same string under another name.
+    #[serde(rename = "_id")]
     pub id: String,
     /// `owner/name`.
     pub repo: String,
