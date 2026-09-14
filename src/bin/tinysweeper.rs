@@ -1109,8 +1109,11 @@ async fn run_preview(command: PreviewCommand) -> Result<()> {
                     expect_before: tinysweeper::preview::types::ExpectBefore::Same,
                 })
                 .collect();
+            // Likewise, every flow is treated as driven: there is no
+            // session's `states` to check against.
+            let driven = planned.iter().map(|f| f.id.clone()).collect();
             let gallery = tinysweeper::preview::manifest::validate(
-                &parsed, &expected, &base_url, loaded, &planned,
+                &parsed, &expected, &base_url, loaded, &planned, &driven,
             )?;
             match tinysweeper::preview::render::comment(&gallery) {
                 Some(body) => println!("{body}"),
