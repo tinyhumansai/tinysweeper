@@ -56,7 +56,7 @@ export function jobSummary(manifest, baseUrl) {
       );
     }
   }
-  let out = `### 🎬 UI preview — PR #${manifest.pull_request}\n\n`;
+  let out = `### 🎬 UI preview — PR #${esc(manifest.pull_request)}\n\n`;
   if (cells.length === 0) {
     out += "_No user flow produced a picture on this commit._\n";
     return out;
