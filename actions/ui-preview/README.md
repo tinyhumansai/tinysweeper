@@ -41,6 +41,7 @@ the latter is the synthetic merge commit, and the server checks the head.
   "timeout_s": 420,
   "viewport": [1440, 900],
   "auth": {
+    "visit": "/__preview-connect.html",
     "cookies": [{ "name": "session", "value": "preview-session" }],
     "localStorage": { "token": "preview-token" }
   },
@@ -57,6 +58,7 @@ the latter is the synthetic merge commit, and the server checks the head.
 | `ready` | A path that answers 2xx/3xx once the app is up. |
 | `timeout_s` | How long to wait for `ready`. |
 | `viewport` | `[width, height]` in CSS pixels. Screenshots are taken at 2x. |
+| `auth.visit` | A page on the served app to open before anything else. For values only the serving side knows — such as the port of a backend the `serve` script started — the script writes a small page that seeds `localStorage` and redirects, and this points at it. Same idea as openhuman's dev-server `/__dev-connect` route. |
 | `auth.cookies` | Cookies set on the browser context before the first page. `domain` defaults to `127.0.0.1`. |
 | `auth.localStorage` | Keys seeded into `localStorage` on every page, if unset. |
 | `mocks` | Routes intercepted with Playwright's `page.route`. A `dir` mock answers `GET /api/me` with `<dir>/api/me.json` (also `me.GET.json`, `me/index.json`); a `body` mock answers inline. |
@@ -78,7 +80,9 @@ TS_TOKEN=… node run.mjs --server https://sweeper.example.org \
   --out ./ui-preview-out --no-upload
 ```
 
-`--no-upload` leaves the run in `--out`; the server still publishes a comment
+Every turn is written to `--out` as `turn-<flow>-NN.json` — the snapshot the
+brain saw and what it answered — which is the first thing to read when a flow
+went somewhere odd. `--no-upload` leaves the run in `--out`; the server still publishes a comment
 whose images will not resolve, so use a test pull request. `TS_BEFORE_PORT`
 and `TS_AFTER_PORT` move the two servers off 3000/3001. If Chromium dies with
 "Target crashed" on a screenshot, `/dev/shm` is too small or quota'd on your
