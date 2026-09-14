@@ -41,12 +41,22 @@ pub enum Outcome {
 }
 
 /// Publish a gallery.
+///
+/// `existing_check_id` is the id a previous `publish` for the same session
+/// already returned, if the caller has one. `publish_check` never replaces a
+/// check run of the same name — GitHub keeps both — so a session retried
+/// after its `finish` response was lost (the hands' own HTTP client retries a
+/// dropped response, and a session is only deleted *after* a successful
+/// publish) would otherwise grow a second `tinysweeper/ui-preview` row every
+/// retry. Passing the id back lets the caller persist it and update the same
+/// check run next time instead.
 pub async fn publish(
     read: &dyn ForgeRead,
     write: &dyn ForgeWrite,
     repo: &str,
     gallery: &Gallery,
-) -> Result<Outcome> {
+    existing_check_id: Option<u64>,
+) -> Result<(Outcome, u64)> {
     let repo_id =
         RepoId::parse(repo).ok_or_else(|| Error::Forge(format!("`{repo}` is not owner/name")))?;
 
@@ -57,7 +67,12 @@ pub async fn publish(
             live = %live.head_sha,
             "head moved since the preview ran; not publishing stale pictures"
         );
-        return Ok(Outcome::HeadMoved);
+        // No check to reuse or create: the caller has nothing new to
+        // remember, so its existing id (if any) is handed back unchanged.
+        return Ok((
+            Outcome::HeadMoved,
+            existing_check_id.unwrap_or_default(),
+        ));
     }
 
     let body = render::comment(gallery);
