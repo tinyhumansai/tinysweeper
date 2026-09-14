@@ -69,18 +69,23 @@ pub fn parse(bytes: &[u8]) -> Result<Manifest> {
 /// `{base}/{owner}/{name}/{head_sha}/{run}/`.
 ///
 /// `planned` is the session's own plan — the flows the brain told the hands to
-/// drive when the session opened. The manifest is written by a job in the
-/// reviewed repository's CI, so a same-repository pull request that edits
-/// that job (or the action it calls) can submit any flow id, title or status
-/// it likes. Binding every manifest flow to one the session actually planned,
-/// and taking the title from the plan rather than the manifest, is what stops
-/// that from fabricating a gallery entry or mislabelling one "new in this PR".
+/// drive when the session opened. `driven` is which of those the hands
+/// actually called `/step` for at least once (the session's `states` keys).
+/// The manifest is written by a job in the reviewed repository's CI, so a
+/// same-repository pull request that edits that job (or the action it calls)
+/// can submit any flow id, title or status it likes — including one it
+/// planned but skipped driving entirely, with a fabricated `before_failed`
+/// status and arbitrary asset names. Binding every manifest flow to one the
+/// session both planned *and* drove, and taking the title from the plan
+/// rather than the manifest, is what stops that from fabricating a gallery
+/// entry or mislabelling one "new in this PR".
 pub fn validate(
     manifest: &Manifest,
     expected: &Expected<'_>,
     base_url: &str,
     max_flows: usize,
     planned: &[Flow],
+    driven: &std::collections::BTreeSet<String>,
 ) -> Result<Gallery> {
     if manifest.version != VERSION {
         return Err(Error::Config(format!(
