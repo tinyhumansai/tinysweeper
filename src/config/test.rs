@@ -468,6 +468,19 @@ fn an_unknown_key_is_rejected_rather_than_silently_ignored() {
 }
 
 #[test]
+fn a_top_level_automation_flag_is_not_accepted_under_stale() {
+    // `merge_sweep` is a scalar on `[automation]`, not a setting owned by the
+    // stale-policy table. Accepting it here would make a typo look configured
+    // while the runtime continues to read the top-level default.
+    let dir = repo(
+        Some("version = 1\n[automation.stale]\nmerge_sweep = true\n"),
+        &[],
+    );
+    let err = load(dir.path(), None).unwrap_err().to_string();
+    assert!(err.contains("automation.stale.merge_sweep"), "{err}");
+}
+
+#[test]
 fn validation_reports_every_problem_at_once() {
     let config = parse(
         r#"
