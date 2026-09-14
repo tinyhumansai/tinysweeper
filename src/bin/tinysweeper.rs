@@ -1094,8 +1094,24 @@ async fn run_preview(command: PreviewCommand) -> Result<()> {
             let loaded = tinysweeper::config::load_validated(std::path::Path::new("."), None)
                 .map(|loaded| loaded.config.preview.max_flows)
                 .unwrap_or(4);
-            let gallery =
-                tinysweeper::preview::manifest::validate(&parsed, &expected, &base_url, loaded)?;
+            // There is no session's plan to check this manifest against here
+            // (see the comment above), so every flow it names is treated as
+            // its own plan — an id and title lifted straight off the
+            // manifest rather than looked up.
+            let planned: Vec<tinysweeper::preview::types::Flow> = parsed
+                .flows
+                .iter()
+                .map(|flow| tinysweeper::preview::types::Flow {
+                    id: flow.id.clone(),
+                    title: flow.title.clone(),
+                    start_path: String::new(),
+                    goal: String::new(),
+                    expect_before: tinysweeper::preview::types::ExpectBefore::Same,
+                })
+                .collect();
+            let gallery = tinysweeper::preview::manifest::validate(
+                &parsed, &expected, &base_url, loaded, &planned,
+            )?;
             match tinysweeper::preview::render::comment(&gallery) {
                 Some(body) => println!("{body}"),
                 None => println!(
