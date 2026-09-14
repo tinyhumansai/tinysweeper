@@ -1264,18 +1264,9 @@ mod tests {
         let diffs = vec![
             crate::evidence::diff::parse_file_patch("agents.md", "@@ -1,1 +1,2 @@\n a\n+b\n"),
             crate::evidence::diff::parse_file_patch("claude.md", "@@ -1,1 +1,2 @@\n a\n+b\n"),
-            crate::evidence::diff::parse_file_patch(
-                "contributing.md",
-                "@@ -1,1 +1,2 @@\n a\n+b\n",
-            ),
-            crate::evidence::diff::parse_file_patch(
-                "conventions.md",
-                "@@ -1,1 +1,2 @@\n a\n+b\n",
-            ),
-            crate::evidence::diff::parse_file_patch(
-                "convention.md",
-                "@@ -1,1 +1,2 @@\n a\n+b\n",
-            ),
+            crate::evidence::diff::parse_file_patch("contributing.md", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+            crate::evidence::diff::parse_file_patch("conventions.md", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+            crate::evidence::diff::parse_file_patch("convention.md", "@@ -1,1 +1,2 @@\n a\n+b\n"),
             crate::evidence::diff::parse_file_patch("docs.md", "@@ -1,1 +1,2 @@\n a\n+b\n"),
             crate::evidence::diff::parse_file_patch("lib.rs", "@@ -1,1 +1,2 @@\n a\n+b\n"),
             crate::evidence::diff::parse_file_patch("readme.md", "@@ -1,1 +1,2 @@\n a\n+b\n"),
