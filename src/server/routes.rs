@@ -175,6 +175,7 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
         index: index.clone(),
         memory,
         index_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_INDEXES)),
+        preview_locks: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     };
 
     let manual_state = state.clone();
