@@ -29,6 +29,9 @@ use crate::server::failure;
 use crate::server::indexing::{IndexBackend, index_in_background};
 use crate::server::manual::{self, FullReviews, MergeReport, Merges, Triages};
 use crate::server::memory::{MemoryBackend, ingest_in_background};
+use crate::server::preview::{
+    self, FinishReply, FinishRequest, Previews, StartReply, StartRequest, StepReply as PreviewStepReply,
+};
 use crate::server::status;
 use crate::server::store::{Store, Trust};
 use crate::server::webhook::{self, Action, Payload};
@@ -165,6 +168,9 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
 
     let manual_state = state.clone();
     let manual_auth = admin_auth.clone();
+    let preview_state = state.clone();
+    let preview_auth = AdminAuth::from_named_env(preview::TOKEN_ENV)?;
+    let enabled_preview = state.config.config.preview.enabled;
     // Logged once at boot rather than discovered from behaviour. "Auto-merge
     // is configured and nothing acts on it" was a real bug in this repository;
     // a line at startup saying which way the switch is set is the cheapest
@@ -223,6 +229,26 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
             "manual full reviews are available under /admin/reviews, \
              and auto-merge sweeps under /admin/merges"
         );
+    }
+
+    // The UI preview routes, behind a token of their own: this one is handed
+    // to every repository's CI, and the admin token must never be. Absent
+    // when there is no token, like the admin router and for the same reason.
+    let previews: Arc<dyn Previews> = Arc::new(PreviewDispatch {
+        state: preview_state,
+    });
+    match preview::router(preview_auth, previews) {
+        Some(routes) => {
+            app = app.merge(routes);
+            tracing::info!(
+                enabled = enabled_preview,
+                "UI preview sessions are available under /preview"
+            );
+        }
+        None => tracing::info!(
+            "{} is not set; the UI preview routes are not mounted",
+            preview::TOKEN_ENV
+        ),
     }
 
     let listener = tokio::net::TcpListener::bind(&bind)
@@ -1537,6 +1563,284 @@ async fn run_and_publish(
     crate::app::apply(forge, &write, &config, &proposal, Some(&state.store)).await?;
 
     Ok(proposal)
+}
+
+
+/// The UI preview routes' way into the brain.
+///
+/// Each call loads the session, does one thing, and writes it back. Nothing
+/// is kept in memory between calls, so a redeploy mid-session costs the turn
+/// in flight and nothing else.
+struct PreviewDispatch {
+    state: AppState,
+}
+
+impl PreviewDispatch {
+    /// The session, or the error the hands can act on.
+    async fn session(&self, id: &str) -> Result<crate::preview::session::Session> {
+        self.state
+            .store
+            .preview_session(id)
+            .await?
+            .ok_or_else(|| Error::Config(format!("no preview session `{id}`; it may have expired")))
+    }
+}
+
+#[async_trait::async_trait]
+impl Previews for PreviewDispatch {
+    async fn start(&self, request: StartRequest) -> Result<StartReply> {
+        let config = &self.state.config.config;
+        let off = StartReply {
+            enabled: false,
+            session: None,
+            flows: vec![],
+            max_steps: 0,
+        };
+        if !config.preview.enabled {
+            return Ok(off);
+        }
+        let base_url = config.preview.public_base_url.as_deref().unwrap_or("");
+        if base_url.is_empty() {
+            // Validation refuses this configuration, but the check is cheap
+            // and the alternative is composing URLs onto nothing.
+            return Ok(off);
+        }
+
+        let (owner, name) = request
+            .repo
+            .split_once('/')
+            .ok_or_else(|| Error::Config(format!("`{}` is not owner/name", request.repo)))?;
+        let repo = manual::checked_target(owner, name, &manual::allowed_org())
+            .map_err(Error::Config)?;
+
+        // The token proved a CI job in our organisation; this proves *which*
+        // pull request, against GitHub rather than the request.
+        let installation = self
+            .state
+            .auth
+            .installation_for_repo(&repo.owner, &repo.name)
+            .await?;
+        let read_token = self.state.auth.installation_token(installation).await?;
+        let forge = crate::forge::github::GitHubRead::new(&read_token)?;
+        let pull_request = forge.pull_request(&repo, request.pull_request).await?;
+        if pull_request.head_sha != request.head_sha {
+            return Err(Error::Config(format!(
+                "#{} is at {} on GitHub, not {}; a push has happened since this job started",
+                request.pull_request, pull_request.head_sha, request.head_sha
+            )));
+        }
+
+        // The repository may turn previews off for itself, read at the base
+        // commit like every other repository setting.
+        let overlaid =
+            crate::config::remote::overlay(&forge, &repo, &pull_request.base_sha, config).await;
+        if !overlaid.config.preview.enabled {
+            return Ok(off);
+        }
+        let effective = overlaid.config;
+
+        let files = forge.changed_files(&repo, request.pull_request).await?;
+        let diffs = crate::evidence::diff::parse_changed_files(&files);
+        let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
+            &effective.models,
+        )?);
+        let plan = crate::preview::plan::plan(
+            &crate::preview::plan::PlanInputs {
+                diffs: &diffs,
+                title: &pull_request.title,
+                entry_points: &request.entry_points,
+                max_flows: effective.preview.max_flows,
+                model: effective.model_for_workload(crate::config::types::Workload::Preview),
+                max_tokens: effective.models.max_tokens,
+            },
+            model,
+        )
+        .await?;
+
+        let session = crate::preview::session::Session {
+            id: crate::preview::session::new_id(&request.repo, request.pull_request, &request.head_sha),
+            repo: repo.to_string(),
+            number: request.pull_request,
+            head_sha: request.head_sha.clone(),
+            base_sha: request.base_sha.clone(),
+            installation,
+            flows: plan.flows.clone(),
+            states: Default::default(),
+            diff_excerpt: crate::preview::session::excerpt(&diffs),
+            spent_usd: plan.spend.usage.cost_usd,
+            max_steps: effective.preview.max_steps,
+        };
+        self.state.store.save_preview_session(&session).await?;
+        tracing::info!(
+            repo = %repo,
+            number = request.pull_request,
+            flows = session.flows.len(),
+            "opened a UI preview session"
+        );
+
+        Ok(StartReply {
+            enabled: true,
+            session: Some(session.id),
+            flows: plan.flows,
+            max_steps: effective.preview.max_steps,
+        })
+    }
+
+    async fn step(
+        &self,
+        id: &str,
+        flow_id: &str,
+        observation: crate::preview::types::Observation,
+    ) -> Result<PreviewStepReply> {
+        let config = &self.state.config.config;
+        let mut session = self.session(id).await?;
+        let flow = session
+            .flow(flow_id)
+            .cloned()
+            .ok_or_else(|| Error::Config(format!("no flow `{flow_id}` in this session")))?;
+
+        // The `before` side replays the `after` script and asks nothing; a
+        // step call for it is answered from the recorded script so a hands
+        // implementation that asks anyway gets the same answer for free.
+        if observation.side == crate::preview::types::Side::Before {
+            let script = session
+                .states
+                .get(flow_id)
+                .map(|state| state.commands.clone())
+                .unwrap_or_default();
+            return Ok(PreviewStepReply {
+                commands: vec![],
+                done: true,
+                replay: Some(script),
+            });
+        }
+
+        let mut state = session.states.remove(flow_id).unwrap_or_default();
+        let reply = if session.exhausted(config.preview.budget_usd) {
+            // Closed without a call, and every later flow the same way: the
+            // ceiling is per session, not per flow.
+            state.done = true;
+            let mut commands = Vec::new();
+            if !state.commands.is_empty() {
+                commands.push(crate::preview::types::Command::Record { start: false });
+            }
+            commands.push(crate::preview::types::Command::Done {
+                reason: "session budget spent".into(),
+            });
+            state.commands.extend(commands.iter().cloned());
+            crate::preview::step::StepReply {
+                commands,
+                done: true,
+                spend: Default::default(),
+            }
+        } else {
+            let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
+                &config.models,
+            )?);
+            crate::preview::step::next(
+                &crate::preview::step::StepContext {
+                    flow: &flow,
+                    diff_excerpt: &session.diff_excerpt,
+                    max_steps: session.max_steps,
+                    model: config.model_for_workload(crate::config::types::Workload::Preview),
+                    max_tokens: config.models.max_tokens,
+                },
+                &mut state,
+                &observation,
+                model,
+            )
+            .await?
+        };
+        session.spent_usd += reply.spend.usage.cost_usd;
+        let replay = reply.done.then(|| state.commands.clone());
+        session.states.insert(flow_id.to_string(), state);
+        self.state.store.save_preview_session(&session).await?;
+
+        Ok(PreviewStepReply {
+            commands: reply.commands,
+            done: reply.done,
+            replay,
+        })
+    }
+
+    async fn finish(&self, id: &str, request: FinishRequest) -> Result<FinishReply> {
+        let config = &self.state.config.config;
+        let session = self.session(id).await?;
+        let base_url = config.preview.public_base_url.as_deref().unwrap_or("");
+
+        let mut gallery = crate::preview::manifest::validate(
+            &request.manifest,
+            &crate::preview::manifest::Expected {
+                repo: &session.repo,
+                number: session.number,
+                head_sha: &session.head_sha,
+            },
+            base_url,
+            config.preview.max_flows,
+        )?;
+
+        // Captions are the last model calls, and they are made before the
+        // write token exists — the same order as a review.
+        if config.preview.caption && !gallery.flows.is_empty() {
+            let states: Vec<(String, crate::preview::step::FlowState)> = session
+                .states
+                .iter()
+                .map(|(id, state)| (id.clone(), state.clone()))
+                .collect();
+            let (model, model_id, vision): (Arc<dyn crate::ports::model::Model>, &str, bool) =
+                match config.model_for_vision() {
+                    Some(vision) => (
+                        Arc::new(crate::harness::openrouter::GatewayModel::for_vision(
+                            &config.models,
+                        )?),
+                        vision,
+                        true,
+                    ),
+                    None => (
+                        Arc::new(crate::harness::openrouter::GatewayModel::from_config(
+                            &config.models,
+                        )?),
+                        config.model_for_workload(crate::config::types::Workload::Preview),
+                        false,
+                    ),
+                };
+            let spend = crate::preview::caption::caption(
+                &mut gallery,
+                &crate::preview::caption::CaptionInputs {
+                    diff_excerpt: &session.diff_excerpt,
+                    states: &states,
+                    model: model_id,
+                    vision,
+                    max_tokens: config.models.max_tokens,
+                },
+                model,
+            )
+            .await;
+            tracing::info!(
+                session = %session.id,
+                cost_usd = session.spent_usd + spend.usage.cost_usd,
+                "UI preview session spent"
+            );
+        }
+
+        let repo = RepoId::parse(&session.repo)
+            .ok_or_else(|| Error::Forge(format!("`{}` is not owner/name", session.repo)))?;
+        let read_token = self.state.auth.installation_token(session.installation).await?;
+        let read = crate::forge::github::GitHubRead::new(&read_token)?;
+        let write_token = self.state.auth.installation_token(session.installation).await?;
+        let write = crate::forge::github::GitHubWrite::new(&write_token)?;
+        let outcome = crate::preview::apply::publish(&read, &write, &repo.to_string(), &gallery).await?;
+
+        // Gone once published: a second finish for the same session would
+        // otherwise republish, and the session has nothing left to say.
+        if let Err(err) = self.state.store.delete_preview_session(&session.id).await {
+            tracing::warn!(%err, "could not delete a finished preview session");
+        }
+
+        Ok(FinishReply {
+            outcome: format!("{outcome:?}").to_ascii_lowercase(),
+        })
+    }
 }
 
 #[cfg(test)]
