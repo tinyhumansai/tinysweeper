@@ -135,6 +135,14 @@ pub fn validate(
     let mut flows = Vec::new();
     let mut empty_flows = 0;
     for flow in manifest.flows.iter().take(max_flows) {
+        // Only a flow the session actually planned may publish anything: an
+        // id the plan never issued is either a bug in the hands or a
+        // same-repository pull request that edited the action to invent one,
+        // and either way it gets nothing published under it.
+        let Some(plan) = planned.iter().find(|p| p.id == flow.id) else {
+            empty_flows += 1;
+            continue;
+        };
         // A flow that never got a screenshot has nothing to put in a cell. A
         // clip alone is kept: a clip of a flow that works is worth showing
         // even when the brain never pointed at anything.
