@@ -46,3 +46,14 @@ test("a 5xx is retried and a 4xx is not", async () => {
   await assert.rejects(other.start({}), /422 head moved/);
   assert.equal(mistaken.calls.length, 1);
 });
+
+test("step is never retried, even on a 5xx", async () => {
+  // `step` is not idempotent server-side (it charges spend and appends to
+  // the recorded script per call), so a lost response must surface as a
+  // failure rather than risk double-processing the same turn.
+  const flaky = fakeFetch([{ status: 503, body: { error: "model down" } }]);
+  const session = new Session({ server: "https://s.example", token: "t", fetchImpl: flaky.fetchImpl });
+  session.id = "s1";
+  await assert.rejects(session.step("f1", { side: "after" }), /503/);
+  assert.equal(flaky.calls.length, 1, "no retry attempt was made");
+});
