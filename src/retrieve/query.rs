@@ -163,7 +163,7 @@ fn is_meaningful(token: &str) -> bool {
 /// `camelCase` is deliberately *not* split: an embedding of `parseRequest`
 /// matches indexed code containing `parseRequest`, and splitting it into two
 /// common words would match everything.
-fn tokenise(text: &str) -> impl Iterator<Item = String> {
+pub fn tokenise(text: &str) -> impl Iterator<Item = String> {
     text.split(|c: char| !c.is_alphanumeric() && c != '_')
         .filter(|token| !token.is_empty())
         .map(|token| token.to_ascii_lowercase())
