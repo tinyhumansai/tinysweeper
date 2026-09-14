@@ -307,6 +307,12 @@ mod tests {
             .collect()
     }
 
+    /// Every planned flow, as driven: the common case for fixtures below that
+    /// are not specifically testing the driven/undriven distinction.
+    fn driven() -> std::collections::BTreeSet<String> {
+        planned().into_iter().map(|f| f.id).collect()
+    }
+
     fn manifest() -> Manifest {
         Manifest {
             version: 1,
