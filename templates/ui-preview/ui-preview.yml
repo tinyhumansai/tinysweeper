@@ -68,6 +68,12 @@ jobs:
         with:
           node-version: "22"
 
+      # tinysweeper has no release tags yet, so `@main` is what this template
+      # ships with. Once tinyhumansai/tinysweeper cuts a release, or as soon
+      # as you copy this file, pin this to a specific commit SHA (or a
+      # release tag) the same way you would any other third-party action —
+      # `@main` here receives the preview token and object-store credentials
+      # below and should not float indefinitely.
       - uses: tinyhumansai/tinysweeper/actions/ui-preview@main
         with:
           server: ${{ vars.TINYSWEEPER_SERVER_URL }}
