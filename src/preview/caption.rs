@@ -54,11 +54,22 @@ pub struct CaptionInputs<'a> {
     pub vision: bool,
     /// The output ceiling.
     pub max_tokens: u32,
+    /// What the session had already spent driving, before captioning.
+    pub spent_usd: f64,
+    /// The session's ceiling. One flow over it still finishes — a caption
+    /// call already in flight is not cut off mid-flow — but the next one is
+    /// skipped rather than started.
+    pub budget_usd: f64,
 }
 
 /// Caption every flow in place. Returns the total spend.
 ///
 /// Failures are per flow and logged: the gallery is published either way.
+/// `step` already stops driving once the session's budget is spent; this is
+/// the same ceiling applied per flow here, since `spend` is only handed back
+/// to the caller (and persisted onto the session) after every flow has been
+/// attempted — without rechecking mid-loop, one call over budget would let
+/// every remaining flow spend past it too.
 pub async fn caption(
     gallery: &mut Gallery,
     inputs: &CaptionInputs<'_>,
@@ -66,6 +77,13 @@ pub async fn caption(
 ) -> Spend {
     let mut spend = Spend::default();
     for flow in &mut gallery.flows {
+        if inputs.spent_usd + spend.cost_usd() > inputs.budget_usd {
+            tracing::warn!(
+                flow = %flow.id,
+                "preview session budget spent; skipping the remaining captions"
+            );
+            break;
+        }
         let transcript = inputs
             .states
             .iter()
