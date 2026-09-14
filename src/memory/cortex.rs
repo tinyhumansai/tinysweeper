@@ -1002,6 +1002,18 @@ mod tests {
     }
 
     #[test]
+    fn an_answer_model_is_optional_and_blank_means_the_engines_default() {
+        let memory = CortexMemory::new("http://127.0.0.1:3141", "k").unwrap();
+        assert_eq!(memory.answer_model, None);
+        assert_eq!(memory.with_answer_model("  ").answer_model, None);
+        let memory = CortexMemory::new("http://127.0.0.1:3141", "k")
+            .unwrap()
+            .with_answer_model(" flash ");
+        assert_eq!(memory.answer_model.as_deref(), Some("flash"));
+        assert!(format!("{memory:?}").contains("flash"));
+    }
+
+    #[test]
     fn budgets_are_shaped_as_the_engine_expects() {
         let only = events_only(7);
         assert_eq!(only["per_layer_limits"]["events"], json!(7));
