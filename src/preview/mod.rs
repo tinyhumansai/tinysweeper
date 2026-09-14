@@ -31,6 +31,7 @@ pub mod caption;
 pub mod manifest;
 pub mod plan;
 pub mod render;
+pub mod session;
 pub mod step;
 pub mod types;
 

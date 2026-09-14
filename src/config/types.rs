@@ -855,6 +855,11 @@ pub enum Workload {
     KnowledgeExtraction,
     /// Judging whether a reply settled a review thread (`src/threads`).
     ThreadReview,
+    /// Planning and driving a UI preview session (`src/preview`).
+    ///
+    /// Cheap on purpose: a driving turn reads an accessibility snapshot and
+    /// picks a click, and there may be a hundred of them per pull request.
+    Preview,
 }
 
 /// Several reviewers on one lane's evidence.
@@ -1400,7 +1405,8 @@ impl Config {
             Workload::Relocate
             | Workload::Falsify
             | Workload::KnowledgeExtraction
-            | Workload::ThreadReview => &self.models.scan,
+            | Workload::ThreadReview
+            | Workload::Preview => &self.models.scan,
         }
     }
 
