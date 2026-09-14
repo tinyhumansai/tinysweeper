@@ -269,7 +269,7 @@ mod tests {
             flows: vec![],
             ..gallery()
         };
-        let outcome = publish(&forge, &forge, "o/r", &empty).await.unwrap();
+        let (outcome, _) = publish(&forge, &forge, "o/r", &empty, None).await.unwrap();
         assert_eq!(outcome, Outcome::NothingToShow);
         let writes = forge.writes();
         let [Write::Check(check)] = writes.as_slice() else {
@@ -277,5 +277,29 @@ mod tests {
         };
         assert_eq!(check.title, "No visible change found");
         assert!(check.images.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_retry_with_a_known_check_id_updates_it_instead_of_publishing_another() {
+        let forge = MockForge::new()
+            .with_pull_request(pull_request("abc"), vec![], vec![])
+            .with_comments(
+                7,
+                vec![IssueComment {
+                    id: Some(41),
+                    author: "tinysweeper".into(),
+                    body: format!("{}\nold", render::MARKER),
+                }],
+            );
+        let (outcome, check_id) = publish(&forge, &forge, "o/r", &gallery(), Some(55))
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::Published);
+        assert_eq!(check_id, Some(55), "the caller's own id rides back unchanged");
+        let writes = forge.writes();
+        assert!(
+            matches!(&writes[1], Write::CheckUpdate { check_id: 55, .. }),
+            "an existing check id updates that check rather than creating another: {writes:?}"
+        );
     }
 }
