@@ -311,6 +311,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_flow_over_budget_is_skipped_rather_than_captioned() {
+        let mut gallery = gallery();
+        let states = states();
+        // Each mock call costs $0.01 (see MockModel's canned usage); a budget
+        // already spent past $0.01 before this call starts means even the
+        // first flow's caption call must not happen.
+        let model = Arc::new(MockModel::new().then(json!({"title": "t", "caption": "c"})));
+        let inputs = CaptionInputs {
+            spent_usd: 0.02,
+            budget_usd: 0.01,
+            ..inputs(&states, false)
+        };
+        let spend = caption(&mut gallery, &inputs, model.clone()).await;
+        assert_eq!(spend.cost_usd(), 0.0, "no call was made");
+        assert_eq!(model.requests().len(), 0);
+        assert_eq!(gallery.flows[0].title, "Toggle the setting", "the planned title is kept");
+    }
+
+    #[tokio::test]
     async fn a_vision_model_is_shown_the_crop_then_the_before_shot() {
         let mut gallery = gallery();
         let states = states();
