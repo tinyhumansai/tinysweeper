@@ -1256,6 +1256,46 @@ mod tests {
     }
 
     #[test]
+    fn a_source_cap_counts_accepted_terms_not_rejected_candidates() {
+        // Eight diffs, every one of them a measured hub word — the source
+        // cap for stems (`MAX_QUERY_STEMS`, 8) exactly matches the count, so
+        // a `.take` ahead of the hub-word filter would burn the whole quota
+        // on rejects and never reach the ninth diff's real stem.
+        let diffs = vec![
+            crate::evidence::diff::parse_file_patch("agents.md", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+            crate::evidence::diff::parse_file_patch("claude.md", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+            crate::evidence::diff::parse_file_patch(
+                "contributing.md",
+                "@@ -1,1 +1,2 @@\n a\n+b\n",
+            ),
+            crate::evidence::diff::parse_file_patch(
+                "conventions.md",
+                "@@ -1,1 +1,2 @@\n a\n+b\n",
+            ),
+            crate::evidence::diff::parse_file_patch(
+                "convention.md",
+                "@@ -1,1 +1,2 @@\n a\n+b\n",
+            ),
+            crate::evidence::diff::parse_file_patch("docs.md", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+            crate::evidence::diff::parse_file_patch("lib.rs", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+            crate::evidence::diff::parse_file_patch("readme.md", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+            crate::evidence::diff::parse_file_patch("widget.rs", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+        ];
+        // Six title words, every one a measured hub word, ahead of a seventh
+        // that is not — `MAX_QUERY_TITLE_TERMS` is 6.
+        let title = "src docs lib readme agents claude update";
+        let query = memory_query(title, &diffs, 24);
+        assert!(
+            query.split(' ').any(|t| t == "widget"),
+            "the ninth diff's real stem must survive eight hub-word rejects: {query}"
+        );
+        assert!(
+            query.split(' ').any(|t| t == "update"),
+            "the seventh title word must survive six hub-word rejects: {query}"
+        );
+    }
+
+    #[test]
     fn the_memory_query_is_bounded_and_deduplicated() {
         let diffs: Vec<FileDiff> = (0..30)
             .map(|i| {
