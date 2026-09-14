@@ -65,11 +65,20 @@ pub fn parse(bytes: &[u8]) -> Result<Manifest> {
 ///
 /// `base_url` is the operator's `preview.public_base_url`; the run prefix is
 /// `{base}/{owner}/{name}/{head_sha}/{run}/`.
+///
+/// `planned` is the session's own plan — the flows the brain told the hands to
+/// drive when the session opened. The manifest is written by a job in the
+/// reviewed repository's CI, so a same-repository pull request that edits
+/// that job (or the action it calls) can submit any flow id, title or status
+/// it likes. Binding every manifest flow to one the session actually planned,
+/// and taking the title from the plan rather than the manifest, is what stops
+/// that from fabricating a gallery entry or mislabelling one "new in this PR".
 pub fn validate(
     manifest: &Manifest,
     expected: &Expected<'_>,
     base_url: &str,
     max_flows: usize,
+    planned: &[Flow],
 ) -> Result<Gallery> {
     if manifest.version != VERSION {
         return Err(Error::Config(format!(
