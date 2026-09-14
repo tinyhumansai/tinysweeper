@@ -262,10 +262,10 @@ mod tests {
     fn inputs<'a>(diffs: &'a [FileDiff], entry: &'a [(String, String)]) -> PlanInputs<'a> {
         PlanInputs {
             diffs,
-            title: "Add dynamic secrets".into(),
+            title: "Add dynamic secrets",
             entry_points: entry,
             max_flows: 2,
-            model: "scan".into(),
+            model: "scan",
             max_tokens: 800,
         }
     }
@@ -285,7 +285,7 @@ mod tests {
     #[tokio::test]
     async fn a_diff_with_no_ui_file_plans_nothing_for_free() {
         let diffs = vec![parse_file_patch("src/server/main.rs", PATCH)];
-        let model = Arc::new(MockModel::new(vec![]));
+        let model = Arc::new(MockModel::new());
         let plan = plan(&inputs(&diffs, &[]), model).await.unwrap();
         assert!(plan.flows.is_empty());
         assert_eq!(plan.spend.usage.cost_usd, 0.0);
@@ -294,12 +294,12 @@ mod tests {
     #[tokio::test]
     async fn flows_are_capped_ided_and_kept_to_same_origin_paths() {
         let diffs = vec![parse_file_patch("app/src/pages/Settings.tsx", PATCH)];
-        let model = Arc::new(MockModel::new(vec![json!({"flows": [
+        let model = Arc::new(MockModel::new().then(json!({"flows": [
             {"title": "Toggle the <b>setting</b>", "start_path": "/settings", "goal": "toggle shown", "expect_before": "absent"},
             {"title": "Elsewhere", "start_path": "https://evil.example/", "goal": "x", "expect_before": "same"},
             {"title": "Second", "start_path": "/secrets", "goal": "y", "expect_before": "different"},
             {"title": "Third", "start_path": "/more", "goal": "z", "expect_before": "same"},
-        ]})]));
+        ]})));
         let plan = plan(&inputs(&diffs, &[]), model).await.unwrap();
         assert_eq!(plan.flows.len(), 2);
         assert_eq!(plan.flows[0].id, "f1");
@@ -312,7 +312,7 @@ mod tests {
     #[tokio::test]
     async fn the_prompt_fences_the_diff_and_names_the_entry_points() {
         let diffs = vec![parse_file_patch("app/src/pages/Settings.tsx", PATCH)];
-        let model = Arc::new(MockModel::new(vec![json!({"flows": []})]));
+        let model = Arc::new(MockModel::new().then(json!({"flows": []})]));
         let entry = vec![("settings".to_string(), "/settings".to_string())];
         plan(&inputs(&diffs, &entry), model.clone()).await.unwrap();
         let prompt = model.last_prompt().expect("one call");
