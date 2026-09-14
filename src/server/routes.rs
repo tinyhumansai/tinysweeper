@@ -1920,6 +1920,7 @@ impl Previews for PreviewDispatch {
             },
             base_url,
             config.preview.max_flows,
+            &session.flows,
         )?;
 
         // Captions are the last model calls, and they are made before the
