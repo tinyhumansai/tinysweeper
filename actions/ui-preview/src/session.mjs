@@ -64,7 +64,7 @@ export class Session {
         });
       } catch (err) {
         last = new Error(`${path}: ${err.message}`);
-        await sleep(2000 * attempt);
+        if (attempt < attempts) await sleep(2000 * attempt);
         continue;
       }
       const text = await response.text();
