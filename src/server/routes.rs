@@ -1825,6 +1825,20 @@ impl Previews for PreviewDispatch {
         )
         .await?;
 
+        // Nothing planned: the diff changes nothing a user can see. The hands
+        // never call `step` or `finish` for an empty plan (there is nothing
+        // to drive or publish), so a session saved here would sit unused
+        // until its TTL. Answer "enabled, nothing to do" without persisting
+        // one.
+        if plan.flows.is_empty() {
+            return Ok(StartReply {
+                enabled: true,
+                session: None,
+                flows: vec![],
+                max_steps: effective.preview.max_steps,
+            });
+        }
+
         let session = crate::preview::session::Session {
             id: crate::preview::session::new_id(
                 &request.repo,
