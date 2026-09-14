@@ -5,21 +5,24 @@
 //!
 //! Two ways of asking, and the review does both:
 //!
-//! 1. **Recall by query.** The same bounded query `src/retrieve` composes from
-//!    the pull request — title, paths, hunk headings, identifiers — is put to
-//!    each section of the repository's memory. Conventions and review outcomes
-//!    always; code only when the caller says the index is not already doing
-//!    that job, because two copies of the same function is worse context than
-//!    one.
+//! 1. **Recall by query.** A short bag of keywords — the changed files'
+//!    stems, the title's words, the identifiers the diff moves most — is put
+//!    to each section of the repository's memory. Conventions, review
+//!    outcomes and discussions always; code only when the caller says the
+//!    index is not already doing that job, because two copies of the same
+//!    function is worse context than one. Keywords, not the index's
+//!    four-thousand-character query and not a sentence: see
+//!    [`memory_query`] for what a live engine did with the alternatives.
 //! 2. **Ask by question.** The configured questions are templated over the
 //!    changed paths and put to the engine's grounded-answer route, each in
-//!    the section it names. This is the part a keyword store cannot do and
-//!    the part worth an engine: "which rule applies here?" answered with a
-//!    citation is a pointer a reviewer can act on, where the same rule as the
-//!    seventh-ranked recollection is not. Measured against a live engine, the
-//!    section matters: over one section the answer quotes the rule and names
-//!    the file; over the whole repository it comes back with whatever was
-//!    written first.
+//!    the section it names, with the *same keywords* gathering the evidence
+//!    the question is answered over. This is the part a keyword store cannot
+//!    do and the part worth an engine: "which rule applies here?" answered
+//!    with a citation is a pointer a reviewer can act on, where the same rule
+//!    as the seventh-ranked recollection is not. Measured against a live
+//!    engine, the section matters: over one section the answer quotes the
+//!    rule and names the file; over the whole repository it comes back with
+//!    whatever was written first.
 //!
 //! Everything comes back under one token budget, answers first — they are the
 //! synthesis, and the recollections are the evidence — then outcomes, then
@@ -38,7 +41,8 @@ use crate::evidence::diff::FileDiff;
 use crate::forge::types::{ReviewComment, ReviewThread};
 use crate::memory::ingest;
 use crate::memory::types::{
-    MemoryAnswer, MemoryItem, MemoryKind, MemoryScope, MemorySection, Recollection, RememberReport,
+    Ask, MemoryAnswer, MemoryItem, MemoryKind, MemoryScope, MemorySection, Recollection,
+    RememberReport,
 };
 use crate::ports::memory::Memory;
 
@@ -313,6 +317,66 @@ pub fn paths_clause(paths: &[String]) -> String {
     out
 }
 
+/// How many changed files lend their stem to the memory query.
+///
+/// A stem — `auth` from `src/server/auth.rs` — is the one part of a path a
+/// discussion or a finding names in prose. The directories are not: `src`
+/// is in nearly every path the engine holds, and a query that carries it
+/// asks about everything.
+const MAX_QUERY_STEMS: usize = 8;
+
+/// How many of the title's words the memory query carries.
+const MAX_QUERY_TITLE_TERMS: usize = 6;
+
+/// The query put to the memory engine, for recall and as the evidence
+/// behind every question: the changed files' stems, the title's words, and
+/// the identifiers the diff moves most, `terms` of them in all.
+///
+/// Keywords, deliberately, and short. Measured against a live CortexDB:
+/// a keyword query over one section answered in about a second, every
+/// time. The index's own retrieval query — four thousand characters of
+/// paths and identifiers — and a question written as a sentence both hit
+/// the engine's two-minute evidence deadline whenever they carried one of
+/// a handful of words that name hub entities in its graph (`src`,
+/// `README.md`, the word `conventions`, the envelope's own header), and a
+/// path carries `src`. Directories are therefore dropped, extensions with
+/// them, and the sentence is kept for the answer route alone, where it is
+/// read by a model rather than matched by an index.
+pub fn memory_query(title: &str, diffs: &[FileDiff], terms: usize) -> String {
+    if terms == 0 {
+        return String::new();
+    }
+    let mut picked: Vec<String> = Vec::with_capacity(terms);
+    let mut push = |term: String, picked: &mut Vec<String>| {
+        if picked.len() < terms && !picked.contains(&term) {
+            picked.push(term);
+        }
+    };
+    let stems = diffs.iter().filter_map(|diff| file_stem(&diff.path));
+    for stem in stems.take(MAX_QUERY_STEMS) {
+        push(stem, &mut picked);
+    }
+    for word in crate::retrieve::query::tokenise(title).take(MAX_QUERY_TITLE_TERMS) {
+        push(word, &mut picked);
+    }
+    for (identifier, _, _) in crate::retrieve::query::ranked_identifiers(diffs) {
+        if picked.len() >= terms {
+            break;
+        }
+        push(identifier, &mut picked);
+    }
+    picked.join(" ")
+}
+
+/// `auth` from `src/server/auth.rs`; `readme` from `README.md`; nothing
+/// from a path whose name is only an extension or a number.
+fn file_stem(path: &str) -> Option<String> {
+    let name = path.rsplit('/').next()?;
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    let stem = stem.trim_matches(|c: char| !c.is_alphanumeric());
+    crate::retrieve::query::tokenise(stem).next()
+}
+
 /// The tag [`fill_question`] wraps every substitution in, and
 /// [`ANSWER_INSTRUCTIONS`] names, so the engine's own model — which this
 /// adapter does not control the prompt of — has some signal that a title or
@@ -445,11 +509,7 @@ impl<'a> Recaller<'a> {
     ) -> MemoryContext {
         let settings = &config.memory;
         let paths: Vec<String> = diffs.iter().map(|d| d.path.clone()).collect();
-        let query = crate::retrieve::query::build_retrieval_query(
-            title,
-            diffs,
-            config.retrieval.query_chars.max(512),
-        );
+        let query = memory_query(title, diffs, settings.query_terms);
 
         let mut sections = vec![
             MemorySection::Reviews,
@@ -516,8 +576,12 @@ impl<'a> Recaller<'a> {
                 })
                 .collect();
             let results = futures::future::join_all(wanted.iter().map(|(scope, question)| {
-                self.memory
-                    .answer(scope, question, Some(ANSWER_INSTRUCTIONS))
+                self.memory.answer(
+                    scope,
+                    &Ask::new(question)
+                        .with_evidence(&query)
+                        .shaped(ANSWER_INSTRUCTIONS),
+                )
             }))
             .await;
             for ((scope, _), result) in wanted.iter().zip(results) {
