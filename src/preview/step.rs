@@ -674,6 +674,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_step_ceiling_is_counted_server_side_not_from_the_report() {
+        // A caller that reports `steps: 0` forever must not buy unbounded
+        // turns: the ceiling is measured from what this server has issued.
+        let flow = flow();
+        let mut state = FlowState {
+            commands: std::iter::once(Command::Record { start: true })
+                .chain((0..25).map(|_| Command::Press { key: "Tab".into() }))
+                .collect(),
+            ..FlowState::default()
+        };
+        let model = Arc::new(MockModel::new());
+        let reply = next(&ctx(&flow), &mut state, &observation(0), model.clone())
+            .await
+            .unwrap();
+        assert!(reply.done);
+        assert_eq!(model.calls(), 0);
+    }
+
+    #[tokio::test]
     async fn the_screenshot_ceiling_drops_extra_screenshots() {
         let flow = flow();
         let mut state = FlowState {
