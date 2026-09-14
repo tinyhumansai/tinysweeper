@@ -105,7 +105,8 @@ struct AppState {
     /// hash, one entry is a handful of bytes, and a deployment restarts long
     /// before that adds up. The map itself is a `std::sync::Mutex` because
     /// the critical section that touches it never awaits.
-    preview_locks: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    preview_locks:
+        Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
 /// Run the server until the process is stopped.

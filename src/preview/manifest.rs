@@ -25,7 +25,9 @@
 //!   the ones the session was opened for.
 
 use crate::error::{Error, Result};
-use crate::preview::types::{Callout, Flow, FlowStatus, Gallery, GalleryChange, GalleryFlow, Manifest};
+use crate::preview::types::{
+    Callout, Flow, FlowStatus, Gallery, GalleryChange, GalleryFlow, Manifest,
+};
 
 /// The manifest schema this crate understands.
 pub const VERSION: u32 = 1;
@@ -419,7 +421,10 @@ mod tests {
         let mut m = manifest();
         m.flows[0].id = "not-a-planned-flow".into();
         let gallery = validate(&m, &expected(), BASE, 4, &planned()).unwrap();
-        assert!(gallery.flows.is_empty(), "an unplanned flow publishes nothing");
+        assert!(
+            gallery.flows.is_empty(),
+            "an unplanned flow publishes nothing"
+        );
         assert_eq!(gallery.empty_flows, 1);
     }
 

@@ -258,7 +258,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(outcome, Outcome::HeadMoved);
-        assert_eq!(check_id, Some(7), "an id the caller already had is handed back unchanged");
+        assert_eq!(
+            check_id,
+            Some(7),
+            "an id the caller already had is handed back unchanged"
+        );
         assert!(forge.writes().is_empty());
     }
 
@@ -295,7 +299,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(outcome, Outcome::Published);
-        assert_eq!(check_id, Some(55), "the caller's own id rides back unchanged");
+        assert_eq!(
+            check_id,
+            Some(55),
+            "the caller's own id rides back unchanged"
+        );
         let writes = forge.writes();
         assert!(
             matches!(&writes[1], Write::CheckUpdate { check_id: 55, .. }),

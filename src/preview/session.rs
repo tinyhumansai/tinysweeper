@@ -152,7 +152,10 @@ mod tests {
             check_id: None,
         };
         session.spent_usd = 1.0;
-        assert!(!session.exhausted(1.0), "spend equal to budget is not yet exhausted");
+        assert!(
+            !session.exhausted(1.0),
+            "spend equal to budget is not yet exhausted"
+        );
         session.spent_usd = 1.0000001;
         assert!(session.exhausted(1.0), "spend past budget is exhausted");
     }
