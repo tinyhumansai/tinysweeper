@@ -286,6 +286,8 @@ mod tests {
             model: "cap",
             vision,
             max_tokens: 300,
+            spent_usd: 0.0,
+            budget_usd: 5.0,
         }
     }
 
