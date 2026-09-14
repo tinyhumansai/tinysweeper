@@ -1862,6 +1862,9 @@ impl Previews for PreviewDispatch {
         observation: crate::preview::types::Observation,
     ) -> Result<PreviewStepReply> {
         let config = &self.state.config.config;
+        // Held for the whole load-modify-save below, so a retried or racing
+        // call for this same session waits rather than clobbering it.
+        let _lock = self.lock_session(id).await;
         let mut session = self.session(id).await?;
         let flow = session
             .flow(flow_id)
