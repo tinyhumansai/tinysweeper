@@ -259,14 +259,18 @@ this order:
    intentional, the caller checks it" is the single most useful thing to know
    before reviewing the next push.
 
-2. **Recall.** The same bounded query `src/retrieve` composes from the pull
-   request is put to the `reviews`, `conventions` and `discussions` sections,
-   and to `code` only when retrieval showed the lane nothing. Every recall and every question
-   runs concurrently: each is a round trip, a question is a model call behind
-   it, and running them in sequence puts the whole list on the critical path.
+2. **Recall.** A short keyword query — the changed files' stems, the title's
+   words and the identifiers the diff moves most, `memory.query_terms` of
+   them — is put to the `reviews`, `conventions` and `discussions` sections,
+   and to `code` only when retrieval showed the lane nothing. Every recall
+   and every question runs concurrently: each is a round trip, a question is
+   a model call behind it, and running them in sequence puts the whole list
+   on the critical path.
 
 3. **Ask.** Each configured question is templated over the changed paths and
-   put to the engine's grounded-answer route, in the section it names.
+   put to the engine's grounded-answer route, in the section it names — with
+   the *same keywords* gathering the evidence it is answered over. The
+   question is read by the engine's model; it is never used as a query.
 
 4. **Remember.** After the lanes run, every finding they produced is written as
    a `ReviewFinding`, so the next review can be told what was said and, once
@@ -301,6 +305,24 @@ vectors; a parent scope enumerates its children.
 An engine that has nothing to say answers with a sentinel the instructions ask
 for ("nothing relevant is remembered"), which is filtered out rather than
 rendered.
+
+### The query is keywords, and the question is not the query
+
+Measured against the production CortexDB (420k events, 790k vectors across
+seventy repositories), a recall over one section answered in about a second
+for a bag of the change's own identifiers — and hit the engine's two-minute
+evidence deadline (`EVIDENCE_TIMEOUT`, 88 s of `coordinator_recall` on the
+runs that did finish) for the same section whenever the query carried a word
+whose neighbourhood in the shared index is dense with *other* repositories'
+events: `src`, `README.md`, the envelope's own header, the word
+`conventions`, and paths generally. A question written as a sentence, or the
+index's four-thousand-character retrieval query, carried one of those every
+time. `memory_query` therefore keeps file stems and drops directories and
+extensions, and `Ask::evidence` hands the same keywords to the answer route
+so the question itself is only ever read by a model. An engine that stalls
+is stalled for its whole deadline whether or not the caller is still
+waiting, so a timed-out recall also costs the next review's: the ten-second
+`READ_TIMEOUT` is a ceiling, not a retry budget.
 
 ## Where it sits in the prompt
 
@@ -341,7 +363,12 @@ event log with an extraction pipeline behind it:
 
 - `POST /v1/experience?wait=indexed` (and `/bulk`) writes an event and holds
   the response until it is readable, which is what makes ingest-then-recall in
-  one process honest. The idempotency key is `content_id()`.
+  one process honest. The idempotency key is `content_id()`. Each write names
+  the layers the engine should extract, per kind: nothing for a code chunk
+  (embedded only — it is recalled as an event and the index already searches
+  code), facts and entities for a convention or a finding, an episode too for
+  a discussion. Every named layer is a background model call per event, and
+  the backlog is paid for by every recall that runs while it drains.
 - `POST /v1/recall` ranks events for a query within a scope. Recall asks for
   the events layer only; the extracted layers carry no envelope and cannot
   come back as items.
@@ -406,5 +433,9 @@ a section above its neighbours, that a section-scoped question quotes the rule
 and names the file, and that a citation resolves to a path.
 
 Latency is the engine's model calls: each question is one, measured at four to
-twelve seconds through a local ladder, run concurrently. A deployment that
-wants memory without the wait sets `ask = false` and keeps recall.
+twelve seconds through a local ladder with a fast model, run concurrently —
+and at a minute with a self-hosted engine's default *reasoning* tier, which
+is longer than the adapter waits. `memory.answer_model` names the model in
+the engine's own vocabulary (`answer_model = "flash"` on the deployment);
+empty leaves the engine's default. A deployment that wants memory without
+the wait sets `ask = false` and keeps recall.

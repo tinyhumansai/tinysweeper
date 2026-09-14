@@ -52,7 +52,7 @@ use serde_json::{Value, json};
 
 use crate::error::{Error, Result};
 use crate::memory::types::{
-    Citation, MemoryAnswer, MemoryItem, MemoryKind, MemoryScope, MemorySection, Recollection,
+    Ask, Citation, MemoryAnswer, MemoryItem, MemoryKind, MemoryScope, MemorySection, Recollection,
     RememberReport,
 };
 use crate::ports::memory::Memory;
@@ -69,14 +69,27 @@ pub const CORTEX_API_ENDPOINT: &str = "https://api-v1.cortexdb.ai";
 /// per request for the calls on the review's critical path.
 const TIMEOUT: Duration = Duration::from_secs(120);
 
-/// How long `recall` or `answer` may take.
+/// How long a `recall` — the review's own, or the one that gathers an
+/// answer's evidence — may take.
 ///
-/// Neither waits on indexing the way a write does, and both run before every
-/// lane — a review is best-effort without memory, but it must not queue
-/// behind an engine that accepted the connection and then stopped
+/// It does not wait on indexing the way a write does, and it runs before
+/// every lane — a review is best-effort without memory, but it must not
+/// queue behind an engine that accepted the connection and then stopped
 /// responding. [`TIMEOUT`]'s 120 seconds, held here, would occupy one of the
-/// server's review permits for that long per lane that recalls or asks.
+/// server's review permits for that long. Measured against a live engine, a
+/// keyword recall over one section answers in about a second; the engine's
+/// own evidence deadline is two minutes, and a recall that needs more than
+/// this is one that is going to hit it.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long the answer route may take over a pack recall already built.
+///
+/// A model call, and a slower one than a recall: a fast model measured four
+/// to twelve seconds through the engine's own provider on a calm engine.
+/// Longer than [`READ_TIMEOUT`] because the recall half was already paid
+/// for, and the questions run concurrently with each other and with the
+/// review's recall, so this bounds the review's wait for memory as a whole.
+const ANSWER_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The header line that opens every event this adapter writes.
 const HEADER: &str = "tinysweeper-memory:";
@@ -91,12 +104,18 @@ const MAX_PAGES: usize = 500;
 pub struct CortexMemory {
     client: reqwest::Client,
     base_url: String,
+    /// The model the engine is asked to write answers with, when the
+    /// operator names one. `None` leaves it to the engine's own default —
+    /// which on a self-hosted engine can be its slowest, reasoning tier,
+    /// measured at a minute per answer where a fast tier took seconds.
+    answer_model: Option<String>,
 }
 
 impl std::fmt::Debug for CortexMemory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CortexMemory")
             .field("base_url", &self.base_url)
+            .field("answer_model", &self.answer_model)
             .finish_non_exhaustive()
     }
 }
@@ -116,7 +135,15 @@ impl CortexMemory {
         } else {
             config.endpoint.trim()
         };
-        Self::connect(endpoint, &key, config.allow_private_http)
+        Ok(Self::connect(endpoint, &key, config.allow_private_http)?
+            .with_answer_model(config.answer_model.trim()))
+    }
+
+    /// Ask the engine to write answers with `model`, in the engine's own
+    /// naming; an empty name keeps the engine's default.
+    pub fn with_answer_model(mut self, model: &str) -> Self {
+        self.answer_model = (!model.trim().is_empty()).then(|| model.trim().to_string());
+        self
     }
 
     /// Connect to `endpoint` with `api_key` as the bearer, plain HTTP to
@@ -154,6 +181,7 @@ impl CortexMemory {
         Ok(Self {
             client,
             base_url: endpoint.trim_end_matches('/').to_string(),
+            answer_model: None,
         })
     }
 
@@ -164,7 +192,7 @@ impl CortexMemory {
             .json(body)
             .send()
             .await
-            .map_err(|err| Error::Model(format!("cortex: {path}: {}", scrub(&err.to_string()))))?;
+            .map_err(|err| Error::Model(format!("cortex: {path}: {}", describe(&err, TIMEOUT))))?;
         Self::read(path, response).await
     }
 
@@ -181,7 +209,7 @@ impl CortexMemory {
             .json(body)
             .send()
             .await
-            .map_err(|err| Error::Model(format!("cortex: {path}: {}", scrub(&err.to_string()))))?;
+            .map_err(|err| Error::Model(format!("cortex: {path}: {}", describe(&err, timeout))))?;
         Self::read(path, response).await
     }
 
@@ -191,7 +219,7 @@ impl CortexMemory {
             .get(format!("{}/{path}", self.base_url))
             .send()
             .await
-            .map_err(|err| Error::Model(format!("cortex: {path}: {}", scrub(&err.to_string()))))?;
+            .map_err(|err| Error::Model(format!("cortex: {path}: {}", describe(&err, TIMEOUT))))?;
         Self::read(path, response).await
     }
 
@@ -358,6 +386,32 @@ fn modality(kind: MemoryKind) -> &'static str {
     }
 }
 
+/// Which derived layers the engine is asked to extract from an item.
+///
+/// Each named layer is a model call per event, run by the engine in the
+/// background, and the backlog is paid for by every recall that runs while
+/// it drains: measured, a production engine digesting a seventy-repository
+/// backfill sat at five cores for days and answered one-second recalls in
+/// a minute. So the layers are asked for where an answer can use them and
+/// nowhere else. A code chunk is recalled as an event and the index already
+/// does semantic search over code, so it is embedded and nothing more. A
+/// convention or a finding yields facts and entities — the rule, the file,
+/// the maintainer — and a discussion yields an episode too, because "what
+/// happened on that pull request" is what a review asks of it. Beliefs and
+/// understanding are the engine's slowest layers and nothing here cites
+/// them.
+fn extraction(kind: MemoryKind) -> &'static [&'static str] {
+    match kind {
+        MemoryKind::CodeChunk => &[],
+        MemoryKind::Convention | MemoryKind::ReviewFinding | MemoryKind::ReviewOutcome => {
+            &["facts", "entities"]
+        }
+        MemoryKind::Issue | MemoryKind::PullRequest | MemoryKind::Remark => {
+            &["facts", "entities", "episodes"]
+        }
+    }
+}
+
 /// The `/v1/experience` body for one item.
 fn experience(scope: &str, item: &MemoryItem) -> Value {
     let mut context = serde_json::Map::new();
@@ -377,7 +431,7 @@ fn experience(scope: &str, item: &MemoryItem) -> Value {
         "content": { "kind": "text", "text": envelope(item) },
         "context": context,
         "directives": {
-            "extract": ["facts", "entities", "beliefs", "episodes", "understanding"],
+            "extract": extraction(item.kind),
             "embed": "eager",
         },
         "idempotency_key": item.content_id(),
@@ -429,6 +483,22 @@ fn answer_budget() -> Value {
 /// Strip anything that could be a query string or a key from an error text.
 fn scrub(message: &str) -> String {
     crate::memory::excerpt(message.split('?').next().unwrap_or(message), 160)
+}
+
+/// One line for a transport error, naming a timeout as one.
+///
+/// `reqwest`'s own text for an elapsed timeout is the same "error sending
+/// request" it prints for a refused connection; the cause is on the error's
+/// source, which `Display` does not print. Seven reviews in one morning
+/// lost every memory call to a ten-second timeout and logged as if the
+/// engine were unreachable, so the operator went looking for a network
+/// fault where there was a slow query.
+fn describe(err: &reqwest::Error, timeout: Duration) -> String {
+    if err.is_timeout() {
+        format!("timed out after {}s", timeout.as_secs())
+    } else {
+        scrub(&err.to_string())
+    }
 }
 
 /// The events layer of a recall answer.
@@ -595,19 +665,18 @@ impl Memory for CortexMemory {
         Ok(out)
     }
 
-    async fn answer(
-        &self,
-        scope: &MemoryScope,
-        question: &str,
-        instructions: Option<&str>,
-    ) -> Result<MemoryAnswer> {
+    async fn answer(&self, scope: &MemoryScope, ask: &Ask<'_>) -> Result<MemoryAnswer> {
         let scope_path = scope_path(scope)?;
+        let question = ask.question;
+        // The evidence is gathered by the keywords, not by the sentence —
+        // see [`Ask`] for the measurement behind that — and the question is
+        // then put to exactly that pack.
         let pack = self
             .post_bounded(
                 "v1/recall",
                 &json!({
                     "scope": scope_path,
-                    "query": question,
+                    "query": ask.evidence_query(),
                     "budgets": answer_budget(),
                 }),
                 READ_TIMEOUT,
@@ -636,10 +705,15 @@ impl Memory for CortexMemory {
             "cite_sources": true,
             "include_context": true,
         });
-        if let Some(instructions) = instructions {
+        if let Some(instructions) = ask.instructions {
             body["answer_instructions"] = json!(instructions);
         }
-        let response = self.post_bounded("v1/answer", &body, READ_TIMEOUT).await?;
+        if let Some(model) = &self.answer_model {
+            body["answer_model"] = json!(model);
+        }
+        let response = self
+            .post_bounded("v1/answer", &body, ANSWER_TIMEOUT)
+            .await?;
         let text = response
             .get("answer")
             .and_then(Value::as_str)
@@ -953,6 +1027,38 @@ mod tests {
         let debug = format!("{memory:?}");
         assert!(!debug.contains("sk-secret-value"));
         assert!(debug.contains("127.0.0.1:3141"));
+    }
+
+    #[test]
+    fn code_is_embedded_without_extraction_and_discussions_yield_episodes() {
+        let code = MemoryItem::new("k", MemoryKind::CodeChunk, "t", "b");
+        assert_eq!(experience("s", &code)["directives"]["extract"], json!([]));
+        assert_eq!(
+            experience("s", &code)["directives"]["embed"],
+            json!("eager")
+        );
+        let rule = MemoryItem::new("k", MemoryKind::Convention, "t", "b");
+        assert_eq!(
+            experience("s", &rule)["directives"]["extract"],
+            json!(["facts", "entities"])
+        );
+        let remark = MemoryItem::new("k", MemoryKind::Remark, "t", "b");
+        assert_eq!(
+            experience("s", &remark)["directives"]["extract"],
+            json!(["facts", "entities", "episodes"])
+        );
+    }
+
+    #[test]
+    fn an_answer_model_is_optional_and_blank_means_the_engines_default() {
+        let memory = CortexMemory::new("http://127.0.0.1:3141", "k").unwrap();
+        assert_eq!(memory.answer_model, None);
+        assert_eq!(memory.with_answer_model("  ").answer_model, None);
+        let memory = CortexMemory::new("http://127.0.0.1:3141", "k")
+            .unwrap()
+            .with_answer_model(" flash ");
+        assert_eq!(memory.answer_model.as_deref(), Some("flash"));
+        assert!(format!("{memory:?}").contains("flash"));
     }
 
     #[test]

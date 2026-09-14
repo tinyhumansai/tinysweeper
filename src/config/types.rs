@@ -826,6 +826,21 @@ pub struct Memory {
     pub questions: Vec<MemoryQuestion>,
     /// Character ceiling on one grounded answer.
     pub answer_chars: usize,
+    /// The model the engine writes answers with, in the engine's own
+    /// naming. Empty leaves it to the engine's default.
+    ///
+    /// Worth setting on a self-hosted engine whose default is a reasoning
+    /// tier: measured, the same grounded answer took a minute there and
+    /// seconds from a fast tier, and a review waits for its answers.
+    pub answer_model: String,
+    /// How many keywords the query put to the engine carries.
+    ///
+    /// The memory query is a short bag of the change's own identifiers and
+    /// file stems — not the index's four-thousand-character bag of words
+    /// and not the question's sentence. Measured against a live engine, a
+    /// two-dozen-keyword query answers in about a second where a sentence
+    /// naming a path could take the engine's whole two-minute deadline.
+    pub query_terms: usize,
 }
 
 /// One question a review puts to the memory engine.

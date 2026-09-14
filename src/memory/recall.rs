@@ -5,21 +5,24 @@
 //!
 //! Two ways of asking, and the review does both:
 //!
-//! 1. **Recall by query.** The same bounded query `src/retrieve` composes from
-//!    the pull request — title, paths, hunk headings, identifiers — is put to
-//!    each section of the repository's memory. Conventions and review outcomes
-//!    always; code only when the caller says the index is not already doing
-//!    that job, because two copies of the same function is worse context than
-//!    one.
+//! 1. **Recall by query.** A short bag of keywords — the changed files'
+//!    stems, the title's words, the identifiers the diff moves most — is put
+//!    to each section of the repository's memory. Conventions, review
+//!    outcomes and discussions always; code only when the caller says the
+//!    index is not already doing that job, because two copies of the same
+//!    function is worse context than one. Keywords, not the index's
+//!    four-thousand-character query and not a sentence: see
+//!    [`memory_query`] for what a live engine did with the alternatives.
 //! 2. **Ask by question.** The configured questions are templated over the
 //!    changed paths and put to the engine's grounded-answer route, each in
-//!    the section it names. This is the part a keyword store cannot do and
-//!    the part worth an engine: "which rule applies here?" answered with a
-//!    citation is a pointer a reviewer can act on, where the same rule as the
-//!    seventh-ranked recollection is not. Measured against a live engine, the
-//!    section matters: over one section the answer quotes the rule and names
-//!    the file; over the whole repository it comes back with whatever was
-//!    written first.
+//!    the section it names, with the *same keywords* gathering the evidence
+//!    the question is answered over. This is the part a keyword store cannot
+//!    do and the part worth an engine: "which rule applies here?" answered
+//!    with a citation is a pointer a reviewer can act on, where the same rule
+//!    as the seventh-ranked recollection is not. Measured against a live
+//!    engine, the section matters: over one section the answer quotes the
+//!    rule and names the file; over the whole repository it comes back with
+//!    whatever was written first.
 //!
 //! Everything comes back under one token budget, answers first — they are the
 //! synthesis, and the recollections are the evidence — then outcomes, then
@@ -38,7 +41,8 @@ use crate::evidence::diff::FileDiff;
 use crate::forge::types::{ReviewComment, ReviewThread};
 use crate::memory::ingest;
 use crate::memory::types::{
-    MemoryAnswer, MemoryItem, MemoryKind, MemoryScope, MemorySection, Recollection, RememberReport,
+    Ask, MemoryAnswer, MemoryItem, MemoryKind, MemoryScope, MemorySection, Recollection,
+    RememberReport,
 };
 use crate::ports::memory::Memory;
 
@@ -313,6 +317,123 @@ pub fn paths_clause(paths: &[String]) -> String {
     out
 }
 
+/// How many changed files lend their stem to the memory query.
+///
+/// A stem — `auth` from `src/server/auth.rs` — is the one part of a path a
+/// discussion or a finding names in prose. The directories are not: `src`
+/// is in nearly every path the engine holds, and a query that carries it
+/// asks about everything.
+const MAX_QUERY_STEMS: usize = 8;
+
+/// How many of the title's words the memory query carries.
+const MAX_QUERY_TITLE_TERMS: usize = 6;
+
+/// Longest term the memory query carries.
+///
+/// A diff is contributor-controlled text, and a minified or generated line
+/// is one alphanumeric run of any length; `ranked_identifiers` returns it
+/// intact, and a term count alone would let a handful of them turn a
+/// two-dozen-word query into hundreds of kilobytes. Nothing a reviewer
+/// would search memory for is this long, so an over-long token is dropped
+/// rather than cut: half a hash is no better a keyword than a whole one.
+const MAX_QUERY_TERM_CHARS: usize = 64;
+
+/// Words measured to stall the engine on their own, kept out of the query
+/// whatever source they come from.
+///
+/// Each of these, alone, took a live CortexDB's recall from a second to its
+/// two-minute deadline: they name entities the engine has linked to nearly
+/// everything it holds — the instruction files every repository carries,
+/// the directories every path starts with, the section the conventions
+/// live in. A change to `README.md` or a title about "conventions" is
+/// ordinary, and it must not switch memory off for the review. The list
+/// is what was measured, not a theory of the engine; a word that turns out
+/// to behave the same way is added the same way.
+const ENGINE_HUB_TERMS: &[&str] = &[
+    "agents",
+    "claude",
+    "contributing",
+    "conventions",
+    "convention",
+    "docs",
+    "lib",
+    "readme",
+    "src",
+    "tinysweeper",
+];
+
+/// The query put to the memory engine, for recall and as the evidence
+/// behind every question: the changed files' stems, the title's words, and
+/// the identifiers the diff moves most, `terms` of them in all.
+///
+/// Keywords, deliberately, and short. Measured against a live CortexDB:
+/// a keyword query over one section answered in about a second, every
+/// time. The index's own retrieval query — four thousand characters of
+/// paths and identifiers — and a question written as a sentence both hit
+/// the engine's two-minute evidence deadline whenever they carried one of
+/// a handful of words that name hub entities in its graph (`src`,
+/// `README.md`, the word `conventions`, the envelope's own header), and a
+/// path carries `src`. Directories are therefore dropped, extensions with
+/// them, and the sentence is kept for the answer route alone, where it is
+/// read by a model rather than matched by an index.
+pub fn memory_query(title: &str, diffs: &[FileDiff], terms: usize) -> String {
+    if terms == 0 {
+        return String::new();
+    }
+    let mut picked: Vec<String> = Vec::with_capacity(terms);
+    let push = |term: String, picked: &mut Vec<String>| -> bool {
+        if picked.len() < terms
+            && term.chars().count() <= MAX_QUERY_TERM_CHARS
+            && !picked.contains(&term)
+            && !ENGINE_HUB_TERMS.contains(&term.as_str())
+        {
+            picked.push(term);
+            true
+        } else {
+            false
+        }
+    };
+    // The per-source cap counts *accepted* terms, not candidates offered to
+    // `push`: a `.take(N)` ahead of `push` would burn the whole source quota
+    // on hub words or duplicates and starve every stem or title word behind
+    // them, which is exactly the empty-query failure this query exists to
+    // avoid.
+    let mut stems_picked = 0;
+    for stem in diffs.iter().filter_map(|diff| file_stem(&diff.path)) {
+        if stems_picked >= MAX_QUERY_STEMS || picked.len() >= terms {
+            break;
+        }
+        if push(stem, &mut picked) {
+            stems_picked += 1;
+        }
+    }
+    let mut title_terms_picked = 0;
+    for word in crate::retrieve::query::tokenise(title) {
+        if title_terms_picked >= MAX_QUERY_TITLE_TERMS || picked.len() >= terms {
+            break;
+        }
+        if push(word, &mut picked) {
+            title_terms_picked += 1;
+        }
+    }
+    for (identifier, _, _) in crate::retrieve::query::ranked_identifiers(diffs) {
+        if picked.len() >= terms {
+            break;
+        }
+        push(identifier, &mut picked);
+    }
+    picked.join(" ")
+}
+
+/// `auth` from `src/server/auth.rs`; `readme` from `README.md`; nothing
+/// from a path whose name is only an extension or a number.
+fn file_stem(path: &str) -> Option<String> {
+    let name = path.rsplit('/').next()?;
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    let stem = stem.trim_matches(|c: char| !c.is_alphanumeric());
+    crate::retrieve::query::tokenise(stem).next()
+}
+
 /// The tag [`fill_question`] wraps every substitution in, and
 /// [`ANSWER_INSTRUCTIONS`] names, so the engine's own model — which this
 /// adapter does not control the prompt of — has some signal that a title or
@@ -445,11 +566,7 @@ impl<'a> Recaller<'a> {
     ) -> MemoryContext {
         let settings = &config.memory;
         let paths: Vec<String> = diffs.iter().map(|d| d.path.clone()).collect();
-        let query = crate::retrieve::query::build_retrieval_query(
-            title,
-            diffs,
-            config.retrieval.query_chars.max(512),
-        );
+        let query = memory_query(title, diffs, settings.query_terms);
 
         let mut sections = vec![
             MemorySection::Reviews,
@@ -499,7 +616,12 @@ impl<'a> Recaller<'a> {
         let asks = async {
             let mut answers = Vec::new();
             let mut failures: Vec<String> = Vec::new();
-            if !settings.ask {
+            // No keywords means no evidence query, and a question without
+            // one would fall back to being asked in its own sentence —
+            // exactly the query shape this exists to avoid. A diff with
+            // nothing to say (an empty title over binary files) asks
+            // nothing.
+            if !settings.ask || query.trim().is_empty() {
                 return (answers, failures);
             }
             // Validation already refused an unknown section; a question that
@@ -515,10 +637,21 @@ impl<'a> Recaller<'a> {
                     ))
                 })
                 .collect();
-            let results = futures::future::join_all(wanted.iter().map(|(scope, question)| {
-                self.memory
-                    .answer(scope, question, Some(ANSWER_INSTRUCTIONS))
-            }))
+            let asks: Vec<(&MemoryScope, Ask<'_>)> = wanted
+                .iter()
+                .map(|(scope, question)| {
+                    (
+                        scope,
+                        Ask::new(question)
+                            .with_evidence(&query)
+                            .shaped(ANSWER_INSTRUCTIONS),
+                    )
+                })
+                .collect();
+            let results = futures::future::join_all(
+                asks.iter()
+                    .map(|(scope, ask)| self.memory.answer(scope, ask)),
+            )
             .await;
             for ((scope, _), result) in wanted.iter().zip(results) {
                 match result {
@@ -547,7 +680,7 @@ impl<'a> Recaller<'a> {
             0
         } else {
             sections.len()
-        } + if settings.ask {
+        } + if settings.ask && !query.trim().is_empty() {
             settings.questions.len()
         } else {
             0
@@ -1080,6 +1213,176 @@ mod tests {
             started.elapsed()
         );
         assert_eq!(report.written, 0, "the timed-out write never lands");
+    }
+
+    #[test]
+    fn the_memory_query_is_stems_title_words_and_ranked_identifiers() {
+        let diffs = vec![
+            crate::evidence::diff::parse_file_patch(
+                "src/server/auth.rs",
+                "@@ -1,1 +1,3 @@ fn installation_token\n fn installation_token() {}\n+let scoped = \
+                 mint_scoped(installation_token);\n+let scoped = again(installation_token);\n",
+            ),
+            crate::evidence::diff::parse_file_patch(
+                "docs/modules/server/README.md",
+                "@@ -1,1 +1,2 @@\n # x\n+Tokens are read-only.\n",
+            ),
+        ];
+        let query = memory_query("fix(server): scope review tokens read-only", &diffs, 24);
+        let terms: Vec<&str> = query.split(' ').collect();
+        // Stems first (the README's is a hub word and dropped), then the
+        // title, then the identifiers by frequency.
+        assert_eq!(terms[0], "auth", "{query}");
+        assert!(
+            terms[1..].starts_with(&["fix", "server", "scope", "review", "tokens", "read"]),
+            "{query}"
+        );
+        assert!(
+            terms.iter().position(|t| *t == "installation_token")
+                < terms.iter().position(|t| *t == "mint_scoped"),
+            "the identifier used twice ranks above the one used once: {query}"
+        );
+        // Never a directory, never an extension: `src` is in nearly every
+        // path a large engine holds, and a query that carries it is what
+        // ran into the engine's evidence deadline.
+        for hub in ["src", "docs", "modules", "rs", "md", "src/server/auth.rs"] {
+            assert!(!terms.contains(&hub), "{hub} must not be in {query}");
+        }
+        // Nor a measured hub word from any source: the README's stem, a
+        // title about conventions, the crate's own name in the diff.
+        let hubby = vec![crate::evidence::diff::parse_file_patch(
+            "README.md",
+            "@@ -1,1 +1,2 @@\n # x\n+tinysweeper conventions for src layout\n",
+        )];
+        let query = memory_query("Document the conventions", &hubby, 24);
+        for hub in ["readme", "conventions", "src", "tinysweeper"] {
+            assert!(
+                !query.split(' ').any(|t| t == hub),
+                "{hub} must not be in {query}"
+            );
+        }
+        assert!(query.contains("layout"), "{query}");
+        assert!(terms.len() <= 24, "{query}");
+        assert!(!terms.iter().any(|t| t.is_empty()), "{query}");
+    }
+
+    #[test]
+    fn a_source_cap_counts_accepted_terms_not_rejected_candidates() {
+        // Eight diffs, every one of them a measured hub word — the source
+        // cap for stems (`MAX_QUERY_STEMS`, 8) exactly matches the count, so
+        // a `.take` ahead of the hub-word filter would burn the whole quota
+        // on rejects and never reach the ninth diff's real stem.
+        let diffs = vec![
+            crate::evidence::diff::parse_file_patch("agents.md", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+            crate::evidence::diff::parse_file_patch("claude.md", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+            crate::evidence::diff::parse_file_patch("contributing.md", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+            crate::evidence::diff::parse_file_patch("conventions.md", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+            crate::evidence::diff::parse_file_patch("convention.md", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+            crate::evidence::diff::parse_file_patch("docs.md", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+            crate::evidence::diff::parse_file_patch("lib.rs", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+            crate::evidence::diff::parse_file_patch("readme.md", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+            crate::evidence::diff::parse_file_patch("widget.rs", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+        ];
+        // Six title words, every one a measured hub word, ahead of a seventh
+        // that is not — `MAX_QUERY_TITLE_TERMS` is 6.
+        let title = "src docs lib readme agents claude update";
+        let query = memory_query(title, &diffs, 24);
+        assert!(
+            query.split(' ').any(|t| t == "widget"),
+            "the ninth diff's real stem must survive eight hub-word rejects: {query}"
+        );
+        assert!(
+            query.split(' ').any(|t| t == "update"),
+            "the seventh title word must survive six hub-word rejects: {query}"
+        );
+    }
+
+    #[test]
+    fn the_memory_query_is_bounded_and_deduplicated() {
+        let diffs: Vec<FileDiff> = (0..30)
+            .map(|i| {
+                crate::evidence::diff::parse_file_patch(
+                    &format!("src/lane_{i}.rs"),
+                    "@@ -1,1 +1,2 @@\n a\n+shared_helper(shared_helper);\n",
+                )
+            })
+            .collect();
+        let query = memory_query("shared_helper everywhere", &diffs, 12);
+        let terms: Vec<&str> = query.split(' ').collect();
+        // Thirty stems on offer, eight taken: the rest of the budget is for
+        // what the change says, not where it lands.
+        assert_eq!(
+            terms.iter().filter(|t| t.starts_with("lane_")).count(),
+            MAX_QUERY_STEMS,
+            "{query}"
+        );
+        assert_eq!(
+            terms.iter().filter(|t| **t == "shared_helper").count(),
+            1,
+            "{query}"
+        );
+        assert!(terms.len() <= 12, "{query}");
+        let capped = memory_query("shared_helper everywhere", &diffs, 3);
+        assert_eq!(capped.split(' ').count(), 3, "{capped}");
+        assert_eq!(memory_query("anything", &diffs, 0), "");
+        assert_eq!(memory_query("", &[], 24), "");
+        // A minified line is one token of any length, and the diff is a
+        // contributor's to write: it must not become the query's size.
+        let blob = "x".repeat(20_000);
+        let minified = vec![crate::evidence::diff::parse_file_patch(
+            "bundle.js",
+            &format!("@@ -1,1 +1,2 @@\n a\n+{blob} real_symbol\n"),
+        )];
+        let query = memory_query(&blob, &minified, 24);
+        assert!(
+            query.len() < 24 * (MAX_QUERY_TERM_CHARS + 1),
+            "{}",
+            query.len()
+        );
+        assert!(query.contains("real_symbol"), "{query}");
+        assert!(!query.contains(&blob[..100]), "{query}");
+    }
+
+    #[tokio::test]
+    async fn a_change_with_no_keywords_asks_no_question_in_its_own_words() {
+        let memory = seeded().await;
+        let recaller = Recaller::new(&memory);
+        let config = config();
+        let context = recaller.recall(&config, "o/r", "", &[], false).await;
+        assert!(memory.queries().is_empty(), "{:?}", memory.queries());
+        assert!(context.answers.is_empty());
+        assert_eq!(context.status, MemoryStatus::Ready);
+    }
+
+    #[tokio::test]
+    async fn the_engine_is_asked_in_keywords_and_never_in_the_questions_sentence() {
+        let memory = seeded().await;
+        let recaller = Recaller::new(&memory);
+        let mut config = config();
+        config.memory.questions = vec![question(
+            "conventions",
+            "Which conventions apply to changes under {paths}?",
+        )];
+        recaller
+            .recall(
+                &config,
+                "o/r",
+                "Add a port",
+                &[diff("src/ports/forge.rs")],
+                false,
+            )
+            .await;
+        let queries = memory.queries();
+        // Three sections recalled, one question asked: four calls, one query.
+        assert_eq!(queries.len(), 4, "{queries:?}");
+        for query in &queries {
+            assert_eq!(query, &queries[0]);
+            assert!(!query.contains("Which conventions"), "{query}");
+            assert!(!query.contains("src/ports"), "{query}");
+            assert!(!query.contains("untrusted"), "{query}");
+            assert!(query.contains("forge"), "{query}");
+            assert!(query.contains("added_ports_fn"), "{query}");
+        }
     }
 
     #[test]

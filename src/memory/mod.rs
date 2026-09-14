@@ -54,7 +54,7 @@ pub use crate::memory::ingest::{IngestReport, Ingestor};
 pub use crate::memory::mock::MockMemory;
 pub use crate::memory::recall::{MemoryContext, MemoryStatus, Recaller};
 pub use crate::memory::types::{
-    Citation, MemoryAnswer, MemoryItem, MemoryKind, MemoryScope, MemorySection, Recollection,
+    Ask, Citation, MemoryAnswer, MemoryItem, MemoryKind, MemoryScope, MemorySection, Recollection,
     RememberReport,
 };
 

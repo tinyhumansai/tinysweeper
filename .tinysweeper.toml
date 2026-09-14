@@ -48,6 +48,10 @@ api_key_env = "OPENROUTER_API_KEY"
 enabled = true
 endpoint = "http://cortexdb:3141"
 allow_private_http = true
+# The engine's own default answer tier is `reasoning`, measured at a minute
+# per grounded answer — longer than a review waits. `flash` answered the
+# same questions, cited, in seconds.
+answer_model = "flash"
 
 # Issue triage, turned on for this repository so the job is exercised on real
 # issues. Closing stays off: the labels and the duplicate cross-links are the

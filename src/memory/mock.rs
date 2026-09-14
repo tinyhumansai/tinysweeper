@@ -19,7 +19,7 @@ use async_trait::async_trait;
 
 use crate::error::{Error, Result};
 use crate::memory::types::{
-    Citation, MemoryAnswer, MemoryItem, MemoryScope, Recollection, RememberReport,
+    Ask, Citation, MemoryAnswer, MemoryItem, MemoryScope, Recollection, RememberReport,
 };
 use crate::ports::memory::Memory;
 
@@ -40,6 +40,10 @@ pub struct MockMemory {
     /// When set, only `answer` fails. For the tests that prove one lost call
     /// does not throw away the others.
     answer_failure: Arc<Mutex<Option<String>>>,
+    /// Every query put to `recall`, and every evidence query behind an
+    /// `answer`, in call order. For the tests that prove what the engine is
+    /// actually asked: keywords, never the question's sentence.
+    queries: Arc<Mutex<Vec<String>>>,
 }
 
 impl MockMemory {
@@ -66,6 +70,12 @@ impl MockMemory {
             .expect("answers lock")
             .push((needle, answer));
         self
+    }
+
+    /// The queries put to the engine so far — by `recall`, and the evidence
+    /// query behind each `answer` — in call order.
+    pub fn queries(&self) -> Vec<String> {
+        self.queries.lock().expect("queries lock").clone()
     }
 
     /// Make every call fail from now on.
@@ -210,6 +220,10 @@ impl Memory for MockMemory {
         limit: usize,
     ) -> Result<Vec<Recollection>> {
         self.check()?;
+        self.queries
+            .lock()
+            .expect("queries lock")
+            .push(query.to_string());
         let query_terms = terms(query);
         let mut scored: Vec<Recollection> = self
             .remembered(scope)
@@ -234,13 +248,13 @@ impl Memory for MockMemory {
         Ok(scored)
     }
 
-    async fn answer(
-        &self,
-        _scope: &MemoryScope,
-        question: &str,
-        _instructions: Option<&str>,
-    ) -> Result<MemoryAnswer> {
+    async fn answer(&self, _scope: &MemoryScope, ask: &Ask<'_>) -> Result<MemoryAnswer> {
         self.check()?;
+        self.queries
+            .lock()
+            .expect("queries lock")
+            .push(ask.evidence_query().to_string());
+        let question = ask.question;
         if let Some(message) = self
             .answer_failure
             .lock()
@@ -383,13 +397,13 @@ mod tests {
         let memory = MockMemory::new().with_answer("conventions", "Never unwrap.");
         let scope = MemoryScope::repo("o/r");
         let hit = memory
-            .answer(&scope, "What conventions apply?", None)
+            .answer(&scope, &Ask::new("What conventions apply?"))
             .await
             .unwrap();
         assert!(hit.is_grounded());
         assert_eq!(hit.answer, "Never unwrap.");
         let miss = memory
-            .answer(&scope, "Who wrote this?", None)
+            .answer(&scope, &Ask::new("Who wrote this?"))
             .await
             .unwrap();
         assert!(!miss.is_grounded());

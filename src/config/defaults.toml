@@ -480,6 +480,10 @@ context_tokens = 3000
 max_recollections = 8
 ask = true
 answer_chars = 1500
+# The engine's own model name for answers; empty is the engine's default.
+answer_model = ""
+# Keywords per memory query: file stems and the change's identifiers.
+query_terms = 24
 # Each question is put to one section of the repository's memory. Measured
 # against a live engine: a question over one section is answered with the
 # rule and its file; the same question over the whole repository comes back

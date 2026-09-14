@@ -295,6 +295,60 @@ pub struct Citation {
     pub excerpt: Option<String>,
 }
 
+/// One question put to the engine, and how its evidence is gathered.
+///
+/// A question and the query that finds its evidence are two different
+/// texts, and conflating them is what made asking fragile. A question is a
+/// sentence — "which rules apply to changes under these paths?" — and an
+/// engine's recall over a sentence is at the mercy of every word in it:
+/// measured against a live CortexDB, a handful of words that name hub
+/// entities (`src`, `README.md`, the envelope header) turned a one-second
+/// recall into its two-minute deadline, with the same words a second
+/// earlier answering in under a second on their own. A short bag of the
+/// change's own identifiers never did that. So the evidence is gathered by
+/// keywords, and the question is asked over what they found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ask<'a> {
+    /// The question, in whatever words the operator wrote it.
+    pub question: &'a str,
+    /// Keywords the evidence is gathered by, in place of the question's own
+    /// words. `None` asks in the question's words — the CLI's raw form.
+    pub evidence: Option<&'a str>,
+    /// How the answer should be shaped — "one paragraph, name paths". Never
+    /// carries repository text.
+    pub instructions: Option<&'a str>,
+}
+
+impl<'a> Ask<'a> {
+    /// A question asked in its own words.
+    pub fn new(question: &'a str) -> Self {
+        Self {
+            question,
+            evidence: None,
+            instructions: None,
+        }
+    }
+
+    /// The same question, with its evidence gathered by `keywords`.
+    pub fn with_evidence(mut self, keywords: &'a str) -> Self {
+        self.evidence = Some(keywords);
+        self
+    }
+
+    /// The same question, with `instructions` on the answer's shape.
+    pub fn shaped(mut self, instructions: &'a str) -> Self {
+        self.instructions = Some(instructions);
+        self
+    }
+
+    /// What recall is run on to gather the evidence.
+    pub fn evidence_query(&self) -> &'a str {
+        self.evidence
+            .filter(|keywords| !keywords.trim().is_empty())
+            .unwrap_or(self.question)
+    }
+}
+
 /// A grounded answer to a question about the repository.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryAnswer {

@@ -35,7 +35,9 @@
 use async_trait::async_trait;
 
 use crate::error::Result;
-use crate::memory::types::{MemoryAnswer, MemoryItem, MemoryScope, Recollection, RememberReport};
+use crate::memory::types::{
+    Ask, MemoryAnswer, MemoryItem, MemoryScope, Recollection, RememberReport,
+};
 
 /// A long-lived memory of repositories, scoped per repository and section.
 #[async_trait]
@@ -66,16 +68,12 @@ pub trait Memory: Send + Sync {
 
     /// Ask the engine a question about `scope` and get a cited answer.
     ///
-    /// `instructions` steer the answer's shape — "one paragraph, name paths" —
-    /// and never carry repository text. An engine that cannot answer returns
-    /// an answer whose [`MemoryAnswer::is_grounded`] is false rather than an
-    /// error: "nothing remembered" is an ordinary outcome.
-    async fn answer(
-        &self,
-        scope: &MemoryScope,
-        question: &str,
-        instructions: Option<&str>,
-    ) -> Result<MemoryAnswer>;
+    /// The evidence the answer is grounded on is gathered by
+    /// [`Ask::evidence`] when it is given, and by the question's own words
+    /// when it is not. An engine that cannot answer returns an answer whose
+    /// [`MemoryAnswer::is_grounded`] is false rather than an error: "nothing
+    /// remembered" is an ordinary outcome.
+    async fn answer(&self, scope: &MemoryScope, ask: &Ask<'_>) -> Result<MemoryAnswer>;
 
     /// Forget everything in `scope`, reporting how many items went.
     ///
