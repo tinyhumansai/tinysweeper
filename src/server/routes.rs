@@ -31,7 +31,8 @@ use crate::server::indexing::{IndexBackend, index_in_background};
 use crate::server::manual::{self, FullReviews, MergeReport, Merges, Triages};
 use crate::server::memory::{MemoryBackend, ingest_in_background};
 use crate::server::preview::{
-    self, FinishReply, FinishRequest, Previews, StartReply, StartRequest, StepReply as PreviewStepReply,
+    self, FinishReply, FinishRequest, Previews, StartReply, StartRequest,
+    StepReply as PreviewStepReply,
 };
 use crate::server::status;
 use crate::server::store::{Store, Trust};
@@ -1566,7 +1567,6 @@ async fn run_and_publish(
     Ok(proposal)
 }
 
-
 /// The UI preview routes' way into the brain.
 ///
 /// Each call loads the session, does one thing, and writes it back. Nothing
@@ -1611,8 +1611,8 @@ impl Previews for PreviewDispatch {
             .repo
             .split_once('/')
             .ok_or_else(|| Error::Config(format!("`{}` is not owner/name", request.repo)))?;
-        let repo = manual::checked_target(owner, name, &manual::allowed_org())
-            .map_err(Error::Config)?;
+        let repo =
+            manual::checked_target(owner, name, &manual::allowed_org()).map_err(Error::Config)?;
 
         // The token proved a CI job in our organisation; this proves *which*
         // pull request, against GitHub rather than the request.
@@ -1659,7 +1659,11 @@ impl Previews for PreviewDispatch {
         .await?;
 
         let session = crate::preview::session::Session {
-            id: crate::preview::session::new_id(&request.repo, request.pull_request, &request.head_sha),
+            id: crate::preview::session::new_id(
+                &request.repo,
+                request.pull_request,
+                &request.head_sha,
+            ),
             repo: repo.to_string(),
             number: request.pull_request,
             head_sha: request.head_sha.clone(),
@@ -1826,11 +1830,20 @@ impl Previews for PreviewDispatch {
 
         let repo = RepoId::parse(&session.repo)
             .ok_or_else(|| Error::Forge(format!("`{}` is not owner/name", session.repo)))?;
-        let read_token = self.state.auth.installation_token(session.installation).await?;
+        let read_token = self
+            .state
+            .auth
+            .installation_token(session.installation)
+            .await?;
         let read = crate::forge::github::GitHubRead::new(&read_token)?;
-        let write_token = self.state.auth.installation_token(session.installation).await?;
+        let write_token = self
+            .state
+            .auth
+            .installation_token(session.installation)
+            .await?;
         let write = crate::forge::github::GitHubWrite::new(&write_token)?;
-        let outcome = crate::preview::apply::publish(&read, &write, &repo.to_string(), &gallery).await?;
+        let outcome =
+            crate::preview::apply::publish(&read, &write, &repo.to_string(), &gallery).await?;
 
         // Gone once published: a second finish for the same session would
         // otherwise republish, and the session has nothing left to say.

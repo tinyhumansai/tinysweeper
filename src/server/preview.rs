@@ -147,10 +147,7 @@ pub fn router(auth: Option<AdminAuth>, previews: Arc<dyn Previews>) -> Option<Ro
     )
 }
 
-async fn start(
-    State(state): State<PreviewState>,
-    Json(request): Json<StartRequest>,
-) -> Response {
+async fn start(State(state): State<PreviewState>, Json(request): Json<StartRequest>) -> Response {
     match state.previews.start(request).await {
         Ok(reply) => (StatusCode::OK, Json(reply)).into_response(),
         Err(err) => failure(err),
@@ -163,7 +160,11 @@ async fn step(
     Json(observation): Json<Observation>,
 ) -> Response {
     if !is_id(&id) || !is_id(&flow) {
-        return (StatusCode::NOT_FOUND, Json(json!({"error": "no such session"}))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "no such session"})),
+        )
+            .into_response();
     }
     match state.previews.step(&id, &flow, observation).await {
         Ok(reply) => (StatusCode::OK, Json(reply)).into_response(),
@@ -177,7 +178,11 @@ async fn finish(
     Json(request): Json<FinishRequest>,
 ) -> Response {
     if !is_id(&id) {
-        return (StatusCode::NOT_FOUND, Json(json!({"error": "no such session"}))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "no such session"})),
+        )
+            .into_response();
     }
     match state.previews.finish(&id, request).await {
         Ok(reply) => (StatusCode::OK, Json(reply)).into_response(),
@@ -197,7 +202,9 @@ fn is_id(s: &str) -> bool {
 /// give up on the first, so the distinction is the whole point.
 fn failure(err: Error) -> Response {
     let status = match &err {
-        Error::Config(_) | Error::ConfigNotFound(_) | Error::Json(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        Error::Config(_) | Error::ConfigNotFound(_) | Error::Json(_) => {
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
         _ => StatusCode::SERVICE_UNAVAILABLE,
     };
     tracing::warn!(%err, "preview request failed");
@@ -237,7 +244,12 @@ mod tests {
                 max_steps: 25,
             })
         }
-        async fn step(&self, session: &str, flow: &str, observation: Observation) -> Result<StepReply> {
+        async fn step(
+            &self,
+            session: &str,
+            flow: &str,
+            observation: Observation,
+        ) -> Result<StepReply> {
             self.stepped
                 .lock()
                 .unwrap()
@@ -303,7 +315,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let started = recorder.started.lock().unwrap();
         assert_eq!(started[0].repo, "o/r");
-        assert_eq!(started[0].entry_points, vec![("home".to_string(), "/".to_string())]);
+        assert_eq!(
+            started[0].entry_points,
+            vec![("home".to_string(), "/".to_string())]
+        );
     }
 
     #[tokio::test]

@@ -94,7 +94,10 @@ pub fn new_id(repo: &str, number: u64, head_sha: &str) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or_default();
-    let digest = Sha256::digest(format!("{repo}#{number}@{head_sha}:{nanos}:{}", std::process::id()));
+    let digest = Sha256::digest(format!(
+        "{repo}#{number}@{head_sha}:{nanos}:{}",
+        std::process::id()
+    ));
     digest
         .iter()
         .take(16)
