@@ -21,6 +21,6 @@ test("the mistakes that would surface as playwright errors are refused up front"
   assert.throws(() => checkConfig({ viewport: [100, 100] }), /"viewport"/);
   assert.throws(() => checkConfig({ entry_points: [{ name: "x", path: "settings" }] }), /entry point/);
   assert.throws(() => checkConfig({ mocks: [{ url: "**/api/**" }] }), /needs a "dir"/);
-  assert.throws(() => checkConfig({ auth: { cookies: [{ name: "sid" }] }), /auth cookie/);
+  assert.throws(() => checkConfig({ auth: { cookies: [{ name: "sid" }] } }), /auth cookie/);
   assert.throws(() => checkConfig({ max_flows: 0 }), /"max_flows"/);
 });
