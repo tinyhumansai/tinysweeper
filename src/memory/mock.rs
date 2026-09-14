@@ -19,7 +19,7 @@ use async_trait::async_trait;
 
 use crate::error::{Error, Result};
 use crate::memory::types::{
-    Citation, MemoryAnswer, MemoryItem, MemoryScope, Recollection, RememberReport,
+    Ask, Citation, MemoryAnswer, MemoryItem, MemoryScope, Recollection, RememberReport,
 };
 use crate::ports::memory::Memory;
 
