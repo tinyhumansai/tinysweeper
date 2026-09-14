@@ -1199,12 +1199,21 @@ mod tests {
             .collect();
         let query = memory_query("shared_helper everywhere", &diffs, 12);
         let terms: Vec<&str> = query.split(' ').collect();
-        assert_eq!(terms.len(), 12, "{query}");
+        // Thirty stems on offer, eight taken: the rest of the budget is for
+        // what the change says, not where it lands.
+        assert_eq!(
+            terms.iter().filter(|t| t.starts_with("lane_")).count(),
+            MAX_QUERY_STEMS,
+            "{query}"
+        );
         assert_eq!(
             terms.iter().filter(|t| **t == "shared_helper").count(),
             1,
             "{query}"
         );
+        assert!(terms.len() <= 12, "{query}");
+        let capped = memory_query("shared_helper everywhere", &diffs, 3);
+        assert_eq!(capped.split(' ').count(), 3, "{capped}");
         assert_eq!(memory_query("anything", &diffs, 0), "");
         assert_eq!(memory_query("", &[], 24), "");
     }
