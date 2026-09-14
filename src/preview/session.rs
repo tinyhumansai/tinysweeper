@@ -149,6 +149,7 @@ mod tests {
             diff_excerpt: "d".into(),
             spent_usd: 0.0,
             max_steps: 25,
+            check_id: None,
         };
         session.spent_usd = 1.0;
         assert!(!session.exhausted(1.0), "spend equal to budget is not yet exhausted");
@@ -170,6 +171,7 @@ mod tests {
             diff_excerpt: "d".into(),
             spent_usd: 0.1,
             max_steps: 25,
+            check_id: Some(99),
         };
         let json = serde_json::to_string(&session).unwrap();
         assert_eq!(serde_json::from_str::<Session>(&json).unwrap(), session);
