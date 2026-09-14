@@ -73,12 +73,28 @@ pub async fn publish(
     }
 
     let body = render::comment(gallery);
+    let existing =
+        crate::findings::prior::own_comment(read, &repo_id, gallery.number, render::MARKER).await?;
     let outcome = match &body {
-        None => Outcome::NothingToShow,
+        // A pull request that never had a preview comment stays quiet (see
+        // `render::comment`'s own doc). One that did is left showing an
+        // earlier head's pictures under a check that now says there is
+        // nothing to see, which is actively misleading rather than quiet —
+        // so an existing comment is edited down to a short stale notice.
+        None => match &existing {
+            Some(comment) => {
+                let stale = render::stale(&gallery.head_sha);
+                match comment.id {
+                    Some(id) => {
+                        write.update_comment(&repo_id, id, &stale).await?;
+                        Outcome::Published
+                    }
+                    None => Outcome::NothingToShow,
+                }
+            }
+            None => Outcome::NothingToShow,
+        },
         Some(body) => {
-            let existing =
-                crate::findings::prior::own_comment(read, &repo_id, gallery.number, render::MARKER)
-                    .await?;
             match existing {
                 Some(comment) if comment.body == *body => Outcome::Unchanged,
                 Some(comment) => match comment.id {
