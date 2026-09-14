@@ -1731,6 +1731,22 @@ impl PreviewDispatch {
             .await?
             .ok_or_else(|| Error::Config(format!("no preview session `{id}`; it may have expired")))
     }
+
+    /// Hold this session's lock for the duration of a load-modify-save.
+    ///
+    /// Two `step` calls for the same session — a retried request, or two
+    /// flows genuinely racing — would otherwise each load the same document,
+    /// mutate their own copy, and save it back; the second save wins and the
+    /// first flow's transition is lost. Serialising through one lock per
+    /// session id, rather than one lock for the whole dispatcher, keeps
+    /// unrelated sessions from waiting on each other.
+    async fn lock_session(&self, id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut locks = self.state.preview_locks.lock().expect("preview locks");
+            locks.entry(id.to_string()).or_default().clone()
+        };
+        lock.lock_owned().await
+    }
 }
 
 #[async_trait::async_trait]
