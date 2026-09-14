@@ -36,10 +36,15 @@
 //!   the per-pull-request budget, and the provider/model/dimensions triple that
 //!   is the index partition key — one repository changing it invalidates every
 //!   other repository's vectors), `[automerge]`, `[issues]`, `[pr_triage]`, `[automation]`,
-//!   `[sentry]` (which also names a token environment variable), and
+//!   `[sentry]` (which also names a token environment variable),
 //!   `review.request_changes_at` / `review.approve_when_clean`, which decide
 //!   whether the review blocks the merge button or produces an approval that
-//!   can satisfy a branch protection rule.
+//!   can satisfy a branch protection rule, and `preview.public_base_url`,
+//!   which is the origin every published screenshot is served from — a
+//!   repository that could set it would have the bot embed pictures from a
+//!   host of its choosing. `preview.enabled` and `preview.max_flows` are
+//!   overridable for the usual reason: they can only make a repository's
+//!   own preview smaller.
 //! - **Not overridable — anything that puts repository prose into a prompt.**
 //!   `path_instructions` is free text injected straight into a lane's
 //!   instructions, unfenced. Repository prose reaches a prompt through exactly
