@@ -24,6 +24,7 @@ use mongodb::{Collection, IndexModel};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::preview::session::Session as PreviewSession;
 use crate::state::types::ReviewedState;
 
 /// How long a lease survives without being released.
@@ -109,6 +110,13 @@ impl Contributor {
 /// correct are on GitHub, not here.
 pub const REVIEW_STATE_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
 
+/// How long a UI preview session survives between calls.
+///
+/// A CI job that builds two checkouts and drives a browser takes minutes; one
+/// that has gone two hours without a call has been cancelled, and its
+/// session is holding a plan and transcripts nothing will read.
+pub const PREVIEW_SESSION_TTL: std::time::Duration = std::time::Duration::from_secs(2 * 60 * 60);
+
 /// The server's persistent state.
 #[derive(Clone, Debug)]
 pub struct Store {
@@ -117,6 +125,7 @@ pub struct Store {
     leases: Collection<Document>,
     installations: Collection<Document>,
     review_state: Collection<Document>,
+    preview_sessions: Collection<Document>,
 }
 
 impl Store {
@@ -134,6 +143,7 @@ impl Store {
             leases: database.collection("leases"),
             installations: database.collection("installations"),
             review_state: database.collection("review_state"),
+            preview_sessions: database.collection("preview_sessions"),
         };
         store.ensure_indexes().await?;
         Ok(store)
@@ -226,6 +236,59 @@ impl Store {
             .await
             .map_err(|err| Error::Forge(format!("could not set the review-state TTL: {err}")))?;
 
+        let session_ttl = IndexOptions::builder()
+            .expire_after(PREVIEW_SESSION_TTL)
+            .build();
+        self.preview_sessions
+            .create_index(
+                IndexModel::builder()
+                    .keys(doc! { "updated": 1 })
+                    .options(session_ttl)
+                    .build(),
+            )
+            .await
+            .map_err(|err| Error::Forge(format!("could not set the preview-session TTL: {err}")))?;
+
+        Ok(())
+    }
+
+    /// A UI preview session by id, if it is still there.
+    pub async fn preview_session(&self, id: &str) -> Result<Option<PreviewSession>> {
+        let found = self
+            .preview_sessions
+            .find_one(doc! { "_id": id })
+            .await
+            .map_err(|err| Error::Forge(err.to_string()))?;
+        let Some(document) = found else {
+            return Ok(None);
+        };
+        bson::from_document::<PreviewSession>(document)
+            .map(Some)
+            .map_err(|err| Error::Forge(format!("unreadable preview session: {err}")))
+    }
+
+    /// Write a UI preview session, replacing what was there.
+    ///
+    /// `updated` is what the TTL index watches, and it is written on every
+    /// save so a session in use never expires underneath itself.
+    pub async fn save_preview_session(&self, session: &PreviewSession) -> Result<()> {
+        let mut document =
+            bson::to_document(session).map_err(|err| Error::Forge(err.to_string()))?;
+        document.insert("updated", bson::DateTime::now());
+        self.preview_sessions
+            .update_one(doc! { "_id": &session.id }, doc! { "$set": document })
+            .upsert(true)
+            .await
+            .map_err(|err| Error::Forge(err.to_string()))?;
+        Ok(())
+    }
+
+    /// Forget a UI preview session.
+    pub async fn delete_preview_session(&self, id: &str) -> Result<()> {
+        self.preview_sessions
+            .delete_one(doc! { "_id": id })
+            .await
+            .map_err(|err| Error::Forge(err.to_string()))?;
         Ok(())
     }
 
