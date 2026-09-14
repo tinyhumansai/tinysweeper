@@ -343,8 +343,31 @@ impl CheckStatus {
     }
 }
 
-/// A check run to publish.
+/// An image attached to a check run's output.
+///
+/// GitHub renders these under the summary on the check's page — the one
+/// place in the checks UI that can show a picture. The UI preview uses it
+/// for its annotated screenshots so the pictures are reachable from the
+/// checks tab as well as from the comment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckImage {
+    /// Alternative text, shown when the image cannot be loaded.
+    pub alt: String,
+    /// Where the image is served from. Composed by this crate from operator
+    /// configuration, never taken from untrusted input.
+    pub image_url: String,
+    /// A short caption rendered under the image.
+    pub caption: Option<String>,
+}
+
+/// The most images one check run may carry.
+///
+/// GitHub's documented ceiling; a request over it is rejected outright, and a
+/// rejected check reads as "the bot did not run".
+pub const MAX_CHECK_IMAGES: usize = 8;
+
+/// A check run to publish.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckRun {
     /// The check name, e.g. `tinysweeper/security`.
     pub name: String,
@@ -371,6 +394,13 @@ pub struct CheckRun {
     pub title: String,
     /// The markdown summary.
     pub summary: String,
+    /// Images rendered under the summary. Empty for every check but the UI
+    /// preview's.
+    ///
+    /// Defaulted on read so a proposal written to disk before this field
+    /// existed still loads.
+    #[serde(default)]
+    pub images: Vec<CheckImage>,
 }
 
 impl CheckRun {
