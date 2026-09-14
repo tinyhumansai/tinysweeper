@@ -165,8 +165,11 @@ mod tests {
     #[tokio::test]
     async fn a_first_run_creates_the_comment_and_publishes_a_neutral_check() {
         let forge = MockForge::new().with_pull_request(pull_request("abc"), vec![], vec![]);
-        let outcome = publish(&forge, &forge, "o/r", &gallery()).await.unwrap();
+        let (outcome, check_id) = publish(&forge, &forge, "o/r", &gallery(), None)
+            .await
+            .unwrap();
         assert_eq!(outcome, Outcome::Published);
+        assert!(check_id.is_some(), "a fresh check run's id is handed back");
 
         let writes = forge.writes();
         assert_eq!(writes.len(), 2);
