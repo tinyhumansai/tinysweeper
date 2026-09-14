@@ -1200,10 +1200,11 @@ mod tests {
         ];
         let query = memory_query("fix(server): scope review tokens read-only", &diffs, 24);
         let terms: Vec<&str> = query.split(' ').collect();
-        // Stems first, then the title, then the identifiers by frequency.
-        assert_eq!(&terms[..2], &["auth", "readme"], "{query}");
+        // Stems first (the README's is a hub word and dropped), then the
+        // title, then the identifiers by frequency.
+        assert_eq!(terms[0], "auth", "{query}");
         assert!(
-            terms[2..].starts_with(&["fix", "server", "scope", "review", "tokens", "read"]),
+            terms[1..].starts_with(&["fix", "server", "scope", "review", "tokens", "read"]),
             "{query}"
         );
         assert!(
