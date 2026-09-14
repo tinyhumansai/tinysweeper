@@ -137,6 +137,7 @@ overlay reads:
 | `TINYSWEEPER_HOST_PORT` | Loopback port nginx proxies to. `8081`; the vhost hard-codes the same number. |
 | `TINYSWEEPER_IMAGE_TAG` | Image tag the box tracks. Defaults to `latest`. Set to a `sha-…` tag to pin. |
 | `TINYSWEEPER_ADMIN_TOKEN` | What `manual-review.yml` authenticates with. Unset means no `/admin` router. |
+| `TINYSWEEPER_PREVIEW_TOKEN` | What the UI preview action in other repositories' CI authenticates with (`templates/ui-preview/README.md`). Unset means no `/preview` routes. Pairs with `[preview] enabled` and `public_base_url` in `.tinysweeper.toml`, and optionally `models.vision`. |
 | `TINYSWEEPER_ALLOWED_ORG` | Organisation manual reviews are bounded to. Defaults to `tinyhumansai`. |
 | `LANGFUSE_*` | Optional tracing; see the README. |
 | `CORTEX_API_KEY` | The shared CortexDB's bearer, the value the `cortex` container was started with. Required while `[memory]` is on. |
