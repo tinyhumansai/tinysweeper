@@ -1429,7 +1429,7 @@ async fn review_inner(
         .await
         .map_err(|err| Error::Forge(err.to_string()))?;
 
-    let read_token = state.auth.installation_token(installation).await?;
+    let read_token = state.auth.review_read_token(installation).await?;
     let forge = crate::forge::github::GitHubRead::new(&read_token)?;
 
     let pull_request = {
