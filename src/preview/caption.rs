@@ -326,7 +326,10 @@ mod tests {
         let spend = caption(&mut gallery, &inputs, model.clone()).await;
         assert_eq!(spend.cost_usd(), 0.0, "no call was made");
         assert_eq!(model.requests().len(), 0);
-        assert_eq!(gallery.flows[0].title, "Toggle the setting", "the planned title is kept");
+        assert_eq!(
+            gallery.flows[0].title, "Toggle the setting",
+            "the planned title is kept"
+        );
     }
 
     #[tokio::test]
