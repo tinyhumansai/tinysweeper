@@ -1909,7 +1909,7 @@ impl Previews for PreviewDispatch {
 
     async fn finish(&self, id: &str, request: FinishRequest) -> Result<FinishReply> {
         let config = &self.state.config.config;
-        let session = self.session(id).await?;
+        let mut session = self.session(id).await?;
         let base_url = config.preview.public_base_url.as_deref().unwrap_or("");
 
         let mut gallery = crate::preview::manifest::validate(
