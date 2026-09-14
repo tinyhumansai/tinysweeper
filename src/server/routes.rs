@@ -2047,19 +2047,18 @@ impl Previews for PreviewDispatch {
         )
         .await?;
 
-        // Gone once published: a second finish for the same session would
-        // otherwise republish, and the session has nothing left to say. But
-        // the hands' own HTTP client retries a dropped response, and this
-        // delete can itself fail — so the check run's id is saved back onto
-        // the session first. If the delete below does fail, a retried finish
-        // updates that same check run through `session.check_id` instead of
-        // GitHub growing another `tinysweeper/ui-preview` row for it.
+        // Not deleted: the hands' own HTTP client retries a dropped response,
+        // and a `finish` that deleted its session on success would make that
+        // retry fail with "no preview session" despite the first attempt
+        // having already published. `publish` is idempotent per head commit
+        // (the comment is edited in place, and `check_id` — saved back here —
+        // makes the check run reused rather than duplicated), so a retried
+        // finish for a still-present session simply reconfirms the same
+        // outcome. The session store's own TTL index (`PREVIEW_SESSION_TTL`,
+        // two hours) is what actually reclaims it.
         session.check_id = check_id;
         if let Err(err) = self.state.store.save_preview_session(&session).await {
             tracing::warn!(%err, "could not record the published check id on the preview session");
-        }
-        if let Err(err) = self.state.store.delete_preview_session(&session.id).await {
-            tracing::warn!(%err, "could not delete a finished preview session");
         }
 
         Ok(FinishReply {
