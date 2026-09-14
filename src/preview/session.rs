@@ -48,6 +48,17 @@ pub struct Session {
     pub spent_usd: f64,
     /// The largest number of steps any flow may take.
     pub max_steps: usize,
+    /// The `tinysweeper/ui-preview` check run this session already published,
+    /// if any.
+    ///
+    /// Set right after a successful `finish`, before the session is deleted:
+    /// deletion can itself fail, and the hands' own HTTP client retries a
+    /// dropped response. Recording the id here is what lets a retried
+    /// `finish` for the same (still undeleted) session update that check run
+    /// rather than publish another one under the same name — GitHub keeps
+    /// every check `publish_check` creates rather than replacing it.
+    #[serde(default)]
+    pub check_id: Option<u64>,
 }
 
 impl Session {
