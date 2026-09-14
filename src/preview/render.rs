@@ -37,6 +37,21 @@ const THUMB_WIDTH: u32 = 380;
 
 /// Render the comment, or `None` when there is nothing to show.
 ///
+/// The body [`crate::preview::apply::publish`] writes over an existing
+/// preview comment when the current head has nothing to show.
+///
+/// Not the same as never having posted at all — see [`comment`]'s own
+/// "`None` rather than..." reasoning, which still applies to a pull request
+/// that never had a preview comment. But once a comment exists, showing a
+/// stale head's screenshots under a check run that now says there is nothing
+/// to see is actively misleading, not merely quiet.
+pub fn stale(head_sha: &str) -> String {
+    format!(
+        "{MARKER}\n<!-- tinysweeper:ui-preview-sha={} -->\n### 🎬 UI preview\n\n_No visible change on this commit._\n",
+        escape(head_sha),
+    )
+}
+
 /// `None` rather than "no visible change found": the pull request that has no
 /// UI change has plenty of other comments, and one more saying so is noise.
 /// The check run says it instead, where it costs no screen space.
