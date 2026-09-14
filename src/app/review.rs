@@ -631,6 +631,7 @@ pub async fn review_with_memory(
     // at all — disabled in config, or skipped as a draft — in which case it
     // reported Neutral and its findings would otherwise vanish silently.
     publish_unclaimed(&mut lanes, &scan_findings);
+    cap_proposal_findings(&mut lanes, config.review.max_comments);
 
     let uninspected = uninspected_paths(config, &context)?;
 
@@ -1176,13 +1177,7 @@ fn lane_proposal(
             .then(b.corroboration.cmp(&a.corroboration))
     });
 
-    let over_cap = findings.len().saturating_sub(config.review.max_comments);
-    findings.truncate(config.review.max_comments);
-
     let mut summary = outcome_summary;
-    if over_cap > 0 {
-        summary = format!("{summary} (+{over_cap} more not shown)");
-    }
     if deduped > 0 {
         summary = format!("{summary} ({deduped} already reported on an earlier push)");
     }
@@ -1216,6 +1211,61 @@ fn lane_proposal(
         highest_severity,
         usage: spend.usage,
         models: spend.models,
+    }
+}
+
+/// Apply the comment limit after every lane and scanner fallback has contributed.
+///
+/// A lane-level cap looks equivalent until two lanes each produce a full limit;
+/// then one pull request receives twice the noise it configured. Conclusions are
+/// deliberately left alone: hiding a lower-ranked comment must not turn its
+/// lane green.
+fn cap_proposal_findings(lanes: &mut [LaneProposal], max_comments: usize) {
+    let mut ranked: Vec<(usize, usize, Severity, f64, u8)> = lanes
+        .iter()
+        .enumerate()
+        .flat_map(|(lane_index, lane)| {
+            lane.findings
+                .iter()
+                .enumerate()
+                .map(move |(finding_index, finding)| {
+                    (
+                        lane_index,
+                        finding_index,
+                        finding.severity,
+                        finding.confidence,
+                        finding.corroboration,
+                    )
+                })
+        })
+        .collect();
+    ranked.sort_by(|a, b| {
+        b.2.cmp(&a.2)
+            .then(b.3.total_cmp(&a.3))
+            .then(b.4.cmp(&a.4))
+            .then(a.0.cmp(&b.0))
+            .then(a.1.cmp(&b.1))
+    });
+
+    let keep: BTreeSet<(usize, usize)> = ranked
+        .into_iter()
+        .take(max_comments)
+        .map(|(lane, finding, ..)| (lane, finding))
+        .collect();
+    for (lane_index, lane) in lanes.iter_mut().enumerate() {
+        let before = lane.findings.len();
+        lane.findings = std::mem::take(&mut lane.findings)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(finding_index, finding)| {
+                keep.contains(&(lane_index, finding_index))
+                    .then_some(finding)
+            })
+            .collect();
+        let dropped = before - lane.findings.len();
+        if dropped > 0 {
+            lane.summary = format!("{} (+{dropped} more not shown)", lane.summary);
+        }
     }
 }
 
@@ -1394,6 +1444,62 @@ mod tests {
         let mut config = config();
         config.review.lanes = vec!["critique".into()];
         config
+    }
+
+    #[test]
+    fn max_comments_caps_findings_across_lanes_not_per_lane() {
+        fn finding(title: &str, severity: Severity) -> Finding {
+            Finding {
+                lane: LaneId::Critique,
+                severity,
+                confidence: 0.9,
+                path: "src/lib.rs".into(),
+                line: Some(2),
+                end_line: None,
+                rule: "rule".into(),
+                title: title.into(),
+                body: "body".into(),
+                suggestion: None,
+                applicable: None,
+                late: false,
+                identity: None,
+                corroboration: 1,
+            }
+        }
+        fn lane(id: LaneId, findings: Vec<Finding>) -> LaneProposal {
+            LaneProposal {
+                lane: id,
+                check_name: id.check_name(),
+                conclusion: CheckConclusion::Failure,
+                summary: "Reviewed.".into(),
+                findings,
+                resolved: vec![],
+                deduped: 0,
+                highest_severity: Some(Severity::High),
+                usage: Default::default(),
+                models: vec![],
+            }
+        }
+
+        let mut lanes = vec![
+            lane(
+                LaneId::Critique,
+                vec![finding("critique medium", Severity::Medium)],
+            ),
+            lane(
+                LaneId::Security,
+                vec![finding("security high", Severity::High)],
+            ),
+        ];
+        cap_proposal_findings(&mut lanes, 1);
+
+        assert_eq!(
+            lanes.iter().map(|lane| lane.findings.len()).sum::<usize>(),
+            1
+        );
+        assert_eq!(lanes[1].findings[0].title, "security high");
+        assert!(lanes[0].summary.contains("+1 more not shown"));
+        assert_eq!(lanes[0].conclusion, CheckConclusion::Failure);
     }
 
     fn repo() -> RepoId {

@@ -293,6 +293,13 @@ fn validate_memory(config: &Config, problems: &mut Vec<String>) {
                 .into(),
         );
     }
+    if memory.ingest_discussions && memory.discussion_chars == 0 {
+        problems.push(
+            "`memory.discussion_chars = 0` remembers every remark as an empty body; set it \
+             above zero or set `memory.ingest_discussions = false`"
+                .into(),
+        );
+    }
     if memory.ask && memory.questions.is_empty() {
         problems.push("`memory.ask = true` but `memory.questions` is empty".into());
     }
@@ -300,7 +307,7 @@ fn validate_memory(config: &Config, problems: &mut Vec<String>) {
         if crate::memory::MemorySection::parse(&question.section).is_none() {
             problems.push(format!(
                 "`memory.questions[{index}].section = \"{}\"` is not a section; use code, \
-                 conventions or reviews",
+                 conventions, reviews or discussions",
                 question.section
             ));
         }

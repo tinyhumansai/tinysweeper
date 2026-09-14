@@ -131,6 +131,20 @@ pub fn load(root: &Path, explicit: Option<&Path>) -> Result<Loaded> {
         merge::merge_layer(&mut merged, table, Layer::Repo, &mut provenance);
     }
 
+    let unknown = unknown_keys(&merged);
+    if !unknown.is_empty() {
+        return Err(Error::config(format!(
+            "{} unknown configuration key{}:\n{}",
+            unknown.len(),
+            if unknown.len() == 1 { "" } else { "s" },
+            unknown
+                .iter()
+                .map(|key| format!("  - `{key}`"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )));
+    }
+
     let mut config: Config = merged.try_into().map_err(|err| {
         Error::config(format!(
             "the merged configuration is not valid: {err}\n\
@@ -146,6 +160,280 @@ pub fn load(root: &Path, explicit: Option<&Path>) -> Result<Loaded> {
         source: located.map(|l| l.path),
         preset_source,
     })
+}
+
+/// Collect every key Serde's `deny_unknown_fields` would otherwise report one
+/// at a time. The schema names configuration *tables*, not values, so maps
+/// such as `automation.labeler.area` remain deliberately open.
+fn unknown_keys(table: &Table) -> Vec<String> {
+    let mut unknown = Vec::new();
+    collect_unknown_keys(table, "", &mut unknown);
+    unknown
+}
+
+fn collect_unknown_keys(table: &Table, path: &str, unknown: &mut Vec<String>) {
+    let Some(known) = known_keys(path) else {
+        return;
+    };
+
+    for (key, value) in table {
+        let key_path = join_key(path, key);
+        // `lanes` is the one keyed table: its entry name is a lane id, while
+        // the fields inside every entry still have a closed schema.
+        if path != "lanes" && !known.contains(&key.as_str()) {
+            unknown.push(key_path);
+            continue;
+        }
+
+        match value {
+            toml::Value::Table(child) => collect_unknown_keys(child, &key_path, unknown),
+            toml::Value::Array(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    if let toml::Value::Table(child) = item {
+                        collect_unknown_keys(child, &format!("{key_path}[{index}]"), unknown);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn join_key(path: &str, key: &str) -> String {
+    if path.is_empty() {
+        key.to_owned()
+    } else {
+        format!("{path}.{key}")
+    }
+}
+
+/// Keys accepted in one table. An absent entry represents an intentionally
+/// open map, while `*` stands for an entry in a keyed table or array of tables.
+fn known_keys(path: &str) -> Option<&'static [&'static str]> {
+    let parts = path
+        .split('.')
+        .map(|part| part.split_once('[').map_or(part, |(key, _)| key))
+        .collect::<Vec<_>>();
+    let path = match parts.as_slice() {
+        ["lanes", _] => "lanes.*".to_owned(),
+        ["path_instructions"] => "path_instructions.*".to_owned(),
+        ["memory", "questions"] => "memory.questions.*".to_owned(),
+        ["council", "agents"] => "council.agents.*".to_owned(),
+        ["sentry", "route"] => "sentry.route.*".to_owned(),
+        _ => parts.join("."),
+    };
+    match path.as_str() {
+        "" => Some(&[
+            "version",
+            "preset",
+            "review",
+            "paths",
+            "path_instructions",
+            "cache",
+            "labels",
+            "models",
+            "knowledge",
+            "embeddings",
+            "retrieval",
+            "memory",
+            "lanes",
+            "council",
+            "automerge",
+            "threads",
+            "overview",
+            "issues",
+            "pr_triage",
+            "automation",
+            "sentry",
+        ]),
+        "review" => Some(&[
+            "lanes",
+            "strictness",
+            "severity_gate",
+            "confidence_min",
+            "max_comments",
+            "incremental",
+            "draft_prs",
+            "respect_agents_md",
+            "request_changes_at",
+            "approve_when_clean",
+        ]),
+        "threads" => Some(&["resolve_fixed", "ask_model", "comment_on_resolve"]),
+        "overview" => Some(&[
+            "enabled",
+            "max_components",
+            "max_impacted",
+            "max_links",
+            "max_paths_per_component",
+        ]),
+        "paths" => Some(&["ignore"]),
+        "path_instructions.*" => Some(&["glob", "instructions", "rules", "lanes"]),
+        "cache" => Some(&["enabled", "semantic", "max_age_days"]),
+        "labels" => Some(&["human_review", "manual_only"]),
+        "models" => Some(&[
+            "gateway",
+            "base_url",
+            "api_key_env",
+            "scan",
+            "deep",
+            "flash",
+            "fallback",
+            "provider",
+            "max_tokens",
+            "reasoning_effort",
+            "structured_output",
+            "budget_usd_per_pr",
+        ]),
+        "models.provider" => Some(&["order", "allow_fallbacks", "last_resort_unpinned"]),
+        "knowledge" => Some(&[
+            "extract",
+            "files",
+            "max_file_bytes",
+            "pinned_doc_chars",
+            "pinned_total_chars",
+        ]),
+        "embeddings" => Some(&[
+            "enabled",
+            "provider",
+            "model",
+            "dimensions",
+            "api_key_env",
+            "base_url",
+            "batch",
+            "max_request_tokens",
+            "requests_per_minute",
+            "budget_usd_per_index",
+        ]),
+        "retrieval" => Some(&[
+            "enabled",
+            "query_chars",
+            "context_tokens",
+            "max_chunks",
+            "graph_hops",
+            "max_graph_nodes",
+            "max_impact",
+        ]),
+        "memory" => Some(&[
+            "enabled",
+            "provider",
+            "endpoint",
+            "api_key_env",
+            "allow_private_http",
+            "ingest_code",
+            "ingest_conventions",
+            "ingest_discussions",
+            "convention_files",
+            "convention_section_chars",
+            "discussion_chars",
+            "discussion_debounce_secs",
+            "remember_reviews",
+            "context_tokens",
+            "max_recollections",
+            "ask",
+            "questions",
+            "answer_chars",
+        ]),
+        "memory.questions.*" => Some(&["section", "ask"]),
+        "lanes" => Some(&[]),
+        "lanes.*" => Some(&["model", "fail_on", "secret_rulepack", "max_blob_bytes"]),
+        "council" => Some(&["enabled", "corroboration", "subagents", "agents"]),
+        "council.agents.*" => Some(&["id", "lanes", "model", "persona"]),
+        "automerge" => Some(&[
+            "enabled",
+            "require_checks",
+            "require_approvals",
+            "method",
+            "allow_labels",
+            "block_labels",
+            "max_files",
+            "max_changed_lines",
+            "max_hunks",
+            "max_directories",
+            "sensitive_paths",
+            "allow_dependency_bumps",
+            "dependency_bots",
+            "dependency_paths",
+        ]),
+        "issues" => Some(&[
+            "enabled",
+            "model",
+            "comment",
+            "apply_labels",
+            "max_labels",
+            "apply_issue_type",
+            "allow_labels",
+            "block_labels",
+            "dedupe",
+            "dedupe_confidence_min",
+            "close",
+        ]),
+        "issues.close" => Some(&[
+            "enabled",
+            "min_age_days",
+            "quiet_days",
+            "confidence_min",
+            "protected_labels",
+            "protected_authors",
+            "dry_run",
+        ]),
+        "pr_triage" => Some(&[
+            "enabled",
+            "max_pull_requests",
+            "max_landed_files",
+            "min_landed_lines",
+            "max_base_reads",
+            "duplicate_path_overlap_min",
+            "duplicate_line_overlap_min",
+            "comment",
+            "apply_labels",
+            "flag_promotional",
+            "sweep_every_minutes",
+            "sweep_repositories",
+            "close",
+        ]),
+        "pr_triage.close" => Some(&[
+            "enabled",
+            "min_age_days",
+            "quiet_days",
+            "protected_labels",
+            "protected_authors",
+            "dry_run",
+        ]),
+        "automation" => Some(&[
+            "enabled",
+            "stale",
+            "labeler",
+            "merge_sweep",
+            "nudge_after_days",
+        ]),
+        "automation.stale" => Some(&[
+            "enabled",
+            "days_until_stale",
+            "days_until_close",
+            "label",
+            "exempt_labels",
+        ]),
+        "automation.labeler" => Some(&["enabled", "size", "area"]),
+        "automation.labeler.area" => None,
+        "sentry" => Some(&[
+            "enabled",
+            "org",
+            "projects",
+            "token_env",
+            "base_url",
+            "min_events",
+            "min_users",
+            "ignore_culprits",
+            "labels",
+            "max_per_run",
+            "annotate_sentry",
+            "resolve_when_tracked",
+            "scrub_patterns",
+            "route",
+        ]),
+        "sentry.route.*" => Some(&["project", "repo", "labels"]),
+        _ => Some(&[]),
+    }
 }
 
 /// Inline every `path_instructions.rules` document into its instructions.

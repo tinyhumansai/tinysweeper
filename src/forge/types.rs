@@ -110,6 +110,16 @@ pub struct PullRequest {
     /// therefore refuses a close rather than allowing one.
     #[serde(default)]
     pub quiet_days: u32,
+    /// When the forge last recorded a write to it, RFC 3339.
+    ///
+    /// The one freshness signal memory has for a pull-request subject item:
+    /// unlike [`Issue`], nothing else here is a timestamp `subject_item` can
+    /// call `.observed()` with. `None` from an adapter that cannot say (or a
+    /// fixture from before this field existed, via `serde(default)`), which
+    /// means that item enters the engine with no freshness signal rather than
+    /// a wrong one.
+    #[serde(default)]
+    pub updated_at: Option<String>,
 }
 
 /// An unstated `open` is an open pull request.
@@ -172,6 +182,7 @@ impl Default for PullRequest {
             approvals: 0,
             age_days: 0,
             quiet_days: 0,
+            updated_at: None,
         }
     }
 }
@@ -582,6 +593,115 @@ pub struct Issue {
     /// A single field rather than a set, which is why triage never overwrites
     /// it: unlike a label, writing one destroys whatever a human chose.
     pub issue_type: Option<String>,
+    /// Whether this "issue" is really a pull request.
+    ///
+    /// GitHub's issues endpoint lists both, and the memory backfill wants
+    /// both — but a pull request has review comments and reviews an issue
+    /// does not, so the reader has to be told which it is holding. Triage
+    /// paths never see a `true` here: they filter pull requests out before
+    /// the value is built.
+    #[serde(default)]
+    pub pull_request: bool,
+    /// Whether GitHub reports the author as `type: "Bot"`.
+    #[serde(default)]
+    pub author_is_bot: bool,
+    /// When it was opened, as RFC 3339, when the adapter knows.
+    #[serde(default)]
+    pub created_at: Option<String>,
+    /// When it was last touched, as RFC 3339, when the adapter knows. What
+    /// an incremental backfill resumes from.
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    /// When it was closed, as RFC 3339, when it was and the adapter knows.
+    #[serde(default)]
+    pub closed_at: Option<String>,
+    /// When a pull request listed as an issue was merged, as RFC 3339.
+    ///
+    /// The issues listing carries this under `pull_request.merged_at`, and it
+    /// is the one fact the memory backfill needs from a pull request that the
+    /// listing would otherwise not say — so reading it here saves a
+    /// `pull_request` round trip (and the reviews page behind it) per entry.
+    /// Always `None` on a real issue.
+    #[serde(default)]
+    pub merged_at: Option<String>,
+}
+
+/// What kind of contribution a [`Remark`] is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemarkKind {
+    /// A comment in the conversation tab of an issue or a pull request.
+    #[default]
+    Comment,
+    /// An inline comment on a pull request's diff.
+    ReviewComment,
+    /// A submitted review: a verdict, usually with a body.
+    Review,
+}
+
+impl RemarkKind {
+    /// The stable, lowercase name used in labels and memory keys.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Comment => "comment",
+            Self::ReviewComment => "review-comment",
+            Self::Review => "review",
+        }
+    }
+}
+
+/// One contribution to the conversation on an issue or a pull request,
+/// whoever made it and wherever it hangs.
+///
+/// The three places GitHub keeps a conversation — issue comments, inline
+/// review comments and review bodies — are folded into one shape here because
+/// the one reader that wants all three, the memory backfill, wants them as a
+/// single timeline: what was said about this change, by whom, in what order.
+/// The existing per-kind reads stay as they are; this is a projection for a
+/// reader that never writes.
+///
+/// Every body is untrusted input: anyone who can comment writes one.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Remark {
+    /// GitHub's id for it, unique within its kind.
+    pub id: u64,
+    /// Which of the three places it came from.
+    pub kind: RemarkKind,
+    /// The login of whoever wrote it.
+    pub author: String,
+    /// Whether GitHub reports the author as `type: "Bot"`.
+    pub bot: bool,
+    /// GitHub's `author_association`, lowercased: `owner`, `member`,
+    /// `collaborator`, `contributor`, `none`, … Empty when unknown.
+    ///
+    /// Recorded as a *label*, never a judgement: `collaborator` covers a
+    /// read-only invitee, so nothing here decides who is a maintainer. What
+    /// it is good for is telling a reviewer whether the person who said
+    /// "this is intentional" owns the repository or wandered in.
+    pub association: String,
+    /// The markdown body.
+    pub body: String,
+    /// When it was written, as RFC 3339, when the adapter knows.
+    pub created_at: Option<String>,
+    /// When it was last edited, as RFC 3339, when it was and the adapter
+    /// knows. What memory dates an observation to, so an edit outranks the
+    /// text it replaced; `created_at` stays the timeline position.
+    pub updated_at: Option<String>,
+    /// The file an inline comment anchors to.
+    pub path: Option<String>,
+    /// The line an inline comment anchors to, in the head revision.
+    pub line: Option<u64>,
+    /// The comment this one replies to, for an inline reply.
+    pub in_reply_to: Option<u64>,
+    /// The verdict, on a review.
+    pub verdict: Option<ReviewEvent>,
+    /// Whether this review was dismissed: a verdict a human retired.
+    ///
+    /// Carried apart from `verdict`, which is `None` for a dismissed review
+    /// because it no longer blocks or approves anything — and yet "the
+    /// maintainer dismissed that request for changes" is a fact the
+    /// conversation should remember.
+    pub dismissed: bool,
 }
 
 /// Everything a lane needs about one pull request, fetched once.

@@ -162,17 +162,38 @@ impl AppAuth {
 
     /// An installation token, from cache when one is still good.
     pub async fn installation_token(&self, installation: u64) -> Result<String> {
-        self.token(installation, TokenScope::Full).await
+        self.installation_token_good_for(installation, RENEW_MARGIN)
+            .await
+    }
+
+    /// An installation token that will still be valid `margin` from now,
+    /// from cache when the cached one is, minted afresh otherwise.
+    ///
+    /// For a caller that holds one token across a long run of requests — a
+    /// memory backfill chunk is minutes of reads — and cannot re-mint in the
+    /// middle. `installation_token` is this with the default margin.
+    pub async fn installation_token_good_for(
+        &self,
+        installation: u64,
+        margin: Duration,
+    ) -> Result<String> {
+        self.token(installation, TokenScope::Full, margin).await
     }
 
     /// An installation token that cannot mutate the reviewed repository.
     pub async fn review_read_token(&self, installation: u64) -> Result<String> {
-        self.token(installation, TokenScope::ReviewRead).await
+        self.token(installation, TokenScope::ReviewRead, RENEW_MARGIN)
+            .await
     }
 
-    async fn token(&self, installation: u64, scope: TokenScope) -> Result<String> {
+    async fn token(
+        &self,
+        installation: u64,
+        scope: TokenScope,
+        margin: Duration,
+    ) -> Result<String> {
         if let Some(cached) = self.cache.lock().await.get(&(installation, scope))
-            && cached.expires > SystemTime::now() + RENEW_MARGIN
+            && cached.expires > SystemTime::now() + margin
         {
             return Ok(cached.token.clone());
         }

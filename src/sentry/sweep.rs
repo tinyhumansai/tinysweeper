@@ -248,30 +248,28 @@ async fn sweep_project(
     // Step 2 — dedupe against GitHub, before the cap.
     let mut candidates = Vec::new();
     for issue in filtered.selected {
-        // Scrubbed on both sides, deliberately.
-        //
-        // `promote::body` writes the marker from `SafeIssue.short_id` and
-        // `project`, which `redact::project` has scrubbed. Looking up with the
-        // RAW values meant that if any `scrub_patterns` entry touched either,
-        // the key searched for could never match the marker written — and the
-        // sweep re-promoted the same issue on every run, forever. Duplicates
-        // are the failure mode that scales, so both sides must derive the key
-        // the same way.
-        //
-        // KNOWN EDGE, deliberately not fixed here: scrubbing is lossy, so a
-        // pattern that matches part of a short id can collapse two distinct
-        // ids to one string, and the second issue then looks already-tracked
-        // and is silently never promoted. That is quieter than a duplicate but
-        // it is still wrong. The real answer is that structural identifiers
-        // should not be scrubbed at all, which is a design change rather than
-        // a fix — tracked as a follow-up.
-        // `marker_component`, not `scrub_text`: the marker is built from
-        // values that promotion also truncates, so scrubbing alone would still
-        // miss a marker for any value over the cap.
-        let dedupe_short_id =
-            redact::marker_component(&issue.short_id, &config.sentry.scrub_patterns);
-        let dedupe_project = redact::marker_component(project, &config.sentry.scrub_patterns);
-        match dedupe::find_tracked(read, repo, org, &dedupe_project, &dedupe_short_id).await? {
+        // Structural identifiers bypass content scrubbing, but both promotion
+        // and lookup still use this shared truncation helper. That makes the
+        // marker stable without allowing two distinct identifiers to collapse
+        // into one and silently suppress a promotion.
+        let dedupe_short_id = redact::marker_component(&issue.short_id);
+        let dedupe_project = redact::marker_component(project);
+        let tracked =
+            dedupe::find_tracked(read, repo, org, &dedupe_project, &dedupe_short_id).await?;
+        let tracked = if matches!(tracked, Tracked::No) {
+            let legacy_short_id =
+                redact::legacy_marker_component(&issue.short_id, &config.sentry.scrub_patterns);
+            let legacy_project =
+                redact::legacy_marker_component(project, &config.sentry.scrub_patterns);
+            if legacy_short_id != dedupe_short_id || legacy_project != dedupe_project {
+                dedupe::find_tracked(read, repo, org, &legacy_project, &legacy_short_id).await?
+            } else {
+                tracked
+            }
+        } else {
+            tracked
+        };
+        match tracked {
             Tracked::Yes(tracking) => {
                 tracing::debug!(
                     project,

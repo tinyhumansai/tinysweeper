@@ -782,6 +782,25 @@ pub struct Memory {
     pub convention_section_chars: usize,
     /// Remember what the reviewer published and what became of it.
     pub remember_reviews: bool,
+    /// Remember the repository's issues and pull requests — open and closed
+    /// — and everything anybody said on them: comments, inline review
+    /// comments and reviews, from humans and from other review agents alike.
+    ///
+    /// Fed live from webhooks while the server runs, and by the backfill
+    /// (`tinysweeper memory backfill`, or `POST /admin/memory/…`) for the
+    /// history before it did. The reviewer's own comments are never
+    /// remembered here: its findings live in the `reviews` section already,
+    /// and remembering its own prose would be remembering an echo.
+    pub ingest_discussions: bool,
+    /// Character ceiling on one remembered remark or issue body. Longer
+    /// bodies are cut, with the cut marked. It is quoted back into a prompt,
+    /// so it is also a bound on how much of a stranger's text one remark can
+    /// carry there.
+    pub discussion_chars: usize,
+    /// How long the server waits after a discussion event before re-reading
+    /// the conversation it was about, so a review bot posting twenty inline
+    /// comments in one go costs one re-read rather than twenty.
+    pub discussion_debounce_secs: u64,
     /// Token ceiling on the remembered context handed to one lane.
     pub context_tokens: usize,
     /// How many recollections one review asks for, per section.

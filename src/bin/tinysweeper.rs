@@ -285,6 +285,41 @@ enum MemoryCommand {
         question: String,
     },
 
+    /// Remember a repository's issues and pull requests — open and closed —
+    /// and everything anybody said on them, read from GitHub.
+    ///
+    /// The server does this live from webhooks; this is for the history
+    /// before it was listening, or for a repository it has never seen. Reads
+    /// with `GITHUB_TOKEN` and writes nothing to GitHub. Needs `github`.
+    Backfill {
+        /// The repository, as `owner/name`. Fetched from GitHub.
+        #[arg(long)]
+        repo: String,
+
+        /// Only conversations updated after this RFC 3339 instant. The
+        /// previous run printed the value to pass here.
+        #[arg(long)]
+        since: Option<String>,
+
+        /// How many conversations to walk at most, oldest change first.
+        #[arg(long, default_value_t = tinysweeper::memory::discussions::DEFAULT_BACKFILL_LIMIT)]
+        limit: usize,
+
+        /// One issue or pull request instead of a walk.
+        #[arg(long, conflicts_with_all = ["since", "limit"])]
+        number: Option<u64>,
+
+        /// With `--number`: it is a pull request, so read its review
+        /// comments and reviews too.
+        #[arg(long, requires = "number")]
+        pull_request: bool,
+
+        /// Path to the config file. Defaults to discovery from the current
+        /// directory.
+        #[arg(long)]
+        config: Option<std::path::PathBuf>,
+    },
+
     /// Forget everything the engine holds for a repository, or one section.
     Forget {
         /// The repository, as `owner/name`.
@@ -1296,7 +1331,7 @@ async fn run_memory(command: MemoryCommand) -> Result<()> {
             let (_, memory) = open(std::path::Path::new("."), None)?;
             let section = MemorySection::parse(&section).ok_or_else(|| {
                 tinysweeper::Error::config(format!(
-                    "`{section}` is not a section; use code, conventions or reviews"
+                    "`{section}` is not a section; use code, conventions, reviews or discussions"
                 ))
             })?;
             let answer = memory
@@ -1322,6 +1357,45 @@ async fn run_memory(command: MemoryCommand) -> Result<()> {
                 );
             }
         }
+        MemoryCommand::Backfill {
+            repo,
+            since,
+            limit,
+            number,
+            pull_request,
+            config,
+        } => {
+            let repo_id = tinysweeper::forge::RepoId::parse(&repo).ok_or_else(|| {
+                tinysweeper::Error::config(format!("`{repo}` is not `owner/name`"))
+            })?;
+            let (config, memory) = open(std::path::Path::new("."), config.as_deref())?;
+            memory.health().await?;
+            let report = backfill_discussions(
+                &memory,
+                &config.memory,
+                &repo_id,
+                since.as_deref(),
+                limit,
+                number.map(|n| (n, pull_request)),
+            )
+            .await?;
+            println!("{}", report.summary());
+            for line in &report.failed {
+                println!("  failed {line}");
+            }
+            if let Some(at) = &report.resume_from {
+                println!("next time: --since {at}");
+            }
+            // A walk with skipped conversations is not a complete import and
+            // offers no safe cursor; say so with the exit code, as the
+            // server-side script does, so automation cannot mistake it.
+            if !report.failed.is_empty() {
+                return Err(tinysweeper::Error::config(format!(
+                    "{} conversation(s) could not be remembered; rerun without --since to retry them",
+                    report.failed.len()
+                )));
+            }
+        }
         MemoryCommand::Forget { repo, section, yes } => {
             let repo = canonical_repo(&repo)?;
             let (_, memory) = open(std::path::Path::new("."), None)?;
@@ -1330,7 +1404,7 @@ async fn run_memory(command: MemoryCommand) -> Result<()> {
                 Some(Some(section)) => MemoryScope::section(&repo, section),
                 Some(None) => {
                     return Err(tinysweeper::Error::config(format!(
-                        "`{}` is not a section; use code, conventions or reviews",
+                        "`{}` is not a section; use code, conventions, reviews or discussions",
                         section.unwrap_or_default()
                     )));
                 }
@@ -1344,6 +1418,44 @@ async fn run_memory(command: MemoryCommand) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Walk GitHub for `memory backfill`. Split out so the `github` requirement
+/// is one function's, not the whole memory command's.
+#[cfg(all(feature = "cortex", feature = "github"))]
+async fn backfill_discussions(
+    memory: &dyn tinysweeper::ports::memory::Memory,
+    config: &tinysweeper::config::types::Memory,
+    repo: &tinysweeper::forge::RepoId,
+    since: Option<&str>,
+    limit: usize,
+    one: Option<(u64, bool)>,
+) -> Result<tinysweeper::memory::DiscussionReport> {
+    let forge = tinysweeper::forge::github::GitHubRead::from_env()?;
+    let discussions = tinysweeper::memory::Discussions::new(memory, &forge, config);
+    match one {
+        Some((number, pull_request)) => {
+            discussions
+                .remember_number(repo, number, pull_request)
+                .await
+        }
+        None => discussions.backfill(repo, since, limit).await,
+    }
+}
+
+#[cfg(all(feature = "cortex", not(feature = "github")))]
+async fn backfill_discussions(
+    _memory: &dyn tinysweeper::ports::memory::Memory,
+    _config: &tinysweeper::config::types::Memory,
+    _repo: &tinysweeper::forge::RepoId,
+    _since: Option<&str>,
+    _limit: usize,
+    _one: Option<(u64, bool)>,
+) -> Result<tinysweeper::memory::DiscussionReport> {
+    Err(tinysweeper::Error::FeatureDisabled(
+        "reading conversations from GitHub",
+        "github",
+    ))
 }
 
 #[cfg(not(feature = "cortex"))]
