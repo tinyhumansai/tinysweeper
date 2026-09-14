@@ -231,7 +231,7 @@ fn a_repository_may_switch_its_preview_off_but_not_point_it_elsewhere() {
     let (config, ignored) = applied(
         r#"
         [preview]
-        enabled = true
+        enabled = false
         max_flows = 1
         max_steps = 500
         budget_usd = 50.0
@@ -239,7 +239,7 @@ fn a_repository_may_switch_its_preview_off_but_not_point_it_elsewhere() {
         "#,
     );
 
-    assert!(config.preview.enabled);
+    assert!(!config.preview.enabled);
     assert_eq!(config.preview.max_flows, 1);
     assert_eq!(config.preview.max_steps, base().preview.max_steps);
     assert_eq!(config.preview.budget_usd, base().preview.budget_usd);
