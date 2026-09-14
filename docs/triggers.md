@@ -18,6 +18,7 @@ never be told about, and how it handles the difference.
 | Someone comments on a line of the diff | `pull_request_review_comment: created` | Yes |
 | A review is submitted | `pull_request_review: submitted` | Yes |
 | A check run finishes | `check_suite: completed` | Yes |
+| A repository's `ui-preview` job hands over its manifest | `POST /preview/sessions/{id}/finish` — not a webhook | Yes; see [modules/preview](modules/preview/README.md) |
 | The App is installed or repositories are added | `installation`, `installation_repositories` | Yes |
 
 `issue_comment` fires for issues *and* pull requests; the payload distinguishes
@@ -103,6 +104,12 @@ The one fork-specific behaviour that remains is a policy choice, not a platform
 one: an unknown contributor is `Trust::Unknown`, and a blocked one is not
 reviewed at all. Trust is set through the admin API — see
 [modules/server/README.md](modules/server/README.md).
+
+The UI preview is the exception, and for the old reason: its browser runs in
+the reviewed repository's CI as a `pull_request` job, which on a fork has no
+secrets to reach the server or the bucket with. The template workflow skips
+fork pull requests rather than failing them, and there is no preview to
+publish. Nothing about the review itself changes.
 
 ## Scheduled work
 

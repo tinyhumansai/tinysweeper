@@ -1,0 +1,14 @@
+{
+  "serve": "bash scripts/ui-preview/serve.sh",
+  "ready": "/",
+  "timeout_s": 420,
+  "viewport": [1440, 900],
+  "auth": {
+    "cookies": [],
+    "localStorage": {}
+  },
+  "mocks": [{ "url": "**/api/**", "dir": ".tinysweeper/fixtures/api" }],
+  "mask": [],
+  "entry_points": [{ "name": "home", "path": "/" }],
+  "max_flows": 4
+}

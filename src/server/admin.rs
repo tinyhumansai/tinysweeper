@@ -72,10 +72,19 @@ impl std::fmt::Debug for AdminAuth {
 impl AdminAuth {
     /// Build from a token, rejecting one too weak to protect a public endpoint.
     pub fn new(token: &str) -> Result<Self> {
+        Self::named(token, TOKEN_ENV)
+    }
+
+    /// [`new`](Self::new), naming the variable the token came from.
+    ///
+    /// The same credential type guards more than one door — the admin API
+    /// and the UI preview routes each have a token of their own — and the
+    /// refusal has to name the variable the operator actually set.
+    pub fn named(token: &str, var: &str) -> Result<Self> {
         if token.len() < MIN_TOKEN_LEN {
             return Err(Error::config(format!(
-                "{TOKEN_ENV} must be at least {MIN_TOKEN_LEN} characters. It is the only thing \
-                 standing between the internet and the trust database, so a short one is \
+                "{var} must be at least {MIN_TOKEN_LEN} characters. It is the only thing \
+                 standing between the internet and what it guards, so a short one is \
                  rejected rather than accepted with a warning."
             )));
         }
@@ -91,9 +100,14 @@ impl AdminAuth {
     /// `Ok("")` for a variable exported without a value, which is exactly what
     /// copying `.env.example` produces.
     pub fn from_env() -> Result<Option<Self>> {
-        match std::env::var(TOKEN_ENV) {
+        Self::from_named_env(TOKEN_ENV)
+    }
+
+    /// Read a token from the named variable, with the same rules.
+    pub fn from_named_env(var: &str) -> Result<Option<Self>> {
+        match std::env::var(var) {
             Ok(token) if token.trim().is_empty() => Ok(None),
-            Ok(token) => Self::new(&token).map(Some),
+            Ok(token) => Self::named(&token, var).map(Some),
             Err(_) => Ok(None),
         }
     }

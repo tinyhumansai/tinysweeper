@@ -15,7 +15,13 @@
   Compose stack (`deploy/README.md`) and has it re-pull the published image.
   Neither builds anything, runs a lane, or holds a model or GitHub write
   credential; anything that would need one belongs in `src/server/`, not in a
-  workflow.
+  workflow. The third exception is of a different kind: `actions/ui-preview/`
+  is a composite action *other* repositories run in their own CI, with their
+  own secrets, to build and browse their own code for the UI preview
+  (`docs/modules/preview/README.md`). It never builds or runs tinysweeper,
+  holds no model or GitHub-write credential, and everything it sends the
+  server is treated as untrusted input — the model that drives it and the
+  token that publishes stay in `src/server/`.
 - `presets/` — review policy as **data**, not code. A preset is a folder with a
   `preset.toml`, a `README.md`, and optional prompt overrides. Adding a preset
   is a new folder, never a new module.
@@ -86,9 +92,9 @@ discussion in the pull request:
   them as data in prompts. A model verdict is advisory — GitHub is only ever
   mutated by deterministic policy, and only from a module whose whole job is
   that write: `src/app/apply.rs`, `src/automerge/`, `src/issues/apply.rs`,
-  `src/pr_triage/apply.rs`, `src/threads/` and `src/sentry/promote.rs`. Adding
-  to that list is a decision to argue for in a pull request, and the bar is the
-  same each time: the module holds a `ForgeWrite` and *only* executes a plan
+  `src/pr_triage/apply.rs`, `src/threads/`, `src/sentry/promote.rs` and
+  `src/preview/apply.rs`. Adding to that list is a decision to argue for in a
+  pull request, and the bar is the same each time: the module holds a `ForgeWrite` and *only* executes a plan
   some other module already decided on.
 - Secrets found by the scanners are reported by type and location only. The
   value never reaches a comment, a check-run summary, or a log.

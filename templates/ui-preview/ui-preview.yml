@@ -1,0 +1,91 @@
+# UI previews on pull requests, by tinysweeper.
+#
+# Copy to .github/workflows/ui-preview.yml. The job name `ui-preview` is what
+# reviewers see in the checks list; the comment itself is posted by the
+# tinysweeper server, not by this job. This job builds and serves this
+# repository's own code and talks to the server with a bearer token; it holds
+# no model or GitHub-write credential.
+#
+# Same-repository pull requests only: a fork's job cannot read the secrets
+# below, and would fail before it did anything useful.
+name: UI preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "**/*.tsx"
+      - "**/*.jsx"
+      - "**/*.vue"
+      - "**/*.svelte"
+      - "**/*.css"
+      - "**/*.scss"
+      - "**/*.html"
+      - ".tinysweeper/ui-preview.json"
+      - "scripts/ui-preview/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  ui-preview:
+    name: ui-preview
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out the head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Find the merge-base
+        id: base
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
+          sha="$(git merge-base HEAD "origin/${{ github.event.pull_request.base.ref }}")"
+          if [ -z "$sha" ]; then
+            echo "::error::git merge-base produced no common ancestor with ${{ github.event.pull_request.base.ref }}" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the merge-base beside it
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ steps.base.outputs.sha }}
+          path: before
+          persist-credentials: false
+
+      # Whatever both checkouts need before `serve` can run: toolchains,
+      # dependency caches. Keep it to setup; building belongs in `serve`.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      # tinysweeper has no release tags yet, so `@main` is what this template
+      # ships with. Once tinyhumansai/tinysweeper cuts a release, or as soon
+      # as you copy this file, pin this to a specific commit SHA (or a
+      # release tag) the same way you would any other third-party action —
+      # `@main` here receives the preview token and object-store credentials
+      # below and should not float indefinitely.
+      - uses: tinyhumansai/tinysweeper/actions/ui-preview@main
+        with:
+          server: ${{ vars.TINYSWEEPER_SERVER_URL }}
+          token: ${{ secrets.TINYSWEEPER_PREVIEW_TOKEN }}
+          before-dir: before
+          base-sha: ${{ steps.base.outputs.sha }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          bucket: ${{ secrets.PREVIEW_S3_BUCKET }}
+          endpoint: ${{ secrets.PREVIEW_S3_ENDPOINT }}
+          access-key-id: ${{ secrets.PREVIEW_S3_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.PREVIEW_S3_SECRET_ACCESS_KEY }}

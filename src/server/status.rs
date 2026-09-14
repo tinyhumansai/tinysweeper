@@ -71,6 +71,7 @@ pub fn in_progress(head_sha: &str) -> CheckRun {
                   on the code, and it will conclude either way — including if the review \
                   fails, which it will say explicitly rather than disappearing."
             .to_string(),
+        images: vec![],
     }
 }
 
@@ -98,6 +99,7 @@ pub fn completed(head_sha: &str, findings: usize) -> CheckRun {
              tinysweeper ran, nothing more — each lane publishes its own check with its \
              own verdict, and those are what gate the merge."
         ),
+        images: vec![],
     }
 }
 
@@ -123,6 +125,7 @@ pub fn not_reviewed(head_sha: &str) -> CheckRun {
                   Nothing is wrong with the code, and nothing was checked. Use the \
                   repository's **Manual review** workflow to review it anyway."
             .to_string(),
+        images: vec![],
     }
 }
 

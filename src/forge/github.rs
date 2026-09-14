@@ -14,8 +14,8 @@ use crate::error::{Error, Result};
 use crate::evidence::diff::truncate_patch;
 use crate::forge::types::{
     ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, FileStatus, Issue, IssueComment,
-    PullRequest, Remark, RemarkKind, RepoId, ReviewComment, ReviewEvent, ReviewThread,
-    ReviewVerdict, ThreadComment,
+    MAX_CHECK_IMAGES, PullRequest, Remark, RemarkKind, RepoId, ReviewComment, ReviewEvent,
+    ReviewThread, ReviewVerdict, ThreadComment,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -193,6 +193,31 @@ fn check_payload(check: &CheckRun) -> serde_json::Value {
         "name": check.name,
         "output": { "title": check.title, "summary": summary },
     });
+
+    // Only when there is something to attach: an empty `images` array is
+    // accepted by the API, but it is one more thing for a strict schema to
+    // reject in future, and the common case has none.
+    if !check.images.is_empty() {
+        let images: Vec<serde_json::Value> = check
+            .images
+            .iter()
+            .take(MAX_CHECK_IMAGES)
+            .map(|image| {
+                let mut value = serde_json::json!({
+                    "alt": image.alt,
+                    "image_url": image.image_url,
+                });
+                // GitHub defines `caption` as an optional string, not a
+                // nullable one: sending `null` risks the request being
+                // rejected, so omit the key entirely when there is none.
+                if let Some(caption) = &image.caption {
+                    value["caption"] = serde_json::json!(caption);
+                }
+                value
+            })
+            .collect();
+        body["output"]["images"] = serde_json::json!(images);
+    }
 
     match check.conclusion {
         Some(conclusion) => {
@@ -1941,6 +1966,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    use crate::forge::types::CheckImage;
+
     fn check(conclusion: Option<CheckConclusion>) -> CheckRun {
         CheckRun {
             name: "tinysweeper/review".into(),
@@ -1948,7 +1975,41 @@ mod tests {
             conclusion,
             title: "t".into(),
             summary: "s".into(),
+            images: vec![],
         }
+    }
+
+    #[test]
+    fn a_check_with_no_images_sends_no_images_key() {
+        assert!(
+            check_payload(&check(None))["output"]
+                .get("images")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn images_ride_under_output_and_are_capped_at_the_api_ceiling() {
+        let mut shots = check(Some(CheckConclusion::Neutral));
+        shots.images = (0..MAX_CHECK_IMAGES + 3)
+            .map(|n| CheckImage {
+                alt: format!("shot {n}"),
+                image_url: format!("https://cdn.example/{n}.png"),
+                caption: (n == 0).then(|| "first".to_string()),
+            })
+            .collect();
+        let body = check_payload(&shots);
+        let images = body["output"]["images"]
+            .as_array()
+            .expect("an images array");
+        assert_eq!(images.len(), MAX_CHECK_IMAGES);
+        assert_eq!(images[0]["alt"], "shot 0");
+        assert_eq!(images[0]["image_url"], "https://cdn.example/0.png");
+        assert_eq!(images[0]["caption"], "first");
+        assert!(
+            images[1].get("caption").is_none(),
+            "an absent caption is an omitted key, not a null one"
+        );
     }
 
     #[test]

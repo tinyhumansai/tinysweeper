@@ -1,4 +1,4 @@
-- [] Have app diagrams and screenshots made of the PR's changes.Make it rich like greptile
+- [x] Have app diagrams and screenshots made of the PR's changes. Make it rich like greptile — the change map (`src/overview`) and the UI preview (`src/preview`, `actions/ui-preview`)
 
 
 --- 

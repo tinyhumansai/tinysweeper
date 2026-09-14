@@ -33,6 +33,7 @@ pub mod overview;
 pub mod ports;
 pub mod position;
 pub mod pr_triage;
+pub mod preview;
 pub mod retrieve;
 pub mod scan;
 pub mod sentry;

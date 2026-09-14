@@ -222,6 +222,42 @@ fn a_lane_may_move_its_own_gate_but_not_its_model() {
 }
 
 #[test]
+fn a_repository_may_switch_its_preview_off_but_not_point_it_elsewhere() {
+    // `enabled` and `max_flows` only ever make a repository's own preview
+    // quieter or absent. `public_base_url` is the origin every published
+    // image URL is composed from: a repository that could set it would have
+    // the bot embed pictures from a host it controls into every reviewer's
+    // browser. `budget_usd` and `max_steps` spend the operator's money.
+    let (config, ignored) = applied(
+        r#"
+        [preview]
+        enabled = false
+        max_flows = 1
+        max_steps = 500
+        budget_usd = 50.0
+        public_base_url = "https://attacker.example"
+        "#,
+    );
+
+    assert!(!config.preview.enabled);
+    assert_eq!(config.preview.max_flows, 1);
+    assert_eq!(config.preview.max_steps, base().preview.max_steps);
+    assert_eq!(config.preview.budget_usd, base().preview.budget_usd);
+    assert_eq!(
+        config.preview.public_base_url,
+        base().preview.public_base_url
+    );
+    assert_eq!(
+        ignored,
+        vec![
+            "preview.budget_usd".to_string(),
+            "preview.max_steps".to_string(),
+            "preview.public_base_url".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn an_unknown_key_is_ignored_rather_than_fatal() {
     // One typo in a repository's config must not cost it the whole review.
     let (config, ignored) = applied("[review]\nstrictness = 3\nnot_a_key = 1\n");
@@ -330,6 +366,10 @@ files = ["POLICY.md"]
 
 [lanes.critique]
 fail_on = "medium"
+
+[preview]
+enabled = false
+max_flows = 2
 "#;
 
 #[test]

@@ -36,10 +36,15 @@
 //!   the per-pull-request budget, and the provider/model/dimensions triple that
 //!   is the index partition key — one repository changing it invalidates every
 //!   other repository's vectors), `[automerge]`, `[issues]`, `[pr_triage]`, `[automation]`,
-//!   `[sentry]` (which also names a token environment variable), and
+//!   `[sentry]` (which also names a token environment variable),
 //!   `review.request_changes_at` / `review.approve_when_clean`, which decide
 //!   whether the review blocks the merge button or produces an approval that
-//!   can satisfy a branch protection rule.
+//!   can satisfy a branch protection rule, and `preview.public_base_url`,
+//!   which is the origin every published screenshot is served from — a
+//!   repository that could set it would have the bot embed pictures from a
+//!   host of its choosing. `preview.enabled` and `preview.max_flows` are
+//!   overridable for the usual reason: they can only make a repository's
+//!   own preview smaller.
 //! - **Not overridable — anything that puts repository prose into a prompt.**
 //!   `path_instructions` is free text injected straight into a lane's
 //!   instructions, unfenced. Repository prose reaches a prompt through exactly
@@ -77,13 +82,15 @@ use crate::ports::forge::ForgeRead;
 /// is safe. See the module documentation for the split; changing this list is a
 /// change to the security boundary in `AGENTS.md` and needs saying so in the
 /// pull request.
-pub const OVERRIDABLE_KEYS: [&str; 14] = [
+pub const OVERRIDABLE_KEYS: [&str; 16] = [
     "knowledge.extract",
     "knowledge.files",
     "labels.human_review",
     "labels.manual_only",
     "lanes.*.fail_on",
     "paths.ignore",
+    "preview.enabled",
+    "preview.max_flows",
     "review.confidence_min",
     "review.draft_prs",
     "review.incremental",
@@ -191,9 +198,18 @@ pub fn apply(base: &Config, document: &str) -> Result<(Config, Vec<String>)> {
     let mut provenance = Provenance::default();
     merge::merge_layer(&mut merged, &allowed, Layer::Repo, &mut provenance);
 
-    let config: Config = merged
+    let mut config: Config = merged
         .try_into()
         .map_err(|err| Error::config(format!("the merged configuration is not valid: {err}")))?;
+
+    // `preview.enabled` and `preview.max_flows` are overridable for the
+    // "only smaller" reason the module doc gives — a raw merge would let a
+    // repository *raise* `max_flows` past the operator's ceiling, or turn
+    // previews back on after the operator disabled them, paying for model
+    // planning and CI the operator never agreed to. Clamp both back down
+    // after the merge rather than trusting the repository's own value.
+    config.preview.enabled &= base.preview.enabled;
+    config.preview.max_flows = config.preview.max_flows.min(base.preview.max_flows);
 
     let problems = validate::validate(&config);
     if !problems.is_empty() {

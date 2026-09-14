@@ -1049,6 +1049,7 @@ mod tests {
                     conclusion: Some(CheckConclusion::Success),
                     title: "No findings".into(),
                     summary: String::new(),
+                    images: vec![],
                 },
             )
             .await
@@ -1076,6 +1077,7 @@ mod tests {
                     conclusion: Some(CheckConclusion::Failure),
                     title: "1 high finding".into(),
                     summary: String::new(),
+                    images: vec![],
                 },
             )
             .await
