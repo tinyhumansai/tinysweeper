@@ -720,6 +720,36 @@ mod tests {
     }
 
     #[test]
+    fn a_user_message_with_images_becomes_text_then_image_parts() {
+        let wired = wire_message(&CrateMessage::user_with_images(
+            "what changed?",
+            vec!["https://cdn.example/a.png".into()],
+        ));
+        let TaMessage::User(user) = wired else {
+            panic!("a user message stays a user message");
+        };
+        assert_eq!(user.content.len(), 2);
+        assert_eq!(user.content[0], ContentBlock::Text("what changed?".into()));
+        assert_eq!(
+            user.content[1],
+            ContentBlock::Image(ImageRef {
+                url: "https://cdn.example/a.png".into(),
+                mime_type: Some("image/png".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn a_text_only_user_message_is_wired_exactly_as_before() {
+        // The single-text shape is what every lane sends and what every
+        // recorded cassette was made from; images must not change it.
+        assert_eq!(
+            wire_message(&CrateMessage::user("plain")),
+            TaMessage::user("plain")
+        );
+    }
+
+    #[test]
     fn the_last_resort_rung_is_on_by_default() {
         // A pin is only safe to default to because this rung exists. Turning it
         // off by default would restore the failure it was added for: every rung
