@@ -44,8 +44,16 @@ export async function serve({ command, checkout, port, ready, timeoutMs, log = c
   child.stderr.on("data", keep);
 
   let exited = null;
+  // `spawn` itself can fail after returning — the command does not exist, or
+  // is not executable — and that only ever shows up as an `'error'` event,
+  // never `'exit'`. Without a handler here the health-check loop below just
+  // times out and reports a confusing "was not ready" instead of the real
+  // launch failure.
+  child.on("error", (err) => {
+    exited ??= { code: null, signal: null, error: err };
+  });
   child.on("exit", (code, signal) => {
-    exited = { code, signal };
+    exited ??= { code, signal };
   });
 
   const origin = `http://127.0.0.1:${port}`;
