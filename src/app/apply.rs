@@ -63,6 +63,7 @@ pub async fn apply(
                     conclusion: Some(lane.conclusion),
                     title: title_for(lane.findings.len(), &lane.summary),
                     summary: render_lane_summary(lane),
+                    images: vec![],
                 },
             )
             .await?;
