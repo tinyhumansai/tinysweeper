@@ -13,7 +13,7 @@ use octocrab::Octocrab;
 use crate::error::{Error, Result};
 use crate::evidence::diff::truncate_patch;
 use crate::forge::types::{
-    ChangedFile, CheckConclusion, CheckImage, CheckRun, CheckStatus, Commit, FileStatus, Issue,
+    ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, FileStatus, Issue,
     IssueComment, MAX_CHECK_IMAGES, PullRequest, RepoId, ReviewComment, ReviewEvent, ReviewThread,
     ReviewVerdict, ThreadComment,
 };
