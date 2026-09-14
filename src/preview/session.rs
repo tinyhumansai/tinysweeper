@@ -57,8 +57,14 @@ impl Session {
     }
 
     /// Whether the budget is spent.
+    ///
+    /// Strict, matching every other budget check in this crate (e.g.
+    /// `models.budget_usd_per_pr` in `src/app/review.rs`): spend exactly
+    /// equal to the budget has not yet exceeded it, so the step that landed
+    /// on it is allowed to complete rather than being refused after the
+    /// fact.
     pub fn exhausted(&self, budget_usd: f64) -> bool {
-        self.spent_usd >= budget_usd
+        self.spent_usd > budget_usd
     }
 }
 
