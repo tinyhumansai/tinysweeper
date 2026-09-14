@@ -1812,6 +1812,7 @@ impl Previews for PreviewDispatch {
             diff_excerpt: crate::preview::session::excerpt(&diffs),
             spent_usd: plan.spend.usage.cost_usd,
             max_steps: effective.preview.max_steps,
+            check_id: None,
         };
         self.state.store.save_preview_session(&session).await?;
         tracing::info!(
