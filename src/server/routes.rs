@@ -21,6 +21,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::forge::RepoId;
 use crate::index::mongo::MongoIndex;
+use crate::ports::forge::ForgeRead as _;
 use crate::ports::knowledge::KnowledgeStore;
 use crate::pr_triage::Report as PrTriageReport;
 use crate::server::admin::{self, AdminAuth};
