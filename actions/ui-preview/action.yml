@@ -65,8 +65,13 @@ runs:
         set -euo pipefail
         npm ci --no-audit --no-fund
         npx playwright install --with-deps chromium-headless-shell
+        # A full ffmpeg gives an H.264 clip and a gif; without one the run
+        # falls back to Playwright's bundled build, which encodes WebM only
+        # and cannot write a gif, so the clip is dropped. Best effort: a
+        # container job may have no sudo and no apt.
         if ! command -v ffmpeg >/dev/null; then
-          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          if command -v sudo >/dev/null; then SUDO=sudo; else SUDO=; fi
+          $SUDO apt-get update -qq && $SUDO apt-get install -y -qq ffmpeg || echo "::warning::ffmpeg is not installable here; clips will be skipped"
         fi
 
     - name: Drive the preview
