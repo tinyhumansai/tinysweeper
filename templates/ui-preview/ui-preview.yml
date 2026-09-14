@@ -41,7 +41,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Check out the head
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -53,10 +53,14 @@ jobs:
           set -euo pipefail
           git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
           sha="$(git merge-base HEAD "origin/${{ github.event.pull_request.base.ref }}")"
+          if [ -z "$sha" ]; then
+            echo "::error::git merge-base produced no common ancestor with ${{ github.event.pull_request.base.ref }}" >&2
+            exit 1
+          fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Check out the merge-base beside it
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ steps.base.outputs.sha }}
           path: before
@@ -64,7 +68,7 @@ jobs:
 
       # Whatever both checkouts need before `serve` can run: toolchains,
       # dependency caches. Keep it to setup; building belongs in `serve`.
-      - uses: actions/setup-node@1e3930b4bb0bac7c412d80e6e1c1f3a6d9f0d1b4 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
 
