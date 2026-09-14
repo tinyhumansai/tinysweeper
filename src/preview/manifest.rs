@@ -280,6 +280,21 @@ mod tests {
         }
     }
 
+    /// The plan behind every fixture manifest below: enough ids (`f0`..`f9`)
+    /// to cover the cap test, each with a title distinct from the manifest's
+    /// own so a test can tell which one `validate` actually used.
+    fn planned() -> Vec<Flow> {
+        (0..10)
+            .map(|n| Flow {
+                id: format!("f{n}"),
+                title: format!("Planned flow {n}"),
+                start_path: "/".into(),
+                goal: "reach the goal".into(),
+                expect_before: crate::preview::types::ExpectBefore::Same,
+            })
+            .collect()
+    }
+
     fn manifest() -> Manifest {
         Manifest {
             version: 1,
