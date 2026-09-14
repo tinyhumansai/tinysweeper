@@ -8,9 +8,37 @@
 // for the same seconds.
 
 import { execFile } from "node:child_process";
+import { existsSync, readdirSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
+
+/**
+ * The ffmpeg to use: the one on PATH, else the one Playwright downloads for
+ * its own video recording. The runner never needs an apt install for this.
+ */
+export function ffmpegBinary() {
+  if (process.env.TS_FFMPEG) return process.env.TS_FFMPEG;
+  for (const dir of process.env.PATH?.split(path.delimiter) ?? []) {
+    const candidate = path.join(dir, "ffmpeg");
+    if (existsSync(candidate)) return candidate;
+  }
+  const cache = process.env.PLAYWRIGHT_BROWSERS_PATH ?? path.join(os.homedir(), ".cache", "ms-playwright");
+  try {
+    const found = readdirSync(cache)
+      .filter((d) => d.startsWith("ffmpeg-"))
+      .sort()
+      .reverse()
+      .map((d) => path.join(cache, d, os.platform() === "win32" ? "ffmpeg-win64.exe" : os.platform() === "darwin" ? "ffmpeg-mac" : "ffmpeg-linux"))
+      .find((f) => existsSync(f));
+    if (found) return found;
+  } catch {
+    // No cache directory.
+  }
+  return "ffmpeg";
+}
 
 /** The longest a clip may be, in seconds. */
 export const MAX_CLIP_S = 12;
@@ -37,7 +65,8 @@ export function recorder(epoch = Date.now()) {
 /** Cut `webm` to `mp4` and `gif` over `span`. */
 export async function convert(webm, span, { mp4, gif }) {
   const common = ["-y", "-loglevel", "error", "-ss", span.start.toFixed(2), "-to", span.stop.toFixed(2), "-i", webm];
-  await run("ffmpeg", [
+  const ffmpeg = ffmpegBinary();
+  await run(ffmpeg, [
     ...common,
     "-vf",
     "scale=1280:-2",
@@ -54,7 +83,7 @@ export async function convert(webm, span, { mp4, gif }) {
     "-an",
     mp4,
   ]);
-  await run("ffmpeg", [
+  await run(ffmpeg, [
     ...common,
     "-vf",
     "fps=10,scale=600:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=bayer:bayer_scale=5",
