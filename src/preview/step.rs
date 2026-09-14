@@ -438,10 +438,13 @@ fn parse(value: &Value, state: &mut FlowState) -> Vec<Command> {
                 if state.screenshots.len() >= MAX_SCREENSHOTS {
                     None
                 } else {
-                    wire.id.map(|id| text(&id, 16)).filter(|id| !id.is_empty()).map(|id| {
-                        state.screenshots.push(id.clone());
-                        Command::Screenshot { id }
-                    })
+                    wire.id
+                        .map(|id| text(&id, 16))
+                        .filter(|id| !id.is_empty())
+                        .map(|id| {
+                            state.screenshots.push(id.clone());
+                            Command::Screenshot { id }
+                        })
                 }
             }
             "annotate" => {

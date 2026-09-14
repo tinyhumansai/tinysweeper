@@ -115,7 +115,12 @@ fn cells(gallery: &Gallery) -> Vec<String> {
             out.push(cell(mp4, gif, flow, None));
         }
         for change in &flow.changes {
-            out.push(cell(&change.full_url, &change.crop_url, flow, Some(&change.path)));
+            out.push(cell(
+                &change.full_url,
+                &change.crop_url,
+                flow,
+                Some(&change.path),
+            ));
         }
     }
     out
@@ -170,9 +175,7 @@ mod tests {
                 GalleryFlow {
                     id: "f1".into(),
                     title: "Toggle 'Dynamic Secrets' experimental setting".into(),
-                    caption: Some(
-                        "Experimental settings gain a Dynamic Secrets toggle.".into(),
-                    ),
+                    caption: Some("Experimental settings gain a Dynamic Secrets toggle.".into()),
                     is_new: true,
                     clip: Some((
                         "https://p.example/o/r/53ee083/run-1/clip-01.mp4".into(),
@@ -180,8 +183,7 @@ mod tests {
                     )),
                     changes: vec![GalleryChange {
                         full_url: "https://p.example/o/r/53ee083/run-1/change-01.png".into(),
-                        crop_url: "https://p.example/o/r/53ee083/run-1/change-01.crop.png"
-                            .into(),
+                        crop_url: "https://p.example/o/r/53ee083/run-1/change-01.crop.png".into(),
                         before_url: None,
                         path: "/settings/experimental".into(),
                         callouts: vec![Callout {
@@ -198,8 +200,7 @@ mod tests {
                     clip: None,
                     changes: vec![GalleryChange {
                         full_url: "https://p.example/o/r/53ee083/run-1/change-02.png".into(),
-                        crop_url: "https://p.example/o/r/53ee083/run-1/change-02.crop.png"
-                            .into(),
+                        crop_url: "https://p.example/o/r/53ee083/run-1/change-02.crop.png".into(),
                         before_url: Some(
                             "https://p.example/o/r/53ee083/run-1/before-02.png".into(),
                         ),

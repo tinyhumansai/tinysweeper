@@ -168,7 +168,10 @@ mod tests {
         assert_eq!(check.conclusion, Some(CheckConclusion::Neutral));
         assert_eq!(check.title, "1 flow previewed");
         assert_eq!(check.images.len(), 1);
-        assert_eq!(check.images[0].caption.as_deref(), Some("Settings gain a toggle."));
+        assert_eq!(
+            check.images[0].caption.as_deref(),
+            Some("Settings gain a toggle.")
+        );
     }
 
     #[tokio::test]

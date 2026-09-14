@@ -102,7 +102,9 @@ pub fn validate(
         )));
     }
     if !is_segment(&manifest.head_sha) {
-        return Err(Error::Config("manifest head_sha is not a plain name".into()));
+        return Err(Error::Config(
+            "manifest head_sha is not a plain name".into(),
+        ));
     }
 
     let prefix = format!(
@@ -214,8 +216,24 @@ pub fn text(s: &str, max: usize) -> String {
             c.is_alphanumeric()
                 || matches!(
                     c,
-                    ' ' | '.' | ',' | ':' | ';' | '\'' | '"' | '(' | ')' | '-' | '/' | '&' | '!'
-                        | '?' | '_' | '#' | '+' | '%' | '@'
+                    ' ' | '.'
+                        | ','
+                        | ':'
+                        | ';'
+                        | '\''
+                        | '"'
+                        | '('
+                        | ')'
+                        | '-'
+                        | '/'
+                        | '&'
+                        | '!'
+                        | '?'
+                        | '_'
+                        | '#'
+                        | '+'
+                        | '%'
+                        | '@'
                 )
         })
         .collect();

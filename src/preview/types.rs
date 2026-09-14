@@ -387,7 +387,9 @@ mod tests {
                 r#"{"op":"fill","locator":{"by":"label","text":"Name"},"value":"x"}"#,
             ),
             (
-                Command::Press { key: "Enter".into() },
+                Command::Press {
+                    key: "Enter".into(),
+                },
                 r#"{"op":"press","key":"Enter"}"#,
             ),
             (

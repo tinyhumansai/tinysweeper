@@ -59,7 +59,11 @@ pub struct CaptionInputs<'a> {
 /// Caption every flow in place. Returns the total spend.
 ///
 /// Failures are per flow and logged: the gallery is published either way.
-pub async fn caption(gallery: &mut Gallery, inputs: &CaptionInputs<'_>, model: Arc<dyn Model>) -> Spend {
+pub async fn caption(
+    gallery: &mut Gallery,
+    inputs: &CaptionInputs<'_>,
+    model: Arc<dyn Model>,
+) -> Spend {
     let mut spend = Spend::default();
     for flow in &mut gallery.flows {
         let transcript = inputs
@@ -72,7 +76,8 @@ pub async fn caption(gallery: &mut Gallery, inputs: &CaptionInputs<'_>, model: A
         let mut content = String::new();
         let _ = writeln!(content, "The flow as planned: {}", flow.title);
         if flow.is_new {
-            content.push_str("The base build could not complete this flow; what it shows is new.\n");
+            content
+                .push_str("The base build could not complete this flow; what it shows is new.\n");
         }
         if !transcript.is_empty() {
             content.push_str("\nWhat the browser did:\n\n");
@@ -132,7 +137,9 @@ pub async fn caption(gallery: &mut Gallery, inputs: &CaptionInputs<'_>, model: A
                     flow.caption = (!caption.is_empty()).then_some(caption);
                 }
             }
-            Err(err) => tracing::warn!(flow = %flow.id, %err, "caption call failed; keeping the planned title"),
+            Err(err) => {
+                tracing::warn!(flow = %flow.id, %err, "caption call failed; keeping the planned title")
+            }
         }
     }
     spend
@@ -306,7 +313,11 @@ mod tests {
             vec!["https://p.example/o/r/abc/run-1/change-02.crop.png".to_string()]
         );
         assert!(requests[0].messages[1].content.contains("open /settings"));
-        assert!(requests[0].messages[1].content.contains("could not complete this flow"));
+        assert!(
+            requests[0].messages[1]
+                .content
+                .contains("could not complete this flow")
+        );
     }
 
     #[tokio::test]
@@ -319,6 +330,11 @@ mod tests {
                 .then(json!({"title": "t", "caption": "c"})),
         );
         caption(&mut gallery, &inputs(&states, false), model.clone()).await;
-        assert!(model.requests().iter().all(|r| r.messages[1].images.is_empty()));
+        assert!(
+            model
+                .requests()
+                .iter()
+                .all(|r| r.messages[1].images.is_empty())
+        );
     }
 }

@@ -113,10 +113,12 @@ pub async fn plan(inputs: &PlanInputs<'_>, model: Arc<dyn Model>) -> Result<Plan
 /// what a flow does.
 pub fn is_ui_path(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
-    if lower
-        .split('/')
-        .any(|seg| matches!(seg, "node_modules" | "dist" | "build" | "vendor" | "__tests__"))
-        || lower.contains(".test.")
+    if lower.split('/').any(|seg| {
+        matches!(
+            seg,
+            "node_modules" | "dist" | "build" | "vendor" | "__tests__"
+        )
+    }) || lower.contains(".test.")
         || lower.contains(".spec.")
         || lower.contains(".stories.")
     {
@@ -312,7 +314,7 @@ mod tests {
     #[tokio::test]
     async fn the_prompt_fences_the_diff_and_names_the_entry_points() {
         let diffs = vec![parse_file_patch("app/src/pages/Settings.tsx", PATCH)];
-        let model = Arc::new(MockModel::new().then(json!({"flows": []})]));
+        let model = Arc::new(MockModel::new().then(json!({"flows": []})));
         let entry = vec![("settings".to_string(), "/settings".to_string())];
         plan(&inputs(&diffs, &entry), model.clone()).await.unwrap();
         let prompt = model.last_prompt().expect("one call");
