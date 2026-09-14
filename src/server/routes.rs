@@ -98,6 +98,13 @@ struct AppState {
     /// Bounds concurrent indexing separately from concurrent reviewing: a
     /// delivery burst must not turn into a burst of full indexes.
     index_permits: Arc<Semaphore>,
+    /// One lock per in-flight UI preview session, so two `step` calls for the
+    /// same session (the hands retrying a dropped response, or two flows
+    /// racing) serialise their load-modify-save instead of one overwriting
+    /// the other's transition. Entries are removed once nobody is waiting on
+    /// them; the map itself is a `std::sync::Mutex` because the critical
+    /// section that touches it never awaits.
+    preview_locks: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
 /// Run the server until the process is stopped.
