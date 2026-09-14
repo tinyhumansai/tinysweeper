@@ -2006,7 +2006,10 @@ mod tests {
         assert_eq!(images[0]["alt"], "shot 0");
         assert_eq!(images[0]["image_url"], "https://cdn.example/0.png");
         assert_eq!(images[0]["caption"], "first");
-        assert!(images[1]["caption"].is_null());
+        assert!(
+            images[1].get("caption").is_none(),
+            "an absent caption is an omitted key, not a null one"
+        );
     }
 
     #[test]
