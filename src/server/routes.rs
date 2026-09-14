@@ -1785,7 +1785,10 @@ impl Previews for PreviewDispatch {
             .auth
             .installation_for_repo(&repo.owner, &repo.name)
             .await?;
-        let read_token = self.state.auth.installation_token(installation).await?;
+        // Read-scoped, like the review path's own pre-model read
+        // (`review_read_token` around line 1470): everything below this
+        // point, through the planning model call, only reads.
+        let read_token = self.state.auth.review_read_token(installation).await?;
         let forge = crate::forge::github::GitHubRead::new(&read_token)?;
         let pull_request = forge.pull_request(&repo, request.pull_request).await?;
         if pull_request.head_sha != request.head_sha {
