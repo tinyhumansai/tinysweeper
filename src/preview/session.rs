@@ -125,6 +125,27 @@ mod tests {
     }
 
     #[test]
+    fn exhausted_is_strict_so_landing_exactly_on_budget_still_completes() {
+        let mut session = Session {
+            id: new_id("o/r", 7, "abc"),
+            repo: "o/r".into(),
+            number: 7,
+            head_sha: "abc".into(),
+            base_sha: "base".into(),
+            installation: 42,
+            flows: vec![],
+            states: BTreeMap::new(),
+            diff_excerpt: "d".into(),
+            spent_usd: 0.0,
+            max_steps: 25,
+        };
+        session.spent_usd = 1.0;
+        assert!(!session.exhausted(1.0), "spend equal to budget is not yet exhausted");
+        session.spent_usd = 1.0000001;
+        assert!(session.exhausted(1.0), "spend past budget is exhausted");
+    }
+
+    #[test]
     fn a_session_round_trips_through_json() {
         let session = Session {
             id: new_id("o/r", 7, "abc"),
