@@ -198,9 +198,18 @@ pub fn apply(base: &Config, document: &str) -> Result<(Config, Vec<String>)> {
     let mut provenance = Provenance::default();
     merge::merge_layer(&mut merged, &allowed, Layer::Repo, &mut provenance);
 
-    let config: Config = merged
+    let mut config: Config = merged
         .try_into()
         .map_err(|err| Error::config(format!("the merged configuration is not valid: {err}")))?;
+
+    // `preview.enabled` and `preview.max_flows` are overridable for the
+    // "only smaller" reason the module doc gives — a raw merge would let a
+    // repository *raise* `max_flows` past the operator's ceiling, or turn
+    // previews back on after the operator disabled them, paying for model
+    // planning and CI the operator never agreed to. Clamp both back down
+    // after the merge rather than trusting the repository's own value.
+    config.preview.enabled &= base.preview.enabled;
+    config.preview.max_flows = config.preview.max_flows.min(base.preview.max_flows);
 
     let problems = validate::validate(&config);
     if !problems.is_empty() {
