@@ -328,6 +328,16 @@ const MAX_QUERY_STEMS: usize = 8;
 /// How many of the title's words the memory query carries.
 const MAX_QUERY_TITLE_TERMS: usize = 6;
 
+/// Longest term the memory query carries.
+///
+/// A diff is contributor-controlled text, and a minified or generated line
+/// is one alphanumeric run of any length; `ranked_identifiers` returns it
+/// intact, and a term count alone would let a handful of them turn a
+/// two-dozen-word query into hundreds of kilobytes. Nothing a reviewer
+/// would search memory for is this long, so an over-long token is dropped
+/// rather than cut: half a hash is no better a keyword than a whole one.
+const MAX_QUERY_TERM_CHARS: usize = 64;
+
 /// Words measured to stall the engine on their own, kept out of the query
 /// whatever source they come from.
 ///
@@ -373,6 +383,7 @@ pub fn memory_query(title: &str, diffs: &[FileDiff], terms: usize) -> String {
     let mut picked: Vec<String> = Vec::with_capacity(terms);
     let push = |term: String, picked: &mut Vec<String>| -> bool {
         if picked.len() < terms
+            && term.chars().count() <= MAX_QUERY_TERM_CHARS
             && !picked.contains(&term)
             && !ENGINE_HUB_TERMS.contains(&term.as_str())
         {
@@ -1315,6 +1326,21 @@ mod tests {
         assert_eq!(capped.split(' ').count(), 3, "{capped}");
         assert_eq!(memory_query("anything", &diffs, 0), "");
         assert_eq!(memory_query("", &[], 24), "");
+        // A minified line is one token of any length, and the diff is a
+        // contributor's to write: it must not become the query's size.
+        let blob = "x".repeat(20_000);
+        let minified = vec![crate::evidence::diff::parse_file_patch(
+            "bundle.js",
+            &format!("@@ -1,1 +1,2 @@\n a\n+{blob} real_symbol\n"),
+        )];
+        let query = memory_query(&blob, &minified, 24);
+        assert!(
+            query.len() < 24 * (MAX_QUERY_TERM_CHARS + 1),
+            "{}",
+            query.len()
+        );
+        assert!(query.contains("real_symbol"), "{query}");
+        assert!(!query.contains(&blob[..100]), "{query}");
     }
 
     #[tokio::test]
