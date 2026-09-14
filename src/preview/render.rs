@@ -111,8 +111,8 @@ pub fn check_title(gallery: &Gallery) -> String {
 fn cells(gallery: &Gallery) -> Vec<String> {
     let mut out = Vec::new();
     for flow in &gallery.flows {
-        if let Some((mp4, gif)) = &flow.clip {
-            out.push(cell(mp4, gif, flow, None));
+        if let Some((video, gif)) = &flow.clip {
+            out.push(cell(video, gif, flow, None));
         }
         for change in &flow.changes {
             out.push(cell(

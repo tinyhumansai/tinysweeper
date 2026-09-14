@@ -212,8 +212,9 @@ pub struct Flow {
 /// A clip of one flow.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Clip {
-    /// Relative path of the H.264 file.
-    pub mp4: String,
+    /// Relative path of the video: `.mp4` from a full ffmpeg, `.webm` from
+    /// the one Playwright bundles. The gif links to whichever it is.
+    pub video: String,
     /// Relative path of the preview GIF.
     pub gif: String,
 }
@@ -330,7 +331,7 @@ pub struct GalleryFlow {
     pub caption: Option<String>,
     /// Whether the base build could not get to the end of this flow.
     pub is_new: bool,
-    /// The clip's URLs, `(mp4, gif)`.
+    /// The clip's URLs, `(video, gif)`.
     pub clip: Option<(String, String)>,
     /// The screenshots, with URLs.
     pub changes: Vec<GalleryChange>,

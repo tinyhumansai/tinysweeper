@@ -9,7 +9,13 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
-const TYPES = { ".png": "image/png", ".gif": "image/gif", ".mp4": "video/mp4", ".json": "application/json" };
+const TYPES = {
+  ".png": "image/png",
+  ".gif": "image/gif",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".json": "application/json",
+};
 
 /** Upload every file in `dir` under `prefix`. Returns the keys written. */
 export async function upload({ dir, prefix, bucket, endpoint, region = "auto", log = console.error }) {

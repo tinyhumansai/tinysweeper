@@ -152,7 +152,7 @@ pub fn validate(
             })
             .collect::<Result<_>>()?;
         let clip = match &flow.clip {
-            Some(clip) => Some((url(&clip.mp4)?, url(&clip.gif)?)),
+            Some(clip) => Some((url(&clip.video)?, url(&clip.gif)?)),
             None => None,
         };
         // A flow whose head build failed has nothing trustworthy to show: the
@@ -198,7 +198,7 @@ fn is_asset_path(path: &str) -> bool {
     let dir_ok = second.is_none_or(|_| is_segment(first));
     dir_ok
         && is_segment(file)
-        && [".png", ".gif", ".mp4"]
+        && [".png", ".gif", ".mp4", ".webm"]
             .iter()
             .any(|ext| file.ends_with(ext))
 }
@@ -274,7 +274,7 @@ mod tests {
                 status: FlowStatus::Ok,
                 failed_at: None,
                 clip: Some(Clip {
-                    mp4: "clip-01.mp4".into(),
+                    video: "clip-01.mp4".into(),
                     gif: "clip-01.gif".into(),
                 }),
                 changes: vec![Change {

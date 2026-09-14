@@ -75,7 +75,10 @@ async function main() {
     log(`[preview] session ${session.id}: ${started.flows.length} flow(s)`);
     for (const flow of started.flows) log(`[preview]   ${flow.id}: ${flow.title}`);
 
-    const browser = await chromium.launch();
+    // `--disable-dev-shm-usage`: Chromium's frame capture allocates in
+    // /dev/shm, which a container gives 64 MB and some hosts quota; without
+    // this a 2x full-page screenshot dies with "Target crashed".
+    const browser = await chromium.launch({ args: ["--disable-dev-shm-usage"] });
     const run = `run-${new Date().toISOString().replace(/[:.]/g, "-")}`;
     const results = [];
     let changeNumber = 0;
@@ -128,11 +131,9 @@ async function main() {
 
         if (head.video && head.span) {
           const cc = String(i + 1).padStart(2, "0");
-          const mp4 = path.join(opts.out, `clip-${cc}.mp4`);
-          const gif = path.join(opts.out, `clip-${cc}.gif`);
           try {
-            await convert(head.video, head.span, { mp4, gif });
-            result.clip = { mp4: `clip-${cc}.mp4`, gif: `clip-${cc}.gif` };
+            const { video } = await convert(head.video, head.span, path.join(opts.out, `clip-${cc}`));
+            result.clip = { video: path.basename(video), gif: `clip-${cc}.gif` };
           } catch (err) {
             log(`[preview] ${flow.id}: clip conversion failed: ${err.message}`);
           }

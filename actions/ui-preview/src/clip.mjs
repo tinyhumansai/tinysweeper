@@ -62,27 +62,18 @@ export function recorder(epoch = Date.now()) {
   };
 }
 
-/** Cut `webm` to `mp4` and `gif` over `span`. */
-export async function convert(webm, span, { mp4, gif }) {
-  const common = ["-y", "-loglevel", "error", "-ss", span.start.toFixed(2), "-to", span.stop.toFixed(2), "-i", webm];
+/**
+ * Cut `webm` over `span` into `<stem>.gif` and a video beside it.
+ *
+ * The video is `<stem>.mp4` (H.264) when the ffmpeg at hand can encode it —
+ * the one on a CI runner can — and `<stem>.webm` (VP8) otherwise, which is
+ * what Playwright's own bundled ffmpeg supports. GitHub links either; the
+ * gif is the thumbnail in both cases. Returns the paths written.
+ */
+export async function convert(webm, span, stem) {
   const ffmpeg = ffmpegBinary();
-  await run(ffmpeg, [
-    ...common,
-    "-vf",
-    "scale=1280:-2",
-    "-c:v",
-    "libx264",
-    "-preset",
-    "veryfast",
-    "-crf",
-    "23",
-    "-pix_fmt",
-    "yuv420p",
-    "-movflags",
-    "+faststart",
-    "-an",
-    mp4,
-  ]);
+  const common = ["-y", "-loglevel", "error", "-ss", span.start.toFixed(2), "-to", span.stop.toFixed(2), "-i", webm];
+  const gif = `${stem}.gif`;
   await run(ffmpeg, [
     ...common,
     "-vf",
@@ -91,4 +82,30 @@ export async function convert(webm, span, { mp4, gif }) {
     "0",
     gif,
   ]);
+
+  const mp4 = `${stem}.mp4`;
+  try {
+    await run(ffmpeg, [
+      ...common,
+      "-vf",
+      "scale=1280:-2",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-crf",
+      "23",
+      "-pix_fmt",
+      "yuv420p",
+      "-movflags",
+      "+faststart",
+      "-an",
+      mp4,
+    ]);
+    return { video: mp4, gif };
+  } catch {
+    const out = `${stem}.webm`;
+    await run(ffmpeg, [...common, "-vf", "scale=1280:-2", "-c:v", "libvpx", "-b:v", "1M", "-an", out]);
+    return { video: out, gif };
+  }
 }

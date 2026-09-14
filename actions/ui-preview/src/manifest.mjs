@@ -43,7 +43,7 @@ export function jobSummary(manifest, baseUrl) {
     const tag = flow.status === "before_failed" ? " <sub>new in this PR</sub>" : "";
     if (flow.clip && prefix) {
       cells.push(
-        `<a href="${prefix}${flow.clip.mp4}"><img src="${prefix}${flow.clip.gif}" width="380" alt="${esc(flow.title)}"></a><br><b>${esc(flow.title)}</b>${tag}`,
+        `<a href="${prefix}${flow.clip.video}"><img src="${prefix}${flow.clip.gif}" width="380" alt="${esc(flow.title)}"></a><br><b>${esc(flow.title)}</b>${tag}`,
       );
     }
     for (const change of flow.changes) {

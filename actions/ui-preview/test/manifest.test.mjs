@@ -9,7 +9,7 @@ const flows = [
     title: "Toggle the setting",
     status: "before_failed",
     failedAt: 3,
-    clip: { mp4: "clip-01.mp4", gif: "clip-01.gif" },
+    clip: { video: "clip-01.mp4", gif: "clip-01.gif" },
     changes: [
       { n: 1, step: 4, path: "/settings", full: "change-01.png", crop: "change-01.crop.png", before: "before-01.png", callouts: [{ n: 1, label: "New toggle", box: { x: 1, y: 1, w: 1, h: 1 } }] },
     ],
@@ -20,7 +20,7 @@ const flows = [
 test("the manifest is the wire shape the server validates, with no boxes and no URLs", () => {
   const m = buildManifest({ repo: "o/r", pullRequest: 7, headSha: "abc", baseSha: "b", run: "run-1", flows });
   assert.equal(m.version, 1);
-  assert.deepEqual(m.flows[0].clip, { mp4: "clip-01.mp4", gif: "clip-01.gif" });
+  assert.deepEqual(m.flows[0].clip, { video: "clip-01.mp4", gif: "clip-01.gif" });
   assert.equal(m.flows[0].failed_at, 3);
   assert.deepEqual(m.flows[0].changes[0].callouts, [{ n: 1, label: "New toggle" }]);
   assert.equal(m.flows[0].changes[0].before, "before-01.png");
