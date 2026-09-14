@@ -151,6 +151,14 @@ enum Command {
     #[command(subcommand)]
     Memory(MemoryCommand),
 
+    /// UI previews: plan the user flows of a pull request, or render a gallery.
+    ///
+    /// The browser itself runs in the reviewed repository's CI
+    /// (`actions/ui-preview/`); these subcommands are the offline halves an
+    /// operator can run by hand.
+    #[command(subcommand)]
+    Preview(PreviewCommand),
+
     /// Merge a pull request if it qualifies under `[automerge]`.
     ///
     /// Deterministic and off unless the repository opts in. Makes no model
@@ -439,6 +447,7 @@ async fn dispatch(command: Command) -> Result<()> {
         } => run_review(&repo, pr, config, lanes, dry_run, &propose_to).await,
         Command::Apply { repo, pr, findings } => run_apply(&repo, pr, &findings).await,
         Command::Triage { repo, pr, findings } => run_triage(&repo, pr, &findings).await,
+        Command::Preview(command) => run_preview(command).await,
         Command::Automerge { repo, pr, dry_run } => run_automerge(&repo, pr, dry_run).await,
         Command::PrTriage {
             repo,
@@ -996,6 +1005,93 @@ async fn run_automerge(_repo: &str, _pr: u64, _dry_run: bool) -> Result<()> {
     Err(tinysweeper::Error::FeatureDisabled(
         "merging on GitHub",
         "github",
+    ))
+}
+
+/// The offline halves of the UI preview.
+async fn run_preview(command: PreviewCommand) -> Result<()> {
+    match command {
+        PreviewCommand::Render { manifest, base_url } => {
+            let bytes = std::fs::read(&manifest)?;
+            let parsed = tinysweeper::preview::manifest::parse(&bytes)?;
+            // The manifest is trusted to be about itself here: there is no
+            // session to check it against, and the point is to see the body.
+            let expected = tinysweeper::preview::manifest::Expected {
+                repo: &parsed.repo,
+                number: parsed.pull_request,
+                head_sha: &parsed.head_sha,
+            };
+            let loaded = tinysweeper::config::load_validated(std::path::Path::new("."), None)
+                .map(|loaded| loaded.config.preview.max_flows)
+                .unwrap_or(4);
+            let gallery =
+                tinysweeper::preview::manifest::validate(&parsed, &expected, &base_url, loaded)?;
+            match tinysweeper::preview::render::comment(&gallery) {
+                Some(body) => println!("{body}"),
+                None => println!(
+                    "nothing to show: {} flow(s) ran without producing a picture",
+                    gallery.empty_flows + gallery.dropped_flows
+                ),
+            }
+            Ok(())
+        }
+        PreviewCommand::Plan { repo, pr, config } => run_preview_plan(&repo, pr, config).await,
+    }
+}
+
+/// Plan the flows for a pull request, as the server would at session start.
+#[cfg(all(feature = "harness", feature = "github"))]
+async fn run_preview_plan(repo: &str, pr: u64, config: Option<std::path::PathBuf>) -> Result<()> {
+    use std::sync::Arc;
+    use tinysweeper::forge::RepoId;
+    use tinysweeper::forge::github::GitHubRead;
+    use tinysweeper::ports::forge::ForgeRead as _;
+
+    let repo_id = RepoId::parse(repo)
+        .ok_or_else(|| tinysweeper::Error::config(format!("`{repo}` is not owner/name")))?;
+    let loaded = tinysweeper::config::load_validated(std::path::Path::new("."), config.as_deref())?;
+    let config = loaded.config;
+    let read = GitHubRead::from_env()?;
+    let pull_request = read.pull_request(&repo_id, pr).await?;
+    let files = read.changed_files(&repo_id, pr).await?;
+    let diffs = tinysweeper::evidence::diff::parse_changed_files(&files);
+    let model = Arc::new(tinysweeper::harness::openrouter::GatewayModel::from_config(
+        &config.models,
+    )?);
+    let plan = tinysweeper::preview::plan::plan(
+        &tinysweeper::preview::plan::PlanInputs {
+            diffs: &diffs,
+            title: &pull_request.title,
+            entry_points: &[],
+            max_flows: config.preview.max_flows,
+            model: config.model_for_workload(tinysweeper::config::types::Workload::Preview),
+            max_tokens: config.models.max_tokens,
+        },
+        model,
+    )
+    .await?;
+    if plan.flows.is_empty() {
+        println!("no user flows: the diff changes nothing a user can see");
+    }
+    for flow in &plan.flows {
+        println!(
+            "{}: {}\n    start {}\n    done when {}\n    before: {:?}",
+            flow.id, flow.title, flow.start_path, flow.goal, flow.expect_before
+        );
+    }
+    println!("cost: ${:.4}", plan.spend.usage.cost_usd);
+    Ok(())
+}
+
+#[cfg(not(all(feature = "harness", feature = "github")))]
+async fn run_preview_plan(
+    _repo: &str,
+    _pr: u64,
+    _config: Option<std::path::PathBuf>,
+) -> Result<()> {
+    Err(tinysweeper::Error::FeatureDisabled(
+        "planning a UI preview",
+        "harness,github",
     ))
 }
 
