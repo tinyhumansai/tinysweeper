@@ -11,12 +11,22 @@
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 
+// The spawned `serve` command is the checked-out repository's own script —
+// same-repository pull requests still run whatever is at
+// `scripts/ui-preview/serve.sh` on that head, so it is not fully trusted.
+// This action holds the server token and the object-store credentials
+// (module doc above); neither belongs in an environment that repository code
+// controls.
+const SECRET_ENV_KEYS = ["TS_TOKEN", "TS_S3_BUCKET", "TS_S3_ENDPOINT", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"];
+
 /** Start `command` for `checkout` on `port`; resolve once `ready` answers. */
 export async function serve({ command, checkout, port, ready, timeoutMs, log = console.error }) {
+  const env = { ...process.env, TS_CHECKOUT: checkout, TS_PORT: String(port) };
+  for (const key of SECRET_ENV_KEYS) delete env[key];
   const child = spawn(command, {
     shell: true,
     cwd: checkout,
-    env: { ...process.env, TS_CHECKOUT: checkout, TS_PORT: String(port) },
+    env,
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
   });
