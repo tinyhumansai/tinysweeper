@@ -586,9 +586,11 @@ impl<'a> Recaller<'a> {
                     )
                 })
                 .collect();
-            let results =
-                futures::future::join_all(asks.iter().map(|(scope, ask)| self.memory.answer(scope, ask)))
-                    .await;
+            let results = futures::future::join_all(
+                asks.iter()
+                    .map(|(scope, ask)| self.memory.answer(scope, ask)),
+            )
+            .await;
             for ((scope, _), result) in wanted.iter().zip(results) {
                 match result {
                     Ok(mut answer) if answer.is_grounded() => {
@@ -1228,7 +1230,13 @@ mod tests {
             "Which conventions apply to changes under {paths}?",
         )];
         recaller
-            .recall(&config, "o/r", "Add a port", &[diff("src/ports/forge.rs")], false)
+            .recall(
+                &config,
+                "o/r",
+                "Add a port",
+                &[diff("src/ports/forge.rs")],
+                false,
+            )
             .await;
         let queries = memory.queries();
         // Three sections recalled, one question asked: four calls, one query.

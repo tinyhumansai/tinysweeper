@@ -363,7 +363,12 @@ event log with an extraction pipeline behind it:
 
 - `POST /v1/experience?wait=indexed` (and `/bulk`) writes an event and holds
   the response until it is readable, which is what makes ingest-then-recall in
-  one process honest. The idempotency key is `content_id()`.
+  one process honest. The idempotency key is `content_id()`. Each write names
+  the layers the engine should extract, per kind: nothing for a code chunk
+  (embedded only — it is recalled as an event and the index already searches
+  code), facts and entities for a convention or a finding, an episode too for
+  a discussion. Every named layer is a background model call per event, and
+  the backlog is paid for by every recall that runs while it drains.
 - `POST /v1/recall` ranks events for a query within a scope. Recall asks for
   the events layer only; the extracted layers carry no envelope and cannot
   come back as items.

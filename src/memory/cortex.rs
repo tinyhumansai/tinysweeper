@@ -52,8 +52,8 @@ use serde_json::{Value, json};
 
 use crate::error::{Error, Result};
 use crate::memory::types::{
-    Ask, Citation, MemoryAnswer, MemoryItem, MemoryKind, MemoryScope, MemorySection,
-    Recollection, RememberReport,
+    Ask, Citation, MemoryAnswer, MemoryItem, MemoryKind, MemoryScope, MemorySection, Recollection,
+    RememberReport,
 };
 use crate::ports::memory::Memory;
 
@@ -711,7 +711,9 @@ impl Memory for CortexMemory {
         if let Some(model) = &self.answer_model {
             body["answer_model"] = json!(model);
         }
-        let response = self.post_bounded("v1/answer", &body, ANSWER_TIMEOUT).await?;
+        let response = self
+            .post_bounded("v1/answer", &body, ANSWER_TIMEOUT)
+            .await?;
         let text = response
             .get("answer")
             .and_then(Value::as_str)
@@ -1031,7 +1033,10 @@ mod tests {
     fn code_is_embedded_without_extraction_and_discussions_yield_episodes() {
         let code = MemoryItem::new("k", MemoryKind::CodeChunk, "t", "b");
         assert_eq!(experience("s", &code)["directives"]["extract"], json!([]));
-        assert_eq!(experience("s", &code)["directives"]["embed"], json!("eager"));
+        assert_eq!(
+            experience("s", &code)["directives"]["embed"],
+            json!("eager")
+        );
         let rule = MemoryItem::new("k", MemoryKind::Convention, "t", "b");
         assert_eq!(
             experience("s", &rule)["directives"]["extract"],

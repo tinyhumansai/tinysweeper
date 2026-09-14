@@ -54,8 +54,8 @@ pub use crate::memory::ingest::{IngestReport, Ingestor};
 pub use crate::memory::mock::MockMemory;
 pub use crate::memory::recall::{MemoryContext, MemoryStatus, Recaller};
 pub use crate::memory::types::{
-    Ask, Citation, MemoryAnswer, MemoryItem, MemoryKind, MemoryScope, MemorySection,
-    Recollection, RememberReport,
+    Ask, Citation, MemoryAnswer, MemoryItem, MemoryKind, MemoryScope, MemorySection, Recollection,
+    RememberReport,
 };
 
 /// Whether a memory endpoint may carry a bearer token.
