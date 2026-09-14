@@ -31,7 +31,13 @@ export async function loadConfig(root, file) {
   } catch (err) {
     throw new Error(`no ui-preview config at ${full}: ${err.message}`);
   }
-  return checkConfig(JSON.parse(raw), full);
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`invalid JSON in ui-preview config at ${full}: ${err.message}`);
+  }
+  return checkConfig(parsed, full);
 }
 
 /** Lay `config` over the defaults and refuse what cannot work. */
