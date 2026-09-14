@@ -13,8 +13,9 @@ use octocrab::Octocrab;
 use crate::error::{Error, Result};
 use crate::evidence::diff::truncate_patch;
 use crate::forge::types::{
-    ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, FileStatus, Issue, IssueComment,
-    PullRequest, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict, ThreadComment,
+    ChangedFile, CheckConclusion, CheckImage, CheckRun, CheckStatus, Commit, FileStatus, Issue,
+    IssueComment, MAX_CHECK_IMAGES, PullRequest, RepoId, ReviewComment, ReviewEvent, ReviewThread,
+    ReviewVerdict, ThreadComment,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -1734,7 +1735,11 @@ mod tests {
 
     #[test]
     fn a_check_with_no_images_sends_no_images_key() {
-        assert!(check_payload(&check(None))["output"].get("images").is_none());
+        assert!(
+            check_payload(&check(None))["output"]
+                .get("images")
+                .is_none()
+        );
     }
 
     #[test]
@@ -1748,7 +1753,9 @@ mod tests {
             })
             .collect();
         let body = check_payload(&shots);
-        let images = body["output"]["images"].as_array().expect("an images array");
+        let images = body["output"]["images"]
+            .as_array()
+            .expect("an images array");
         assert_eq!(images.len(), MAX_CHECK_IMAGES);
         assert_eq!(images[0]["alt"], "shot 0");
         assert_eq!(images[0]["image_url"], "https://cdn.example/0.png");
