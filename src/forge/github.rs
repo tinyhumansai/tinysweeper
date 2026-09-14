@@ -203,11 +203,17 @@ fn check_payload(check: &CheckRun) -> serde_json::Value {
             .iter()
             .take(MAX_CHECK_IMAGES)
             .map(|image| {
-                serde_json::json!({
+                let mut value = serde_json::json!({
                     "alt": image.alt,
                     "image_url": image.image_url,
-                    "caption": image.caption,
-                })
+                });
+                // GitHub defines `caption` as an optional string, not a
+                // nullable one: sending `null` risks the request being
+                // rejected, so omit the key entirely when there is none.
+                if let Some(caption) = &image.caption {
+                    value["caption"] = serde_json::json!(caption);
+                }
+                value
             })
             .collect();
         body["output"]["images"] = serde_json::json!(images);
