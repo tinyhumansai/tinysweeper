@@ -27,7 +27,7 @@ import { chromium } from "playwright";
 import { loadConfig } from "./src/config.mjs";
 import { serve } from "./src/serve.mjs";
 import { Session } from "./src/session.mjs";
-import { execute, observe } from "./src/driver.mjs";
+import { execute, observe, REPLAY_TIMEOUT_MS } from "./src/driver.mjs";
 import { annotate } from "./src/annotate.mjs";
 import { recorder, convert } from "./src/clip.mjs";
 import { upload } from "./src/upload.mjs";
@@ -221,7 +221,7 @@ async function drive({ browser, config, origin, session, flow, side, maxSteps, o
 async function replay({ browser, config, origin, flow, script, out, log }) {
   const context = await newContext({ browser, config, origin, out, flow, side: "before", video: false });
   const page = await context.newPage();
-  const ctx = { origin, shots: new Map(), recorder: recorder(), masks: config.mask, scale: SCALE, step: 0 };
+  const ctx = { origin, shots: new Map(), recorder: recorder(), masks: config.mask, scale: SCALE, step: 0, timeoutMs: REPLAY_TIMEOUT_MS };
   let failedAt = null;
   try {
     await page.goto(`${origin}${flow.start_path}`, { waitUntil: "load", timeout: 30_000 });

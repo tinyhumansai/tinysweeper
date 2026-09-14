@@ -17,6 +17,15 @@
 const COMMAND_TIMEOUT_MS = 10_000;
 const MAX_WAIT_MS = 5_000;
 
+/**
+ * The per-command timeout for a replay on the base build.
+ *
+ * Shorter than the head's, because a miss there is the expected answer for
+ * anything the pull request added, and waiting the full ten seconds to learn
+ * what the plan already predicted is a minute per flow for nothing.
+ */
+export const REPLAY_TIMEOUT_MS = 4_000;
+
 /** A Playwright locator for a server locator. */
 export function resolveLocator(page, locator) {
   switch (locator?.by) {
@@ -64,7 +73,8 @@ export async function execute(page, commands, ctx) {
 }
 
 async function run(page, command, ctx) {
-  const t = { timeout: COMMAND_TIMEOUT_MS };
+  const timeout = ctx.timeoutMs ?? COMMAND_TIMEOUT_MS;
+  const t = { timeout };
   switch (command.op) {
     case "goto": {
       if (!command.path.startsWith("/") || command.path.startsWith("//")) {
@@ -96,7 +106,7 @@ async function run(page, command, ctx) {
       if (command.locator) {
         await resolveLocator(page, command.locator)
           .first()
-          .waitFor({ state: "visible", timeout: Math.min(command.ms ?? COMMAND_TIMEOUT_MS, COMMAND_TIMEOUT_MS) });
+          .waitFor({ state: "visible", timeout: Math.min(command.ms ?? timeout, timeout) });
       } else {
         await page.waitForTimeout(Math.min(command.ms ?? 500, MAX_WAIT_MS));
       }
@@ -122,7 +132,7 @@ async function run(page, command, ctx) {
       const scrollX = await page.evaluate(() => window.scrollX);
       let n = shot.callouts.length;
       for (const callout of command.callouts) {
-        const box = await resolveLocator(page, callout.locator).first().boundingBox({ timeout: COMMAND_TIMEOUT_MS });
+        const box = await resolveLocator(page, callout.locator).first().boundingBox({ timeout });
         if (!box) throw new Error(`callout target is not visible: ${callout.label}`);
         n += 1;
         shot.callouts.push({
