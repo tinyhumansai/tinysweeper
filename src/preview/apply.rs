@@ -326,4 +326,44 @@ mod tests {
             "an existing check id updates that check rather than creating another: {writes:?}"
         );
     }
+
+    #[tokio::test]
+    async fn an_empty_gallery_replaces_an_earlier_comment_with_a_stale_notice() {
+        let forge = MockForge::new()
+            .with_pull_request(pull_request("def"), vec![], vec![])
+            .with_comments(
+                7,
+                vec![IssueComment {
+                    id: Some(41),
+                    author: "tinysweeper".into(),
+                    body: format!("{}\nold gallery from an earlier head", render::MARKER),
+                }],
+            );
+        let empty = Gallery {
+            head_sha: "def".into(),
+            flows: vec![],
+            ..gallery()
+        };
+        let (outcome, _) = publish(&forge, &forge, "o/r", &empty, None).await.unwrap();
+        assert_eq!(outcome, Outcome::Published);
+        let writes = forge.writes();
+        let Write::CommentUpdate { comment_id: 41, body } = &writes[0] else {
+            panic!("the earlier comment is edited, not left alone: {writes:?}");
+        };
+        assert!(body.contains("No visible change"));
+        assert!(!body.contains("old gallery"));
+    }
+
+    #[tokio::test]
+    async fn an_empty_gallery_with_no_earlier_comment_stays_quiet() {
+        let forge = MockForge::new().with_pull_request(pull_request("def"), vec![], vec![]);
+        let empty = Gallery {
+            head_sha: "def".into(),
+            flows: vec![],
+            ..gallery()
+        };
+        let (outcome, _) = publish(&forge, &forge, "o/r", &empty, None).await.unwrap();
+        assert_eq!(outcome, Outcome::NothingToShow);
+        assert!(matches!(forge.writes().as_slice(), [Write::Check(_)]));
+    }
 }
