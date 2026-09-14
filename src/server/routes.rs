@@ -1925,8 +1925,14 @@ impl Previews for PreviewDispatch {
         )?;
 
         // Captions are the last model calls, and they are made before the
-        // write token exists — the same order as a review.
-        if config.preview.caption && !gallery.flows.is_empty() {
+        // write token exists — the same order as a review. `step` already
+        // stops driving once the session's budget is spent; captioning after
+        // that point would make more calls past the same ceiling, so it is
+        // gated the same way.
+        if config.preview.caption
+            && !gallery.flows.is_empty()
+            && !session.exhausted(config.preview.budget_usd)
+        {
             let states: Vec<(String, crate::preview::step::FlowState)> = session
                 .states
                 .iter()
