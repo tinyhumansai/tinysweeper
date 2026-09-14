@@ -415,6 +415,23 @@ mod tests {
     }
 
     #[test]
+    fn a_flow_id_the_session_never_planned_is_refused_not_published() {
+        let mut m = manifest();
+        m.flows[0].id = "not-a-planned-flow".into();
+        let gallery = validate(&m, &expected(), BASE, 4, &planned()).unwrap();
+        assert!(gallery.flows.is_empty(), "an unplanned flow publishes nothing");
+        assert_eq!(gallery.empty_flows, 1);
+    }
+
+    #[test]
+    fn the_gallery_title_comes_from_the_plan_not_the_manifest() {
+        let mut m = manifest();
+        m.flows[0].title = "a hostile title the CI job made up".into();
+        let gallery = validate(&m, &expected(), BASE, 4, &planned()).unwrap();
+        assert_eq!(gallery.flows[0].title, "Planned flow 1");
+    }
+
+    #[test]
     fn a_flow_the_base_build_could_not_finish_is_marked_new() {
         let mut m = manifest();
         m.flows[0].status = FlowStatus::BeforeFailed;
