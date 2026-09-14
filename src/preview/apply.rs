@@ -254,8 +254,11 @@ mod tests {
     #[tokio::test]
     async fn a_moved_head_publishes_nothing() {
         let forge = MockForge::new().with_pull_request(pull_request("def"), vec![], vec![]);
-        let outcome = publish(&forge, &forge, "o/r", &gallery()).await.unwrap();
+        let (outcome, check_id) = publish(&forge, &forge, "o/r", &gallery(), Some(7))
+            .await
+            .unwrap();
         assert_eq!(outcome, Outcome::HeadMoved);
+        assert_eq!(check_id, Some(7), "an id the caller already had is handed back unchanged");
         assert!(forge.writes().is_empty());
     }
 
