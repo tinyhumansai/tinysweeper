@@ -705,6 +705,7 @@ mod tests {
             deep: "b".into(),
             flash: "c".into(),
             fallback: vec![],
+            vision: None,
             provider: ProviderRouting::default(),
             max_tokens: 100,
             budget_usd_per_pr: 1.0,

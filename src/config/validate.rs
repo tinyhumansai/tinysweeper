@@ -895,7 +895,7 @@ fn validate_preview(config: &Config, problems: &mut Vec<String>) {
     if preview.max_steps == 0 {
         problems.push("`preview.max_steps` must be at least 1".into());
     }
-    if !(preview.budget_usd > 0.0) {
+    if preview.budget_usd.is_nan() || preview.budget_usd <= 0.0 {
         problems.push("`preview.budget_usd` must be positive".into());
     }
 
