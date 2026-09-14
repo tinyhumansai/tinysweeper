@@ -72,7 +72,7 @@ export class Session {
         return text ? JSON.parse(text) : {};
       }
       const detail = errorDetail(text);
-      if (response.status >= 500 && attempt < RETRIES) {
+      if (response.status >= 500 && attempt < attempts) {
         last = new Error(`${path}: ${response.status} ${detail}`);
         await sleep(2000 * attempt);
         continue;
