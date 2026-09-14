@@ -234,13 +234,9 @@ impl Memory for MockMemory {
         Ok(scored)
     }
 
-    async fn answer(
-        &self,
-        _scope: &MemoryScope,
-        question: &str,
-        _instructions: Option<&str>,
-    ) -> Result<MemoryAnswer> {
+    async fn answer(&self, _scope: &MemoryScope, ask: &Ask<'_>) -> Result<MemoryAnswer> {
         self.check()?;
+        let question = ask.question;
         if let Some(message) = self
             .answer_failure
             .lock()
@@ -383,13 +379,13 @@ mod tests {
         let memory = MockMemory::new().with_answer("conventions", "Never unwrap.");
         let scope = MemoryScope::repo("o/r");
         let hit = memory
-            .answer(&scope, "What conventions apply?", None)
+            .answer(&scope, &Ask::new("What conventions apply?"))
             .await
             .unwrap();
         assert!(hit.is_grounded());
         assert_eq!(hit.answer, "Never unwrap.");
         let miss = memory
-            .answer(&scope, "Who wrote this?", None)
+            .answer(&scope, &Ask::new("Who wrote this?"))
             .await
             .unwrap();
         assert!(!miss.is_grounded());
