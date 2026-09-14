@@ -22,6 +22,14 @@ pub struct Message {
     pub role: Role,
     /// What they said.
     pub content: String,
+    /// Images shown alongside the text, as URLs the provider fetches.
+    ///
+    /// Only ever populated on a [`Role::User`] message: the OpenAI-compatible
+    /// wire format has no image part on a system or assistant message, and
+    /// tinyinference refuses to translate one there. Empty for every lane —
+    /// a review reads a diff, not a picture — and non-empty only for the UI
+    /// preview's captions, which look at the screenshots they describe.
+    pub images: Vec<String>,
 }
 
 impl Message {
@@ -30,6 +38,7 @@ impl Message {
         Self {
             role: Role::System,
             content: content.into(),
+            images: vec![],
         }
     }
 
@@ -38,6 +47,19 @@ impl Message {
         Self {
             role: Role::User,
             content: content.into(),
+            images: vec![],
+        }
+    }
+
+    /// A user message with images attached.
+    ///
+    /// The only constructor that sets [`images`](Self::images), and it exists
+    /// for the user role alone — see the field's doc for why.
+    pub fn user_with_images(content: impl Into<String>, images: Vec<String>) -> Self {
+        Self {
+            role: Role::User,
+            content: content.into(),
+            images,
         }
     }
 }

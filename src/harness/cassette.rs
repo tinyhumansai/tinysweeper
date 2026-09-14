@@ -72,6 +72,10 @@ pub struct RecordedMessage {
     pub role: String,
     /// The text.
     pub content: String,
+    /// Image URLs attached to a user message. Absent from every recording
+    /// made before images existed, and from every text-only prompt since.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
 }
 
 /// How a [`Cassette`] behaves when it is asked for a call.
@@ -265,6 +269,7 @@ impl Model for Cassette {
                         .map(|message| RecordedMessage {
                             role: role_name(message).to_string(),
                             content: message.content.clone(),
+                            images: message.images.clone(),
                         })
                         .collect()
                 }),
@@ -367,6 +372,13 @@ pub fn key(request: &ModelRequest) -> String {
         hasher.update(role_name(message).as_bytes());
         hasher.update(b"\0");
         hasher.update(message.content.as_bytes());
+        // Only when present, so every recording made before images existed
+        // keeps the key it was filed under. Two caption requests that differ
+        // only in which screenshot they show must still hash apart.
+        for image in &message.images {
+            hasher.update(b"\0img\0");
+            hasher.update(image.as_bytes());
+        }
     }
     hasher
         .finalize()

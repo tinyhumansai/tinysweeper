@@ -15,7 +15,7 @@ use tinyagents::runtime::{AgentHarness, PayloadCapture, RunPolicy};
 use tinyagents::{
     HarnessEventJournal, InMemoryEventJournal, JournalSink, LangfuseClient, LangfuseTraceConfig,
 };
-use tinyinference::message::Message as TaMessage;
+use tinyinference::message::{ContentBlock, ImageRef, Message as TaMessage, UserMessage};
 use tinyinference::model::ResponseFormat;
 use tinyinference::providers::openai::OpenAiModel;
 
@@ -138,6 +138,33 @@ fn gateway_cost(raw: Option<&serde_json::Value>) -> Option<f64> {
 /// if this function stops appending the schema the model is left describing a
 /// contract nobody gave it — and that failure looks like a quality regression
 /// rather than a bug, which is exactly the kind that survives a review.
+/// One crate message as tinyinference wants it.
+///
+/// Images become content parts on a user message and nowhere else: the
+/// OpenAI-compatible format has no image part for the other roles, and
+/// tinyinference's converter rejects one rather than dropping it silently.
+/// `Message::user_with_images` is the only constructor that sets images, so
+/// the other arms never see any — but if one did, ignoring it would send a
+/// caption request with no picture, and this arm is written so that cannot
+/// happen without a compile error naming it.
+fn wire_message(m: &CrateMessage) -> TaMessage {
+    match m.role {
+        Role::System => TaMessage::system(&m.content),
+        Role::Assistant => TaMessage::assistant(&m.content),
+        Role::User if m.images.is_empty() => TaMessage::user(&m.content),
+        Role::User => {
+            let mut content = vec![ContentBlock::Text(m.content.clone())];
+            content.extend(m.images.iter().map(|url| {
+                ContentBlock::Image(ImageRef {
+                    url: url.clone(),
+                    mime_type: Some("image/png".to_string()),
+                })
+            }));
+            TaMessage::User(UserMessage { content })
+        }
+    }
+}
+
 fn wire_messages(request: &ModelRequest, mode: StructuredOutput) -> Vec<CrateMessage> {
     let mut messages = request.messages.clone();
     // Appended as its own system message rather than folded into the lane
@@ -176,6 +203,24 @@ impl GatewayModel {
             structured_output: models.structured_output,
             langfuse: langfuse_client(),
         })
+    }
+
+    /// A gateway for calls that carry images.
+    ///
+    /// Not the review ladder. That ladder shares one provider pin across the
+    /// primary and every fallback, and the pin names the hosts that serve the
+    /// *text* models — a vision model is usually not among them, so the
+    /// primary 404s, and each fallback is then a text model handed
+    /// `image_url` parts it cannot see, which answers with a confident caption
+    /// of a picture it never looked at. So: no fallbacks, and no pin — the
+    /// gateway routes the one model wherever it is served. The price is an
+    /// estimate rather than a pinned rate, and the caption is decoration, so
+    /// that is the right trade here and the wrong one for a review.
+    pub fn for_vision(models: &Models) -> Result<Self> {
+        let mut gateway = Self::from_config(models)?;
+        gateway.fallbacks = vec![];
+        gateway.provider = ProviderRouting::unpinned();
+        Ok(gateway)
     }
 
     fn harness(&self, model: &str, routing: &ProviderRouting) -> Result<AgentHarness<()>> {
@@ -275,11 +320,7 @@ impl GatewayModel {
 
         let messages: Vec<TaMessage> = wire_messages(request, self.structured_output)
             .iter()
-            .map(|m| match m.role {
-                Role::System => TaMessage::system(&m.content),
-                Role::User => TaMessage::user(&m.content),
-                Role::Assistant => TaMessage::assistant(&m.content),
-            })
+            .map(wire_message)
             .collect();
 
         // `invoke` rather than `invoke_default`, because the run configuration
