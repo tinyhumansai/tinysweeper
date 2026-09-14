@@ -144,6 +144,20 @@ fn the_built_in_defaults_are_valid() {
 }
 
 #[test]
+fn recorded_eval_cassettes_are_ignored_by_default() {
+    let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
+
+    assert!(
+        config
+            .paths
+            .ignore
+            .iter()
+            .any(|pattern| pattern == "evals/cassettes/**"),
+        "recorded model output is a generated artifact, not reviewable source"
+    );
+}
+
+#[test]
 fn the_shipped_defaults_pin_the_upstream_provider() {
     // Unpinned, the gateway load-balances across providers whose prices span
     // 4x while `harness::pricing` keeps one price per model id — so the cost

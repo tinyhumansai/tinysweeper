@@ -239,6 +239,122 @@ pub enum Action {
     Ignore(&'static str),
 }
 
+/// A conversation a delivery says has changed, for memory to re-read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Conversation {
+    /// `owner/name`.
+    pub repo: String,
+    /// The issue or pull request number.
+    pub number: u64,
+    /// Whether it is a pull request, which is what decides whether review
+    /// comments and reviews are read too.
+    pub pull_request: bool,
+    /// The installation that can read it.
+    pub installation: u64,
+}
+
+/// The conversation a delivery touched, if it touched one.
+///
+/// Orthogonal to [`route`] on purpose: what memory remembers about a
+/// conversation is independent of whether the same delivery starts a review,
+/// so this is asked alongside routing rather than folded into an [`Action`]
+/// that can only be one thing. It runs *before* the bot guard in `route`, and
+/// must: the whole point is to remember what other agents said, and their
+/// comments arrive from a `Bot` sender.
+///
+/// The reviewer's own activity is skipped, but only for the *remark* events —
+/// `issue_comment`, `pull_request_review_comment`, `pull_request_review` —
+/// whose own remarks are filtered out of memory anyway downstream, so a
+/// re-read they triggered would find nothing new. `issues` and `pull_request`
+/// events carry the subject's *state* — open or closed, its labels — which is
+/// remembered regardless of who changed it: an auto-merge close or a triage
+/// label is exactly the kind of state change nothing else is guaranteed to
+/// deliver a follow-up for, and skipping it here would let memory hold a
+/// closed issue or a stale label set indefinitely.
+///
+/// No loop can form. Remembering writes to the engine and never to GitHub,
+/// so a delivery here produces no further delivery.
+///
+/// `deleted` is not a trigger. Memory is append-only about what was said, and
+/// a comment somebody removed was still said; the item stays until the
+/// section is forgotten.
+pub fn remember_trigger(event: &str, payload: &Payload) -> Option<Conversation> {
+    let repository = payload.repository.as_ref()?;
+    let installation = payload.installation.as_ref()?;
+    let is_remark_event = matches!(
+        event,
+        "issue_comment" | "pull_request_review_comment" | "pull_request_review"
+    );
+    if is_remark_event
+        && payload
+            .sender
+            .as_ref()
+            .is_some_and(|sender| crate::findings::prior::is_own_login(&sender.login))
+    {
+        return None;
+    }
+    let action = payload.action.as_str();
+    let (number, pull_request) = match event {
+        "issues" | "issue_comment" => {
+            let ok = match event {
+                "issues" => matches!(
+                    action,
+                    "opened"
+                        | "edited"
+                        | "closed"
+                        | "reopened"
+                        | "labeled"
+                        | "unlabeled"
+                        | "typed"
+                        | "untyped"
+                ),
+                _ => matches!(action, "created" | "edited"),
+            };
+            if !ok {
+                return None;
+            }
+            let issue = payload.issue.as_ref()?;
+            (issue.number, issue.pull_request.is_some())
+        }
+        "pull_request" => {
+            if !matches!(
+                action,
+                "opened"
+                    | "edited"
+                    | "closed"
+                    | "reopened"
+                    | "ready_for_review"
+                    | "labeled"
+                    | "unlabeled"
+            ) {
+                return None;
+            }
+            (payload.pull_request.as_ref()?.number, true)
+        }
+        "pull_request_review_comment" => {
+            if !matches!(action, "created" | "edited") {
+                return None;
+            }
+            (payload.pull_request.as_ref()?.number, true)
+        }
+        "pull_request_review" => {
+            // `dismissed` too: a retired verdict is a fact about the
+            // conversation, and the re-read records the review as dismissed.
+            if !matches!(action, "submitted" | "edited" | "dismissed") {
+                return None;
+            }
+            (payload.pull_request.as_ref()?.number, true)
+        }
+        _ => return None,
+    };
+    Some(Conversation {
+        repo: repository.full_name.clone(),
+        number,
+        pull_request,
+        installation: installation.id,
+    })
+}
+
 /// Decide what a delivery means.
 ///
 /// Deliberately conservative: anything not explicitly understood is ignored,
@@ -949,6 +1065,150 @@ mod tests {
             route("pull_request_review_comment", &payload(delivery)),
             Action::Ignore(_)
         ));
+    }
+
+    #[test]
+    fn a_bots_comment_on_a_pull_request_is_a_conversation_to_remember() {
+        // The review-trigger path ignores bot senders; memory must not, or
+        // nothing another agent says would ever be remembered.
+        let payload = payload(serde_json::json!({
+            "action": "created",
+            "repository": {"full_name": "o/r"},
+            "installation": {"id": 5},
+            "sender": {"login": "coderabbitai[bot]", "type": "Bot"},
+            "issue": {"number": 12, "pull_request": {}, "user": {"login": "someone"}},
+            "comment": {"body": "Consider bounding this.", "user": {"login": "coderabbitai[bot]", "type": "Bot"}}
+        }));
+        assert_eq!(
+            route("issue_comment", &payload),
+            Action::Ignore("sender is a bot")
+        );
+        assert_eq!(
+            remember_trigger("issue_comment", &payload),
+            Some(Conversation {
+                repo: "o/r".into(),
+                number: 12,
+                pull_request: true,
+                installation: 5,
+            })
+        );
+    }
+
+    #[test]
+    fn the_reviewers_own_comment_is_not_a_conversation_to_remember() {
+        let payload = payload(serde_json::json!({
+            "action": "created",
+            "repository": {"full_name": "o/r"},
+            "installation": {"id": 5},
+            "sender": {"login": "tinysweeper[bot]", "type": "Bot"},
+            "issue": {"number": 12, "pull_request": {}, "user": {"login": "someone"}},
+            "comment": {"body": "## Change map", "user": {"login": "tinysweeper[bot]", "type": "Bot"}}
+        }));
+        assert_eq!(remember_trigger("issue_comment", &payload), None);
+    }
+
+    #[test]
+    fn a_state_change_tinysweeper_itself_made_is_still_a_conversation_to_remember() {
+        // Regression: the own-sender guard used to apply to every event, not
+        // just remarks. An auto-merge close or a triage label is state —
+        // open/closed, labels — attributed to `tinysweeper[bot]` as the
+        // sender, and nothing else is guaranteed to deliver a follow-up that
+        // would otherwise pick it up; skipping it here left memory holding a
+        // stale open state or label set indefinitely.
+        let closed_by_us = payload(serde_json::json!({
+            "action": "closed",
+            "repository": {"full_name": "o/r"},
+            "installation": {"id": 5},
+            "sender": {"login": "tinysweeper[bot]", "type": "Bot"},
+            "pull_request": {"number": 12, "head": {"sha": "abc"}, "user": {"login": "someone"}}
+        }));
+        assert_eq!(
+            remember_trigger("pull_request", &closed_by_us),
+            Some(Conversation {
+                repo: "o/r".into(),
+                number: 12,
+                pull_request: true,
+                installation: 5,
+            }),
+            "tinysweeper's own auto-merge close must still refresh the subject's state"
+        );
+
+        let labeled_by_us = payload(serde_json::json!({
+            "action": "labeled",
+            "repository": {"full_name": "o/r"},
+            "installation": {"id": 5},
+            "sender": {"login": "tinysweeper[bot]", "type": "Bot"},
+            "issue": {"number": 9, "user": {"login": "someone"}}
+        }));
+        assert!(
+            remember_trigger("issues", &labeled_by_us).is_some(),
+            "tinysweeper's own triage label must still refresh the subject's labels"
+        );
+
+        // Remarks stay excluded: a comment is filtered out of memory by
+        // login downstream regardless, so re-reading for it would find
+        // nothing new.
+        let commented_by_us = payload(serde_json::json!({
+            "action": "created",
+            "repository": {"full_name": "o/r"},
+            "installation": {"id": 5},
+            "sender": {"login": "tinysweeper[bot]", "type": "Bot"},
+            "issue": {"number": 9, "user": {"login": "someone"}},
+            "comment": {"body": "## Change map", "user": {"login": "tinysweeper[bot]", "type": "Bot"}}
+        }));
+        assert_eq!(remember_trigger("issue_comment", &commented_by_us), None);
+    }
+
+    #[test]
+    fn closed_issues_reviews_and_inline_comments_are_conversations_and_deletions_are_not() {
+        let base = |event_bits: serde_json::Value| {
+            let mut v = serde_json::json!({
+                "repository": {"full_name": "o/r"},
+                "installation": {"id": 5},
+                "sender": {"login": "maintainer", "type": "User"}
+            });
+            v.as_object_mut()
+                .unwrap()
+                .extend(event_bits.as_object().unwrap().clone());
+            payload(v)
+        };
+        let closed = base(
+            serde_json::json!({"action": "closed", "issue": {"number": 3, "user": {"login": "a"}}}),
+        );
+        let got = remember_trigger("issues", &closed).expect("a closed issue is remembered");
+        assert_eq!((got.number, got.pull_request), (3, false));
+
+        let review = base(serde_json::json!({
+            "action": "submitted",
+            "pull_request": {"number": 8, "head": {"sha": "abc"}, "user": {"login": "a"}}
+        }));
+        let got = remember_trigger("pull_request_review", &review).expect("a review");
+        assert_eq!((got.number, got.pull_request), (8, true));
+        let dismissed = base(serde_json::json!({
+            "action": "dismissed",
+            "pull_request": {"number": 8, "head": {"sha": "abc"}, "user": {"login": "a"}}
+        }));
+        assert!(
+            remember_trigger("pull_request_review", &dismissed).is_some(),
+            "a dismissal is remembered"
+        );
+
+        let inline = base(serde_json::json!({
+            "action": "created",
+            "pull_request": {"number": 8, "head": {"sha": "abc"}, "user": {"login": "a"}},
+            "comment": {"body": "nit", "user": {"login": "maintainer"}}
+        }));
+        assert!(remember_trigger("pull_request_review_comment", &inline).is_some());
+
+        let deleted = base(
+            serde_json::json!({"action": "deleted", "issue": {"number": 3, "user": {"login": "a"}}}),
+        );
+        assert_eq!(remember_trigger("issue_comment", &deleted), None);
+        assert_eq!(remember_trigger("issues", &deleted), None);
+
+        let check =
+            base(serde_json::json!({"action": "completed", "check_run": {"pull_requests": []}}));
+        assert_eq!(remember_trigger("check_run", &check), None);
     }
 
     #[test]

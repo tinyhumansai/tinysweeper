@@ -28,8 +28,22 @@
 //! deduplicates on content, so a second process ingesting the same tip pays
 //! the network and writes nothing; a manifest for memory would save that cost
 //! and nothing else, and is not worth a collection yet.
+//!
+//! # Conversations are remembered live, debounced
+//!
+//! Every delivery that touches a conversation — a comment, a review, an issue
+//! closing — asks for that conversation to be re-read and remembered, through
+//! [`crate::memory::Discussions`]. The re-read is debounced per conversation
+//! by `memory.discussion_debounce_secs`: a review bot posting twenty inline
+//! comments produces twenty deliveries in a few seconds, and one re-read
+//! after the burst remembers all twenty. Replays are free at the engine, so
+//! the debounce saves GitHub reads, not correctness.
+//!
+//! The history from before the server was listening comes from a backfill,
+//! started from the admin API and run here in the background; its progress
+//! is kept per repository so the operator can poll for it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::Mutex as AsyncMutex;
@@ -39,8 +53,55 @@ use crate::error::Result;
 use crate::forge::RepoId;
 use crate::indexer::fetch::Checkout;
 use crate::memory::cortex::CortexMemory;
-use crate::memory::{IngestReport, Ingestor, Recaller};
+use crate::memory::{DiscussionReport, Discussions, IngestReport, Ingestor, Recaller};
 use crate::ports::memory::Memory;
+use crate::server::auth::AppAuth;
+use crate::server::webhook::Conversation;
+
+/// Where one repository's backfill stands.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct BackfillStatus {
+    /// Whether it is still walking.
+    pub running: bool,
+    /// The `since` it was started with.
+    pub since: Option<String>,
+    /// How many conversations it was allowed to walk.
+    pub limit: usize,
+    /// When it started, RFC 3339.
+    pub started_at: String,
+    /// When it finished, RFC 3339, once it has.
+    pub finished_at: Option<String>,
+    /// What it did: the whole walk when it finished, or the chunks that
+    /// completed before a fatal error stopped it — in which case `error` is
+    /// set too, and `report.resume_from` is where those chunks got to.
+    pub report: Option<DiscussionReport>,
+    /// Why it stopped early, when it did. A rate limit is not one: the walk
+    /// waits those out itself (see `crate::memory::discussions`). A single
+    /// conversation failing is in the report, not here.
+    pub error: Option<String>,
+}
+
+/// What asking for a backfill produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackfillStart {
+    /// A walk was recorded as started; the caller runs it.
+    Started(BackfillStatus),
+    /// One is already walking this repository; here is where it stands.
+    AlreadyRunning(BackfillStatus),
+}
+
+/// Conversations one `run_backfill` chunk walks before the installation
+/// token backing it is re-minted (from cache, unless it needs renewing).
+const BACKFILL_CHUNK: usize = 100;
+
+/// How long the token a chunk starts with must still be good for.
+///
+/// A chunk is `BACKFILL_CHUNK` conversations of one to three forge reads and
+/// one indexed engine write each — measured at a few seconds per conversation
+/// — so a token with only the default five-minute renewal margin left could
+/// expire mid-chunk and turn the rest of it into failures. Half an hour is
+/// several times the longest chunk seen, and re-minting costs one request.
+const BACKFILL_TOKEN_MARGIN: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 /// The engine, and what it has been fed.
 pub struct MemoryBackend {
@@ -56,6 +117,21 @@ pub struct MemoryBackend {
     /// an ingest, and holding a sync lock across an `.await` blocks the
     /// runtime thread rather than yielding it.
     ingesting: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
+    /// Conversations with a re-read already scheduled, as `repo#number`. A
+    /// delivery that finds its conversation here has nothing to do: the
+    /// scheduled re-read will see its comment too.
+    pending: Mutex<HashSet<String>>,
+    /// The last backfill per repository, running or finished.
+    backfills: Mutex<HashMap<String, BackfillStatus>>,
+    /// One backfill walks at a time, across every repository.
+    ///
+    /// Its own lock rather than a slot in the index permit pool: a walk is
+    /// minutes of forge reads, and holding an index permit for that long
+    /// would starve code ingestion and live re-reads of every other
+    /// repository. Serial across repositories on purpose, too — every walk
+    /// spends the same installation's rate-limit budget that reviews need,
+    /// and two walks at once is how a review gets a 403.
+    walking: AsyncMutex<()>,
 }
 
 impl std::fmt::Debug for MemoryBackend {
@@ -80,11 +156,246 @@ impl MemoryBackend {
         }
         let memory = CortexMemory::from_config(&config.memory)?;
         memory.health().await?;
-        Ok(Some(Self {
+        Ok(Some(Self::over(memory)))
+    }
+
+    /// A backend over an already-built engine, with nothing ingested.
+    fn over(memory: CortexMemory) -> Self {
+        Self {
             memory: Arc::new(memory),
             fresh: Mutex::new(HashMap::new()),
             ingesting: Mutex::new(HashMap::new()),
-        }))
+            pending: Mutex::new(HashSet::new()),
+            backfills: Mutex::new(HashMap::new()),
+            walking: AsyncMutex::new(()),
+        }
+    }
+
+    /// Claim the debounce slot for `conversation`.
+    ///
+    /// `true` means the caller owns the re-read and must call
+    /// [`Self::release`] when it is done; `false` means one is already
+    /// scheduled and this delivery rides along with it.
+    pub fn claim(&self, conversation: &Conversation) -> bool {
+        self.pending
+            .lock()
+            .expect("pending lock")
+            .insert(conversation_key(conversation))
+    }
+
+    /// Give the debounce slot back once the re-read has started reading.
+    ///
+    /// Released *before* the read rather than after it, deliberately: a
+    /// comment that lands while the read is in flight may or may not be in
+    /// the page GitHub serves, and letting its delivery schedule a fresh
+    /// re-read is what makes sure it is remembered either way.
+    pub fn release(&self, conversation: &Conversation) {
+        self.pending
+            .lock()
+            .expect("pending lock")
+            .remove(&conversation_key(conversation));
+    }
+
+    /// Remember one conversation now, through the shared pipeline.
+    pub async fn remember_conversation(
+        &self,
+        config: &Config,
+        repo: &RepoId,
+        number: u64,
+        pull_request: bool,
+        token: &str,
+    ) -> Result<DiscussionReport> {
+        let forge = crate::forge::github::GitHubRead::new(token)?;
+        Discussions::new(self.memory.as_ref(), &forge, &config.memory)
+            .remember_number(repo, number, pull_request)
+            .await
+    }
+
+    /// The last backfill started for `repo`, if any.
+    pub fn backfill_status(&self, repo: &RepoId) -> Option<BackfillStatus> {
+        self.backfills
+            .lock()
+            .expect("backfill lock")
+            .get(&repo.to_string())
+            .cloned()
+    }
+
+    /// Record that a backfill of `repo` is starting, unless one is running.
+    ///
+    /// Two walks over one repository would read every conversation twice
+    /// for nothing, so a running one is reported instead of doubled.
+    pub fn start_backfill(
+        &self,
+        repo: &RepoId,
+        since: Option<String>,
+        limit: usize,
+    ) -> BackfillStart {
+        let mut backfills = self.backfills.lock().expect("backfill lock");
+        if let Some(running) = backfills.get(&repo.to_string()).filter(|s| s.running) {
+            return BackfillStart::AlreadyRunning(running.clone());
+        }
+        let status = BackfillStatus {
+            running: true,
+            since,
+            limit,
+            started_at: now(),
+            finished_at: None,
+            report: None,
+            error: None,
+        };
+        backfills.insert(repo.to_string(), status.clone());
+        BackfillStart::Started(status)
+    }
+
+    /// Record how `repo`'s backfill ended.
+    fn finish_backfill(
+        &self,
+        repo: &RepoId,
+        outcome: Result<DiscussionReport>,
+        partial: DiscussionReport,
+    ) {
+        let mut backfills = self.backfills.lock().expect("backfill lock");
+        if let Some(status) = backfills.get_mut(&repo.to_string()) {
+            status.running = false;
+            status.finished_at = Some(now());
+            match outcome {
+                Ok(report) => status.report = Some(report),
+                Err(err) => {
+                    // What the completed chunks did is kept beside the error:
+                    // a walk that stopped after four hours of progress must
+                    // not report that progress as nothing, and its cursor is
+                    // what the operator restarts from.
+                    status.report = Some(partial);
+                    status.error = Some(err.to_string());
+                }
+            }
+        }
+    }
+
+    /// Walk `repo`'s history since `since` and remember it, recording the
+    /// outcome under [`Self::backfill_status`]. Call only after
+    /// [`Self::start_backfill`] said yes.
+    ///
+    /// Walked in chunks of [`BACKFILL_CHUNK`] rather than as one pass over
+    /// `limit`: the default walk is thousands of GitHub reads plus a memory
+    /// write per subject, easily long enough to outlast an installation
+    /// token's hour, and a single `GitHubRead` built once up front would
+    /// carry that one token for the whole thing. Re-minting between chunks
+    /// costs nothing extra — `AppAuth::installation_token` answers from
+    /// cache while the token is still good — and renews it before it expires
+    /// when the walk runs long.
+    pub async fn run_backfill(
+        &self,
+        config: &Config,
+        repo: &RepoId,
+        since: Option<&str>,
+        limit: usize,
+        auth: &AppAuth,
+        installation: u64,
+    ) {
+        // Queued behind any other repository's walk; the status already says
+        // `running`, which is honest — it is queued to run, and the operator
+        // polling it sees it finish.
+        let _walking = self.walking.lock().await;
+        let mut cursor = since.map(str::to_string);
+        // Progress across chunks, kept outside the fallible block so a fatal
+        // error still reports the chunks that completed (see
+        // `finish_backfill`).
+        let mut combined = DiscussionReport::default();
+        let mut walked = 0usize;
+        let outcome: Result<DiscussionReport> = async {
+            while walked < limit {
+                let chunk = (limit - walked).min(BACKFILL_CHUNK);
+                // A rate limit is waited out *here*, with the chunk retried on
+                // a freshly minted token, rather than inside the walk: an
+                // installation token expires within the hour the limit takes
+                // to reset, so a walk that waited in place would wake to a
+                // credential that no longer works. The chunk's conversations
+                // are re-read on the retry; the engine replays them for free.
+                let report = loop {
+                    let token = auth
+                        .installation_token_good_for(installation, BACKFILL_TOKEN_MARGIN)
+                        .await?;
+                    let forge = crate::forge::github::GitHubRead::new(&token)?;
+                    match Discussions::new(self.memory.as_ref(), &forge, &config.memory)
+                        .without_waiting()
+                        .backfill(repo, cursor.as_deref(), chunk)
+                        .await
+                    {
+                        Ok(report) => break report,
+                        Err(crate::error::Error::RateLimited { reset_at }) => {
+                            if combined.rate_limit_waits
+                                >= crate::memory::discussions::MAX_RATE_LIMIT_WAITS
+                            {
+                                return Err(crate::error::Error::RateLimited { reset_at });
+                            }
+                            let wait = crate::memory::discussions::rate_limit_wait(reset_at);
+                            tracing::info!(
+                                %repo,
+                                secs = wait.as_secs(),
+                                "the forge's rate limit is spent; the backfill waits for it to reset"
+                            );
+                            tokio::time::sleep(wait).await;
+                            combined.rate_limit_waits += 1;
+                            combined.waited_secs += wait.as_secs();
+                        }
+                        Err(err) => return Err(err),
+                    }
+                };
+                let processed = report.subjects + report.failed.len();
+                let last_seen = report.last_seen.clone();
+                combined.absorb(report);
+                combined.last_seen = last_seen.clone().or(combined.last_seen.clone());
+                walked += chunk;
+                // Whether to keep chunking is decided *before* the cursor is
+                // updated, from the chunk's own progress — but the cursor
+                // itself is advanced whenever `last_seen` moved, even on the
+                // chunk that ends the walk. Deciding to stop and updating the
+                // cursor are separate questions: a final chunk smaller than
+                // requested (the walk reached the end of history) still
+                // walked real conversations whose boundary the *next*
+                // incremental backfill needs, and skipping the update here
+                // left a first, single-chunk backfill reporting no resume
+                // point at all.
+                let keep_going = should_continue_chunking(&cursor, &last_seen, processed, chunk);
+                if let Some(seen) = last_seen {
+                    cursor = Some(seen);
+                }
+                if !keep_going {
+                    break;
+                }
+            }
+            // Safe to hand back only once nothing anywhere in the walk
+            // failed: a resume must never skip past a failure, even one an
+            // internal cursor already made progress beyond.
+            combined.resume_from = if combined.failed.is_empty() {
+                cursor
+            } else {
+                None
+            };
+            Ok(combined.clone())
+        }
+        .await;
+        match &outcome {
+            Ok(report) => tracing::info!(%repo, "memory backfill finished: {}", report.summary()),
+            Err(err) => tracing::warn!(
+                %repo,
+                %err,
+                "memory backfill stopped after {}",
+                combined.summary()
+            ),
+        }
+        // On a fatal error the partial report's `resume_from` is the cursor
+        // the completed chunks reached, offered on the same terms as a
+        // finished walk's: only when none of them recorded a failure.
+        if outcome.is_err() {
+            combined.resume_from = if combined.failed.is_empty() {
+                combined.last_seen.clone()
+            } else {
+                None
+            };
+        }
+        self.finish_backfill(repo, outcome, combined);
     }
 
     /// A recaller over the engine, for one review.
@@ -156,6 +467,30 @@ impl MemoryBackend {
     }
 }
 
+/// Whether `run_backfill`'s chunk loop should walk another chunk.
+///
+/// Pure and independent of the forge or the token, so the rule this exists
+/// to enforce — a chunk that had a failure must still let later chunks run,
+/// as long as it made forward progress — is covered without a live GitHub
+/// call. `false` ends the walk: `last_seen` is empty (the listing was, or
+/// this chunk's own timestamps could not be backed off from), the cursor did
+/// not move (nothing new since last time), or the chunk came back smaller
+/// than requested (the walk reached the end of history).
+///
+/// Deliberately does not decide the cursor itself: the caller advances it
+/// from `last_seen` whenever that is `Some`, independently of this answer, so
+/// the *last* chunk of a walk — including a first, single-chunk backfill
+/// that never needed a second one — still reports where it actually got to
+/// rather than leaving the incoming cursor untouched.
+fn should_continue_chunking(
+    cursor: &Option<String>,
+    last_seen: &Option<String>,
+    processed: usize,
+    chunk: usize,
+) -> bool {
+    last_seen.is_some() && last_seen != cursor && processed >= chunk
+}
+
 /// The freshness cache key for `revision` under `config`.
 ///
 /// Keyed on the *effective ingestion policy*, not the revision alone: if the
@@ -203,6 +538,121 @@ pub async fn ingest_in_background(
     }
 }
 
+/// The debounce key for a conversation.
+fn conversation_key(conversation: &Conversation) -> String {
+    format!("{}#{}", conversation.repo, conversation.number)
+}
+
+/// Now, as RFC 3339 to the second.
+fn now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    rfc3339(secs)
+}
+
+/// A Unix timestamp as `YYYY-MM-DDTHH:MM:SSZ`.
+///
+/// Hand-rolled for the same reason `auth::parse_expiry` is: one field is not
+/// worth a date library. Howard Hinnant's civil-from-days, which is exact for
+/// every date the process will ever see.
+fn rfc3339(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3_600,
+        (rem % 3_600) / 60,
+        rem % 60
+    )
+}
+
+/// Remember `conversation` after the debounce window, in the background.
+///
+/// Spawned by the webhook path and never awaited by it. Errors are logged:
+/// a conversation that could not be re-read is remembered by its next
+/// delivery or by a backfill, and must not fail the delivery that mentioned
+/// it. The installation token is minted *after* the wait, so a long window
+/// cannot hand an expired one to the read.
+///
+/// Shares the index permit pool with `ensure_ingested` and a running
+/// backfill: the debounce only coalesces repeat deliveries for the *same*
+/// conversation, so a comment burst spread across many issues would
+/// otherwise still spawn one unbounded task per conversation, each
+/// paginating its own timeline concurrently. Bounding them here caps how
+/// much of the installation's shared read budget live re-reads can spend at
+/// once, the same way a backfill's own walk is capped.
+pub async fn remember_in_background(
+    backend: Arc<MemoryBackend>,
+    config: Arc<Config>,
+    auth: Arc<AppAuth>,
+    permits: Arc<tokio::sync::Semaphore>,
+    conversation: Conversation,
+) {
+    if !backend.claim(&conversation) {
+        tracing::debug!(
+            repo = %conversation.repo,
+            number = conversation.number,
+            "a re-read of this conversation is already scheduled"
+        );
+        return;
+    }
+    tokio::time::sleep(std::time::Duration::from_secs(
+        config.memory.discussion_debounce_secs,
+    ))
+    .await;
+    // The claim is held across the permit wait, or a delivery landing
+    // while every permit is busy would schedule a second task for the same
+    // conversation on every debounce interval; released only once this task
+    // is about to read, so a delivery landing mid-read still gets its own.
+    let permit = permits.acquire_owned().await;
+    backend.release(&conversation);
+    let Ok(_permit) = permit else {
+        return;
+    };
+
+    let outcome = async {
+        let repo = RepoId::parse(&conversation.repo).ok_or_else(|| {
+            crate::error::Error::Forge(format!("`{}` is not owner/name", conversation.repo))
+        })?;
+        let token = auth.installation_token(conversation.installation).await?;
+        backend
+            .remember_conversation(
+                &config,
+                &repo,
+                conversation.number,
+                conversation.pull_request,
+                &token,
+            )
+            .await
+    }
+    .await;
+    match outcome {
+        Ok(report) => tracing::info!(
+            repo = %conversation.repo,
+            number = conversation.number,
+            "remembered a conversation: {}",
+            report.summary()
+        ),
+        Err(err) => tracing::warn!(
+            repo = %conversation.repo,
+            number = conversation.number,
+            %err,
+            "could not remember a conversation; the next delivery or a backfill will"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,6 +666,61 @@ mod tests {
             .unwrap();
         assert!(!config.memory.enabled);
         assert!(MemoryBackend::open(&config).await.unwrap().is_none());
+    }
+
+    #[test]
+    fn a_chunk_failure_does_not_stop_the_walk_from_reaching_later_chunks() {
+        // Regression: a chunk that has a subject failure reports
+        // `resume_from: None` (see `DiscussionReport::backfill`), which used
+        // to be read as "the whole walk is done" and stopped every later
+        // chunk from ever running. `last_seen` — set whether or not the
+        // chunk had a failure — must still let the walk continue.
+        let cursor = Some("2026-08-01T00:00:00Z".to_string());
+        let last_seen = Some("2026-08-10T00:00:00Z".to_string());
+        assert!(
+            should_continue_chunking(&cursor, &last_seen, 200, 200),
+            "a failed subject must not stop the walk from advancing to the next chunk"
+        );
+    }
+
+    #[test]
+    fn the_walk_stops_once_a_chunk_makes_no_further_progress() {
+        let cursor = Some("2026-08-10T00:00:00Z".to_string());
+        assert!(
+            !should_continue_chunking(&cursor, &cursor, 200, 200),
+            "the same cursor twice means nothing new was found"
+        );
+    }
+
+    #[test]
+    fn the_walk_stops_when_there_is_nothing_to_back_a_cursor_off_from() {
+        assert!(
+            !should_continue_chunking(&None, &None, 0, 200),
+            "an empty listing has no cursor to continue from"
+        );
+    }
+
+    #[test]
+    fn the_walk_stops_once_a_chunk_comes_back_smaller_than_requested() {
+        // Fewer entries than the chunk asked for means the listing reached
+        // the end of history; there is nothing more to walk regardless of
+        // whether the cursor moved.
+        let cursor = Some("2026-08-01T00:00:00Z".to_string());
+        let last_seen = Some("2026-08-10T00:00:00Z".to_string());
+        assert!(!should_continue_chunking(&cursor, &last_seen, 3, 200));
+        // Regression: `should_continue_chunking` correctly says stop here —
+        // the walk reached the end of history — but `run_backfill`'s loop
+        // used to read "stop" as "leave the cursor alone" too, discarding
+        // this very common last chunk's own progress and reporting the
+        // walk's *starting* cursor (often `None`, for a repository small
+        // enough to finish in one chunk) as where to resume from. The fix
+        // advances the cursor from `last_seen` unconditionally, independently
+        // of whether the walk continues; this is exactly the case where it
+        // must still happen even though the walk is ending.
+        assert_ne!(
+            last_seen, cursor,
+            "the chunk's own progress must differ from the stale starting cursor"
+        );
     }
 
     #[test]
@@ -257,13 +762,9 @@ mod tests {
         // each get their own, or the check-then-ingest window stays racy.
         // `CortexMemory::new` performs no I/O — it only builds an HTTP client
         // — so it is safe to construct directly here without a real engine.
-        let backend = MemoryBackend {
-            memory: Arc::new(
-                CortexMemory::new("http://127.0.0.1:1", "test-key").expect("client builds"),
-            ),
-            fresh: Mutex::new(HashMap::new()),
-            ingesting: Mutex::new(HashMap::new()),
-        };
+        let backend = MemoryBackend::over(
+            CortexMemory::new("http://127.0.0.1:1", "test-key").expect("client builds"),
+        );
 
         let a = backend.ingest_lock("o/same");
         let b = backend.ingest_lock("o/same");
@@ -291,6 +792,113 @@ mod tests {
         assert!(!waiter.is_finished(), "the second acquisition must block");
         drop(guard);
         waiter.await.expect("the waiter completes once released");
+    }
+
+    #[test]
+    fn timestamps_render_as_rfc3339() {
+        assert_eq!(rfc3339(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339(951_782_400), "2000-02-29T00:00:00Z");
+        assert_eq!(rfc3339(1_755_167_400), "2025-08-14T10:30:00Z");
+    }
+
+    #[test]
+    fn a_conversation_is_claimed_once_until_released() {
+        let backend = MemoryBackend::over(
+            CortexMemory::new("http://127.0.0.1:1", "test-key").expect("client builds"),
+        );
+        let conversation = Conversation {
+            repo: "o/r".into(),
+            number: 7,
+            pull_request: true,
+            installation: 1,
+        };
+        assert!(
+            backend.claim(&conversation),
+            "the first delivery owns the re-read"
+        );
+        assert!(!backend.claim(&conversation), "a burst rides along");
+        let other = Conversation {
+            number: 8,
+            ..conversation.clone()
+        };
+        assert!(
+            backend.claim(&other),
+            "a different conversation is its own slot"
+        );
+        backend.release(&conversation);
+        assert!(
+            backend.claim(&conversation),
+            "released, the next delivery owns it again"
+        );
+    }
+
+    #[test]
+    fn one_backfill_per_repository_at_a_time() {
+        let backend = MemoryBackend::over(
+            CortexMemory::new("http://127.0.0.1:1", "test-key").expect("client builds"),
+        );
+        let repo = RepoId::parse("o/r").unwrap();
+        assert!(backend.backfill_status(&repo).is_none());
+        let BackfillStart::Started(started) =
+            backend.start_backfill(&repo, Some("2026-01-01T00:00:00Z".into()), 50)
+        else {
+            panic!("nothing was running");
+        };
+        assert!(started.running);
+        let BackfillStart::AlreadyRunning(refused) = backend.start_backfill(&repo, None, 50) else {
+            panic!("a second walk must be refused");
+        };
+        assert_eq!(refused.since.as_deref(), Some("2026-01-01T00:00:00Z"));
+
+        backend.finish_backfill(
+            &repo,
+            Ok(DiscussionReport {
+                subjects: 3,
+                ..DiscussionReport::default()
+            }),
+            DiscussionReport::default(),
+        );
+        let done = backend.backfill_status(&repo).expect("recorded");
+        assert!(!done.running);
+        assert!(done.finished_at.is_some());
+        assert_eq!(done.report.as_ref().map(|r| r.subjects), Some(3));
+        assert!(
+            matches!(
+                backend.start_backfill(&repo, None, 50),
+                BackfillStart::Started(_)
+            ),
+            "finished, so a new one may start"
+        );
+    }
+
+    #[test]
+    fn a_walk_that_stops_early_keeps_what_it_did_beside_the_error() {
+        let backend = MemoryBackend::over(
+            CortexMemory::new("http://127.0.0.1:1", "test-key").expect("client builds"),
+        );
+        let repo = RepoId::parse("o/r").unwrap();
+        let BackfillStart::Started(_) = backend.start_backfill(&repo, None, 500) else {
+            panic!("nothing was running");
+        };
+        backend.finish_backfill(
+            &repo,
+            Err(crate::error::Error::Forge("token exchange failed".into())),
+            DiscussionReport {
+                subjects: 200,
+                resume_from: Some("2026-08-10T00:00:00Z".into()),
+                ..DiscussionReport::default()
+            },
+        );
+        let status = backend.backfill_status(&repo).unwrap();
+        assert!(!status.running);
+        assert!(status.error.as_deref().unwrap().contains("token exchange"));
+        let report = status.report.expect("the completed chunks are reported");
+        assert_eq!(report.subjects, 200);
+        assert_eq!(
+            report.resume_from.as_deref(),
+            Some("2026-08-10T00:00:00Z"),
+            "the operator restarts from where the walk got to"
+        );
     }
 
     #[tokio::test]

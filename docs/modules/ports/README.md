@@ -78,9 +78,14 @@ itself, why `ChunkIndex` needs deletes, and what MongoDB has to be — is in
 
 ## `Memory`
 
-One trait, one adapter, three sections. What the reviewer remembers about a
+One trait, one adapter, four sections. What the reviewer remembers about a
 repository *between* pull requests: its code, the conventions its own guides
-state, and what the maintainers did with the reviewer's earlier findings. The
+state, what the maintainers did with the reviewer's earlier findings, and what
+was said on its issues and pull requests by anyone — humans and other agents
+alike, except the reviewer's own remarks, which are excluded. The last is fed
+through two read-only `ForgeRead` methods added for it,
+`issues_updated_since` (the whole history, closed items and pull requests
+included) and `remarks` (one conversation as a single timeline). The
 index answers what the code looks like and the graph what a change reaches;
 neither learns. This one accumulates, and it is consulted by question
 (`answer`, a cited synthesis) as well as by query (`recall`). The reasoning,

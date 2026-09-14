@@ -24,6 +24,33 @@ never be told about, and how it handles the difference.
 them only by `issue.pull_request` being present. `webhook::route` filters on
 exactly that.
 
+### What memory listens to
+
+With `[memory]` **and** `memory.ingest_discussions` both on, a second decision
+is taken on every delivery beside routing: `webhook::remember_trigger` asks
+whether it touched a conversation, and if so the server re-reads that issue or
+pull request — its body and every comment, inline review comment and review
+on it — and remembers it. `[memory]` alone is not enough: a deployment that
+wants code and conventions remembered but not conversations turns memory on
+and sets `memory.ingest_discussions = false`. The trigger runs
+*before* the bot guard, deliberately: it exists to remember what other agents
+said, and their comments arrive from a `Bot` sender. The reviewer's own
+activity is the one sender skipped.
+
+| Event | Actions that trigger a re-read |
+| --- | --- |
+| `issues` | `opened`, `edited`, `closed`, `reopened`, `labeled`, `unlabeled`, `typed`, `untyped` |
+| `issue_comment` | `created`, `edited` |
+| `pull_request` | `opened`, `edited`, `closed`, `reopened`, `ready_for_review`, `labeled`, `unlabeled` |
+| `pull_request_review_comment` | `created`, `edited` |
+| `pull_request_review` | `submitted`, `edited`, `dismissed` |
+
+`deleted` is never a trigger: memory is append-only about what was said.
+Re-reads are debounced per conversation (`memory.discussion_debounce_secs`),
+and they write to the engine only, never to GitHub, so no loop can form. The
+history from before the server was listening comes from a backfill — see
+`docs/modules/memory/README.md`.
+
 A comment event carries no head SHA, so the server resolves it from the API
 rather than assuming `pull_request.head.sha` exists.
 
