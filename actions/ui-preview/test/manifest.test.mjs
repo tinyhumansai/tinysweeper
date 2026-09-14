@@ -52,3 +52,17 @@ test("a clip with no screenshot changes still shows without a base url", () => {
   assert.ok(md.includes("<code>clip-02.gif</code>"), "the clip's own filename is named, not dropped");
   assert.ok(!md.includes("_No user flow produced a picture"));
 });
+
+test("the pull request number in the heading is escaped", () => {
+  const m = buildManifest({
+    repo: "o/r",
+    pullRequest: '7"><script>alert(1)</script>',
+    headSha: "abc",
+    baseSha: "b",
+    run: "run-1",
+    flows: [],
+  });
+  const md = jobSummary(m, "https://p.example/");
+  assert.ok(!md.includes("<script>"));
+  assert.ok(md.includes("&lt;script&gt;"));
+});
