@@ -228,7 +228,15 @@ async function drive({ browser, config, origin, checkoutDir, session, flow, side
       const observation = await observe(page, { side, results, step: ctx.step });
       const reply = await session.step(flow.id, observation);
       results = await execute(page, reply.commands, ctx);
-      script.push(...reply.commands.slice(0, results.length));
+      // `execute` stops at the first failing command, so at most the last
+      // entry in `results` is a failure. The base build's `replay` later
+      // runs the whole recorded `script` in one `execute` call too — if a
+      // failed command rode along, replay would stop there and never reach
+      // whatever the model recovered with in a later turn, misreporting
+      // where the base build actually diverges. Record only what succeeded.
+      const failedIndex = results.findIndex((r) => !r.ok);
+      const succeeded = failedIndex === -1 ? results.length : failedIndex;
+      script.push(...reply.commands.slice(0, succeeded));
       const failed = results.find((r) => !r.ok);
       if (failed) {
         log(`[preview] ${flow.id}: step ${ctx.step} failed: ${failed.error}`);
