@@ -25,3 +25,6 @@ worktrees/
 # key: move it to a secret store and delete the local copy.
 .tinysweeper-app.json
 evals/runs/
+
+# The UI preview action's dependencies. `npm ci` in CI reads the lockfile.
+actions/ui-preview/node_modules/

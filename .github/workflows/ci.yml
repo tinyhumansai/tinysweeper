@@ -89,6 +89,33 @@ jobs:
       - name: Check all features
         run: cargo check --locked --all-features --all-targets
 
+  # The hands of the UI preview: the composite action other repositories'
+  # CI runs. Pure-node tests — the callout geometry, the command mapping, the
+  # manifest — with no browser, so this stays fast and offline. No `paths:`
+  # filter, like every other job here: branch protection may require it.
+  node:
+    name: Node (ui-preview action)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: actions/ui-preview/package-lock.json
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+        working-directory: actions/ui-preview
+
+      - name: Test
+        run: npm test
+        working-directory: actions/ui-preview
+
   # Builds on every pull request; pushes only from main. A pull request must
   # never be able to publish an image tag, because the image is what downstream
   # repositories would run.
