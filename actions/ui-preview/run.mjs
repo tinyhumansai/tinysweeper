@@ -227,6 +227,12 @@ async function drive({ browser, config, origin, checkoutDir, session, flow, side
     for (let turn = 0; turn < maxSteps + 5; turn += 1) {
       const observation = await observe(page, { side, results, step: ctx.step });
       const reply = await session.step(flow.id, observation);
+      // Every turn's snapshot and answer, for reading afterwards why a flow
+      // went where it went. Under the run directory, so the artifact keeps it.
+      await writeFile(
+        path.join(out, `turn-${flow.id}-${String(turn).padStart(2, "0")}.json`),
+        JSON.stringify({ observation, reply }, null, 2),
+      );
       results = await execute(page, reply.commands, ctx);
       // `execute` stops at the first failing command, so at most the last
       // entry in `results` is a failure. The base build's `replay` later
