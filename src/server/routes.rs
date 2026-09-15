@@ -1717,9 +1717,13 @@ async fn run_and_publish(
         .await
         {
             Ok(checkout) => {
-                if config.retrieval.submodules
+                if !config.retrieval.submodules.is_empty()
                     && let Err(err) = checkout
-                        .fetch_submodules(&super::indexing::git_host(), read_token)
+                        .fetch_submodules(
+                            &super::indexing::git_host(),
+                            read_token,
+                            &config.retrieval.submodules,
+                        )
                         .await
                 {
                     tracing::warn!(%repo, %err, "submodules not fetched for the review's tree");

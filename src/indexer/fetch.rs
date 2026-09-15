@@ -118,15 +118,21 @@ impl Checkout {
     /// A submodule that cannot be fetched is skipped and named in the
     /// returned list; the checkout is still usable without it.
     ///
-    /// Same host is not enough authorization, for the same reason it is not
-    /// in [`crate::forge::tree::ForgeTree`]: `.gitmodules` is written by
-    /// whoever opened the pull request, and a same-host, different-owner
-    /// repository can be at a different trust level than the one under
-    /// review. A submodule is fetched only when its owner matches this
-    /// checkout's own repository owner.
-    pub async fn fetch_submodules(&self, host: &str, token: &str) -> Result<Vec<String>> {
+    /// Only submodules whose repository is in `allowed` (`owner/name`) are
+    /// fetched: `.gitmodules` is written by whoever opened the pull request,
+    /// and neither same host nor same owner says the reviewed repository is
+    /// entitled to pull the target with this token. The operator's list does.
+    pub async fn fetch_submodules(
+        &self,
+        host: &str,
+        token: &str,
+        allowed: &[String],
+    ) -> Result<Vec<String>> {
         let root = self.dir.path();
-        let own_owner = self.repo.split('/').next().unwrap_or("");
+        let allowed: Vec<crate::forge::types::RepoId> = allowed
+            .iter()
+            .filter_map(|r| crate::forge::types::RepoId::parse(r))
+            .collect();
         let Ok(text) = std::fs::read_to_string(root.join(".gitmodules")) else {
             return Ok(Vec::new());
         };
@@ -136,7 +142,7 @@ impl Checkout {
                 skipped.push(sub.path.clone());
                 continue;
             };
-            if repo.owner != own_owner {
+            if !allowed.iter().any(|a| a == repo) {
                 skipped.push(sub.path.clone());
                 continue;
             }

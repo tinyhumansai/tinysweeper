@@ -252,7 +252,8 @@ mod tests {
         state.set_submodule("head", "vendor/lib", "https://github.com/acme/lib", "pin");
         state.set_file("pin", "src/x.rs", "one\ntwo\nthree\n");
         let forge = MockForge::with_state(state);
-        let tree = ForgeTree::new(&forge, repo(), "head", "github.com");
+        let tree = ForgeTree::new(&forge, repo(), "head", "github.com")
+            .allowing(&["acme/lib".to_string()]);
 
         let found = tree
             .lookup(&Lookup::Read {
@@ -322,7 +323,19 @@ mod tests {
         assert_eq!(
             found,
             Found::NotFound,
-            "a submodule owned by a different owner must not be read"
+            "a submodule the operator did not list must not be read, whoever owns it"
         );
+
+        let listed = ForgeTree::new(&forge, repo(), "head", "github.com")
+            .allowing(&["other/lib".to_string()]);
+        let found = listed
+            .lookup(&Lookup::Read {
+                path: "vendor/lib/src/x.rs".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(found, Found::Text { .. }), "listed, so read: {found:?}");
     }
 }

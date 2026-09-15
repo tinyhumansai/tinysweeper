@@ -372,7 +372,8 @@ pub async fn review_with_tree(
         repo.clone(),
         &context.pull_request.head_sha,
         &forge.git_host(),
-    );
+    )
+    .allowing(&config.retrieval.submodules);
     // A tree from another commit is worse than none: the reviewer would read
     // definitions the diff does not call. A push can land between a caller
     // fetching its checkout and this context being read, so the checkout
