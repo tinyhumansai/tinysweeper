@@ -597,6 +597,75 @@ async fn a_revoked_submodule_is_gone_before_the_run_can_stop_on_budget() {
     );
 }
 
+/// An embedder that answers `n` calls and then fails once — the provider
+/// outage that lands halfway through a run.
+struct FlakyEmbedder {
+    inner: MockEmbedder,
+    answers: std::sync::atomic::AtomicU64,
+}
+
+#[async_trait::async_trait]
+impl crate::ports::embed::Embedder for FlakyEmbedder {
+    fn signature(&self) -> crate::index::EmbedSignature {
+        self.inner.signature()
+    }
+
+    async fn embed(&self, texts: &[String]) -> crate::error::Result<crate::index::Embedded> {
+        use std::sync::atomic::Ordering;
+        if self.answers.load(Ordering::Relaxed) == 0 {
+            // Fail exactly once, then recover: the retry must succeed.
+            self.answers.store(u64::MAX, Ordering::Relaxed);
+            return Err(crate::error::Error::Model("provider down".into()));
+        }
+        if self.answers.load(Ordering::Relaxed) != u64::MAX {
+            self.answers.fetch_sub(1, Ordering::Relaxed);
+        }
+        self.inner.embed(texts).await
+    }
+}
+
+#[tokio::test]
+async fn a_run_that_fails_after_its_first_batch_does_not_count_that_batch_twice() {
+    // First attempt: one batch lands, the next call fails, the run settles
+    // as failed. Its written chunks belong to a file that never confirmed,
+    // so the retry embeds and upserts them again — an `upsert` that reports
+    // the replacement as a write. Counted at write time, the total would be
+    // one attempt too high forever; counted at confirmation, it is the
+    // number of rows the store actually holds.
+    let checkout = Checkout::new();
+    let rig = Rig::new();
+    let embedder = FlakyEmbedder {
+        inner: MockEmbedder::new(16),
+        answers: std::sync::atomic::AtomicU64::new(1),
+    };
+    let signature = crate::ports::embed::Embedder::signature(&embedder);
+    let indexer = Indexer::new(&embedder, &rig.index, &rig.manifest)
+        .expect("builds")
+        .with_batch(1);
+
+    let failed = indexer.index_repo(REPO, "sha-1", &checkout.root()).await;
+    assert!(failed.is_err(), "the first attempt fails");
+    assert_eq!(rig.index.len(), 1, "one batch landed before the failure");
+    let after_failure = rig.manifest.snapshot(REPO, &signature);
+    assert_eq!(after_failure.state, IndexState::Failed);
+    assert_eq!(
+        after_failure.chunks, 0,
+        "an unconfirmed write is not yet a counted chunk"
+    );
+
+    indexer
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("the retry succeeds");
+    let record = rig.manifest.snapshot(REPO, &signature);
+    assert_eq!(record.state, IndexState::Ready);
+    assert_eq!(
+        record.chunks,
+        rig.index.len() as u64,
+        "the settled count is what the store holds, not one per attempt"
+    );
+}
+
 #[tokio::test]
 async fn a_run_that_hits_its_budget_stops_with_a_partial_index_rather_than_failing() {
     let checkout = Checkout::new();
