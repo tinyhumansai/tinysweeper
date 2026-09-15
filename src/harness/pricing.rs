@@ -147,6 +147,19 @@ const MODEL_PRICES: &[(&str, Price)] = &[
         },
     ),
     (
+        // The deep tier this deployment reviews logic with: served first-party
+        // through the gateway, one endpoint, one price. Measured 2026-09-15.
+        // Cache reads are a tenth of input, so a reviewer's follow-up turns —
+        // the lookup rounds share the whole prefix — cost a fraction of the
+        // first.
+        "openai/gpt-5.3-codex",
+        Price {
+            input: 1.75,
+            output: 14.00,
+            cached: 0.175,
+        },
+    ),
+    (
         "moonshotai/kimi-k3",
         Price {
             input: 3.00,
@@ -472,6 +485,8 @@ mod tests {
         ("moonshotai/kimi-k2.6", 0.5415, 2.28),
         ("moonshotai/kimi-k2.7-code", 0.67, 3.40),
         ("moonshotai/kimi-k3", 2.60, 13.00),
+        // One endpoint, OpenAI's own; measured 2026-09-15.
+        ("openai/gpt-5.3-codex", 1.75, 14.00),
         ("qwen/qwen3.8-max", 2.00, 6.00),
         ("z-ai/glm-5.2", 0.336, 1.056),
     ];

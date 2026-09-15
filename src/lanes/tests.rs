@@ -122,11 +122,7 @@ impl Lane for Tests {
             LaneId::Tests,
             &calls,
             &schema::json_schema(),
-            input
-                .config
-                .council
-                .subagents
-                .then_some(input.config.models.flash.as_str()),
+            input.asking(),
         )
         .await?;
 
@@ -400,6 +396,7 @@ mod lane_tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                tree: None,
             })
             .await
             .expect("lane runs")

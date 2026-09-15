@@ -44,6 +44,19 @@ Flag any widening of `permissions`, any unpinned third-party action, and any
 step that interpolates untrusted context into a shell.
 """
 
+# The deep tier is the one that reads logic, and it now reads only logic: a
+# mechanical rename is verified line for line before the fan-out and never
+# sent to a model, and the reviewer looks up the definitions the changed lines
+# call into before it answers. On opencompany#2313 — 58 files, one of them a
+# refactor with two boundary bugs — the default flash model, given the callee's
+# doc comment saying the bound is exclusive, still called the call correct in
+# every run; `openai/gpt-5.3-codex` found it three runs out of three. The
+# residue is one file in fifty-nine, so the dearer model costs about what the
+# fifty-eight rename conversations used to. `scan` and `flash` stay pinned;
+# an `openai/` id is routed unpinned by `models.provider.unpinned_vendors`.
+[models]
+deep = "openai/gpt-5.3-codex"
+
 # Retrieval on, through the same gateway the completion models use. The three
 # fields below are the index partition key: change any of them and the vectors
 # already written stop matching, which is why they live here rather than in the
@@ -54,6 +67,12 @@ provider = "openrouter"
 model = "openai/text-embedding-3-small"
 dimensions = 1536
 api_key_env = "OPENROUTER_API_KEY"
+
+# Index the reviewed repositories' own submodules. Same-host remotes only, with
+# the read token; opencompany's core library is a vendored submodule, and
+# without this the definition a changed line calls into cannot be retrieved.
+[retrieval]
+submodules = true
 
 # The memory engine: the CortexDB the production box already runs, shared
 # with the other services on it and reached over the box's own Docker

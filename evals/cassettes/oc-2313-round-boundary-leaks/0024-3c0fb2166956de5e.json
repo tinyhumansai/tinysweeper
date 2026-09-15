@@ -1,0 +1,17 @@
+{
+  "key": "3c0fb2166956de5e",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3689,
+    "output_tokens": 87,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00033044102
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change narrows the dependency path from the vendor workspace root to the specific `crates/openhuman-core` sub‑crate.  It does not alter any dependency version, feature set, or optionality; it introduces no new network calls, subprocesses, deserialization, or secrets handling.  The diff is sound and safe to merge."
+  }
+}

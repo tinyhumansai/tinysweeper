@@ -1,0 +1,22 @@
+{
+  "key": "419331a910a18044",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3638,
+    "output_tokens": 183,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00034250216
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "pattern": "package \"openhuman\"",
+        "why": "Find the Cargo.toml at the old path to confirm the structure changed and that no new risk is introduced — specifically whether the old path pointed at a workspace root with a cdylib that is now bypassed, which could be a security concern."
+      }
+    ]
+  }
+}

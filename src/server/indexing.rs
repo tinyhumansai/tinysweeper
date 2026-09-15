@@ -146,6 +146,12 @@ impl IndexBackend {
         // review runs against. The write token is minted separately, in
         // `routes.rs`, after every model call has returned.
         let checkout = Checkout::fetch(&git_host(), &repo_id, revision, token).await?;
+        if config.retrieval.submodules {
+            let skipped = checkout.fetch_submodules(&git_host(), token).await?;
+            if !skipped.is_empty() {
+                tracing::info!(repo = %repo_id, ?skipped, "submodules not fetched for indexing");
+            }
+        }
 
         let selector = crate::chunk::Selector::new(&config.paths.ignore)?;
         let indexer = Indexer::new(

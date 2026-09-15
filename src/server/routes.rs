@@ -1612,6 +1612,7 @@ async fn review_inner(
         number,
         installation,
         &forge,
+        &read_token,
         mode,
     ))
     .catch_unwind()
@@ -1659,6 +1660,7 @@ async fn review_inner(
 /// gateway and the index are still built from the deployment's config, because
 /// model choice, credentials and the index partition key are not things a
 /// reviewed repository may set.
+#[allow(clippy::too_many_arguments)]
 async fn run_and_publish(
     state: &AppState,
     config: &Config,
@@ -1666,6 +1668,7 @@ async fn run_and_publish(
     number: u64,
     installation: u64,
     forge: &crate::forge::github::GitHubRead,
+    read_token: &str,
     mode: Mode,
 ) -> Result<crate::app::Proposal> {
     let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
@@ -1695,7 +1698,53 @@ async fn run_and_publish(
     let recaller = state.memory.as_ref().map(|backend| backend.recaller());
 
     let config = config_for(config, mode);
-    let proposal = crate::app::review::review_with_memory(
+
+    // The tree the reviewers may look things up in. A shallow checkout of
+    // the head when `[lookup].checkout` allows it — one commit, no history,
+    // no hooks, the same fetch the indexer makes — so search works and a
+    // read costs no API call; the forge reader behind it for what a shallow
+    // checkout lacks, such as a submodule that was not fetched. Read-only
+    // either way: the token here is the review-read one the forge already
+    // holds, and the checkout is deleted with the review.
+    let checkout = if config.lookup.enabled && config.lookup.checkout {
+        let head = forge.pull_request(repo, number).await?.head_sha;
+        match crate::indexer::fetch::Checkout::fetch(
+            &super::indexing::git_host(),
+            &repo.to_string(),
+            &head,
+            read_token,
+        )
+        .await
+        {
+            Ok(checkout) => {
+                if config.retrieval.submodules
+                    && let Err(err) = checkout
+                        .fetch_submodules(&super::indexing::git_host(), read_token)
+                        .await
+                {
+                    tracing::warn!(%repo, %err, "submodules not fetched for the review's tree");
+                }
+                Some(checkout)
+            }
+            Err(err) => {
+                tracing::warn!(%repo, %err, "no checkout for the review; lookups read through the forge");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    // The review chains the forge reader behind whatever it is given, so a
+    // path the shallow checkout lacks — a submodule that was not fetched —
+    // is still read through the API.
+    let dir_tree = checkout
+        .as_ref()
+        .map(|c| crate::ports::tree::DirTree::new(c.path()).at_revision(c.revision()));
+    let tree = dir_tree
+        .as_ref()
+        .map(|dir| dir as &dyn crate::ports::tree::TreeReader);
+
+    let proposal = crate::app::review::review_with_tree(
         forge,
         model,
         &config,
@@ -1705,6 +1754,7 @@ async fn run_and_publish(
         state.knowledge.as_deref(),
         retriever.as_ref(),
         recaller.as_ref(),
+        tree,
     )
     .await?;
 

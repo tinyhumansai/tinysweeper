@@ -8,8 +8,12 @@
 //!
 //! So a reviewer may end its turn with **questions** instead of guessing. Each
 //! one is dispatched to a child workflow that answers it against the evidence
-//! already gathered, and the reviewer then gets **one** more turn with those
-//! answers in hand. What it says on that turn is what counts.
+//! already gathered — the diff, and what the reviewer looked up first, see
+//! `flows::lookup` — and the reviewer then gets **one** more turn with those
+//! answers in hand. What it says on that turn is what counts. The instruction
+//! used to say the question was "answered from the repository" while the
+//! sub-agent was handed the reviewer's own prompt; it now says what is true,
+//! and points a question about unfetched code at a lookup instead.
 //!
 //! The direction matters. This makes a reviewer *find more* — it is the same
 //! argument `src/council` makes for a second reviewer, and the opposite of
@@ -56,7 +60,7 @@ pub const MAX_QUESTIONS_PER_REVIEWER: usize = 3;
 /// is a constant, so the prefix stays byte-identical run to run and the cache
 /// still hits. It also has to answer the schema's own "there is no second
 /// turn" line, which is true of the last turn and false of this one.
-pub const ASK_INSTRUCTION: &str = "\n\n## Asking instead of guessing\n\nIf something you cannot see would change your verdict — whether a caller already validates this argument, whether the helper being called behaves as the code assumes — put it in `questions` rather than reporting a hedged finding. Each question is answered from the repository and you are asked once more with the answers, which is the turn your verdict is taken from. Ask only what would change what you report: a question whose answer you would ignore costs a call and buys nothing. If nothing is in doubt, omit the key.";
+pub const ASK_INSTRUCTION: &str = "\n\n## Asking instead of guessing\n\nIf something you cannot see would change your verdict — whether a caller already validates this argument, whether the helper being called behaves as the code assumes — put it in `questions` rather than reporting a hedged finding. Each question is answered by another agent against the evidence you have been shown — the diff and whatever you looked up — and you are asked once more with the answers, which is the turn your verdict is taken from. A question about code nobody has fetched yet is better asked as a lookup. Ask only what would change what you report: a question whose answer you would ignore costs a call and buys nothing. If nothing is in doubt, omit the key.";
 
 /// The schema a reviewer's questions are reported under.
 ///

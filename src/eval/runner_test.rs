@@ -44,6 +44,7 @@ fn fixture() -> Fixture {
         commits: vec![],
         comments: vec![],
         blobs: Default::default(),
+        lookups: Default::default(),
     }
 }
 
@@ -474,6 +475,43 @@ async fn the_corpus_ceiling_stops_the_run_rather_than_the_bill() {
 
     assert!(outcome.scores.is_empty());
     assert_eq!(outcome.skipped, ["ts-0001"]);
+}
+
+#[tokio::test]
+async fn a_tree_option_with_more_than_one_case_is_a_config_error() {
+    // `--tree` names one checkout on disk; handing it to every case in a
+    // multi-case run would feed the same tree's lookups into unrelated
+    // fixtures. This must be refused before any case is touched, not
+    // discovered later as corrupted cassettes.
+    let dir = corpus_dir(EXPECTATION);
+    std::fs::write(dir.path().join("cases/ts-0002.toml"), {
+        let mut text = case_toml(EXPECTATION);
+        text = text.replace("ts-0001", "ts-0002");
+        text
+    })
+    .expect("write");
+    std::fs::write(
+        dir.path().join("fixtures/ts-0002.json"),
+        serde_json::to_string_pretty(&fixture()).expect("serializes"),
+    )
+    .expect("write");
+    let corpus = load(dir.path()).expect("loads");
+    assert_eq!(corpus.cases.len(), 2);
+
+    let err = run(
+        &corpus,
+        &config(),
+        None,
+        &RunOptions {
+            out: dir.path().join("runs/test"),
+            tree: Some(dir.path().to_path_buf()),
+            ..RunOptions::default()
+        },
+    )
+    .await
+    .expect_err("--tree with more than one case must be refused");
+
+    assert!(err.to_string().contains("--tree"), "{err}");
 }
 
 #[tokio::test]

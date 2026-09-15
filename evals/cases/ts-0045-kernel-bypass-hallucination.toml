@@ -58,3 +58,32 @@ matches = [
     "describes nothing|wip|unclear message",
     "merge noise|should be squashed|squash",
 ]
+
+# Found by the critique lane once it could read the tree, and true: the
+# `None` arm of `shorten` appends `…` to a `limit`-character head, so the
+# result is `limit + 1` characters against a doc comment promising "at most
+# `limit`". The corpus README records this exact finding being scored a false
+# positive on the first live run. Optional, because the case is about the
+# hallucination above and a run that misses this is not a regression of that;
+# labelled so it is no longer counted against the reviewer for being right.
+# Evidence is the helper itself, in this fixture's diff at
+# `src/findings/summarise.rs:20-23`: the doc comment and the `None` arm
+# disagree, and no reviewer wrote either.
+[[expected]]
+id = "E1"
+path = "src/findings/summarise.rs"
+lines = [18, 24]
+severity_min = "low"
+optional = true
+summary = "`shorten` returns `limit + 1` characters when the head has no space, against its own doc comment."
+must_mention = ["limit", "…|ellipsis|plus one|\\+ 1|exceed|over|one character|no space|word boundary"]
+
+[[expected]]
+id = "E2"
+path = "src/findings/summarise.rs"
+lines = [18, 40]
+severity_min = "low"
+lanes = ["tests"]
+optional = true
+summary = "No test reaches the `None` arm of `shorten`."
+must_mention = ["shorten", "None|no space|no-space|branch|arm"]

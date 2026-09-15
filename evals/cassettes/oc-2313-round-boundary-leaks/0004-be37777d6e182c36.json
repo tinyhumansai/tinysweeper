@@ -1,0 +1,18 @@
+{
+  "key": "be37777d6e182c36",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4222,
+    "output_tokens": 83,
+    "cached_tokens": 1536,
+    "embed_tokens": 0,
+    "cost_usd": 0.000270237968
+  },
+  "value": {
+    "findings": [],
+    "lookups": [],
+    "summary": "This documentation-only change updates the spec to replace 'single turns' with 'rounds' and adds details about width bounds, serial execution, and isolation between turns in a round. The change is descriptive and appears sound — it does not modify any code logic or introduce new invariants that conflict with existing rules."
+  }
+}

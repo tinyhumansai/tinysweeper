@@ -177,6 +177,8 @@ pub struct MockState {
     /// knowledge centre depends on: a test has to be able to prove a file was
     /// read at the pull request's head and not at some other ref.
     pub blobs: BTreeMap<String, String>,
+    /// Submodule gitlinks, keyed by [`file_key`], as `(url, commit)`.
+    pub submodules: BTreeMap<String, (String, String)>,
 }
 
 /// The key a file's contents are stored under.
@@ -191,6 +193,12 @@ impl MockState {
     /// Serve `content` for `path` at `sha`.
     pub fn set_file(&mut self, sha: &str, path: &str, content: &str) {
         self.blobs.insert(file_key(sha, path), content.to_string());
+    }
+
+    /// Serve a submodule gitlink at `path` for `sha`.
+    pub fn set_submodule(&mut self, sha: &str, path: &str, url: &str, commit: &str) {
+        self.submodules
+            .insert(file_key(sha, path), (url.to_string(), commit.to_string()));
     }
 
     /// Report `name` on `sha`. `conclusion: None` means still running.
@@ -533,6 +541,16 @@ impl ForgeRead for MockForge {
     async fn file_at(&self, _repo: &RepoId, path: &str, sha: &str) -> Result<Option<String>> {
         let state = self.state.lock().expect("mock state lock");
         Ok(state.blobs.get(&file_key(sha, path)).cloned())
+    }
+
+    async fn submodule_at(
+        &self,
+        _repo: &RepoId,
+        path: &str,
+        sha: &str,
+    ) -> Result<Option<(String, String)>> {
+        let state = self.state.lock().expect("mock state lock");
+        Ok(state.submodules.get(&file_key(sha, path)).cloned())
     }
 
     async fn issue(&self, _repo: &RepoId, number: u64) -> Result<Issue> {

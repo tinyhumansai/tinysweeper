@@ -82,6 +82,7 @@ fn proposal(findings: Vec<Finding>) -> Proposal {
             conclusion: CheckConclusion::Success,
             summary: "reviewed".into(),
             findings,
+            noted: Vec::new(),
             resolved: vec![],
             deduped: 0,
             highest_severity: None,

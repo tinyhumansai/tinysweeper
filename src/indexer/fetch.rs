@@ -42,6 +42,7 @@ pub const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 *
 pub struct Checkout {
     dir: tempfile::TempDir,
     revision: String,
+    repo: String,
 }
 
 impl Checkout {
@@ -99,7 +100,88 @@ impl Checkout {
         Ok(Self {
             dir,
             revision: revision.to_string(),
+            repo: repo.to_string(),
         })
+    }
+
+    /// Fetch the repository's own submodules into this checkout, shallowly.
+    ///
+    /// Only submodules whose remote is on `host`: the read token rides on
+    /// every request as a header, and `.gitmodules` is written by whoever
+    /// opened the pull request, so a remote elsewhere is never contacted.
+    /// Each one is fetched exactly the way the superproject was — one commit
+    /// by id, no history, no hooks — at the gitlink the superproject records,
+    /// rather than through `git submodule update`, whose `--depth 1` clones
+    /// the remote's default branch and fails when the pinned commit is not
+    /// its tip.
+    ///
+    /// A submodule that cannot be fetched is skipped and named in the
+    /// returned list; the checkout is still usable without it.
+    ///
+    /// Same host is not enough authorization, for the same reason it is not
+    /// in [`crate::forge::tree::ForgeTree`]: `.gitmodules` is written by
+    /// whoever opened the pull request, and a same-host, different-owner
+    /// repository can be at a different trust level than the one under
+    /// review. A submodule is fetched only when its owner matches this
+    /// checkout's own repository owner.
+    pub async fn fetch_submodules(&self, host: &str, token: &str) -> Result<Vec<String>> {
+        let root = self.dir.path();
+        let own_owner = self.repo.split('/').next().unwrap_or("");
+        let Ok(text) = std::fs::read_to_string(root.join(".gitmodules")) else {
+            return Ok(Vec::new());
+        };
+        let mut skipped = Vec::new();
+        for sub in crate::forge::tree::parse_gitmodules(&text, host) {
+            let Some(repo) = &sub.repo else {
+                skipped.push(sub.path.clone());
+                continue;
+            };
+            if repo.owner != own_owner {
+                skipped.push(sub.path.clone());
+                continue;
+            }
+            let dir = root.join(&sub.path);
+            if !dir.starts_with(root) || sub.path.contains("..") {
+                skipped.push(sub.path.clone());
+                continue;
+            }
+            let Some(gitlink) = gitlink(root, token, &sub.path).await? else {
+                skipped.push(sub.path.clone());
+                continue;
+            };
+            let url = format!("https://{host}/{}/{}.git", repo.owner, repo.name);
+            let fetched = async {
+                std::fs::create_dir_all(&dir)
+                    .map_err(|err| Error::Forge(format!("could not make {}: {err}", sub.path)))?;
+                git(&dir, token, &["init", "--quiet"]).await?;
+                git(
+                    &dir,
+                    token,
+                    &[
+                        "fetch",
+                        "--quiet",
+                        "--depth",
+                        "1",
+                        "--no-tags",
+                        &url,
+                        &gitlink,
+                    ],
+                )
+                .await?;
+                git(
+                    &dir,
+                    token,
+                    &["checkout", "--quiet", "--detach", "FETCH_HEAD"],
+                )
+                .await
+            }
+            .await;
+            if let Err(err) = fetched {
+                tracing::warn!(path = %sub.path, %err, "a submodule could not be fetched; indexed without it");
+                skipped.push(sub.path.clone());
+            }
+        }
+        Ok(skipped)
     }
 
     /// The directory the tree was checked out into.
@@ -113,15 +195,36 @@ impl Checkout {
     }
 }
 
+/// The commit the superproject's `HEAD` records for the submodule at `path`.
+async fn gitlink(root: &Path, token: &str, path: &str) -> Result<Option<String>> {
+    let stdout = git_stdout(root, token, &["ls-tree", "HEAD", "--", path]).await?;
+    // `160000 commit <sha>\t<path>`; anything else at that path is not a
+    // submodule and is left alone.
+    let mut fields = stdout.split_whitespace();
+    match (fields.next(), fields.next(), fields.next()) {
+        (Some("160000"), Some("commit"), Some(sha))
+            if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) =>
+        {
+            Ok(Some(sha.to_string()))
+        }
+        _ => Ok(None),
+    }
+}
+
 /// Run one git command in `root`, with hooks and prompts disabled.
 async fn git(root: &Path, token: &str, args: &[&str]) -> Result<()> {
+    git_stdout(root, token, args).await.map(|_| ())
+}
+
+/// Run one git command in `root` and return what it printed.
+async fn git_stdout(root: &Path, token: &str, args: &[&str]) -> Result<String> {
     let mut command = Command::new("git");
     command
         .arg("-C")
         .arg(root)
         .args(args)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // Nothing inherited. A `GIT_CONFIG_COUNT` already in the environment
         // would silently renumber the pairs set below, and the ambient
@@ -160,7 +263,7 @@ async fn git(root: &Path, token: &str, args: &[&str]) -> Result<()> {
             message.trim()
         )));
     }
-    Ok(())
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// `base64(x-access-token:<token>)`, for git's HTTP basic auth.

@@ -401,13 +401,20 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
 /// advisory and only deterministic code mutates anything — but labelling data
 /// as data is what makes the instruction to ignore injected text meaningful.
 pub fn push_fenced(out: &mut String, label: &str, content: &str) {
-    // The fence has to be longer than the longest backtick run in the content,
-    // or a diff containing ```` closes its own fence and everything after it
-    // reads as instructions rather than data. A pull request author picks that
-    // content.
-    let longest_run = content.split(|c| c != '`').map(str::len).max().unwrap_or(0);
-    let fence = "`".repeat(longest_run.max(3) + 1);
+    let fence = fence_for(content);
     let _ = write!(out, "{fence}{label}\n{}\n{fence}\n", content.trim_end());
+}
+
+/// The fence delimiter to wrap `content` in: longer than the longest
+/// backtick run it contains, or a diff (or a looked-up source line)
+/// containing ```` closes the fence early and everything after it reads as
+/// instructions rather than data. Exposed separately from [`push_fenced`] for
+/// callers that render fenced content inside a larger, differently labelled
+/// string — the lookup loop's "what you looked up" sections, for one — and
+/// still need the same collision-safe rule.
+pub fn fence_for(content: &str) -> String {
+    let longest_run = content.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    "`".repeat(longest_run.max(3) + 1)
 }
 
 /// Select the rules that apply to this prompt's paths, **first match wins**.
@@ -494,17 +501,27 @@ comments.
 
 /// Rules every lane shares. Part of the cacheable prefix, so it must not
 /// interpolate anything.
+/// Appended to a turn that is the reviewer's last, so it does not answer as
+/// though another were coming.
+///
+/// This used to open `SHARED_RULES` — "there is no second turn" — and was
+/// therefore in the prefix of every turn, including the ones that offered a
+/// lookup. A model told in one paragraph to decide with what is in front of
+/// it and in a later one that it may read first does the former. Now it is
+/// said only when it is true.
+pub const SETTLE_INSTRUCTION: &str = "\n\n## This is your last turn\n\nAnswer once, completely. \
+There is no turn after this one: you are not going to be asked a follow-up, and nothing you \
+say is a preamble to further work. Decide with what is in front of you and report the result.";
+
 const SHARED_RULES: &str = r#"
 
 ## How to report
 
-Answer once, completely. There is no second turn: you are not going to be asked
-a follow-up, and nothing you say is a preamble to further work. Do not describe
-what you are about to do, what you would like to check, or what you would need
-in order to decide — decide with what is in front of you and report the result.
-
-The summary is your verdict, written as if the review is already finished,
-because it is.
+The summary is your verdict, written as if the review is already finished.
+Do not describe what you are about to do or what you would like to check:
+either you were given a way to check it — in which case use that, and it is
+described below — or you were not, and then you decide with what is in front
+of you and report the result.
 
 The summary and the findings must agree. If you describe a problem in the
 summary it belongs in the findings list, where it can be anchored, gated and
@@ -636,10 +653,26 @@ off-by-one and boundary mistakes, resource leaks, race conditions, incorrect
 assumptions about nullability or ordering, and changes that break an existing
 caller.
 
-Everything you can see is in this prompt. You cannot open files, run commands,
-or look anything up, so a claim that depends on code you were not shown is a
-claim you cannot make: lower its confidence, or drop it. Saying nothing is
-better than asserting something you could not check.
+## The diff is a claim, not a fact
+
+The comments in the diff were written by its author to justify the change.
+Treat every sentence of the form "X is bounded", "this is inert", "cannot
+happen", "is the same as Y" as a hypothesis. For each one, name the concrete
+inputs that would make it false and check whether the code rules them out.
+Three shapes are worth a deliberate look every time: a bound applied to one
+read but not to a sibling read in the same loop; an inclusive value passed
+where an exclusive one is consumed, or the reverse; and an effect one
+iteration of a loop produces that a later iteration can observe. When the
+diff calls a function whose contract you can see — in the repository context,
+in what you looked up, or in its doc comment — check the diff's assumption
+against that definition rather than against the diff's own comment about it.
+
+Where your verdict turns on code you cannot see and cannot fetch, do not
+drop the concern and do not invent the answer: report it at the confidence the
+evidence supports, quoting the changed line, and say in the body exactly which
+detail you could not check. A finding that names a concrete violating case is
+worth reporting at medium confidence; a claim about a crate or module you were
+never shown is not a finding at all.
 
 Style, formatting and naming are not your job unless the repository's own policy
 says otherwise."#
@@ -669,7 +702,14 @@ behaviour, new branches with no coverage, and error paths that are never
 exercised.
 
 Changes with no behavioural component — documentation, formatting, comments — do
-not need tests, and demanding them is noise."#
+not need tests, and demanding them is noise.
+
+A comment in the diff asserting an invariant — "committed once, after every
+turn is durable", "bounded at the round", "cannot happen" — is the author's
+claim, not evidence that the claim holds. The evidence is the test that would
+fail if it were false. When the change states such an invariant, name the test
+that pins it; if none in the diff does, that is the finding, and the summary
+must not restate the invariant as though it were verified."#
         }
         LaneId::Commits => {
             r#"You are reviewing this pull request's commit history: `git log -p` over

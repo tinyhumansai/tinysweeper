@@ -122,11 +122,13 @@ impl Lane for Description {
             LaneId::Description,
             &calls,
             &schema::json_schema(),
-            input
-                .config
-                .council
-                .subagents
-                .then_some(input.config.models.flash.as_str()),
+            // No lookups: the subject is the title and body against the
+            // diff, and a reviewer reading the tree to judge prose is one
+            // spending calls on the wrong question.
+            runner::Asking {
+                tree: None,
+                ..input.asking()
+            },
         )
         .await?;
 
@@ -285,6 +287,7 @@ mod tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                tree: None,
             })
             .await
             .expect("lane runs")
@@ -347,6 +350,7 @@ mod tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "- **rejected — an earlier finding**\n  Maintainer's reply: no.",
+                tree: None,
             })
             .await
             .expect("lane runs");

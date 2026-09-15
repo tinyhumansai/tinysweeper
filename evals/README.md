@@ -61,10 +61,15 @@ The stub will **not** load until a human fills in `provenance.evidence` and
 writes the labels — which is the point. Then:
 
 ```sh
-tinysweeper eval run --record          # live, costs money, writes cassettes
+tinysweeper eval run --record --tree /path/to/checkout   # live, costs money, writes cassettes
 tinysweeper eval score                 # free, offline, re-reads the proposals
 tinysweeper eval report --baseline evals/baselines/current.json
 ```
+
+`--tree` is a checkout of the case's head, submodules included, for the
+reviewer to look things up in; what it reads is frozen into the fixture's
+`lookups` so the replay needs no checkout. Recording without one answers
+every lookup *not found*.
 
 `eval score` is the loop to iterate in. It re-reads proposals from disk, so
 rewriting a matching rule or a label costs nothing.

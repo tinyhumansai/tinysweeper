@@ -1,0 +1,26 @@
+{
+  "key": "21689936b356c943",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 5242,
+    "output_tokens": 561,
+    "cached_tokens": 4554,
+    "embed_tokens": 0,
+    "cost_usd": 0.001846256
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "end": 80,
+        "kind": "read",
+        "path": "vendor/openhuman/crates/openhuman-core/Cargo.toml",
+        "start": 1,
+        "why": "Confirm the new dependency path has package name 'openhuman' and defines the features 'skills', 'mcp', 'hosting' referenced in the diff."
+      }
+    ],
+    "summary": "Provisional: the diff repoints the `openhuman_core` dependency from the workspace root at `vendor/openhuman` to the actual crate at `vendor/openhuman/crates/openhuman-core`, and the package name match looks correct from search results. I need to verify the feature list before giving a final verdict."
+  }
+}

@@ -238,6 +238,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "memory",
             "lanes",
             "council",
+            "lookup",
             "automerge",
             "threads",
             "overview",
@@ -253,6 +254,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "severity_gate",
             "confidence_min",
             "max_comments",
+            "note_confidence",
             "incremental",
             "draft_prs",
             "respect_agents_md",
@@ -285,7 +287,12 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "structured_output",
             "budget_usd_per_pr",
         ]),
-        "models.provider" => Some(&["order", "allow_fallbacks", "last_resort_unpinned"]),
+        "models.provider" => Some(&[
+            "order",
+            "allow_fallbacks",
+            "last_resort_unpinned",
+            "unpinned_vendors",
+        ]),
         "knowledge" => Some(&[
             "extract",
             "files",
@@ -313,6 +320,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "graph_hops",
             "max_graph_nodes",
             "max_impact",
+            "submodules",
         ]),
         "memory" => Some(&[
             "enabled",
@@ -341,6 +349,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
         "lanes.*" => Some(&["model", "fail_on", "secret_rulepack", "max_blob_bytes"]),
         "council" => Some(&["enabled", "corroboration", "subagents", "agents"]),
         "council.agents.*" => Some(&["id", "lanes", "model", "persona"]),
+        "lookup" => Some(&["enabled", "rounds", "per_round", "max_chars", "checkout"]),
         "automerge" => Some(&[
             "enabled",
             "require_checks",
