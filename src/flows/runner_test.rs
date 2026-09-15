@@ -578,6 +578,16 @@ async fn a_reviewer_that_looks_something_up_is_asked_again_with_what_it_read() {
         second.schema["properties"].get("lookups").is_some(),
         "with a round left, the second turn may still ask"
     );
+
+    // Sub-agents are off (`subagent_model: None`, the default), so the early
+    // return past the sub-agent branch must not skip filling `looked_up` —
+    // otherwise the falsifier sees no evidence for a finding this reviewer
+    // only reached because it looked something up.
+    assert!(
+        answers[0].looked_up.contains("## What you looked up"),
+        "{}",
+        answers[0].looked_up
+    );
 }
 
 #[tokio::test]
