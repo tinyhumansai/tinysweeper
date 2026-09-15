@@ -1739,7 +1739,7 @@ async fn run_and_publish(
     // is still read through the API.
     let dir_tree = checkout
         .as_ref()
-        .map(|c| crate::ports::tree::DirTree::new(c.path()));
+        .map(|c| crate::ports::tree::DirTree::new(c.path()).at_revision(c.revision()));
     let tree = dir_tree
         .as_ref()
         .map(|dir| dir as &dyn crate::ports::tree::TreeReader);

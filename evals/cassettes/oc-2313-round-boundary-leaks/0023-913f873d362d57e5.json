@@ -1,0 +1,17 @@
+{
+  "key": "913f873d362d57e5",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3685,
+    "output_tokens": 395,
+    "cached_tokens": 2728,
+    "embed_tokens": 0,
+    "cost_usd": 0.001514832
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change updates a test fixture to match a refactored API, replacing the `next_state` field with `watermark` and `round_start` fields and adding explanatory comments. It is a test-only change with no security implications and looks safe to merge."
+  }
+}

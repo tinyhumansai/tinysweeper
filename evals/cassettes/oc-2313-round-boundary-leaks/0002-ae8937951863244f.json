@@ -1,0 +1,17 @@
+{
+  "key": "ae8937951863244f",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3757,
+    "output_tokens": 104,
+    "cached_tokens": 1536,
+    "embed_tokens": 0,
+    "cost_usd": 0.000234054548
+  },
+  "value": {
+    "findings": [],
+    "summary": "Changes the `use` of `openhuman_core` from a path qualified as `openhuman_core::openhuman` to the bare crate root. This is safe if the crate re-exports the symbols that `McpAuthorizationContext`, `McpHttpClient`, etc. resolve through — and the diff shows they still resolve. The change appears to be a namespace simplification that keeps the same API surface. Merging is safe."
+  }
+}

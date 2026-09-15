@@ -386,18 +386,30 @@ pub async fn ask_all(
                     chars = ledgers[index].chars(),
                     "a reviewer looked something up"
                 );
-                if let Ok(again) = one_round(
+                // The turn that asked was provisional by its own instruction,
+                // so a follow-up that fails cannot leave it standing as the
+                // verdict: the file is reported unreviewed instead.
+                answers[index] = match one_round(
                     &capabilities,
                     lane,
                     std::slice::from_ref(&prompts[index]),
                     &round_schema,
                 )
                 .await
-                    && let Some(settled) = again.into_iter().next()
-                    && settled.value.is_some()
                 {
-                    answers[index] = settled;
-                }
+                    Ok(again) => match again.into_iter().next() {
+                        Some(settled) if settled.value.is_some() => settled,
+                        Some(failed) => failed,
+                        None => Answer::failed(
+                            &prompts[index].id,
+                            "the reviewer produced no answer after looking things up",
+                        ),
+                    },
+                    Err(err) => Answer::failed(
+                        &prompts[index].id,
+                        format!("the follow-up turn after a lookup did not run: {err}"),
+                    ),
+                };
             }
         }
     }
@@ -452,9 +464,11 @@ pub async fn ask_all(
 
         if let Ok(round_two) =
             one_round(&capabilities, lane, std::slice::from_ref(&again), schema).await
-            && let Some(settled) = round_two.into_iter().next()
+            && let Some(mut settled) = round_two.into_iter().next()
             && settled.value.is_some()
         {
+            // The evidence the reviewer read travels with its final answer.
+            settled.looked_up = answers[index].looked_up.clone();
             answers[index] = settled;
         }
     }

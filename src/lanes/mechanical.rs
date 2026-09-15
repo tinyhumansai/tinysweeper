@@ -182,8 +182,8 @@ fn differing_span(removed: &str, added: &str) -> Option<(String, String)> {
 /// The sentence a lane summary carries for verified files.
 pub fn note(sub: &Substitution) -> String {
     format!(
-        "{} file(s) are the mechanical rename `{}` → `{}`, verified line for line and not \
-         sent to a model.",
+        "{} file(s) are the mechanical rename `{}` → `{}`, verified line for line; one of \
+         them was read to judge the substitution itself, the rest were not sent to a model.",
         sub.verified.len(),
         sub.from,
         if sub.to.is_empty() { "" } else { &sub.to }
