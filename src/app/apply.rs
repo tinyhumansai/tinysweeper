@@ -315,6 +315,12 @@ fn title_for(findings: usize, summary: &str) -> String {
     }
 }
 
+/// The rendered summary, for tests in sibling modules.
+#[cfg(test)]
+pub(crate) fn render_lane_summary_for_test(lane: &crate::app::review::LaneProposal) -> String {
+    render_lane_summary(lane)
+}
+
 fn render_lane_summary(lane: &crate::app::review::LaneProposal) -> String {
     // `Neutral` is exactly "this lane formed no opinion" — not implemented,
     // skipped as a draft, or every model call in the chain failed. Anything
