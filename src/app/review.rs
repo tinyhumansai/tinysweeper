@@ -585,6 +585,7 @@ pub async fn review_with_memory(
                 prior_findings: &prior_lines,
                 retrieved_context: &retrieved_context,
                 memory_context: &memory_text,
+                tree: None,
             })
             .await?;
 

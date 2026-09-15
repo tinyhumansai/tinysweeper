@@ -190,6 +190,7 @@ async fn review_file(
     prior_findings: &[String],
     retrieved_context: &str,
     memory_context: &str,
+    tree: None,
     diff: &FileDiff,
     scanner: &[&ScanFinding],
 ) -> Result<FileReview> {
@@ -403,6 +404,7 @@ mod tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                tree: None,
             })
             .await
             .expect("lane runs")
@@ -678,6 +680,7 @@ mod tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                tree: None,
             })
             .await
             .expect("runs");
