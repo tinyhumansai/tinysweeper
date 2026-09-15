@@ -65,21 +65,31 @@ pull request can never be reviewed again.
 `REVIEW_DEADLINE` bounds one review's wall clock, retries included. Each model
 call is capped on its own by the gateway client, but a review is dozens of
 them in sequence and nothing capped the sum: on 2026-09-15 one sat "in
-progress" for over two hours holding a permit. The deadline wraps the lookup
-checkout and the model phase. A review that misses it concludes its check as
-`ActionRequired` with "ran out of time", and is not retried: the deadline is
-the budget, and a retry would spend it again.
+progress" for over two hours holding a permit. A review that misses it
+concludes its check as `ActionRequired` with "ran out of time", and is not
+retried: the deadline is the budget, and a retry would spend it again.
 
-The publish after the lanes has a budget of its own, `PUBLISH_DEADLINE`,
-rather than whatever the lanes left over. `apply` is a handful of sequential,
-non-idempotent writes, and cancelling it between two of them cannot retract
-what GitHub already accepted — so its bound is deliberately generous, sized to
-fire only on a publish that is stuck, never one that is merely slow. The two
-together are asserted at compile time to be shorter than `LEASE_TTL`, because
-a review still running when its lease lapses is exactly the duplicate the
-lease prevents. What is left of that margin covers the metadata reads before
-the lease is taken, and `forge::github`'s client sets a connect and read
-timeout on every call so no single hung socket can spend all of it.
+How it is enforced differs by phase, because cancellation is only safe where
+nothing non-idempotent is in flight:
+
+- **The lanes and the lookup checkout** are *cancelled* at the deadline, in
+  `run_lanes`. This is what drops the model calls.
+- **The metadata phase** between the lease claim and the lanes — the umbrella
+  check's POST, the config overlay, the default-branch read — is not
+  cancelled: a check-run POST cut off after GitHub accepted it is an orphaned
+  check. Each call is bounded by `forge::github`'s request timeout instead,
+  and `Run::check` re-reads the deadline at the boundary before the lease is
+  claimed and again before the lanes start, so a spent budget stops the run
+  before it holds anything.
+- **The publish** has a budget of its own, `PUBLISH_DEADLINE`, rather than
+  whatever the lanes left over. `apply` is a handful of sequential,
+  non-idempotent writes, so its bound is deliberately generous, sized to fire
+  only on a publish that is stuck.
+
+The three add up, with `METADATA_ALLOWANCE` standing in for the metadata
+phase's per-call bounds, and the sum is asserted at compile time to be
+shorter than `LEASE_TTL`, because a review still running when its lease
+lapses is exactly the duplicate the lease prevents.
 
 ### A running review is never silent either
 

@@ -2603,6 +2603,37 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_phase_boundary_refuses_a_spent_budget_and_passes_a_live_one() {
+        // The lease claim and the lanes both consult this before starting.
+        // A spent budget must stop the run *before* it holds anything, and
+        // must surface as the same non-transient timeout the lanes report.
+        let slot: StatusSlot = Arc::new(std::sync::Mutex::new(None));
+        let now = tokio::time::Instant::now();
+        let spent = Run {
+            mode: Mode::Incremental,
+            slot: slot.clone(),
+            deadline: now
+                .checked_sub(std::time::Duration::from_secs(1))
+                .unwrap_or(now),
+        };
+        let err = spent
+            .check("o/r", 7)
+            .expect_err("a spent budget must refuse");
+        assert!(matches!(err, Error::Timeout { ref what, .. } if what == "the review of o/r#7"));
+        assert!(!failure::is_transient(&err));
+
+        let live = Run {
+            mode: Mode::Incremental,
+            slot,
+            deadline: now + REVIEW_DEADLINE,
+        };
+        assert!(
+            live.check("o/r", 7).is_ok(),
+            "a live budget must not refuse"
+        );
+    }
+
     #[test]
     fn an_in_flight_review_is_listed_until_it_ends_and_only_removes_itself() {
         let registry = Arc::new(std::sync::Mutex::new(InFlightRegistry::default()));
