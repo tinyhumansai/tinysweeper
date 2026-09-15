@@ -374,6 +374,15 @@ impl MockForge {
     }
 
     /// Pretend tinysweeper already left a review of this state.
+    /// Make `own_review_state` fail, as a forge mid-outage would.
+    pub fn failing_own_review_state(self) -> Self {
+        {
+            let mut state = self.state.lock().expect("mock state lock");
+            state.own_review_state_fails = true;
+        }
+        self
+    }
+
     pub fn with_own_review(self, number: u64, event: ReviewEvent) -> Self {
         {
             let mut state = self.state.lock().expect("mock state lock");
@@ -542,6 +551,9 @@ impl ForgeRead for MockForge {
 
     async fn own_review_state(&self, _repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
         let state = self.state.lock().expect("mock state lock");
+        if state.own_review_state_fails {
+            return Err(Error::Forge("review history unavailable".into()));
+        }
         Ok(state.own_reviews.get(&number).copied())
     }
 

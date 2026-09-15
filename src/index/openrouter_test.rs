@@ -213,6 +213,29 @@ fn the_ladder_is_built_through_the_same_client_at_the_address_it_was_given() {
     assert!(err.to_string().contains("`ladder`"), "{err}");
 }
 
+#[tokio::test]
+async fn requests_are_paced_to_the_configured_rate() {
+    // 600 a minute is one every 100ms: three paced calls take at least 200ms
+    // between the first and the last. Zero means no pacing at all.
+    let paced = OpenRouterEmbedder::with_key(signature(4), "unused".into(), "")
+        .expect("builds")
+        .with_requests_per_minute(600);
+    let started = std::time::Instant::now();
+    paced.pace().await;
+    paced.pace().await;
+    paced.pace().await;
+    assert!(started.elapsed() >= std::time::Duration::from_millis(200));
+
+    let unpaced = OpenRouterEmbedder::with_key(signature(4), "unused".into(), "")
+        .expect("builds")
+        .with_requests_per_minute(0);
+    let started = std::time::Instant::now();
+    for _ in 0..3 {
+        unpaced.pace().await;
+    }
+    assert!(started.elapsed() < std::time::Duration::from_millis(50));
+}
+
 #[test]
 fn a_provider_this_client_does_not_serve_is_refused() {
     let voyage = EmbedSignature {

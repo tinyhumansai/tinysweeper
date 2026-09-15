@@ -1320,6 +1320,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_unanswered_review_dismisses_even_when_its_own_history_cannot_be_read() {
+        // A failed lookup of our own past verdicts must not shield an
+        // approval that may be standing: the dismissal is attempted anyway,
+        // and is a no-op when nothing stands.
+        let mut unanswered = proposal("abc123", vec![]);
+        for lane in &mut unanswered.lanes {
+            lane.conclusion = CheckConclusion::Neutral;
+            lane.unanswered = vec!["src/lib.rs".into()];
+        }
+        let forge = forge("abc123")
+            .with_own_review(7, ReviewEvent::Approve)
+            .failing_own_review_state();
+        apply(&forge, &forge, &config(), &unanswered, None)
+            .await
+            .expect("applies");
+        assert!(
+            forge
+                .writes()
+                .iter()
+                .any(|w| matches!(w, Write::DismissApproval { .. })),
+            "the dismissal is attempted when the history is unreadable"
+        );
+    }
+
+    #[tokio::test]
     async fn unread_files_do_not_block_either() {
         // The other half. Refusing to approve is not the same as objecting: we
         // do not know there is a problem, only that we did not look, and
