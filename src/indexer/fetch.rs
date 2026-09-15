@@ -42,7 +42,6 @@ pub const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 *
 pub struct Checkout {
     dir: tempfile::TempDir,
     revision: String,
-    repo: String,
 }
 
 impl Checkout {
@@ -100,7 +99,6 @@ impl Checkout {
         Ok(Self {
             dir,
             revision: revision.to_string(),
-            repo: repo.to_string(),
         })
     }
 
