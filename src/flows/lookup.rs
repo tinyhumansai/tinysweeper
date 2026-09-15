@@ -553,15 +553,18 @@ impl Ledger {
                     continue;
                 }
                 self.seen.insert(lookup.key());
-                let mut body = String::from("````\n");
+                let mut hits_text = String::new();
                 for hit in &definitions {
-                    body.push_str(&format!(
-                        "{}:{}: {}
-",
-                        hit.path, hit.line, hit.text
-                    ));
+                    hits_text.push_str(&format!("{}:{}: {}\n", hit.path, hit.line, hit.text));
                 }
-                body.push_str("````");
+                // The fence has to outrun any backtick run in a hit line — a
+                // contributor-controlled source line containing ```` would
+                // otherwise close it early and the rest of this turn's
+                // evidence would read as instructions.
+                let fence = crate::harness::prompt::fence_for(&hits_text);
+                let mut body = format!("{fence}\n");
+                body.push_str(&hits_text);
+                body.push_str(&fence);
                 for hit in definitions {
                     let below = if hit.path == diff.path {
                         SAME_FILE_BELOW
