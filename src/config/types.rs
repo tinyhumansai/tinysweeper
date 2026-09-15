@@ -1690,6 +1690,11 @@ mod provider_routing_tests {
             vec!["streamlake".to_string(), "deepinfra".to_string()]
         );
         // No pin at all: nothing to lift, so the routing is returned as is.
-        assert!(ProviderRouting::default().for_model("openai/x").order.is_empty());
+        assert!(
+            ProviderRouting::default()
+                .for_model("openai/x")
+                .order
+                .is_empty()
+        );
     }
 }
