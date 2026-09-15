@@ -24,10 +24,11 @@ use crate::council::Reviewer;
 use crate::error::Result;
 use crate::evidence::diff::FileDiff;
 use crate::findings::types::Finding;
-use crate::flows::runner::Answer;
+use crate::flows::runner::{Answer, Asking};
 use crate::forge::types::{CheckConclusion, Commit, PullRequest};
 use crate::harness::schema::LaneResponse;
 use crate::ports::model::Spend;
+use crate::ports::tree::TreeReader;
 use crate::scan::types::{Finding as ScanFinding, ScanKind};
 
 /// Everything a lane is given.
@@ -74,9 +75,27 @@ pub struct LaneInput<'a> {
     /// `crate::memory::recall`. Volatile, suffix-only, for the same reasons as
     /// [`Self::retrieved_context`]. Empty when no engine is configured.
     pub memory_context: &'a str,
+    /// The reviewed tree, for a reviewer that wants to check before it
+    /// answers — see `crate::flows::lookup`. `None` reviews the diff alone,
+    /// which every offline golden test does.
+    pub tree: Option<&'a dyn TreeReader>,
 }
 
-impl LaneInput<'_> {
+impl<'a> LaneInput<'a> {
+    /// How this lane's reviewers may follow up: questions when sub-agents are
+    /// on, lookups when a tree was supplied and `[lookup]` allows them.
+    pub fn asking(&self) -> Asking<'a> {
+        Asking {
+            subagent_model: self
+                .config
+                .council
+                .subagents
+                .then_some(self.config.models.flash.as_str()),
+            tree: self.tree,
+            lookup: Some(&self.config.lookup),
+        }
+    }
+
     /// Total lines this pull request added, across every file.
     pub fn additions(&self) -> usize {
         self.diffs.iter().map(FileDiff::additions).sum()

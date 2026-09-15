@@ -122,11 +122,7 @@ impl Lane for Description {
             LaneId::Description,
             &calls,
             &schema::json_schema(),
-            input
-                .config
-                .council
-                .subagents
-                .then_some(input.config.models.flash.as_str()),
+            input.asking(),
         )
         .await?;
 
