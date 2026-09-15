@@ -247,6 +247,13 @@ async function drive({ browser, config, origin, checkoutDir, session, flow, side
       const failed = results.find((r) => !r.ok);
       if (failed) {
         log(`[preview] ${flow.id}: step ${ctx.step} failed: ${failed.error}`);
+        failedAt = ctx.step;
+      } else if (reply.commands.some((c) => c.op !== "record" && c.op !== "done")) {
+        // A later batch that actually did something and succeeded is the
+        // flow recovering. A bare `record`/`done` closing batch — which is
+        // what the server sends once its reopen budget is spent — is not,
+        // and must not turn a failed flow into a published one.
+        failedAt = null;
       }
       // A batch that failed before reaching its `done` has not ended the
       // flow: the next turn shows the server the failure, and it decides
@@ -254,9 +261,6 @@ async function drive({ browser, config, origin, checkoutDir, session, flow, side
       if (reply.done && !failed) break;
       if (ctx.step >= maxSteps) break;
     }
-    // A flow whose last batch failed before `done` did not reach its goal.
-    const last = results[results.length - 1];
-    if (last && !last.ok) failedAt = ctx.step;
   } finally {
     rec.stop();
     await page.close();
