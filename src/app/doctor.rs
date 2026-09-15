@@ -296,12 +296,8 @@ fn print_prose(loaded: &Loaded) {
         ])
         .chain(config.models.fallback.iter().map(String::as_str))
         .collect();
-    let unpriced = crate::harness::pricing::unpriced(configured);
-    if !unpriced.is_empty() {
-        println!(
-            "  unpriced         {} (billed at the most expensive known rate)",
-            unpriced.join(", ")
-        );
+    if let Some(line) = price_line(&config.models.gateway, configured) {
+        println!("  {line}");
     }
 
     println!("\ncapabilities");
@@ -391,6 +387,33 @@ fn print_prose(loaded: &Loaded) {
 /// Which credentials this configuration needs, and whether they are present.
 ///
 /// Only presence is reported. A value never is, and never should be.
+/// The price diagnostic for the configured tiers, when there is one to give.
+///
+/// Behind a ladder the tier names are *ladders*, not model ids — `flash`,
+/// `deep` — and the price table is not where their cost comes from: the
+/// router returns the upstream body, so every call is priced by the model
+/// that answered or by the cost the marketplace reported. Calling them
+/// unpriced would send an operator hunting for table rows that must not
+/// exist. Say what they are instead.
+fn price_line<'a>(gateway: &str, configured: Vec<&'a str>) -> Option<String> {
+    if gateway.trim() == "ladder" {
+        let mut ladders = configured;
+        ladders.sort_unstable();
+        ladders.dedup();
+        return Some(format!(
+            "ladders          {} (priced by the model that answers each call)",
+            ladders.join(", ")
+        ));
+    }
+    let unpriced = crate::harness::pricing::unpriced(configured);
+    (!unpriced.is_empty()).then(|| {
+        format!(
+            "unpriced         {} (billed at the most expensive known rate)",
+            unpriced.join(", ")
+        )
+    })
+}
+
 fn credentials(loaded: &Loaded) -> Vec<(String, bool, &'static str)> {
     let config = &loaded.config;
     let mut wanted: Vec<(String, &'static str)> = vec![
@@ -527,6 +550,22 @@ mod tests {
         let rendered = serde_json::to_string(&redacted_config(&loaded.config).expect("redacts"))
             .expect("serialises");
         assert!(rendered.contains("OPENROUTER_API_KEY"), "{rendered}");
+    }
+
+    #[test]
+    fn ladder_aliases_are_not_reported_as_unpriced() {
+        let behind_ladder = price_line("ladder", vec!["flash", "deep", "flash"]).unwrap();
+        assert!(behind_ladder.starts_with("ladders"), "{behind_ladder}");
+        assert!(behind_ladder.contains("deep, flash"), "{behind_ladder}");
+        assert!(!behind_ladder.contains("unpriced"), "{behind_ladder}");
+
+        let direct = price_line("openrouter", vec!["flash", "deepseek/deepseek-v4-flash"]).unwrap();
+        assert!(direct.starts_with("unpriced"), "{direct}");
+        assert!(
+            direct.contains("flash") && !direct.contains("deepseek/"),
+            "{direct}"
+        );
+        assert!(price_line("openrouter", vec!["deepseek/deepseek-v4-flash"]).is_none());
     }
 
     #[test]
