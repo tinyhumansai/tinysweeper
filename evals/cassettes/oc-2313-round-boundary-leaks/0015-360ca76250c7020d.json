@@ -1,0 +1,17 @@
+{
+  "key": "360ca76250c7020d",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3721,
+    "output_tokens": 59,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00033430012
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change corrects the dependency path from the root `openhuman` package to its inner `openhuman-core` crate, aligning the Cargo.toml with the actual crate structure. No security issues are introduced."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "d4673509258d12bf",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 5181,
+    "output_tokens": 70,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00046335268
+  },
+  "value": {
+    "findings": [],
+    "summary": "The changes re-route module paths following a reorganization of the `openhuman_core` crate, replacing `openhuman_core::openhuman` with `openhuman_core` directly and fixing two doc links. No security-relevant logic or data flow is altered."
+  }
+}

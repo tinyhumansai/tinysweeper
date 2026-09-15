@@ -1,0 +1,17 @@
+{
+  "key": "dc616171beb5bf4b",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4340,
+    "output_tokens": 118,
+    "cached_tokens": 3705,
+    "embed_tokens": 0,
+    "cost_usd": 0.0011454345
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change updates intra-doc link paths from `openhuman_core::openhuman::agent` to `openhuman_core::agent` in comments only. No code logic, permissions, or security-relevant behavior is touched. Safe to merge."
+  }
+}

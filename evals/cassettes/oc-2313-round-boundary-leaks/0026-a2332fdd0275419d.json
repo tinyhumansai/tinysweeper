@@ -1,0 +1,17 @@
+{
+  "key": "a2332fdd0275419d",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3787,
+    "output_tokens": 72,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00034231148
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request updates two doc-comment and `use` paths within `brain.rs` to remove the redundant `openhuman::` segment from the `Agent` and `ToolPolicy` type paths.  The changes are purely cosmetic and do not introduce any security, correctness, or dependency concerns."
+  }
+}

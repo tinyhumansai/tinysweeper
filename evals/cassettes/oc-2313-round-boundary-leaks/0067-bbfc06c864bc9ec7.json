@@ -1,0 +1,25 @@
+{
+  "key": "bbfc06c864bc9ec7",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3595,
+    "output_tokens": 289,
+    "cached_tokens": 3095,
+    "embed_tokens": 0,
+    "cost_usd": 0.0013409529
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core/src/harness/built_in/skills/naming.rs",
+        "pattern": "oh::",
+        "why": "See how `oh` alias is used to determine if the import path change is consistent"
+      }
+    ],
+    "summary": "The diff changes only an import alias from `openhuman_core::openhuman as oh` to `openhuman_core as oh`; without seeing how `oh` is used throughout the file I cannot confirm the path resolves correctly."
+  }
+}

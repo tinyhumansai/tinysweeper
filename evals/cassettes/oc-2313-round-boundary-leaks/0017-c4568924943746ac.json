@@ -1,0 +1,18 @@
+{
+  "key": "c4568924943746ac",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4563,
+    "output_tokens": 108,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00041615532
+  },
+  "value": {
+    "findings": [],
+    "lookups": [],
+    "summary": "The change renames the top-level re-export from `openhuman_core::openhuman` to `openhuman_core` — an import path simplification. All usages in this file are consistent with the new path. The diff introduces no security problems: it touches only use statements and does not alter any logic, data flow, authentication, network calls, deserialization, or permissions. The change is safe to merge."
+  }
+}

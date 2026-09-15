@@ -1,0 +1,17 @@
+{
+  "key": "b0bcdd6b995129b4",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4938,
+    "output_tokens": 66,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004414956
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change renames a use path from `openhuman_core::openhuman::tools::traits` to `openhuman_core::tools::traits`, which matches the public API exposed by the vendor crate. It is safe to merge."
+  }
+}

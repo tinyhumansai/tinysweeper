@@ -1,0 +1,17 @@
+{
+  "key": "a61f5967986141d9",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_description",
+  "usage": {
+    "input_tokens": 25564,
+    "output_tokens": 69,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00223813016
+  },
+  "value": {
+    "findings": [],
+    "summary": "The PR bumps two vendored submodules and adapts the host loop to the new multi-speaker round contract.  The module doc and spec are updated, the pinboard leak is fixed, and all tests pass.  The change looks sound."
+  }
+}

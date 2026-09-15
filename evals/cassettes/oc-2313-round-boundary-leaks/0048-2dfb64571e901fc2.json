@@ -1,0 +1,27 @@
+{
+  "key": "2dfb64571e901fc2",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3592,
+    "output_tokens": 283,
+    "cached_tokens": 3092,
+    "embed_tokens": 0,
+    "cost_usd": 0.00132782496
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "pattern": "pub mod tools",
+        "why": "Check whether `tools` is re-exported at the crate root of openhuman_core, which the new import path `openhuman_core as oh` followed by `oh::tools::traits` requires."
+      },
+      {
+        "kind": "search",
+        "pattern": "pub mod openhuman",
+        "why": "Check whether `openhuman` is a submodule of openhuman_core, which the old import used."
+      }
+    ]
+  }
+}

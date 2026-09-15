@@ -1,0 +1,17 @@
+{
+  "key": "cdd68077eb5fcddb",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 6109,
+    "output_tokens": 135,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00055548332
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change updates a doc-comment path after a module reorganisation, making the documentation link correct. It is safe to merge."
+  }
+}

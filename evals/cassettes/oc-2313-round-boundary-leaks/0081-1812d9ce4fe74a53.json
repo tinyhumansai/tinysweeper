@@ -1,0 +1,17 @@
+{
+  "key": "1812d9ce4fe74a53",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 6757,
+    "output_tokens": 117,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00060877628
+  },
+  "value": {
+    "findings": [],
+    "summary": "The pull request changes the import path from `openhuman_core::openhuman` to `openhuman_core` and uses `as oh` to bring the crate into scope. This is a benign refactor — it does not expose untrusted input to a dangerous sink, change authentication or authorization, introduce new network or subprocess calls, deserialize untrusted data, open a path traversal, move secrets into code or logs, alter dependencies, or widen CI permissions. The change is safe to merge."
+  }
+}

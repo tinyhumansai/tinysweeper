@@ -1,0 +1,17 @@
+{
+  "key": "55b7b110796d88e8",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4645,
+    "output_tokens": 77,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00041789692
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request only modifies `use` paths for the `openhuman` crate alias in two test locations, removing the intermediate `openhuman` module from the path. The `oh` alias resolves to the same `openhuman_core` crate as before, so there is no semantic change and no security risk introduced."
+  }
+}

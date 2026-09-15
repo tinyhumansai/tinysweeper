@@ -1,0 +1,35 @@
+{
+  "key": "127e4631bc59d4c7",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4083,
+    "output_tokens": 360,
+    "cached_tokens": 3495,
+    "embed_tokens": 0,
+    "cost_usd": 0.0016015797
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core/src/hivemind",
+        "pattern": "round_width",
+        "why": "Verify the new doc references to round_width correspond to real code in this module."
+      },
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core/src/hivemind",
+        "pattern": "revealed_width",
+        "why": "Verify the new doc references to revealed_width correspond to real code in this module."
+      },
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core/src/hivemind",
+        "pattern": "tinyhivemind_hive::step",
+        "why": "Check that the referenced step function still exists and its signature aligns with the new doc claims."
+      }
+    ]
+  }
+}

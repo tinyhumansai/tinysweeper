@@ -1,0 +1,17 @@
+{
+  "key": "2a89edcd0f1a9b94",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 7480,
+    "output_tokens": 1399,
+    "cached_tokens": 6402,
+    "embed_tokens": 0,
+    "cost_usd": 0.00450606156
+  },
+  "value": {
+    "findings": [],
+    "summary": "The diff updates a `HiveTurn` test fixture to match a refactored struct: the old `next_state: EpisodeState::opened(...)` field is replaced by `watermark: Sequence(0)` and `round_start: Sequence(u64::MAX)`. The `round_start: Sequence(u64::MAX)` choice is consistent with sibling fixtures in `moves_test.rs` and `test.rs`, and the `<= round_start` visibility predicate in `episode/mod.rs` means it withholds nothing — matching the prior sequential-episode semantics. The change is safe to merge."
+  }
+}

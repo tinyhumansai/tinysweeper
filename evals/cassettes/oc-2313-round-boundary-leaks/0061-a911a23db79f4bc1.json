@@ -1,0 +1,17 @@
+{
+  "key": "a911a23db79f4bc1",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 5276,
+    "output_tokens": 118,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00047998496
+  },
+  "value": {
+    "findings": [],
+    "summary": "This diff renames `openhuman_core::openhuman` to `openhuman_core` itself, changing the import path used by the `oh` alias. The change introduces no new security concerns: it is a pure reorganisation internal to the crate, the types used from `oh::memory` remain the same, and no untrusted input, authentication, network, subprocess, deserialization, path traversal, secret, or CI permission surface is touched. The shortened path is safe to merge."
+  }
+}

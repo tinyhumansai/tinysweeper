@@ -1,0 +1,17 @@
+{
+  "key": "857403a30cdc3c06",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3734,
+    "output_tokens": 34,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00033107816
+  },
+  "value": {
+    "findings": [],
+    "summary": "This is a trivial import path change inside module tests; it does not introduce any security problems."
+  }
+}

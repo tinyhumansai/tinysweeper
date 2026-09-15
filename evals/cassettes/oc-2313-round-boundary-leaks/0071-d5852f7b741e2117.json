@@ -1,0 +1,31 @@
+{
+  "key": "d5852f7b741e2117",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3880,
+    "output_tokens": 188,
+    "cached_tokens": 3328,
+    "embed_tokens": 0,
+    "cost_usd": 0.00119073024
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "vendor",
+        "pattern": "pub mod agent",
+        "why": "Check whether `openhuman_core::agent` exists after the import path change"
+      },
+      {
+        "kind": "search",
+        "path": "vendor",
+        "pattern": "pub use",
+        "why": "Check whether `openhuman_core` re-exports `agent` at the crate root"
+      }
+    ],
+    "summary": "The change repoints import and doc-link paths from `openhuman_core::openhuman::...` to `openhuman_core::...`. I need to verify the new crate-root paths resolve before signing off."
+  }
+}

@@ -5,12 +5,12 @@
   "schema_name": "tinysweeper_rule_extraction",
   "usage": {
     "input_tokens": 3844,
-    "output_tokens": 287,
+    "output_tokens": 345,
     "cached_tokens": 0,
     "embed_tokens": 0,
-    "cost_usd": 0.000391461308
+    "cost_usd": 0.00039482072
   },
   "value": {
-    "rules_markdown": "- Use standard `rustfmt` output and Rust 2024 idioms.\n- Module and file names should be `snake_case`.\n- Public types should be `PascalCase`.\n- Functions, methods, fields, and local variables should be `snake_case`.\n- Return `Result<T>` using the crate error type from `src/error.rs`.\n- Prefer small modules with focused responsibilities.\n- Keep core type definitions in a dedicated `types.rs` file.\n- Place package-local tests in the module file or a dedicated `test.rs` file when they grow.\n- Add focused tests with every behavior change.\n- Keep tests near the module they exercise.\n- Maintain at least 80% coverage for meaningful library behavior.\n- Document any intentionally untested edge case in the PR description.\n- Keep `README.md`, `docs/spec/README.md`, and module docs aligned with code changes.\n- Prefer concrete examples over vague descriptions.\n- Keep every Markdown file at 500 lines or fewer.\n- Use concise, imperative commit subjects.\n- Keep commits small and concise.\n- Include a short summary, commands run locally, and API or behavior changes in PRs.\n- Include updated examples or docs when public APIs, architecture, or usage changes."
+    "rules_markdown": "- Prefer small modules with focused responsibilities; keep core types in a dedicated `types.rs`.\n- Keep package-local tests in the module file or a dedicated `test.rs` when they grow.\n- Use standard `rustfmt` output and Rust 2024 idioms.\n- Module and file names should be `snake_case`; public types `PascalCase`; functions, methods, fields, locals `snake_case`.\n- Return `Result<T>` using the crate error type from `src/error.rs`.\n- Add focused tests with every behavior change; keep tests near the exercised module.\n- Place cross-module tests in the consuming module or in `tests/` as an integration target.\n- A new file under `tests/` is not covered until a CI job both selects it and enables needed features.\n- Feature-gated tests need a row in `scripts/ci/feature-lanes.txt` classifying the lane.\n- Maintain at least 80% coverage for meaningful library behavior.\n- Keep `README.md`, `docs/spec/README.md`, and module docs aligned with code changes.\n- Prefer concrete examples over vague descriptions in documentation.\n- Keep every Markdown file at 500 lines or fewer; split larger topics into focused files.\n- Use concise, imperative commit subjects; avoid bundling unrelated work.\n- Keep commits small and concise; each valid slice on its own.\n- Include a short summary, run commands, and API/behavior changes in PRs.\n- Include updated examples or docs when public APIs, architecture, or usage changes."
   }
 }

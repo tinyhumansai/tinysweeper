@@ -1,0 +1,17 @@
+{
+  "key": "65de341cb56631fb",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3586,
+    "output_tokens": 45,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00032010608
+  },
+  "value": {
+    "findings": [],
+    "summary": "Only a re-import of the `openhuman_core` crate, which appears to be a rename without behavioural change. No security problems introduced."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "be63c6939e770101",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3598,
+    "output_tokens": 663,
+    "cached_tokens": 3097,
+    "embed_tokens": 0,
+    "cost_usd": 0.00213670506
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change updates an import alias from `openhuman_core::openhuman` to `openhuman_core` in a test harness file. It is a straightforward path adjustment with no security implications; if the new path doesn't resolve, compilation would fail before merge."
+  }
+}

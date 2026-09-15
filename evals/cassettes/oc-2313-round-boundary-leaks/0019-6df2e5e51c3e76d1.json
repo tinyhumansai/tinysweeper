@@ -1,0 +1,31 @@
+{
+  "key": "6df2e5e51c3e76d1",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3800,
+    "output_tokens": 209,
+    "cached_tokens": 3263,
+    "embed_tokens": 0,
+    "cost_usd": 0.00121705374
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "glob": "**/lib.rs",
+        "kind": "search",
+        "pattern": "pub mod security",
+        "why": "Confirm that `openhuman_core::security` module exists at crate root after the move."
+      },
+      {
+        "glob": "**/lib.rs",
+        "kind": "search",
+        "pattern": "pub mod tools",
+        "why": "Confirm that `openhuman_core::tools` module exists at crate root after the move."
+      }
+    ],
+    "summary": "The change re-points two imports from the nested `openhuman_core::openhuman::{security,tools}` paths to the crate-root `openhuman_core::{security,tools}` paths in both a function and a test. I need to confirm the new module locations exist and re-export the moved items."
+  }
+}

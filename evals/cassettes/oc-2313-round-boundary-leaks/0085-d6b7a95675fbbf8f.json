@@ -1,0 +1,17 @@
+{
+  "key": "d6b7a95675fbbf8f",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3619,
+    "output_tokens": 55,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00032472132
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change re-exports `openhuman_core` at the top level instead of under `openhuman_core::openhuman`. This is a path cleanup that introduces no security problem; it is safe to merge."
+  }
+}

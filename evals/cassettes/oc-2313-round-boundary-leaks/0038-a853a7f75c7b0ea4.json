@@ -1,0 +1,17 @@
+{
+  "key": "a853a7f75c7b0ea4",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4059,
+    "output_tokens": 569,
+    "cached_tokens": 3552,
+    "embed_tokens": 0,
+    "cost_usd": 0.00199813236
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change updates an import alias from `openhuman_core::openhuman` to `openhuman_core` directly, which aligns with the dependency's module structure where `mcp` is exposed at the crate root. This is a safe import path adjustment with no security implications."
+  }
+}

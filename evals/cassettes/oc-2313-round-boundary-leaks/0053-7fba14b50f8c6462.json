@@ -1,0 +1,44 @@
+{
+  "key": "7fba14b50f8c6462",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3575,
+    "output_tokens": 434,
+    "cached_tokens": 3078,
+    "embed_tokens": 0,
+    "cost_usd": 0.00164494344
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "glob": "crates/openhuman-core/src/**/*.rs",
+        "kind": "search",
+        "pattern": "pub mod openhuman",
+        "why": "Determine whether a `openhuman` submodule or re-export exists, which the old import depended on and the new import bypasses."
+      },
+      {
+        "glob": "crates/openhuman-core/src/**/*.rs",
+        "kind": "search",
+        "pattern": "pub mod memory",
+        "why": "Determine where `memory` and its types live so I can verify the new `openhuman_core` alias resolves them."
+      },
+      {
+        "glob": "crates/openhuman-core/src/lib.rs",
+        "kind": "search",
+        "pattern": "pub use",
+        "why": "Check for re-exports at the crate root that would make the new import path valid."
+      },
+      {
+        "end": 45,
+        "kind": "read",
+        "path": "crates/opencompany-core/src/harness/built_in/memory.rs",
+        "start": 30,
+        "why": "See the full import block to confirm what items must resolve under the new alias."
+      }
+    ],
+    "summary": "The change re-aliases the crate import from `openhuman_core::openhuman` to `openhuman_core` itself. Whether this compiles depends on whether the items imported on the following line are re-exported at the crate root rather than under a `openhuman` submodule, which I cannot confirm without reading the crate's lib.rs or module tree."
+  }
+}

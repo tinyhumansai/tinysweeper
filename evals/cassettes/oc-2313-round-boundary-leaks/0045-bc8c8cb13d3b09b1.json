@@ -1,0 +1,17 @@
+{
+  "key": "bc8c8cb13d3b09b1",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3729,
+    "output_tokens": 87,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00033987324
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change re-exports `openhuman_core` at the crate root and updates two use-paths accordingly. No dangerous sink, no new network or subprocess calls, no deserialization of untrusted data, no path traversal, no secrets in logs, no dependency changes, and no CI permission changes. The change looks sound and safe to merge."
+  }
+}

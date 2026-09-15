@@ -1,0 +1,17 @@
+{
+  "key": "aa5ed4255ca6f2d4",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3793,
+    "output_tokens": 83,
+    "cached_tokens": 512,
+    "embed_tokens": 0,
+    "cost_usd": 0.000309081752
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change replaces an `EpisodeState::opened(...)` value with separate `watermark` and `round_start` fields, adapting a test to a refactored `Turn` struct. The test fixture is purely internal and never reaches a dangerous sink. No security issue is introduced."
+  }
+}

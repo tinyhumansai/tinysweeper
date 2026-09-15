@@ -1,0 +1,17 @@
+{
+  "key": "ef2bb063333b9891",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4280,
+    "output_tokens": 103,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00039064088
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change re-exports `openhuman_core` as `oh` instead of importing its `openhuman` submodule, adjusting the import path for all subsequent `oh::` qualified names.  The code compiles correctly with the new path, and no security issue is introduced by the change itself — it is a pure rename of the module alias.  The pull request is safe to merge as far as this file is concerned."
+  }
+}

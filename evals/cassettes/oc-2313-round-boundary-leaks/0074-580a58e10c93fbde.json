@@ -1,0 +1,42 @@
+{
+  "key": "580a58e10c93fbde",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3599,
+    "output_tokens": 483,
+    "cached_tokens": 3098,
+    "embed_tokens": 0,
+    "cost_usd": 0.00175429464
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core",
+        "pattern": "pub mod openhuman",
+        "why": "Check whether openhuman_core re-exports an inner openhuman module at the crate root, to see if the new import alias resolves correctly."
+      },
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core",
+        "pattern": "pub mod tools",
+        "why": "Determine where the tools module lives relative to openhuman_core and its openhuman submodule, to see if oh::tools resolves after the import change."
+      },
+      {
+        "end": 215,
+        "kind": "read",
+        "path": "crates/opencompany-core/src/harness/built_in/workspace_tools.rs",
+        "start": 195,
+        "why": "Read the surrounding import block to see all uses of the oh alias and confirm the new alias still resolves."
+      },
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core",
+        "pattern": "pub use openhuman",
+        "why": "Check for a re-export that maps openhuman_core::openhuman or openhuman_core::tools at the crate root."
+      }
+    ]
+  }
+}

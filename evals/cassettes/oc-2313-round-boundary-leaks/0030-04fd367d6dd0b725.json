@@ -1,0 +1,17 @@
+{
+  "key": "04fd367d6dd0b725",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3598,
+    "output_tokens": 70,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00032550504
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change updates the import path from `openhuman_core::openhuman as oh` to `openhuman_core as oh`, eliminating an unnecessary module qualifier. The diff is a one-line import simplification with no functional effect; no security or logic issues are introduced."
+  }
+}

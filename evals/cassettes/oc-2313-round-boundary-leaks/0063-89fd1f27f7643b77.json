@@ -1,0 +1,17 @@
+{
+  "key": "89fd1f27f7643b77",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3618,
+    "output_tokens": 128,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00033734792
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change renames an import from `openhuman_core::openhuman as oh` to `openhuman_core as oh`, which is a straightforward alias adjustment. It introduces no new security concerns: no untrusted input is taken, no dangerous sink is reached, no authentication or authorization logic is touched, no network or subprocess calls are added, no deserialization of untrusted data occurs, no path traversal is possible, no secrets are exposed, no dependencies are changed, and no CI permissions are widened. The change looks sound and safe to merge."
+  }
+}

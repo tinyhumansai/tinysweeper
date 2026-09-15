@@ -1,0 +1,18 @@
+{
+  "key": "1c7016932aca3c9c",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3613,
+    "output_tokens": 84,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00032924948
+  },
+  "value": {
+    "findings": [],
+    "lookups": [],
+    "summary": "This pull request changes one import path from `openhuman_core::openhuman as oh` to `openhuman_core as oh`, which is a pure refactor with no security impact. No new untrusted inputs, dangerous sinks, authentication changes, or widened permissions are introduced. It is safe to merge."
+  }
+}

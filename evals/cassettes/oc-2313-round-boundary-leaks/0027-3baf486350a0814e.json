@@ -1,0 +1,17 @@
+{
+  "key": "3baf486350a0814e",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4684,
+    "output_tokens": 99,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00042512456
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change re-exports `openhuman_core` at the crate root, replacing a qualified path that previously required `openhuman_core::openhuman`.  This is a mechanical rename that does not introduce any new untrusted-input paths, authentication/authorisation changes, network calls, deserialization, path traversal, secret exposure, dependency shifts, or widened CI permissions.  The diff is safe to merge."
+  }
+}

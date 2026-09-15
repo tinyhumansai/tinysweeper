@@ -1,0 +1,17 @@
+{
+  "key": "ce0e888642cd0cde",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 5683,
+    "output_tokens": 64,
+    "cached_tokens": 512,
+    "embed_tokens": 0,
+    "cost_usd": 0.000470353912
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change updates the import path from `openhuman_core::openhuman as oh` to `openhuman_core as oh`, which is a trivial path simplification that does not introduce any new security concerns. The change appears safe to merge."
+  }
+}

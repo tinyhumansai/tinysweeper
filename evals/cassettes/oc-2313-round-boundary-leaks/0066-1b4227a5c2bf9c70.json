@@ -1,0 +1,17 @@
+{
+  "key": "1b4227a5c2bf9c70",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3612,
+    "output_tokens": 86,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00032951072
+  },
+  "value": {
+    "findings": [],
+    "summary": "This diff changes a single `use` statement from `use openhuman_core::openhuman as oh;` to `use openhuman_core as oh;`, which is a purely cosmetic rename. It does not introduce any new dependencies, dangerous sinks, or untrusted data paths. The change looks sound."
+  }
+}

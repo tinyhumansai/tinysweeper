@@ -1,0 +1,38 @@
+{
+  "key": "b2df65d1f019a560",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3756,
+    "output_tokens": 287,
+    "cached_tokens": 2744,
+    "embed_tokens": 0,
+    "cost_usd": 0.00163883832
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core/src/lib.rs",
+        "pattern": "pub use",
+        "why": "Confirm openhuman_core crate root re-exports security and tools modules after the alias change"
+      },
+      {
+        "kind": "search",
+        "pattern": "pub mod openhuman",
+        "why": "Check whether an openhuman submodule still exists that might break the old path"
+      },
+      {
+        "kind": "search",
+        "pattern": "pub mod tools",
+        "why": "Confirm tools module is reachable at crate root"
+      },
+      {
+        "kind": "search",
+        "pattern": "pub mod security",
+        "why": "Confirm security module is reachable at crate root"
+      }
+    ]
+  }
+}

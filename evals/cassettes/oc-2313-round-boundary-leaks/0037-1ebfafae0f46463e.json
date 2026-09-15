@@ -1,0 +1,17 @@
+{
+  "key": "1ebfafae0f46463e",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4165,
+    "output_tokens": 71,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00037505356
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change renames the `openhuman_core` import alias from `openhuman_core::openhuman as oh` to `openhuman_core as oh`, which is a pure refactor with no security impact. The bindings are otherwise identical. Safe to merge."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "0d6312622b3eff16",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3610,
+    "output_tokens": 69,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00032637584
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request changes one import line: `use openhuman_core as oh;` becomes `use openhuman_core as oh;` with no actual effect — it was an alias re-importing the crate it already imported. No security problem is introduced."
+  }
+}

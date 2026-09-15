@@ -1,0 +1,17 @@
+{
+  "key": "67246162c5a32bc6",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4429,
+    "output_tokens": 94,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00040204836
+  },
+  "value": {
+    "findings": [],
+    "summary": "The pull request changes the module path for `openhuman_core` items from `openhuman_core::openhuman` to `openhuman_core` in both the import and the type bound, matching a restructuring that appears intentional. The lookups show the same path change in the test helper `step_label` in the sibling module; everything is consistent. No security problems are introduced."
+  }
+}

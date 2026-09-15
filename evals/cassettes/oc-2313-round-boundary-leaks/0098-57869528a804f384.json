@@ -1,0 +1,17 @@
+{
+  "key": "57869528a804f384",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 6311,
+    "output_tokens": 1297,
+    "cached_tokens": 5322,
+    "embed_tokens": 0,
+    "cost_usd": 0.00409348296
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change re-aliases the `openhuman_core` import from its `openhuman` submodule to the crate root, which is a straightforward refactor with no security implications. It looks safe to merge."
+  }
+}

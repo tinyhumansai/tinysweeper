@@ -1,0 +1,37 @@
+{
+  "key": "d0c36e58fe58ceec",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3588,
+    "output_tokens": 634,
+    "cached_tokens": 3089,
+    "embed_tokens": 0,
+    "cost_usd": 0.00207271722
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core",
+        "pattern": "pub mod openhuman",
+        "why": "Check if openhuman_core has a submodule or re-export named openhuman, to see if the import alias change resolves correctly"
+      },
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core",
+        "pattern": "pub mod config",
+        "why": "Check if config, security, and tools modules exist at crate root vs inside an openhuman module"
+      },
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core/src/lib.rs",
+        "pattern": "pub use",
+        "why": "See how the crate root re-exports modules to understand if oh::config resolves the same way"
+      }
+    ],
+    "summary": "The change renames an import alias from `openhuman_core::openhuman as oh` to `openhuman_core as oh`. I need to verify that the paths `oh::config`, `oh::security`, and `oh::tools` still resolve correctly after this change."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "dae4cd26b3dc5eca",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4032,
+    "output_tokens": 260,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00039638816
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change only relocates the import of `SecurityPolicy` from `openhuman_core::openhuman::security` to `openhuman_core::security`, matching the module path reported in the crate's public surface. No untrusted input, new network or subprocess calls, deserialization, path traversal, secrets, or permission changes are introduced. The diff is safe to merge."
+  }
+}

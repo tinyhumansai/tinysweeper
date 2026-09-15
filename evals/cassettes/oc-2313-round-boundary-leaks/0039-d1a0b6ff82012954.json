@@ -1,0 +1,17 @@
+{
+  "key": "d1a0b6ff82012954",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3617,
+    "output_tokens": 47,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00032315388
+  },
+  "value": {
+    "findings": [],
+    "summary": "This is a trivial import path change from `openhuman_core::openhuman` to `openhuman_core` with no semantic impact. No security problems are introduced."
+  }
+}
