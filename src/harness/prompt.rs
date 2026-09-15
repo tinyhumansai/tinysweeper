@@ -685,7 +685,14 @@ behaviour, new branches with no coverage, and error paths that are never
 exercised.
 
 Changes with no behavioural component — documentation, formatting, comments — do
-not need tests, and demanding them is noise."#
+not need tests, and demanding them is noise.
+
+A comment in the diff asserting an invariant — "committed once, after every
+turn is durable", "bounded at the round", "cannot happen" — is the author's
+claim, not evidence that the claim holds. The evidence is the test that would
+fail if it were false. When the change states such an invariant, name the test
+that pins it; if none in the diff does, that is the finding, and the summary
+must not restate the invariant as though it were verified."#
         }
         LaneId::Commits => {
             r#"You are reviewing this pull request's commit history: `git log -p` over
