@@ -252,17 +252,21 @@ enum Command {
 enum PreviewCommand {
     /// Render the preview comment from a manifest, without touching GitHub.
     ///
-    /// The manifest is what `actions/ui-preview/` uploads; the base URL
-    /// stands in for `preview.public_base_url`. Prints the comment body, or
-    /// says there is nothing to show.
+    /// The manifest is what `actions/ui-preview/` produces. Links point at
+    /// the store branch unless `--base-url` names a bucket instead. Prints
+    /// the comment body, or says there is nothing to show.
     Render {
         /// Path to a `manifest.json`.
         #[arg(long)]
         manifest: std::path::PathBuf,
 
-        /// The origin the run's assets are served from.
-        #[arg(long, default_value = "https://previews.example.org")]
-        base_url: String,
+        /// An object-store origin to link to, in place of the branch.
+        #[arg(long)]
+        base_url: Option<String>,
+
+        /// The store branch to link to.
+        #[arg(long, default_value = "tinysweeper/ui-previews")]
+        branch: String,
     },
 
     /// Plan the user flows for a pull request and print them. Requires the
@@ -1089,7 +1093,11 @@ async fn run_automerge(_repo: &str, _pr: u64, _dry_run: bool) -> Result<()> {
 /// The offline halves of the UI preview.
 async fn run_preview(command: PreviewCommand) -> Result<()> {
     match command {
-        PreviewCommand::Render { manifest, base_url } => {
+        PreviewCommand::Render {
+            manifest,
+            base_url,
+            branch,
+        } => {
             let bytes = std::fs::read(&manifest)?;
             let parsed = tinysweeper::preview::manifest::parse(&bytes)?;
             // The manifest is trusted to be about itself here: there is no
@@ -1128,8 +1136,12 @@ async fn run_preview(command: PreviewCommand) -> Result<()> {
             // Likewise, every flow is treated as driven: there is no
             // session's `states` to check against.
             let driven = planned.iter().map(|f| f.id.clone()).collect();
+            let storage = match base_url.as_deref() {
+                Some(base_url) => tinysweeper::preview::manifest::Storage::Bucket { base_url },
+                None => tinysweeper::preview::manifest::Storage::Branch { branch: &branch },
+            };
             let gallery = tinysweeper::preview::manifest::validate(
-                &parsed, &expected, &base_url, loaded, &planned, &driven,
+                &parsed, &expected, storage, loaded, &planned, &driven,
             )?;
             match tinysweeper::preview::render::comment(&gallery) {
                 Some(body) => println!("{body}"),
