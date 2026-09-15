@@ -1805,7 +1805,7 @@ async fn review_inner(
     // this function exists to conclude. The forge calls here are bounded on
     // their own by `forge::github::REQUEST_TIMEOUT`, which is what the margin
     // between `REVIEW_DEADLINE` and `LEASE_TTL` is for.
-    {
+    let outcome = {
         open_status(
             state,
             &run.slot,
@@ -1923,8 +1923,7 @@ async fn review_inner(
                 let publish = async {
                     let write_token = state.auth.installation_token(installation).await?;
                     let write = crate::forge::github::GitHubWrite::new(&write_token)?;
-                    crate::app::apply(&forge, &write, &config, &proposal, Some(&state.store))
-                        .await
+                    crate::app::apply(&forge, &write, &config, &proposal, Some(&state.store)).await
                 };
                 publish.await.map(|()| proposal)
             }
@@ -1940,11 +1939,8 @@ async fn review_inner(
         drop(permit);
 
         outcome
-    }
-    .pipe_into_findings(state, author, repo, number, installation)
-    .await
-}
-PLACEHOLDER_REMOVE_ME
+    };
+
     let proposal = outcome?;
     let findings = proposal.findings().count();
     state.store.record_review(author, findings as u64).await?;
@@ -1972,22 +1968,24 @@ PLACEHOLDER_REMOVE_ME
     Ok(Some(findings))
 }
 
-/// Run the review lanes under the cancellable deadline, and hand back what
-/// they produced for `review_inner` to publish uncancelled.
+/// Run the checkout and the lanes under the deadline, and hand back what they
+/// produced for `review_inner` to publish uncancelled.
 ///
 /// `config` is the *effective* config for this repository — the deployment's,
 /// with the reviewed repository's own allow-listed keys laid over it. The model
 /// gateway and the index are still built from the deployment's config, because
 /// model choice, credentials and the index partition key are not things a
-/// reviewed repository may set. Despite the name, this no longer publishes —
-/// see the comment on its return.
-#[allow(clippy::too_many_arguments)]
-async fn run_and_publish(
+/// reviewed repository may set. The config handed back is that one with the
+/// run's mode layered on, so the publish applies the same policy the lanes
+/// ran under.
+///
+/// Holds no write credential: nothing in here runs after a model call has
+/// returned, so nothing in here may mint one.
+async fn run_lanes(
     state: &AppState,
     config: &Config,
     repo: &RepoId,
     number: u64,
-    installation: u64,
     forge: &crate::forge::github::GitHubRead,
     read_token: &str,
     run: &Run,
@@ -1996,8 +1994,9 @@ async fn run_and_publish(
         &state.config.config.models,
     )?);
 
-    // The model runs against a read-only handle. The write token is minted
-    // below, after this returns — same boundary as the workflow, same reason.
+    // The model runs against a read-only handle. The write token is minted by
+    // the caller, after this returns — same boundary as the workflow, same
+    // reason.
     // The store doubles as the review-state cache: it is what lets the next
     // push replay this run's evidence verbatim and pay cache prices for it.
     // Dedupe does not depend on it — that reads the markers off the pull
@@ -2020,21 +2019,12 @@ async fn run_and_publish(
 
     let config = config_for(config, run.mode);
 
-    // `review_inner` already wraps this whole call, the write-token mint and
-    // the publish below in the same `run.deadline` — the lease-held lifecycle
-    // shares one clock, so a slow publish cannot let the lease outlive it any
-    // more than a slow model call can. This inner `timeout_at` targets just
-    // the checkout and the lanes: it is what actually drops the model calls
-    // in flight rather than merely racing them against the outer wrapper, and
-    // it gives the timeout error the specific "the review of ..." wording
-    // instead of the outer, coarser one. The checkout sits inside it so that
-    // a deadline already in the past — a retry after a slow failure —
-    // resolves at once, before a clone is even started, which is the intended
-    // way of refusing the retry. A timeout is non-transient (`failure::is_transient`
-    // never retries it), so a deadline that lands mid-publish costs at most
-    // one partially-posted review, never a duplicate — the exact tradeoff
-    // `REVIEW_DEADLINE`'s doc comment already accepts by keeping this shorter
-    // than `LEASE_TTL`.
+    // The deadline bounds the checkout and the lanes — everything that can
+    // take minutes and nothing that must not be cut short. `timeout_at` drops
+    // the inner future when it elapses, which cancels every model call in
+    // flight. The checkout sits inside it so that a deadline already in the
+    // past — a retry after a slow failure — resolves at once, before a clone
+    // is even started, which is the intended way of refusing the retry.
     let review = async {
         // The tree the reviewers may look things up in. A shallow checkout of
         // the head when `[lookup].checkout` allows it — one commit, no history,
@@ -2105,16 +2095,7 @@ async fn run_and_publish(
             Error::timeout(format!("the review of {repo}#{number}"), REVIEW_DEADLINE)
         })??;
 
-    // Deliberately returned rather than published here: `apply` performs
-    // several sequential, non-idempotent writes (lane checks, the review
-    // body, comments), and this function is called from inside the outer
-    // `timeout_at` in `review_inner`. Publishing here would put `apply` under
-    // that same cancellable deadline — dropping it mid-sequence cannot
-    // retract whatever GitHub already accepted, so a deadline landing between
-    // two of its writes would leave a permanently partial review instead of a
-    // clean timeout. `review_inner` publishes this proposal itself, after the
-    // cancellable phase has returned.
-    Ok((config, proposal))
+    Ok((config.into_owned(), proposal))
 }
 
 /// The UI preview routes' way into the brain.
