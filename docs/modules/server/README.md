@@ -74,6 +74,13 @@ the lease prevents. A review that misses it concludes its check as
 `ActionRequired` with "ran out of time", and is not retried: the deadline is
 the budget, and a retry would spend it again.
 
+The margin between `REVIEW_DEADLINE` and `LEASE_TTL` is spent on the phases
+the deadline itself does not cover: the metadata reads before it and the
+publish after it. Those still need their own bound, because a hung socket
+does not know about either duration — `forge::github`'s client sets a
+connect and read timeout on every call for exactly this, so no single request
+in that margin can spend all of it.
+
 ### A running review is never silent either
 
 `server::status` owns **`tinysweeper/review`**, one check with a lifecycle
