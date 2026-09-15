@@ -1317,6 +1317,30 @@ struct Run {
     deadline: tokio::time::Instant,
 }
 
+/// The registry behind `AppState::in_flight`.
+///
+/// `accepting` shares a lock with `slots` on purpose. `conclude_in_flight`
+/// needs to take an exact snapshot of every review it is about to conclude
+/// and refuse every registration from then on, atomically — otherwise a
+/// review could register in the gap between the snapshot and the flag being
+/// set, land on neither side, and be exactly the orphaned check this whole
+/// registry exists to prevent. One lock covering both makes that gap not
+/// exist: a registration either lands in the snapshot or observes shutdown
+/// already in progress.
+struct InFlightRegistry {
+    slots: Vec<StatusSlot>,
+    accepting: bool,
+}
+
+impl Default for InFlightRegistry {
+    fn default() -> Self {
+        Self {
+            slots: Vec::new(),
+            accepting: true,
+        }
+    }
+}
+
 /// A review's membership in `AppState::in_flight`, for as long as it runs.
 ///
 /// A guard rather than a pair of calls so that every exit from
@@ -1324,20 +1348,25 @@ struct Run {
 /// guard removes exactly its own slot, by pointer, so two reviews finishing
 /// in either order cannot remove each other.
 struct InFlight {
-    registry: Arc<std::sync::Mutex<Vec<StatusSlot>>>,
+    registry: Arc<std::sync::Mutex<InFlightRegistry>>,
     slot: StatusSlot,
 }
 
 impl InFlight {
-    fn register(registry: &Arc<std::sync::Mutex<Vec<StatusSlot>>>, slot: &StatusSlot) -> Self {
-        registry
-            .lock()
-            .expect("in-flight reviews")
-            .push(slot.clone());
-        Self {
+    /// `None` once shutdown has taken its snapshot: the caller declines the
+    /// review outright, before opening a check, rather than register a slot
+    /// nothing will ever conclude.
+    fn register(registry: &Arc<std::sync::Mutex<InFlightRegistry>>, slot: &StatusSlot) -> Option<Self> {
+        let mut guard = registry.lock().expect("in-flight reviews");
+        if !guard.accepting {
+            return None;
+        }
+        guard.slots.push(slot.clone());
+        drop(guard);
+        Some(Self {
             registry: registry.clone(),
             slot: slot.clone(),
-        }
+        })
     }
 }
 
@@ -1346,6 +1375,7 @@ impl Drop for InFlight {
         self.registry
             .lock()
             .expect("in-flight reviews")
+            .slots
             .retain(|other| !Arc::ptr_eq(other, &self.slot));
     }
 }
