@@ -2407,24 +2407,40 @@ mod tests {
 
     #[test]
     fn an_in_flight_review_is_listed_until_it_ends_and_only_removes_itself() {
-        let registry = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let registry = Arc::new(std::sync::Mutex::new(InFlightRegistry::default()));
         let first: StatusSlot = Arc::new(std::sync::Mutex::new(None));
         let second: StatusSlot = Arc::new(std::sync::Mutex::new(None));
 
-        let a = InFlight::register(&registry, &first);
-        let b = InFlight::register(&registry, &second);
-        assert_eq!(registry.lock().unwrap().len(), 2);
+        let a = InFlight::register(&registry, &first).expect("accepting");
+        let b = InFlight::register(&registry, &second).expect("accepting");
+        assert_eq!(registry.lock().unwrap().slots.len(), 2);
 
         // Finishing in the other order from registration must remove exactly
         // the finished review, by identity, not whichever came first.
         drop(a);
         let left = registry.lock().unwrap();
-        assert_eq!(left.len(), 1);
-        assert!(Arc::ptr_eq(&left[0], &second));
+        assert_eq!(left.slots.len(), 1);
+        assert!(Arc::ptr_eq(&left.slots[0], &second));
         drop(left);
 
         drop(b);
-        assert!(registry.lock().unwrap().is_empty());
+        assert!(registry.lock().unwrap().slots.is_empty());
+    }
+
+    #[test]
+    fn a_review_declines_to_register_once_shutdown_has_taken_its_snapshot() {
+        // The race this closes: a webhook accepted while `conclude_in_flight`
+        // is still awaiting its network calls must not be able to land a slot
+        // after the snapshot — it would then run unwatched by any shutdown
+        // pass. Flipping `accepting` and taking the snapshot under the same
+        // lock is what makes that impossible; this asserts the caller's half
+        // of that contract.
+        let registry = Arc::new(std::sync::Mutex::new(InFlightRegistry::default()));
+        registry.lock().unwrap().accepting = false;
+
+        let slot: StatusSlot = Arc::new(std::sync::Mutex::new(None));
+        assert!(InFlight::register(&registry, &slot).is_none());
+        assert!(registry.lock().unwrap().slots.is_empty());
     }
 
     #[test]
