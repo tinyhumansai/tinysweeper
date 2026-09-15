@@ -1533,27 +1533,9 @@ impl ForgeRead for GitHubRead {
         );
         let raw: serde_json::Value = self.client.get(route, None::<&()>).await.map_err(api)?;
 
-        // Only our own reviews, latest last. GitHub keeps every review in this
-        // list, so the state that matters is the final one we left — an earlier
-        // block followed by our own approval is not a block.
-        Ok(raw.as_array().and_then(|reviews| {
-            reviews
-                .iter()
-                .filter(|r| {
-                    // Exact rather than `starts_with`, which would have counted
-                    // a review left by an account called `tinysweeper-anything`
-                    // as our own. See `findings::prior::is_own_login`.
-                    let login = r["user"]["login"].as_str().unwrap_or_default();
-                    crate::findings::prior::is_own_login(login)
-                })
-                .filter_map(|r| match r["state"].as_str() {
-                    Some("CHANGES_REQUESTED") => Some(ReviewEvent::RequestChanges),
-                    Some("APPROVED") => Some(ReviewEvent::Approve),
-                    Some("COMMENTED") => Some(ReviewEvent::Comment),
-                    _ => None,
-                })
-                .next_back()
-        }))
+        Ok(raw
+            .as_array()
+            .and_then(|reviews| own_review_state_of(reviews.iter())))
     }
 
     async fn file_at(&self, repo: &RepoId, path: &str, sha: &str) -> Result<Option<String>> {
@@ -1967,6 +1949,39 @@ impl ForgeWrite for GitHubWrite {
 ///
 /// Split out of `create_review` so the wire format is a pure, testable
 /// function — the HTTP call itself can't run the offline suite.
+/// The verdict that stands from a list of reviews, ours only, oldest first.
+///
+/// The one that matters is the last *verdict* we left — an earlier block
+/// followed by our own approval is not a block. A `COMMENTED` review is not
+/// a verdict: GitHub leaves a standing changes request in force under any
+/// number of comments, so reading the latest comment as "the state" would
+/// make the block invisible to the code whose job is to clear it. That is
+/// exactly what a review nobody answered posts — a comment saying it could
+/// not review — and the clean push after the outage must still see the
+/// block it has to lift. Only when we have never left a verdict at all does
+/// a comment count, as "we have reviewed this before".
+fn own_review_state_of<'a>(
+    reviews: impl Iterator<Item = &'a serde_json::Value>,
+) -> Option<ReviewEvent> {
+    let mut last_verdict = None;
+    let mut commented = false;
+    for review in reviews.filter(|r| {
+        // Exact rather than `starts_with`, which would have counted a review
+        // left by an account called `tinysweeper-anything` as our own. See
+        // `findings::prior::is_own_login`.
+        let login = r["user"]["login"].as_str().unwrap_or_default();
+        crate::findings::prior::is_own_login(login)
+    }) {
+        match review["state"].as_str() {
+            Some("CHANGES_REQUESTED") => last_verdict = Some(ReviewEvent::RequestChanges),
+            Some("APPROVED") => last_verdict = Some(ReviewEvent::Approve),
+            Some("COMMENTED") => commented = true,
+            _ => {}
+        }
+    }
+    last_verdict.or(commented.then_some(ReviewEvent::Comment))
+}
+
 fn review_comment_payload(c: &ReviewComment) -> serde_json::Value {
     // Every finding here is anchored to a line the diff actually touches (see
     // `anchored_in_diff`), always on the head revision. GitHub defaults `side`
@@ -2284,6 +2299,36 @@ mod tests {
             bot: false,
             state,
         }
+    }
+
+    #[test]
+    fn a_comment_after_our_own_block_leaves_the_block_standing() {
+        // What a review nobody answered posts is a comment. GitHub keeps the
+        // changes request in force under it, and so must we, or the clean
+        // push after the outage never sees the block it has to clear.
+        let own = |state: &str| serde_json::json!({ "user": { "login": "tinysweeper[bot]" }, "state": state });
+        let reviews = vec![own("CHANGES_REQUESTED"), own("COMMENTED")];
+        assert_eq!(
+            own_review_state_of(reviews.iter()),
+            Some(ReviewEvent::RequestChanges)
+        );
+
+        let cleared = vec![own("CHANGES_REQUESTED"), own("APPROVED"), own("COMMENTED")];
+        assert_eq!(
+            own_review_state_of(cleared.iter()),
+            Some(ReviewEvent::Approve)
+        );
+
+        let only_comments = vec![own("COMMENTED")];
+        assert_eq!(
+            own_review_state_of(only_comments.iter()),
+            Some(ReviewEvent::Comment)
+        );
+
+        let theirs = vec![
+            serde_json::json!({ "user": { "login": "someone" }, "state": "CHANGES_REQUESTED" }),
+        ];
+        assert_eq!(own_review_state_of(theirs.iter()), None);
     }
 
     #[test]
