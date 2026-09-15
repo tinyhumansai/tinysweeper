@@ -125,10 +125,22 @@ pub async fn apply(
         && previous == Some(ReviewEvent::Approve)
         && comments.is_empty();
 
+    // A review the model never answered is submitted too, as a comment: the
+    // lane checks say "did not review", but a reader of the conversation sees
+    // only that the bot said nothing, which on a clean-looking pull request
+    // reads as an all-clear. A file the *forge* withheld is not in this list
+    // — that is a property of the pull request, it recurs on every push, and
+    // the check runs already carry it.
+    let unanswered_by_a_model = proposal
+        .lanes
+        .iter()
+        .any(|lane| !lane.unanswered.is_empty());
+
     if !redundant_approval
         && (!comments.is_empty()
             || event == ReviewEvent::Approve
-            || event == ReviewEvent::RequestChanges)
+            || event == ReviewEvent::RequestChanges
+            || unanswered_by_a_model)
     {
         write
             .create_review(
