@@ -1446,7 +1446,7 @@ impl Drop for InFlight {
 /// property that rule protects is that *the model* never holds a write handle,
 /// and that is preserved exactly: the token is minted here, used for one
 /// request, and dropped before this function returns — it is never placed in
-/// `AppState`, never passed to `run_and_publish`, and no lane or model can
+/// `AppState`, never passed to `run_lanes`, and no lane or model can
 /// reach it. `report_failure` has always minted one on the same terms. See the
 /// pull request that introduced this for the discussion the boundary requires.
 async fn open_status(
@@ -2487,7 +2487,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_review_past_its_deadline_fails_as_a_timeout_and_is_not_retried() {
-        // The shape `run_and_publish` relies on: a deadline already in the
+        // The shape `run_lanes` relies on: a deadline already in the
         // past resolves immediately, so a retry that arrives after the budget
         // is spent is refused instead of starting another twenty minutes.
         let now = tokio::time::Instant::now();

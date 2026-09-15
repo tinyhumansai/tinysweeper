@@ -136,7 +136,7 @@ lanes run, which the security boundary otherwise reserves for after every model
 call. The property that rule protects — *the model never holds a write handle*
 — is preserved exactly. The token is minted in `open_status`, used for one
 request, and dropped before the function returns; it never enters `AppState`,
-never reaches `run_and_publish`, and no lane or model can reach it.
+never reaches `run_lanes`, and no lane or model can reach it.
 `report_failure` has always minted one on the same terms.
 
 ### A failed review is never silent
