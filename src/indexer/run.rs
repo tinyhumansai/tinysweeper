@@ -443,9 +443,14 @@ impl<'a> Indexer<'a> {
         // See [`Indexer::missing`].
         let under =
             |dirs: &[String], path: &String| dirs.iter().any(|dir| path.starts_with(dir.as_str()));
+        //
+        // Revocation wins a tie. `.gitmodules` is the contributor's, and two
+        // entries for one path — one allow-listed whose fetch failed, one not
+        // allow-listed — would otherwise let the "missing" reading keep rows
+        // the operator revoked.
         let (_missing, removed): (Vec<String>, Vec<String>) = removed
             .into_iter()
-            .partition(|path| under(&self.missing, path));
+            .partition(|path| under(&self.missing, path) && !under(&self.revoked, path));
         // Named whether or not the index held anything under them: a cold
         // repository, or a submodule allow-listed today, has no old rows to
         // keep — and still must not have its head claimed as indexed.
@@ -671,13 +676,40 @@ impl<'a> Indexer<'a> {
             .filter(|(index, _)| finished(*index))
             .map(|(_, file)| file.confirmation())
             .collect();
-        self.manifest.record(repo_id, signature, &complete).await?;
-        report.upserted += work
+        let recorded = self.manifest.record(repo_id, signature, &complete).await;
+        // Counted per file that is *on record* as confirmed, not per file this
+        // run meant to confirm. A manifest that writes its rows one at a time
+        // can fail part-way, and the files it did write are confirmed for
+        // good: the retry sees them unchanged and never counts them. So on a
+        // failure the manifest is asked which ones landed, those are counted,
+        // and only then does the error go up to settle with them.
+        let counted: Vec<usize> = match &recorded {
+            Ok(()) => work
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| finished(*index))
+                .map(|(index, _)| index)
+                .collect(),
+            Err(_) => {
+                let paths: Vec<String> = complete.iter().map(|file| file.path.clone()).collect();
+                let landed = self.manifest.indexed(repo_id, signature, &paths).await?;
+                work.iter()
+                    .enumerate()
+                    .filter(|(index, file)| {
+                        finished(*index)
+                            && landed.iter().any(|on_record| {
+                                on_record.path == file.path && on_record.chunks == file.ids
+                            })
+                    })
+                    .map(|(index, _)| index)
+                    .collect()
+            }
+        };
+        report.upserted += counted
             .iter()
-            .enumerate()
-            .filter(|(index, _)| finished(*index))
-            .map(|(index, file)| written_per_file[index] + file.to_relocate.len() as u64)
+            .map(|&index| written_per_file[index] + work[index].to_relocate.len() as u64)
             .sum::<u64>();
+        recorded?;
 
         // Step 5: and only now is anything deleted.
         let stale: Vec<String> = work

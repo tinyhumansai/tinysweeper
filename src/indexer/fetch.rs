@@ -223,6 +223,13 @@ impl Checkout {
                 unfetched.failed.push(sub.path.clone());
             }
         }
+        // A path named twice by `.gitmodules` — the contributor's file — is
+        // classified once, and denial wins: a second entry that is
+        // allow-listed but unfetchable must not turn a revocation into a
+        // "keep it for now".
+        unfetched
+            .failed
+            .retain(|path| !unfetched.denied.contains(path));
         Ok(unfetched)
     }
 
