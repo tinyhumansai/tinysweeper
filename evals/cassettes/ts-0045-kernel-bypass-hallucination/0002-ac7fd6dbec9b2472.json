@@ -1,0 +1,17 @@
+{
+  "key": "ac7fd6dbec9b2472",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4755,
+    "output_tokens": 39,
+    "cached_tokens": 1536,
+    "embed_tokens": 0,
+    "cost_usd": 0.000313853736
+  },
+  "value": {
+    "findings": [],
+    "summary": "Introduces two helper functions for shortening text and extracting the first sentence, plus tests. The logic appears correct for the stated use cases."
+  }
+}

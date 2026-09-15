@@ -1,0 +1,17 @@
+{
+  "key": "98a9cab4b9c93e6b",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 6526,
+    "output_tokens": 1562,
+    "cached_tokens": 5524,
+    "embed_tokens": 0,
+    "cost_usd": 0.00469081872
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change makes reasoning effort configurable on the OpenRouter gateway model, replacing a hard-coded `reasoning: { enabled: false }` with a `reasoning_options` function that maps `\"off\"` and empty strings to disabled and passes any other effort string through. The logic is sound, the trimming handles whitespace-only input correctly, and the tests cover the key cases. Safe to merge."
+  }
+}

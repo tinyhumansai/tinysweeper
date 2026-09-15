@@ -1,0 +1,50 @@
+{
+  "key": "b3a5b46cc3db632d",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4694,
+    "output_tokens": 1341,
+    "cached_tokens": 4162,
+    "embed_tokens": 0,
+    "cost_usd": 0.00373229556
+  },
+  "value": {
+    "/findings": [
+      {
+        "body": "The diff claims `TINYSWEEPER_APP_ID` and `TINYSWEEPER_APP_PRIVATE_KEY` are the names read by `server::auth::AppAuth::from_env`, and that the old `TINYSWEEPER_GITHUB_*` names were never read. I was unable to look up the source of `AppAuth::from_env` to confirm this (the search tool was unavailable on this deployment). If the claim is correct this is a good fix; if the binary actually reads `TINYSWEEPER_GITHUB_*` (or reads both), renaming to the un-read names and making them required (`:?`) would break authentication for every deployment — the old names now silently vanish and the new ones error on startup if unset. Someone who can read `src/server/auth*` or grep the binary should confirm `from_env` reads `TINYSWEEPER_APP_ID` / `TINYSWEEPER_APP_PRIVATE_KEY` before merging.",
+        "confidence": 0.5,
+        "existing_code": "      TINYSWEEPER_APP_ID: ${TINYSWEEPER_APP_ID:?set the GitHub App id}\n      TINYSWEEPER_APP_PRIVATE_KEY: ${TINYSWEEPER_APP_PRIVATE_KEY:?set the GitHub App private key}",
+        "path": "docker-compose.yml",
+        "severity": "high",
+        "title": "Verify env var names match AppAuth::from_env before merging"
+      }
+    ],
+    "lookups": [
+      {
+        "end": 80,
+        "kind": "read",
+        "path": "src/server/auth.rs",
+        "start": 1,
+        "why": "Verify which env var names AppAuth::from_env actually reads — TINYSWEEPER_APP_ID vs TINYSWEEPER_GITHUB_APP_ID"
+      },
+      {
+        "kind": "search",
+        "pattern": "TINYSWEEPER_GITHUB_APP_ID",
+        "why": "Check whether the old env var name is still referenced anywhere in source"
+      },
+      {
+        "kind": "search",
+        "pattern": "TINYSWEEPER_APP_ID",
+        "why": "Confirm the new env var name is what the binary reads"
+      },
+      {
+        "kind": "search",
+        "pattern": "default.*provider",
+        "why": "Verify openrouter is the default embeddings provider as the comment claims"
+      }
+    ],
+    "summary": "The diff adds forwarded API keys, renames the GitHub App env vars to match what the binary reads, and mounts the config file. I could not confirm the central claim — that `AppAuth::from_env` reads `TINYSWEEPER_APP_ID`/`TINYSWEEPER_APP_PRIVATE_KEY` — because the source search was unavailable; if that claim is wrong, making those vars required will break deployment for everyone."
+  }
+}

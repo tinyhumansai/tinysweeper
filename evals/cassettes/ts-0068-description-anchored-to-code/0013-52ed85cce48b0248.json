@@ -1,0 +1,17 @@
+{
+  "key": "52ed85cce48b0248",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 5191,
+    "output_tokens": 105,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00047031908
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request adds three new model price entries to the static table and five new tests. All additions are data or test logic only, and no untrusted input reaches a dangerous sink. The new tests validate that every model named in the defaults has a price entry, that costing calculations are correct, and that the argument order is exercised — they improve rather than degrade safety. No security problems are introduced."
+  }
+}

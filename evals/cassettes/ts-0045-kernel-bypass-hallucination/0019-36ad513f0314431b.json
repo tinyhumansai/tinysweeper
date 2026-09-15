@@ -1,0 +1,17 @@
+{
+  "key": "36ad513f0314431b",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4532,
+    "output_tokens": 1700,
+    "cached_tokens": 3863,
+    "embed_tokens": 0,
+    "cost_usd": 0.00455033334
+  },
+  "value": {
+    "findings": [],
+    "summary": "The new module adds two pure string-manipulation helpers for truncating model-authored text. Both functions handle multibyte characters safely — `shorten` works in `char` space and its `rfind(' ')` byte index is always at a character boundary since ASCII space cannot be a continuation byte, and `first_sentence`'s `. ` search is likewise byte-safe. No untrusted input reaches a dangerous sink, no network, subprocess, deserialization, or secrets are involved. Safe to merge."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "175c01fcd008ff73",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3815,
+    "output_tokens": 106,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00035067116
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change adds an embeddings retrieval configuration section to `.tinysweeper.toml`, enabling a new feature with an API key read from the environment. No untrusted input flow, authentication bypass, network call to a dangerous sink, or widened permissions are introduced by this diff. The diff appears sound."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "ef9d30e9ebdcc388",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4036,
+    "output_tokens": 340,
+    "cached_tokens": 3109,
+    "embed_tokens": 0,
+    "cost_usd": 0.00173983362
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds an `[embeddings]` configuration section to `.tinysweeper.toml`, enabling embedding retrieval via OpenRouter. It is a config-data addition with no logic and no secret exposure (only an environment variable name is referenced). No issues found; safe to merge."
+  }
+}

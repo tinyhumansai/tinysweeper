@@ -1,0 +1,17 @@
+{
+  "key": "9ea70566496dcc5f",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 6619,
+    "output_tokens": 548,
+    "cached_tokens": 5574,
+    "embed_tokens": 0,
+    "cost_usd": 0.00257122152
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a configurable `reasoning_effort` field to `GatewayModel` and a `reasoning_options` helper that builds the reasoning JSON block, replacing a hardcoded disable. Config values flow through `serde_json::json!` which handles escaping, so there is no injection risk; no new secrets, network calls, or untrusted deserialization are introduced. Safe to merge."
+  }
+}

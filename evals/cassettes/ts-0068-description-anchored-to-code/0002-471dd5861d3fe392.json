@@ -1,0 +1,34 @@
+{
+  "key": "471dd5861d3fe392",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4451,
+    "output_tokens": 413,
+    "cached_tokens": 3822,
+    "embed_tokens": 0,
+    "cost_usd": 0.00178300416
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "pattern": "reasoning_effort",
+        "why": "Check whether the code recognizes and consumes the new `reasoning_effort` config key, and what values it accepts."
+      },
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "fallback",
+        "why": "See how the `fallback` list is consumed and whether ordering or emptiness matters."
+      },
+      {
+        "glob": "src/config/**/*.rs",
+        "kind": "search",
+        "pattern": "scan",
+        "why": "Understand how `scan` and `deep` model keys are parsed and used."
+      }
+    ]
+  }
+}

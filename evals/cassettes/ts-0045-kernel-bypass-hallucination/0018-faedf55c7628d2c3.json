@@ -1,0 +1,17 @@
+{
+  "key": "faedf55c7628d2c3",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4232,
+    "output_tokens": 1173,
+    "cached_tokens": 3038,
+    "embed_tokens": 0,
+    "cost_usd": 0.00368175444
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change adds optional provider API key env vars, fixes the GitHub App credential env var names to match what the binary actually reads (and makes them required), and mounts the server config file read-only. All of these are security improvements or neutral operational changes. No findings."
+  }
+}

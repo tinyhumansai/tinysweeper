@@ -1,0 +1,28 @@
+{
+  "key": "40113b2b5e161617",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3831,
+    "output_tokens": 397,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000402745
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The doc comment lists `off`, `low`, `medium`, `high` as the only valid values, but the field is a plain `String`.  A malformed value (e.g. `\"hight\"`, `\"default\"`) would pass schema or structure validation and reach the inference path where it either triggers a provider error or, worse, is silently ignored and falls into undefined behaviour.  The repository’s own convention in `vendor/tinyhivemind` already treats these as an enum.  Making `reasoning_effort` a `ReasoningEffort` enum or newtype that serde-deserializes from the four strings would eliminate a class of bugs without changing the serialization format.  The fix applies only to the added field, so the `existing_code` span is just that line.",
+        "confidence": 0.9,
+        "existing_code": "    pub reasoning_effort: String,",
+        "path": "src/config/types.rs",
+        "rule": "unvalidated-string-enum",
+        "severity": "medium",
+        "suggestion": "    pub reasoning_effort: ReasoningEffort,",
+        "title": "Enforce the allowed values for reasoning_effort with an enum or newtype"
+      }
+    ],
+    "summary": "The change adds a `reasoning_effort` field to `ModelConfig` as a `String`, but the field is validated nowhere against the enum it describes, and the diff provides no documentation of how this string maps to actual model behaviour.  A typo like `\"hight\"` would silently produce undefined behaviour at inference time.  Until the field carries a newtype or an enum that enforces `off | low | medium | high`, the author should know about this untracked failure path."
+  }
+}

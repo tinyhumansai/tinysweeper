@@ -1,0 +1,17 @@
+{
+  "key": "0f6c582ff25c54fb",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3834,
+    "output_tokens": 718,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004743
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change adds a `pub mod summarise;` declaration to `src/findings/mod.rs`. The module is not shown in the diff; the declaration itself introduces no security concern. The change is safe to merge."
+  }
+}

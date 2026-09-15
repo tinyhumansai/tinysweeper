@@ -1,0 +1,31 @@
+{
+  "key": "88ac643dffb8adc5",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3672,
+    "output_tokens": 179,
+    "cached_tokens": 3158,
+    "embed_tokens": 0,
+    "cost_usd": 0.00112455924
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "glob": "src/findings/*",
+        "kind": "search",
+        "pattern": "mod summarise",
+        "why": "Confirm the summarise module file exists so the module declaration compiles"
+      },
+      {
+        "glob": "src/findings/summarise.rs",
+        "kind": "search",
+        "pattern": "summarise",
+        "why": "Confirm the module file exists at the expected path"
+      }
+    ],
+    "summary": "The change adds a public `summarise` submodule declaration to `src/findings/mod.rs`. I need to confirm the corresponding module file exists before giving a final verdict."
+  }
+}

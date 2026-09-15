@@ -1,0 +1,17 @@
+{
+  "key": "441297e372cc253d",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4218,
+    "output_tokens": 112,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00038680936
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request changes model names, rearranges fallback lists, and enables a reasoning effort setting in a TOML configuration file. No untrusted input reaches a dangerous sink, no authentication or authorisation boundaries are crossed, no network or subprocess calls are introduced, no deserialization of untrusted data occurs, no path traversal is possible, no secrets are moved into code or logs, no dependencies change, and no CI permissions are widened. The change is safe to merge."
+  }
+}
