@@ -165,6 +165,14 @@ pub struct LaneProposal {
     /// fixed finding that goes unacknowledged reads as an unfixed one.
     #[serde(default)]
     pub resolved: Vec<String>,
+    /// Check runs the lane is still waiting on.
+    ///
+    /// Only the `e2e` lane sets it. The conclusion above is already
+    /// `Neutral` for a lane with something pending; this is what the review
+    /// records so the server can settle the check run once the named jobs
+    /// complete, without re-running the lane.
+    #[serde(default)]
+    pub pending: Vec<String>,
     /// Findings that were suppressed because they are already on the pull
     /// request from an earlier push.
     ///
@@ -710,6 +718,7 @@ pub async fn review_with_memory(
             // actually kept, so the map cannot outgrow the list it annotates.
             severities: kept_severities(&prior_severities, &lanes, &next_titles),
             titles: next_titles,
+            e2e: e2e_watch(&lanes, &context.pull_request.head_sha),
         };
         if let Err(err) = store.save_state(&state_key, &next).await {
             tracing::warn!(%err, "could not record the review state; the next review will cost more");
@@ -1043,6 +1052,23 @@ fn already_posted(finding: &Finding, continuity: &Continuity<'_>) -> bool {
 /// on the list. Dropping it would mean an unfixed concern quietly disappearing
 /// between two pushes, which is the failure the re-review contract in
 /// `harness::prompt` exists to prevent.
+/// What the `e2e` lane is still waiting on, for the server to settle later.
+///
+/// `None` unless that lane ran and left jobs pending: a record with nothing
+/// to wait for would make every check completion on the pull request load
+/// state for no reason.
+fn e2e_watch(lanes: &[LaneProposal], head_sha: &str) -> Option<crate::lanes::e2e::runs::Watch> {
+    let lane = lanes
+        .iter()
+        .find(|lane| lane.lane == LaneId::E2e && !lane.pending.is_empty())?;
+    Some(crate::lanes::e2e::runs::Watch {
+        head_sha: head_sha.to_string(),
+        jobs: lane.pending.clone(),
+        summary: lane.summary.clone(),
+        failed: lane.conclusion.blocks(),
+    })
+}
+
 fn still_open_titles(prior_titles: &[String], lanes: &[LaneProposal]) -> Vec<String> {
     let resolved: BTreeSet<&str> = lanes
         .iter()
@@ -1151,6 +1177,10 @@ fn lane_proposal(
         .any(|f| f.severity >= config.fail_on(lane))
     {
         CheckConclusion::Failure
+    } else if !outcome.pending.is_empty() {
+        // A verdict on work that has not finished is the verdict branch
+        // protection must not see. The check settles when the jobs do.
+        CheckConclusion::Neutral
     } else {
         CheckConclusion::Success
     };
@@ -1228,6 +1258,7 @@ fn lane_proposal(
         summary,
         findings,
         resolved,
+        pending: outcome.pending,
         deduped,
         highest_severity,
         usage: spend.usage,
