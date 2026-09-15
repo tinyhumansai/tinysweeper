@@ -248,9 +248,11 @@ fn a_repository_may_switch_its_preview_off_but_not_point_it_elsewhere() {
         config.preview.public_base_url,
         base().preview.public_base_url
     );
+    assert_eq!(config.preview.branch, base().preview.branch);
     assert_eq!(
         ignored,
         vec![
+            "preview.branch".to_string(),
             "preview.budget_usd".to_string(),
             "preview.max_steps".to_string(),
             "preview.public_base_url".to_string(),
