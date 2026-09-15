@@ -154,6 +154,14 @@ impl<'a> ForgeTree<'a> {
         let Some(repo) = &sub.repo else {
             return Ok(None);
         };
+        // A `.gitmodules` edit is contributor-controlled and can name any
+        // repository on this host; without this check the installation-wide
+        // read token would follow it into a sibling repository at a
+        // different trust level. Same owner is the cheap proxy for "the
+        // installation's access to this repo already covers that one".
+        if repo.owner != self.repo.owner {
+            return Ok(None);
+        }
         let Some((_url, commit)) = self
             .forge
             .submodule_at(&self.repo, &sub.path, &self.sha)
