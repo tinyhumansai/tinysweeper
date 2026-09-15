@@ -282,4 +282,35 @@ mod tests {
             .unwrap();
         assert!(matches!(search, Found::Unavailable { .. }));
     }
+
+    #[tokio::test]
+    async fn a_same_host_different_owner_submodule_is_not_followed() {
+        // `.gitmodules` is contributor-controlled; pointing it at a same-host
+        // repository owned by someone else must not pull that repository in
+        // through the installation's read token.
+        let mut state = MockState::default();
+        state.set_file(
+            "head",
+            ".gitmodules",
+            "[submodule \"lib\"]\n\tpath = vendor/lib\n\turl = https://github.com/other/lib\n",
+        );
+        state.set_submodule("head", "vendor/lib", "https://github.com/other/lib", "pin");
+        state.set_file("pin", "src/x.rs", "one\ntwo\nthree\n");
+        let forge = MockForge::with_state(state);
+        let tree = ForgeTree::new(&forge, repo(), "head", "github.com");
+
+        let found = tree
+            .lookup(&Lookup::Read {
+                path: "vendor/lib/src/x.rs".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            found,
+            Found::NotFound,
+            "a submodule owned by a different owner must not be read"
+        );
+    }
 }
