@@ -1,9 +1,21 @@
 # Review quality, measured against the labelled corpus in `evals/`.
 #
-# The offline half already runs in `ci.yml`: `cargo test --locked` replays the
-# committed cassettes and asserts both regressions still hold, for free. This
-# workflow is the *live* half — it re-records against the real model, which
-# costs money and needs a key.
+# This is the *replay* half: it runs the real engine over the committed
+# cassettes — no key, no network, free — scores the proposals under the
+# current matching rules, and reports the drift against the committed
+# baseline as a step summary with the scorecard attached. `cargo test` in
+# `ci.yml` already asserts the two guarded regressions still hold; this job
+# is where the whole scorecard is readable per pull request.
+#
+# The *live* half — `eval run --record` — is an operator command, not a job
+# here. Every model call goes through the box's LLM ladder
+# (`.tinysweeper.toml`, `[models]`), which listens on the fleet's own hosts
+# and is not reachable from a hosted runner; before that it wanted an
+# `OPENROUTER_API_KEY` this repository never had, so the recording step here
+# 401'd on every call and passed anyway. A run that records nothing and goes
+# green is worse than no run. Re-record on a box with the ladder
+# (`evals/README.md`), commit the cassettes and the refreshed baseline, and
+# this job replays them.
 #
 # Deliberately **not** a required check. Run-to-run variance has not been
 # measured yet: the gateway routes where it likes, no `seed` is honoured, and
@@ -13,71 +25,52 @@ name: eval
 
 on:
   workflow_dispatch:
-    inputs:
-      max_cost_usd:
-        description: Hard ceiling for the whole run, in dollars.
-        default: "5.00"
-  schedule:
-    # Weekly, so drift in the model behind the same id is noticed without
-    # anybody remembering to look.
-    - cron: "0 6 * * 1"
   pull_request:
     # Only what can move a score. A change to the server or the automerge gate
-    # cannot, and paying for a corpus run on one is waste.
+    # cannot change what a lane finds, so it should not pay for a replay.
     paths:
       - "src/lanes/**"
       - "src/harness/prompt.rs"
       - "src/harness/schema.rs"
       - "src/falsify/**"
+      - "src/flows/**"
       - "src/eval/**"
       - "presets/**"
       - "evals/**"
+      - ".tinysweeper.toml"
 
 permissions:
   contents: read
 
 jobs:
-  measure:
+  replay:
     runs-on: ubuntu-latest
-    # A fork must never reach OPENROUTER_API_KEY. `pull_request` gives a
-    # read-only token, but repository *secrets* are the thing being guarded and
-    # this is the only condition that keeps them off a fork's branch.
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
-          # The recorded corpus runs the engine, whose build scripts and binary
-          # must never be able to read a GITHUB_TOKEN out of the checkout's git
+          # The replay runs the engine, whose build scripts and binary must
+          # never be able to read a GITHUB_TOKEN out of the checkout's git
           # config. The workflow needs no authenticated git at all.
           persist-credentials: false
 
-      # Pinned to commit SHAs rather than `@stable` / `@v2`, because this
-      # workflow's shell steps run with OPENROUTER_API_KEY set. A moving tag
-      # could be repointed to code none of us has reviewed; Dependabot bumps
+      # Pinned to commit SHAs rather than `@stable` / `@v2`; Dependabot bumps
       # these pins.
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
-      - name: Record the corpus
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          # The ceiling is operator input at workflow_dispatch. It crosses into
-          # a shell step that holds the key, so it goes through an environment
-          # variable rather than being interpolated as shell syntax: whatever
-          # the value is, the shell only ever reads `$MAX_COST_USD` as a string
-          # argument, never as commands to run.
-          MAX_COST_USD: ${{ inputs.max_cost_usd || '5.00' }}
+      # Strict replay: a call the cassette cannot answer fails its case with
+      # "re-record the corpus", which is the staleness this exists to make
+      # loud — a prompt changed and nobody recorded it.
+      - name: Replay the corpus
         run: |
           cargo run --locked --features harness,github -- \
-            eval run --record --max-cost-usd "$MAX_COST_USD"
+            eval run
 
-      # `eval run --record` scores inline as it goes, but the documented
-      # pipeline keeps scoring separate for exactly the case here: re-reading
-      # the proposals on disk under the current matching rule before reporting,
-      # so a rule edit between records never reports off a stale scorecard.
+      # `eval run` scores inline as it goes, but the documented pipeline keeps
+      # scoring separate for exactly the case here: re-reading the proposals
+      # on disk under the current matching rule before reporting, so a rule
+      # edit between records never reports off a stale scorecard.
       - name: Score the corpus
         run: |
           cargo run --locked --features harness,github -- \
