@@ -62,6 +62,18 @@ pub fn detect(diffs: &[&FileDiff]) -> Option<Substitution> {
         if from.is_empty() || from.len() < 3 {
             continue;
         }
+        // A uniform *textual* substitution proves only that the text is
+        // consistent, not that it is a rename: `<` → `<=` across three files
+        // would satisfy `explains` just as well as a real identifier rename,
+        // and be verified as one. Restricting the fast path to substitutions
+        // that look like an identifier or a path keeps it to renames — an
+        // operator, a literal or other punctuation change never qualifies.
+        if !is_identifier_shaped(&from)
+            || !is_identifier_shaped(&to)
+            || !from.chars().any(|c| c.is_ascii_alphabetic())
+        {
+            continue;
+        }
         let verified: Vec<String> = diffs
             .iter()
             .filter(|diff| explains(diff, &from, &to))
@@ -76,6 +88,15 @@ pub fn detect(diffs: &[&FileDiff]) -> Option<Substitution> {
         }
     }
     best
+}
+
+/// Whether `s` reads as an identifier or a path: letters, digits,
+/// underscores, `::` module separators, or `.`/`/` path separators — and
+/// nothing else. Empty is allowed, since a rename may delete the token
+/// entirely (`::openhuman` → ``).
+fn is_identifier_shaped(s: &str) -> bool {
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | '.' | '/'))
 }
 
 /// Whether `diff` is entirely `from`→`to`: every removed line contains
@@ -225,6 +246,17 @@ mod tests {
         assert_eq!(sub.to, "");
         assert_eq!(sub.verified, vec!["src/a.rs", "src/b.rs", "src/c.rs"]);
         assert!(note(&sub).contains("3 file(s)"));
+    }
+
+    #[test]
+    fn an_operator_substitution_is_never_treated_as_a_rename() {
+        // `<` → `<=` across three files is a uniform textual substitution,
+        // but it is a behavior change, not a rename, and must not be
+        // silently verified and skipped.
+        let a = diff("a", &[("if x < 1", "if x <= 1")], &[]);
+        let b = diff("b", &[("if y < 2", "if y <= 2")], &[]);
+        let c = diff("c", &[("if z < 3", "if z <= 3")], &[]);
+        assert_eq!(detect(&[&a, &b, &c]), None);
     }
 
     #[test]

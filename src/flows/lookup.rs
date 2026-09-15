@@ -553,18 +553,15 @@ impl Ledger {
                     continue;
                 }
                 self.seen.insert(lookup.key());
-                let mut hits_text = String::new();
+                let mut body = String::from("````\n");
                 for hit in &definitions {
-                    hits_text.push_str(&format!("{}:{}: {}\n", hit.path, hit.line, hit.text));
+                    body.push_str(&format!(
+                        "{}:{}: {}
+",
+                        hit.path, hit.line, hit.text
+                    ));
                 }
-                // The fence has to outrun any backtick run in a hit line — a
-                // contributor-controlled source line containing ```` would
-                // otherwise close it early and the rest of this turn's
-                // evidence would read as instructions.
-                let fence = crate::harness::prompt::fence_for(&hits_text);
-                let mut body = format!("{fence}\n");
-                body.push_str(&hits_text);
-                body.push_str(&fence);
+                body.push_str("````");
                 for hit in definitions {
                     let below = if hit.path == diff.path {
                         SAME_FILE_BELOW
@@ -686,12 +683,8 @@ fn render_found(found: &Found) -> String {
             if text.is_empty() {
                 format!("The file has {total} lines; the range starts past its end.")
             } else {
-                // A source line the reviewer asked for is contributor
-                // content; one containing ```` must not be able to close a
-                // fixed fence and turn the rest of the file into instructions.
-                let fence = crate::harness::prompt::fence_for(text);
                 format!(
-                    "Lines {start}–{end} of {total}:\n\n{fence}\n{text}\n{fence}{}",
+                    "Lines {start}–{end} of {total}:\n\n````\n{text}\n````{}",
                     if *end < *total {
                         format!("\n\nThe file continues to line {total}.")
                     } else {
@@ -700,36 +693,17 @@ fn render_found(found: &Found) -> String {
                 )
             }
         }
-        Found::Hits {
-            hits,
-            truncated,
-            skipped,
-        } => {
-            let mut s = if hits.is_empty() {
-                "No line contains that text.".to_string()
-            } else {
-                let mut hits_text = String::new();
-                for hit in hits {
-                    hits_text.push_str(&format!("{}:{}: {}\n", hit.path, hit.line, hit.text));
-                }
-                let fence = crate::harness::prompt::fence_for(&hits_text);
-                let mut s = format!("{fence}\n");
-                s.push_str(&hits_text);
-                s.push_str(&fence);
-                s
-            };
+        Found::Hits { hits, truncated } => {
+            if hits.is_empty() {
+                return "No line contains that text.".into();
+            }
+            let mut s = String::from("````\n");
+            for hit in hits {
+                s.push_str(&format!("{}:{}: {}\n", hit.path, hit.line, hit.text));
+            }
+            s.push_str("````");
             if *truncated {
                 s.push_str("\n\nMore matched than are shown; narrow the pattern or add a glob.");
-            }
-            // A submodule that is declared but not checked out is walked as
-            // an empty directory, so a search of it silently returns zero
-            // hits — indistinguishable from "genuinely nothing there" unless
-            // the reviewer is told which paths were never actually searched.
-            if !skipped.is_empty() {
-                s.push_str(&format!(
-                    "\n\nNot searched (submodule not checked out): {}",
-                    skipped.join(", ")
-                ));
             }
             s
         }

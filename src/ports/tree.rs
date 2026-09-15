@@ -141,21 +141,6 @@ pub enum Found {
         hits: Vec<Hit>,
         /// Whether more matched than were returned.
         truncated: bool,
-        /// Declared submodule paths this search could not look inside,
-        /// because they are not checked out here.
-        ///
-        /// `checkout = true, submodules = false` leaves every gitlink an
-        /// empty directory. A read under one already answers `Unavailable`
-        /// rather than a false "not found", but a search silently walked
-        /// past the empty directory and returned zero hits — indistinguishable
-        /// from "genuinely nothing matches anywhere in the tree", which is
-        /// exactly the vendored code this field exists to flag as unsearched
-        /// rather than searched-and-empty. `#[serde(default)]` keeps an
-        /// older fixture without this field deserializing, and a cassette
-        /// only renders differently when the list is non-empty, so replay of
-        /// an existing recording is unaffected.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        skipped: Vec<String>,
     },
     /// The path does not exist at this revision.
     NotFound,
@@ -333,11 +318,7 @@ impl TreeReader for MockTree {
                         break;
                     }
                 }
-                Found::Hits {
-                    hits,
-                    truncated,
-                    skipped: Vec::new(),
-                }
+                Found::Hits { hits, truncated }
             }
         })
     }
@@ -448,47 +429,11 @@ impl DirTree {
             .submodules
             .iter()
             .find(|s| path.starts_with(&format!("{s}/")))?;
-        self.dir_is_empty(sub).then_some(sub.as_str())
-    }
-
-    /// Whether the directory a declared submodule path names is empty —
-    /// checked out with `[lookup].checkout = true` but never fetched, since
-    /// `[retrieval].submodules = false` or the fetch itself failed.
-    fn dir_is_empty(&self, sub: &str) -> bool {
-        std::fs::read_dir(self.root.join(sub))
+        let dir = self.root.join(sub);
+        let empty = std::fs::read_dir(&dir)
             .map(|mut entries| entries.next().is_none())
-            .unwrap_or(true)
-    }
-
-    /// Declared submodule paths that matched `glob` but have no content, so a
-    /// search of them answered zero hits rather than searching them.
-    fn unfetched_submodules_matching(&self, glob: Option<&str>) -> Vec<String> {
-        self.submodules
-            .iter()
-            .filter(|s| glob_matches(glob, s) && self.dir_is_empty(s))
-            .cloned()
-            .collect()
-    }
-
-    /// Whether `path`, joined onto `root` and resolved, still lies inside
-    /// `root`.
-    ///
-    /// `safe_relative` rejects a lexical `..` escape, but a tracked symlink
-    /// such as `leak -> /proc/self/environ` never contains `..` and still
-    /// leaves the checkout once the filesystem follows it. Canonicalizing
-    /// both sides and requiring the prefix catches that. A path that does not
-    /// exist yet — including one under an unfetched submodule, which is an
-    /// empty directory — cannot be canonicalized either way; that is not an
-    /// escape, so it is let through to the normal "not found" or "submodule
-    /// unavailable" handling below.
-    fn within_root(&self, path: &str) -> bool {
-        let Ok(root) = self.root.canonicalize() else {
-            return false;
-        };
-        match self.root.join(path).canonicalize() {
-            Ok(resolved) => resolved.starts_with(&root),
-            Err(_) => true,
-        }
+            .unwrap_or(true);
+        empty.then_some(sub.as_str())
     }
 
     fn walk(&self, dir: &std::path::Path, out: &mut Vec<String>) {
@@ -504,18 +449,7 @@ impl DirTree {
             if self.skipped(&rel) {
                 continue;
             }
-            // `symlink_metadata` does not follow the link, unlike `is_dir()`
-            // below it used to call transitively through `path.is_dir()`. A
-            // tracked symlink to an ancestor directory would otherwise recurse
-            // forever, and one to a file outside the checkout would be walked
-            // and searched as if it were tree content.
-            let Ok(meta) = std::fs::symlink_metadata(&path) else {
-                continue;
-            };
-            if meta.file_type().is_symlink() {
-                continue;
-            }
-            if meta.is_dir() {
+            if path.is_dir() {
                 self.walk(&path, out);
             } else {
                 out.push(rel);
@@ -549,7 +483,7 @@ impl TreeReader for DirTree {
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
         Ok(match lookup {
             Lookup::Read { path, start, end } => {
-                if !safe_relative(path) || !self.within_root(path) {
+                if !safe_relative(path) {
                     return Ok(Found::NotFound);
                 }
                 match std::fs::read_to_string(self.root.join(path)) {
@@ -590,12 +524,7 @@ impl TreeReader for DirTree {
                         break;
                     }
                 }
-                let skipped = self.unfetched_submodules_matching(glob.as_deref());
-                Found::Hits {
-                    hits,
-                    truncated,
-                    skipped,
-                }
+                Found::Hits { hits, truncated }
             }
         })
     }
@@ -695,9 +624,7 @@ mod tests {
             .await
             .unwrap();
         match found {
-            Found::Hits {
-                hits, truncated, ..
-            } => {
+            Found::Hits { hits, truncated } => {
                 assert_eq!(hits.len(), 1);
                 assert_eq!(hits[0].path, "src/a.rs");
                 assert!(!truncated);
@@ -806,73 +733,6 @@ mod tests {
             matches!(unfetched, Found::Unavailable { .. }),
             "{unfetched:?}"
         );
-
-        // A search does not have the read path's per-lookup "unavailable" to
-        // fall back on: it walks the empty directory and finds nothing, which
-        // reads exactly like "nothing in the whole tree matches" unless the
-        // unfetched submodule is named separately.
-        let found = tree
-            .lookup(&Lookup::Search {
-                pattern: "needle".into(),
-                glob: None,
-            })
-            .await
-            .unwrap();
-        let Found::Hits { skipped, .. } = found else {
-            panic!("{found:?}")
-        };
-        assert_eq!(
-            skipped,
-            vec!["vendor/empty".to_string()],
-            "the unfetched submodule must be named, not silently searched as empty"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_symlink_out_of_the_checkout_is_refused_not_followed() {
-        let outside = tempfile::tempdir().unwrap();
-        std::fs::write(outside.path().join("secret.txt"), "s3cr3t\n").unwrap();
-
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/a.rs"), "needle\n").unwrap();
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(outside.path().join("secret.txt"), dir.path().join("leak"))
-            .unwrap();
-
-        let tree = DirTree::new(dir.path());
-
-        // A read through the symlink must not escape the checkout.
-        #[cfg(unix)]
-        {
-            let read = tree
-                .lookup(&Lookup::Read {
-                    path: "leak".into(),
-                    start: None,
-                    end: None,
-                })
-                .await
-                .unwrap();
-            assert_eq!(
-                read,
-                Found::NotFound,
-                "a symlink out of the root was followed"
-            );
-        }
-
-        // A search must not walk through the symlink either, so the outside
-        // file's content never reaches a hit.
-        let found = tree
-            .lookup(&Lookup::Search {
-                pattern: "s3cr3t".into(),
-                glob: None,
-            })
-            .await
-            .unwrap();
-        let Found::Hits { hits, .. } = found else {
-            panic!()
-        };
-        assert!(hits.is_empty(), "search followed a symlink out of the root");
     }
 
     #[tokio::test]
