@@ -22,6 +22,17 @@
 //! A remote elsewhere is reported as not readable rather than fetched: the
 //! `.gitmodules` URL is contributor-controlled, and the only host this reader
 //! will talk to is the forge it was built over.
+//!
+//! Same host is not enough: a pull request can rewrite `.gitmodules` to name
+//! any repository on that host, and this reader would then use the
+//! installation-wide read token to pull it in — including a private sibling
+//! at a different trust level than the repository under review. Whether the
+//! installation can actually read an arbitrary repository is not something
+//! this port can check cheaply, so a submodule is only followed when its
+//! repository shares an owner with the repository under review
+//! (`sub.repo.owner == self.repo.owner`). That does not cover an installation
+//! that spans multiple trust levels under one owner, but it closes the
+//! same-host-any-repo escape a `.gitmodules` edit alone can reach.
 
 use async_trait::async_trait;
 use tokio::sync::OnceCell;
