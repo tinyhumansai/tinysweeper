@@ -141,7 +141,7 @@ impl Lane for Security {
             let prior_findings = input.prior_findings;
             let retrieved_context = input.retrieved_context;
             let memory_context = input.memory_context;
-            let asking = input.asking();
+            let input = &input;
             let diffs = input.diffs;
             let scanner = &scanner;
             async move {
@@ -149,6 +149,7 @@ impl Lane for Security {
                     .iter()
                     .find(|d| d.path == path)
                     .expect("the path came from the diff list");
+                let asking = input.asking_about(diff);
                 review_file(
                     llm,
                     config,

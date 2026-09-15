@@ -197,7 +197,7 @@ async fn review_file(
         LaneId::Critique,
         &calls,
         &schema::json_schema(),
-        input.asking(),
+        input.asking_about(diff),
     )
     .await?;
 
