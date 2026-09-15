@@ -449,6 +449,31 @@ fn graphql_errors(raw: &serde_json::Value, what: &str) -> Result<()> {
 /// because absence is what both readers treat as innocent. So exhausting the
 /// bound with a full page is an error rather than a truncation: the caller
 /// refuses instead of merging on a history it only partly read.
+impl GitHub {
+    /// Every review on a pull request, raw, oldest first, all pages.
+    ///
+    /// Our own verdict can be anywhere in the history — a long-lived pull
+    /// request with a chatty bot passes a hundred reviews — and both readers
+    /// of it decide what stands from the *last* one, so a truncated list is
+    /// the one thing they must never see.
+    async fn all_reviews_raw(&self, repo: &RepoId, number: u64) -> Result<Vec<serde_json::Value>> {
+        read_all_pages(
+            |page| async move {
+                let route = format!(
+                    "/repos/{}/{}/pulls/{number}/reviews?per_page={PER_PAGE}&page={page}",
+                    repo.owner, repo.name
+                );
+                self.client.get(route, None::<&()>).await.map_err(api)
+            },
+            |raw| raw.as_array(),
+            |items| items.to_vec(),
+            MAX_REVIEW_PAGES,
+            "the review history for this pull request",
+        )
+        .await
+    }
+}
+
 async fn read_all_pages<T, F, Fut>(
     fetch: F,
     items_of: impl Fn(&serde_json::Value) -> Option<&Vec<serde_json::Value>>,
@@ -1527,15 +1552,8 @@ impl ForgeRead for GitHubRead {
     }
 
     async fn own_review_state(&self, repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
-        let route = format!(
-            "/repos/{}/{}/pulls/{number}/reviews?per_page=100",
-            repo.owner, repo.name
-        );
-        let raw: serde_json::Value = self.client.get(route, None::<&()>).await.map_err(api)?;
-
-        Ok(raw
-            .as_array()
-            .and_then(|reviews| own_review_state_of(reviews.iter())))
+        let reviews = self.all_reviews_raw(repo, number).await?;
+        Ok(own_review_state_of(reviews.iter()))
     }
 
     async fn file_at(&self, repo: &RepoId, path: &str, sha: &str) -> Result<Option<String>> {
@@ -1804,18 +1822,11 @@ impl ForgeWrite for GitHubWrite {
     }
 
     async fn dismiss_own_approval(&self, repo: &RepoId, number: u64, message: &str) -> Result<()> {
-        let route = format!(
-            "/repos/{}/{}/pulls/{number}/reviews?per_page=100",
-            repo.owner, repo.name
-        );
-        let raw: serde_json::Value = self.client.get(route, None::<&()>).await.map_err(api)?;
+        let reviews = self.all_reviews_raw(repo, number).await?;
         // The approval that stands is the last verdict we left, if it was one.
         // An approval followed by our own changes request is not standing,
         // and dismissing it would be dismissing history.
-        let Some(id) = raw
-            .as_array()
-            .and_then(|reviews| own_standing_approval_id(reviews.iter()))
-        else {
+        let Some(id) = own_standing_approval_id(reviews.iter()) else {
             return Ok(());
         };
         let route = format!(

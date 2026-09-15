@@ -815,13 +815,13 @@ impl ForgeWrite for MockForge {
     async fn dismiss_own_approval(&self, _repo: &RepoId, number: u64, message: &str) -> Result<()> {
         let standing = {
             let mut state = self.state.lock().expect("mock state lock");
-            match state.own_reviews.get(&number) {
-                Some(ReviewEvent::Approve) => {
-                    state.own_reviews.remove(&number);
-                    true
-                }
-                _ => false,
+            let standing = state.own_reviews.get(&number) == Some(&ReviewEvent::Approve);
+            // Recorded either way; the state only moves when the mock is
+            // allowed to write, like every other write here.
+            if standing && !self.read_only {
+                state.own_reviews.remove(&number);
             }
+            standing
         };
         if standing {
             self.record(Write::DismissApproval {
