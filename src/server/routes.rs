@@ -311,21 +311,26 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
 
     tracing::info!(%bind, "tinysweeper is listening");
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown(shutdown_state))
         .await
-        .map_err(|err| Error::Forge(format!("server stopped: {err}")))?;
+        .map_err(|err| Error::Forge(format!("server stopped: {err}")))
+}
 
-    // The listener is closed and no new delivery can arrive. The reviews
-    // already running will not finish inside Compose's stop grace period, so
-    // say so on each of their pull requests before the process goes.
-    conclude_in_flight(&shutdown_state).await;
-    Ok(())
+/// Resolve when the process has been asked to stop and is ready to.
+///
+/// `SIGTERM` is what `docker compose up` sends on a redeploy, `SIGINT` what
+/// an operator's terminal sends. Either way the answer is the same: conclude
+/// the checks of the reviews still running, *then* let axum drain. That order
+/// matters. Compose gives the process ten seconds before `SIGKILL`, and axum
+/// only returns once every open connection has finished — a preview step
+/// in flight could spend the whole grace period on its own — so anything that
+/// runs after `serve` returns may never run at all.
+async fn shutdown(state: AppState) {
+    shutdown_signal().await;
+    conclude_in_flight(&state).await;
 }
 
 /// Resolve when the process is asked to stop.
-///
-/// `SIGTERM` is what `docker compose up` sends on a redeploy, `SIGINT` what
-/// an operator's terminal sends. Either way the answer is the same.
 async fn shutdown_signal() {
     use tokio::signal::unix::{SignalKind, signal};
 
