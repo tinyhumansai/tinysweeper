@@ -1678,7 +1678,15 @@ async fn handle_review(
     let permit = match state.permits.clone().acquire_owned().await {
         Ok(permit) => permit,
         Err(err) => {
+            // Unreachable in practice — nothing closes the pool — but a
+            // terminal path all the same, and a terminal path releases its
+            // delivery claim so a redelivery is not refused forever.
             tracing::error!(%err, %repo, number, "the review permit pool is closed");
+            if let Some(delivery) = delivery
+                && let Err(release) = state.store.release_delivery(&delivery).await
+            {
+                tracing::error!(%release, %delivery, "could not release the delivery claim");
+            }
             return;
         }
     };
@@ -1707,6 +1715,10 @@ async fn handle_review(
                     Some(findings) => Conclusion::Reviewed(findings),
                     None => Conclusion::NotReviewed,
                 };
+                // The review is over; concluding the check is one GitHub
+                // write that should not hold a review slot against other
+                // pull requests.
+                drop(permit);
                 close_status(&state, &slot, conclusion).await;
                 return;
             }
