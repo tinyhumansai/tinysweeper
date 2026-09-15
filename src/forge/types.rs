@@ -772,7 +772,16 @@ mod tests {
 
     #[test]
     fn malformed_repo_ids_are_rejected() {
-        for bad in ["tinysweeper", "/tinysweeper", "owner/", "a/b/c", ""] {
+        for bad in [
+            "tinysweeper",
+            "/tinysweeper",
+            "owner/",
+            "a/b/c",
+            "",
+            " owner/name",
+            "owner/name ",
+            "owner/na me",
+        ] {
             assert!(RepoId::parse(bad).is_none(), "accepted `{bad}`");
         }
     }

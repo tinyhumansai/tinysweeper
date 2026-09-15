@@ -117,9 +117,15 @@ fn the_retired_submodules_switch_still_parses_or_says_how_to_migrate() {
 
 #[test]
 fn a_submodule_entry_that_is_not_owner_slash_name_is_rejected() {
-    let config = parse("version = 1\n[retrieval]\nsubmodules = [\"acme/lib\", \"acme-lib\"]\n");
+    let config = parse(
+        "version = 1\n[retrieval]\nsubmodules = [\"acme/lib\", \"acme-lib\", \" acme/lib\", \
+         \"acme/lib \"]\n",
+    );
     let joined = validate::validate(&config).join("\n");
     assert!(joined.contains("`acme-lib`"), "{joined}");
+    // Stray whitespace would pass startup and then match no `.gitmodules` remote.
+    assert!(joined.contains("` acme/lib`"), "{joined}");
+    assert!(joined.contains("`acme/lib `"), "{joined}");
     assert!(!joined.contains("`acme/lib`"), "{joined}");
 }
 
