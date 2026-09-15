@@ -312,6 +312,12 @@ pub struct Gallery {
     pub number: u64,
     /// The head commit shown.
     pub head_sha: String,
+    /// The run prefix under the commit.
+    pub run: String,
+    /// Every relative asset path a shown flow references, in first-use
+    /// order — what `apply` commits when the store is a branch. Files the
+    /// hands uploaded but no flow references are not among them.
+    pub files: Vec<String>,
     /// The flows with something to show.
     pub flows: Vec<GalleryFlow>,
     /// How many flows ran but produced nothing to show.

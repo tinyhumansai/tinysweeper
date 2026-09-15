@@ -79,10 +79,50 @@ pub fn parse(bytes: &[u8]) -> Result<Manifest> {
 /// session both planned *and* drove, and taking the title from the plan
 /// rather than the manifest, is what stops that from fabricating a gallery
 /// entry or mislabelling one "new in this PR".
+/// Where a run's files are served from, and so what its URLs look like.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Storage<'a> {
+    /// An object store the hands upload to; `base_url` is the operator's
+    /// `preview.public_base_url`.
+    Bucket {
+        /// The origin, no trailing slash needed.
+        base_url: &'a str,
+    },
+    /// A branch of the reviewed repository, written by the server through
+    /// the App. Files render through GitHub's own blob route with `?raw=true`,
+    /// which works for public and private repositories alike — the viewer's
+    /// own session authorises it — where `raw.githubusercontent.com` would
+    /// not.
+    Branch {
+        /// The branch name, e.g. `tinysweeper/ui-previews`.
+        branch: &'a str,
+    },
+}
+
+impl Storage<'_> {
+    /// The URL of one relative asset path within a run.
+    pub fn url(&self, repo: &str, head_sha: &str, run: &str, path: &str) -> String {
+        match self {
+            Storage::Bucket { base_url } => format!(
+                "{}/{repo}/{head_sha}/{run}/{path}",
+                base_url.trim_end_matches('/')
+            ),
+            Storage::Branch { branch } => {
+                format!("https://github.com/{repo}/blob/{branch}/{head_sha}/{run}/{path}?raw=true")
+            }
+        }
+    }
+
+    /// The path a file is committed at, for [`Storage::Branch`].
+    pub fn commit_path(head_sha: &str, run: &str, path: &str) -> String {
+        format!("{head_sha}/{run}/{path}")
+    }
+}
+
 pub fn validate(
     manifest: &Manifest,
     expected: &Expected<'_>,
-    base_url: &str,
+    storage: Storage<'_>,
     max_flows: usize,
     planned: &[Flow],
     driven: &std::collections::BTreeSet<String>,
@@ -123,20 +163,17 @@ pub fn validate(
         ));
     }
 
-    let prefix = format!(
-        "{}/{}/{}/{}/",
-        base_url.trim_end_matches('/'),
-        manifest.repo,
-        manifest.head_sha,
-        manifest.run
-    );
-    let url = |path: &str| -> Result<String> {
+    let mut files: Vec<String> = Vec::new();
+    let url = |path: &str, files: &mut Vec<String>| -> Result<String> {
         if !is_asset_path(path) {
             return Err(Error::Config(format!(
                 "manifest names `{path}`, which is not a relative asset path"
             )));
         }
-        Ok(format!("{prefix}{path}"))
+        if !files.iter().any(|f| f == path) {
+            files.push(path.to_string());
+        }
+        Ok(storage.url(&manifest.repo, &manifest.head_sha, &manifest.run, path))
     };
 
     let mut flows = Vec::new();
@@ -164,9 +201,13 @@ pub fn validate(
             .take(MAX_CHANGES_PER_FLOW)
             .map(|change| {
                 Ok(GalleryChange {
-                    full_url: url(&change.full)?,
-                    crop_url: url(&change.crop)?,
-                    before_url: change.before.as_deref().map(url).transpose()?,
+                    full_url: url(&change.full, &mut files)?,
+                    crop_url: url(&change.crop, &mut files)?,
+                    before_url: change
+                        .before
+                        .as_deref()
+                        .map(|p| url(p, &mut files))
+                        .transpose()?,
                     path: text(&change.path, MAX_TITLE),
                     callouts: change
                         .callouts
@@ -181,7 +222,7 @@ pub fn validate(
             })
             .collect::<Result<_>>()?;
         let clip = match &flow.clip {
-            Some(clip) => Some((url(&clip.video)?, url(&clip.gif)?)),
+            Some(clip) => Some((url(&clip.video, &mut files)?, url(&clip.gif, &mut files)?)),
             None => None,
         };
         // A flow whose head build failed has nothing trustworthy to show: the
@@ -206,6 +247,8 @@ pub fn validate(
     Ok(Gallery {
         number: manifest.pull_request,
         head_sha: manifest.head_sha.clone(),
+        run: manifest.run.clone(),
+        files,
         flows,
         empty_flows,
         dropped_flows: manifest.flows.len().saturating_sub(max_flows),
@@ -282,7 +325,9 @@ mod tests {
     use super::*;
     use crate::preview::types::{Change, Clip, FlowResult};
 
-    const BASE: &str = "https://previews.example.org";
+    const BASE: Storage<'static> = Storage::Bucket {
+        base_url: "https://previews.example.org",
+    };
 
     fn expected() -> Expected<'static> {
         Expected {
