@@ -130,12 +130,16 @@ async function run(page, command, ctx) {
       // scroll offset is added back.
       const scrollY = await page.evaluate(() => window.scrollY);
       const scrollX = await page.evaluate(() => window.scrollX);
+      // All or nothing: measured into a list first and appended only once
+      // every target resolved, so a miss on the third callout does not
+      // leave the first two on the shot for a later recovery to duplicate.
+      const measured = [];
       let n = shot.callouts.length;
       for (const callout of command.callouts) {
         const box = await resolveLocator(page, callout.locator).first().boundingBox({ timeout });
         if (!box) throw new Error(`callout target is not visible: ${callout.label}`);
         n += 1;
-        shot.callouts.push({
+        measured.push({
           n,
           label: callout.label,
           box: {
@@ -146,6 +150,7 @@ async function run(page, command, ctx) {
           },
         });
       }
+      shot.callouts.push(...measured);
       return;
     }
     case "record":

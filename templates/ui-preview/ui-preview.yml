@@ -89,3 +89,5 @@ jobs:
           endpoint: ${{ secrets.PREVIEW_S3_ENDPOINT }}
           access-key-id: ${{ secrets.PREVIEW_S3_ACCESS_KEY_ID }}
           secret-access-key: ${{ secrets.PREVIEW_S3_SECRET_ACCESS_KEY }}
+          # `auto` for R2; the bucket's region for AWS.
+          region: ${{ vars.PREVIEW_S3_REGION || 'auto' }}
