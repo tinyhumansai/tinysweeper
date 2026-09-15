@@ -1,0 +1,17 @@
+{
+  "key": "89e135c84fe3e8de",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3173,
+    "output_tokens": 98,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000298513614
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request updates a doc-comment path (`openhuman_core::openhuman::tools::Tool` → `openhuman_core::tools::Tool`) and the corresponding `use` statement (`openhuman_core::openhuman as oh` → `openhuman_core as oh`) to reflect a module reorganization. The change is purely mechanical and introduces no security-relevant issues. Safe to merge."
+  }
+}

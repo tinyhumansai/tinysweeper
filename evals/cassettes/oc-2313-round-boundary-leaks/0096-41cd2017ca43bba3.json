@@ -1,0 +1,18 @@
+{
+  "key": "41cd2017ca43bba3",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3000,
+    "output_tokens": 91,
+    "cached_tokens": 512,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002456512744
+  },
+  "value": {
+    "findings": [],
+    "resolved": [],
+    "summary": "This pull request replaces a qualified path `use openhuman_core::openhuman as oh;` with a direct module path `use openhuman_core as oh;`. The change is a trivial import alias adjustment with no new code, no new dependencies, no exposed data, no network calls, and no risk from untrusted input. It is safe to merge."
+  }
+}

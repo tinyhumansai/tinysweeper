@@ -1,0 +1,17 @@
+{
+  "key": "cdca755dd9cfde72",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3038,
+    "output_tokens": 72,
+    "cached_tokens": 1536,
+    "embed_tokens": 0,
+    "cost_usd": 0.0001730652392
+  },
+  "value": {
+    "findings": [],
+    "summary": "The diff changes one import line from `use openhuman_core::openhuman as oh;` to `use openhuman_core as oh;`. This is a straightforward path change that appears to work correctly given the surrounding code, and introduces no bug or violation of repository rules."
+  }
+}

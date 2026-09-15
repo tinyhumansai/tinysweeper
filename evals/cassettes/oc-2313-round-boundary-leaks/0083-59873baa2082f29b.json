@@ -1,0 +1,17 @@
+{
+  "key": "59873baa2082f29b",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2982,
+    "output_tokens": 93,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000280703808
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change simply adjusts a use statement from `openhuman_core::openhuman as oh` to `openhuman_core as oh`, which is a purely cosmetic refactor. It introduces no security concerns, no new dependencies, no network or subprocess calls, no deserialization of untrusted data, and no change in permissions or credentials exposure. The diff is safe to merge."
+  }
+}

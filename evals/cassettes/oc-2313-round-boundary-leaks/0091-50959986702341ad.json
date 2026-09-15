@@ -1,0 +1,17 @@
+{
+  "key": "50959986702341ad",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2962,
+    "output_tokens": 383,
+    "cached_tokens": 2576,
+    "embed_tokens": 0,
+    "cost_usd": 0.00139845888
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adjusts an import alias from the `openhuman_core::openhuman` module to the crate root `openhuman_core`. This is a routine import-path refactoring with no security implications."
+  }
+}

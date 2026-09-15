@@ -1,0 +1,17 @@
+{
+  "key": "c66f02a311eef7d7",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3025,
+    "output_tokens": 67,
+    "cached_tokens": 1536,
+    "embed_tokens": 0,
+    "cost_usd": 0.0001710273012
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change re-exports the `oh` module from `openhuman_core` instead of importing the crate and using its nested path, which is a trivial refactor that appears correct but whose full implications cannot be verified without seeing the crate's public API."
+  }
+}

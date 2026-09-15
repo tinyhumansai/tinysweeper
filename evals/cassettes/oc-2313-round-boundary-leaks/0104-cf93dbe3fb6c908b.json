@@ -1,0 +1,17 @@
+{
+  "key": "cf93dbe3fb6c908b",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3232,
+    "output_tokens": 97,
+    "cached_tokens": 512,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002672711384
+  },
+  "value": {
+    "findings": [],
+    "summary": "The pull request updates the import path for the `openhuman_core` crate within a test module and a private function to use the crate root instead of the `openhuman` submodule. This is a mechanical refactoring that does not introduce new security concerns, change authentication or authorization logic, make network calls, deserialize untrusted data, or alter CI configuration. The change appears safe to merge."
+  }
+}

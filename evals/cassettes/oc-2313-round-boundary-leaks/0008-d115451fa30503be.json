@@ -1,0 +1,17 @@
+{
+  "key": "d115451fa30503be",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3107,
+    "output_tokens": 195,
+    "cached_tokens": 2182,
+    "embed_tokens": 0,
+    "cost_usd": 0.00131391456
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change updates the `openhuman_core` dependency path from `../../vendor/openhuman` to `../../vendor/openhuman/crates/openhuman-core`. There is nothing in the diff that reveals a bug; whether the new path points at a valid package cannot be verified from here, but the edit itself is a straightforward path update and looks safe to merge."
+  }
+}

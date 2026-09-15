@@ -1,0 +1,17 @@
+{
+  "key": "55163c8e60b79de6",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3243,
+    "output_tokens": 83,
+    "cached_tokens": 1536,
+    "embed_tokens": 0,
+    "cost_usd": 0.0001931788012
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request updates two cross-references that were broken by a prior module rename, pointing `Agent::turn` doc links from the old `openhuman_core::openhuman::agent::Agent` path to the correct `openhuman_core::agent::Agent`.  The change is mechanical and correct; no bugs are introduced."
+  }
+}

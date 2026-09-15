@@ -1,0 +1,17 @@
+{
+  "key": "ea0848f38528e450",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3112,
+    "output_tokens": 98,
+    "cached_tokens": 512,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002568156304
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request only changes two import lines, replacing `openhuman_core::openhuman as oh` with `openhuman_core as oh`. This is a cosmetic namespace simplification. It introduces no new dependencies, no new network or subprocess calls, no deserialization of untrusted data, no path traversal issues, and no changes to authentication or authorization logic. The change looks sound and safe to merge."
+  }
+}

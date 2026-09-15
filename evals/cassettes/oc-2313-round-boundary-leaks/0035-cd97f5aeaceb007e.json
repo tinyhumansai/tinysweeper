@@ -1,0 +1,16 @@
+{
+  "key": "cd97f5aeaceb007e",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_relocate",
+  "usage": {
+    "input_tokens": 673,
+    "output_tokens": 65,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000071150618
+  },
+  "value": {
+    "existing_code": "use openhuman_core as oh;"
+  }
+}

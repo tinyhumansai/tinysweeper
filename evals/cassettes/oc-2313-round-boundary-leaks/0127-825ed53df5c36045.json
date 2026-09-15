@@ -1,0 +1,17 @@
+{
+  "key": "825ed53df5c36045",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 25000,
+    "output_tokens": 182,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.002247402584
+  },
+  "value": {
+    "findings": [],
+    "summary": "This PR updates OpenHuman import paths after a crate restructuring, and converts the hivemind episode loop from single-turn steps to rounds of concurrent turns. Both sets of changes are mechanically correct: the import path updates match the new crate layout, and the round-based loop correctly projects all turns against the same transcript, commits state only after every turn is durable, and bounds the pinboard read by the round start. The test fixtures are updated to match the new `HiveStep` shape with `round_start` at `u64::MAX` for width-one rounds, preserving semantic equivalence. No behavioural defects are introduced."
+  }
+}

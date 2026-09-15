@@ -1,0 +1,17 @@
+{
+  "key": "5fa039b896ca91bd",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 2976,
+    "output_tokens": 1075,
+    "cached_tokens": 2593,
+    "embed_tokens": 0,
+    "cost_usd": 0.00286920354
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change re-aliases the `oh` import from the `openhuman` submodule to the `openhuman_core` crate root. This is a straightforward import path adjustment and appears safe to merge; without visibility into the crate's module structure I cannot confirm a problem, and none is evident from the diff alone."
+  }
+}

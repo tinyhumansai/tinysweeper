@@ -1,0 +1,17 @@
+{
+  "key": "6104dc7ab5c561e7",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 2994,
+    "output_tokens": 1400,
+    "cached_tokens": 2608,
+    "embed_tokens": 0,
+    "cost_usd": 0.00356380584
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change repoints the `oh` import alias from `openhuman_core::openhuman` to the crate root `openhuman_core`. Whether the downstream paths (`oh::config`, `oh::security`, `oh::tools`) still resolve depends on the crate's module re-exports, which are not visible here; assuming the crate re-exports those modules at its root, the change is safe to merge."
+  }
+}

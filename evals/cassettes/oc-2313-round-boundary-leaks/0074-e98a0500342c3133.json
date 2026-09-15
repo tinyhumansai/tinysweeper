@@ -1,0 +1,17 @@
+{
+  "key": "e98a0500342c3133",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3268,
+    "output_tokens": 106,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00030834888
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request only changes import paths in test code, replacing `openhuman_core::openhuman::security::SecurityPolicy` with `openhuman_core::security::SecurityPolicy`. The module has been reorganised; the public API is unchanged. No new unchecked inputs, dangerous sinks, authentication changes, network calls, deserialization, path traversal, secrets, dependency changes, or CI permission changes are introduced. The change is safe to merge."
+  }
+}

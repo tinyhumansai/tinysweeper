@@ -1,0 +1,17 @@
+{
+  "key": "b21d5b380e68b7d6",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2994,
+    "output_tokens": 77,
+    "cached_tokens": 512,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002426386704
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request changes a single import path from `openhuman_core::openhuman as oh` to `openhuman_core as oh`. This is a namespace restructuring that appears to be internally consistent and introduces no new security issues, unsafe input reachability, or permission changes. It is safe to merge."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "e06b98e928acfc4b",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 2994,
+    "output_tokens": 506,
+    "cached_tokens": 2608,
+    "embed_tokens": 0,
+    "cost_usd": 0.00166387704
+  },
+  "value": {
+    "findings": [],
+    "summary": "The PR repoints the `oh` alias from the `openhuman_core::openhuman` submodule to the `openhuman_core` crate root. Whether the downstream `oh::agent::...` paths still resolve depends on the crate's re-exports, which are not shown here; the change itself is a one-line import adjustment and looks self-consistent with the surrounding usage."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "59eb3ee9143c7765",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2982,
+    "output_tokens": 95,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000281058232
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change replaces `openhuman_core::openhuman as oh` with `openhuman_core as oh`, which is a simple namespace re‑export. It does not introduce any security concern, authentication or authorization change, new network or subprocess call, deserialization of untrusted data, path traversal, secret exposure, dependency change, or widened permission. The change looks safe to merge."
+  }
+}

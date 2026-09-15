@@ -1,0 +1,17 @@
+{
+  "key": "95e80020d262648a",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3003,
+    "output_tokens": 63,
+    "cached_tokens": 1536,
+    "embed_tokens": 0,
+    "cost_usd": 0.0001683691212
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change replaces a crate-level re-export (`use openhuman_core::openhuman as oh`) with a direct path (`use openhuman_core as oh`), which is sound and simplifies the import. No bugs are introduced."
+  }
+}

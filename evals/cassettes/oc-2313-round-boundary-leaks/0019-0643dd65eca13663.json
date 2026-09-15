@@ -1,0 +1,17 @@
+{
+  "key": "0643dd65eca13663",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3098,
+    "output_tokens": 153,
+    "cached_tokens": 2693,
+    "embed_tokens": 0,
+    "cost_usd": 0.00093720354
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change re-paths two imports/use-qualifiers from the nested `openhuman` module to the crate root. Whether it compiles depends on the module layout in the rest of the crate, which is not visible here; the diff itself introduces no logic changes."
+  }
+}

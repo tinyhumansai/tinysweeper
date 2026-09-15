@@ -1,0 +1,17 @@
+{
+  "key": "789d69308f7dcd71",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3813,
+    "output_tokens": 100,
+    "cached_tokens": 1536,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002466968252
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request updates six intra-doc links from the old path `openhuman_core::openhuman::agent::Agent::seed_resume_from_messages` to the new path `openhuman_core::agent::Agent::seed_resume_from_messages`. The change is purely cosmetic — it fixes stale doc links — and introduces no logic errors, unsafety, or behavioural changes. It is safe to merge."
+  }
+}

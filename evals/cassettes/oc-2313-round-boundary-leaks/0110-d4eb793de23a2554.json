@@ -1,0 +1,17 @@
+{
+  "key": "d4eb793de23a2554",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3173,
+    "output_tokens": 85,
+    "cached_tokens": 512,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002599168404
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change corrects two stale module paths (`openhuman_core::openhuman::agent::Agent` → `openhuman_core::agent::Agent`, `openhuman_core::openhuman` → `openhuman_core`) in doc comments and a use statement, aligning them with a previous refactor. No security concerns are introduced."
+  }
+}
