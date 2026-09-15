@@ -338,7 +338,15 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
         ]),
         "memory.questions.*" => Some(&["section", "ask"]),
         "lanes" => Some(&[]),
-        "lanes.*" => Some(&["model", "fail_on", "secret_rulepack", "max_blob_bytes"]),
+        "lanes.*" => Some(&[
+            "model",
+            "fail_on",
+            "secret_rulepack",
+            "max_blob_bytes",
+            "missing_harness",
+            "paths",
+            "workflows",
+        ]),
         "council" => Some(&["enabled", "corroboration", "subagents", "agents"]),
         "council.agents.*" => Some(&["id", "lanes", "model", "persona"]),
         "automerge" => Some(&[
