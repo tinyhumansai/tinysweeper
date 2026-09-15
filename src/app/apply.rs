@@ -1288,12 +1288,18 @@ mod tests {
         assert_ne!(event, ReviewEvent::Approve, "{body}");
 
         // A clean push that *was* answered dismisses nothing.
-        let forge = forge("abc123").with_own_review(7, ReviewEvent::Approve);
-        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
-            .await
-            .expect("applies");
+        let answered = self::tests::forge("abc123").with_own_review(7, ReviewEvent::Approve);
+        apply(
+            &answered,
+            &answered,
+            &config(),
+            &proposal("abc123", vec![]),
+            None,
+        )
+        .await
+        .expect("applies");
         assert!(
-            !forge
+            !answered
                 .writes()
                 .iter()
                 .any(|w| matches!(w, Write::DismissApproval { .. })),
