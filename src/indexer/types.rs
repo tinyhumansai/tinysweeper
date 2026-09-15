@@ -72,6 +72,13 @@ pub enum Settled {
     Failed {
         /// Why, for a human reading the repository's status.
         message: String,
+        /// How many chunks the repository has *now*, when the run changed
+        /// that before it failed. A deletion that happened is a deletion
+        /// whether or not the embedding after it did; leaving the old count
+        /// on record would report chunks that are not there, and a run that
+        /// deleted the last of them would look `Ready` rather than cold.
+        /// `None` leaves the count as it was.
+        chunks: Option<u64>,
     },
 }
 
@@ -376,6 +383,7 @@ mod tests {
     fn a_failed_run_leaves_the_repository_retryable_rather_than_wedged() {
         let settled = Settled::Failed {
             message: "provider down".into(),
+            chunks: None,
         };
         let after = IndexState::Indexing.after(&settled);
         assert_eq!(after, IndexState::Failed);

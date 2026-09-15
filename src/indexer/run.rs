@@ -89,6 +89,10 @@ pub struct Indexer<'a> {
     group: usize,
     budget_usd: Option<f64>,
     holder: String,
+    /// Directories whose absent paths are deleted before anything is
+    /// embedded: the submodules this checkout did not fetch. See
+    /// [`Indexer::revoking`].
+    revoked: Vec<String>,
 }
 
 impl<'a> Indexer<'a> {
@@ -109,7 +113,29 @@ impl<'a> Indexer<'a> {
             group: DEFAULT_GROUP,
             budget_usd: None,
             holder: format!("pid-{}", std::process::id()),
+            revoked: Vec::new(),
         })
+    }
+
+    /// Name the submodule directories this checkout did not fetch.
+    ///
+    /// A path the manifest knows under one of these is deleted *before* the
+    /// embedding pass rather than after it. Ordinary removals keep their
+    /// place at the end — write before delete, so a rename whose new path
+    /// cannot be embedded still has its old one — but a path under an
+    /// unfetched submodule has no replacement coming, and the reason it is
+    /// unfetched is usually that the operator took the repository off
+    /// `retrieval.submodules`. That is a revocation, and a review querying
+    /// this index while the rebuild is still embedding, or after it stops on
+    /// budget, must not be handed that repository's code. Only paths absent
+    /// from the checkout are touched: a `.gitmodules` entry naming a
+    /// directory that is really on disk names nothing that is gone.
+    pub fn revoking(mut self, submodule_dirs: Vec<String>) -> Self {
+        self.revoked = submodule_dirs
+            .into_iter()
+            .map(|dir| format!("{}/", dir.trim_end_matches('/')))
+            .collect();
+        self
     }
 
     /// Use a caller-configured file selector — normally one built from
@@ -290,22 +316,48 @@ impl<'a> Indexer<'a> {
             }
         };
 
+        let mut report = IndexReport {
+            skipped,
+            ..IndexReport::default()
+        };
         let outcome = self
-            .run(repo_id, &signature, root, selected, skipped, removed)
+            .run(repo_id, &signature, root, selected, removed, &mut report)
             .await;
 
         // Released on both paths. A claim only released on success is a claim a
         // crashed run holds until its TTL expires, and every push in between is
         // requeued for nothing.
         match outcome {
-            Ok(report) => {
+            Ok(()) => {
                 self.settle(&lease, &signature, repo_id, revision, &report)
                     .await?;
                 Ok(IndexOutcome::Indexed(report))
             }
             Err(err) => {
+                // What the run wrote and deleted before it failed is on disk
+                // whatever the error says; the count on record must say so
+                // too, or the next run inherits a total for chunks that are
+                // not there. Best effort: a manifest that cannot be read here
+                // leaves the count alone rather than masking the real error.
+                let chunks = if report.upserted == 0 && report.deleted == 0 {
+                    None
+                } else {
+                    match self.manifest.state(repo_id, &signature).await {
+                        Ok(state) => Some(
+                            state
+                                .chunks
+                                .saturating_add(report.upserted)
+                                .saturating_sub(report.deleted),
+                        ),
+                        Err(nested) => {
+                            tracing::warn!(error = %nested, "could not read the index count to settle a failed run");
+                            None
+                        }
+                    }
+                };
                 let settled = Settled::Failed {
                     message: err.to_string(),
+                    chunks,
                 };
                 // A release failure must not mask the error that caused it.
                 if let Err(nested) = self.manifest.release(&lease, &settled).await {
@@ -351,38 +403,39 @@ impl<'a> Indexer<'a> {
         signature: &EmbedSignature,
         root: &Path,
         selected: Vec<String>,
-        skipped: Vec<SkippedFile>,
         removed: Vec<String>,
-    ) -> Result<IndexReport> {
-        let mut report = IndexReport {
-            skipped,
-            ..IndexReport::default()
-        };
-
-        // Removals first, embeddings second — the order is the point. A path
-        // that has left the checkout may have left it because the operator
-        // took its submodule off `retrieval.submodules`, and that is a
-        // revocation: the review that queries this index while the rebuild is
-        // still embedding, or after it stops on budget, must not be handed
-        // that repository's code. Deleting costs nothing and cannot fail on
-        // budget, so it goes before anything that can. Under the claim, in
-        // the report's count, and in `removed` for the graph — the same
-        // bookkeeping a deletion has always had, just earlier.
-        if !removed.is_empty() {
-            report.deleted += self.index.delete_paths(repo_id, &removed).await?;
-            self.manifest.forget(repo_id, signature, &removed).await?;
-            report.removed = removed;
+        report: &mut IndexReport,
+    ) -> Result<()> {
+        // Revocations first, everything else after the writes. See
+        // [`Indexer::revoking`] for why the two kinds of removal are ordered
+        // differently; the bookkeeping is the same for both.
+        let (revoked, removed): (Vec<String>, Vec<String>) =
+            removed.into_iter().partition(|path| {
+                self.revoked
+                    .iter()
+                    .any(|dir| path.starts_with(dir.as_str()))
+            });
+        if !revoked.is_empty() {
+            report.deleted += self.index.delete_paths(repo_id, &revoked).await?;
+            self.manifest.forget(repo_id, signature, &revoked).await?;
+            report.removed.extend(revoked);
         }
 
         for group in selected.chunks(self.group) {
             if report.budget_exhausted {
                 break;
             }
-            self.index_group(repo_id, signature, root, group, &mut report)
+            self.index_group(repo_id, signature, root, group, report)
                 .await?;
         }
 
-        Ok(report)
+        if !removed.is_empty() {
+            report.deleted += self.index.delete_paths(repo_id, &removed).await?;
+            self.manifest.forget(repo_id, signature, &removed).await?;
+            report.removed.extend(removed);
+        }
+
+        Ok(())
     }
 
     async fn index_group(

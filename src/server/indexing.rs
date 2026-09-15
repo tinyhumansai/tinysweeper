@@ -162,6 +162,9 @@ impl IndexBackend {
             self.manifest.as_ref(),
         )?
         .with_selector(selector)
+        // The submodules this checkout did not fetch: their paths, if the
+        // index still holds any, go before the embedding pass.
+        .revoking(skipped)
         .with_batch(config.embeddings.batch)
         // The count ceiling above does not bound a request; this does. Without
         // it a large repository's batches are rejected outright and the review

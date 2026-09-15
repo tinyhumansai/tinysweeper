@@ -111,8 +111,11 @@ impl IndexManifest for MockManifest {
                 entry.0.message = None;
                 entry.0.usage.add(*usage);
             }
-            Settled::Failed { message } => {
+            Settled::Failed { message, chunks } => {
                 entry.0.message = Some(message.clone());
+                if let Some(chunks) = chunks {
+                    entry.0.chunks = *chunks;
+                }
             }
         }
         Ok(())
@@ -322,6 +325,7 @@ mod tests {
                 &lease,
                 &Settled::Failed {
                     message: "provider down".into(),
+                    chunks: None,
                 },
             )
             .await
