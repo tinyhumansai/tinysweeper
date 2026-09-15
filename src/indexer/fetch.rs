@@ -44,6 +44,39 @@ pub struct Checkout {
     revision: String,
 }
 
+/// The submodule directories a checkout is missing, by reason.
+///
+/// Kept apart because the indexer treats them differently. A *denied*
+/// submodule — not on `retrieval.submodules`, or unparsable, or escaping the
+/// checkout — is a policy decision: its rows in the index are revoked before
+/// anything else is embedded. A *failed* one is a transient — network, auth,
+/// a gitlink the superproject does not carry — and its rows are left to the
+/// run's ordinary removal, after the writes, where a run that fails part-way
+/// still has them.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Unfetched {
+    /// Paths policy refused to fetch.
+    pub denied: Vec<String>,
+    /// Paths that were allowed and could not be fetched this time.
+    pub failed: Vec<String>,
+}
+
+impl Unfetched {
+    /// Every path that is not on disk, whatever the reason.
+    pub fn all(&self) -> Vec<String> {
+        self.denied
+            .iter()
+            .chain(self.failed.iter())
+            .cloned()
+            .collect()
+    }
+
+    /// Whether everything was fetched.
+    pub fn is_empty(&self) -> bool {
+        self.denied.is_empty() && self.failed.is_empty()
+    }
+}
+
 impl Checkout {
     /// Fetch `revision` of `repo` into a fresh temporary directory.
     ///
@@ -113,8 +146,9 @@ impl Checkout {
     /// the remote's default branch and fails when the pinned commit is not
     /// its tip.
     ///
-    /// A submodule that cannot be fetched is skipped and named in the
-    /// returned list; the checkout is still usable without it.
+    /// A submodule that is not fetched is named in the returned
+    /// [`Unfetched`], under the reason: the checkout is still usable without
+    /// it, but the two reasons mean different things to whoever indexes it.
     ///
     /// Only submodules whose repository is in `allowed` (`owner/name`) are
     /// fetched: `.gitmodules` is written by whoever opened the pull request,
@@ -125,32 +159,32 @@ impl Checkout {
         host: &str,
         token: &str,
         allowed: &[String],
-    ) -> Result<Vec<String>> {
+    ) -> Result<Unfetched> {
         let root = self.dir.path();
         let allowed: Vec<crate::forge::types::RepoId> = allowed
             .iter()
             .filter_map(|r| crate::forge::types::RepoId::parse(r))
             .collect();
         let Ok(text) = std::fs::read_to_string(root.join(".gitmodules")) else {
-            return Ok(Vec::new());
+            return Ok(Unfetched::default());
         };
-        let mut skipped = Vec::new();
+        let mut unfetched = Unfetched::default();
         for sub in crate::forge::tree::parse_gitmodules(&text, host) {
             let Some(repo) = &sub.repo else {
-                skipped.push(sub.path.clone());
+                unfetched.denied.push(sub.path.clone());
                 continue;
             };
             if !allowed.iter().any(|a| a == repo) {
-                skipped.push(sub.path.clone());
+                unfetched.denied.push(sub.path.clone());
                 continue;
             }
             let dir = root.join(&sub.path);
             if !dir.starts_with(root) || sub.path.contains("..") {
-                skipped.push(sub.path.clone());
+                unfetched.denied.push(sub.path.clone());
                 continue;
             }
             let Some(gitlink) = gitlink(root, token, &sub.path).await? else {
-                skipped.push(sub.path.clone());
+                unfetched.failed.push(sub.path.clone());
                 continue;
             };
             let url = format!("https://{host}/{}/{}.git", repo.owner, repo.name);
@@ -182,10 +216,10 @@ impl Checkout {
             .await;
             if let Err(err) = fetched {
                 tracing::warn!(path = %sub.path, %err, "a submodule could not be fetched; indexed without it");
-                skipped.push(sub.path.clone());
+                unfetched.failed.push(sub.path.clone());
             }
         }
-        Ok(skipped)
+        Ok(unfetched)
     }
 
     /// The directory the tree was checked out into.

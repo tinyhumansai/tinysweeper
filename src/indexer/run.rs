@@ -89,6 +89,10 @@ pub struct Indexer<'a> {
     group: usize,
     budget_usd: Option<f64>,
     holder: String,
+    /// Directories whose absent paths are deleted before anything is
+    /// embedded: the submodules this checkout did not fetch. See
+    /// [`Indexer::revoking`].
+    revoked: Vec<String>,
 }
 
 impl<'a> Indexer<'a> {
@@ -109,7 +113,29 @@ impl<'a> Indexer<'a> {
             group: DEFAULT_GROUP,
             budget_usd: None,
             holder: format!("pid-{}", std::process::id()),
+            revoked: Vec::new(),
         })
+    }
+
+    /// Name the submodule directories this checkout did not fetch.
+    ///
+    /// A path the manifest knows under one of these is deleted *before* the
+    /// embedding pass rather than after it. Ordinary removals keep their
+    /// place at the end — write before delete, so a rename whose new path
+    /// cannot be embedded still has its old one — but a path under an
+    /// unfetched submodule has no replacement coming, and the reason it is
+    /// unfetched is usually that the operator took the repository off
+    /// `retrieval.submodules`. That is a revocation, and a review querying
+    /// this index while the rebuild is still embedding, or after it stops on
+    /// budget, must not be handed that repository's code. Only paths absent
+    /// from the checkout are touched: a `.gitmodules` entry naming a
+    /// directory that is really on disk names nothing that is gone.
+    pub fn revoking(mut self, submodule_dirs: Vec<String>) -> Self {
+        self.revoked = submodule_dirs
+            .into_iter()
+            .map(|dir| format!("{}/", dir.trim_end_matches('/')))
+            .collect();
+        self
     }
 
     /// Use a caller-configured file selector — normally one built from
@@ -290,22 +316,48 @@ impl<'a> Indexer<'a> {
             }
         };
 
+        let mut report = IndexReport {
+            skipped,
+            ..IndexReport::default()
+        };
         let outcome = self
-            .run(repo_id, &signature, root, selected, skipped, removed)
+            .run(repo_id, &signature, root, selected, removed, &mut report)
             .await;
 
         // Released on both paths. A claim only released on success is a claim a
         // crashed run holds until its TTL expires, and every push in between is
         // requeued for nothing.
         match outcome {
-            Ok(report) => {
+            Ok(()) => {
                 self.settle(&lease, &signature, repo_id, revision, &report)
                     .await?;
                 Ok(IndexOutcome::Indexed(report))
             }
             Err(err) => {
+                // What the run wrote and deleted before it failed is on disk
+                // whatever the error says; the count on record must say so
+                // too, or the next run inherits a total for chunks that are
+                // not there. Best effort: a manifest that cannot be read here
+                // leaves the count alone rather than masking the real error.
+                let chunks = if report.upserted == 0 && report.deleted == 0 {
+                    None
+                } else {
+                    match self.manifest.state(repo_id, &signature).await {
+                        Ok(state) => Some(
+                            state
+                                .chunks
+                                .saturating_add(report.upserted)
+                                .saturating_sub(report.deleted),
+                        ),
+                        Err(nested) => {
+                            tracing::warn!(error = %nested, "could not read the index count to settle a failed run");
+                            None
+                        }
+                    }
+                };
                 let settled = Settled::Failed {
                     message: err.to_string(),
+                    chunks,
                 };
                 // A release failure must not mask the error that caused it.
                 if let Err(nested) = self.manifest.release(&lease, &settled).await {
@@ -351,29 +403,49 @@ impl<'a> Indexer<'a> {
         signature: &EmbedSignature,
         root: &Path,
         selected: Vec<String>,
-        skipped: Vec<SkippedFile>,
         removed: Vec<String>,
-    ) -> Result<IndexReport> {
-        let mut report = IndexReport {
-            skipped,
-            ..IndexReport::default()
-        };
+        report: &mut IndexReport,
+    ) -> Result<()> {
+        // Revocations first, everything else after the writes. See
+        // [`Indexer::revoking`] for why the two kinds of removal are ordered
+        // differently.
+        //
+        // Only the *rows* go early. The manifest keeps the paths until the
+        // run's own removal step below, so a run that fails between here and
+        // there leaves them discoverable: the next full walk finds them
+        // absent again, deletes nothing (already gone), and carries them in
+        // `removed` to the graph sync that only an `Indexed` outcome reaches.
+        // Forgetting them here would make that graph cleanup unreachable.
+        let revoked: Vec<&String> = removed
+            .iter()
+            .filter(|path| {
+                self.revoked
+                    .iter()
+                    .any(|dir| path.starts_with(dir.as_str()))
+            })
+            .collect();
+        if !revoked.is_empty() {
+            let revoked: Vec<String> = revoked.into_iter().cloned().collect();
+            report.deleted += self.index.delete_paths(repo_id, &revoked).await?;
+        }
 
         for group in selected.chunks(self.group) {
             if report.budget_exhausted {
                 break;
             }
-            self.index_group(repo_id, signature, root, group, &mut report)
+            self.index_group(repo_id, signature, root, group, report)
                 .await?;
         }
 
+        // Rows a revocation already deleted are deleted again here for
+        // nothing — zero rows, zero count — and forgotten for the first time.
         if !removed.is_empty() {
             report.deleted += self.index.delete_paths(repo_id, &removed).await?;
             self.manifest.forget(repo_id, signature, &removed).await?;
             report.removed = removed;
         }
 
-        Ok(report)
+        Ok(())
     }
 
     async fn index_group(
@@ -440,7 +512,6 @@ impl<'a> Indexer<'a> {
                 "a confirmed chunk disappeared before its vector could be reused".into(),
             ));
         }
-        report.upserted += relocated;
 
         let queue: Vec<(usize, &Chunk)> = work
             .iter()
@@ -455,6 +526,13 @@ impl<'a> Indexer<'a> {
             last_position[*file] = Some(position);
         }
 
+        // Rows go into the store as they are written, but into the *count*
+        // only when their file is confirmed below. An unconfirmed file is
+        // re-embedded by the next run, and `upsert` reports a replacement as
+        // a write, so counting here would count a chunk once per attempt: a
+        // run cut off by the budget, or one that failed after its first
+        // batch, would leave the total inflated for good.
+        let mut written_per_file = vec![0_u64; work.len()];
         let mut written = 0_usize;
         for (start, end) in batch_bounds(&queue, self.batch, self.max_batch_tokens) {
             let batch = &queue[start..end];
@@ -491,7 +569,10 @@ impl<'a> Indexer<'a> {
                     vector,
                 })
                 .collect();
-            report.upserted += self.index.upsert(signature, &embedded).await?;
+            self.index.upsert(signature, &embedded).await?;
+            for (file, _) in batch {
+                written_per_file[*file] += 1;
+            }
             written += batch.len();
         }
 
@@ -513,6 +594,12 @@ impl<'a> Indexer<'a> {
             .map(|(_, file)| file.confirmation())
             .collect();
         self.manifest.record(repo_id, signature, &complete).await?;
+        report.upserted += work
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| finished(*index))
+            .map(|(index, file)| written_per_file[index] + file.to_relocate.len() as u64)
+            .sum::<u64>();
 
         // Step 5: and only now is anything deleted.
         let stale: Vec<String> = work

@@ -234,8 +234,13 @@ impl IndexManifest for MongoManifest {
                     "cost_usd": usage.cost_usd,
                 },
             },
-            Settled::Failed { message } => doc! {
-                "$set": { "state": "failed", "message": message.clone() },
+            Settled::Failed { message, chunks } => match chunks {
+                Some(chunks) => doc! {
+                    "$set": { "state": "failed", "message": message.clone(), "chunks": *chunks as i64 },
+                },
+                None => doc! {
+                    "$set": { "state": "failed", "message": message.clone() },
+                },
             },
         };
 

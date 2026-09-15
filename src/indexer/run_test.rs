@@ -520,6 +520,153 @@ async fn a_completed_run_leaves_the_repository_ready_and_claimable() {
 }
 
 #[tokio::test]
+async fn a_revoked_submodule_is_gone_before_the_run_can_stop_on_budget() {
+    // The operator took `libs/core` off the allow-list, so the next checkout
+    // has an empty directory there. Its chunks must not outlive the first
+    // budget check: deleting them is a revocation, not a tidy-up, and a
+    // review querying this index mid-rebuild must not be handed them.
+    let checkout = Checkout::new();
+    checkout.write(
+        "libs/core/src/lib.rs",
+        "fn vendored() -> usize {\n    3\n}\n",
+    );
+    let rig = Rig::new();
+    let signature = crate::index::EmbedSignature::new("voyage", "voyage-code-3", 16);
+    let embedder = CountingEmbedder::new(MockEmbedder::with_signature(signature.clone()));
+    Indexer::new(&embedder, &rig.index, &rig.manifest)
+        .expect("builds")
+        .with_batch(1)
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("indexes");
+    async fn paths_under(rig: &Rig, signature: &crate::index::EmbedSignature) -> Vec<String> {
+        let query = crate::index::HybridQuery::new(signature.clone(), "fn", vec![0.0; 16])
+            .in_repo(REPO)
+            .limit(1_000);
+        rig.index
+            .query(&query)
+            .await
+            .expect("queries")
+            .into_iter()
+            .map(|hit| hit.chunk.path.clone())
+            .collect()
+    }
+    assert!(
+        paths_under(&rig, &signature)
+            .await
+            .iter()
+            .any(|path| path == "libs/core/src/lib.rs")
+    );
+
+    // The submodule is now unfetched: an empty directory. A new file needs
+    // embedding, and the budget refuses it before the first call.
+    checkout.remove("libs/core/src/lib.rs");
+    checkout.write("src/gamma.rs", "fn gamma() {}\n");
+    let before = embedder.calls();
+    let starved = report(
+        Indexer::new(&embedder, &rig.index, &rig.manifest)
+            .expect("builds")
+            .with_batch(1)
+            .with_budget(0.000_000_001)
+            .revoking(vec!["libs/core".into()])
+            .index_repo(REPO, "sha-2", &checkout.root())
+            .await
+            .expect("runs"),
+    );
+    assert!(starved.budget_exhausted, "{starved:?}");
+    assert_eq!(embedder.calls(), before, "nothing was embedded");
+    assert!(starved.deleted > 0, "{starved:?}");
+    assert!(
+        starved
+            .removed
+            .contains(&"libs/core/src/lib.rs".to_string())
+    );
+    assert!(
+        !paths_under(&rig, &signature)
+            .await
+            .iter()
+            .any(|path| path == "libs/core/src/lib.rs"),
+        "the revocation must not wait behind the embedding pass"
+    );
+    // And the count on record moved with it.
+    let record = rig.manifest.snapshot(REPO, &signature);
+    assert_eq!(
+        record.chunks,
+        paths_under(&rig, &signature).await.len() as u64,
+        "the settled count is what the store holds"
+    );
+}
+
+/// An embedder that answers `n` calls and then fails once — the provider
+/// outage that lands halfway through a run.
+struct FlakyEmbedder {
+    inner: MockEmbedder,
+    answers: std::sync::atomic::AtomicU64,
+}
+
+#[async_trait::async_trait]
+impl crate::ports::embed::Embedder for FlakyEmbedder {
+    fn signature(&self) -> crate::index::EmbedSignature {
+        self.inner.signature()
+    }
+
+    async fn embed(&self, texts: &[String]) -> crate::error::Result<crate::index::Embedded> {
+        use std::sync::atomic::Ordering;
+        if self.answers.load(Ordering::Relaxed) == 0 {
+            // Fail exactly once, then recover: the retry must succeed.
+            self.answers.store(u64::MAX, Ordering::Relaxed);
+            return Err(crate::error::Error::Model("provider down".into()));
+        }
+        if self.answers.load(Ordering::Relaxed) != u64::MAX {
+            self.answers.fetch_sub(1, Ordering::Relaxed);
+        }
+        self.inner.embed(texts).await
+    }
+}
+
+#[tokio::test]
+async fn a_run_that_fails_after_its_first_batch_does_not_count_that_batch_twice() {
+    // First attempt: one batch lands, the next call fails, the run settles
+    // as failed. Its written chunks belong to a file that never confirmed,
+    // so the retry embeds and upserts them again — an `upsert` that reports
+    // the replacement as a write. Counted at write time, the total would be
+    // one attempt too high forever; counted at confirmation, it is the
+    // number of rows the store actually holds.
+    let checkout = Checkout::new();
+    let rig = Rig::new();
+    let embedder = FlakyEmbedder {
+        inner: MockEmbedder::new(16),
+        answers: std::sync::atomic::AtomicU64::new(1),
+    };
+    let signature = crate::ports::embed::Embedder::signature(&embedder);
+    let indexer = Indexer::new(&embedder, &rig.index, &rig.manifest)
+        .expect("builds")
+        .with_batch(1);
+
+    let failed = indexer.index_repo(REPO, "sha-1", &checkout.root()).await;
+    assert!(failed.is_err(), "the first attempt fails");
+    assert_eq!(rig.index.len(), 1, "one batch landed before the failure");
+    let after_failure = rig.manifest.snapshot(REPO, &signature);
+    assert_eq!(after_failure.state, IndexState::Failed);
+    assert_eq!(
+        after_failure.chunks, 0,
+        "an unconfirmed write is not yet a counted chunk"
+    );
+
+    indexer
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("the retry succeeds");
+    let record = rig.manifest.snapshot(REPO, &signature);
+    assert_eq!(record.state, IndexState::Ready);
+    assert_eq!(
+        record.chunks,
+        rig.index.len() as u64,
+        "the settled count is what the store holds, not one per attempt"
+    );
+}
+
+#[tokio::test]
 async fn a_run_that_hits_its_budget_stops_with_a_partial_index_rather_than_failing() {
     let checkout = Checkout::new();
     let rig = Rig::new();
