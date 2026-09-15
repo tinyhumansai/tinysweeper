@@ -1947,13 +1947,15 @@ async fn review_inner(
     Ok(Some(findings))
 }
 
-/// Run the review and publish it.
+/// Run the review lanes under the cancellable deadline, and hand back what
+/// they produced for `review_inner` to publish uncancelled.
 ///
 /// `config` is the *effective* config for this repository — the deployment's,
 /// with the reviewed repository's own allow-listed keys laid over it. The model
 /// gateway and the index are still built from the deployment's config, because
 /// model choice, credentials and the index partition key are not things a
-/// reviewed repository may set.
+/// reviewed repository may set. Despite the name, this no longer publishes —
+/// see the comment on its return.
 #[allow(clippy::too_many_arguments)]
 async fn run_and_publish(
     state: &AppState,
@@ -1964,7 +1966,7 @@ async fn run_and_publish(
     forge: &crate::forge::github::GitHubRead,
     read_token: &str,
     run: &Run,
-) -> Result<crate::app::Proposal> {
+) -> Result<(Config, crate::app::Proposal)> {
     let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
         &state.config.config.models,
     )?);
