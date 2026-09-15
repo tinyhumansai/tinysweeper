@@ -306,9 +306,63 @@ pub enum IndexOutcome {
     },
 }
 
+/// What the manifest records as the revision an index reflects.
+///
+/// The commit alone is not enough: which submodules were fetched into the
+/// checkout is part of what got indexed, and that is decided by
+/// `retrieval.submodules`, not by the commit. An operator who removes a
+/// repository from the list at an unchanged head would otherwise be told the
+/// index is fresh — and `Retriever::retrieve` applies no allow-list of its
+/// own, so the chunks policy says may no longer be read would keep reaching
+/// prompts until the next push. Folding the list into the recorded revision
+/// makes a policy change a stale index. An empty list records the bare
+/// commit, so the manifests written before this existed stay fresh.
+///
+/// One function for both sides on purpose: the server records it, and
+/// `Retriever::freshness` compares against it. Two spellings would report
+/// every allow-listed repository as permanently stale.
+pub fn indexed_revision(revision: &str, submodules: &[String]) -> String {
+    if submodules.is_empty() {
+        return revision.to_string();
+    }
+    let mut allowed: Vec<&str> = submodules.iter().map(String::as_str).collect();
+    allowed.sort_unstable();
+    allowed.dedup();
+    let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
+    for repo in allowed {
+        sha2::Digest::update(&mut hasher, repo.as_bytes());
+        sha2::Digest::update(&mut hasher, b"\0");
+    }
+    let digest = sha2::Digest::finalize(hasher);
+    format!(
+        "{revision}+submodules:{:016x}",
+        u64::from_be_bytes(digest[..8].try_into().unwrap())
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_recorded_revision_moves_with_the_submodule_policy() {
+        // No policy: the bare commit, so manifests written before the list
+        // existed are still fresh.
+        assert_eq!(indexed_revision("abc", &[]), "abc");
+
+        let one = indexed_revision("abc", &["o/lib".into()]);
+        let two = indexed_revision("abc", &["o/lib".into(), "o/core".into()]);
+        assert!(one.starts_with("abc+submodules:"));
+        assert_ne!(
+            one, two,
+            "changing the allow-list must make the index stale"
+        );
+        assert_ne!(one, "abc", "a policy is not the bare commit");
+
+        // Order and repeats are not policy.
+        let reordered = indexed_revision("abc", &["o/core".into(), "o/lib".into(), "o/lib".into()]);
+        assert_eq!(two, reordered);
+    }
 
     #[test]
     fn an_index_in_progress_cannot_be_claimed_and_every_other_state_can() {

@@ -1,0 +1,17 @@
+{
+  "key": "6da23ac96b05b8af",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4025,
+    "output_tokens": 930,
+    "cached_tokens": 3550,
+    "embed_tokens": 0,
+    "cost_usd": 0.00274344
+  },
+  "value": {
+    "findings": [],
+    "summary": "The pull request adds an `[embeddings]` section to `.tinysweeper.toml` enabling vector retrieval through the OpenRouter gateway using `text-embedding-3-small` at 1536 dimensions, with the API key sourced from an environment variable. The change is purely declarative configuration and introduces no logic bugs; the model and dimensions are internally consistent and no secret value is committed, only an environment-variable name."
+  }
+}

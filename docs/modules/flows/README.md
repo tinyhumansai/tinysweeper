@@ -80,6 +80,20 @@ recursion into existence.
   turn after it, so leaving `questions` in its schema invites a question nothing
   will ever answer.
 
+## Lookups
+
+The other follow-up, and the one that pays: a reviewer may end a turn with
+reads and searches of the repository instead of a verdict, and is asked again
+with what came back. The loop is host-owned — the model fills a JSON field,
+`flows::lookup` answers it through the `TreeReader` port — so the `Model`
+port stays one structured completion and every turn is a cassette can replay.
+Lookups run before questions, so a sub-agent answering a question is handed
+the evidence the reviewer already fetched rather than the diff alone; before
+this it was handed the reviewer's own prompt and told it was answering "from
+the repository". The turn prompts say what each turn may do: the settling
+turn alone is told it is the last. See
+[`docs/modules/lanes/lookup.md`](../lanes/lookup.md).
+
 ## What the graph is *not* allowed to do
 
 `caps.rs` is as much about refusal as wiring. `tools`, `http` and `code` are
@@ -103,7 +117,8 @@ lane, so it can refuse one however many are in flight.
 | `caps.rs` | the capability seam, budget, spend tally, and every refusal |
 | `panel.rs` | one `agent` node per reviewer, and the fan-in barrier |
 | `subagent.rs` | the child graph, the question schema, and the depth bound |
-| `runner.rs` | runs the rounds and returns one answer per reviewer |
+| `lookup.rs` | the lookup loop: seeding, the `lookups` schema, gathering, the budget |
+| `runner.rs` | runs the rounds — lookups, then questions, then the settling turn — and returns one answer per reviewer |
 
 ## Testing
 

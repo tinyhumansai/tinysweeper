@@ -65,9 +65,10 @@ pull request can never be reviewed again.
 `REVIEW_DEADLINE` bounds one review's wall clock, retries included. Each model
 call is capped on its own by the gateway client, but a review is dozens of
 them in sequence and nothing capped the sum: on 2026-09-15 one sat "in
-progress" for over two hours holding a permit. The deadline wraps the model
-phase only — the publish after it must not be cut off between one comment and
-the next — and is asserted at compile time to be shorter than `LEASE_TTL`,
+progress" for over two hours holding a permit. The deadline wraps the lookup
+checkout and the model phase — not the publish after them, which must not be
+cut off between one comment and the next — and is asserted at compile time to
+be shorter than `LEASE_TTL`,
 because a review still running when its lease lapses is exactly the duplicate
 the lease prevents. A review that misses it concludes its check as
 `ActionRequired` with "ran out of time", and is not retried: the deadline is

@@ -1767,6 +1767,7 @@ async fn review_inner(
         number,
         installation,
         &forge,
+        &read_token,
         run,
     ))
     .catch_unwind()
@@ -1814,6 +1815,7 @@ async fn review_inner(
 /// gateway and the index are still built from the deployment's config, because
 /// model choice, credentials and the index partition key are not things a
 /// reviewed repository may set.
+#[allow(clippy::too_many_arguments)]
 async fn run_and_publish(
     state: &AppState,
     config: &Config,
@@ -1821,6 +1823,7 @@ async fn run_and_publish(
     number: u64,
     installation: u64,
     forge: &crate::forge::github::GitHubRead,
+    read_token: &str,
     run: &Run,
 ) -> Result<crate::app::Proposal> {
     let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
@@ -1849,24 +1852,80 @@ async fn run_and_publish(
     // same policy with no memory, not the deployment's policy instead.
     let recaller = state.memory.as_ref().map(|backend| backend.recaller());
 
-    // The deadline bounds the model phase only. `tokio::time::timeout_at`
-    // drops the inner future when it elapses, which cancels every model call
-    // in flight — the right thing for the lanes, and the wrong thing for the
-    // publish below, which must not be cut off between one comment and the
-    // next. A deadline already in the past — a retry after a slow failure —
-    // resolves at once, which is the intended way of refusing the retry.
     let config = config_for(config, run.mode);
-    let review = crate::app::review::review_with_memory(
-        forge,
-        model,
-        &config,
-        repo,
-        number,
-        Some(&state.store),
-        state.knowledge.as_deref(),
-        retriever.as_ref(),
-        recaller.as_ref(),
-    );
+
+    // The deadline bounds the checkout and the model phase, not the publish.
+    // `tokio::time::timeout_at` drops the inner future when it elapses, which
+    // cancels every model call in flight — the right thing for the lanes, and
+    // the wrong thing for the publish below, which must not be cut off between
+    // one comment and the next. The checkout sits inside the deadline so that
+    // a deadline already in the past — a retry after a slow failure —
+    // resolves at once, before a clone is even started, which is the intended
+    // way of refusing the retry.
+    let review = async {
+        // The tree the reviewers may look things up in. A shallow checkout of
+        // the head when `[lookup].checkout` allows it — one commit, no history,
+        // no hooks, the same fetch the indexer makes — so search works and a
+        // read costs no API call; the forge reader behind it for what a shallow
+        // checkout lacks, such as a submodule that was not fetched. Read-only
+        // either way: the token here is the review-read one the forge already
+        // holds, and the checkout is deleted with the review.
+        let checkout = if config.lookup.enabled && config.lookup.checkout {
+            let head = forge.pull_request(repo, number).await?.head_sha;
+            match crate::indexer::fetch::Checkout::fetch(
+                &super::indexing::git_host(),
+                &repo.to_string(),
+                &head,
+                read_token,
+            )
+            .await
+            {
+                Ok(checkout) => {
+                    if !config.retrieval.submodules.is_empty()
+                        && let Err(err) = checkout
+                            .fetch_submodules(
+                                &super::indexing::git_host(),
+                                read_token,
+                                &config.retrieval.submodules,
+                            )
+                            .await
+                    {
+                        tracing::warn!(%repo, %err, "submodules not fetched for the review's tree");
+                    }
+                    Some(checkout)
+                }
+                Err(err) => {
+                    tracing::warn!(%repo, %err, "no checkout for the review; lookups read through the forge");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        // The review chains the forge reader behind whatever it is given, so a
+        // path the shallow checkout lacks — a submodule that was not fetched —
+        // is still read through the API.
+        let dir_tree = checkout
+            .as_ref()
+            .map(|c| crate::ports::tree::DirTree::new(c.path()).at_revision(c.revision()));
+        let tree = dir_tree
+            .as_ref()
+            .map(|dir| dir as &dyn crate::ports::tree::TreeReader);
+
+        crate::app::review::review_with_tree(
+            forge,
+            model,
+            &config,
+            repo,
+            number,
+            Some(&state.store),
+            state.knowledge.as_deref(),
+            retriever.as_ref(),
+            recaller.as_ref(),
+            tree,
+        )
+        .await
+    };
     let proposal = tokio::time::timeout_at(run.deadline, review)
         .await
         .map_err(|_elapsed| {

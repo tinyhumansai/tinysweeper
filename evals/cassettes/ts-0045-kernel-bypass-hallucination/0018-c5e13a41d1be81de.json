@@ -1,0 +1,17 @@
+{
+  "key": "c5e13a41d1be81de",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3567,
+    "output_tokens": 460,
+    "cached_tokens": 2593,
+    "embed_tokens": 0,
+    "cost_usd": 0.00196183974
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds an [embeddings] configuration section to .tinysweeper.toml. It references an API key through an environment variable name rather than embedding the secret, and introduces no dangerous sinks or untrusted input paths. It looks safe to merge."
+  }
+}

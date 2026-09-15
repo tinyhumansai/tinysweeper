@@ -1,0 +1,30 @@
+{
+  "key": "48753170e488935e",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 7099,
+    "output_tokens": 3357,
+    "cached_tokens": 5993,
+    "embed_tokens": 0,
+    "cost_usd": 0.00863477454
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The test claims to assert \"the wire between config and gateway,\" but it constructs `GatewayModel` directly (bypassing `from_config`) and calls `reasoning_options` on a field it just set — it never calls `harness()` or verifies that `with_default_provider_options` receives the value. If a future change drops the `reasoning_effort: models.reasoning_effort.clone()` line in `from_config`, this test still passes. The test gives false confidence about exactly the failure mode its comment warns about: a setting that is read and documented but never forwarded.",
+        "confidence": 0.85,
+        "existing_code": "        let gateway = GatewayModel {\n            api_key: \"unused\".into(),\n            base_url: models.base_url.clone(),\n            fallbacks: models.fallback.clone(),\n            reasoning_effort: models.reasoning_effort.clone(),\n        };\n\n        assert_eq!(\n            reasoning_options(&gateway.reasoning_effort),\n            json!({ \"reasoning\": { \"enabled\": false } })\n        );",
+        "path": "src/harness/openrouter.rs",
+        "rule": "misleading-test-coverage",
+        "severity": "low",
+        "suggestion": null,
+        "title": "Configured-effort test does not exercise the gateway wire"
+      }
+    ],
+    "lookups": [],
+    "resolved": [],
+    "summary": "The change replaces a hard-coded reasoning-disable with a configurable `reasoning_effort` field, wiring it through `reasoning_options` into `with_default_provider_options`. The logic is sound: \"off\" and empty strings disable reasoning, any other trimmed value is passed through as an effort level. One test claims to verify the config-to-gateway wire but only re-tests `reasoning_options` in isolation, leaving the actual forwarding path unexercised."
+  }
+}

@@ -6,6 +6,7 @@
 #[cfg(feature = "github")]
 pub mod github;
 pub mod mock;
+pub mod tree;
 pub mod types;
 
 pub use crate::forge::mock::{MockForge, MockState, Write};

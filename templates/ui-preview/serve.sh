@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Serve one checkout of this repository for the UI preview.
 #
-# Copy to scripts/ui-preview/serve.sh. Called with two variables:
+# Copy to .github/tinysweeper/serve.sh. Called with two variables:
 #   TS_CHECKOUT  the directory to serve (the head, or the merge-base)
 #   TS_PORT      the port to listen on
 # Two copies run at once, so nothing here may assume a fixed port or a shared

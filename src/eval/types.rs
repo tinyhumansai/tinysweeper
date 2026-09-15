@@ -219,6 +219,13 @@ pub struct Fixture {
     /// tree would make a fixture unreviewable in a diff and would carry the
     /// repository into the corpus.
     pub blobs: BTreeMap<String, String>,
+    /// What the reviewer looked up, keyed by [`crate::ports::tree::Lookup::key`].
+    ///
+    /// Written by `eval run --record --tree <dir>` as the reviewer asks, and
+    /// served back on replay so the follow-up turn is byte-identical to the
+    /// one recorded. Only what was asked for is frozen, which is what keeps
+    /// the fixture reviewable in a diff rather than carrying the tree.
+    pub lookups: BTreeMap<String, crate::ports::tree::Found>,
 }
 
 /// What one produced finding turned out to be.

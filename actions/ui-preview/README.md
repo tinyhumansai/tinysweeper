@@ -32,11 +32,11 @@ read that folder's README for the secrets. The workflow calls this action:
 `head-sha` must be `github.event.pull_request.head.sha`, never `github.sha`:
 the latter is the synthetic merge commit, and the server checks the head.
 
-## The config: `.tinysweeper/ui-preview.json`
+## The config: `.github/tinysweeper/ui-preview.json`
 
 ```json
 {
-  "serve": "bash scripts/ui-preview/serve.sh",
+  "serve": "bash .github/tinysweeper/serve.sh",
   "ready": "/",
   "timeout_s": 420,
   "viewport": [1440, 900],
@@ -45,7 +45,7 @@ the latter is the synthetic merge commit, and the server checks the head.
     "cookies": [{ "name": "session", "value": "preview-session" }],
     "localStorage": { "token": "preview-token" }
   },
-  "mocks": [{ "url": "**/api/**", "dir": ".tinysweeper/fixtures/api" }],
+  "mocks": [{ "url": "**/api/**", "dir": ".github/tinysweeper/fixtures/api" }],
   "mask": ["[data-testid=clock]"],
   "entry_points": [{ "name": "settings", "path": "/settings" }],
   "max_flows": 4

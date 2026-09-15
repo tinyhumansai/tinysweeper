@@ -172,6 +172,7 @@ mod tests {
                 },
                 summary: "Reviewed.".into(),
                 findings: vec![],
+                noted: vec![],
                 resolved: vec![],
                 deduped: 0,
                 highest_severity: highest,

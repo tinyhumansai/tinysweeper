@@ -1,0 +1,16 @@
+{
+  "key": "5e9ce0620d591795",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_falsify",
+  "usage": {
+    "input_tokens": 2164,
+    "output_tokens": 437,
+    "cached_tokens": 1686,
+    "embed_tokens": 0,
+    "cost_usd": 0.00146366388
+  },
+  "value": {
+    "incorrect": []
+  }
+}

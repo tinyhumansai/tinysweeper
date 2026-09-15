@@ -13,7 +13,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 // The spawned `serve` command is the checked-out repository's own script —
 // same-repository pull requests still run whatever is at
-// `scripts/ui-preview/serve.sh` on that head, so it is not fully trusted.
+// `.github/tinysweeper/serve.sh` on that head, so it is not fully trusted.
 // This action holds the server token and the object-store credentials
 // (module doc above); neither belongs in an environment that repository code
 // controls.

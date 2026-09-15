@@ -436,6 +436,15 @@ enum EvalCommand {
         /// Stop the whole run at this many dollars.
         #[arg(long, default_value_t = 5.0)]
         max_cost_usd: f64,
+
+        /// A checkout of the case's head, for the reviewer to look things
+        /// up in while recording.
+        ///
+        /// What it reads is written into the fixture's `lookups`, so the
+        /// replay needs no checkout. Only honoured with `--record`; a replay
+        /// answers lookups from the fixture alone.
+        #[arg(long)]
+        tree: Option<std::path::PathBuf>,
     },
 
     /// Re-score proposals already on disk. Free, offline, no model.
@@ -621,6 +630,7 @@ async fn run_eval(command: EvalCommand) -> Result<()> {
             record_prompts,
             loose,
             max_cost_usd,
+            tree,
         } => {
             let loaded =
                 tinysweeper::config::load_validated(std::path::Path::new("."), config.as_deref())?;
@@ -637,6 +647,7 @@ async fn run_eval(command: EvalCommand) -> Result<()> {
                 loose,
                 record_prompts,
                 max_cost_usd,
+                tree,
             };
             let outcome = eval::run(&corpus_data, &loaded.config, model, &options).await?;
 
@@ -862,6 +873,7 @@ async fn add_case(repo: &str, pr: u64, id: &str, corpus: &std::path::Path) -> Re
         commits: context.commits,
         comments: context.comments,
         blobs,
+        lookups: Default::default(),
     };
 
     let fixtures = corpus.join("fixtures");

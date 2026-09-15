@@ -41,6 +41,18 @@ Usage and cost replay **verbatim** rather than being re-derived through
 `src/harness/pricing.rs`, so an offline re-score reproduces the dollars the live
 run actually paid — including for a model the price table has since changed.
 
+## Lookups are frozen with the fixture
+
+A reviewer may read the repository (`docs/modules/lanes/lookup.md`), and a
+replay has no repository. `eval run --record --tree <checkout>` answers
+lookups from the checkout and writes every outcome into the fixture's
+`lookups`, keyed by the lookup; a replay serves them back from there, so the
+follow-up prompt is byte-identical to the one recorded and the cassette
+still hits. Only what was asked is frozen, which keeps the fixture reviewable
+in a diff. A recording without `--tree` answers every lookup *not found*,
+deterministically, which is a review that could not read — say so in the
+case.
+
 ## Scoring, in two stages
 
 **Stage one is structural**: same path, line ranges overlapping within three
@@ -53,9 +65,12 @@ the exact line that holds the real bug, and scoring on overlap alone counts that
 as a find — so the harness would reward commenting on hot lines, which is
 precisely the behaviour it exists to catch.
 
-What is scored is what would be **posted**: findings come from the
-`LaneProposal`s, after `severity_gate`, `confidence_min`, dedupe and
-`max_comments`. Scoring raw model output would measure a review nobody receives.
+What is scored is what would **reach the author**: the posted findings, after
+`severity_gate`, `confidence_min`, dedupe and `max_comments`, and the *worth a
+look* notes the summary names below the gate. Scoring raw model output would
+measure a review nobody receives; scoring only comments would report a
+boundary bug the summary named as a miss. A match from the noted tier says so
+in its judgement.
 
 Assignment is one-to-one and greedy over severity, then confidence. A second
 finding on a claimed expectation is a **duplicate**, not a false positive —
