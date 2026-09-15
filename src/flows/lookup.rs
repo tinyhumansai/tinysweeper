@@ -678,8 +678,9 @@ mod tests {
         assert!(seeded.rendered.contains("`before` is an exclusive bound"));
         assert!(seeded.rendered.contains("pub enum HiveStep"));
         assert!(
-            !seeded.rendered.contains("src/episode.rs:1"),
-            "a definition in the reviewed file itself is not a lookup"
+            !seeded.rendered.contains("src/episode.rs:1: fn read_pinboard"),
+            "a definition inside the diff's own hunk is not a lookup: {}",
+            seeded.rendered
         );
     }
 
