@@ -449,7 +449,18 @@ impl DirTree {
             if self.skipped(&rel) {
                 continue;
             }
-            if path.is_dir() {
+            // `symlink_metadata` does not follow the link, unlike `is_dir()`
+            // below it used to call transitively through `path.is_dir()`. A
+            // tracked symlink to an ancestor directory would otherwise recurse
+            // forever, and one to a file outside the checkout would be walked
+            // and searched as if it were tree content.
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
                 self.walk(&path, out);
             } else {
                 out.push(rel);
