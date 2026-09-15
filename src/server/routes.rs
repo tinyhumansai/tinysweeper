@@ -355,15 +355,31 @@ async fn shutdown_signal() {
     }
 }
 
-/// Conclude the umbrella check of every review still running.
+/// Conclude the umbrella check of every review still running, and stop
+/// taking new ones.
 ///
 /// Taking each slot's status out is what makes this safe against the review
 /// itself: if a lane happens to finish during the grace period, its own
 /// `close_status` finds the slot empty and does nothing, so no check is
 /// concluded twice. The reviews are not cancelled here — the process exit
 /// does that, and a lane that gets a few more seconds costs nothing.
+///
+/// Flipping `accepting` off in the same locked section as the snapshot is
+/// what closes the race with `InFlight::register`: a webhook accepted while
+/// this function is still awaiting the network calls below (axum has not
+/// started draining yet — that only happens once `shutdown` returns) would
+/// otherwise be able to register a slot after the snapshot was taken, and
+/// that review would then run unwatched, with only whatever is left of the
+/// grace period before Compose's `SIGKILL` to finish and conclude its own
+/// check. Declining it here, before it opens a check, is strictly better
+/// than that — GitHub's own redelivery or the next push starts it again once
+/// the new container is up.
 async fn conclude_in_flight(state: &AppState) {
-    let slots = std::mem::take(&mut *state.in_flight.lock().expect("in-flight reviews"));
+    let slots = {
+        let mut registry = state.in_flight.lock().expect("in-flight reviews");
+        registry.accepting = false;
+        std::mem::take(&mut registry.slots)
+    };
     if slots.is_empty() {
         return;
     }
