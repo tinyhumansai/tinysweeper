@@ -1,0 +1,17 @@
+{
+  "key": "580e52257fcb5af1",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3177,
+    "output_tokens": 100,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000299222462
+  },
+  "value": {
+    "findings": [],
+    "summary": "This diff modifies an existing test fixture in moves_test.rs, replacing a detailed `EpisodeState::opened` value with a simpler `watermark` and `round_start` pair. The change does not introduce new untrusted input, authentication or authorization paths, network calls, deserialization, path traversal, secrets, dependency changes, or CI configuration changes. It is a straightforward test-only update that appears safe to merge."
+  }
+}

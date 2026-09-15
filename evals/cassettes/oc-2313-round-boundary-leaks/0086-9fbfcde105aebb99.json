@@ -1,0 +1,17 @@
+{
+  "key": "9fbfcde105aebb99",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3118,
+    "output_tokens": 94,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000292931436
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change renames the import path from `openhuman_core::openhuman` to `openhuman_core`. It appears to be a non-functional refactor that does not introduce any new security concerns or reach untrusted input. No problems found."
+  }
+}

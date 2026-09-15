@@ -1,0 +1,17 @@
+{
+  "key": "ce2825d5385e6578",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2990,
+    "output_tokens": 97,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000282121504
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request changes `use openhuman_core::openhuman as oh;` to `use openhuman_core as oh;`, a purely cosmetic internal rename of the re-import path. It introduces no security or correctness issue — no untrusted input paths, no new network or subprocess calls, no deserialization, no path traversal, no secrets moving. The diff is safe to merge."
+  }
+}

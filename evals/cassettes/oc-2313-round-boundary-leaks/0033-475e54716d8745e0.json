@@ -1,0 +1,17 @@
+{
+  "key": "475e54716d8745e0",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3125,
+    "output_tokens": 641,
+    "cached_tokens": 2716,
+    "embed_tokens": 0,
+    "cost_usd": 0.00197989428
+  },
+  "value": {
+    "findings": [],
+    "summary": "The diff updates the crate alias and doc-link path to drop the `openhuman` submodule indirection, consistently changing both the import (`openhuman_core as oh`) and the doc comment (`openhuman_core::agent::Agent`). The change is internally consistent and looks safe to merge; I could not verify the upstream crate's re-export structure from the file shown."
+  }
+}

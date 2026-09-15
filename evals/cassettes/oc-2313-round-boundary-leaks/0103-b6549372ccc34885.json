@@ -1,0 +1,17 @@
+{
+  "key": "b6549372ccc34885",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3002,
+    "output_tokens": 81,
+    "cached_tokens": 512,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002440563664
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change renames an import alias in a harness module. No new code paths, no untrusted input, no authentication or authorization changes, and no dependency changes are introduced. The change is safe to merge."
+  }
+}

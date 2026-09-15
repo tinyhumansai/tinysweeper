@@ -1,0 +1,17 @@
+{
+  "key": "d3a88c4066b75b1d",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3139,
+    "output_tokens": 87,
+    "cached_tokens": 1536,
+    "embed_tokens": 0,
+    "cost_usd": 0.0001846726252
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request renames two `use openhuman_core::openhuman as oh;` import paths to `use openhuman_core as oh;` inside test modules.  The change looks correct and safe to merge — `openhuman_core` now re-exports the `oh` module directly, so the shorter import resolves the same items."
+  }
+}

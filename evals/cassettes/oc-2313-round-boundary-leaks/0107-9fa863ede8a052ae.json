@@ -1,0 +1,17 @@
+{
+  "key": "9fa863ede8a052ae",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2979,
+    "output_tokens": 125,
+    "cached_tokens": 512,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002498157564
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change renames an import from `openhuman_core::openhuman as oh` to `openhuman_core as oh`.  The diff is small, introduces no security-sensitive data flows, no new network or subprocess calls, no deserialization of untrusted data, no path traversal, no secrets, no dependency changes, and no widened permissions.  It is safe to merge."
+  }
+}

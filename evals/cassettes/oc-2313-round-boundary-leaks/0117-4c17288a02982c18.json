@@ -1,0 +1,17 @@
+{
+  "key": "4c17288a02982c18",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3104,
+    "output_tokens": 347,
+    "cached_tokens": 2692,
+    "embed_tokens": 0,
+    "cost_usd": 0.00135410016
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adjusts `openhuman_core` import and doc-link paths by removing a redundant `openhuman` module segment. It is a mechanical, internal refactor with no security impact; safe to merge if it compiles."
+  }
+}

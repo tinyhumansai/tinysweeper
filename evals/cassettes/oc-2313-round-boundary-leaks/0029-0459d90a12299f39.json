@@ -1,0 +1,17 @@
+{
+  "key": "0459d90a12299f39",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3029,
+    "output_tokens": 53,
+    "cached_tokens": 1536,
+    "embed_tokens": 0,
+    "cost_usd": 0.0001689007572
+  },
+  "value": {
+    "findings": [],
+    "summary": "The diff re-exports `openhuman_core` as `oh` by changing the `use` path, which is a trivial rename that does not alter behaviour or introduce any bug."
+  }
+}

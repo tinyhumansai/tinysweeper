@@ -1,0 +1,18 @@
+{
+  "key": "132bda223d59534f",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3652,
+    "output_tokens": 117,
+    "cached_tokens": 512,
+    "embed_tokens": 0,
+    "cost_usd": 0.0003080298984
+  },
+  "value": {
+    "findings": [],
+    "resolved": [],
+    "summary": "This pull request performs a mechanical module path update that shortens `openhuman_core::openhuman::skills::types` to `openhuman_core::skills::types` across test blocks only. No security-sensitive patterns (unvalidated input, dangerous sinks, auth or permission changes, new network/subprocess calls, deserialization of untrusted data, path traversal, secrets, dependency changes, or CI permission widening) are introduced. The change is safe to merge."
+  }
+}

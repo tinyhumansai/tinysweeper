@@ -1,0 +1,17 @@
+{
+  "key": "1ec38dc4e0387e1f",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3010,
+    "output_tokens": 131,
+    "cached_tokens": 2621,
+    "embed_tokens": 0,
+    "cost_usd": 0.00087058818
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change updates a single import path from `openhuman_core::openhuman::tools::traits` to `openhuman_core::tools::traits`. With only this diff visible I cannot verify the target module exists or that downstream usages still resolve, so there is nothing reportable here."
+  }
+}

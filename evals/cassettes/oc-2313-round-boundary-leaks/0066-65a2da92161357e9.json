@@ -1,0 +1,16 @@
+{
+  "key": "65a2da92161357e9",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_falsify",
+  "usage": {
+    "input_tokens": 961,
+    "output_tokens": 50,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000094010966
+  },
+  "value": {
+    "incorrect": []
+  }
+}

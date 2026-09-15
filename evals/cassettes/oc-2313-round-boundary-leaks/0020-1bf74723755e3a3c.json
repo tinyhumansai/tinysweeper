@@ -1,0 +1,17 @@
+{
+  "key": "1bf74723755e3a3c",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3968,
+    "output_tokens": 83,
+    "cached_tokens": 1536,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002574181512
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request renames the import path from `openhuman_core::openhuman` to `openhuman_core` and updates the test-level `use` paths accordingly. The change is a straightforward module path refactoring; there is no logic change, no new code, and no introduced bugs. It is safe to merge."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "6e7f0ad34f7a32b0",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3003,
+    "output_tokens": 66,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00027777981
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change renames the import alias from `openhuman_core::openhuman as oh` to `openhuman_core as oh`, which is a simple namespace update. It does not introduce any bugs, regressions, or violations of repository rules."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "ac7d16a6bbe7de1c",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3216,
+    "output_tokens": 73,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000297893372
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change only renames module paths in two places to flatten the `openhuman_core::openhuman::*` hierarchy into `openhuman_core::*`. No logic, no data flow, no new capabilities — purely a path adjustment for an internal crate. Safe to merge."
+  }
+}

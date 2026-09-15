@@ -1,0 +1,18 @@
+{
+  "key": "cea57554a4ed436e",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3018,
+    "output_tokens": 95,
+    "cached_tokens": 1280,
+    "embed_tokens": 0,
+    "cost_usd": 0.000193515504
+  },
+  "value": {
+    "findings": [],
+    "resolved": [],
+    "summary": "This pull request changes the import path for the `oh` alias from `openhuman_core::openhuman` to `openhuman_core`, which is a trivial refactor that does not alter behavior. The change compiles if `openhuman_core` re‑exports the necessary items; there is no evidence of a bug or regression. Safe to merge."
+  }
+}

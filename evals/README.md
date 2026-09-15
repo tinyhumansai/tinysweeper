@@ -96,11 +96,13 @@ about which lane landed where, and no vocabulary expresses it.
 
 ## What this corpus does not measure yet
 
-**Recall.** Both current cases are regressions — they assert what the review
-must *not* say — so `recall` renders `n/a` and will until cases with
-`[[expected]]` entries land. Those need a human to read a diff and a fix and
-write down what a good reviewer should have caught, and no amount of
-machinery substitutes for it.
+**Recall, barely.** One case carries `[[expected]]` entries:
+`oc-2313-round-boundary-leaks`, a 62-file submodule bump where two external
+reviewers found two boundary defects in the one file with a logic change and
+the live review approved with nothing. The default configuration scores 0/2 on
+it, which is the number to move. One case is a floor, not a measurement; the
+labelling still owed is every pull request where a Codex or CodeRabbit
+finding was acted on and tinysweeper said nothing.
 
 **Clean pull requests.** A case with `exhaustive = true` and no expectations is
 how noise gets measured, and there are none yet. The obvious candidates —

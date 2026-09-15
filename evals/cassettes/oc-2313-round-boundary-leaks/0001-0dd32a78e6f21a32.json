@@ -1,0 +1,16 @@
+{
+  "key": "0dd32a78e6f21a32",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_rule_extraction",
+  "usage": {
+    "input_tokens": 3844,
+    "output_tokens": 295,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000392879004
+  },
+  "value": {
+    "rules_markdown": "- Use standard rustfmt output and Rust 2024 idioms.\n- Module and file names should be snake_case.\n- Public types should be PascalCase.\n- Functions, methods, fields, and local variables should be snake_case.\n- Return Result<T> using the crate error type from src/error.rs.\n- Add focused tests with every behavior change.\n- Keep tests near the module they exercise.\n- Maintain at least 80% coverage for meaningful library behavior.\n- Keep README.md, docs/spec/README.md, and module docs aligned with code changes.\n- Prefer concrete examples over vague descriptions.\n- Keep every Markdown file at 500 lines or fewer.\n- Use concise, imperative commit subjects.\n- Keep commits small and concise.\n- Pull requests should include a short summary, commands run locally, and API or behavior changes.\n- Prefer small modules with focused responsibilities.\n- Keep core type definitions in a dedicated types.rs file.\n- Place package-local tests in the module file or a dedicated test.rs file.\n- Do not change rust-toolchain.toml or dtolnay/rust-toolchain back to stable.\n- Do not drop RUST_MIN_STACK from .cargo/config.toml.\n- If changing RUST_MIN_STACK, measure and document the new value."
+  }
+}

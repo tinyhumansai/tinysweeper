@@ -1,0 +1,29 @@
+{
+  "key": "0215fbb3c27160f0",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 10264,
+    "output_tokens": 8721,
+    "cached_tokens": 1536,
+    "embed_tokens": 0,
+    "cost_usd": 0.002382948
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "`round_len` is computed as `u32::try_from(round.len()).unwrap_or(u32::MAX)`. If the round contains more than `u32::MAX` turns (theoretically possible on a 64‑bit platform where `Vec::len` returns `usize`), the count saturates and `turns` will be incremented by `u32::MAX` rather than the true number. The old code incremented `turns` by 1 for each turn individually, so it never suffered from this inaccuracy.  The fix depends on the type of `turns`; if it is `u64`, use `round.len() as u64` directly; if it is `u32`, the per‑turn increment pattern is safer. Consider adjusting the arithmetic to match the type without a fallback that silently loses precision.",
+        "confidence": 0.3,
+        "existing_code": "            let round_len = u32::try_from(round.len()).unwrap_or(u32::MAX);\n            turns = turns.saturating_add(round_len);",
+        "path": "crates/opencompany-core/src/hivemind/episode.rs",
+        "rule": "inexact-count",
+        "severity": "low",
+        "suggestion": null,
+        "title": "Use the exact round length instead of saturating at u32::MAX"
+      }
+    ],
+    "resolved": [],
+    "summary": "This pull request refactors the host loop to process a round of turns (multiple turns authorized by `HiveStep::Speak`) instead of a single turn per iteration. The logic appears correct for the round semantics, but there is a minor potential inaccuracy in the turn count arithmetic when the round length exceeds `u32::MAX`. Otherwise, the change is safe to merge."
+  }
+}

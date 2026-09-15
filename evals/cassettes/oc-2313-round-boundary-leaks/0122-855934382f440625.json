@@ -1,0 +1,17 @@
+{
+  "key": "855934382f440625",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3129,
+    "output_tokens": 193,
+    "cached_tokens": 2712,
+    "embed_tokens": 0,
+    "cost_usd": 0.00103271196
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change updates a test fixture to use the new struct fields (`watermark`, `round_start`) in place of the removed `next_state`/`EpisodeState::opened` construction. It is a test-only adjustment with no security-relevant sinks, inputs, or permissions involved; it looks safe to merge."
+  }
+}

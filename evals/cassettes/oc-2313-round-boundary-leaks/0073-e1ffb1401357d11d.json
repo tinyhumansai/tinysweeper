@@ -1,0 +1,18 @@
+{
+  "key": "e1ffb1401357d11d",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2997,
+    "output_tokens": 84,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00028043799
+  },
+  "value": {
+    "findings": [],
+    "resolved": [],
+    "summary": "The diff only changes an import path, swapping `openhuman_core::openhuman` for `openhuman_core`. No new untrusted input, sinks, auth changes, network calls, subprocesses, deserialization, path traversal, secrets, or dependency changes are introduced. The change looks sound."
+  }
+}

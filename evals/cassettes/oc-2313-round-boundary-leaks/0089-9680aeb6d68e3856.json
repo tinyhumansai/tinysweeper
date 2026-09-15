@@ -1,0 +1,17 @@
+{
+  "key": "9680aeb6d68e3856",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 2973,
+    "output_tokens": 338,
+    "cached_tokens": 2228,
+    "embed_tokens": 0,
+    "cost_usd": 0.00150187884
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adjusts the `openhuman_core` import path from the `openhuman` submodule to the crate root. It is a mechanical import refactor with no security-relevant impact; if the referenced items are re-exported at the crate root it is safe to merge."
+  }
+}
