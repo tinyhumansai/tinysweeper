@@ -586,7 +586,12 @@ impl TreeReader for DirTree {
                         break;
                     }
                 }
-                Found::Hits { hits, truncated }
+                let skipped = self.unfetched_submodules_matching(glob.as_deref());
+                Found::Hits {
+                    hits,
+                    truncated,
+                    skipped,
+                }
             }
         })
     }
