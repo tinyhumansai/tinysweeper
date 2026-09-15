@@ -1741,6 +1741,10 @@ async fn handle_review(
         }
     };
 
+    // The review is over; the failure report below is a GitHub write that
+    // should not hold a review slot against other pull requests.
+    drop(permit);
+
     tracing::error!(%err, %repo, number, attempts = attempt, "review failed");
 
     // Two ways to report the same thing, and which one applies depends on how
@@ -1918,7 +1922,6 @@ async fn review_inner(
             if let Err(err) = state.store.release_lease(&lease).await {
                 tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
             }
-            drop(permit);
             return Ok(None);
         }
 
@@ -2033,7 +2036,7 @@ async fn review_inner(
             Ok((config, proposal)) => {
                 // `AssertUnwindSafe` + `catch_unwind` here too, same reason as
                 // around `run_lanes`: without it a panic inside `apply` skips
-                // `release_lease` and `drop(permit)` below and escapes
+                // `release_lease` below and escapes
                 // `handle_review` entirely, deregistering the `InFlight` slot
                 // on the way out (`Drop` always runs) without ever concluding
                 // its check — a lease held until `LEASE_TTL` and a check stuck
@@ -2068,7 +2071,6 @@ async fn review_inner(
         if let Err(err) = state.store.release_lease(&lease).await {
             tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
         }
-        drop(permit);
 
         outcome
     };
