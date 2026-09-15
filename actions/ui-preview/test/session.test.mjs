@@ -57,3 +57,17 @@ test("step is never retried, even on a 5xx", async () => {
   await assert.rejects(session.step("f1", { side: "after" }), /503/);
   assert.equal(flaky.calls.length, 1, "no retry attempt was made");
 });
+
+test("an asset goes up as raw bytes with its content type", async () => {
+  const { fetchImpl, calls } = fakeFetch([
+    { status: 200, body: { enabled: true, session: "s1", flows: [] } },
+    { status: 200, body: { stored: "a.png" } },
+  ]);
+  const session = new Session({ server: "https://s.example", token: "t", fetchImpl });
+  await session.start({});
+  await session.asset("a.png", Buffer.from([1, 2, 3]), "image/png");
+  assert.equal(calls[1].url, "https://s.example/preview/sessions/s1/assets/a.png");
+  assert.equal(calls[1].init.headers["content-type"], "image/png");
+  assert.ok(Buffer.isBuffer(calls[1].init.body));
+  assert.equal(calls[1].init.body.length, 3);
+});

@@ -1,9 +1,13 @@
-// Uploading a run to the object store.
+// Uploading a run: to the server by default, to an object store when the
+// operator configured one.
 //
-// Keys are `{owner}/{name}/{head_sha}/{run}/{file}` — exactly the prefix the
-// server composes URLs from, so the two never have to agree on anything but
-// the base URL. Every object is content-addressed by the commit and the run,
-// so it is immutable and cached as such; a re-run writes a new prefix.
+// The server path needs no credential beyond the session token — the server
+// commits the files to a branch of the repository through the App at
+// `finish`. The bucket path keys objects as
+// `{owner}/{name}/{head_sha}/{run}/{file}`, exactly the prefix the server
+// composes URLs from, so the two never have to agree on anything but the
+// base URL; every object is content-addressed by commit and run, immutable,
+// and cached as such.
 
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -14,8 +18,19 @@ const TYPES = {
   ".gif": "image/gif",
   ".mp4": "video/mp4",
   ".webm": "video/webm",
-  ".json": "application/json",
 };
+
+/** Stage every asset in `dir` on the server. Returns the names sent. */
+export async function uploadToServer({ dir, session, log = console.error }) {
+  const files = (await readdir(dir)).filter((f) => path.extname(f) in TYPES && f !== "manifest.json");
+  const names = [];
+  for (const file of files) {
+    await session.asset(file, await readFile(path.join(dir, file)), TYPES[path.extname(file)]);
+    names.push(file);
+    log(`[upload] ${file} → server`);
+  }
+  return names;
+}
 
 /** Upload every file in `dir` under `prefix`. Returns the keys written. */
 export async function upload({ dir, prefix, bucket, endpoint, region = "auto", log = console.error }) {

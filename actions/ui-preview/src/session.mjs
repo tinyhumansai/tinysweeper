@@ -45,7 +45,17 @@ export class Session {
     return this.post(`/preview/sessions/${this.id}/finish`, { manifest });
   }
 
-  async post(path, body, { retry = true } = {}) {
+  /**
+   * Stage one asset on the server, which commits it to the store branch at
+   * `finish`. Idempotent — the server overwrites by name — so retried.
+   */
+  async asset(name, bytes, contentType) {
+    return this.post(`/preview/sessions/${this.id}/assets/${encodeURIComponent(name)}`, bytes, {
+      raw: contentType,
+    });
+  }
+
+  async post(path, body, { retry = true, raw = null } = {}) {
     const url = `${this.server}${path}`;
     const attempts = retry ? RETRIES : 1;
     let last;
@@ -56,10 +66,10 @@ export class Session {
           method: "POST",
           headers: {
             authorization: `Bearer ${this.token}`,
-            "content-type": "application/json",
+            "content-type": raw ?? "application/json",
             accept: "application/json",
           },
-          body: JSON.stringify(body),
+          body: raw ? body : JSON.stringify(body),
           signal: AbortSignal.timeout(TIMEOUT_MS),
         });
       } catch (err) {

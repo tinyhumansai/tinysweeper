@@ -30,7 +30,7 @@ import { Session } from "./src/session.mjs";
 import { execute, observe, REPLAY_TIMEOUT_MS } from "./src/driver.mjs";
 import { annotate } from "./src/annotate.mjs";
 import { recorder, convert } from "./src/clip.mjs";
-import { upload } from "./src/upload.mjs";
+import { upload, uploadToServer } from "./src/upload.mjs";
 import { buildManifest, jobSummary } from "./src/manifest.mjs";
 
 const SCALE = 2;
@@ -165,7 +165,9 @@ async function main() {
     });
     await writeFile(path.join(opts.out, "manifest.json"), JSON.stringify(manifest, null, 2));
 
-    if (opts.upload) {
+    if (!opts.upload) {
+      log("[preview] --no-upload: the run stays in " + opts.out);
+    } else if (opts.s3.bucket) {
       await upload({
         dir: opts.out,
         prefix: `${opts.repo}/${opts.headSha}/${run}`,
@@ -175,7 +177,9 @@ async function main() {
         log,
       });
     } else {
-      log("[preview] --no-upload: the run stays in " + opts.out);
+      // The default: the server keeps the files until `finish` and commits
+      // them to the repository's store branch itself.
+      await uploadToServer({ dir: opts.out, session, log });
     }
     await summary(opts, manifest);
 
@@ -429,8 +433,8 @@ function options() {
     if (!opts[key]) throw new Error(`missing ${key}; set it as a flag or environment variable`);
   }
   if (!Number.isInteger(opts.pr) || opts.pr <= 0) throw new Error("missing or invalid pull request number");
-  if (opts.upload && (!opts.s3.bucket || !opts.s3.endpoint)) {
-    throw new Error("uploading needs TS_S3_BUCKET and TS_S3_ENDPOINT, or pass --no-upload");
+  if (opts.s3.bucket && !opts.s3.endpoint) {
+    throw new Error("TS_S3_BUCKET is set without TS_S3_ENDPOINT");
   }
   return opts;
 }
