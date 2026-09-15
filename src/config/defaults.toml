@@ -478,11 +478,11 @@ max_chunks = 40
 graph_hops = 2
 max_graph_nodes = 60
 max_impact = 20
-# Fetch and index the repository's own submodules, same-host remotes only.
-# Off: it is a fetch to a URL the reviewed repository names. On for a
-# repository whose core library is vendored as a submodule, or the code a
-# changed line calls into can never be retrieved.
-submodules = false
+# Submodule repositories a review may read and the indexer may fetch, as
+# `owner/name`. An allow-list, not a switch: `.gitmodules` is written by the
+# pull request's author and the read token would follow it anywhere on the
+# forge. Name the vendored libraries a reviewed repository's code calls into.
+submodules = []
 
 # The memory engine: what the reviewer remembers about a repository between
 # pull requests. Off until an endpoint is named; see docs/modules/memory.

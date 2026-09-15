@@ -18,10 +18,10 @@
 //! miss is retried through the submodule: `.gitmodules` at the reviewed
 //! commit names the path and its remote, [`ForgeRead::submodule_at`] gives
 //! the gitlink commit, and the file is read from that repository at that
-//! commit — provided the remote is on the same host and the app can read it.
-//! A remote elsewhere is reported as not readable rather than fetched: the
-//! `.gitmodules` URL is contributor-controlled, and the only host this reader
-//! will talk to is the forge it was built over.
+//! commit — provided the operator listed that repository in
+//! `retrieval.submodules`. Nothing else is followed: the `.gitmodules` URL is
+//! contributor-controlled, and neither same host nor same owner says the
+//! reviewed repository is entitled to expose the target.
 //!
 //! Same host is not enough: a pull request can rewrite `.gitmodules` to name
 //! any repository on that host, and this reader would then use the
@@ -107,11 +107,13 @@ pub struct ForgeTree<'a> {
     sha: String,
     host: String,
     submodules: OnceCell<Vec<Submodule>>,
+    /// The submodule repositories the operator allows to be read.
+    allowed: Vec<RepoId>,
 }
 
 impl<'a> ForgeTree<'a> {
-    /// Read `repo` at `sha` through `forge`; submodule remotes on `host` are
-    /// followed.
+    /// Read `repo` at `sha` through `forge`. No submodule is followed until
+    /// [`Self::allowing`] names its repository.
     pub fn new(forge: &'a dyn ForgeRead, repo: RepoId, sha: &str, host: &str) -> Self {
         Self {
             forge,
@@ -119,7 +121,17 @@ impl<'a> ForgeTree<'a> {
             sha: sha.to_string(),
             host: host.to_string(),
             submodules: OnceCell::new(),
+            allowed: Vec::new(),
         }
+    }
+
+    /// Follow submodules whose remote is one of `repos` (`owner/name`).
+    pub fn allowing<'s>(mut self, repos: impl IntoIterator<Item = &'s String>) -> Self {
+        self.allowed = repos
+            .into_iter()
+            .filter_map(|r| RepoId::parse(r))
+            .collect();
+        self
     }
 
     async fn submodules(&self) -> &[Submodule] {
@@ -155,11 +167,11 @@ impl<'a> ForgeTree<'a> {
             return Ok(None);
         };
         // A `.gitmodules` edit is contributor-controlled and can name any
-        // repository on this host; without this check the installation-wide
-        // read token would follow it into a sibling repository at a
-        // different trust level. Same owner is the cheap proxy for "the
-        // installation's access to this repo already covers that one".
-        if repo.owner != self.repo.owner {
+        // repository on this host, and the installation-wide read token
+        // would follow it — into a private sibling under the same owner as
+        // readily as anywhere. Only a repository the operator listed in
+        // `retrieval.submodules` is read.
+        if !self.allowed.iter().any(|a| a == repo) {
             return Ok(None);
         }
         let Some((_url, commit)) = self

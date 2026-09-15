@@ -780,17 +780,18 @@ pub struct Retrieval {
     /// paths above a diff read as noise rather than as a warning. `0` turns the
     /// block off.
     pub max_impact: usize,
-    /// Fetch and index the repository's own git submodules.
+    /// The submodule repositories a review may read and the indexer may
+    /// fetch, as `owner/name`.
     ///
-    /// Off by default because it is a network fetch to a URL the reviewed
-    /// repository names in `.gitmodules`. Only submodules whose remote is on
-    /// the forge's own host are fetched — the read token is sent as a header
-    /// on every git request, and it must not reach any other host — and the
-    /// walk then indexes them despite `vendor/` being skipped otherwise. Turn
-    /// it on for a repository whose core library is a vendored submodule:
-    /// without it, the definition a changed line calls into cannot be
-    /// retrieved.
-    pub submodules: bool,
+    /// Empty by default, and an allow-list rather than a switch on purpose:
+    /// `.gitmodules` is written by whoever opened the pull request and can
+    /// name any repository on the forge, and the installation's read token
+    /// would follow it — into a private sibling under the same owner as
+    /// readily as into a public library. Same host is not authorization and
+    /// neither is same owner; the operator naming the repository is. A
+    /// submodule whose remote is not listed here is neither fetched nor
+    /// read, and the reviewer is told the path is unavailable.
+    pub submodules: Vec<String>,
 }
 
 /// The long-lived memory of a repository, and how a review consults it.

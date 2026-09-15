@@ -52,11 +52,18 @@ model = "openai/text-embedding-3-small"
 dimensions = 1536
 api_key_env = "OPENROUTER_API_KEY"
 
-# Index the reviewed repositories' own submodules. Same-host remotes only, with
-# the read token; opencompany's core library is a vendored submodule, and
-# without this the definition a changed line calls into cannot be retrieved.
+# The vendored libraries the reviewed repositories call into. A review may
+# read these submodules and the indexer fetches them; anything else named in
+# a `.gitmodules` is left alone. opencompany's core library is
+# `tinyhumansai/tinyhivemind`, and this repository vendors tinyagents and
+# tinyflows.
 [retrieval]
-submodules = true
+submodules = [
+    "tinyhumansai/tinyhivemind",
+    "tinyhumansai/openhuman",
+    "tinyhumansai/tinyagents",
+    "tinyhumansai/tinyflows",
+]
 
 # The memory engine: the CortexDB the production box already runs, shared
 # with the other services on it and reached over the box's own Docker
