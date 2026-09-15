@@ -520,6 +520,55 @@ async fn a_completed_run_leaves_the_repository_ready_and_claimable() {
 }
 
 #[tokio::test]
+async fn a_deleted_file_is_gone_even_when_the_run_stops_on_budget() {
+    // A path that left the checkout may have left it because its submodule
+    // was taken off the allow-list. That deletion is a revocation, and it
+    // must not wait behind an embedding pass that may never finish.
+    let checkout = Checkout::new();
+    let rig = Rig::new();
+    rig.indexer()
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("indexes");
+    assert!(rig.rows().await.iter().any(|(path, _)| path == "src/beta.rs"));
+
+    checkout.remove("src/beta.rs");
+    checkout.write("src/gamma.rs", "fn gamma() {}\n");
+    let embedder = CountingEmbedder::new(MockEmbedder::with_signature(
+        crate::index::EmbedSignature::new("voyage", "voyage-code-3", 16),
+    ));
+    // A different signature partitions the index, so re-seed this one's
+    // manifest and rows through a zero-budget run: it deletes, embeds nothing.
+    let indexer = Indexer::new(&embedder, &rig.index, &rig.manifest)
+        .expect("builds")
+        .with_batch(1)
+        .with_budget(0.000_000_001);
+    let _ = indexer
+        .index_repo(REPO, "sha-2", &checkout.root())
+        .await
+        .expect("runs");
+
+    // Now the run that matters: the default-signature index still holds
+    // `src/beta.rs`; a budget-starved run over it must still drop the file.
+    let starved = rig
+        .indexer()
+        .with_budget(0.0)
+        .index_repo(REPO, "sha-2", &checkout.root())
+        .await
+        .expect("runs");
+    let starved = report(starved);
+    assert!(starved.deleted > 0, "{starved:?}");
+    assert!(starved.removed.contains(&"src/beta.rs".to_string()));
+    assert!(
+        !rig.rows()
+            .await
+            .iter()
+            .any(|(path, _)| path == "src/beta.rs"),
+        "the deletion must not wait behind the embedding pass"
+    );
+}
+
+#[tokio::test]
 async fn a_run_that_hits_its_budget_stops_with_a_partial_index_rather_than_failing() {
     let checkout = Checkout::new();
     let rig = Rig::new();
