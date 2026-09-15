@@ -153,7 +153,6 @@ impl IndexBackend {
             .await?;
         if !skipped.is_empty() {
             tracing::info!(repo = %repo_id, ?skipped, "submodules not fetched for indexing");
-            self.purge_under(&repo_id, &skipped).await?;
         }
 
         let selector = crate::chunk::Selector::new(&config.paths.ignore)?;
@@ -200,38 +199,6 @@ impl IndexBackend {
         }
 
         Ok(outcome)
-    }
-
-    /// Drop every chunk the index holds under submodule paths this run did
-    /// not fetch, before anything else is indexed.
-    ///
-    /// The full run would remove them anyway — a path absent from the
-    /// checkout is deleted at the end — but *at the end*, and only of a run
-    /// that gets there. An operator who takes a repository off
-    /// `retrieval.submodules` has revoked it; a review that queries the index
-    /// while the rebuild is still embedding, or after a rebuild that failed
-    /// on budget, would otherwise still be handed that repository's code.
-    /// Revocation takes effect here, first, whatever the rest of the run does.
-    async fn purge_under(&self, repo_id: &str, submodules: &[String]) -> Result<()> {
-        use crate::ports::index::ChunkIndex;
-        use crate::ports::manifest::IndexManifest;
-
-        let known = self.manifest.paths(repo_id, &self.signature).await?;
-        let revoked = paths_under(known, submodules);
-        if revoked.is_empty() {
-            return Ok(());
-        }
-        let deleted = self.index.code.delete_paths(repo_id, &revoked).await?;
-        self.manifest
-            .forget(repo_id, &self.signature, &revoked)
-            .await?;
-        tracing::info!(
-            repo = %repo_id,
-            paths = revoked.len(),
-            chunks = deleted,
-            "purged chunks under submodules this deployment may not read"
-        );
-        Ok(())
     }
 
     /// Bring the code graph up to date with a checkout already on disk.
@@ -435,36 +402,9 @@ fn mongo_db() -> String {
     std::env::var("TINYSWEEPER_MONGODB_DB").unwrap_or_else(|_| "tinysweeper".to_string())
 }
 
-/// The `known` paths that sit under one of `submodules` (directory paths,
-/// with or without a trailing slash). A prefix match on the directory, not
-/// the string: `vendor/lib` does not claim `vendor/libfoo/x.rs`.
-fn paths_under(known: Vec<String>, submodules: &[String]) -> Vec<String> {
-    let dirs: Vec<String> = submodules
-        .iter()
-        .map(|sub| format!("{}/", sub.trim_end_matches('/')))
-        .collect();
-    known
-        .into_iter()
-        .filter(|path| dirs.iter().any(|dir| path.starts_with(dir.as_str())))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_purge_takes_the_submodule_directory_and_nothing_beside_it() {
-        let known = vec![
-            "vendor/lib/src/a.rs".to_string(),
-            "vendor/libfoo/src/b.rs".to_string(),
-            "src/main.rs".to_string(),
-            "vendor/other/c.rs".to_string(),
-        ];
-        let revoked = paths_under(known, &["vendor/lib".into(), "vendor/other/".into()]);
-        assert_eq!(revoked, vec!["vendor/lib/src/a.rs", "vendor/other/c.rs"]);
-        assert!(paths_under(vec!["src/main.rs".into()], &[]).is_empty());
-    }
 
     #[test]
     fn the_git_host_defaults_to_github_and_tolerates_a_scheme() {

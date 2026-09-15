@@ -359,18 +359,27 @@ impl<'a> Indexer<'a> {
             ..IndexReport::default()
         };
 
+        // Removals first, embeddings second — the order is the point. A path
+        // that has left the checkout may have left it because the operator
+        // took its submodule off `retrieval.submodules`, and that is a
+        // revocation: the review that queries this index while the rebuild is
+        // still embedding, or after it stops on budget, must not be handed
+        // that repository's code. Deleting costs nothing and cannot fail on
+        // budget, so it goes before anything that can. Under the claim, in
+        // the report's count, and in `removed` for the graph — the same
+        // bookkeeping a deletion has always had, just earlier.
+        if !removed.is_empty() {
+            report.deleted += self.index.delete_paths(repo_id, &removed).await?;
+            self.manifest.forget(repo_id, signature, &removed).await?;
+            report.removed = removed;
+        }
+
         for group in selected.chunks(self.group) {
             if report.budget_exhausted {
                 break;
             }
             self.index_group(repo_id, signature, root, group, &mut report)
                 .await?;
-        }
-
-        if !removed.is_empty() {
-            report.deleted += self.index.delete_paths(repo_id, &removed).await?;
-            self.manifest.forget(repo_id, signature, &removed).await?;
-            report.removed = removed;
         }
 
         Ok(report)
