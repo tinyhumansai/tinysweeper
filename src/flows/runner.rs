@@ -18,12 +18,14 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use tinyflows::engine;
 
-use crate::config::types::LaneId;
+use crate::config::types::{LaneId, LookupPolicy};
 use crate::error::Result;
 use crate::flows::caps::{ChildGraphs, ModelCapability};
+use crate::flows::lookup;
 use crate::flows::panel::{self, Call};
 use crate::flows::subagent::{self, Answered};
 use crate::ports::model::Model;
+use crate::ports::tree::{Lookup, TreeReader};
 
 /// What one reviewer said, or why it said nothing.
 #[derive(Debug, Clone)]
@@ -205,13 +207,44 @@ async fn answer_questions(
         .collect()
 }
 
+/// How a lane wants its reviewers asked, beyond the one call.
+///
+/// Both extras are off when their field is absent, and the prompt is then
+/// byte-identical to the plain one — which is what keeps the cassettes of a
+/// deployment that has neither valid.
+#[derive(Clone, Copy, Default)]
+pub struct Asking<'a> {
+    /// The model sub-agents answer questions on. `None` disables questions.
+    pub subagent_model: Option<&'a str>,
+    /// The tree a reviewer may look things up in. `None` disables lookups.
+    pub tree: Option<&'a dyn TreeReader>,
+    /// How much it may look up.
+    pub lookup: Option<&'a LookupPolicy>,
+}
+
+impl<'a> Asking<'a> {
+    /// The lookup policy in force, when lookups are possible at all.
+    fn lookups(&self) -> Option<(&'a dyn TreeReader, &'a LookupPolicy)> {
+        let tree = self.tree?;
+        let policy = self.lookup?;
+        (policy.enabled && policy.rounds > 0 && policy.per_round > 0).then_some((tree, policy))
+    }
+}
+
 /// Ask every reviewer at once, and return one [`Answer`] each, in order.
 ///
-/// When `subagent_model` is set, a reviewer may end its turn with questions
-/// rather than a guess; each is answered by a sub-agent and that reviewer is
-/// asked once more with the answers in hand. Exactly one follow-up turn, and
-/// only for reviewers that asked — see [`crate::flows::subagent`] for why the
-/// depth bound is structural rather than a counter.
+/// Two kinds of follow-up, both bounded, both host-owned:
+///
+/// - **Lookups** — when a tree is available, a reviewer may end a turn with
+///   reads and searches instead of a verdict; the host answers them and asks
+///   again, up to `lookup.rounds` times. See [`crate::flows::lookup`].
+/// - **Questions** — when `subagent_model` is set, a reviewer may end its
+///   turn with questions; each is answered by a sub-agent and that reviewer is
+///   asked once more. Exactly one such turn — see [`crate::flows::subagent`].
+///
+/// Lookups run first, so a sub-agent answering a question is handed the
+/// evidence the reviewer already fetched rather than the diff alone. The last
+/// turn always answers the plain schema: there is genuinely no turn after it.
 ///
 /// Never returns `Err` for a single reviewer's failure — that is an [`Answer`]
 /// carrying an `error`. `Err` is reserved for the graph itself not running,
@@ -221,37 +254,103 @@ pub async fn ask_all(
     lane: LaneId,
     calls: &[Call],
     schema: &Value,
-    subagent_model: Option<&str>,
+    asking: Asking<'_>,
 ) -> Result<Vec<Answer>> {
     if calls.is_empty() {
         return Ok(Vec::new());
     }
 
     let capabilities = crate::flows::caps::with_llm(llm, ChildGraphs::none());
+    let lookups = asking.lookups();
+    let subagent_model = asking.subagent_model;
 
     // The schema and the instruction travel together: a reviewer told it may
     // ask, answering a schema with no `questions` key, produces a refusal under
-    // strict mode and a dropped key under `json_object`.
-    let asked = subagent_model.map(|_| subagent::with_questions(schema.clone()));
-    let round_one: Vec<Call> = match subagent_model {
-        Some(_) => calls
-            .iter()
-            .cloned()
-            .map(|mut call| {
-                call.system.push_str(subagent::ASK_INSTRUCTION);
-                call
-            })
-            .collect(),
-        None => calls.to_vec(),
+    // strict mode and a dropped key under `json_object`. Same for `lookups`.
+    let schema_for = |may_lookup: bool, may_ask: bool| -> Value {
+        let mut s = schema.clone();
+        if may_lookup && let Some((_, policy)) = lookups {
+            s = lookup::with_lookups(s, policy);
+        }
+        if may_ask {
+            s = subagent::with_questions(s);
+        }
+        s
     };
 
+    let mut prompts: Vec<Call> = calls
+        .iter()
+        .cloned()
+        .map(|mut call| {
+            if let Some((tree, policy)) = lookups {
+                call.system
+                    .push_str(&lookup::instruction(&tree.describe(), policy));
+            }
+            if subagent_model.is_some() {
+                call.system.push_str(subagent::ASK_INSTRUCTION);
+            }
+            call
+        })
+        .collect();
+
+    let max_rounds = lookups.map_or(0, |(_, p)| p.rounds);
     let mut answers = one_round(
         &capabilities,
         lane,
-        &round_one,
-        asked.as_ref().unwrap_or(schema),
+        &prompts,
+        &schema_for(max_rounds > 0, subagent_model.is_some()),
     )
     .await?;
+
+    // The lookup rounds. Each reviewer that asked gets its results appended
+    // and is asked again; one that did not ask is settled and left alone. The
+    // schema for the final permitted round offers no `lookups` key, so a
+    // reviewer cannot ask for something no turn will answer.
+    if let Some((tree, policy)) = lookups {
+        let mut ledgers: Vec<lookup::Ledger> =
+            (0..calls.len()).map(|_| lookup::Ledger::default()).collect();
+        for round in 1..=max_rounds {
+            let pending: Vec<(usize, Vec<Lookup>)> = answers
+                .iter()
+                .enumerate()
+                .filter_map(|(index, answer)| {
+                    let asked = lookup::read_lookups(answer.value.as_ref()?, policy);
+                    (!asked.is_empty()).then_some((index, asked))
+                })
+                .collect();
+            if pending.is_empty() {
+                break;
+            }
+            let may_lookup_again = round < max_rounds;
+            let round_schema = schema_for(may_lookup_again, subagent_model.is_some());
+            for (index, asked) in pending {
+                let gathered = ledgers[index].gather(tree, &asked, policy).await;
+                if gathered.rendered.is_empty() {
+                    continue;
+                }
+                prompts[index].prompt.push_str(&gathered.rendered);
+                tracing::debug!(
+                    reviewer = %prompts[index].id,
+                    round,
+                    answered = gathered.answered,
+                    chars = ledgers[index].chars(),
+                    "a reviewer looked something up"
+                );
+                if let Ok(again) = one_round(
+                    &capabilities,
+                    lane,
+                    std::slice::from_ref(&prompts[index]),
+                    &round_schema,
+                )
+                .await
+                    && let Some(settled) = again.into_iter().next()
+                    && settled.value.is_some()
+                {
+                    answers[index] = settled;
+                }
+            }
+        }
+    }
 
     let Some(model) = subagent_model else {
         return Ok(answers);
@@ -268,7 +367,10 @@ pub async fn ask_all(
         .collect();
 
     for (index, questions) in pending {
-        let evidence = &calls[index].prompt;
+        // The evidence as the reviewer last saw it: the diff plus whatever it
+        // looked up. A sub-agent handed only the diff was answering "from the
+        // repository" in name alone.
+        let evidence = &prompts[index].prompt;
         let answered = answer_questions(&capabilities, model, &questions, evidence).await;
 
         // Nothing came back, so a second turn would be the same turn with the
@@ -280,7 +382,7 @@ pub async fn ask_all(
         // The final turn answers the plain schema: there is genuinely no turn
         // after this one, so offering `questions` again would invite a question
         // nothing will ever answer.
-        let mut again = calls[index].clone();
+        let mut again = prompts[index].clone();
         again.prompt.push_str(&subagent::render(&answered));
 
         if let Ok(round_two) =
