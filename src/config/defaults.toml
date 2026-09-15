@@ -20,8 +20,9 @@ strictness = 2
 max_comments = 20
 # A finding below the posting gate but at least `medium` and at least this
 # confident is still named in the check-run summary — no comment, no block.
-# Silence is the wrong shape for a boundary bug the model was 60% sure of.
-note_confidence = 0.5
+# Silence is the wrong shape for a boundary bug the model was two-thirds sure
+# of; 0.5 let a pair of compose-file guesses through on the noise case.
+note_confidence = 0.65
 incremental = true
 draft_prs = false
 respect_agents_md = true
