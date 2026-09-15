@@ -1668,6 +1668,21 @@ async fn handle_review(
         return;
     };
 
+    // The permit is taken here, before the clock starts, and held across
+    // every attempt. Queueing behind the other reviews is not time this
+    // review spent, and counting it would let a delivery that merely waited
+    // its turn "time out" without ever running — and then, having no SHA of
+    // its own, report that failure against whatever head is live by then.
+    // Holding it across retries also keeps a retry from going to the back of
+    // the queue behind reviews that arrived while it was failing.
+    let permit = match state.permits.clone().acquire_owned().await {
+        Ok(permit) => permit,
+        Err(err) => {
+            tracing::error!(%err, %repo, number, "the review permit pool is closed");
+            return;
+        }
+    };
+
     // One deadline for the whole review, retries included. A per-attempt
     // deadline would let three transient failures late in the run stretch a
     // single pull request to three times the budget, all under one check that
@@ -1810,16 +1825,6 @@ async fn review_inner(
 
     let repo_id =
         RepoId::parse(repo).ok_or_else(|| Error::Forge(format!("`{repo}` is not owner/name")))?;
-
-    // The lease is keyed on the head SHA, so two deliveries for the same push
-    // cannot both review it, while a *new* push takes a fresh lease and
-    // proceeds.
-    let permit = state
-        .permits
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|err| Error::Forge(err.to_string()))?;
 
     let read_token = state.auth.review_read_token(installation).await?;
     let forge = crate::forge::github::GitHubRead::new(&read_token)?;
