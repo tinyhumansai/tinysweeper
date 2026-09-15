@@ -1151,13 +1151,22 @@ fn helper() {
 
         let outcome = run_with(model.clone(), &config, &diffs).await;
 
-        assert_eq!(model.requests().len(), 1, "one conversation: the residue");
-        assert!(
-            model.requests()[0].messages[1]
-                .content
-                .contains("src/logic.rs"),
-            "and it is the residue file"
+        let requests = model.requests();
+        assert_eq!(
+            requests.len(),
+            2,
+            "two conversations: the residue, and one sample of the rename"
         );
+        let prompts: Vec<&str> = requests
+            .iter()
+            .map(|r| r.messages[1].content.as_str())
+            .collect();
+        assert!(prompts.iter().any(|p| p.contains("src/logic.rs")));
+        assert!(
+            prompts.iter().any(|p| p.contains("src/a.rs")),
+            "the first verified file is the sample"
+        );
+        assert!(!prompts.iter().any(|p| p.contains("src/b.rs")));
         assert!(
             outcome
                 .summary
@@ -1169,7 +1178,7 @@ fn helper() {
     }
 
     #[tokio::test]
-    async fn a_pull_request_that_is_only_a_rename_reaches_a_verdict_with_no_model_call() {
+    async fn a_pull_request_that_is_only_a_rename_reads_one_sample_and_reaches_a_verdict() {
         let config = config();
         let rename = |path: &str, line: &str| {
             let new = line.replace("::openhuman", "");
@@ -1180,11 +1189,15 @@ fn helper() {
             rename("src/b.rs", "    openhuman_core::openhuman::tools::x();"),
             rename("src/c.rs", "let y = openhuman_core::openhuman::A;"),
         ];
-        let model = MockModel::new().then_error("must not be called");
+        let model = MockModel::always(json!({ "summary": "a rename", "findings": [] }));
 
         let outcome = run_with(model.clone(), &config, &diffs).await;
 
-        assert!(model.requests().is_empty());
+        assert_eq!(
+            model.requests().len(),
+            1,
+            "one sample of the rename is read"
+        );
         assert!(
             outcome.skipped.is_none(),
             "a verified rename is a verdict, not a skip"

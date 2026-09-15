@@ -1,5 +1,5 @@
 {
-  "corpus_digest": "af4c5a84b43ba5c2",
+  "corpus_digest": "1ac521af047a4286",
   "config_digest": "4d2f6571844dd03b",
   "loose_replays": 0,
   "cases": [
@@ -17,23 +17,22 @@
       "forbidden_hits": [],
       "optional_hits": 0,
       "judged": [],
-      "cost_usd": 0.06414390055199999,
+      "cost_usd": 0.067922808924,
       "over_budget": false,
-      "input_tokens": 204045,
-      "output_tokens": 19728,
-      "cached_tokens": 67302,
-      "wall_secs": 0.04304457,
+      "input_tokens": 204785,
+      "output_tokens": 23092,
+      "cached_tokens": 87528,
+      "wall_secs": 0.041971744,
       "models": [
         "deepseek/deepseek-v4-flash",
-        "z-ai/glm-5.2",
-        "minimax/minimax-m3"
+        "z-ai/glm-5.2"
       ],
       "lane_costs": {
         "commits": 0.0,
-        "critique": 0.045054976796,
-        "description": 0.00223813016,
-        "security": 0.014198685116,
-        "tests": 0.00225728776
+        "critique": 0.046030809304,
+        "description": 0.0021928179,
+        "security": 0.017112537660000003,
+        "tests": 0.00221317642
       }
     },
     {
@@ -62,7 +61,7 @@
       "input_tokens": 94460,
       "output_tokens": 26055,
       "cached_tokens": 54509,
-      "wall_secs": 0.021528414,
+      "wall_secs": 0.021569693,
       "models": [
         "deepseek/deepseek-v4-flash",
         "z-ai/glm-5.2"
@@ -91,7 +90,7 @@
       "input_tokens": 87953,
       "output_tokens": 12793,
       "cached_tokens": 36754,
-      "wall_secs": 0.0186911,
+      "wall_secs": 0.018178333,
       "models": [
         "deepseek/deepseek-v4-flash",
         "z-ai/glm-5.2"
