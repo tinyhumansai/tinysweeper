@@ -457,6 +457,9 @@ impl<'a> Indexer<'a> {
         report.unfetched = self
             .missing
             .iter()
+            // A directory the operator revoked is not one the run is waiting
+            // on, whatever a second `.gitmodules` entry says.
+            .filter(|dir| !self.revoked.contains(dir))
             .map(|dir| dir.trim_end_matches('/').to_string())
             .collect();
         let revoked: Vec<String> = removed

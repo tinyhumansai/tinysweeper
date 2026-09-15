@@ -77,7 +77,14 @@ pub fn parse_gitmodules(text: &str, host: &str) -> Vec<Submodule> {
         if let Some(rest) = line.strip_prefix("path")
             && let Some(value) = rest.trim().strip_prefix('=')
         {
-            path = Some(value.trim().trim_end_matches('/').to_string());
+            // Canonical spelling, or the same directory is two paths: the
+            // selector and the manifest say `libs/core/...`, and `./libs/core`
+            // would match neither.
+            let mut spelled = value.trim();
+            while let Some(rest) = spelled.strip_prefix("./") {
+                spelled = rest;
+            }
+            path = Some(spelled.trim_end_matches('/').to_string());
         } else if let Some(rest) = line.strip_prefix("url")
             && let Some(value) = rest.trim().strip_prefix('=')
         {

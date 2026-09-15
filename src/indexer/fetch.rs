@@ -169,6 +169,7 @@ impl Checkout {
             return Ok(Unfetched::default());
         };
         let mut unfetched = Unfetched::default();
+        let mut fetched: Vec<String> = Vec::new();
         for sub in crate::forge::tree::parse_gitmodules(&text, host) {
             let Some(repo) = &sub.repo else {
                 unfetched.denied.push(sub.path.clone());
@@ -192,7 +193,7 @@ impl Checkout {
                 continue;
             };
             let url = format!("https://{host}/{}/{}.git", repo.owner, repo.name);
-            let fetched = async {
+            let fetched_now = async {
                 std::fs::create_dir_all(&dir)
                     .map_err(|err| Error::Forge(format!("could not make {}: {err}", sub.path)))?;
                 git(&dir, token, &["init", "--quiet"]).await?;
@@ -218,18 +219,23 @@ impl Checkout {
                 .await
             }
             .await;
-            if let Err(err) = fetched {
-                tracing::warn!(path = %sub.path, %err, "a submodule could not be fetched; indexed without it");
-                unfetched.failed.push(sub.path.clone());
+            match fetched_now {
+                Ok(()) => fetched.push(sub.path.clone()),
+                Err(err) => {
+                    tracing::warn!(path = %sub.path, %err, "a submodule could not be fetched; indexed without it");
+                    unfetched.failed.push(sub.path.clone());
+                }
             }
         }
         // A path named twice by `.gitmodules` — the contributor's file — is
-        // classified once, and denial wins: a second entry that is
-        // allow-listed but unfetchable must not turn a revocation into a
-        // "keep it for now".
+        // classified once. Denial wins over everything: a second entry that
+        // is allow-listed must not turn a revocation into a "keep it for
+        // now". And a fetch that succeeded wins over one that failed: the
+        // files are on disk, so the checkout is not missing them.
         unfetched
             .failed
-            .retain(|path| !unfetched.denied.contains(path));
+            .retain(|path| !unfetched.denied.contains(path) && !fetched.contains(path));
+        unfetched.failed.dedup();
         Ok(unfetched)
     }
 
