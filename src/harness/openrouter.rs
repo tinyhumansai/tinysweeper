@@ -461,7 +461,9 @@ impl GatewayModel {
         // Reasoning is billed against the same ceiling as the answer, so a
         // model spending most of the budget thinking is one prompt away from
         // the truncation above. Say so while the review still succeeds.
-        if totals.reasoning_tokens * 2 > u64::from(cap) {
+        // No ceiling, no budget to consume half of: a routed model with
+        // `max_tokens = 0` would otherwise trip this on every call.
+        if cap != 0 && totals.reasoning_tokens * 2 > u64::from(cap) {
             tracing::warn!(
                 model,
                 cap,
