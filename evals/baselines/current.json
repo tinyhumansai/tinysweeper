@@ -22,7 +22,7 @@
       "input_tokens": 204045,
       "output_tokens": 19728,
       "cached_tokens": 67302,
-      "wall_secs": 0.043038835,
+      "wall_secs": 0.04304457,
       "models": [
         "deepseek/deepseek-v4-flash",
         "z-ai/glm-5.2",
@@ -62,7 +62,7 @@
       "input_tokens": 94460,
       "output_tokens": 26055,
       "cached_tokens": 54509,
-      "wall_secs": 0.021134066,
+      "wall_secs": 0.021528414,
       "models": [
         "deepseek/deepseek-v4-flash",
         "z-ai/glm-5.2"
@@ -86,15 +86,23 @@
       "forbidden_hits": [],
       "optional_hits": 0,
       "judged": [],
-      "cost_usd": 0.0,
-      "over_budget": false,
-      "input_tokens": 0,
-      "output_tokens": 0,
-      "cached_tokens": 0,
-      "wall_secs": 0.01884421,
-      "models": [],
-      "lane_costs": {},
-      "error": "1 call(s) had no recorded answer; re-record the corpus with `eval run --record`, or replay loosely and accept the numbers describe the old prompt"
+      "cost_usd": 0.03601302656,
+      "over_budget": true,
+      "input_tokens": 87953,
+      "output_tokens": 12793,
+      "cached_tokens": 36754,
+      "wall_secs": 0.0186911,
+      "models": [
+        "deepseek/deepseek-v4-flash",
+        "z-ai/glm-5.2"
+      ],
+      "lane_costs": {
+        "commits": 0.0,
+        "critique": 0.028231741160000004,
+        "description": 0.00085956668,
+        "security": 0.00591838296,
+        "tests": 0.00075071668
+      }
     }
   ]
 }

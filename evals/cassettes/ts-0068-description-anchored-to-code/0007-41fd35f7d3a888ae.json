@@ -1,14 +1,14 @@
 {
-  "key": "4dce7cdaa3f87321",
+  "key": "41fd35f7d3a888ae",
   "model_requested": "deepseek/deepseek-v4-flash",
   "model_answered": "z-ai/glm-5.2",
   "schema_name": "tinysweeper_critique",
   "usage": {
-    "input_tokens": 5569,
-    "output_tokens": 769,
-    "cached_tokens": 4739,
+    "input_tokens": 4459,
+    "output_tokens": 662,
+    "cached_tokens": 3950,
     "embed_tokens": 0,
-    "cost_usd": 0.00279064842
+    "cost_usd": 0.0022471092
   },
   "value": {}
 }

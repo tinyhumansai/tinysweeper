@@ -1,0 +1,29 @@
+{
+  "key": "06eda2eb64e26a30",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4019,
+    "output_tokens": 201,
+    "cached_tokens": 3442,
+    "embed_tokens": 0,
+    "cost_usd": 0.00124957896
+  },
+  "value": {
+    "lookups": [
+      {
+        "end": 410,
+        "kind": "read",
+        "path": "src/config/types.rs",
+        "start": 370,
+        "why": "See the struct containing the new field and whether there is validation or Default impl"
+      },
+      {
+        "kind": "search",
+        "pattern": "reasoning_effort",
+        "why": "Find where reasoning_effort is consumed or validated"
+      }
+    ]
+  }
+}
