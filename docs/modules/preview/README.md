@@ -26,9 +26,8 @@ and the split is the whole design:
   repository runs in its own CI, with its own secrets — exactly the trust
   domain its tests already run in. It builds and serves the merge-base and
   the head, runs Playwright, executes whatever the brain says, draws the
-  callouts, records the clip, and uploads to an object store the operator
-  owns. It holds the bucket credential and a bearer for the `/preview`
-  routes, and nothing else.
+  callouts, records the clip, and hands the files to the server. It holds a
+  bearer for the `/preview` routes and nothing else.
 
 ```
 hands (repo CI)                                     brain (tinysweeper server)
@@ -39,9 +38,10 @@ for each flow, on the head:
   ◄── [{goto|click|fill|…|screenshot|annotate|done}]
   execute; draw callouts; record
 then replay the same script on the merge-base (no calls)
-upload {owner}/{repo}/{head}/run-…/ to the bucket
+POST …/assets/{name} ×N                        ───► staged on disk until finish
 POST …/finish {manifest}                       ───► validate, caption (1 call per flow),
-                                                     mint the write token, publish
+                                                     mint the write token, commit the files
+                                                     to the store branch, publish
 ```
 
 ### Why a step protocol and not a plan
@@ -69,10 +69,22 @@ edit the job that runs them. The rules, each closing a specific door:
 
 - **The server accepts no URL.** A manifest carries relative paths of one or
   two plain segments and a renderable extension; every published URL is
-  composed from the operator's `preview.public_base_url`, the commit and the
-  run (`manifest.rs`). A repository cannot override the base URL
-  (`config::remote`): one that could would have the bot embed pictures from
-  a host it controls into every reviewer's browser.
+  composed by the server from the store — the repository's own
+  `tinysweeper/ui-previews` branch by default, or the operator's
+  `preview.public_base_url` — plus the commit and the run (`manifest.rs`).
+  A repository can override neither (`config::remote`): one that could would
+  have the bot embed pictures from a host it controls into every reviewer's
+  browser, or commit files onto a branch of its choosing.
+- **The pictures live in the repository.** The hands stage each file on the
+  server (`/preview/sessions/{id}/assets/{name}`, 8 MB a file, 48 MB a
+  session, names by the same rule the manifest is held to); at `finish` the
+  write module commits exactly the files the gallery references, in one
+  commit, to an orphan store branch through the Git Data API
+  (`ForgeWrite::publish_files`), and the comment embeds them through
+  GitHub's blob route with `?raw=true`, which the viewer's own session
+  authorises — so it works for private repositories too. The App therefore
+  needs `contents: write`. The branch is never read back and is safe to
+  delete.
 - **Snapshots and manifests are fenced as data** before a model sees any of
   it, like a diff. Titles and labels pass a safe alphabet and are HTML-escaped
   again at render time.
@@ -97,7 +109,8 @@ edit the job that runs them. The rules, each closing a specific door:
 ```toml
 [preview]
 enabled = true                                  # repository-overridable
-public_base_url = "https://previews.example.org" # operator-only: the trust anchor
+branch = "tinysweeper/ui-previews"              # operator-only: where the pictures go
+# public_base_url = "https://previews.example.org" # …or an object store instead
 max_flows = 4                                   # repository-overridable
 max_steps = 25
 budget_usd = 0.50

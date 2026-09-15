@@ -3,8 +3,9 @@
 The half of tinysweeper's UI preview that runs in *your* repository's CI. It
 serves your pull request's base and head, drives a browser through the user
 flows the tinysweeper server plans, draws numbered callouts on what changed,
-records a clip, and uploads the lot to an object store. The server writes the
-comment. See `docs/modules/preview/README.md` for the whole picture.
+records a clip, and hands the files to the server, which commits them to a
+store branch of your repository and writes the comment. See
+`docs/modules/preview/README.md` for the whole picture.
 
 It is deliberately dumb. It builds nothing itself (your `serve` script does),
 decides nothing itself (the server does), and holds no model or GitHub-write
@@ -23,11 +24,11 @@ read that folder's README for the secrets. The workflow calls this action:
     before-dir: ../before
     base-sha: ${{ steps.base.outputs.sha }}
     head-sha: ${{ github.event.pull_request.head.sha }}
-    bucket: ${{ secrets.PREVIEW_S3_BUCKET }}
-    endpoint: ${{ secrets.PREVIEW_S3_ENDPOINT }}
-    access-key-id: ${{ secrets.PREVIEW_S3_ACCESS_KEY_ID }}
-    secret-access-key: ${{ secrets.PREVIEW_S3_SECRET_ACCESS_KEY }}
 ```
+
+The `bucket`/`endpoint`/`access-key-id`/`secret-access-key` inputs are only
+for an operator who set `preview.public_base_url` on the server and wants the
+job to upload to an object store instead.
 
 `head-sha` must be `github.event.pull_request.head.sha`, never `github.sha`:
 the latter is the synthetic merge commit, and the server checks the head.

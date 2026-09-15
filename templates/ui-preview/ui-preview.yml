@@ -77,7 +77,7 @@ jobs:
       # ships with. Once tinyhumansai/tinysweeper cuts a release, or as soon
       # as you copy this file, pin this to a specific commit SHA (or a
       # release tag) the same way you would any other third-party action —
-      # `@main` here receives the preview token and object-store credentials
+      # `@main` here receives the preview token
       # below and should not float indefinitely.
       - uses: tinyhumansai/tinysweeper/actions/ui-preview@main
         with:
