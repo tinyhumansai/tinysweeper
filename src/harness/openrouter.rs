@@ -1020,6 +1020,49 @@ mod tests {
     }
 
     #[test]
+    fn a_vision_gateway_drops_the_routes_with_the_pin() {
+        // `for_vision` reads the key from the environment; build the same
+        // gateway by hand and apply the same stripping.
+        let mut models = models();
+        models.provider = pinned(&["streamlake"], false);
+        models.routes = vec![crate::config::types::ModelRoute {
+            model: "b".into(),
+            order: vec!["text-only-host".into()],
+            allow_fallbacks: false,
+            max_tokens: None,
+        }];
+        let mut gateway = GatewayModel {
+            api_key: "unused".into(),
+            base_url: models.base_url.clone(),
+            fallbacks: vec!["c".into()],
+            reasoning_effort: models.reasoning_effort.clone(),
+            provider: models.provider.clone(),
+            routes: models.routes.clone(),
+            structured_output: models.structured_output,
+            langfuse: None,
+        };
+        gateway.fallbacks = vec![];
+        gateway.provider = ProviderRouting::unpinned();
+        gateway.routes = vec![];
+        assert!(
+            gateway.routing_for("b").is_empty(),
+            "an image call to a routed model must not inherit the text route"
+        );
+    }
+
+    #[test]
+    fn the_answering_model_is_read_out_of_the_raw_body() {
+        // A ladder is asked for an alias and answers with the upstream's
+        // body, whose `model` is what actually ran.
+        let raw = json!({ "model": "gpt-5.6-luna", "usage": { "buyer_cost_micro": 4 } });
+        assert_eq!(answered_model(Some(&raw)), Some("gpt-5.6-luna"));
+        assert_eq!(answered_model(Some(&json!({ "model": "  " }))), None);
+        assert_eq!(answered_model(Some(&json!({ "model": 7 }))), None);
+        assert_eq!(answered_model(Some(&json!({}))), None);
+        assert_eq!(answered_model(None), None);
+    }
+
+    #[test]
     fn a_json_object_answer_with_trailing_text_keeps_the_object() {
         let value = first_json_value("m", "{\"summary\": \"ok\", \"findings\": []}\n\nDone.")
             .expect("the object is taken");
