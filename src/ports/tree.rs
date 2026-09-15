@@ -633,6 +633,18 @@ mod tests {
         let recorded =
             MockTree::from_recorded([(key.key(), Found::NotFound)].into_iter().collect());
         assert_eq!(recorded.lookup(&key).await.unwrap(), Found::NotFound);
+        let unrecorded = recorded
+            .lookup(&Lookup::Read {
+                path: "never-asked.rs".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+        assert!(
+            matches!(unrecorded, Found::Unavailable { .. }),
+            "an unrecorded lookup is unavailable, not a claim the path is absent"
+        );
     }
 
     #[test]
