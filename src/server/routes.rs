@@ -1656,7 +1656,19 @@ async fn handle_review(
                 // The lease is released inside `review_inner` on every path,
                 // including this one, so a retry re-claims it rather than
                 // colliding with itself and returning a silent `Ok`.
-                if attempt < failure::MAX_ATTEMPTS && failure::is_transient(&err) {
+                //
+                // Bounded by `run.deadline` too, not just `MAX_ATTEMPTS`: the
+                // backoff sleep between attempts is outside `run_lanes`'
+                // `timeout_at`, so without this check a run already out of
+                // budget would sleep anyway and try again, spending more of
+                // the `LEASE_TTL` margin on a review that has already missed
+                // its window. `Instant::now() >= run.deadline` is the same
+                // "refuse late rather than cancel mid-flight" rule the
+                // non-idempotent writes elsewhere in this function use — a
+                // sleep is trivially safe to just not start.
+                let deadline_spent = tokio::time::Instant::now() >= run.deadline;
+                if !deadline_spent && attempt < failure::MAX_ATTEMPTS && failure::is_transient(&err)
+                {
                     let wait = failure::backoff_ms(attempt);
                     tracing::warn!(
                         %err, %repo, number, attempt, wait_ms = wait,
