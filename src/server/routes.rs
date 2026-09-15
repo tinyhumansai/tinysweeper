@@ -2007,11 +2007,20 @@ async fn review_inner(
         // boundary in `AGENTS.md`.
         let outcome = match lanes {
             Ok((config, proposal)) => {
-                let publish = async {
+                // `AssertUnwindSafe` + `catch_unwind` here too, same reason as
+                // around `run_lanes`: without it a panic inside `apply` skips
+                // `release_lease` and `drop(permit)` below and escapes
+                // `handle_review` entirely, deregistering the `InFlight` slot
+                // on the way out (`Drop` always runs) without ever concluding
+                // its check — a lease held until `LEASE_TTL` and a check stuck
+                // "in progress" forever, which is exactly what this whole
+                // umbrella-check mechanism exists to prevent.
+                let publish = std::panic::AssertUnwindSafe(async {
                     let write_token = state.auth.installation_token(installation).await?;
                     let write = crate::forge::github::GitHubWrite::new(&write_token)?;
                     crate::app::apply(&forge, &write, &config, &proposal, Some(&state.store)).await
-                };
+                })
+                .catch_unwind();
                 tokio::time::timeout(PUBLISH_DEADLINE, publish)
                     .await
                     .map_err(|_elapsed| {
@@ -2020,7 +2029,10 @@ async fn review_inner(
                             PUBLISH_DEADLINE,
                         )
                     })
-                    .and_then(|published| published.map(|()| proposal))
+                    .and_then(|published| {
+                        published.unwrap_or_else(|_| Err(Error::lane("review", "publishing panicked")))
+                    })
+                    .map(|()| proposal)
             }
             Err(err) => Err(err),
         };
