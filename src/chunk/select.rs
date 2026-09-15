@@ -196,10 +196,14 @@ fn gather(
         if metadata.is_dir() {
             let name = entry.file_name();
             let rel = relative(root, &path);
-            let holds_submodule = submodules.iter().any(|s| {
-                *s == rel || s.starts_with(&format!("{rel}/")) || rel.starts_with(&format!("{s}/"))
-            });
-            if SKIPPED_DIRS.iter().any(|d| name == *d) && !holds_submodule {
+            // Only the directories leading to and including a submodule root
+            // are exempt from the skip list. Inside a fetched submodule the
+            // rules apply as they do anywhere: its `.git` and `target` are
+            // not source either.
+            let leads_to_submodule = submodules
+                .iter()
+                .any(|s| *s == rel || s.starts_with(&format!("{rel}/")));
+            if SKIPPED_DIRS.iter().any(|d| name == *d) && !leads_to_submodule {
                 continue;
             }
             gather(root, &path, submodules, files, unreadable)?;
