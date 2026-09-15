@@ -118,8 +118,22 @@ pub async fn local_review(
     );
 
     // No store: there is no earlier local run to replay, and pretending
-    // otherwise would report a cache hit that never happened.
-    let proposal = review_with_state(&forge, model, config, &repo, LOCAL_NUMBER, None).await?;
+    // otherwise would report a cache hit that never happened. The tree is
+    // the checkout itself, so a reviewer here can search as well as read.
+    let tree = crate::ports::tree::DirTree::new(dir);
+    let proposal = crate::app::review::review_with_tree(
+        &forge,
+        model,
+        config,
+        &repo,
+        LOCAL_NUMBER,
+        None,
+        None,
+        None,
+        None,
+        Some(&tree),
+    )
+    .await?;
 
     Ok((proposal, LocalContext { repo, range }))
 }
