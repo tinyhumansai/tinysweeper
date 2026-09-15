@@ -1795,16 +1795,17 @@ async fn review_inner(
     // keeps a blocked contributor, a draft, or a duplicate delivery from
     // announcing a review that is not going to happen.
     //
-    // Everything from here down — status publication, the repository's config
-    // overlay, the default-branch lookup, the lanes and the final publish —
-    // is the lease-held portion of the run, and all of it now shares the one
-    // `run.deadline`. A stalled forge read or a slow check-run write must lose
-    // the lease exactly as a slow model call does: the deadline exists so a
-    // review cannot outlive `LEASE_TTL`, and it only does that job if nothing
-    // between the lease claim and its release can run unbounded. A contributor
-    // still sees the check appear seconds after pushing, because `open_status`
-    // is the first thing this future awaits.
-    let outcome = tokio::time::timeout_at(run.deadline, async {
+    // Still early: everything above is metadata reads, and every model call is
+    // below. A contributor sees the check appear seconds after pushing, not
+    // minutes.
+    //
+    // Deliberately *not* under `run.deadline`, and neither is anything else
+    // between here and `run_lanes`. The deadline is a cancellation, and
+    // cancelling a check-run POST after GitHub accepted it orphans the check
+    // this function exists to conclude. The forge calls here are bounded on
+    // their own by `forge::github::REQUEST_TIMEOUT`, which is what the margin
+    // between `REVIEW_DEADLINE` and `LEASE_TTL` is for.
+    {
         open_status(
             state,
             &run.slot,
@@ -1891,35 +1892,59 @@ async fn review_inner(
             }
         }
 
-        std::panic::AssertUnwindSafe(run_and_publish(
+        // `AssertUnwindSafe` + `catch_unwind` so a panic inside a lane still
+        // reaches the release below. Without it the `?` on the outcome is not
+        // the only way out — an unwind skips everything — and the lease
+        // survives the worker that took it.
+        let lanes = std::panic::AssertUnwindSafe(run_lanes(
             state,
             &overlay.config,
             &repo_id,
             number,
-            installation,
             &forge,
             &read_token,
             run,
         ))
         .catch_unwind()
         .await
-        .unwrap_or_else(|_| Err(Error::lane("review", "the review panicked")))
-    })
-    .await
-    .unwrap_or_else(|_elapsed| {
-        Err(Error::timeout(
-            format!("the review of {repo}#{number}"),
-            REVIEW_DEADLINE,
-        ))
-    });
+        .unwrap_or_else(|_| Err(Error::lane("review", "the review panicked")));
 
-    // Released regardless of how the review went. The TTL in the store is the
-    // backstop for the cases this cannot cover — a kill, or a lost machine.
-    if let Err(err) = state.store.release_lease(&lease).await {
-        tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
+        // The publish is outside the deadline on purpose. `apply` is several
+        // sequential, non-idempotent writes — lane checks, the review body,
+        // comments — and cancelling it between two of them cannot retract
+        // what GitHub already accepted: the result would be a permanently
+        // partial review, not a clean timeout. The lanes have returned, so
+        // there is no model call left to bound; each write here is capped by
+        // the forge client's own request timeout. The write token is minted
+        // only now, after every model call has returned — the boundary in
+        // `AGENTS.md`.
+        let outcome = match lanes {
+            Ok((config, proposal)) => {
+                let publish = async {
+                    let write_token = state.auth.installation_token(installation).await?;
+                    let write = crate::forge::github::GitHubWrite::new(&write_token)?;
+                    crate::app::apply(&forge, &write, &config, &proposal, Some(&state.store))
+                        .await
+                };
+                publish.await.map(|()| proposal)
+            }
+            Err(err) => Err(err),
+        };
+
+        // Released regardless of how the review went. The TTL in the store is
+        // the backstop for the cases this cannot cover — a kill, or a lost
+        // machine.
+        if let Err(err) = state.store.release_lease(&lease).await {
+            tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
+        }
+        drop(permit);
+
+        outcome
     }
-    drop(permit);
-
+    .pipe_into_findings(state, author, repo, number, installation)
+    .await
+}
+PLACEHOLDER_REMOVE_ME
     let proposal = outcome?;
     let findings = proposal.findings().count();
     state.store.record_review(author, findings as u64).await?;
