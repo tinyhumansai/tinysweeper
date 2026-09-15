@@ -545,6 +545,7 @@ async fn a_reviewer_that_looks_something_up_is_asked_again_with_what_it_read() {
             subagent_model: None,
             tree: Some(&tree),
             lookup: Some(&policy),
+            seed: None,
         },
     )
     .await
@@ -609,6 +610,7 @@ async fn the_last_permitted_round_offers_no_lookups_and_the_loop_ends() {
             subagent_model: None,
             tree: Some(&tree),
             lookup: Some(&policy),
+            seed: None,
         },
     )
     .await
@@ -642,6 +644,7 @@ async fn without_a_tree_the_prompt_is_the_plain_one() {
             subagent_model: None,
             tree: None,
             lookup: Some(&policy),
+            seed: None,
         },
     )
     .await
