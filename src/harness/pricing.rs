@@ -427,7 +427,10 @@ mod tests {
             .iter()
             .fold(0.0_f64, |worst, (_, price)| worst.max(*price));
         assert!(ladder > 0.0);
-        assert!(ladder < worst, "a known rung must not fall through to the ceiling");
+        assert!(
+            ladder < worst,
+            "a known rung must not fall through to the ceiling"
+        );
     }
 
     #[test]
