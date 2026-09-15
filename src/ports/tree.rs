@@ -768,6 +768,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_symlink_out_of_the_checkout_is_refused_not_followed() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "s3cr3t\n").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/a.rs"), "needle\n").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path().join("secret.txt"), dir.path().join("leak"))
+            .unwrap();
+
+        let tree = DirTree::new(dir.path());
+
+        // A read through the symlink must not escape the checkout.
+        #[cfg(unix)]
+        {
+            let read = tree
+                .lookup(&Lookup::Read {
+                    path: "leak".into(),
+                    start: None,
+                    end: None,
+                })
+                .await
+                .unwrap();
+            assert_eq!(read, Found::NotFound, "a symlink out of the root was followed");
+        }
+
+        // A search must not walk through the symlink either, so the outside
+        // file's content never reaches a hit.
+        let found = tree
+            .lookup(&Lookup::Search {
+                pattern: "s3cr3t".into(),
+                glob: None,
+            })
+            .await
+            .unwrap();
+        let Found::Hits { hits, .. } = found else {
+            panic!()
+        };
+        assert!(hits.is_empty(), "search followed a symlink out of the root");
+    }
+
+    #[tokio::test]
     async fn a_chain_falls_through_not_found_and_unavailable() {
         let empty = MockTree::from_recorded(Default::default());
         let full = MockTree::from_files([("a.rs", "x")]);
