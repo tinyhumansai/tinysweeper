@@ -4,9 +4,11 @@
 # secrets, and it is deliberately dumb: it builds nothing itself (the repo's
 # `serve` script does), decides nothing itself (the tinysweeper server does),
 # and holds no model or GitHub-write credential. It has a bearer token for the
-# server's `/preview` routes and a credential for the object store the
-# screenshots go to, and that is all. Everything it sends the server is
-# treated there as untrusted input.
+# server's `/preview` routes and that is all: the screenshots go to the
+# server, which commits them to a store branch of the repository through the
+# App. (An object store can be used instead — see the optional inputs — but
+# then the job holds that store's credential too.) Everything it sends the
+# server is treated there as untrusted input.
 name: tinysweeper UI preview
 description: >-
   Drive the pull request's UI through the flows tinysweeper plans, record
@@ -35,17 +37,21 @@ inputs:
     description: The pull request head commit (github.event.pull_request.head.sha, never github.sha)
     required: true
   bucket:
-    description: The S3-compatible bucket to upload to
-    required: true
+    description: Optional. An S3-compatible bucket to upload to instead of the server (pairs with `preview.public_base_url` on the server)
+    required: false
+    default: ""
   endpoint:
-    description: The S3-compatible endpoint, e.g. https://<account>.r2.cloudflarestorage.com
-    required: true
+    description: Optional. The S3-compatible endpoint, e.g. https://<account>.r2.cloudflarestorage.com
+    required: false
+    default: ""
   access-key-id:
-    description: Access key for the bucket
-    required: true
+    description: Optional. Access key for the bucket
+    required: false
+    default: ""
   secret-access-key:
-    description: Secret key for the bucket
-    required: true
+    description: Optional. Secret key for the bucket
+    required: false
+    default: ""
   region:
     description: Region for the S3 client; R2 wants `auto`
     default: auto

@@ -4,7 +4,8 @@
 # reviewers see in the checks list; the comment itself is posted by the
 # tinysweeper server, not by this job. This job builds and serves this
 # repository's own code and talks to the server with a bearer token; it holds
-# no model or GitHub-write credential.
+# no model or GitHub-write credential, and no storage credential either — the
+# server commits the pictures to a store branch of this repository.
 #
 # Same-repository pull requests only: a fork's job cannot read the secrets
 # below, and would fail before it did anything useful.
@@ -85,7 +86,4 @@ jobs:
           before-dir: before
           base-sha: ${{ steps.base.outputs.sha }}
           head-sha: ${{ github.event.pull_request.head.sha }}
-          bucket: ${{ secrets.PREVIEW_S3_BUCKET }}
-          endpoint: ${{ secrets.PREVIEW_S3_ENDPOINT }}
-          access-key-id: ${{ secrets.PREVIEW_S3_ACCESS_KEY_ID }}
-          secret-access-key: ${{ secrets.PREVIEW_S3_SECRET_ACCESS_KEY }}
+

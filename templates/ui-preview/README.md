@@ -5,19 +5,23 @@ the planning and the writing; this repository's CI does the browsing.
 
 ## 1. Once per organisation
 
-- An S3-compatible bucket with a **public** domain in front of it — a
-  Cloudflare R2 bucket with a custom domain is the reference setup. The
-  images in the pull request comment are served from that domain, so it has
-  to be reachable by whoever reads the pull request.
-- Organisation secrets: `PREVIEW_S3_BUCKET`, `PREVIEW_S3_ENDPOINT`
-  (`https://<account>.r2.cloudflarestorage.com`), `PREVIEW_S3_ACCESS_KEY_ID`,
-  `PREVIEW_S3_SECRET_ACCESS_KEY` — a key that can write that one bucket and
-  nothing else — and `TINYSWEEPER_PREVIEW_TOKEN`, the same value the server
-  has as its `TINYSWEEPER_PREVIEW_TOKEN` environment variable.
-- Organisation variable: `TINYSWEEPER_SERVER_URL`.
-- On the server: `[preview] enabled = true` and
-  `public_base_url = "https://<the public domain>"` in its `.tinysweeper.toml`,
-  and `TINYSWEEPER_PREVIEW_TOKEN` in its environment. See `deploy/README.md`.
+- On the tinysweeper GitHub App: **`contents: write`** (it was read). The
+  server commits every run's pictures to a store branch of the reviewed
+  repository — `tinysweeper/ui-previews` by default — through the App, and
+  the pull request comment embeds them from there. No bucket, no CDN, no
+  storage credential anywhere. The branch is a store, not a line of
+  development; deleting it costs old comments their pictures and nothing
+  else.
+- Organisation secret `TINYSWEEPER_PREVIEW_TOKEN`, the same value the server
+  has as its `TINYSWEEPER_PREVIEW_TOKEN` environment variable; organisation
+  variable `TINYSWEEPER_SERVER_URL`.
+- On the server: `[preview] enabled = true` in its `.tinysweeper.toml` and
+  `TINYSWEEPER_PREVIEW_TOKEN` in its environment. See `deploy/README.md`.
+
+An object store can replace the branch: set `preview.public_base_url` on the
+server and pass the action's `bucket`/`endpoint`/`access-key-id`/
+`secret-access-key` inputs from secrets. That is the only reason to give the
+job a storage credential.
 
 ## 2. Per repository
 
