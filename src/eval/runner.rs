@@ -22,7 +22,8 @@ use std::time::Instant;
 
 use sha2::{Digest, Sha256};
 
-use crate::app::review::{Proposal, review_with_state};
+use crate::app::review::{Proposal, review_with_tree};
+use crate::ports::tree::TreeReader;
 use crate::config::types::Config;
 use crate::error::Result;
 use crate::eval::corpus::{Corpus, LoadedCase};
@@ -50,6 +51,10 @@ pub struct RunOptions {
     /// enforces per case: this is the ceiling on the *corpus*, so a bad prompt
     /// cannot turn one command into an unbounded bill.
     pub max_cost_usd: f64,
+    /// A checkout of the case's head, for the reviewer to look things up in
+    /// while recording. What it reads is written into the fixture's
+    /// `lookups` so the replay needs no checkout.
+    pub tree: Option<PathBuf>,
 }
 
 impl Default for RunOptions {
@@ -60,6 +65,7 @@ impl Default for RunOptions {
             loose: false,
             record_prompts: false,
             max_cost_usd: 5.0,
+            tree: None,
         }
     }
 }
@@ -127,8 +133,39 @@ pub async fn run(
             }
         };
         let started = Instant::now();
-        let outcome = review_case(case, &with_lanes(&config, case), cassette.clone()).await;
+        // Lookups replay from the fixture, or record into it. A live tree
+        // without `--record` would answer lookups the cassette never saw,
+        // which is a strict miss dressed as a review.
+        let dir_tree = options
+            .tree
+            .as_ref()
+            .filter(|_| options.record)
+            .map(crate::ports::tree::DirTree::new);
+        let recorded = crate::ports::tree::MockTree::from_recorded(case.fixture.lookups.clone());
+        let recording = dir_tree
+            .as_ref()
+            .map(|dir| crate::ports::tree::RecordingTree::new(dir as &dyn TreeReader));
+        let tree: &dyn TreeReader = match &recording {
+            Some(recording) => recording,
+            None => &recorded,
+        };
+        let outcome =
+            review_case(case, &with_lanes(&config, case), cassette.clone(), tree).await;
         let wall = started.elapsed();
+
+        if let Some(recording) = &recording {
+            let learned = recording.recorded();
+            if !learned.is_empty() {
+                let mut fixture = case.fixture.clone();
+                fixture.lookups.extend(learned);
+                let path = case.path.parent().unwrap_or(&case.path).join(&case.case.fixture);
+                std::fs::write(&path, serde_json::to_string_pretty(&fixture)? + "\n")
+                    .map_err(|e| crate::error::Error::Path {
+                        path: path.display().to_string(),
+                        message: e.to_string(),
+                    })?;
+            }
+        }
 
         if options.record {
             cassette.flush()?;
@@ -182,7 +219,12 @@ pub async fn run(
 }
 
 /// Review one case against a fresh, empty state store.
-async fn review_case(case: &LoadedCase, config: &Config, model: Arc<Cassette>) -> Result<Proposal> {
+async fn review_case(
+    case: &LoadedCase,
+    config: &Config,
+    model: Arc<Cassette>,
+    tree: &dyn TreeReader,
+) -> Result<Proposal> {
     let forge = case.forge();
     let store = MemoryState::new();
     let repo = RepoId::parse(&case.case.provenance.repo).unwrap_or_else(|| RepoId {
@@ -190,13 +232,17 @@ async fn review_case(case: &LoadedCase, config: &Config, model: Arc<Cassette>) -
         name: case.case.id.clone(),
     });
 
-    review_with_state(
+    review_with_tree(
         &forge,
         model,
         config,
         &repo,
         case.fixture.pull_request.number,
         Some(&store),
+        None,
+        None,
+        None,
+        Some(tree),
     )
     .await
 }
