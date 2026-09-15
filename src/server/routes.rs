@@ -455,7 +455,13 @@ async fn dispatch(state: AppState, action: Action, delivery: String, event: Stri
             installation,
         } => {
             for number in numbers {
-                tokio::spawn(handle_automerge(
+                // Two consumers of the same event, and the order matters: the
+                // `e2e` check run has to be concluded before the merge gate
+                // reads it, or a pull request whose only red job just
+                // finished would be evaluated against the `Neutral` the
+                // review left behind. `settle_e2e` publishes the terminal
+                // conclusion; the merge evaluation then sees it.
+                tokio::spawn(handle_check_completed(
                     state.clone(),
                     repo.clone(),
                     number,
@@ -464,6 +470,87 @@ async fn dispatch(state: AppState, action: Action, delivery: String, event: Stri
             }
         }
     }
+}
+
+/// A check completed on a pull request: settle the `e2e` lane if it was
+/// waiting on that check, then reconsider the merge.
+async fn handle_check_completed(state: AppState, repo: String, number: u64, installation: u64) {
+    if state
+        .config
+        .config
+        .enabled_lanes()
+        .contains(&crate::config::types::LaneId::E2e)
+        && let Err(err) = settle_e2e_inner(&state, &repo, number, installation).await
+    {
+        // Logged and dropped, like auto-merge: the watch stays in the store,
+        // and the next completion event on the same head retries it.
+        tracing::error!(%err, %repo, number, "could not settle the e2e check run");
+    }
+    handle_automerge(state, repo, number, installation).await;
+}
+
+async fn settle_e2e_inner(
+    state: &AppState,
+    repo: &str,
+    number: u64,
+    installation: u64,
+) -> Result<()> {
+    let repo_id =
+        RepoId::parse(repo).ok_or_else(|| Error::Forge(format!("`{repo}` is not owner/name")))?;
+
+    // The cheap exit before any credential is minted: most completions land
+    // on pull requests with nothing to settle.
+    let key = crate::state::key(repo, number);
+    let watching = crate::ports::review_state::ReviewStateStore::load_state(&state.store, &key)
+        .await?
+        .is_some_and(|reviewed| reviewed.e2e.is_some());
+    if !watching {
+        return Ok(());
+    }
+
+    // Serialised with the review's own lease shape: several jobs finishing at
+    // once is the normal case, and two settlements racing would publish the
+    // same check twice.
+    let lease = format!("{repo}#e2e-settle-{number}");
+    if !state.store.claim_lease(&lease, "server").await? {
+        tracing::debug!(%lease, "another worker is already settling this e2e check");
+        return Ok(());
+    }
+
+    let token = state.auth.installation_token(installation).await;
+    let outcome = match token {
+        Ok(token) => {
+            let read = crate::forge::github::GitHubRead::new(&token);
+            let write = crate::forge::github::GitHubWrite::new(&token);
+            match (read, write) {
+                (Ok(read), Ok(write)) => {
+                    crate::app::apply::settle_e2e(
+                        &read,
+                        &write,
+                        &state.config.config,
+                        &state.store,
+                        &repo_id,
+                        number,
+                    )
+                    .await
+                }
+                (Err(err), _) | (_, Err(err)) => Err(err),
+            }
+        }
+        Err(err) => Err(err),
+    };
+
+    if let Err(err) = state.store.release_lease(&lease).await {
+        tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
+    }
+
+    match outcome? {
+        crate::app::apply::E2eSettlement::Published(conclusion) => {
+            tracing::info!(%repo, number, ?conclusion, "settled the e2e check run");
+        }
+        other => tracing::debug!(%repo, number, ?other, "e2e check run not settled"),
+    }
+    Ok(())
 }
 
 /// Re-evaluate one pull request against the auto-merge policy, off the request
