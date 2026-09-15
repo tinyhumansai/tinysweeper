@@ -180,6 +180,12 @@ pub trait TreeReader: Send + Sync {
     /// One line describing what this reader can do, for the reviewer's
     /// instructions: whether search works, and any caveat.
     fn describe(&self) -> String;
+
+    /// The commit this reader reflects, when it knows. A review compares it
+    /// to the head it is reviewing and refuses a tree from another commit.
+    fn revision(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Number and join lines `start..=end` of `content`, 1-based inclusive.
@@ -408,6 +414,15 @@ impl TreeReader for RecordingTree<'_> {
 pub struct DirTree {
     root: std::path::PathBuf,
     submodules: Vec<String>,
+    /// The only paths that may be read or searched, when set.
+    ///
+    /// `local-review` runs in a developer's working directory, which holds
+    /// files git never tracks — `.env`, a private key — and a lookup's result
+    /// is sent to a remote model. The reader is handed the set git reports as
+    /// tracked or untracked-and-not-ignored, and reads nothing else.
+    allowed: Option<std::collections::BTreeSet<String>>,
+    /// The commit this tree reflects, when the caller knows it.
+    revision: Option<String>,
 }
 
 impl DirTree {
@@ -417,12 +432,41 @@ impl DirTree {
         let submodules = std::fs::read_to_string(root.join(".gitmodules"))
             .map(|text| submodule_paths(&text))
             .unwrap_or_default();
-        Self { root, submodules }
+        Self {
+            root,
+            submodules,
+            allowed: None,
+            revision: None,
+        }
+    }
+
+    /// Restrict reads and searches to `paths`, repository-relative.
+    pub fn allowing(mut self, paths: impl IntoIterator<Item = String>) -> Self {
+        self.allowed = Some(paths.into_iter().collect());
+        self
+    }
+
+    /// Record the commit this tree was checked out at.
+    pub fn at_revision(mut self, revision: &str) -> Self {
+        self.revision = Some(revision.to_string());
+        self
     }
 
     fn skipped(&self, rel: &str) -> bool {
-        let first = rel.split('/').next().unwrap_or("");
-        let vendored = matches!(
+        // The rule applies to the path *relative to the nearest submodule
+        // root*, so a fetched submodule's own `.git`, `target` and
+        // `node_modules` are skipped exactly as the superproject's are. Only
+        // the directories leading to and including a submodule root are
+        // exempt — otherwise the walk never reaches it — and a search that
+        // read a submodule's packfiles was the alternative.
+        let inner = self
+            .submodules
+            .iter()
+            .filter_map(|s| rel.strip_prefix(&format!("{s}/")))
+            .max_by_key(|inner| rel.len() - inner.len())
+            .unwrap_or(rel);
+        let first = inner.split('/').next().unwrap_or("");
+        let skip_dir = matches!(
             first,
             ".git"
                 | "node_modules"
@@ -433,13 +477,19 @@ impl DirTree {
                 | "build"
                 | "third_party"
         );
-        // A vendored directory is kept when a tracked submodule is it, is
-        // under it, or contains it — otherwise the walk never reaches the
-        // submodule to search it.
-        vendored
-            && !self.submodules.iter().any(|s| {
-                s == rel || s.starts_with(&format!("{rel}/")) || rel.starts_with(&format!("{s}/"))
-            })
+        let leads_to_submodule = inner.len() == rel.len()
+            && self
+                .submodules
+                .iter()
+                .any(|s| s == rel || s.starts_with(&format!("{rel}/")));
+        skip_dir && !leads_to_submodule
+    }
+
+    /// Whether `rel` may be read or searched at all under the allow-list.
+    fn allowed(&self, rel: &str) -> bool {
+        self.allowed
+            .as_ref()
+            .is_none_or(|allowed| allowed.contains(rel))
     }
 
     /// The submodule `path` lies under, when that submodule has no content.
@@ -517,7 +567,7 @@ impl DirTree {
             }
             if meta.is_dir() {
                 self.walk(&path, out);
-            } else {
+            } else if self.allowed(&rel) {
                 out.push(rel);
             }
         }
@@ -549,7 +599,7 @@ impl TreeReader for DirTree {
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
         Ok(match lookup {
             Lookup::Read { path, start, end } => {
-                if !safe_relative(path) || !self.within_root(path) {
+                if !safe_relative(path) || !self.within_root(path) || !self.allowed(path) {
                     return Ok(Found::NotFound);
                 }
                 match std::fs::read_to_string(self.root.join(path)) {
@@ -602,6 +652,10 @@ impl TreeReader for DirTree {
 
     fn describe(&self) -> String {
         DIR_DESCRIPTION.into()
+    }
+
+    fn revision(&self) -> Option<String> {
+        self.revision.clone()
     }
 }
 
@@ -873,6 +927,60 @@ mod tests {
             panic!()
         };
         assert!(hits.is_empty(), "search followed a symlink out of the root");
+    }
+
+    #[tokio::test]
+    async fn skip_rules_hold_inside_a_fetched_submodule_and_an_allow_list_holds_everywhere() {
+        let dir = tempfile::tempdir().unwrap();
+        for d in ["src", "vendor/lib/src", "vendor/lib/target", "vendor/lib/.git"] {
+            std::fs::create_dir_all(dir.path().join(d)).unwrap();
+        }
+        std::fs::write(
+            dir.path().join(".gitmodules"),
+            "[submodule \"lib\"]\n\tpath = vendor/lib\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("src/a.rs"), "needle\n").unwrap();
+        std::fs::write(dir.path().join(".env"), "needle SECRET\n").unwrap();
+        std::fs::write(dir.path().join("vendor/lib/src/b.rs"), "needle\n").unwrap();
+        std::fs::write(dir.path().join("vendor/lib/target/c.rs"), "needle\n").unwrap();
+        std::fs::write(dir.path().join("vendor/lib/.git/packed"), "needle\n").unwrap();
+
+        let search = Lookup::Search {
+            pattern: "needle".into(),
+            glob: None,
+        };
+        let Found::Hits { hits, .. } = DirTree::new(dir.path()).lookup(&search).await.unwrap()
+        else {
+            panic!()
+        };
+        let paths: Vec<&str> = hits.iter().map(|h| h.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![".env", "src/a.rs", "vendor/lib/src/b.rs"],
+            "the submodule's own target and .git are skipped"
+        );
+
+        let tracked = DirTree::new(dir.path())
+            .allowing(["src/a.rs".to_string(), "vendor/lib/src/b.rs".to_string()]);
+        let Found::Hits { hits, .. } = tracked.lookup(&search).await.unwrap() else {
+            panic!()
+        };
+        let paths: Vec<&str> = hits.iter().map(|h| h.path.as_str()).collect();
+        assert_eq!(paths, vec!["src/a.rs", "vendor/lib/src/b.rs"], "an ignored file is invisible");
+        let env = tracked
+            .lookup(&Lookup::Read {
+                path: ".env".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(env, Found::NotFound);
+        assert_eq!(
+            DirTree::new(dir.path()).at_revision("abc").revision().as_deref(),
+            Some("abc")
+        );
     }
 
     #[tokio::test]
