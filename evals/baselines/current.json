@@ -1,6 +1,6 @@
 {
   "corpus_digest": "1ac521af047a4286",
-  "config_digest": "4d2f6571844dd03b",
+  "config_digest": "2c13a13895909c75",
   "loose_replays": 0,
   "cases": [
     {
@@ -22,7 +22,7 @@
       "input_tokens": 204785,
       "output_tokens": 23092,
       "cached_tokens": 87528,
-      "wall_secs": 0.041971744,
+      "wall_secs": 0.042412568,
       "models": [
         "deepseek/deepseek-v4-flash",
         "z-ai/glm-5.2"
@@ -61,7 +61,7 @@
       "input_tokens": 94460,
       "output_tokens": 26055,
       "cached_tokens": 54509,
-      "wall_secs": 0.021569693,
+      "wall_secs": 0.021031657,
       "models": [
         "deepseek/deepseek-v4-flash",
         "z-ai/glm-5.2"
@@ -90,7 +90,7 @@
       "input_tokens": 87953,
       "output_tokens": 12793,
       "cached_tokens": 36754,
-      "wall_secs": 0.018178333,
+      "wall_secs": 0.018137943,
       "models": [
         "deepseek/deepseek-v4-flash",
         "z-ai/glm-5.2"
