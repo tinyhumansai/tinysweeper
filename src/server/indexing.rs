@@ -148,11 +148,16 @@ impl IndexBackend {
         // review runs against. The write token is minted separately, in
         // `routes.rs`, after every model call has returned.
         let checkout = Checkout::fetch(&git_host(), &repo_id, revision, token).await?;
-        let skipped = checkout
+        let unfetched = checkout
             .fetch_submodules(&git_host(), token, &config.retrieval.submodules)
             .await?;
-        if !skipped.is_empty() {
-            tracing::info!(repo = %repo_id, ?skipped, "submodules not fetched for indexing");
+        if !unfetched.is_empty() {
+            tracing::info!(
+                repo = %repo_id,
+                denied = ?unfetched.denied,
+                failed = ?unfetched.failed,
+                "submodules not fetched for indexing"
+            );
         }
 
         let selector = crate::chunk::Selector::new(&config.paths.ignore)?;
@@ -162,9 +167,12 @@ impl IndexBackend {
             self.manifest.as_ref(),
         )?
         .with_selector(selector)
-        // The submodules this checkout did not fetch: their paths, if the
-        // index still holds any, go before the embedding pass.
-        .revoking(skipped)
+        // Only the submodules *policy* kept out of this checkout are revoked
+        // ahead of the embedding pass. One that merely failed to fetch keeps
+        // its rows until the run's ordinary removal step: the operator did
+        // not take it away, the network did, and a run that then fails
+        // part-way must not have thrown away context it could still serve.
+        .revoking(unfetched.denied)
         .with_batch(config.embeddings.batch)
         // The count ceiling above does not bound a request; this does. Without
         // it a large repository's batches are rejected outright and the review
