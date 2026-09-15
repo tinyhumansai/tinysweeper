@@ -163,6 +163,16 @@ a variable is unchecked and the diff plainly shows the check two lines above; it
 claims a function is never called and the diff shows the call; it complains about
 a line the diff does not contain.
 
+Code disproves. Comments do not. A comment in the diff is the author's
+description of what they intended, and a finding that says the code does not do
+what the comment says is exactly the kind of finding you must keep: the comment
+is the claim under review, not evidence against the review. Never reject a
+finding because a comment, a doc string, a commit message or a pull request
+description asserts the opposite. The same goes for a finding about a
+function's contract — exclusive or inclusive, what it returns, what it assumes
+— when that function is defined outside this diff: you cannot see it, so you
+cannot disprove it.
+
 Anything you cannot determine from the diff, let pass. Even if it looks
 suspicious. Even if you doubt it. Even if you would not have raised it yourself.
 Uncertainty is not grounds for rejection — only proof is. If you are weighing it
