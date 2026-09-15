@@ -436,6 +436,25 @@ impl DirTree {
         empty.then_some(sub.as_str())
     }
 
+    /// Whether `path`, joined onto `root` and resolved, still lies inside
+    /// `root`.
+    ///
+    /// `safe_relative` rejects a lexical `..` escape, but a tracked symlink
+    /// such as `leak -> /proc/self/environ` never contains `..` and still
+    /// leaves the checkout once the filesystem follows it. Canonicalizing
+    /// both sides and requiring the prefix catches that: a path that does not
+    /// exist yet, or whose canonicalization fails, is treated as unsafe
+    /// rather than read.
+    fn within_root(&self, path: &str) -> bool {
+        let Ok(root) = self.root.canonicalize() else {
+            return false;
+        };
+        match self.root.join(path).canonicalize() {
+            Ok(resolved) => resolved.starts_with(&root),
+            Err(_) => false,
+        }
+    }
+
     fn walk(&self, dir: &std::path::Path, out: &mut Vec<String>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
