@@ -141,6 +141,20 @@ fn gateway_cost(raw: Option<&serde_json::Value>) -> Option<f64> {
     (cost.is_finite() && cost >= 0.0).then_some(cost)
 }
 
+/// The model the gateway says answered, when it says so.
+///
+/// A ladder is asked for `deep` and answers with whichever model it
+/// dispatched to — the router returns the upstream body as it came, so
+/// `model` is `gpt-5.6-luna` or `deepseek/deepseek-v4-flash`, not the alias.
+/// That is the name the spend ledger, the check summary and a recorded
+/// cassette should carry: a bill attributed to `deep` says nothing about
+/// what was bought. `None` means the body named nothing usable and the
+/// requested name stands.
+fn answered_model(raw: Option<&serde_json::Value>) -> Option<&str> {
+    let model = raw?.get("model")?.as_str()?.trim();
+    (!model.is_empty()).then_some(model)
+}
+
 /// The conversation as it goes on the wire, including anything the structured
 /// output mode has to say.
 ///
@@ -232,6 +246,10 @@ impl GatewayModel {
         let mut gateway = Self::from_config(models)?;
         gateway.fallbacks = vec![];
         gateway.provider = ProviderRouting::unpinned();
+        // A per-model route would outrank the unpinned routing above, and a
+        // route written for the model's text endpoint pins the image call to
+        // a host that cannot see the picture.
+        gateway.routes = vec![];
         Ok(gateway)
     }
 
@@ -393,7 +411,9 @@ impl GatewayModel {
             .as_ref()
             .and_then(|response| response.finish_reason.clone())
             .unwrap_or_default();
-        let reported_cost = gateway_cost(run.final_response.as_ref().and_then(|r| r.raw.as_ref()));
+        let raw = run.final_response.as_ref().and_then(|r| r.raw.as_ref());
+        let reported_cost = gateway_cost(raw);
+        let answered = answered_model(raw).unwrap_or(model);
 
         // Every model call, at info, because the two failures this module has
         // actually had — reasoning eating the whole budget, and an answer cut
@@ -401,6 +421,7 @@ impl GatewayModel {
         // these four numbers side by side.
         tracing::info!(
             model,
+            answered,
             cap,
             input_tokens = totals.input_tokens,
             cached_tokens = totals.cache_read_tokens,
@@ -477,8 +498,10 @@ impl GatewayModel {
             // so an estimate that drifts with a provider's repricing is the
             // wrong thing to enforce a real bill against.
             cost_usd: reported_cost.unwrap_or_else(|| {
+                // Priced as what answered, not as what was asked for: the rate
+                // table has no row for a ladder alias.
                 pricing::completion_cost(
-                    model,
+                    answered,
                     totals.input_tokens,
                     totals.cache_read_tokens,
                     totals.output_tokens,
@@ -488,7 +511,7 @@ impl GatewayModel {
 
         Ok(CallOutcome::Answer(ModelResponse {
             value,
-            model: model.to_string(),
+            model: answered.to_string(),
             usage,
         }))
     }
@@ -509,12 +532,20 @@ impl GatewayModel {
         routing: &ProviderRouting,
     ) -> Result<ModelResponse> {
         // A rung with its own route may set its own ceiling — including none.
-        let base = self
+        let routed = self
             .routes
             .iter()
             .find(|r| r.model == model)
-            .and_then(|r| r.max_tokens)
-            .unwrap_or(request.max_tokens);
+            .and_then(|r| r.max_tokens);
+        let base = routed.unwrap_or(request.max_tokens);
+        // The key the error names must be the one that set the ceiling:
+        // telling an operator to raise `models.max_tokens` while a route
+        // override stands has them change a number the next call ignores.
+        let ceiling_key = if routed.is_some() {
+            format!("`models.routes[{model}].max_tokens`")
+        } else {
+            "`models.max_tokens`".to_string()
+        };
         let ladder = truncation_ladder(base);
         let last = ladder.len() - 1;
 
@@ -529,7 +560,7 @@ impl GatewayModel {
                         return Err(Error::Model(format!(
                             "{model} ran out of output tokens at {cap} \
                              ({output_tokens} generated, {reasoning_tokens} of them reasoning); \
-                             the answer was cut off. Raise `models.max_tokens` (currently {base}) \
+                             the answer was cut off. Raise {ceiling_key} (currently {base}) \
                              or lower `models.reasoning_effort`."
                         )));
                     }
@@ -727,11 +758,17 @@ impl Model for GatewayModel {
         // nothing on a healthy deployment. It is loud because an unpinned call
         // is billed at a price `harness::pricing` did not predict, and an
         // operator who never learns the pin is broken keeps paying it.
-        if self.provider.last_resort_unpinned && !self.provider.is_empty() {
+        //
+        // Decided from the primary's *effective* routing, not the ladder-wide
+        // pin: a model with its own `[[models.routes]]` entry named its
+        // endpoint on purpose, and `ModelRoute::routing` turns this rung off
+        // for it. Reading `self.provider` here would put it back on.
+        let primary = self.routing_for(&request.model);
+        if primary.last_resort_unpinned && !primary.is_empty() {
             let unpinned = ProviderRouting::unpinned();
             tracing::warn!(
                 primary = %request.model,
-                pinned_to = %self.provider.order.join(", "),
+                pinned_to = %primary.order.join(", "),
                 error = %last,
                 "every model failed on the pinned provider; retrying unpinned — \
                  the cost line for this review is an estimate, and the pin needs fixing"
