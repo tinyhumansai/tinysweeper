@@ -331,7 +331,12 @@ pub fn seed_symbols(diff: &crate::evidence::diff::FileDiff) -> Vec<String> {
                 }
                 let word = &text[start..i];
                 let rest = text[i..].trim_start();
-                let preceded_by_dot = start > 0 && bytes[start - 1] == b'.';
+                // `self.method(` is a call into this file's own code, which
+                // may sit outside the hunk; any other `.method(` is a call on
+                // a value whose type the seed cannot know, and is left alone.
+                let preceded_by_dot = start > 0
+                    && bytes[start - 1] == b'.'
+                    && !text[..start].ends_with("self.");
                 // `Enum::Variant {` names the variant; the enum before the
                 // `::` is the definition worth reading, and was taken already.
                 let preceded_by_path = start >= 2 && &bytes[start - 2..start] == b"::";
@@ -400,9 +405,17 @@ impl Ledger {
                 let Ok(Found::Hits { hits, .. }) = tree.lookup(&lookup).await else {
                     continue;
                 };
+                // A definition already in the diff is not looked up; one in
+                // the same file but outside every hunk is — it is exactly as
+                // invisible to the reviewer as one in another file, and the
+                // unbounded sibling read on opencompany#2313 lived there.
                 let definitions: Vec<&crate::ports::tree::Hit> = hits
                     .iter()
-                    .filter(|h| h.path != diff.path && looks_like_definition(&h.text))
+                    .filter(|h| {
+                        looks_like_definition(&h.text)
+                            && !(h.path == diff.path
+                                && diff.within_hunk(u64::from(h.line), u64::from(h.line)))
+                    })
                     .collect();
                 if definitions.is_empty() || definitions.len() > AUTO_FOLLOW {
                     continue;
@@ -635,12 +648,18 @@ mod tests {
     async fn the_seed_reads_the_definitions_the_changed_lines_call_into() {
         let diff = crate::evidence::diff::parse_file_patch(
             "src/episode.rs",
-            "@@ -1,2 +1,3 @@\n let visible = project_for(&turn);\n+let pins = read_pinboard(&log, PIN_LIMIT, Some(turn.round_start)).await;\n+let step = HiveStep::Speak { turns };\n",
+            "@@ -1,2 +1,4 @@\n let visible = project_for(&turn);\n+let pins = read_pinboard(&log, PIN_LIMIT, Some(turn.round_start)).await;\n+let step = HiveStep::Speak { turns };\n+let elsewhere = self.elsewhere_for(&turn.agent_id).await;\n",
         );
-        assert_eq!(seed_symbols(&diff), vec!["read_pinboard", "HiveStep"]);
+        assert_eq!(
+            seed_symbols(&diff),
+            vec!["read_pinboard", "HiveStep", "elsewhere_for"]
+        );
 
         let tree = MockTree::from_files([
-            ("src/episode.rs", "fn read_pinboard() {}\n"),
+            (
+                "src/episode.rs",
+                "fn read_pinboard() {}\n\n\n\n\n\n\n\n\n/// Unbounded: `before: None`.\nasync fn elsewhere_for(&self) {}\n",
+            ),
             (
                 "vendor/lib/src/pins.rs",
                 "/// `before` is an exclusive bound.\npub async fn read_pinboard(log: &Log) {}\n",
@@ -649,7 +668,12 @@ mod tests {
         ]);
         let mut ledger = Ledger::default();
         let seeded = ledger.seed(&tree, &diff, &LookupPolicy::default()).await;
-        assert_eq!(seeded.answered, 2, "{}", seeded.rendered);
+        assert_eq!(seeded.answered, 3, "{}", seeded.rendered);
+        assert!(
+            seeded.rendered.contains("Unbounded: `before: None`"),
+            "a same-file definition outside the hunk is read: {}",
+            seeded.rendered
+        );
         assert!(seeded.rendered.contains("## Looked up for you"));
         assert!(seeded.rendered.contains("`before` is an exclusive bound"));
         assert!(seeded.rendered.contains("pub enum HiveStep"));
