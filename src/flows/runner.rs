@@ -459,16 +459,6 @@ pub async fn ask_all(
         }
     }
 
-    // Everything the prompt grew by is what was read: the suffix started as
-    // the lane's evidence and only lookups were appended to it.
-    for (index, answer) in answers.iter_mut().enumerate() {
-        answer.looked_up = prompts[index]
-            .prompt
-            .strip_prefix(calls[index].prompt.as_str())
-            .unwrap_or_default()
-            .to_string();
-    }
-
     Ok(answers)
 }
 
