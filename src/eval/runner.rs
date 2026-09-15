@@ -438,6 +438,23 @@ pub fn digest_of(config: &Config) -> String {
     field(b"fallback\0", models.fallback.join(",").as_bytes());
     field(b"max_tokens\0", &models.max_tokens.to_le_bytes());
     field(b"reasoning_effort\0", models.reasoning_effort.as_bytes());
+    // A per-model route moves a score the same way the global ceiling does —
+    // a ceiling of 0 completes a review that 16k truncates — and pins the
+    // call to an endpoint with its own price. Two runs with the same tier
+    // names and different routes are not the same run. Hashed in config
+    // order: the order is what `Models::route_for` searches.
+    for route in &models.routes {
+        field(b"route\0", route.model.as_bytes());
+        field(b"route_order\0", route.order.join(",").as_bytes());
+        field(
+            b"route_allow_fallbacks\0",
+            &[u8::from(route.allow_fallbacks)],
+        );
+        field(
+            b"route_max_tokens\0",
+            format!("{:?}", route.max_tokens).as_bytes(),
+        );
+    }
     // What a reviewer may read before it answers moves every score: the turns
     // it takes, the evidence it sees, and the cost. Two runs under different
     // lookup policies are not the same run.

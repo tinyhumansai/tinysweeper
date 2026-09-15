@@ -28,6 +28,8 @@ on:
   pull_request:
     # Only what can move a score. A change to the server or the automerge gate
     # cannot change what a lane finds, so it should not pay for a replay.
+    # The replay runs under `src/config/defaults.toml`, so that file can move
+    # a score and `.tinysweeper.toml`, which it deliberately ignores, cannot.
     paths:
       - "src/lanes/**"
       - "src/harness/prompt.rs"
@@ -35,9 +37,10 @@ on:
       - "src/falsify/**"
       - "src/flows/**"
       - "src/eval/**"
+      - "src/config/defaults.toml"
       - "presets/**"
       - "evals/**"
-      - ".tinysweeper.toml"
+      - ".github/workflows/eval.yml"
 
 permissions:
   contents: read
