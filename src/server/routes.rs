@@ -2030,7 +2030,8 @@ async fn review_inner(
                         )
                     })
                     .and_then(|published| {
-                        published.unwrap_or_else(|_| Err(Error::lane("review", "publishing panicked")))
+                        published
+                            .unwrap_or_else(|_| Err(Error::lane("review", "publishing panicked")))
                     })
                     .map(|()| proposal)
             }
