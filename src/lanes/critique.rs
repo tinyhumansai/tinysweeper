@@ -1118,6 +1118,68 @@ fn helper() {
     /// The other half of the isolation rule: one file's failure must leave the
     /// rest of the review standing.
     #[tokio::test]
+    async fn a_mechanical_rename_is_verified_and_only_the_residue_reaches_a_model() {
+        // opencompany#2313: fifty-one files of one substitution and one file
+        // of logic. The substitution is proven line for line here, the
+        // summary says so, and the model is asked about the residue alone.
+        let config = config();
+        let rename = |path: &str, line: &str| {
+            let new = line.replace("::openhuman", "");
+            parse_file_patch(path, &format!("@@ -1,1 +1,1 @@\n-{line}\n+{new}\n"))
+        };
+        let diffs = vec![
+            rename("src/a.rs", "use openhuman_core::openhuman as oh;"),
+            rename("src/b.rs", "    openhuman_core::openhuman::tools::x();"),
+            rename("src/c.rs", "let y = openhuman_core::openhuman::A;"),
+            parse_file_patch(
+                "src/logic.rs",
+                "@@ -1,1 +1,2 @@\n-use openhuman_core::openhuman as oh;\n+use openhuman_core as oh;\n+let leak = 1;\n",
+            ),
+        ];
+        let model = MockModel::always(json!({ "summary": "read the logic", "findings": [] }));
+
+        let outcome = run_with(model.clone(), &config, &diffs).await;
+
+        assert_eq!(model.requests().len(), 1, "one conversation: the residue");
+        assert!(
+            model.requests()[0].messages[1]
+                .content
+                .contains("src/logic.rs"),
+            "and it is the residue file"
+        );
+        assert!(
+            outcome
+                .summary
+                .contains("3 file(s) are the mechanical rename `::openhuman` → ``"),
+            "{}",
+            outcome.summary
+        );
+        assert!(outcome.skipped.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_pull_request_that_is_only_a_rename_reaches_a_verdict_with_no_model_call() {
+        let config = config();
+        let rename = |path: &str, line: &str| {
+            let new = line.replace("::openhuman", "");
+            parse_file_patch(path, &format!("@@ -1,1 +1,1 @@\n-{line}\n+{new}\n"))
+        };
+        let diffs = vec![
+            rename("src/a.rs", "use openhuman_core::openhuman as oh;"),
+            rename("src/b.rs", "    openhuman_core::openhuman::tools::x();"),
+            rename("src/c.rs", "let y = openhuman_core::openhuman::A;"),
+        ];
+        let model = MockModel::new().then_error("must not be called");
+
+        let outcome = run_with(model.clone(), &config, &diffs).await;
+
+        assert!(model.requests().is_empty());
+        assert!(outcome.skipped.is_none(), "a verified rename is a verdict, not a skip");
+        assert!(outcome.findings.is_empty());
+        assert!(outcome.summary.contains("verified line for line"));
+    }
+
+    #[tokio::test]
     async fn one_files_failure_does_not_delete_the_other_files_review() {
         let config = config();
         let diffs = vec![
