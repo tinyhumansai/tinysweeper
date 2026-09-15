@@ -222,11 +222,18 @@ async function drive({ browser, config, origin, checkoutDir, session, flow, side
   let failedAt = null;
 
   try {
+    await bootstrap(page, config, origin);
     await page.goto(`${origin}${flow.start_path}`, { waitUntil: "load", timeout: 30_000 });
     let results = [];
     for (let turn = 0; turn < maxSteps + 5; turn += 1) {
       const observation = await observe(page, { side, results, step: ctx.step });
       const reply = await session.step(flow.id, observation);
+      // Every turn's snapshot and answer, for reading afterwards why a flow
+      // went where it went. Under the run directory, so the artifact keeps it.
+      await writeFile(
+        path.join(out, `turn-${flow.id}-${String(turn).padStart(2, "0")}.json`),
+        JSON.stringify({ observation, reply }, null, 2),
+      );
       results = await execute(page, reply.commands, ctx);
       // `execute` stops at the first failing command, so at most the last
       // entry in `results` is a failure. The base build's `replay` later
@@ -263,6 +270,7 @@ async function replay({ browser, config, origin, checkoutDir, flow, script, out,
   const ctx = { origin, shots: new Map(), recorder: recorder(), masks: config.mask, scale: SCALE, step: 0, timeoutMs: REPLAY_TIMEOUT_MS };
   let failedAt = null;
   try {
+    await bootstrap(page, config, origin);
     await page.goto(`${origin}${flow.start_path}`, { waitUntil: "load", timeout: 30_000 });
     const replayable = script.filter((c) => c.op !== "annotate" && c.op !== "record" && c.op !== "done");
     const results = await execute(page, replayable, ctx);
@@ -276,6 +284,24 @@ async function replay({ browser, config, origin, checkoutDir, flow, script, out,
     await context.close();
   }
   return { shots: ctx.shots, failedAt };
+}
+
+/**
+ * Open the repository's bootstrap page first, when it has one.
+ *
+ * `auth.visit` is for the case cookies and static localStorage cannot cover:
+ * a value only the served side knows, such as the port of a backend the
+ * `serve` script started. The page seeds whatever it needs and redirects;
+ * openhuman's dev server has the same `/__dev-connect` route.
+ */
+async function bootstrap(page, config, origin) {
+  if (!config.auth.visit) return;
+  await page.goto(`${origin}${config.auth.visit}`, { waitUntil: "load", timeout: 30_000 });
+  try {
+    await page.waitForLoadState("networkidle", { timeout: 5_000 });
+  } catch {
+    // A redirect target that long-polls never goes idle.
+  }
 }
 
 /** A context with the repository's auth and mocks applied. */

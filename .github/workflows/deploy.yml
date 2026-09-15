@@ -109,6 +109,19 @@ jobs:
           image_tag="$2"
           cd "$stack_dir"
 
+          # `.env` must win over the login shell. Compose interpolates
+          # `${VAR}` from the process environment first and the env file
+          # second, and the box's `~/.zshenv` exports an OPENROUTER_API_KEY of
+          # its own for other tooling — zsh sources it even for this
+          # non-interactive ssh command — so a deploy was silently handing the
+          # container the shell's key instead of the one the operator set in
+          # `.env`. Sourcing `.env` here restores the precedence the runbook
+          # describes.
+          set -a
+          # shellcheck disable=SC1091
+          . ./.env
+          set +a
+
           compose() {
             docker compose -f docker-compose.yml -f docker-compose.prod.yml "$@"
           }

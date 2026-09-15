@@ -15,7 +15,7 @@ export const DEFAULTS = Object.freeze({
   ready: "/",
   timeout_s: 420,
   viewport: [1440, 900],
-  auth: { cookies: [], localStorage: {} },
+  auth: { cookies: [], localStorage: {}, visit: null },
   mocks: [],
   mask: [],
   entry_points: [],
@@ -79,6 +79,9 @@ export function checkConfig(config, where = "config") {
     if (!mock.dir && mock.body === undefined) {
       throw new Error(`${where}: mock ${mock.url} needs a "dir" of fixtures or an inline "body"`);
     }
+  }
+  if (merged.auth.visit !== null && (typeof merged.auth.visit !== "string" || !merged.auth.visit.startsWith("/"))) {
+    throw new Error(`${where}: "auth.visit" must be a path on the served app`);
   }
   if (!Array.isArray(merged.auth.cookies)) {
     throw new Error(`${where}: "auth.cookies" must be a list`);

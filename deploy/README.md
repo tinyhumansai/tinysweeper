@@ -10,7 +10,7 @@ rolls a new image.
 | --- | --- |
 | `docker-compose.yml` | The stack: MongoDB pair, the server built locally |
 | `docker-compose.prod.yml` | Overlay: published image, loopback port, memory cap |
-| `deploy/nginx/sweeper.tinyhumans.ai.conf` | Host nginx vhost; only `/webhook`, `/healthz`, `/admin` reach the app |
+| `deploy/nginx/sweeper.tinyhumans.ai.conf` | Host nginx vhost; only `/webhook`, `/healthz`, `/admin`, `/preview` reach the app |
 | `deploy/mongo/` | mongod/mongot config, secrets generator, init scripts |
 
 ## The box

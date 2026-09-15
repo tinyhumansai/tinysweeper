@@ -7,7 +7,7 @@ test("an empty config is the defaults", () => {
   const c = checkConfig({});
   assert.equal(c.serve, DEFAULTS.serve);
   assert.deepEqual(c.viewport, [1440, 900]);
-  assert.deepEqual(c.auth, { cookies: [], localStorage: {} });
+  assert.deepEqual(c.auth, { cookies: [], localStorage: {}, visit: null });
 });
 
 test("auth is merged rather than replaced", () => {
@@ -23,6 +23,8 @@ test("the mistakes that would surface as playwright errors are refused up front"
   assert.throws(() => checkConfig({ mocks: [{ url: "**/api/**" }] }), /needs a "dir"/);
   assert.throws(() => checkConfig({ auth: { cookies: [{ name: "sid" }] } }), /auth cookie/);
   assert.throws(() => checkConfig({ max_flows: 0 }), /"max_flows"/);
+  assert.throws(() => checkConfig({ auth: { visit: "connect.html" } }), /"auth.visit"/);
+  assert.equal(checkConfig({ auth: { visit: "/__preview-connect.html" } }).auth.visit, "/__preview-connect.html");
   assert.throws(() => checkConfig({ mocks: "not-a-list" }), /"mocks" must be a list/);
   assert.throws(() => checkConfig({ auth: { cookies: "not-a-list" } }), /"auth.cookies" must be a list/);
   assert.throws(() => checkConfig({ timeout_s: 0 }), /"timeout_s"/);
