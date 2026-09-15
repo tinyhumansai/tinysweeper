@@ -65,6 +65,19 @@ pub enum Error {
         message: String,
     },
 
+    /// A bounded operation did not finish inside its wall-clock deadline.
+    ///
+    /// Deliberately not one of the transient variants: the deadline is the
+    /// budget, and retrying a run that has already spent it only spends it
+    /// again.
+    #[error("{what} did not finish within {seconds}s")]
+    Timeout {
+        /// What was being waited on, e.g. `the review of owner/repo#12`.
+        what: String,
+        /// The deadline that elapsed, in seconds.
+        seconds: u64,
+    },
+
     /// The per-pull-request budget was exhausted before the run completed.
     #[error("budget exhausted: spent ${spent:.2} of ${limit:.2}")]
     Budget {
@@ -110,6 +123,19 @@ impl Error {
         Self::Path {
             path: path.into(),
             message: message.to_string(),
+        }
+    }
+
+    /// Build a [`Error::Timeout`] for `what` after `after` elapsed.
+    ///
+    /// Rounded up, not truncated: `as_secs()` alone would report a positive
+    /// sub-second deadline — `Duration::from_millis(500)`, say — as `0s`,
+    /// which reads as "no time at all" rather than the budget that was
+    /// actually configured.
+    pub fn timeout(what: impl Into<String>, after: std::time::Duration) -> Self {
+        Self::Timeout {
+            what: what.into(),
+            seconds: after.as_secs() + u64::from(after.subsec_nanos() != 0),
         }
     }
 

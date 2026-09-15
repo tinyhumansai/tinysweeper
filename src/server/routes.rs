@@ -37,7 +37,7 @@ use crate::server::preview::{
     StepReply as PreviewStepReply,
 };
 use crate::server::status;
-use crate::server::store::{Store, Trust};
+use crate::server::store::{LEASE_TTL, Store, Trust};
 use crate::server::webhook::{self, Action, Payload};
 
 /// How many reviews may run at once.
@@ -48,6 +48,28 @@ use crate::server::webhook::{self, Action, Payload};
 /// bill.
 const MAX_CONCURRENT_REVIEWS: usize = 4;
 
+/// How long one review may take, wall clock, from delivery to verdict.
+///
+/// Every model call is bounded on its own — the gateway client caps a unary
+/// request at ten minutes — but a review is dozens of them in sequence, across
+/// lanes, files, retries and the fallback chain, and nothing capped the sum.
+/// On 2026-09-15 `tinyhumansai/backend#1332` sat "in progress" for over two
+/// hours while holding one of the four review permits. A healthy review of a
+/// large repository finishes in single-digit minutes; this is several times
+/// that, so it only ever fires on something already broken.
+///
+/// Strictly less than [`LEASE_TTL`], and that ordering is load-bearing: the
+/// lease is what stops a redelivery from reviewing the same commit twice, and
+/// a review still running when its lease expires is exactly the duplicate the
+/// lease exists to prevent. The margin covers the metadata reads before the
+/// lease is taken and the publish after the lanes return, neither of which is
+/// under this deadline.
+const REVIEW_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+const _: () = assert!(
+    REVIEW_DEADLINE.as_secs() < LEASE_TTL.as_secs(),
+    "a review must give up before its lease does"
+);
+
 /// How many repositories may be indexed at once.
 ///
 /// Lower than the review cap and for a different reason. A review is mostly
@@ -55,6 +77,16 @@ const MAX_CONCURRENT_REVIEWS: usize = 4;
 /// thousands of embedding calls, so two of them concurrently is already the
 /// provider's rate limit and a good deal of the machine.
 const MAX_CONCURRENT_INDEXES: usize = 2;
+
+/// How long `conclude_in_flight` may spend concluding checks before giving up
+/// on the rest.
+///
+/// Compose sends `SIGKILL` ten seconds after `SIGTERM`; this leaves a margin
+/// under that for the runtime to actually unwind once `conclude_in_flight`
+/// returns. Deliberately shorter than `forge::github::REQUEST_TIMEOUT` (60s):
+/// a single stalled `update_check` must not be able to spend the whole grace
+/// period on its own and starve every other review's check behind it.
+const SHUTDOWN_CLEANUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// How many pull requests one manual, repository-wide review may queue.
 ///
@@ -107,6 +139,16 @@ struct AppState {
     /// the critical section that touches it never awaits.
     preview_locks:
         Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    /// The umbrella check of every review currently running, so a shutdown
+    /// can conclude them. A deploy replaces the container, and a review that
+    /// dies with it would otherwise leave its check "in progress" until the
+    /// next push — which `automerge` reads as a review still running. Each
+    /// slot is registered when its review starts and removed when it ends;
+    /// see `conclude_in_flight`. Also carries whether new reviews are still
+    /// accepted, so shutdown can refuse one that would otherwise register
+    /// after the concluding snapshot and be orphaned exactly like the
+    /// deploy this exists to guard against.
+    in_flight: Arc<std::sync::Mutex<InFlightRegistry>>,
 }
 
 /// Run the server until the process is stopped.
@@ -178,8 +220,10 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
         memory,
         index_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_INDEXES)),
         preview_locks: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        in_flight: Arc::new(std::sync::Mutex::new(InFlightRegistry::default())),
     };
 
+    let shutdown_state = state.clone();
     let manual_state = state.clone();
     let manual_auth = admin_auth.clone();
     let preview_state = state.clone();
@@ -280,8 +324,106 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
 
     tracing::info!(%bind, "tinysweeper is listening");
     axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown(shutdown_state))
         .await
         .map_err(|err| Error::Forge(format!("server stopped: {err}")))
+}
+
+/// Resolve when the process has been asked to stop and is ready to.
+///
+/// `SIGTERM` is what `docker compose up` sends on a redeploy, `SIGINT` what
+/// an operator's terminal sends. Either way the answer is the same: conclude
+/// the checks of the reviews still running, *then* let axum drain. That order
+/// matters. Compose gives the process ten seconds before `SIGKILL`, and axum
+/// only returns once every open connection has finished — a preview step
+/// in flight could spend the whole grace period on its own — so anything that
+/// runs after `serve` returns may never run at all.
+async fn shutdown(state: AppState) {
+    shutdown_signal().await;
+    conclude_in_flight(&state).await;
+}
+
+/// Resolve when the process is asked to stop.
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut term = match signal(SignalKind::terminate()) {
+        Ok(term) => term,
+        Err(err) => {
+            // Without a handler the runtime would take the default action
+            // and die mid-review; waiting on `ctrl_c` alone is the best that
+            // can be done, and it is worth saying that happened.
+            tracing::error!(%err, "could not install a SIGTERM handler; a redeploy will orphan running reviews");
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        }
+    };
+
+    tokio::select! {
+        _ = term.recv() => tracing::info!("received SIGTERM; shutting down"),
+        _ = tokio::signal::ctrl_c() => tracing::info!("received SIGINT; shutting down"),
+    }
+}
+
+/// Conclude the umbrella check of every review still running, and stop
+/// taking new ones.
+///
+/// Taking each slot's status out is what makes this safe against the review
+/// itself: if a lane happens to finish during the grace period, its own
+/// `close_status` finds the slot empty and does nothing, so no check is
+/// concluded twice. The reviews are not cancelled here — the process exit
+/// does that, and a lane that gets a few more seconds costs nothing.
+///
+/// Flipping `accepting` off in the same locked section as the snapshot is
+/// what closes the race with `InFlight::register`: a webhook accepted while
+/// this function is still awaiting the network calls below (axum has not
+/// started draining yet — that only happens once `shutdown` returns) would
+/// otherwise be able to register a slot after the snapshot was taken, and
+/// that review would then run unwatched, with only whatever is left of the
+/// grace period before Compose's `SIGKILL` to finish and conclude its own
+/// check. Declining it here, before it opens a check, is strictly better
+/// than that — GitHub's own redelivery or the next push starts it again once
+/// the new container is up.
+async fn conclude_in_flight(state: &AppState) {
+    let slots = {
+        let mut registry = state.in_flight.lock().expect("in-flight reviews");
+        registry.accepting = false;
+        std::mem::take(&mut registry.slots)
+    };
+    if slots.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        reviews = slots.len(),
+        "shutting down with reviews in flight; concluding their checks as failed"
+    );
+    let err = Error::lane(
+        "review",
+        "tinysweeper was restarted while this review was running",
+    );
+
+    // Concurrently, and under a deadline shorter than the grace period, not
+    // a serial loop with none. `GitHubWrite`'s client already times a single
+    // request out at `forge::github::REQUEST_TIMEOUT` (60s) — longer than
+    // Compose's whole ten seconds before `SIGKILL` on its own — so closing
+    // slots one at a time could starve every review after the first behind
+    // one stalled request, leaving their checks pending regardless of how
+    // fast they themselves would have concluded. Whatever this deadline
+    // does not reach in time stays pending until the next push, the same
+    // fallback every other best-effort write in this module already relies
+    // on.
+    let closes = slots
+        .iter()
+        .map(|slot| close_status(state, slot, Conclusion::Failed(&err)));
+    if tokio::time::timeout(SHUTDOWN_CLEANUP_DEADLINE, futures::future::join_all(closes))
+        .await
+        .is_err()
+    {
+        tracing::error!(
+            reviews = slots.len(),
+            "shutdown's grace period ran out before every in-flight check could be concluded"
+        );
+    }
 }
 
 async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
@@ -1212,6 +1354,84 @@ struct ReviewStatus {
 /// this commit and owns the check that goes with it.
 type StatusSlot = Arc<std::sync::Mutex<Option<ReviewStatus>>>;
 
+/// What one review carries from `handle_review` down to the lanes.
+///
+/// The three things every attempt shares: the mode it runs in, the check it
+/// owns, and the wall-clock deadline it must beat. Bundled so a retry cannot
+/// re-derive any of them differently from the first attempt.
+struct Run {
+    mode: Mode,
+    slot: StatusSlot,
+    /// Fixed when the review is accepted, not per attempt. See `handle_review`.
+    deadline: tokio::time::Instant,
+}
+
+/// The registry behind `AppState::in_flight`.
+///
+/// `accepting` shares a lock with `slots` on purpose. `conclude_in_flight`
+/// needs to take an exact snapshot of every review it is about to conclude
+/// and refuse every registration from then on, atomically — otherwise a
+/// review could register in the gap between the snapshot and the flag being
+/// set, land on neither side, and be exactly the orphaned check this whole
+/// registry exists to prevent. One lock covering both makes that gap not
+/// exist: a registration either lands in the snapshot or observes shutdown
+/// already in progress.
+struct InFlightRegistry {
+    slots: Vec<StatusSlot>,
+    accepting: bool,
+}
+
+impl Default for InFlightRegistry {
+    fn default() -> Self {
+        Self {
+            slots: Vec::new(),
+            accepting: true,
+        }
+    }
+}
+
+/// A review's membership in `AppState::in_flight`, for as long as it runs.
+///
+/// A guard rather than a pair of calls so that every exit from
+/// `handle_review` — including an unwind — deregisters the slot. Dropping a
+/// guard removes exactly its own slot, by pointer, so two reviews finishing
+/// in either order cannot remove each other.
+struct InFlight {
+    registry: Arc<std::sync::Mutex<InFlightRegistry>>,
+    slot: StatusSlot,
+}
+
+impl InFlight {
+    /// `None` once shutdown has taken its snapshot: the caller declines the
+    /// review outright, before opening a check, rather than register a slot
+    /// nothing will ever conclude.
+    fn register(
+        registry: &Arc<std::sync::Mutex<InFlightRegistry>>,
+        slot: &StatusSlot,
+    ) -> Option<Self> {
+        let mut guard = registry.lock().expect("in-flight reviews");
+        if !guard.accepting {
+            return None;
+        }
+        guard.slots.push(slot.clone());
+        drop(guard);
+        Some(Self {
+            registry: registry.clone(),
+            slot: slot.clone(),
+        })
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.registry
+            .lock()
+            .expect("in-flight reviews")
+            .slots
+            .retain(|other| !Arc::ptr_eq(other, &self.slot));
+    }
+}
+
 /// Publish the in-progress check, and record how to conclude it.
 ///
 /// Best-effort in both directions: a failure to publish is logged and the
@@ -1226,7 +1446,7 @@ type StatusSlot = Arc<std::sync::Mutex<Option<ReviewStatus>>>;
 /// property that rule protects is that *the model* never holds a write handle,
 /// and that is preserved exactly: the token is minted here, used for one
 /// request, and dropped before this function returns — it is never placed in
-/// `AppState`, never passed to `run_and_publish`, and no lane or model can
+/// `AppState`, never passed to `run_lanes`, and no lane or model can
 /// reach it. `report_failure` has always minted one on the same terms. See the
 /// pull request that introduced this for the discussion the boundary requires.
 async fn open_status(
@@ -1259,6 +1479,28 @@ async fn open_status(
                 head_sha: head_sha.to_string(),
                 installation,
             });
+
+            // `conclude_in_flight`'s snapshot only concludes slots it can see
+            // at the instant it runs. This publish call was in flight for the
+            // whole time it was awaiting `installation_token`/`publish_check`
+            // above, so shutdown could have taken its snapshot — and flipped
+            // `accepting` off — before the slot held anything to conclude,
+            // leaving a fresh "in progress" check that nothing would ever
+            // revisit. Re-checking `accepting` right here, under the same
+            // registry lock `conclude_in_flight` uses, closes that gap
+            // exactly: either this observes `accepting` still true, in which
+            // case the slot is already registered and the shutdown pass that
+            // has not run yet will pick it up normally, or shutdown has
+            // already run and this concludes the check itself, immediately,
+            // rather than leave it orphaned.
+            let missed_the_snapshot = !state.in_flight.lock().expect("in-flight reviews").accepting;
+            if missed_the_snapshot {
+                let err = Error::lane(
+                    "review",
+                    "tinysweeper was restarted while this review was running",
+                );
+                close_status(state, slot, Conclusion::Failed(&err)).await;
+            }
         }
         Err(err) => {
             tracing::warn!(%err, %repo, "could not publish the in-progress check");
@@ -1334,10 +1576,38 @@ async fn handle_review(
     delivery: Option<String>,
 ) {
     let slot: StatusSlot = Arc::new(std::sync::Mutex::new(None));
+    let Some(_registered) = InFlight::register(&state.in_flight, &slot) else {
+        // Shutdown has already taken its concluding snapshot: no check has
+        // been opened yet, so there is nothing to conclude. Declining here,
+        // before `review_inner` does any work, is what keeps this review off
+        // the leftover-grace-period path — see `conclude_in_flight`.
+        tracing::info!(%repo, number, "declining to start a review: shutting down");
+        // The claim still has to be released on this path like every other:
+        // `dispatch` already persisted it before calling in here, and leaving
+        // it held would make `claim_delivery` refuse GitHub's own redelivery
+        // of the same webhook forever, with no other trigger left to review
+        // this commit until the next push.
+        if let Some(delivery) = delivery
+            && let Err(release) = state.store.release_delivery(&delivery).await
+        {
+            tracing::error!(%release, %delivery, "could not release the declined delivery claim");
+        }
+        return;
+    };
+
+    // One deadline for the whole review, retries included. A per-attempt
+    // deadline would let three transient failures late in the run stretch a
+    // single pull request to three times the budget, all under one check that
+    // has said "reviewing" the entire time.
+    let run = Run {
+        mode,
+        slot: slot.clone(),
+        deadline: tokio::time::Instant::now() + REVIEW_DEADLINE,
+    };
 
     let mut attempt = 1;
     let err = loop {
-        match review_inner(&state, &repo, number, &author, installation, mode, &slot).await {
+        match review_inner(&state, &repo, number, &author, installation, &run).await {
             Ok(findings) => {
                 // Usually there is nothing to close: a run that declines — a
                 // blocked contributor, a draft, a lease another worker holds —
@@ -1445,8 +1715,7 @@ async fn review_inner(
     number: u64,
     author: &str,
     installation: u64,
-    mode: Mode,
-    slot: &StatusSlot,
+    run: &Run,
 ) -> Result<Option<usize>> {
     let who = state.store.contributor(author).await?;
     if who.trust == Trust::Blocked {
@@ -1511,7 +1780,7 @@ async fn review_inner(
     // A manual review deliberately takes a lease of its own: the operator asked
     // for this run *because* the ordinary one already happened, so sharing the
     // webhook path's key would make the button a silent no-op.
-    let lease = match mode {
+    let lease = match run.mode {
         Mode::Incremental => format!("{repo}#{number}@{}", pull_request.head_sha),
         Mode::Full => format!("{repo}#{number}@{}!full", pull_request.head_sha),
     };
@@ -1529,102 +1798,148 @@ async fn review_inner(
     // Still early: everything above is metadata reads, and every model call is
     // below. A contributor sees the check appear seconds after pushing, not
     // minutes.
-    open_status(state, slot, &repo_id, &pull_request.head_sha, installation).await;
-
-    // `AssertUnwindSafe` + `catch_unwind` so a panic inside a lane still
-    // reaches the release below. Without it the `?` on the outcome is not the
-    // only way out — an unwind skips everything — and the lease survives the
-    // worker that took it.
-    // The reviewed repository's own policy, read through the forge because
-    // there is no checkout here. Without this every repository is reviewed
-    // under the *deployment's* `.tinysweeper.toml`, which is tinysweeper's own.
-    // Read at the base branch's tip rather than the head: a config is acted on
-    // deterministically, so reading it from the branch under review would let a
-    // pull request grade its own exam. See `crate::config::remote`.
-    let overlay = crate::config::remote::overlay(
-        &forge,
-        &repo_id,
-        &pull_request.base_sha,
-        &state.config.config,
-    )
-    .await;
-    if let Some(source) = &overlay.source {
-        tracing::info!(%repo, source, "reviewing under the repository's own configuration");
-    }
-
-    // Memory is fed from the *base* tip, not the head: what the repository
-    // has committed to, not what this pull request proposes. See
-    // `server::memory`. Spawned only now, under `overlay.config` rather than
-    // the deployment's own, so a repository's own `paths.ignore` — which is
-    // repository-overridable — is honored before anything from an excluded
-    // path is persisted into the engine.
     //
-    // Skipped entirely when the overlay could not be read or applied:
-    // `overlay.config` is then only a fallback, not the repository's actual
-    // policy, and ingesting under it risks persisting paths the repository
-    // excludes. A later delivery for the same base tip that successfully
-    // loads the real overlay still ingests normally — this delivery just
-    // does not, rather than ingesting under a policy that might be wrong.
-    //
-    // And only from the default branch. Memory is repository-wide, so a
-    // pull request against a release branch must not replace `main`'s
-    // snapshot, and an older base must not roll the memory backwards; the
-    // ingest forgets a section before rewriting it, so either would.
-    if overlay.unavailable {
-        tracing::warn!(
-            %repo,
-            "skipping memory ingestion: the repository's own configuration could not be read"
-        );
-    } else if let Some(backend) = &state.memory {
-        let default_branch = {
-            use crate::ports::forge::ForgeRead;
-            forge.default_branch(&repo_id).await
-        };
-        match default_branch {
-            Ok(branch) if branch == pull_request.base_ref => {
-                tokio::spawn(ingest_in_background(
-                    backend.clone(),
-                    Arc::new(overlay.config.clone()),
-                    state.index_permits.clone(),
-                    repo_id.clone(),
-                    pull_request.base_sha.clone(),
-                    read_token.clone(),
-                ));
-            }
-            Ok(branch) => tracing::debug!(
-                %repo,
-                base = %pull_request.base_ref,
-                default = %branch,
-                "skipping memory ingestion: the base is not the default branch"
-            ),
-            Err(err) => tracing::warn!(
-                %repo,
-                %err,
-                "skipping memory ingestion: could not read the default branch"
-            ),
+    // Deliberately *not* under `run.deadline`, and neither is anything else
+    // between here and `run_lanes`. The deadline is a cancellation, and
+    // cancelling a check-run POST after GitHub accepted it orphans the check
+    // this function exists to conclude. The forge calls here are bounded on
+    // their own by `forge::github::REQUEST_TIMEOUT`, which is what the margin
+    // between `REVIEW_DEADLINE` and `LEASE_TTL` is for.
+    let outcome = {
+        open_status(
+            state,
+            &run.slot,
+            &repo_id,
+            &pull_request.head_sha,
+            installation,
+        )
+        .await;
+
+        // `AssertUnwindSafe` + `catch_unwind` so a panic inside a lane still
+        // reaches the release below. Without it the `?` on the outcome is not
+        // the only way out — an unwind skips everything — and the lease
+        // survives the worker that took it.
+        // The reviewed repository's own policy, read through the forge
+        // because there is no checkout here. Without this every repository is
+        // reviewed under the *deployment's* `.tinysweeper.toml`, which is
+        // tinysweeper's own. Read at the base branch's tip rather than the
+        // head: a config is acted on deterministically, so reading it from
+        // the branch under review would let a pull request grade its own
+        // exam. See `crate::config::remote`.
+        let overlay = crate::config::remote::overlay(
+            &forge,
+            &repo_id,
+            &pull_request.base_sha,
+            &state.config.config,
+        )
+        .await;
+        if let Some(source) = &overlay.source {
+            tracing::info!(%repo, source, "reviewing under the repository's own configuration");
         }
-    }
 
-    let outcome = std::panic::AssertUnwindSafe(run_and_publish(
-        state,
-        &overlay.config,
-        &repo_id,
-        number,
-        installation,
-        &forge,
-        &read_token,
-        mode,
-    ))
-    .catch_unwind()
-    .await
-    .unwrap_or_else(|_| Err(Error::lane("review", "the review panicked")));
+        // Memory is fed from the *base* tip, not the head: what the
+        // repository has committed to, not what this pull request proposes.
+        // See `server::memory`. Spawned only now, under `overlay.config`
+        // rather than the deployment's own, so a repository's own
+        // `paths.ignore` — which is repository-overridable — is honored
+        // before anything from an excluded path is persisted into the
+        // engine.
+        //
+        // Skipped entirely when the overlay could not be read or applied:
+        // `overlay.config` is then only a fallback, not the repository's
+        // actual policy, and ingesting under it risks persisting paths the
+        // repository excludes. A later delivery for the same base tip that
+        // successfully loads the real overlay still ingests normally — this
+        // delivery just does not, rather than ingesting under a policy that
+        // might be wrong.
+        //
+        // And only from the default branch. Memory is repository-wide, so a
+        // pull request against a release branch must not replace `main`'s
+        // snapshot, and an older base must not roll the memory backwards; the
+        // ingest forgets a section before rewriting it, so either would.
+        if overlay.unavailable {
+            tracing::warn!(
+                %repo,
+                "skipping memory ingestion: the repository's own configuration could not be read"
+            );
+        } else if let Some(backend) = &state.memory {
+            let default_branch = {
+                use crate::ports::forge::ForgeRead;
+                forge.default_branch(&repo_id).await
+            };
+            match default_branch {
+                Ok(branch) if branch == pull_request.base_ref => {
+                    tokio::spawn(ingest_in_background(
+                        backend.clone(),
+                        Arc::new(overlay.config.clone()),
+                        state.index_permits.clone(),
+                        repo_id.clone(),
+                        pull_request.base_sha.clone(),
+                        read_token.clone(),
+                    ));
+                }
+                Ok(branch) => tracing::debug!(
+                    %repo,
+                    base = %pull_request.base_ref,
+                    default = %branch,
+                    "skipping memory ingestion: the base is not the default branch"
+                ),
+                Err(err) => tracing::warn!(
+                    %repo,
+                    %err,
+                    "skipping memory ingestion: could not read the default branch"
+                ),
+            }
+        }
 
-    // Released regardless of how the review went. The TTL in the store is the
-    // backstop for the cases this cannot cover — a kill, or a lost machine.
-    if let Err(err) = state.store.release_lease(&lease).await {
-        tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
-    }
-    drop(permit);
+        // `AssertUnwindSafe` + `catch_unwind` so a panic inside a lane still
+        // reaches the release below. Without it the `?` on the outcome is not
+        // the only way out — an unwind skips everything — and the lease
+        // survives the worker that took it.
+        let lanes = std::panic::AssertUnwindSafe(run_lanes(
+            state,
+            &overlay.config,
+            &repo_id,
+            number,
+            &forge,
+            &read_token,
+            run,
+        ))
+        .catch_unwind()
+        .await
+        .unwrap_or_else(|_| Err(Error::lane("review", "the review panicked")));
+
+        // The publish is outside the deadline on purpose. `apply` is several
+        // sequential, non-idempotent writes — lane checks, the review body,
+        // comments — and cancelling it between two of them cannot retract
+        // what GitHub already accepted: the result would be a permanently
+        // partial review, not a clean timeout. The lanes have returned, so
+        // there is no model call left to bound; each write here is capped by
+        // the forge client's own request timeout. The write token is minted
+        // only now, after every model call has returned — the boundary in
+        // `AGENTS.md`.
+        let outcome = match lanes {
+            Ok((config, proposal)) => {
+                let publish = async {
+                    let write_token = state.auth.installation_token(installation).await?;
+                    let write = crate::forge::github::GitHubWrite::new(&write_token)?;
+                    crate::app::apply(&forge, &write, &config, &proposal, Some(&state.store)).await
+                };
+                publish.await.map(|()| proposal)
+            }
+            Err(err) => Err(err),
+        };
+
+        // Released regardless of how the review went. The TTL in the store is
+        // the backstop for the cases this cannot cover — a kill, or a lost
+        // machine.
+        if let Err(err) = state.store.release_lease(&lease).await {
+            tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
+        }
+        drop(permit);
+
+        outcome
+    };
 
     let proposal = outcome?;
     let findings = proposal.findings().count();
@@ -1653,30 +1968,35 @@ async fn review_inner(
     Ok(Some(findings))
 }
 
-/// Run the review and publish it.
+/// Run the checkout and the lanes under the deadline, and hand back what they
+/// produced for `review_inner` to publish uncancelled.
 ///
 /// `config` is the *effective* config for this repository — the deployment's,
 /// with the reviewed repository's own allow-listed keys laid over it. The model
 /// gateway and the index are still built from the deployment's config, because
 /// model choice, credentials and the index partition key are not things a
-/// reviewed repository may set.
-#[allow(clippy::too_many_arguments)]
-async fn run_and_publish(
+/// reviewed repository may set. The config handed back is that one with the
+/// run's mode layered on, so the publish applies the same policy the lanes
+/// ran under.
+///
+/// Holds no write credential: nothing in here runs after a model call has
+/// returned, so nothing in here may mint one.
+async fn run_lanes(
     state: &AppState,
     config: &Config,
     repo: &RepoId,
     number: u64,
-    installation: u64,
     forge: &crate::forge::github::GitHubRead,
     read_token: &str,
-    mode: Mode,
-) -> Result<crate::app::Proposal> {
+    run: &Run,
+) -> Result<(Config, crate::app::Proposal)> {
     let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
         &state.config.config.models,
     )?);
 
-    // The model runs against a read-only handle. The write token is minted
-    // below, after this returns — same boundary as the workflow, same reason.
+    // The model runs against a read-only handle. The write token is minted by
+    // the caller, after this returns — same boundary as the workflow, same
+    // reason.
     // The store doubles as the review-state cache: it is what lets the next
     // push replay this run's evidence verbatim and pay cache prices for it.
     // Dedupe does not depend on it — that reads the markers off the pull
@@ -1697,76 +2017,85 @@ async fn run_and_publish(
     // same policy with no memory, not the deployment's policy instead.
     let recaller = state.memory.as_ref().map(|backend| backend.recaller());
 
-    let config = config_for(config, mode);
+    let config = config_for(config, run.mode);
 
-    // The tree the reviewers may look things up in. A shallow checkout of
-    // the head when `[lookup].checkout` allows it — one commit, no history,
-    // no hooks, the same fetch the indexer makes — so search works and a
-    // read costs no API call; the forge reader behind it for what a shallow
-    // checkout lacks, such as a submodule that was not fetched. Read-only
-    // either way: the token here is the review-read one the forge already
-    // holds, and the checkout is deleted with the review.
-    let checkout = if config.lookup.enabled && config.lookup.checkout {
-        let head = forge.pull_request(repo, number).await?.head_sha;
-        match crate::indexer::fetch::Checkout::fetch(
-            &super::indexing::git_host(),
-            &repo.to_string(),
-            &head,
-            read_token,
+    // The deadline bounds the checkout and the lanes — everything that can
+    // take minutes and nothing that must not be cut short. `timeout_at` drops
+    // the inner future when it elapses, which cancels every model call in
+    // flight. The checkout sits inside it so that a deadline already in the
+    // past — a retry after a slow failure — resolves at once, before a clone
+    // is even started, which is the intended way of refusing the retry.
+    let review = async {
+        // The tree the reviewers may look things up in. A shallow checkout of
+        // the head when `[lookup].checkout` allows it — one commit, no history,
+        // no hooks, the same fetch the indexer makes — so search works and a
+        // read costs no API call; the forge reader behind it for what a shallow
+        // checkout lacks, such as a submodule that was not fetched. Read-only
+        // either way: the token here is the review-read one the forge already
+        // holds, and the checkout is deleted with the review.
+        let checkout = if config.lookup.enabled && config.lookup.checkout {
+            let head = forge.pull_request(repo, number).await?.head_sha;
+            match crate::indexer::fetch::Checkout::fetch(
+                &super::indexing::git_host(),
+                &repo.to_string(),
+                &head,
+                read_token,
+            )
+            .await
+            {
+                Ok(checkout) => {
+                    if !config.retrieval.submodules.is_empty()
+                        && let Err(err) = checkout
+                            .fetch_submodules(
+                                &super::indexing::git_host(),
+                                read_token,
+                                &config.retrieval.submodules,
+                            )
+                            .await
+                    {
+                        tracing::warn!(%repo, %err, "submodules not fetched for the review's tree");
+                    }
+                    Some(checkout)
+                }
+                Err(err) => {
+                    tracing::warn!(%repo, %err, "no checkout for the review; lookups read through the forge");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        // The review chains the forge reader behind whatever it is given, so a
+        // path the shallow checkout lacks — a submodule that was not fetched —
+        // is still read through the API.
+        let dir_tree = checkout
+            .as_ref()
+            .map(|c| crate::ports::tree::DirTree::new(c.path()).at_revision(c.revision()));
+        let tree = dir_tree
+            .as_ref()
+            .map(|dir| dir as &dyn crate::ports::tree::TreeReader);
+
+        crate::app::review::review_with_tree(
+            forge,
+            model,
+            &config,
+            repo,
+            number,
+            Some(&state.store),
+            state.knowledge.as_deref(),
+            retriever.as_ref(),
+            recaller.as_ref(),
+            tree,
         )
         .await
-        {
-            Ok(checkout) => {
-                if !config.retrieval.submodules.is_empty()
-                    && let Err(err) = checkout
-                        .fetch_submodules(
-                            &super::indexing::git_host(),
-                            read_token,
-                            &config.retrieval.submodules,
-                        )
-                        .await
-                {
-                    tracing::warn!(%repo, %err, "submodules not fetched for the review's tree");
-                }
-                Some(checkout)
-            }
-            Err(err) => {
-                tracing::warn!(%repo, %err, "no checkout for the review; lookups read through the forge");
-                None
-            }
-        }
-    } else {
-        None
     };
-    // The review chains the forge reader behind whatever it is given, so a
-    // path the shallow checkout lacks — a submodule that was not fetched —
-    // is still read through the API.
-    let dir_tree = checkout
-        .as_ref()
-        .map(|c| crate::ports::tree::DirTree::new(c.path()).at_revision(c.revision()));
-    let tree = dir_tree
-        .as_ref()
-        .map(|dir| dir as &dyn crate::ports::tree::TreeReader);
+    let proposal = tokio::time::timeout_at(run.deadline, review)
+        .await
+        .map_err(|_elapsed| {
+            Error::timeout(format!("the review of {repo}#{number}"), REVIEW_DEADLINE)
+        })??;
 
-    let proposal = crate::app::review::review_with_tree(
-        forge,
-        model,
-        &config,
-        repo,
-        number,
-        Some(&state.store),
-        state.knowledge.as_deref(),
-        retriever.as_ref(),
-        recaller.as_ref(),
-        tree,
-    )
-    .await?;
-
-    let write_token = state.auth.installation_token(installation).await?;
-    let write = crate::forge::github::GitHubWrite::new(&write_token)?;
-    crate::app::apply(forge, &write, &config, &proposal, Some(&state.store)).await?;
-
-    Ok(proposal)
+    Ok((config.into_owned(), proposal))
 }
 
 /// The UI preview routes' way into the brain.
@@ -2154,6 +2483,67 @@ mod tests {
             permits.try_acquire_owned().is_ok(),
             "a freed slot is reusable"
         );
+    }
+
+    #[tokio::test]
+    async fn a_review_past_its_deadline_fails_as_a_timeout_and_is_not_retried() {
+        // The shape `run_lanes` relies on: a deadline already in the
+        // past resolves immediately, so a retry that arrives after the budget
+        // is spent is refused instead of starting another twenty minutes.
+        let now = tokio::time::Instant::now();
+        let deadline = now
+            .checked_sub(std::time::Duration::from_secs(1))
+            .unwrap_or(now);
+
+        let outcome = tokio::time::timeout_at(deadline, std::future::pending::<()>())
+            .await
+            .map_err(|_| Error::timeout("the review of o/r#1", REVIEW_DEADLINE));
+        let err = outcome.expect_err("a spent deadline must not wait");
+        assert!(
+            matches!(err, Error::Timeout { seconds, .. } if seconds == REVIEW_DEADLINE.as_secs())
+        );
+        assert!(
+            !failure::is_transient(&err),
+            "retrying a timed-out review would spend the whole budget again"
+        );
+    }
+
+    #[test]
+    fn an_in_flight_review_is_listed_until_it_ends_and_only_removes_itself() {
+        let registry = Arc::new(std::sync::Mutex::new(InFlightRegistry::default()));
+        let first: StatusSlot = Arc::new(std::sync::Mutex::new(None));
+        let second: StatusSlot = Arc::new(std::sync::Mutex::new(None));
+
+        let a = InFlight::register(&registry, &first).expect("accepting");
+        let b = InFlight::register(&registry, &second).expect("accepting");
+        assert_eq!(registry.lock().unwrap().slots.len(), 2);
+
+        // Finishing in the other order from registration must remove exactly
+        // the finished review, by identity, not whichever came first.
+        drop(a);
+        let left = registry.lock().unwrap();
+        assert_eq!(left.slots.len(), 1);
+        assert!(Arc::ptr_eq(&left.slots[0], &second));
+        drop(left);
+
+        drop(b);
+        assert!(registry.lock().unwrap().slots.is_empty());
+    }
+
+    #[test]
+    fn a_review_declines_to_register_once_shutdown_has_taken_its_snapshot() {
+        // The race this closes: a webhook accepted while `conclude_in_flight`
+        // is still awaiting its network calls must not be able to land a slot
+        // after the snapshot — it would then run unwatched by any shutdown
+        // pass. Flipping `accepting` and taking the snapshot under the same
+        // lock is what makes that impossible; this asserts the caller's half
+        // of that contract.
+        let registry = Arc::new(std::sync::Mutex::new(InFlightRegistry::default()));
+        registry.lock().unwrap().accepting = false;
+
+        let slot: StatusSlot = Arc::new(std::sync::Mutex::new(None));
+        assert!(InFlight::register(&registry, &slot).is_none());
+        assert!(registry.lock().unwrap().slots.is_empty());
     }
 
     #[test]

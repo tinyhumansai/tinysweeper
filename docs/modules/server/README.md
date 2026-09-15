@@ -23,12 +23,12 @@ because the enforcement was never really in the workflow:
   traits in `src/ports/forge.rs`. Lanes are handed a `ForgeRead`; only
   `src/apply` takes a `ForgeWrite`. A lane cannot mutate a pull request even by
   mistake, because it never holds a handle that could.
-- **The ordering carries the rest.** In `routes.rs::run_and_publish`, the
+- **The ordering carries the rest.** In `routes.rs::review_inner`, the
   read-only handle is built from an installation token minted before the lanes
-  run, `crate::app::review(...)` runs against it, and only after that call has
-  returned is a second token minted and wrapped in a `GitHubWrite` for
-  `crate::app::apply(...)`. The write handle does not exist while a model call
-  is in flight.
+  run, `run_lanes` runs `crate::app::review(...)` against it under the
+  deadline, and only after that has returned is a second token minted and
+  wrapped in a `GitHubWrite` for `crate::app::apply(...)`. The write handle
+  does not exist while a model call is in flight.
 
 ## Indexing does not block the review
 
@@ -61,6 +61,25 @@ A review is wrapped in `catch_unwind`, so a panic inside a lane still reaches
 the lease release below it. Leases also carry a TTL in Mongo, which is the only
 thing that covers a killed process — a stranded lease would otherwise mean that
 pull request can never be reviewed again.
+
+`REVIEW_DEADLINE` bounds one review's wall clock, retries included. Each model
+call is capped on its own by the gateway client, but a review is dozens of
+them in sequence and nothing capped the sum: on 2026-09-15 one sat "in
+progress" for over two hours holding a permit. The deadline wraps the lookup
+checkout and the model phase — not the publish after them, which must not be
+cut off between one comment and the next — and is asserted at compile time to
+be shorter than `LEASE_TTL`,
+because a review still running when its lease lapses is exactly the duplicate
+the lease prevents. A review that misses it concludes its check as
+`ActionRequired` with "ran out of time", and is not retried: the deadline is
+the budget, and a retry would spend it again.
+
+The margin between `REVIEW_DEADLINE` and `LEASE_TTL` is spent on the phases
+the deadline itself does not cover: the metadata reads before it and the
+publish after it. Those still need their own bound, because a hung socket
+does not know about either duration — `forge::github`'s client sets a
+connect and read timeout on every call for exactly this, so no single request
+in that margin can spend all of it.
 
 ### A running review is never silent either
 
@@ -97,13 +116,27 @@ Two consequences are load-bearing:
 - **The check is updated, never re-posted.** A second POST of the same name
   creates a second run and leaves the first pending forever, so `publish_check`
   returns the id and `update_check` takes it.
+- **A redeploy concludes what it interrupts.** `docker compose up` sends
+  `SIGTERM` and the reviews in flight will not finish inside its grace
+  period. `AppState::in_flight` lists every open slot, and the shutdown path
+  concludes each as `ActionRequired` ("restarted while this review was
+  running") *before* axum starts draining connections — after it, there may
+  be no time left. Taking the status out of the slot is what keeps this safe
+  against a lane that finishes in the same second: its own `close_status`
+  finds the slot empty and does nothing. `AppState::in_flight` also stops
+  accepting new registrations in the same locked step as the snapshot, so a
+  webhook accepted while the snapshot's network calls are still in flight —
+  axum has not started draining yet, only `shutdown` returning triggers that —
+  cannot land a slot after the snapshot and run unwatched by any shutdown
+  pass; `handle_review` declines that review outright, before it opens a
+  check, and leaves it for the next push or redelivery.
 
 On the write token: opening this check mints an installation token before the
 lanes run, which the security boundary otherwise reserves for after every model
 call. The property that rule protects — *the model never holds a write handle*
 — is preserved exactly. The token is minted in `open_status`, used for one
 request, and dropped before the function returns; it never enters `AppState`,
-never reaches `run_and_publish`, and no lane or model can reach it.
+never reaches `run_lanes`, and no lane or model can reach it.
 `report_failure` has always minted one on the same terms.
 
 ### A failed review is never silent
