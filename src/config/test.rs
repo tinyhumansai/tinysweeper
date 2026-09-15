@@ -81,6 +81,28 @@ fn reasoning_with_too_small_a_budget_is_rejected() {
 }
 
 #[test]
+fn a_route_ceiling_below_the_floor_is_rejected_like_the_global_one() {
+    // A route's `max_tokens` replaces the validated global for its model, so
+    // an undersized override recreates the empty-answer failure on one rung.
+    let config = parse(
+        "version = 1\n[models]\nmax_tokens = 16000\nreasoning_effort = \"high\"\n\
+         [[models.routes]]\nmodel = \"deep\"\nmax_tokens = 4000\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(
+        joined.contains("models.routes[deep].max_tokens = 4000"),
+        "{joined}"
+    );
+
+    // Zero is "no ceiling", not a small one.
+    let config = parse(
+        "version = 1\n[models]\nmax_tokens = 16000\nreasoning_effort = \"high\"\n\
+         [[models.routes]]\nmodel = \"deep\"\nmax_tokens = 0\n",
+    );
+    assert!(validate::validate(&config).is_empty());
+}
+
+#[test]
 fn lowering_the_effort_does_not_satisfy_the_budget_floor() {
     // Measured at both settings: the table in `config/defaults.toml` lists
     // `low` rows for each configured model and they burn the entire allowance
