@@ -182,9 +182,14 @@ one database.
 Two implementations of the `Embedder` port, chosen by `embeddings.provider`
 through `index::embedder_from_config`.
 
-`openrouter` (the default) is a direct HTTP client in `index/openrouter.rs`.
-Everything else goes through `index/provider.rs`, which wraps tinyagents'
-`EmbeddingModel` and its Voyage / OpenAI / Cohere / Ollama adapters.
+`openrouter` (the default) and `ladder` are one direct HTTP client in
+`index/openrouter.rs` — both gateways speak the OpenAI embeddings shape and
+report what they billed in the body. `ladder` is the box's own LLM ladder
+(`llm-ladder-router`), whose `vectors` ladder is a set of same-width rungs it
+fails over between; it has no default address, so `embeddings.base_url` must
+name its `/v1/embeddings` and validation refuses a blank one. Everything else
+goes through `index/provider.rs`, which wraps tinyagents' `EmbeddingModel` and
+its Voyage / OpenAI / Cohere / Ollama adapters.
 
 The split exists for one reason: tinyagents' `EmbeddingModel::embed` returns a
 bare `Vec<Vec<f32>>`, and every adapter behind it decodes the response and

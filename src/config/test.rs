@@ -140,6 +140,23 @@ fn a_model_routed_twice_is_rejected() {
 }
 
 #[test]
+fn the_ladder_embedding_provider_needs_an_address() {
+    let config = parse(
+        "version = 1\n[embeddings]\nenabled = true\nprovider = \"ladder\"\nmodel = \"vectors\"\n\
+         dimensions = 1024\napi_key_env = \"LADDER_API_KEY\"\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("needs `embeddings.base_url`"), "{joined}");
+
+    let config = parse(
+        "version = 1\n[embeddings]\nenabled = true\nprovider = \"ladder\"\nmodel = \"vectors\"\n\
+         dimensions = 1024\napi_key_env = \"LADDER_API_KEY\"\n\
+         base_url = \"http://host.docker.internal:6969/v1/embeddings\"\n",
+    );
+    assert!(validate::validate(&config).is_empty());
+}
+
+#[test]
 fn lowering_the_effort_does_not_satisfy_the_budget_floor() {
     // Measured at both settings: the table in `config/defaults.toml` lists
     // `low` rows for each configured model and they burn the entire allowance

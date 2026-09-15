@@ -70,7 +70,8 @@ impl OpenRouterEmbedder {
             .ok_or_else(|| {
                 Error::config(format!(
                     "{api_key_env} is not set; it holds the API key for the \
-                     `openrouter` embedding provider"
+                     `{}` embedding provider",
+                    signature.provider
                 ))
             })?;
         Self::with_key(signature, api_key, base_url)
@@ -118,7 +119,9 @@ impl OpenRouterEmbedder {
             .json(&body)
             .send()
             .await
-            .map_err(|err| Error::Model(format!("openrouter embeddings: {err}")))?;
+            .map_err(|err| {
+                Error::Model(format!("{} embeddings: {err}", self.signature.provider))
+            })?;
 
         let status = response.status();
         let text = response

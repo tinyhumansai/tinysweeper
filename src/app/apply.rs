@@ -125,10 +125,17 @@ pub async fn apply(
         && previous == Some(ReviewEvent::Approve)
         && comments.is_empty();
 
+    // A review the model never answered is submitted too, as a comment: the
+    // lane checks say "did not review", but a reader of the conversation sees
+    // only that the bot said nothing, which on a clean-looking pull request
+    // reads as an all-clear. A file the *forge* withheld is not in this list
+    // — that is a property of the pull request, it recurs on every push, and
+    // the check runs already carry it.
     if !redundant_approval
         && (!comments.is_empty()
             || event == ReviewEvent::Approve
-            || event == ReviewEvent::RequestChanges)
+            || event == ReviewEvent::RequestChanges
+            || !proposal.answered())
     {
         write
             .create_review(
@@ -284,7 +291,14 @@ fn review_event(
     // Deliberately not gated on `draft`. Refusing to *endorse* a draft is not
     // the same as refusing to *unblock* one, and conflating them would strand
     // every draft that was ever blocked.
-    if previous == Some(ReviewEvent::RequestChanges) {
+    //
+    // Gated on the model having answered, though. "Clean now" is only a
+    // finding when somebody looked: a push during a provider outage comes
+    // back with every lane unanswered and nothing blocking, and clearing the
+    // block on that would let an outage approve what a review had objected
+    // to. Files the forge withheld are not the same case — the lanes did
+    // review what they were shown, and the objection was on those files.
+    if previous == Some(ReviewEvent::RequestChanges) && proposal.answered() {
         return ReviewEvent::Approve;
     }
 
@@ -427,6 +441,27 @@ fn review_body(
                 .to_string()
         }
         ReviewEvent::Approve => "tinysweeper found nothing blocking. Approving.".to_string(),
+        // Not approving a clean-looking review is a decision, and the reader
+        // deserves the reason: silence here reads as an all-clear.
+        ReviewEvent::Comment if blocking == 0 && !proposal.complete() => {
+            let unanswered = proposal.unanswered();
+            let shown: Vec<&str> = unanswered.iter().copied().take(8).collect();
+            let more = unanswered.len().saturating_sub(shown.len());
+            format!(
+                "tinysweeper found nothing blocking, but could not review everything, so this \
+                 is not an approval: {}{}.",
+                shown
+                    .iter()
+                    .map(|name| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                if more > 0 {
+                    format!(" and {more} more")
+                } else {
+                    String::new()
+                }
+            )
+        }
         ReviewEvent::Comment if blocking == 0 => "tinysweeper found nothing blocking.".to_string(),
         ReviewEvent::Comment => format!("tinysweeper: {blocking} lane(s) blocking."),
     };
@@ -598,6 +633,7 @@ mod tests {
                 highest_severity,
                 usage: Default::default(),
                 models: vec![],
+                unanswered: vec![],
             }],
             cost_usd: 0.01,
             input_tokens: 10_000,
@@ -1151,6 +1187,63 @@ mod tests {
                 "nothing blocks, but nothing is vouched for either: {body}"
             ),
         }
+    }
+
+    #[tokio::test]
+    async fn a_review_nobody_answered_is_not_approved() {
+        // The production case, 2026-09-15: every model call 403'd on an
+        // exhausted gateway budget, every lane came back Neutral with "could
+        // not be reviewed", nothing blocked — and the bot posted "found
+        // nothing blocking. Approving. $0.0000 · 0 in / 0 out". Neutral does
+        // not block, so the only thing standing between that and an approval
+        // is the lane saying what it never got an answer on.
+        let mut unanswered = proposal("abc123", vec![]);
+        for lane in &mut unanswered.lanes {
+            lane.conclusion = CheckConclusion::Neutral;
+            lane.summary = "Reviewed 0 files; 0 findings. 1 file could not be reviewed.".into();
+            lane.unanswered = vec!["src/lib.rs".into()];
+        }
+        assert!(!unanswered.blocked());
+        assert!(!unanswered.complete());
+
+        let forge = forge("abc123");
+        apply(&forge, &forge, &config(), &unanswered, None)
+            .await
+            .expect("applies");
+
+        let (body, event) = review_of(&forge).expect("a verdict is posted");
+        assert_ne!(event, ReviewEvent::Approve, "{body}");
+        assert_ne!(event, ReviewEvent::RequestChanges, "{body}");
+        assert!(
+            body.contains("not an approval") && body.contains("`src/lib.rs`"),
+            "the reader is told why: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_review_nobody_answered_does_not_clear_an_earlier_block() {
+        // The other direction of the same outage: the last review requested
+        // changes, the next push finds every model call failing. "Clean now"
+        // is not a finding when nobody looked, so the block stands — and the
+        // comment says why rather than leaving the author to guess.
+        let mut unanswered = proposal("abc123", vec![]);
+        for lane in &mut unanswered.lanes {
+            lane.conclusion = CheckConclusion::Neutral;
+            lane.unanswered = vec!["src/lib.rs".into()];
+        }
+
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::RequestChanges);
+        apply(&forge, &forge, &config(), &unanswered, None)
+            .await
+            .expect("applies");
+
+        let (body, event) = review_of(&forge).expect("a verdict is posted");
+        assert_ne!(
+            event,
+            ReviewEvent::Approve,
+            "an outage must not clear a block: {body}"
+        );
+        assert!(body.contains("not an approval"), "{body}");
     }
 
     #[tokio::test]

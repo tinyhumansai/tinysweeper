@@ -166,6 +166,59 @@ fn a_missing_key_is_a_configuration_error_naming_the_variable() {
     );
 }
 
+#[test]
+fn the_ladder_is_built_through_the_same_client_at_the_address_it_was_given() {
+    // A ladder-shaped signature: the model is a ladder name, and the width is
+    // the one every rung in it returns.
+    let ladder = EmbedSignature {
+        provider: "ladder".into(),
+        model: "vectors".into(),
+        dims: 1024,
+    };
+    let embedder = OpenRouterEmbedder::with_key(
+        ladder.clone(),
+        "unused".to_string(),
+        "http://host.docker.internal:6969/v1/embeddings",
+    )
+    .expect("builds");
+    assert_eq!(embedder.signature(), ladder);
+    assert_eq!(
+        embedder.url,
+        "http://host.docker.internal:6969/v1/embeddings"
+    );
+
+    // And the errors it raises name the provider it is, not OpenRouter.
+    let err = OpenRouterEmbedder::new(ladder, "TINYSWEEPER_ABSENT_KEY_5f3a2b1c", "")
+        .expect_err("refuses");
+    assert!(err.to_string().contains("`ladder`"), "{err}");
+}
+
+#[test]
+fn a_ladder_without_an_address_is_refused_before_the_first_push() {
+    let config = crate::config::types::Embeddings {
+        enabled: true,
+        provider: "ladder".into(),
+        model: "vectors".into(),
+        dimensions: 1024,
+        api_key_env: "TINYSWEEPER_ABSENT_KEY_5f3a2b1c".into(),
+        base_url: String::new(),
+        ..crate::config::DEFAULTS
+            .parse::<toml::Table>()
+            .unwrap()
+            .try_into::<crate::config::types::Config>()
+            .unwrap()
+            .embeddings
+    };
+    let err = match crate::index::embedder_from_config(&config) {
+        Err(err) => err,
+        Ok(_) => panic!("a ladder with no address must be refused"),
+    };
+    assert!(
+        err.to_string().contains("needs `embeddings.base_url`"),
+        "{err}"
+    );
+}
+
 /// The live check. Ignored by default: it spends money and needs a key.
 ///
 /// Run with `OPENROUTER_API_KEY=… cargo test --features harness --lib

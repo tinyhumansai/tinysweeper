@@ -140,14 +140,7 @@ impl Lane for Tests {
             Anchoring::Strict,
             input.config.council.corroboration,
         ) else {
-            return Ok(LaneOutcome {
-                summary: "No reviewer could be consulted.".into(),
-                spend: llm.spend(),
-                skipped: Some(
-                    "No reviewer could be consulted; see the provider errors in the log.".into(),
-                ),
-                ..LaneOutcome::default()
-            });
+            return Ok(LaneOutcome::unanswered(LaneId::Tests, llm.spend()));
         };
 
         outcome.spend.merge(llm.spend());
