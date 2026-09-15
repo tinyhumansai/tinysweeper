@@ -1521,7 +1521,14 @@ async fn handle_review(
     delivery: Option<String>,
 ) {
     let slot: StatusSlot = Arc::new(std::sync::Mutex::new(None));
-    let _registered = InFlight::register(&state.in_flight, &slot);
+    let Some(_registered) = InFlight::register(&state.in_flight, &slot) else {
+        // Shutdown has already taken its concluding snapshot: no check has
+        // been opened yet, so there is nothing to conclude. Declining here,
+        // before `review_inner` does any work, is what keeps this review off
+        // the leftover-grace-period path — see `conclude_in_flight`.
+        tracing::info!(%repo, number, "declining to start a review: shutting down");
+        return;
+    };
 
     // One deadline for the whole review, retries included. A per-attempt
     // deadline would let three transient failures late in the run stretch a
