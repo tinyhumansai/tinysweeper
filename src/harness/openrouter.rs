@@ -125,7 +125,17 @@ fn provider_options(effort: &str, routing: &ProviderRouting) -> serde_json::Valu
 /// OpenRouter's extension, returned because [`provider_options`] asked for it.
 /// `None` means the gateway reported nothing and the estimate stands.
 fn gateway_cost(raw: Option<&serde_json::Value>) -> Option<f64> {
-    let cost = raw?.get("usage")?.get("cost")?.as_f64()?;
+    let usage = raw?.get("usage")?;
+    // Two spellings, from the two marketplaces the ladder dispatches to.
+    // OpenRouter reports `cost` in dollars; Surplus reports
+    // `buyer_cost_micro`, an integer count of micro-dollars, and reports it
+    // through the ladder verbatim — the router returns the upstream body as
+    // it came. Read either, so a call the ladder sent to Surplus is billed
+    // at what it cost rather than at the price table's fallback rate.
+    let cost = match usage.get("cost").and_then(serde_json::Value::as_f64) {
+        Some(cost) => cost,
+        None => usage.get("buyer_cost_micro")?.as_f64()? / 1_000_000.0,
+    };
     // A gateway that reports a nonsensical cost is a gateway to disbelieve: a
     // negative figure would credit the budget rather than spend it.
     (cost.is_finite() && cost >= 0.0).then_some(cost)
@@ -1043,6 +1053,12 @@ mod tests {
         assert_eq!(gateway_cost(None), None);
         assert_eq!(gateway_cost(Some(&json!({ "usage": {} }))), None);
         assert_eq!(gateway_cost(Some(&json!({}))), None);
+    }
+
+    #[test]
+    fn a_surplus_micro_dollar_cost_is_read_through_the_ladder() {
+        let raw = json!({ "usage": { "buyer_cost_micro": 4, "prompt_tokens": 16 } });
+        assert!((gateway_cost(Some(&raw)).unwrap() - 0.000004).abs() < 1e-12);
     }
 
     #[test]
