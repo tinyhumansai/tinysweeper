@@ -124,6 +124,7 @@ fn title_for(err: &Error) -> &'static str {
         Error::Model(_) => "The review could not reach a model",
         Error::Forge(_) => "The review could not read the pull request",
         Error::Budget { .. } => "The review ran out of budget",
+        Error::Timeout { .. } => "The review ran out of time",
         Error::Config(_) | Error::ConfigNotFound(_) => "The review is misconfigured",
         _ => "The review could not run",
     }
@@ -149,6 +150,12 @@ fn summary_for(err: &Error) -> String {
         Error::Budget { .. } => {
             "The per-pull-request spend ceiling was reached before the lanes finished. Raise \
              `models.budget_usd_per_pr`, or narrow what this pull request changes."
+        }
+        Error::Timeout { .. } => {
+            "The review did not finish inside its wall-clock deadline — the checkout, the \
+             lanes, or both. That is usually a model gateway answering very slowly, a large \
+             checkout, or an unusually large diff — check the gateway's latency before \
+             re-running, or narrow what this pull request changes."
         }
         _ => "Re-run the review once the underlying problem is fixed.",
     };
@@ -203,6 +210,18 @@ mod tests {
             !observed.is_inapplicable(),
             "a failed review is not a lane reporting it had nothing to say"
         );
+    }
+
+    #[test]
+    fn a_timed_out_review_is_reported_as_such_and_never_retried() {
+        // A deadline is a budget: retrying a run that spent it would spend it
+        // again, under a check that has said "reviewing" the whole time.
+        let err = Error::timeout("the review of o/r#1", std::time::Duration::from_secs(1200));
+        assert!(!is_transient(&err));
+        let check = check_run("abc123", &err);
+        assert_eq!(check.title, "The review ran out of time");
+        assert!(check.summary.contains("did not finish within 1200s"));
+        assert!(check.conclusion.is_some_and(CheckConclusion::blocks));
     }
 
     #[test]

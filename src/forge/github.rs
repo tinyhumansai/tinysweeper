@@ -19,8 +19,21 @@ use crate::forge::types::{
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
+/// Bounds every GitHub call this client makes. Nothing else does: `octocrab`
+/// leaves connect and read timeouts unset by default, so without this a
+/// stalled socket blocks forever. That matters beyond one slow request —
+/// `server::routes` holds a review's lease across several of these calls
+/// before and after the model phase it bounds with `REVIEW_DEADLINE`, and the
+/// margin between that deadline and `LEASE_TTL` is the budget for exactly
+/// this: metadata reads, the checkout, and the publish. A single hung call
+/// otherwise eats that margin and lets the lease expire while the review is
+/// still the one holding it.
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 fn client(token: &str) -> Result<Octocrab> {
     Octocrab::builder()
+        .set_connect_timeout(Some(REQUEST_TIMEOUT))
+        .set_read_timeout(Some(REQUEST_TIMEOUT))
         .personal_token(token.to_string())
         .build()
         .map_err(|err| Error::Forge(format!("could not build a GitHub client: {err}")))
