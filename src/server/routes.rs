@@ -2614,6 +2614,18 @@ mod tests {
             !failure::is_transient(&err),
             "retrying a timed-out review would spend the whole budget again"
         );
+
+        // What a contributor reads: the check names the review and the budget
+        // it missed, not a generic "something timed out".
+        let check = failure::check_run("abc123", &err);
+        assert_eq!(check.title, "The review ran out of time");
+        assert!(
+            check
+                .summary
+                .contains("the review of o/r#1 did not finish within 900s"),
+            "summary was: {}",
+            check.summary
+        );
     }
 
     #[tokio::test]
