@@ -14,6 +14,7 @@ That boundary is enforced by the type system rather than by discipline.
 | `tests` | `tinysweeper/tests` | Whether changed behaviour is covered | — |
 | `commits` | `tinysweeper/commits` | What entered the history — **no model call** | `secret`, `blob`, `junk` |
 | `description` | `tinysweeper/description` | Title and body against the diff | — |
+| `e2e` | `tinysweeper/e2e` | Whether changed behaviour is reachable end to end, and whether the repository's e2e jobs ran on the head — **opt-in** | — |
 
 The scanner-kind column is a **partition, not an overlap**. Each deterministic
 finding has exactly one owning lane, because two lanes discussing one match
@@ -70,7 +71,7 @@ does not take it back out.
 
 `lanes::anchor` holds the two rules, and the difference between them matters:
 
-- **Strict** (`critique`, `security`, `tests`) — a finding must sit on a line
+- **Strict** (`critique`, `security`, `tests`, `e2e`) — a finding must sit on a line
   this pull request changed, or it is dropped and counted into the summary.
   A comment on unrelated code is the fastest way to lose a team's trust.
 - **Demote** (`commits`, `description`) — the subject is a commit message or a
@@ -133,9 +134,15 @@ reviewer never sees the workflow rules. Roughly half of each document is the
 "do NOT report" list; that half is where the precision comes from. See
 `presets/rules/README.md`.
 
-A sixth lane, `e2e`, is designed but not yet built: see [e2e.md](e2e.md).
+## The `e2e` lane is opt-in and settles later
+
 It owns end-to-end coverage and whether the repository's own e2e jobs ran on
-the head — the concern the `tests` rule document deliberately excludes.
+the head — the concern the `tests` rule document deliberately excludes. It is
+absent from the default `review.lanes`; `presets/e2e-required/` turns it on.
+Its harness inventory, trigger analysis and job states are decided in code
+before any model call, and a job still running when the review finishes
+leaves the check `neutral` until the server settles it on the job's
+completion. See [e2e.md](e2e.md).
 
 ## Adding a lane
 

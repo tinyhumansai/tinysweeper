@@ -1,9 +1,10 @@
-# The `e2e` lane — design
+# The `e2e` lane
 
-**Status: design, not yet implemented.** This document is the argument for a
-sixth lane and the shape it should take. It is written against the code as of
-`5253a2a1`; where it names a function or port that does not exist yet, it says
-so.
+The argument for a sixth lane, and how it is built. The lane lives in
+`src/lanes/e2e/`: `inventory.rs` (the harness and the trigger analysis),
+`runs.rs` (job states, the deterministic findings, and settling), `evidence.rs`
+(the reads through `ForgeRead`), and `mod.rs` (the lane). The write that
+concludes a pending check is `app::apply::settle_e2e`.
 
 ## The question it answers
 
@@ -85,20 +86,13 @@ answered before a token is spent.
   `src/scan/workflows.rs` already parses these files; the classification is a
   second reader over the same YAML, not a second parser.
 
-This needs a tree listing, which no port exposes. Two options:
-
-- `IndexManifest::paths(repo_id, signature)` — the indexed file list. Present
-  only when indexing is on and current, and tied to an embed signature, which
-  is the wrong key for "what is in the tree at this SHA".
-- A new `ForgeRead::tree_paths(repo, sha) -> Vec<String>`, backed by the
-  recursive `git/trees` endpoint on GitHub, with `MockForge` returning a
-  canned list. One round trip, capped at GitHub's 100 000-entry truncation
-  (a truncated tree is reported in the lane summary, not silently treated as
-  complete).
-
-The port method is the right one. It answers the actual question at the
-actual commit, it is useful to `knowledge` and `preview` too, and the manifest
-should not grow a second job.
+This needs a tree listing: `ForgeRead::tree_paths(repo, sha) -> TreeListing`,
+backed by the recursive `git/trees` endpoint on GitHub, with `MockForge`
+serving a canned list. One round trip. GitHub truncates past 100 000 entries,
+and the listing carries that flag so a truncated tree is reported in the lane
+summary rather than silently treated as complete. `IndexManifest::paths` was
+the alternative and is the wrong key — it is tied to an embed signature, not
+to a commit.
 
 ### 2. The e2e workflows' trigger conditions
 
@@ -114,9 +108,12 @@ For each e2e workflow, whether it *would* run for this pull request:
   that the pull request does not carry.
 
 All of this is read from the workflow file at the head SHA via
-`ForgeRead::file_at` and decided in code. The model is told the answer, in the
-same spirit as `tests::Inventory::render`: a model that guesses wrong about
-whether a workflow triggers produces a finding on a wrong premise.
+`ForgeRead::file_at` and decided in code, by an indentation-outline reader
+rather than a YAML parser — `on:`, `paths:`, `jobs:` and `steps:` are all it
+needs, and the crate's dependency set stays where it is. The model is told
+the answer, in the same spirit as `tests::Inventory::render`: a model that
+guesses wrong about whether a workflow triggers produces a finding on a wrong
+premise.
 
 ### 3. What ran on this head
 
@@ -128,8 +125,12 @@ one of four states:
 |---|---|
 | `passed` | Ran on this head and concluded success. |
 | `failed` | Ran on this head and concluded failure, cancelled or timed out. |
-| `pending` | Queued or in progress. Never treated as a pass. |
-| `not triggered` | No check run on this head under that name, and (2) explains why — or does not, which is itself worth saying. |
+| `pending` | Queued, in progress, or expected by (2) and not yet reported — GitHub creates the check run when the job is queued, which can be after the review starts. Never treated as a pass. |
+| `not triggered` | No check run on this head under that name and (2) explains why; or the forge reports the job `skipped`, so a condition the outline could not read was false. |
+
+A check run that exists is the fact; the trigger analysis only explains an
+absence. A job that ran despite a filter the outline misread is reported as
+what it did.
 
 ### What the graph adds
 
@@ -142,14 +143,16 @@ the e2e path table gives, for free, the list of changed symbols an e2e test
 
 That list will usually be short, and the lane must not read its shortness as
 absence. E2e tests reach features through HTTP paths, CLI arguments, UI text
-and configuration keys, not through symbol calls. So the second bridge is
-lexical: string literals and identifiers added by the diff (a route, a
-subcommand, a flag, a button label, an env var) searched for in the e2e test
-files through the index (`ChunkIndex::query` scoped to the e2e paths, or
-`chunks_in_paths` when the set is small). Hits are handed to the model as
-*candidate* e2e coverage with the matching lines quoted; the model decides
-whether the candidate actually drives the changed behaviour or merely mentions
-the same word.
+and configuration keys, not through symbol calls. So the bridge the first cut
+ships is lexical, in `evidence.rs`: the quoted literals and route- or
+flag-shaped tokens the diff added (a route, a subcommand, a flag, a button
+label, an env var — deliberately not identifiers) searched for in the e2e
+test files, read through `file_at` under a budget (`MAX_TEST_FILES`,
+`MAX_TEST_CHARS`), files the pull request itself changed first. Hits are
+handed to the model as *candidate* coverage with the matching lines quoted;
+the model decides whether the candidate actually drives the changed
+behaviour or merely mentions the same word. Routing the search through the
+index instead is the obvious next step once the harness is indexed.
 
 ## The prompt
 
@@ -201,6 +204,10 @@ The first two are deterministic and are republished unchanged, on the
 established. "The reviewer decided the untriggered workflow did not matter" is
 not a failure mode anyone can audit.
 
+A repository on `missing_harness = "require"` whose tree has no harness at
+all gets one more, `e2e-missing-harness` (Medium, Demoted), with no model
+call.
+
 `e2e-pending` is **not** a finding. It is a conclusion — see below.
 
 ## The timing problem, and the check run's lifecycle
@@ -215,18 +222,27 @@ So the check run has two phases:
    analysis, coverage findings — and, if any e2e job is pending, concludes
    `Neutral` with a summary that says which jobs it is waiting on. If a job is
    already `not triggered`, that is final and is reported now.
-2. **On `check_run`/`check_suite` completed** for the same head SHA — an event
-   the webhook already routes for auto-merge (`webhook::automerge_trigger`) —
-   the server re-evaluates *only* step (3) and updates the check run's
-   conclusion. No model call: the coverage verdict is already recorded in
-   `ReviewState`, and only the deterministic part changed. This is the
-   cheapest re-run in the system, and it must be, because a busy repository
-   emits one of these events per job.
+2. **On `check_run`/`check_suite` completed** for the same head SHA — the
+   event the webhook already routes for auto-merge — the server runs
+   `apply::settle_e2e` before it reconsiders the merge
+   (`routes::handle_check_completed`). It re-evaluates *only* step (3):
+   `runs::settle` over fresh check runs and the `Watch` the review recorded
+   in `ReviewedState::e2e`, and publishes the terminal conclusion. No model
+   call. This is the cheapest re-run in the system, and it must be, because
+   a busy repository emits one of these events per job; the cheap exits (no
+   watch, head moved, still pending) come before any credential is minted.
 
-`LaneOutcome` needs one addition for this: a `pending: Vec<String>` naming the
-jobs still to hear from, so `apply` can write the neutral summary and the
-state store can remember what to wait for. The state key is the head SHA, so a
-new push starts over.
+`LaneOutcome::pending` names the jobs still to hear from; `lane_proposal`
+turns a non-empty list into `Neutral`, and the review writes the `Watch`
+(head SHA, jobs, the static summary, whether the static half already failed)
+into the state record. The watch is keyed to its head SHA, so a completion
+for an older commit is ignored and a new push starts over.
+
+One limit worth knowing: the pull request *review* (approve /
+request-changes) is decided at review time, when the lane is still `Neutral`.
+A job that fails later fails the `tinysweeper/e2e` check run — which is what
+branch protection reads — but does not retroactively convert an approval
+into a changes-requested verdict.
 
 ## Configuration
 
@@ -284,26 +300,26 @@ green", and both are future work, not part of the first cut:
 
 Neither changes the boundary. The brain still never runs the code.
 
-## Implementation, in the order that keeps each slice green
+## Where each piece is tested
 
-1. `ForgeRead::tree_paths` with the GitHub adapter and `MockForge`. Tested
-   offline through the mock; the adapter behind `github` like the rest.
-2. `src/lanes/e2e/inventory.rs` — the path table, workflow classification and
-   trigger evaluation. Pure functions over strings and the changed paths; the
-   bulk of the golden tests live here.
-3. `src/lanes/e2e/runs.rs` — matching `CheckStatus` against the inventory
-   into the four states. Pure.
-4. `LaneId::E2e`, `Config` fields, the prompt instructions, the dispatch arm
-   in `src/app/review.rs`, and the lane itself.
-5. The golden test: fixture diff adding a route, a tree with an e2e file
-   that never mentions it, a workflow with a non-matching `paths:` filter, a
-   canned model response — asserting exactly one `e2e-not-triggered` and one
-   `e2e-uncovered` survive.
-6. `LaneOutcome::pending`, the `ReviewState` record, and the
-   `check_suite`-completed refresh in `src/server/webhook.rs`.
-7. The preset, the rule document, and this document's move from "design" to
-   the lane table in `docs/modules/lanes/README.md`.
-
-Slices 1–5 make the lane useful on its own: everything it says on review is
-correct, and a pending job reads as pending. Slice 6 is what makes the check
-run settle without a second push.
+- `inventory.rs` — the path table across the common layouts, workflow
+  classification by name and by step, `paths:` / `paths-ignore:` /
+  dispatch-only triggers, label gates (and that a negated one is not a gate),
+  explicit overrides replacing detection, comments and URLs not confusing
+  the outline.
+- `runs.rs` — a reported check run beating the filter, a filtered-out job as
+  a High finding anchored on the `paths:` line, an expected-but-unreported
+  job as pending, matrix legs, near-miss check names, label gates against
+  the pull request's labels, and `settle` waiting for every job then
+  concluding under `fail_on`.
+- `evidence.rs` — surface tokens are literals and routes, not identifiers;
+  candidates quote the line; `gather` reads the tree, the workflows, the
+  checks and the specs through `MockForge`, and degrades on a missing tree.
+- `mod.rs` — the golden test (a filtered-out workflow plus an uncovered
+  route: exactly one `e2e-not-triggered` and one `e2e-uncovered` survive),
+  pending leaving the lane `Neutral`, a passed job passing it, a failed job
+  the model cannot remove, `e2e-unobservable` forced to Low, the
+  documentation-only and no-harness skips, and the never-executes assertion
+  over all four files.
+- `app/apply.rs` — `settle_e2e` waiting, publishing once, clearing the
+  watch, and leaving a moved head alone.
