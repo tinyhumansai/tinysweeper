@@ -2078,11 +2078,16 @@ async fn run_and_publish(
             Error::timeout(format!("the review of {repo}#{number}"), REVIEW_DEADLINE)
         })??;
 
-    let write_token = state.auth.installation_token(installation).await?;
-    let write = crate::forge::github::GitHubWrite::new(&write_token)?;
-    crate::app::apply(forge, &write, &config, &proposal, Some(&state.store)).await?;
-
-    Ok(proposal)
+    // Deliberately returned rather than published here: `apply` performs
+    // several sequential, non-idempotent writes (lane checks, the review
+    // body, comments), and this function is called from inside the outer
+    // `timeout_at` in `review_inner`. Publishing here would put `apply` under
+    // that same cancellable deadline — dropping it mid-sequence cannot
+    // retract whatever GitHub already accepted, so a deadline landing between
+    // two of its writes would leave a permanently partial review instead of a
+    // clean timeout. `review_inner` publishes this proposal itself, after the
+    // cancellable phase has returned.
+    Ok((config, proposal))
 }
 
 /// The UI preview routes' way into the brain.
