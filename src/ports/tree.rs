@@ -282,6 +282,17 @@ impl TreeReader for MockTree {
         if let Some(found) = self.recorded.get(&lookup.key()) {
             return Ok(found.clone());
         }
+        // A replay answers only what was recorded. "Not found" here would be
+        // a claim about the repository the fixture never made, and a model
+        // told a file does not exist reports it missing at confidence 1.0 —
+        // which is what happened to a compose overlay's entrypoint script.
+        if !self.search && self.files.is_empty() {
+            return Ok(Found::Unavailable {
+                reason: "this lookup was not recorded for the fixture; nothing can be \
+                         concluded about whether the path or text exists"
+                    .into(),
+            });
+        }
         Ok(match lookup {
             Lookup::Read { path, start, end } => match self.files.get(path) {
                 Some(content) => {
