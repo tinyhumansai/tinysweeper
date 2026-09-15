@@ -229,6 +229,21 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
         ));
     }
 
+    // One route per model. Every reader of the list takes the first match —
+    // `routing_for`, `call_until_complete`, `Models::route_for` — so a second
+    // entry for the same model is not an override, it is ignored, while
+    // `doctor` prints both as if they applied.
+    let mut seen = std::collections::BTreeSet::new();
+    for route in &models.routes {
+        if !seen.insert(route.model.as_str()) {
+            problems.push(format!(
+                "`models.routes` names `{}` more than once; only the first entry would apply, \
+                 so merge them into one",
+                route.model
+            ));
+        }
+    }
+
     // A route's ceiling replaces the global one for its model, so the same
     // floor applies to it — a nonzero override below it recreates exactly the
     // failure the check above exists for, on one rung. Zero means "no

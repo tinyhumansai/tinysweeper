@@ -124,6 +124,16 @@ fn a_submodule_entry_that_is_not_owner_slash_name_is_rejected() {
 }
 
 #[test]
+fn a_model_routed_twice_is_rejected() {
+    let config = parse(
+        "version = 1\n[[models.routes]]\nmodel = \"deep\"\nmax_tokens = 0\n\
+         [[models.routes]]\nmodel = \"deep\"\norder = [\"openai/flex\"]\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("`deep` more than once"), "{joined}");
+}
+
+#[test]
 fn lowering_the_effort_does_not_satisfy_the_budget_floor() {
     // Measured at both settings: the table in `config/defaults.toml` lists
     // `low` rows for each configured model and they burn the entire allowance
