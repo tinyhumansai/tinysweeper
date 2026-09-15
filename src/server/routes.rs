@@ -37,7 +37,7 @@ use crate::server::preview::{
     StepReply as PreviewStepReply,
 };
 use crate::server::status;
-use crate::server::store::{Store, Trust};
+use crate::server::store::{LEASE_TTL, Store, Trust};
 use crate::server::webhook::{self, Action, Payload};
 
 /// How many reviews may run at once.
@@ -47,6 +47,28 @@ use crate::server::webhook::{self, Action, Payload};
 /// delivers a burst, and an unbounded worker pool turns that into an unbounded
 /// bill.
 const MAX_CONCURRENT_REVIEWS: usize = 4;
+
+/// How long one review may take, wall clock, from delivery to verdict.
+///
+/// Every model call is bounded on its own — the gateway client caps a unary
+/// request at ten minutes — but a review is dozens of them in sequence, across
+/// lanes, files, retries and the fallback chain, and nothing capped the sum.
+/// On 2026-09-15 `tinyhumansai/backend#1332` sat "in progress" for over two
+/// hours while holding one of the four review permits. A healthy review of a
+/// large repository finishes in single-digit minutes; this is several times
+/// that, so it only ever fires on something already broken.
+///
+/// Strictly less than [`LEASE_TTL`], and that ordering is load-bearing: the
+/// lease is what stops a redelivery from reviewing the same commit twice, and
+/// a review still running when its lease expires is exactly the duplicate the
+/// lease exists to prevent. The margin covers the metadata reads before the
+/// lease is taken and the publish after the lanes return, neither of which is
+/// under this deadline.
+const REVIEW_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+const _: () = assert!(
+    REVIEW_DEADLINE.as_secs() < LEASE_TTL.as_secs(),
+    "a review must give up before its lease does"
+);
 
 /// How many repositories may be indexed at once.
 ///
@@ -107,6 +129,13 @@ struct AppState {
     /// the critical section that touches it never awaits.
     preview_locks:
         Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    /// The umbrella check of every review currently running, so a shutdown
+    /// can conclude them. A deploy replaces the container, and a review that
+    /// dies with it would otherwise leave its check "in progress" until the
+    /// next push — which `automerge` reads as a review still running. Each
+    /// slot is registered when its review starts and removed when it ends;
+    /// see `conclude_in_flight`.
+    in_flight: Arc<std::sync::Mutex<Vec<StatusSlot>>>,
 }
 
 /// Run the server until the process is stopped.
@@ -178,8 +207,10 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
         memory,
         index_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_INDEXES)),
         preview_locks: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        in_flight: Arc::new(std::sync::Mutex::new(Vec::new())),
     };
 
+    let shutdown_state = state.clone();
     let manual_state = state.clone();
     let manual_auth = admin_auth.clone();
     let preview_state = state.clone();
@@ -280,8 +311,65 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
 
     tracing::info!(%bind, "tinysweeper is listening");
     axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
         .await
-        .map_err(|err| Error::Forge(format!("server stopped: {err}")))
+        .map_err(|err| Error::Forge(format!("server stopped: {err}")))?;
+
+    // The listener is closed and no new delivery can arrive. The reviews
+    // already running will not finish inside Compose's stop grace period, so
+    // say so on each of their pull requests before the process goes.
+    conclude_in_flight(&shutdown_state).await;
+    Ok(())
+}
+
+/// Resolve when the process is asked to stop.
+///
+/// `SIGTERM` is what `docker compose up` sends on a redeploy, `SIGINT` what
+/// an operator's terminal sends. Either way the answer is the same.
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut term = match signal(SignalKind::terminate()) {
+        Ok(term) => term,
+        Err(err) => {
+            // Without a handler the runtime would take the default action
+            // and die mid-review; waiting on `ctrl_c` alone is the best that
+            // can be done, and it is worth saying that happened.
+            tracing::error!(%err, "could not install a SIGTERM handler; a redeploy will orphan running reviews");
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        }
+    };
+
+    tokio::select! {
+        _ = term.recv() => tracing::info!("received SIGTERM; shutting down"),
+        _ = tokio::signal::ctrl_c() => tracing::info!("received SIGINT; shutting down"),
+    }
+}
+
+/// Conclude the umbrella check of every review still running.
+///
+/// Taking each slot's status out is what makes this safe against the review
+/// itself: if a lane happens to finish during the grace period, its own
+/// `close_status` finds the slot empty and does nothing, so no check is
+/// concluded twice. The reviews are not cancelled here — the process exit
+/// does that, and a lane that gets a few more seconds costs nothing.
+async fn conclude_in_flight(state: &AppState) {
+    let slots = std::mem::take(&mut *state.in_flight.lock().expect("in-flight reviews"));
+    if slots.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        reviews = slots.len(),
+        "shutting down with reviews in flight; concluding their checks as failed"
+    );
+    let err = Error::lane(
+        "review",
+        "tinysweeper was restarted while this review was running",
+    );
+    for slot in &slots {
+        close_status(state, slot, Conclusion::Failed(&err)).await;
+    }
 }
 
 async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
@@ -1212,6 +1300,40 @@ struct ReviewStatus {
 /// this commit and owns the check that goes with it.
 type StatusSlot = Arc<std::sync::Mutex<Option<ReviewStatus>>>;
 
+/// A review's membership in `AppState::in_flight`, for as long as it runs.
+///
+/// A guard rather than a pair of calls so that every exit from
+/// `handle_review` — including an unwind — deregisters the slot. Dropping a
+/// guard removes exactly its own slot, by pointer, so two reviews finishing
+/// in either order cannot remove each other.
+struct InFlight {
+    registry: Arc<std::sync::Mutex<Vec<StatusSlot>>>,
+    slot: StatusSlot,
+}
+
+impl InFlight {
+    fn register(state: &AppState, slot: &StatusSlot) -> Self {
+        state
+            .in_flight
+            .lock()
+            .expect("in-flight reviews")
+            .push(slot.clone());
+        Self {
+            registry: state.in_flight.clone(),
+            slot: slot.clone(),
+        }
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.registry
+            .lock()
+            .expect("in-flight reviews")
+            .retain(|other| !Arc::ptr_eq(other, &self.slot));
+    }
+}
+
 /// Publish the in-progress check, and record how to conclude it.
 ///
 /// Best-effort in both directions: a failure to publish is logged and the
@@ -1334,10 +1456,28 @@ async fn handle_review(
     delivery: Option<String>,
 ) {
     let slot: StatusSlot = Arc::new(std::sync::Mutex::new(None));
+    let _registered = InFlight::register(&state, &slot);
+
+    // One deadline for the whole review, retries included. A per-attempt
+    // deadline would let three transient failures late in the run stretch a
+    // single pull request to three times the budget, all under one check that
+    // has said "reviewing" the entire time.
+    let deadline = tokio::time::Instant::now() + REVIEW_DEADLINE;
 
     let mut attempt = 1;
     let err = loop {
-        match review_inner(&state, &repo, number, &author, installation, mode, &slot).await {
+        match review_inner(
+            &state,
+            &repo,
+            number,
+            &author,
+            installation,
+            mode,
+            &slot,
+            deadline,
+        )
+        .await
+        {
             Ok(findings) => {
                 // Usually there is nothing to close: a run that declines — a
                 // blocked contributor, a draft, a lease another worker holds —
@@ -1447,6 +1587,7 @@ async fn review_inner(
     installation: u64,
     mode: Mode,
     slot: &StatusSlot,
+    deadline: tokio::time::Instant,
 ) -> Result<Option<usize>> {
     let who = state.store.contributor(author).await?;
     if who.trust == Trust::Blocked {
@@ -1613,6 +1754,7 @@ async fn review_inner(
         installation,
         &forge,
         mode,
+        deadline,
     ))
     .catch_unwind()
     .await
@@ -1667,6 +1809,7 @@ async fn run_and_publish(
     installation: u64,
     forge: &crate::forge::github::GitHubRead,
     mode: Mode,
+    deadline: tokio::time::Instant,
 ) -> Result<crate::app::Proposal> {
     let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
         &state.config.config.models,
@@ -1694,8 +1837,14 @@ async fn run_and_publish(
     // same policy with no memory, not the deployment's policy instead.
     let recaller = state.memory.as_ref().map(|backend| backend.recaller());
 
+    // The deadline bounds the model phase only. `tokio::time::timeout_at`
+    // drops the inner future when it elapses, which cancels every model call
+    // in flight — the right thing for the lanes, and the wrong thing for the
+    // publish below, which must not be cut off between one comment and the
+    // next. A deadline already in the past — a retry after a slow failure —
+    // resolves at once, which is the intended way of refusing the retry.
     let config = config_for(config, mode);
-    let proposal = crate::app::review::review_with_memory(
+    let review = crate::app::review::review_with_memory(
         forge,
         model,
         &config,
@@ -1705,8 +1854,12 @@ async fn run_and_publish(
         state.knowledge.as_deref(),
         retriever.as_ref(),
         recaller.as_ref(),
-    )
-    .await?;
+    );
+    let proposal = tokio::time::timeout_at(deadline, review)
+        .await
+        .map_err(|_elapsed| {
+            Error::timeout(format!("the review of {repo}#{number}"), REVIEW_DEADLINE)
+        })??;
 
     let write_token = state.auth.installation_token(installation).await?;
     let write = crate::forge::github::GitHubWrite::new(&write_token)?;
