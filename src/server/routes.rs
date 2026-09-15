@@ -1300,6 +1300,18 @@ struct ReviewStatus {
 /// this commit and owns the check that goes with it.
 type StatusSlot = Arc<std::sync::Mutex<Option<ReviewStatus>>>;
 
+/// What one review carries from `handle_review` down to the lanes.
+///
+/// The three things every attempt shares: the mode it runs in, the check it
+/// owns, and the wall-clock deadline it must beat. Bundled so a retry cannot
+/// re-derive any of them differently from the first attempt.
+struct Run {
+    mode: Mode,
+    slot: StatusSlot,
+    /// Fixed when the review is accepted, not per attempt. See `handle_review`.
+    deadline: tokio::time::Instant,
+}
+
 /// A review's membership in `AppState::in_flight`, for as long as it runs.
 ///
 /// A guard rather than a pair of calls so that every exit from
@@ -1461,22 +1473,15 @@ async fn handle_review(
     // deadline would let three transient failures late in the run stretch a
     // single pull request to three times the budget, all under one check that
     // has said "reviewing" the entire time.
-    let deadline = tokio::time::Instant::now() + REVIEW_DEADLINE;
+    let run = Run {
+        mode,
+        slot: slot.clone(),
+        deadline: tokio::time::Instant::now() + REVIEW_DEADLINE,
+    };
 
     let mut attempt = 1;
     let err = loop {
-        match review_inner(
-            &state,
-            &repo,
-            number,
-            &author,
-            installation,
-            mode,
-            &slot,
-            deadline,
-        )
-        .await
-        {
+        match review_inner(&state, &repo, number, &author, installation, &run).await {
             Ok(findings) => {
                 // Usually there is nothing to close: a run that declines — a
                 // blocked contributor, a draft, a lease another worker holds —
@@ -1584,9 +1589,7 @@ async fn review_inner(
     number: u64,
     author: &str,
     installation: u64,
-    mode: Mode,
-    slot: &StatusSlot,
-    deadline: tokio::time::Instant,
+    run: &Run,
 ) -> Result<Option<usize>> {
     let who = state.store.contributor(author).await?;
     if who.trust == Trust::Blocked {
@@ -1651,7 +1654,7 @@ async fn review_inner(
     // A manual review deliberately takes a lease of its own: the operator asked
     // for this run *because* the ordinary one already happened, so sharing the
     // webhook path's key would make the button a silent no-op.
-    let lease = match mode {
+    let lease = match run.mode {
         Mode::Incremental => format!("{repo}#{number}@{}", pull_request.head_sha),
         Mode::Full => format!("{repo}#{number}@{}!full", pull_request.head_sha),
     };
@@ -1669,7 +1672,14 @@ async fn review_inner(
     // Still early: everything above is metadata reads, and every model call is
     // below. A contributor sees the check appear seconds after pushing, not
     // minutes.
-    open_status(state, slot, &repo_id, &pull_request.head_sha, installation).await;
+    open_status(
+        state,
+        &run.slot,
+        &repo_id,
+        &pull_request.head_sha,
+        installation,
+    )
+    .await;
 
     // `AssertUnwindSafe` + `catch_unwind` so a panic inside a lane still
     // reaches the release below. Without it the `?` on the outcome is not the
@@ -1752,8 +1762,7 @@ async fn review_inner(
         number,
         installation,
         &forge,
-        mode,
-        deadline,
+        run,
     ))
     .catch_unwind()
     .await
@@ -1807,8 +1816,7 @@ async fn run_and_publish(
     number: u64,
     installation: u64,
     forge: &crate::forge::github::GitHubRead,
-    mode: Mode,
-    deadline: tokio::time::Instant,
+    run: &Run,
 ) -> Result<crate::app::Proposal> {
     let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
         &state.config.config.models,
@@ -1842,7 +1850,7 @@ async fn run_and_publish(
     // publish below, which must not be cut off between one comment and the
     // next. A deadline already in the past — a retry after a slow failure —
     // resolves at once, which is the intended way of refusing the retry.
-    let config = config_for(config, mode);
+    let config = config_for(config, run.mode);
     let review = crate::app::review::review_with_memory(
         forge,
         model,
@@ -1854,7 +1862,7 @@ async fn run_and_publish(
         retriever.as_ref(),
         recaller.as_ref(),
     );
-    let proposal = tokio::time::timeout_at(deadline, review)
+    let proposal = tokio::time::timeout_at(run.deadline, review)
         .await
         .map_err(|_elapsed| {
             Error::timeout(format!("the review of {repo}#{number}"), REVIEW_DEADLINE)
@@ -2254,13 +2262,15 @@ mod tests {
         );
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn a_review_past_its_deadline_fails_as_a_timeout_and_is_not_retried() {
         // The shape `run_and_publish` relies on: a deadline already in the
         // past resolves immediately, so a retry that arrives after the budget
         // is spent is refused instead of starting another twenty minutes.
-        let deadline = tokio::time::Instant::now() + REVIEW_DEADLINE;
-        tokio::time::advance(REVIEW_DEADLINE + std::time::Duration::from_secs(1)).await;
+        let now = tokio::time::Instant::now();
+        let deadline = now
+            .checked_sub(std::time::Duration::from_secs(1))
+            .unwrap_or(now);
 
         let outcome = tokio::time::timeout_at(deadline, std::future::pending::<()>())
             .await
