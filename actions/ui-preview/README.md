@@ -83,8 +83,11 @@ TS_TOKEN=… node run.mjs --server https://sweeper.example.org \
 
 Every turn is written to `--out` as `turn-<flow>-NN.json` — the snapshot the
 brain saw and what it answered — which is the first thing to read when a flow
-went somewhere odd. `--no-upload` leaves the run in `--out`; the server still publishes a comment
-whose images will not resolve, so use a test pull request. `TS_BEFORE_PORT`
+went somewhere odd. Without `--no-upload` a local run is a real one: the
+files go to the server and the comment lands on the pull request with
+working pictures. `--no-upload` keeps the files in `--out`, and the server
+then refuses the finish because the manifest names files it never received —
+use it to inspect a run without publishing. `TS_BEFORE_PORT`
 and `TS_AFTER_PORT` move the two servers off 3000/3001. If Chromium dies with
 "Target crashed" on a screenshot, `/dev/shm` is too small or quota'd on your
 machine; the runner already passes `--disable-dev-shm-usage`, and a
