@@ -94,6 +94,16 @@ impl<'a> LaneInput<'a> {
                 .then_some(self.config.models.flash.as_str()),
             tree: self.tree,
             lookup: Some(&self.config.lookup),
+            seed: None,
+        }
+    }
+
+    /// [`Self::asking`], for a conversation about one file: the definitions
+    /// its changed lines call into are fetched before the first turn.
+    pub fn asking_about(&self, diff: &'a FileDiff) -> Asking<'a> {
+        Asking {
+            seed: Some(diff),
+            ..self.asking()
         }
     }
 
