@@ -643,6 +643,25 @@ async fn a_submodule_the_fetch_could_not_bring_is_kept_and_the_revision_is_not_c
         "an incomplete checkout does not claim the head"
     );
 
+    // A cold repository with nothing under the submodule yet is the same
+    // case: no rows to keep, and still no head to claim.
+    let cold = Rig::new();
+    let first = report(
+        cold.indexer()
+            .missing(vec!["libs/core".into()])
+            .index_repo(REPO, "sha-2", &checkout.root())
+            .await
+            .expect("runs"),
+    );
+    assert_eq!(first.unfetched, vec!["libs/core".to_string()]);
+    assert!(
+        !cold
+            .manifest
+            .snapshot(REPO, &cold.signature())
+            .is_fresh("sha-2"),
+        "a first index missing a submodule is not fresh either"
+    );
+
     // And when it is not missing any more — really gone — it is removed.
     let gone = report(
         rig.indexer()
