@@ -254,6 +254,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "severity_gate",
             "confidence_min",
             "max_comments",
+            "note_confidence",
             "incremental",
             "draft_prs",
             "respect_agents_md",

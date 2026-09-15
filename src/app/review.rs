@@ -159,6 +159,15 @@ pub struct LaneProposal {
     pub summary: String,
     /// Findings that survived filtering.
     pub findings: Vec<Finding>,
+    /// Findings that missed the posting gate but were worth a line in the
+    /// summary: at least `medium`, at least `review.note_confidence` sure.
+    ///
+    /// Never posted inline, never counted toward the conclusion, never
+    /// deduped as a comment. They exist because the alternative — a correct
+    /// finding at 0.61 confidence reaching nobody — is silence dressed as an
+    /// all-clear.
+    #[serde(default)]
+    pub noted: Vec<Finding>,
     /// Titles of earlier findings this revision fixed.
     ///
     /// The lane says so and it is reported rather than discarded: a review that
@@ -1179,6 +1188,23 @@ fn lane_proposal(
         .map(|finding| finding.severity)
         .max();
 
+    // Below the gate but not below notice: named in the summary, never posted.
+    // Capped so a chatty reviewer cannot turn the summary into the comment
+    // list the gate was keeping it from being.
+    let mut noted: Vec<Finding> = outcome
+        .findings
+        .iter()
+        .filter(|f| !f.meets(gate, minimum))
+        .filter(|f| f.severity >= Severity::Medium && f.confidence >= config.review.note_confidence)
+        .cloned()
+        .collect();
+    noted.sort_by(|a, b| {
+        b.severity
+            .cmp(&a.severity)
+            .then(b.confidence.total_cmp(&a.confidence))
+    });
+    noted.truncate(MAX_NOTED);
+
     let mut findings: Vec<Finding> = outcome
         .findings
         .into_iter()
@@ -1247,6 +1273,7 @@ fn lane_proposal(
         conclusion,
         summary,
         findings,
+        noted,
         resolved,
         deduped,
         highest_severity,
@@ -1254,6 +1281,9 @@ fn lane_proposal(
         models: spend.models,
     }
 }
+
+/// How many below-the-gate findings one lane may note in its summary.
+const MAX_NOTED: usize = 5;
 
 /// Apply the comment limit after every lane and scanner fallback has contributed.
 ///

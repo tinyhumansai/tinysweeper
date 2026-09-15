@@ -278,6 +278,16 @@ pub struct Review {
     pub confidence_min: Option<f64>,
     /// Hard cap on posted comments per pull request.
     pub max_comments: usize,
+    /// Keep a finding that misses the posting gate visible in the check-run
+    /// summary when it is at least `medium` and the model is at least this
+    /// sure of it.
+    ///
+    /// Not a comment, not a block, not a conclusion: a line in the summary
+    /// that names the file and the concern. The gate exists so a reviewer
+    /// that is half sure does not block a merge; it was also, before this,
+    /// the reason a correct `medium/0.61` boundary bug reached nobody. Set
+    /// above 1 to turn the notes off.
+    pub note_confidence: f64,
     /// Review only the commits added since the last reviewed SHA.
     pub incremental: bool,
     /// Review draft pull requests too.

@@ -327,6 +327,23 @@ fn render_lane_summary(lane: &crate::app::review::LaneProposal) -> String {
         reached_a_verdict,
     );
 
+    // Below the gate, above notice. A line each: where, what, how sure. Not a
+    // comment and not a verdict, so the wording says so.
+    if !lane.noted.is_empty() {
+        out.push_str(
+            "\n**Worth a look** — below the posting gate, so not a comment and not a block:\n\n",
+        );
+        for finding in &lane.noted {
+            out.push_str(&format!(
+                "- `{}`{} — {} {}\n",
+                finding.path,
+                finding.line.map(|l| format!(":{l}")).unwrap_or_default(),
+                crate::findings::render::escape_cell(&finding.title),
+                crate::findings::render::confidence_badge(finding.confidence),
+            ));
+        }
+    }
+
     // Resolved findings are reported, not discarded. An author who fixed
     // something needs to see that it was noticed; otherwise the only signal a
     // review ever gives is a new objection.
