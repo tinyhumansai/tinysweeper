@@ -210,7 +210,7 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
         memory,
         index_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_INDEXES)),
         preview_locks: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-        in_flight: Arc::new(std::sync::Mutex::new(Vec::new())),
+        in_flight: Arc::new(std::sync::Mutex::new(InFlightRegistry::default())),
     };
 
     let shutdown_state = state.clone();
