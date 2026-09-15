@@ -8,6 +8,8 @@
 //!   answers with the planned flows.
 //! - `POST /preview/sessions/{id}/flows/{flow}/step` hands over what the
 //!   browser sees and gets the next commands.
+//! - `POST /preview/sessions/{id}/assets/{name}` hands over one picture or
+//!   clip, staged on this server's disk until `finish`.
 //! - `POST /preview/sessions/{id}/finish` hands over the manifest of what was
 //!   uploaded and has the comment published.
 //!
@@ -41,11 +43,21 @@ use crate::server::admin::AdminAuth;
 /// Environment variable carrying the preview bearer token.
 pub const TOKEN_ENV: &str = "TINYSWEEPER_PREVIEW_TOKEN";
 
-/// The largest request body the routes accept.
+/// The largest request body the JSON routes accept.
 ///
 /// An accessibility snapshot of a busy page is tens of kilobytes; a manifest
 /// is a few. Anything past this is not a page, it is a payload.
 pub const MAX_BODY_BYTES: usize = 512 * 1024;
+
+/// The largest single asset the assets route accepts.
+///
+/// A 2x full-page PNG of a long screen is a few hundred kilobytes; a twelve
+/// second gif at 600 wide is under two megabytes. Eight is headroom, not an
+/// invitation.
+pub const MAX_ASSET_BYTES: usize = 8 * 1024 * 1024;
+
+/// The most one session may stage, across every asset.
+pub const MAX_SESSION_ASSET_BYTES: u64 = 48 * 1024 * 1024;
 
 /// What the hands say to open a session.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -118,6 +130,8 @@ pub trait Previews: Send + Sync {
     async fn start(&self, request: StartRequest) -> Result<StartReply>;
     /// Decide the next commands for one flow.
     async fn step(&self, session: &str, flow: &str, observation: Observation) -> Result<StepReply>;
+    /// Stage one asset for the session until `finish`.
+    async fn asset(&self, session: &str, name: &str, bytes: Vec<u8>) -> Result<()>;
     /// Validate the manifest and publish.
     async fn finish(&self, session: &str, request: FinishRequest) -> Result<FinishReply>;
 }
@@ -131,12 +145,19 @@ struct PreviewState {
 pub fn router(auth: Option<AdminAuth>, previews: Arc<dyn Previews>) -> Option<Router> {
     let auth = Arc::new(auth?);
     let state = PreviewState { previews };
+    // The assets route takes bytes rather than JSON and so has a limit of
+    // its own; the layer is applied to that route alone before the merge,
+    // and the JSON routes keep the smaller one.
+    let assets = Router::new()
+        .route("/preview/sessions/{id}/assets/{name}", post(asset))
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_ASSET_BYTES));
     Some(
         Router::new()
             .route("/preview/sessions", post(start))
             .route("/preview/sessions/{id}/flows/{flow}/step", post(step))
             .route("/preview/sessions/{id}/finish", post(finish))
             .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
+            .merge(assets)
             // `route_layer`, so the token is checked before the `Json`
             // extractor parses anything an anonymous caller sent.
             .route_layer(axum::middleware::from_fn_with_state(
@@ -172,6 +193,31 @@ async fn step(
     }
 }
 
+async fn asset(
+    State(state): State<PreviewState>,
+    Path((id, name)): Path<(String, String)>,
+    body: axum::body::Bytes,
+) -> Response {
+    if !is_id(&id) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "no such session"})),
+        )
+            .into_response();
+    }
+    if !is_asset_name(&name) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"error": "asset names are one plain segment ending in .png, .gif, .mp4 or .webm"})),
+        )
+            .into_response();
+    }
+    match state.previews.asset(&id, &name, body.to_vec()).await {
+        Ok(()) => (StatusCode::OK, Json(json!({"stored": name}))).into_response(),
+        Err(err) => failure(err),
+    }
+}
+
 async fn finish(
     State(state): State<PreviewState>,
     Path(id): Path<String>,
@@ -193,6 +239,20 @@ async fn finish(
 /// A path segment that could be a session or flow id.
 fn is_id(s: &str) -> bool {
     !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// An asset name the manifest could later reference: one plain segment with
+/// a renderable extension — the same rule `preview::manifest` applies, so
+/// nothing can be staged that could not be published.
+pub fn is_asset_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 96
+        && !s.starts_with('.')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        && [".png", ".gif", ".mp4", ".webm"]
+            .iter()
+            .any(|ext| s.ends_with(ext))
 }
 
 /// The status a failure maps to.
@@ -228,6 +288,7 @@ mod tests {
         started: Mutex<Vec<StartRequest>>,
         stepped: Mutex<Vec<(String, String, Observation)>>,
         finished: Mutex<Vec<(String, Manifest)>>,
+        assets: Mutex<Vec<(String, String, usize)>>,
     }
 
     #[async_trait]
@@ -261,6 +322,13 @@ mod tests {
                 done: true,
                 replay: None,
             })
+        }
+        async fn asset(&self, session: &str, name: &str, bytes: Vec<u8>) -> Result<()> {
+            self.assets
+                .lock()
+                .unwrap()
+                .push((session.into(), name.into(), bytes.len()));
+            Ok(())
         }
         async fn finish(&self, session: &str, request: FinishRequest) -> Result<FinishReply> {
             self.finished
@@ -365,6 +433,40 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert!(recorder.stepped.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_asset_is_staged_by_name_and_a_hostile_name_is_refused() {
+        let recorder = Arc::new(Recorder::default());
+        let app = app(recorder.clone());
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/preview/sessions/s1/assets/change-01.png")
+                    .header("authorization", format!("Bearer {TOKEN}"))
+                    .header("content-type", "image/png")
+                    .body(Body::from(vec![1u8, 2, 3]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            recorder.assets.lock().unwrap()[0],
+            ("s1".to_string(), "change-01.png".to_string(), 3)
+        );
+
+        let response = app
+            .oneshot(
+                Request::post("/preview/sessions/s1/assets/evil.html")
+                    .header("authorization", format!("Bearer {TOKEN}"))
+                    .body(Body::from(vec![1u8]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(recorder.assets.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
