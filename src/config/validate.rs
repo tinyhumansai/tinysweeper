@@ -26,6 +26,8 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_review(config, &mut problems);
     validate_paths(config, &mut problems);
     validate_models(config, &mut problems);
+
+    validate_submodules(config, &mut problems);
     validate_knowledge(config, &mut problems);
     validate_embeddings(config, &mut problems);
     validate_retrieval(config, &mut problems);
@@ -952,6 +954,22 @@ fn validate_preview(config: &Config, problems: &mut Vec<String>) {
                 .into(),
         ),
         None => {}
+    }
+}
+
+/// Every `retrieval.submodules` entry must be an `owner/name` the forge can
+/// resolve. A misspelt one is not a weaker allow-list, it is a missing one:
+/// `Checkout::fetch_submodules` and `ForgeTree::allowing` drop what they
+/// cannot parse, and the operator who listed `acme-lib` would be told the
+/// submodule is unavailable while `doctor` called the config fine.
+fn validate_submodules(config: &Config, problems: &mut Vec<String>) {
+    for entry in &config.retrieval.submodules {
+        if crate::ports::forge::RepoId::parse(entry).is_none() {
+            problems.push(format!(
+                "`retrieval.submodules` entry `{entry}` is not `owner/name`; a submodule the \
+                 forge cannot resolve is one nothing reads"
+            ));
+        }
     }
 }
 

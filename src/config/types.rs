@@ -846,7 +846,37 @@ pub struct Retrieval {
     /// neither is same owner; the operator naming the repository is. A
     /// submodule whose remote is not listed here is neither fetched nor
     /// read, and the reviewer is told the path is unavailable.
+    ///
+    /// This was a `bool` for one release — `true` meant "follow same-host
+    /// remotes" — and configs written then still parse: `false` is the empty
+    /// list, and `true` is refused with the migration spelled out rather
+    /// than with a type error, because there is no list that means what
+    /// `true` meant and guessing one would be the authorization decision
+    /// this field exists to put in the operator's hands.
+    #[serde(deserialize_with = "submodule_list")]
     pub submodules: Vec<String>,
+}
+
+/// `retrieval.submodules`: a list of `owner/name`, or the retired boolean.
+fn submodule_list<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Either {
+        List(Vec<String>),
+        Switch(bool),
+    }
+    match Either::deserialize(deserializer)? {
+        Either::List(list) => Ok(list),
+        Either::Switch(false) => Ok(Vec::new()),
+        Either::Switch(true) => Err(serde::de::Error::custom(
+            "`retrieval.submodules = true` is no longer a setting: list the submodule \
+             repositories a review may read, as `submodules = [\"owner/name\", ...]` — \
+             same host is not authorization, so nothing is followed by default",
+        )),
+    }
 }
 
 /// The long-lived memory of a repository, and how a review consults it.
