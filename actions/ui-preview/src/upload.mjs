@@ -22,8 +22,10 @@ export async function upload({ dir, prefix, bucket, endpoint, region = "auto", l
   const client = new S3Client({
     region,
     endpoint,
-    // R2 and most S3-compatible stores want the bucket in the path, not the host.
-    forcePathStyle: true,
+    // R2 and most S3-compatible stores want the bucket in the path, not the
+    // host; AWS itself deprecates path-style and wants `bucket.s3.region…`,
+    // which is also the shape of the public URL the server composes.
+    forcePathStyle: !/\.amazonaws\.com$/.test(new URL(endpoint).hostname),
   });
   const files = (await readdir(dir)).filter((f) => path.extname(f) in TYPES);
   const keys = [];
