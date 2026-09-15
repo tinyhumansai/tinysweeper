@@ -197,6 +197,11 @@ mod tests {
             "a partial review must say so: {}",
             outcome.summary
         );
+        assert_eq!(
+            outcome.unanswered,
+            vec!["bad.rs".to_string()],
+            "the file nobody answered for is named, so the verdict cannot vouch for it"
+        );
     }
 
     #[tokio::test]
@@ -207,6 +212,7 @@ mod tests {
             .into_outcome();
 
         assert!(outcome.skipped.is_some());
+        assert_eq!(outcome.unanswered, vec!["bad.rs".to_string()]);
     }
 
     #[tokio::test]

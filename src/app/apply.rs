@@ -1176,6 +1176,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_review_nobody_answered_is_not_approved() {
+        // The production case, 2026-09-15: every model call 403'd on an
+        // exhausted gateway budget, every lane came back Neutral with "could
+        // not be reviewed", nothing blocked — and the bot posted "found
+        // nothing blocking. Approving. $0.0000 · 0 in / 0 out". Neutral does
+        // not block, so the only thing standing between that and an approval
+        // is the lane saying what it never got an answer on.
+        let mut unanswered = proposal("abc123", vec![]);
+        for lane in &mut unanswered.lanes {
+            lane.conclusion = CheckConclusion::Neutral;
+            lane.summary = "Reviewed 0 files; 0 findings. 1 file could not be reviewed.".into();
+            lane.unanswered = vec!["src/lib.rs".into()];
+        }
+        assert!(!unanswered.blocked());
+        assert!(!unanswered.complete());
+
+        let forge = forge("abc123");
+        apply(&forge, &forge, &config(), &unanswered, None)
+            .await
+            .expect("applies");
+
+        match review_of(&forge) {
+            None => {}
+            Some((body, event)) => {
+                assert_ne!(event, ReviewEvent::Approve, "{body}");
+                assert_ne!(event, ReviewEvent::RequestChanges, "{body}");
+                assert!(
+                    body.contains("not an approval") && body.contains("`src/lib.rs`"),
+                    "the reader is told why: {body}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn unread_files_do_not_block_either() {
         // The other half. Refusing to approve is not the same as objecting: we
         // do not know there is a problem, only that we did not look, and
