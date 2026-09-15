@@ -133,11 +133,12 @@ impl IndexBackend {
         use crate::ports::manifest::IndexManifest;
 
         let repo_id = repo.to_string();
+        let indexed = indexed_revision(revision, &config.retrieval.submodules);
         if self
             .manifest
             .state(&repo_id, &self.signature)
             .await?
-            .is_fresh(revision)
+            .is_fresh(&indexed)
         {
             return Ok(IndexOutcome::AlreadyFresh);
         }
@@ -173,7 +174,7 @@ impl IndexBackend {
         .as_holder(format!("server-{}", std::process::id()));
 
         let outcome = indexer
-            .index_repo(&repo_id, revision, checkout.path())
+            .index_repo(&repo_id, &indexed, checkout.path())
             .await?;
 
         if let IndexOutcome::Indexed(report) = &outcome {
@@ -400,6 +401,34 @@ fn mongo_uri() -> Result<String> {
 
 fn mongo_db() -> String {
     std::env::var("TINYSWEEPER_MONGODB_DB").unwrap_or_else(|_| "tinysweeper".to_string())
+}
+
+
+/// What the manifest records as the revision an index reflects.
+///
+/// The commit alone is not enough: which submodules were fetched into the
+/// checkout is part of what got indexed, and that is decided by
+/// `retrieval.submodules`, not by the commit. An operator who removes a
+/// repository from the list at an unchanged head would otherwise be told the
+/// index is fresh — and `Retriever::retrieve` applies no allow-list of its
+/// own, so the chunks policy says may no longer be read would keep reaching
+/// prompts until the next push. Folding the list into the recorded revision
+/// makes a policy change a stale index. An empty list records the bare
+/// commit, so the manifests written before this existed stay fresh.
+fn indexed_revision(revision: &str, submodules: &[String]) -> String {
+    if submodules.is_empty() {
+        return revision.to_string();
+    }
+    let mut allowed: Vec<&str> = submodules.iter().map(String::as_str).collect();
+    allowed.sort_unstable();
+    allowed.dedup();
+    let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
+    for repo in allowed {
+        sha2::Digest::update(&mut hasher, repo.as_bytes());
+        sha2::Digest::update(&mut hasher, b"\0");
+    }
+    let digest = sha2::Digest::finalize(hasher);
+    format!("{revision}+submodules:{:016x}", u64::from_be_bytes(digest[..8].try_into().unwrap()))
 }
 
 #[cfg(test)]
