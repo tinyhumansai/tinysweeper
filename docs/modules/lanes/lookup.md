@@ -100,11 +100,12 @@ definition and check one sibling, and not enough to wander.
 
 The forge reader follows one level of submodule: `.gitmodules` at the head
 names the path and remote, `ForgeRead::submodule_at` gives the gitlink, and
-the file is read from that repository at that commit — when the remote is on
-the forge's own host. A remote elsewhere is never contacted: the `.gitmodules`
-URL is contributor-controlled, and the read token must not reach any other
-host. The same rule governs `retrieval.submodules`, which fetches them into
-the indexer's checkout.
+the file is read from that repository at that commit — when the operator has
+listed that repository in `retrieval.submodules`. Nothing else is followed:
+the `.gitmodules` URL is contributor-controlled, the read token would follow
+it into a private sibling under the same owner as readily as anywhere, and
+neither same host nor same owner is authorization. The same list governs
+which submodules the indexer fetches into its checkout.
 
 A checkout that has an empty directory where a submodule belongs answers
 *unavailable* for paths under it, not *not found*. The difference is a false
