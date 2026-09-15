@@ -291,6 +291,17 @@ pub trait ForgeWrite: Send + Sync {
         event: ReviewEvent,
     ) -> Result<()>;
 
+    /// Withdraw tinysweeper's own standing approval on a pull request, if
+    /// there is one, with `message` as the reason GitHub shows.
+    ///
+    /// A comment does not withdraw an approval — the forge keeps the last
+    /// *verdict* in force under any number of comments — so a review that
+    /// could not vouch for a new push has to say so with this, or a
+    /// repository that does not dismiss stale approvals merges the push on
+    /// the strength of what the bot said about an earlier one. Nothing to
+    /// withdraw is not an error.
+    async fn dismiss_own_approval(&self, repo: &RepoId, number: u64, message: &str) -> Result<()>;
+
     /// Add labels to an issue or pull request.
     async fn add_labels(&self, repo: &RepoId, number: u64, labels: &[String]) -> Result<()>;
 

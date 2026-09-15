@@ -131,6 +131,22 @@ pub async fn apply(
     // reads as an all-clear. A file the *forge* withheld is not in this list
     // — that is a property of the pull request, it recurs on every push, and
     // the check runs already carry it.
+    // A push the model never answered cannot be vouched for, and neither can
+    // the approval that stands from before it: a comment does not withdraw
+    // one, and a repository that does not dismiss stale approvals would
+    // merge this push on the strength of what was said about the last. The
+    // dismissal names the reason; the comment below repeats it.
+    if !proposal.answered() && previous == Some(ReviewEvent::Approve) {
+        write
+            .dismiss_own_approval(
+                &repo,
+                proposal.number,
+                "tinysweeper could not review the latest push, so its earlier approval no \
+                 longer speaks for this pull request.",
+            )
+            .await?;
+    }
+
     if !redundant_approval
         && (!comments.is_empty()
             || event == ReviewEvent::Approve
@@ -1244,6 +1260,45 @@ mod tests {
             "an outage must not clear a block: {body}"
         );
         assert!(body.contains("not an approval"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_review_nobody_answered_withdraws_the_approval_that_stood_before_it() {
+        // GitHub keeps an approval in force under any number of comments, so
+        // the comment alone would leave the bot vouching for a push it never
+        // read. The approval is dismissed, with the reason.
+        let mut unanswered = proposal("abc123", vec![]);
+        for lane in &mut unanswered.lanes {
+            lane.conclusion = CheckConclusion::Neutral;
+            lane.unanswered = vec!["src/lib.rs".into()];
+        }
+
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::Approve);
+        apply(&forge, &forge, &config(), &unanswered, None)
+            .await
+            .expect("applies");
+
+        let dismissed = forge.writes().into_iter().find_map(|w| match w {
+            Write::DismissApproval { message, .. } => Some(message),
+            _ => None,
+        });
+        let message = dismissed.expect("the standing approval is withdrawn");
+        assert!(message.contains("could not review"), "{message}");
+        let (body, event) = review_of(&forge).expect("and the reason is posted");
+        assert_ne!(event, ReviewEvent::Approve, "{body}");
+
+        // A clean push that *was* answered dismisses nothing.
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::Approve);
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
+            .await
+            .expect("applies");
+        assert!(
+            !forge
+                .writes()
+                .iter()
+                .any(|w| matches!(w, Write::DismissApproval { .. })),
+            "nothing to withdraw from a review that answered"
+        );
     }
 
     #[tokio::test]

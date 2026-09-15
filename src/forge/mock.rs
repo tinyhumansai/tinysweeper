@@ -55,6 +55,13 @@ pub enum Write {
         /// Whether it blocks the merge button.
         event: ReviewEvent,
     },
+    /// tinysweeper's own approval was withdrawn.
+    DismissApproval {
+        /// The pull request.
+        number: u64,
+        /// The reason shown on the dismissal.
+        message: String,
+    },
     /// Labels were added.
     Labels {
         /// The item.
@@ -802,6 +809,26 @@ impl ForgeWrite for MockForge {
             comments,
             event,
         });
+        Ok(())
+    }
+
+    async fn dismiss_own_approval(&self, _repo: &RepoId, number: u64, message: &str) -> Result<()> {
+        let standing = {
+            let mut state = self.state.lock().expect("mock state lock");
+            match state.own_reviews.get(&number) {
+                Some(ReviewEvent::Approve) => {
+                    state.own_reviews.remove(&number);
+                    true
+                }
+                _ => false,
+            }
+        };
+        if standing {
+            self.record(Write::DismissApproval {
+                number,
+                message: message.to_string(),
+            });
+        }
         Ok(())
     }
 

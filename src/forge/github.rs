@@ -1803,6 +1803,30 @@ impl ForgeWrite for GitHubWrite {
         Ok(())
     }
 
+    async fn dismiss_own_approval(&self, repo: &RepoId, number: u64, message: &str) -> Result<()> {
+        let route = format!(
+            "/repos/{}/{}/pulls/{number}/reviews?per_page=100",
+            repo.owner, repo.name
+        );
+        let raw: serde_json::Value = self.client.get(route, None::<&()>).await.map_err(api)?;
+        // The approval that stands is the last verdict we left, if it was one.
+        // An approval followed by our own changes request is not standing,
+        // and dismissing it would be dismissing history.
+        let Some(id) = raw
+            .as_array()
+            .and_then(|reviews| own_standing_approval_id(reviews.iter()))
+        else {
+            return Ok(());
+        };
+        let route = format!(
+            "/repos/{}/{}/pulls/{number}/reviews/{id}/dismissals",
+            repo.owner, repo.name
+        );
+        let body = serde_json::json!({ "message": message });
+        let _: serde_json::Value = self.client.put(route, Some(&body)).await.map_err(api)?;
+        Ok(())
+    }
+
     async fn add_labels(&self, repo: &RepoId, number: u64, labels: &[String]) -> Result<()> {
         self.client
             .issues(&repo.owner, &repo.name)
@@ -1980,6 +2004,25 @@ fn own_review_state_of<'a>(
         }
     }
     last_verdict.or(commented.then_some(ReviewEvent::Comment))
+}
+
+/// The id of our own approval that is currently in force, from reviews
+/// oldest first: the last verdict we left, when that verdict was an approval.
+fn own_standing_approval_id<'a>(
+    reviews: impl Iterator<Item = &'a serde_json::Value>,
+) -> Option<u64> {
+    let mut standing = None;
+    for review in reviews.filter(|r| {
+        let login = r["user"]["login"].as_str().unwrap_or_default();
+        crate::findings::prior::is_own_login(login)
+    }) {
+        match review["state"].as_str() {
+            Some("APPROVED") => standing = review["id"].as_u64(),
+            Some("CHANGES_REQUESTED") | Some("DISMISSED") => standing = None,
+            _ => {}
+        }
+    }
+    standing
 }
 
 fn review_comment_payload(c: &ReviewComment) -> serde_json::Value {
@@ -2299,6 +2342,28 @@ mod tests {
             bot: false,
             state,
         }
+    }
+
+    #[test]
+    fn the_standing_approval_is_the_last_verdict_when_that_was_an_approval() {
+        let own = |id: u64, state: &str| serde_json::json!({ "id": id, "user": { "login": "tinysweeper[bot]" }, "state": state });
+        assert_eq!(
+            own_standing_approval_id([own(1, "APPROVED"), own(2, "COMMENTED")].iter()),
+            Some(1),
+            "a comment after an approval leaves it standing"
+        );
+        assert_eq!(
+            own_standing_approval_id([own(1, "APPROVED"), own(2, "CHANGES_REQUESTED")].iter()),
+            None,
+            "an approval we ourselves superseded is not standing"
+        );
+        assert_eq!(
+            own_standing_approval_id([own(1, "APPROVED"), own(2, "DISMISSED")].iter()),
+            None
+        );
+        let theirs =
+            serde_json::json!({ "id": 9, "user": { "login": "someone" }, "state": "APPROVED" });
+        assert_eq!(own_standing_approval_id([theirs].iter()), None);
     }
 
     #[test]
