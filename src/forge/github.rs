@@ -1903,6 +1903,121 @@ impl ForgeWrite for GitHubWrite {
         graphql_errors(&raw, "the resolve-thread mutation")
     }
 
+    async fn publish_files(
+        &self,
+        repo: &RepoId,
+        branch: &str,
+        message: &str,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<String> {
+        use base64::Engine as _;
+        let git = format!("/repos/{}/{}/git", repo.owner, repo.name);
+
+        // The branch's tip, or nothing: a store branch is created on first
+        // use, as an orphan, so the repository's history never gains a
+        // commit that reaches these files.
+        let parent: Option<(String, String)> = match self
+            .client
+            .get::<serde_json::Value, _, ()>(format!("{git}/ref/heads/{branch}"), None)
+            .await
+        {
+            Ok(reference) => {
+                let sha = reference["object"]["sha"]
+                    .as_str()
+                    .ok_or_else(|| Error::Forge("the branch ref carried no sha".into()))?
+                    .to_string();
+                let commit: serde_json::Value = self
+                    .client
+                    .get(format!("{git}/commits/{sha}"), None::<&()>)
+                    .await
+                    .map_err(api)?;
+                let tree = commit["tree"]["sha"]
+                    .as_str()
+                    .ok_or_else(|| Error::Forge("the branch commit carried no tree".into()))?
+                    .to_string();
+                Some((sha, tree))
+            }
+            Err(octocrab::Error::GitHub { source, .. }) if source.status_code == 404 => None,
+            Err(err) => return Err(api(err)),
+        };
+
+        // One blob per file. Base64 rather than utf-8: these are PNGs.
+        let mut entries = Vec::with_capacity(files.len());
+        for (path, bytes) in files {
+            let blob: serde_json::Value = self
+                .client
+                .post(
+                    format!("{git}/blobs"),
+                    Some(&serde_json::json!({
+                        "content": base64::engine::general_purpose::STANDARD.encode(bytes),
+                        "encoding": "base64",
+                    })),
+                )
+                .await
+                .map_err(api)?;
+            let sha = blob["sha"]
+                .as_str()
+                .ok_or_else(|| Error::Forge(format!("the blob for `{path}` carried no sha")))?;
+            entries.push(serde_json::json!({
+                "path": path,
+                "mode": "100644",
+                "type": "blob",
+                "sha": sha,
+            }));
+        }
+
+        let mut tree_body = serde_json::json!({ "tree": entries });
+        if let Some((_, base_tree)) = &parent {
+            tree_body["base_tree"] = serde_json::json!(base_tree);
+        }
+        let tree: serde_json::Value = self
+            .client
+            .post(format!("{git}/trees"), Some(&tree_body))
+            .await
+            .map_err(api)?;
+        let tree_sha = tree["sha"]
+            .as_str()
+            .ok_or_else(|| Error::Forge("the tree carried no sha".into()))?;
+
+        let mut commit_body = serde_json::json!({ "message": message, "tree": tree_sha });
+        if let Some((parent_sha, _)) = &parent {
+            commit_body["parents"] = serde_json::json!([parent_sha]);
+        }
+        let commit: serde_json::Value = self
+            .client
+            .post(format!("{git}/commits"), Some(&commit_body))
+            .await
+            .map_err(api)?;
+        let commit_sha = commit["sha"]
+            .as_str()
+            .ok_or_else(|| Error::Forge("the commit carried no sha".into()))?
+            .to_string();
+
+        // Not a force update: a concurrent run that moved the branch first
+        // makes this one fail rather than drop that run's files, and the
+        // caller retries from the new tip.
+        if parent.is_some() {
+            let _: serde_json::Value = self
+                .client
+                .patch(
+                    format!("{git}/refs/heads/{branch}"),
+                    Some(&serde_json::json!({ "sha": commit_sha, "force": false })),
+                )
+                .await
+                .map_err(api)?;
+        } else {
+            let _: serde_json::Value = self
+                .client
+                .post(
+                    format!("{git}/refs"),
+                    Some(&serde_json::json!({ "ref": format!("refs/heads/{branch}"), "sha": commit_sha })),
+                )
+                .await
+                .map_err(api)?;
+        }
+        Ok(commit_sha)
+    }
+
     async fn merge(
         &self,
         repo: &RepoId,

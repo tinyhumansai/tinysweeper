@@ -21,6 +21,15 @@ use crate::ports::forge::{ForgeRead, ForgeWrite};
 /// One thing the mock was asked to write.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Write {
+    /// Files were committed to a branch.
+    Files {
+        /// The branch written to.
+        branch: String,
+        /// The commit message.
+        message: String,
+        /// The paths written, in order.
+        paths: Vec<String>,
+    },
     /// A check run was published.
     Check(CheckRun),
     /// An existing check run was replaced in place.
@@ -937,6 +946,21 @@ impl ForgeWrite for MockForge {
             }
         }
         Ok(())
+    }
+
+    async fn publish_files(
+        &self,
+        _repo: &RepoId,
+        branch: &str,
+        message: &str,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<String> {
+        self.record(Write::Files {
+            branch: branch.to_string(),
+            message: message.to_string(),
+            paths: files.iter().map(|(path, _)| path.clone()).collect(),
+        });
+        Ok(format!("files{:04x}", self.allocate_id()))
     }
 
     async fn merge(
