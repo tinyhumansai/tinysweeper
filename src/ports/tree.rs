@@ -333,7 +333,11 @@ impl TreeReader for MockTree {
                         break;
                     }
                 }
-                Found::Hits { hits, truncated }
+                Found::Hits {
+                    hits,
+                    truncated,
+                    skipped: Vec::new(),
+                }
             }
         })
     }
