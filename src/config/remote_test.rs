@@ -347,6 +347,7 @@ const EVERY_OVERRIDABLE_KEY: &str = r#"
 strictness = 3
 severity_gate = "medium"
 confidence_min = 0.6
+note_confidence = 0.4
 max_comments = 7
 incremental = false
 draft_prs = true
