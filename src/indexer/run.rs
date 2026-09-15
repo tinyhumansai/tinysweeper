@@ -502,7 +502,6 @@ impl<'a> Indexer<'a> {
                 "a confirmed chunk disappeared before its vector could be reused".into(),
             ));
         }
-        report.upserted += relocated;
 
         let queue: Vec<(usize, &Chunk)> = work
             .iter()
@@ -517,6 +516,13 @@ impl<'a> Indexer<'a> {
             last_position[*file] = Some(position);
         }
 
+        // Rows go into the store as they are written, but into the *count*
+        // only when their file is confirmed below. An unconfirmed file is
+        // re-embedded by the next run, and `upsert` reports a replacement as
+        // a write, so counting here would count a chunk once per attempt: a
+        // run cut off by the budget, or one that failed after its first
+        // batch, would leave the total inflated for good.
+        let mut written_per_file = vec![0_u64; work.len()];
         let mut written = 0_usize;
         for (start, end) in batch_bounds(&queue, self.batch, self.max_batch_tokens) {
             let batch = &queue[start..end];
@@ -553,7 +559,10 @@ impl<'a> Indexer<'a> {
                     vector,
                 })
                 .collect();
-            report.upserted += self.index.upsert(signature, &embedded).await?;
+            self.index.upsert(signature, &embedded).await?;
+            for (file, _) in batch {
+                written_per_file[*file] += 1;
+            }
             written += batch.len();
         }
 
@@ -575,6 +584,12 @@ impl<'a> Indexer<'a> {
             .map(|(_, file)| file.confirmation())
             .collect();
         self.manifest.record(repo_id, signature, &complete).await?;
+        report.upserted += work
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| finished(*index))
+            .map(|(index, file)| written_per_file[index] + file.to_relocate.len() as u64)
+            .sum::<u64>();
 
         // Step 5: and only now is anything deleted.
         let stale: Vec<String> = work

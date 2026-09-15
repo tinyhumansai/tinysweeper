@@ -77,7 +77,9 @@ pub enum Settled {
         /// whether or not the embedding after it did; leaving the old count
         /// on record would report chunks that are not there, and a run that
         /// deleted the last of them would look `Ready` rather than cold.
-        /// `None` leaves the count as it was.
+        /// `None` leaves the count as it was — and is what a record written
+        /// before this field existed reads as.
+        #[serde(default)]
         chunks: Option<u64>,
     },
 }
