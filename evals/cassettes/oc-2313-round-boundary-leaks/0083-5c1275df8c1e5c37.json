@@ -1,0 +1,17 @@
+{
+  "key": "5c1275df8c1e5c37",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3603,
+    "output_tokens": 136,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000337435
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request changes a single import line from `use openhuman_core::openhuman as oh;` to `use openhuman_core as oh;`. The lookup confirms that `pub mod openhuman` exists in the crate's lib.rs, and there is no `pub use openhuman` — meaning the old path referenced a submodule, while the new path references the crate root. This is a namespace restructuring that does not introduce any security concern. No untrusted input, network calls, deserialization, path traversal, secrets, or dependency changes are involved. The change looks sound."
+  }
+}

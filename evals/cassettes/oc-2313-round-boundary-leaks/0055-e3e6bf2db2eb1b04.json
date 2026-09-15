@@ -1,0 +1,17 @@
+{
+  "key": "e3e6bf2db2eb1b04",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4573,
+    "output_tokens": 150,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00042434084
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change re-exports `openhuman_core` as `oh` instead of importing it through the crate's own `use oh::tools::traits` alias.  The path `oh::tools::traits` resolves to `openhuman_core::tools::traits` via the new `use openhuman_core as oh`, which is correct.  No security problem is introduced: no untrusted input reaches a dangerous sink, no authentication/authorisation change occurs, no new network/subprocess calls, no deserialization, no path traversal, no secret exposure, no dependency change, and no CI permission widening.  The diff looks sound."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "4162379e2a876a61",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3605,
+    "output_tokens": 367,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00039051
+  },
+  "value": {
+    "findings": [],
+    "summary": "The pull request updates two import paths to use the crate root re-export instead of the nested module. This is a refactoring that does not introduce any security concerns or functional changes."
+  }
+}

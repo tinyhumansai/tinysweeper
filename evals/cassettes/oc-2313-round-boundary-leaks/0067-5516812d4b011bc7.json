@@ -1,0 +1,29 @@
+{
+  "key": "5516812d4b011bc7",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3589,
+    "output_tokens": 285,
+    "cached_tokens": 3090,
+    "embed_tokens": 0,
+    "cost_usd": 0.001331148
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core",
+        "pattern": "pub mod agent",
+        "why": "Check whether openhuman_core directly exports agent::progress::AgentProgress (new path) vs via openhuman submodule (old path)"
+      },
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core",
+        "pattern": "pub use openhuman",
+        "why": "Check if openhuman_core re-exports the openhuman module under a different name"
+      }
+    ]
+  }
+}

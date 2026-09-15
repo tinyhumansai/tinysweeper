@@ -1,0 +1,17 @@
+{
+  "key": "013dc3ab38d475b2",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3730,
+    "output_tokens": 349,
+    "cached_tokens": 3205,
+    "embed_tokens": 0,
+    "cost_usd": 0.0014991837
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adjusts `openhuman_core` import paths to drop a redundant `openhuman::` module segment in both production and test code. No untrusted input, dangerous sinks, authentication, deserialization, or secret-handling changes are introduced; the diff is a path refactor and looks safe to merge."
+  }
+}

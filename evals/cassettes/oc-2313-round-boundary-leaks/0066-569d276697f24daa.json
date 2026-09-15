@@ -1,0 +1,29 @@
+{
+  "key": "569d276697f24daa",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3436,
+    "output_tokens": 274,
+    "cached_tokens": 2971,
+    "embed_tokens": 0,
+    "cost_usd": 0.00126983598
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core",
+        "pattern": "pub mod openhuman",
+        "why": "Determine whether openhuman_core has a top-level openhuman submodule that the old import pointed to, and whether agent::stop_hooks lives under it or under the crate root."
+      },
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core",
+        "pattern": "pub mod agent",
+        "why": "Determine where the agent module is re-exported so I can tell if oh::agent::stop_hooks resolves with the new alias."
+      }
+    ]
+  }
+}

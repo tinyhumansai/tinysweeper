@@ -1,0 +1,17 @@
+{
+  "key": "98b24f49cfa382e8",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4620,
+    "output_tokens": 145,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004275628
+  },
+  "value": {
+    "findings": [],
+    "summary": "The diff changes an import path from `openhuman_core::openhuman` to `openhuman_core` (dropping the `pub mod openhuman` segment), but the crate already re-exports `oh` at its top level — every existing `use oh::…` reference resolves correctly. No untrusted input reaches a dangerous sink, no authentication or authorization logic is touched, no new network/subprocess calls are added, no deserialization of untrusted data is introduced, no path traversal is possible, no secrets move into code or logs, no dependencies change, and CI permissions are unaffected. The change looks safe to merge."
+  }
+}

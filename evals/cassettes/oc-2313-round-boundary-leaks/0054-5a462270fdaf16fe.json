@@ -1,0 +1,17 @@
+{
+  "key": "5a462270fdaf16fe",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3597,
+    "output_tokens": 57,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00032315388
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change updates an import path from `openhuman_core::openhuman` to `openhuman_core` in two locations, which is a routine namespace cleanup. No security-relevant alterations are introduced."
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "key": "a4005f8a75a45801",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4987,
+    "output_tokens": 1004,
+    "cached_tokens": 1536,
+    "embed_tokens": 0,
+    "cost_usd": 0.000518958
+  },
+  "value": {
+    "lookups": [
+      {
+        "end": 200,
+        "kind": "read",
+        "path": "crates/openhuman-core/src/lib.rs",
+        "start": 1,
+        "why": "To see the crate root exports and whether `tools::traits` is available at the top level or only under the `openhuman` submodule."
+      },
+      {
+        "glob": "crates/openhuman-core/src/**/*.rs",
+        "kind": "search",
+        "pattern": "tools::traits",
+        "why": "To locate where `PermissionLevel`, `Tool`, and `ToolResult` are defined and whether they are re-exported at the crate root."
+      }
+    ]
+  }
+}

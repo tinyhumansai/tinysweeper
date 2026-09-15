@@ -1,0 +1,29 @@
+{
+  "key": "c4d55bc5b859ffe5",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3454,
+    "output_tokens": 405,
+    "cached_tokens": 2979,
+    "embed_tokens": 0,
+    "cost_usd": 0.00155600382
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core",
+        "pattern": "pub mod openhuman",
+        "why": "Determine whether openhuman_core has an `openhuman` submodule and whether config/skills live there or at the crate root"
+      },
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core/src/harness/built_in",
+        "pattern": "oh::",
+        "why": "See all paths referenced via the oh alias in the changed file to verify they resolve under the new import"
+      }
+    ]
+  }
+}

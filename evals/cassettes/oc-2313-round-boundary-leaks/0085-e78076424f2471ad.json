@@ -1,0 +1,17 @@
+{
+  "key": "e78076424f2471ad",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3720,
+    "output_tokens": 2202,
+    "cached_tokens": 1536,
+    "embed_tokens": 0,
+    "cost_usd": 0.000620568
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request updates two `use` statements to import the `openhuman_core` crate directly instead of via the `openhuman` submodule. No new code paths, no untrusted input handling, and no security-sensitive logic is changed. The change looks sound."
+  }
+}

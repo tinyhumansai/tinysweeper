@@ -1,0 +1,17 @@
+{
+  "key": "173258d6bc10bc13",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3474,
+    "output_tokens": 125,
+    "cached_tokens": 3002,
+    "embed_tokens": 0,
+    "cost_usd": 0.00096180756
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change updates a `use` import path for `PermissionLevel`, `Tool`, and `ToolResult` from `openhuman_core::openhuman::tools::traits` to `openhuman_core::tools::traits`. It is a cosmetic module-path update with no security impact and looks safe to merge."
+  }
+}

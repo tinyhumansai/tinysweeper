@@ -1,0 +1,24 @@
+{
+  "key": "ae97860ed40e9d67",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3445,
+    "output_tokens": 143,
+    "cached_tokens": 2972,
+    "embed_tokens": 0,
+    "cost_usd": 0.00099696996
+  },
+  "value": {
+    "lookups": [
+      {
+        "end": 120,
+        "kind": "read",
+        "path": "crates/opencompany-core/src/harness/built_in/checkpoint.rs",
+        "start": 1,
+        "why": "Check all usages of `oh` to verify the import path change doesn't break references."
+      }
+    ]
+  }
+}

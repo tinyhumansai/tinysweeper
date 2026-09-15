@@ -1,0 +1,17 @@
+{
+  "key": "ae14e4462a2902e0",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3662,
+    "output_tokens": 66,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00033038152
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change replaces fields in a test fixture with new ones (`watermark` and `round_start`), matching an updated type definition. The diff is in a test file, constructs no dangerous sink calls, and introduces no security concern. It looks sound."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "ec60c3769ae93d00",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4210,
+    "output_tokens": 117,
+    "cached_tokens": 3599,
+    "embed_tokens": 0,
+    "cost_usd": 0.00111376902
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change updates rustdoc link paths in comments from `openhuman_core::openhuman::agent::Agent::seed_resume_from_messages` to `openhuman_core::agent::Agent::seed_resume_from_messages`. It is documentation-only and safe to merge."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "c79f082ef744cdf9",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3771,
+    "output_tokens": 70,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00034056988
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request changes one import from `openhuman_core::openhuman as oh` to `use openhuman_core as oh`, making a re-exported public module the path prefix. The change is a pure refactor that does not introduce any security issues."
+  }
+}

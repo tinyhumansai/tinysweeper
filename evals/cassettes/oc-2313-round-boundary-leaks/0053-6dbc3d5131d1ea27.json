@@ -1,0 +1,17 @@
+{
+  "key": "6dbc3d5131d1ea27",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4443,
+    "output_tokens": 101,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004044866
+  },
+  "value": {
+    "findings": [],
+    "summary": "The diff changes a `use` path from `openhuman_core::openhuman as oh` to `openhuman_core as oh`, which is a harmless internal re-export change (the `openhuman` module is re-exported from the crate root).  No security-sensitive behavior, no new sinks, no untrusted input paths, and no widened permissions are introduced.  The change looks sound as-is."
+  }
+}

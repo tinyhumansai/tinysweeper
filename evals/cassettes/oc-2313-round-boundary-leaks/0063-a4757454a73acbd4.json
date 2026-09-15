@@ -1,0 +1,17 @@
+{
+  "key": "a4757454a73acbd4",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3717,
+    "output_tokens": 121,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00034474972
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request adjusts import paths within the `search_byo.rs` module, replacing `openhuman_core::openhuman` with `openhuman_core`.  The changes appear to be a straightforward refactor of the module's own internal structure and do not introduce new security concerns, unsafe operations, or untrusted data flows.  The change looks sound and is safe to merge."
+  }
+}

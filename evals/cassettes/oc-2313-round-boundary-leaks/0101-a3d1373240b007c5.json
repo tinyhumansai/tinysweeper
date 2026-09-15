@@ -1,0 +1,17 @@
+{
+  "key": "a3d1373240b007c5",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 26206,
+    "output_tokens": 185,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00231423808
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request refactors path imports from `openhuman_core::openhuman` to `openhuman_core` throughout the codebase, and extends the hivemind episode loop from single-turn steps to multi-turn rounds. The import change is purely mechanical. The round change restructures the loop to process a vector of turns, applies a round_start bound to pinboard reads, and adjusts test fixtures to match the new `HiveStep::Speak` variant's `turns`/`next_state` fields. The tests that were updated exercise the same branching and assertions as before; the behavioural change is covered by the existing test structure, which now exercises the round code path (most fixtures yield a single-turn round, which is the degenerate case). No untested branches, unchecked invariants, or missing error paths were found."
+  }
+}

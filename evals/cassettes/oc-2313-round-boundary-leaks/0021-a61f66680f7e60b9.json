@@ -1,0 +1,17 @@
+{
+  "key": "a61f66680f7e60b9",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3670,
+    "output_tokens": 126,
+    "cached_tokens": 3156,
+    "embed_tokens": 0,
+    "cost_usd": 0.00101167248
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change updates import paths from `openhuman_core::openhuman::{security,tools}` to `openhuman_core::{security,tools}`, reflecting a module reorganization. It introduces no security or behavior changes and looks safe to merge."
+  }
+}

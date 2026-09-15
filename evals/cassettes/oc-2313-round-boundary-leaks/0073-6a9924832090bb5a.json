@@ -1,0 +1,17 @@
+{
+  "key": "6a9924832090bb5a",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4597,
+    "output_tokens": 92,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00041632948
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change renames the import from `openhuman_core::openhuman` to `openhuman_core`, which works because `crates/opencompany-core/src/lib.rs` re-exports `pub mod openhuman` at the root. All downstream uses (e.g. `oh::config::Config`) remain valid. The diff is a mechanical rename with no security impact."
+  }
+}

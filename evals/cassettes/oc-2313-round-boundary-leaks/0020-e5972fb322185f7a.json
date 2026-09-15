@@ -1,0 +1,17 @@
+{
+  "key": "e5972fb322185f7a",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3590,
+    "output_tokens": 107,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000337057224
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change narrows the `openhuman_core` dependency path from the workspace root `vendor/openhuman` to the more specific `vendor/openhuman/crates/openhuman-core`. It does not introduce any untrusted input, authentication changes, network calls, deserialization, path traversal, secrets, or permission changes. The path change is a structural refactor that should resolve correctly as long as the vendored crate exists at that location. No security findings."
+  }
+}

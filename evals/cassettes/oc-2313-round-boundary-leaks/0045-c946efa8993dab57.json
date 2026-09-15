@@ -1,0 +1,17 @@
+{
+  "key": "c946efa8993dab57",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3598,
+    "output_tokens": 58,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00032341512
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request only renames two `use` paths from the old `openhuman_core::openhuman` to `openhuman_core`, reflecting an internal module restructuring. No security-sensitive changes are introduced."
+  }
+}

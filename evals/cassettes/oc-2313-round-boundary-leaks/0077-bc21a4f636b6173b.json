@@ -1,0 +1,25 @@
+{
+  "key": "bc21a4f636b6173b",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3468,
+    "output_tokens": 320,
+    "cached_tokens": 2990,
+    "embed_tokens": 0,
+    "cost_usd": 0.0013787718
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core/src/harness/speech_tools.rs",
+        "pattern": "oh::",
+        "why": "Determine whether changing the import alias from `openhuman_core::openhuman as oh` to `openhuman_core as oh` still resolves all `oh::` paths in this file."
+      }
+    ],
+    "summary": "Pending lookup results to determine whether the changed import alias still resolves all `oh::` usages in this file."
+  }
+}

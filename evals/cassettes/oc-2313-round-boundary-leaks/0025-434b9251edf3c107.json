@@ -1,0 +1,17 @@
+{
+  "key": "434b9251edf3c107",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3626,
+    "output_tokens": 402,
+    "cached_tokens": 3120,
+    "embed_tokens": 0,
+    "cost_usd": 0.0015882972
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change re-aliases the crate import from `openhuman_core::openhuman` to `openhuman_core` and updates the corresponding doc-comment paths. It is a straightforward module-path refactor with no security-relevant impact."
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "key": "aa0be3e58665eab5",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3568,
+    "output_tokens": 263,
+    "cached_tokens": 3079,
+    "embed_tokens": 0,
+    "cost_usd": 0.00127625022
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core/src",
+        "pattern": "pub mod tools",
+        "why": "Confirm that `tools` is re-exported at the crate root so `openhuman_core::tools::traits` resolves after the import alias change."
+      },
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core/src",
+        "pattern": "pub use openhuman",
+        "why": "Check whether `openhuman` was the previous crate-root re-export and whether it still exists."
+      }
+    ]
+  }
+}

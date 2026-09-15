@@ -1,0 +1,17 @@
+{
+  "key": "3d2afa1d41048b1c",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4110,
+    "output_tokens": 92,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00037392152
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change renames the imported crate alias from `openhuman_core::openhuman` to `openhuman_core`, but all downstream paths (`oh::agent::...`, `oh::memory::...`, `oh::tools::...`) are unaffected because the crate's public API is re-exported at its root. The diff is safe and introduces no security problems."
+  }
+}

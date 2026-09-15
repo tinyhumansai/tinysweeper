@@ -1,0 +1,17 @@
+{
+  "key": "de9c4fb864fe5e3c",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3572,
+    "output_tokens": 74,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0003239376
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change renames the local alias `openhuman_core::openhuman` to `openhuman_core` (removing one level of indirection via `oh`). This is a trivial import path update with no impact on runtime behavior, security boundaries, authentication, or data handling."
+  }
+}

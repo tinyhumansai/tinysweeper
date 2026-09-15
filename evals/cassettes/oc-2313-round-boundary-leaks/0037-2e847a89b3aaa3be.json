@@ -1,0 +1,26 @@
+{
+  "key": "2e847a89b3aaa3be",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3447,
+    "output_tokens": 467,
+    "cached_tokens": 2973,
+    "embed_tokens": 0,
+    "cost_usd": 0.00168633654
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "end": 180,
+        "kind": "read",
+        "path": "crates/opencompany-core/src/harness/built_in/build.rs",
+        "start": 87,
+        "why": "Check all usages of `oh` after the import alias change to confirm they resolve consistently under the new crate-root alias."
+      }
+    ],
+    "summary": "The change re-aliases `oh` from the `openhuman_core::openhuman` submodule to the crate root `openhuman_core`. It is a pure import-path refactor with no new sinks, inputs, or behaviour; if the crate compiles the change is semantically equivalent and safe to merge."
+  }
+}

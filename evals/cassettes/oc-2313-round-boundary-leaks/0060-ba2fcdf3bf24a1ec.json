@@ -1,0 +1,29 @@
+{
+  "key": "ba2fcdf3bf24a1ec",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3462,
+    "output_tokens": 359,
+    "cached_tokens": 2992,
+    "embed_tokens": 0,
+    "cost_usd": 0.00145649616
+  },
+  "value": {
+    "lookups": [
+      {
+        "glob": "crates/openhuman-core/src/lib.rs",
+        "kind": "search",
+        "pattern": "pub mod tools",
+        "why": "Check whether the `tools` module is accessible from the crate root of openhuman_core, which the new `use openhuman_core as oh` path requires."
+      },
+      {
+        "glob": "crates/openhuman-core/src/lib.rs",
+        "kind": "search",
+        "pattern": "pub mod openhuman",
+        "why": "Check the original module path to understand what was re-exported."
+      }
+    ]
+  }
+}

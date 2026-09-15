@@ -1,0 +1,17 @@
+{
+  "key": "d47e972d44616123",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4399,
+    "output_tokens": 1126,
+    "cached_tokens": 3754,
+    "embed_tokens": 0,
+    "cost_usd": 0.00330055152
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change re-aliases the `oh` import from `openhuman_core::openhuman` to `openhuman_core` directly. It is a one-line import-path adjustment with no security impact."
+  }
+}

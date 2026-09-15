@@ -1,0 +1,27 @@
+{
+  "key": "1f099c7045dab1fa",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3894,
+    "output_tokens": 490,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000431865644
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The diff changes `path` from `../../vendor/openhuman` to `../../vendor/openhuman/crates/openhuman-core`.  I looked up `vendor/openhuman/crates/openhuman-core/Cargo.toml` and the file could not be found at this commit.  Without the file it is impossible to confirm:\n\n1. That `openhuman-core` exists at that location.\n2. That its `Cargo.toml` makes the features `skills`, `mcp`, and `hosting` available.\n3. That its package name matches `openhuman` (used as the `package` override — if the sub-crate uses a different package name, the dependency will fail to resolve).\n\nIf any of these is false, the build breaks for this crate.  The change itself is a mechanical path update and does not introduce any other logic errors, but the risk of a broken reference is real and cannot be dismissed without inspecting the target file.",
+        "confidence": 0.9,
+        "existing_code": "openhuman_core = { package = \"openhuman\", path = \"../../vendor/openhuman/crates/openhuman-core\", optional = true, default-features = false, features = [\"skills\", \"mcp\", \"hosting\"] }",
+        "path": "crates/opencompany-core/Cargo.toml",
+        "rule": "broken-reference",
+        "severity": "high",
+        "title": "Verify that the target path exists and exposes the required features"
+      }
+    ],
+    "summary": "The change adjusts the dependency path from the top-level `openhuman` crate to its inner sub-crate `openhuman-core`.  I attempted to verify that `vendor/openhuman/crates/openhuman-core/Cargo.toml` exists at the reviewed commit, but the file could not be read.  This makes the correctness of the new path unverifiable — if the target crate does not exist or its `Cargo.toml` does not publish the same features (`skills`, `mcp`, `hosting`), the build will break.  The change is otherwise straightforward and introduces no other logic errors.  Until the path is confirmed to exist and expose the required features, merging it is not safe."
+  }
+}

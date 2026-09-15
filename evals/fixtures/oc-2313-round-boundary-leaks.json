@@ -615,5 +615,1878 @@
   "blobs": {
     "AGENTS.md": "# Repository Guidelines\n\n## Project Structure & Module Organization\n\nOpenCompany is a Rust 2024 Cargo workspace rooted at `Cargo.toml`, with one\nmanifest per flavour under `crates/`:\n\n- `crates/opencompany-core`: the host — package `opencompany-core`, library\n  crate `opencompany`, binary `opencompany`. Its `src/`, `tests/`, `benches/`,\n  `examples/` and `build.rs` live beneath that manifest. Every `src/...` path\n  in this file and under `docs/` is short for `crates/opencompany-core/src/...`;\n  the data the crate embeds and reads (`companies/`, `globals/`, `skills/`,\n  `frontend/`, `vendor/`) stays at the repository root, `../..` from\n  `CARGO_MANIFEST_DIR`.\n- `crates/opencompany-app`: the Tauri desktop shell. Excluded from the\n  workspace on purpose (its manifest says why); it has its own `Cargo.lock`.\n- `crates/opencompany-tui`: the terminal client, embedding the host.\n\nRust source for the host lives under `crates/opencompany-core/src/`\n(`src/` below). Public module surfaces live in\nsource module directories:\n\n- `src/app/`: runtime configuration and shared Axum state\n- `src/server/`: Axum router and HTTP handlers\n- `src/ledger/`: dynamic ledgers — declared record shapes, the append-only fold,\n  and the `derived/` folder they render into (`docs/spec/runtime/ledgers.md`)\n- `src/globals/`: the global baseline — the agents, workflows, skills and\n  starting tool belt every company gets whichever vertical it started from,\n  authored in `globals/` and embedded at build time\n  (`docs/spec/runtime/globals.md`)\n- `src/openhuman/`: launcher and integration seams for the vendored OpenHuman checkout\n- `src/tiny/`: optional TinyAgents crate feature/status surface\n\nThe command-line entrypoint lives in `src/bin/opencompany.rs`. Business types\nare data-only definitions under `companies/` (a `company.toml` manifest plus a\n`README.md` — not Cargo crates), loaded at runtime via `opencompany serve\n--company companies/<name>`. What every company has regardless of which of\nthose it started from is authored beside them in `globals/`. The operator\nconsole is a Vite/React app under `frontend/`. Design notes and module specifications live in `docs/`, with\n`docs/spec/README.md` as the top-level architecture reference and\n`docs/modules/` holding per-surface design docs.\nThe vendored runtime source is the `vendor/openhuman/` Git submodule. TinyAgents\nis inherited from OpenHuman at `vendor/openhuman/vendor/tinyagents/`.\n\nPrefer small modules with focused responsibilities. Keep core type definitions\nin a dedicated `types.rs` file and package-local tests in the module file or a\ndedicated `test.rs` file when they grow.\n\n## Build, Test, and Development Commands\n\n- `cargo fmt --all -- --check`: verify Rust formatting without changing files.\n- `cargo fmt`: format Rust source files.\n- `cargo clippy --all-targets -- -D warnings`: run lint checks.\n- `cargo build --all-targets`: compile library, binary, tests, and examples.\n- `cargo test`: run the full test suite.\n- `cargo run --bin opencompany`: run the CLI.\n- `cargo run --bin opencompany -- serve`: run the Axum HTTP server on `127.0.0.1:8080`.\n- `cargo run -p opencompany-tui`: run the terminal client over the default data root.\n- `./scripts/dump-prompt.sh --company companies/<name>`: print the system prompt each agent in that bundle is built with (`docs/spec/runtime/agents.md`).\n- `git submodule update --init vendor/openhuman`: initialize OpenHuman.\n- `scripts/ci/init-vendored-submodules.sh`: initialize its vendored crates.\n- `cargo check -p opencompany-core --features tiny`: compile against OpenHuman's TinyAgents pin.\n\nRun commands from the repository root. A command that names a feature or a\ntarget names the package too (`-p opencompany-core --features ...`); the bare\n`cargo fmt`/`clippy`/`test` lines cover every workspace member.\n\n`rust-toolchain.toml` pins an **explicit** Rust version (issue #1298), and\nevery `dtolnay/rust-toolchain` call site in `.github/workflows/` passes that\nsame version. Do not change either back to `stable`. Both said `stable` until\nrustc 1.98.0 shipped on 2026-08-18 with a newly-enforced\n`clippy::result_large_err`, at which point every open PR in the repo went red\nat once — including PRs touching no Rust — while everyone still on 1.97.x\npassed `cargo clippy` locally and could not reproduce it. A pin turns the next\nstable release into one reviewable bump PR instead.\n\nTo bump: edit `rust-toolchain.toml`, then run\n`scripts/ci/assert-toolchain-pin.sh`, which fails and names any workflow call\nsite still on the old version. That script runs in the `rust` job, so a\nhalf-finished bump is caught rather than shipped. Because the pin is in\n`rust-toolchain.toml`, a plain `cargo` in this checkout already uses it — you\ndo not need `cargo +<version>`, and if your `rustup` lacks the toolchain it\nwill fetch it.\n\n`.cargo/config.toml` sets `RUST_MIN_STACK = 8388608` for every cargo-invoked\nprocess (issue #895). Do not drop it. The gated suite exceeds libtest's 2 MiB\ndefault thread stack, and when it does the failure is a `SIGABRT` that aborts\nthe **whole test binary** — so every test after it is skipped, and the symptom\nreads as \"I broke the harness\" rather than \"this needs a bigger stack\".\n\n8 MiB is 2.7x the measured floor: the whole gated suite aborts at 2 MiB and\npasses 4182/4182 at 3 MiB (aarch64-darwin, default parallelism). The margin\ncovers x86-64 CI frame layout, higher CI parallelism, and growth. The depth is\ncumulative `async fn` composition in the vendored OpenHuman turn chain (~117 KiB\nfor its largest single future, against ~32 KiB for the largest OpenCompany-owned\none), so it is not bounded from this repo — `Box::pin` at our own seam was tried\nand moved it by nothing. Full evidence is in `.cargo/config.toml`.\n\nIf you change the value, say what you measured; an unexplained ceiling is the\nratchet #895 exists to complain about. Export `RUST_MIN_STACK` yourself to\noverride it — the file does not use `force`.\n\n## Coding Style & Naming Conventions\n\nUse standard `rustfmt` output and Rust 2024 idioms. Module and file names should\nbe `snake_case`; public types should be `PascalCase`; functions, methods,\nfields, and local variables should be `snake_case`. Return `Result<T>` using\nthe crate error type from `src/error.rs`.\n\n## Testing Guidelines\n\nAdd focused tests with every behavior change. Keep tests near the module they\nexercise unless they verify cross-module behavior, in which case place them in\nthe consuming module or in `tests/` as an integration target.\n\nA new file under `tests/` is not covered until a CI job both selects it and\nenables the features its crate-level `cfg` needs (issue #475). A target missing\neither builds, runs and reports zero without failing anything. The gated `Rust\n(openhuman, tinycortex)` job runs `--tests` and then asserts a non-zero count\nper target via `scripts/ci/assert-integration-targets-run.sh`; if your target\nneeds a feature set no lane builds, add the lane and run that script there too\nrather than loosening the `cfg`.\n\nA feature-gated test has the same problem one level up (issue #770). Cargo\nfeatures are additive and every CI lane pins an explicit feature set, so a test\nbehind `#[cfg(feature = \"x\")]` is compiled by `Check (--all-features)` and\nexecuted by nothing unless some lane enables `x` — and nothing reports the\nsilence. Every feature therefore needs a row in `scripts/ci/feature-lanes.txt`\nsaying which lane runs its tests (`tested`/`partial`) or why none does\n(`compile-only`, with a reason). `scripts/ci/assert-feature-lanes.sh` fails on an\nunclassified feature, and fails a `compile-only` row that turns out to have a\ngated test. When you add the lane, run it through\n`scripts/ci/run-scoped-suite.sh`, which asserts a non-zero count — a filter that\nselects nothing exits 0.\n\nMaintain at least 80% coverage for meaningful library behavior. Document any\nintentionally untested edge case in the PR description.\n\n## Documentation Expectations\n\nKeep `README.md`, `docs/spec/README.md`, and module docs in `docs/modules/`\naligned with code changes. Prefer concrete examples over vague descriptions,\nespecially for Axum routes, OpenHuman launcher behavior, and `tiny*` feature\nintegration.\n\nKeep every Markdown file, including this one, at 500 lines or fewer. When a\ntopic grows past that limit, split it into focused files and link them from the\nmodule's `README.md`.\n\n## Running under the platform harness (hosted mode)\n\nThis repo is also the tenant workload of the OpenCompany hosting platform:\nthe `opencompany-manager` control plane (the superproject at\n`tinyhumansai/opencompany-microservices`, where this repo is the\n`opencompany/` submodule) builds this crate into a per-tenant container and\ninjects its environment. When developing hosted behavior, know the seams:\n\n- The manager injects `OPENCOMPANY_COMPANY`, `OPENCOMPANY_BIND=0.0.0.0:8080`,\n  `OPENCOMPANY_DATA_DIR=/data`, and `OPENCOMPANY_PUBLIC_URL` into every\n  tenant container. `OPENCOMPANY_DATA_DIR` is the instance data root for\n  the workspace layout, the company-bundle home, **and** the embedded OpenHuman\n  runtime's own root: `serve` derives `<data-dir>/openhuman` and exports it as\n  `OPENHUMAN_WORKSPACE`, because the vendored runtime otherwise defaults its\n  durable agent journal into `$HOME` — the read-only root filesystem in a tenant\n  (issue #446). An unwritable journal root aborts boot; see\n  `docs/spec/runtime/storage.md`. `docker/entrypoint.sh`\n  additionally forwards it as `--home \"$OPENCOMPANY_DATA_DIR\"`, which resolves\n  identically (the flag outranks the variable). Locally it is the only knob that\n  isolates two `serve` processes from each other — see\n  `docs/spec/runtime/storage.md`. It also injects `OPENCOMPANY_ADMIN_EMAIL`, the\n  address that provisioned the instance: a standing admin invite equivalent to a\n  manifest `[users].admins` entry, without which a provisioned company (whose\n  manifest names nobody) has nobody eligible to sign in — see\n  `docs/spec/runtime/users.md`. Plus — when database-per-tenant storage is enabled —\n  `OPENCOMPANY_STORAGE=mongodb`, `OPENCOMPANY_MONGODB_URI` (credentials\n  scoped to that tenant's database only), and `OPENCOMPANY_MONGODB_DB`.\n- In the alternative **shared-single-DB** mode (all tenants on one logical\n  MongoDB), the manager also injects `OPENCOMPANY_TENANT_ID=<tenant-slug>`.\n  The workload then namespaces company ids with `<tenant>--` and records\n  `owners` rows so tenants stay apart in the shared database. Isolation is\n  application-layer only in this mode — a compromised container can reach\n  every tenant's documents; db-per-tenant stays the security default. See\n  `docs/spec/runtime/storage.md`. Unset (the default) is a full no-op.\n- The manager should also inject `OPENCOMPANY_DEPLOYMENT=hosted-tenant` and,\n  when product analytics is on, the three variables the OpenPanel transport\n  needs: `OPENCOMPANY_ANALYTICS_CLIENT_ID`,\n  `OPENCOMPANY_ANALYTICS_CLIENT_SECRET` and `OPENCOMPANY_ANALYTICS_ENDPOINT`.\n  The endpoint has **no default** — the collector is one the operator\n  self-hosts, so there is no address the workload could guess that would not be\n  somebody else's — and it must be `https`, or `http` to a loopback host: the\n  client secret is a request header on every request, so a plain-`http`\n  collector on a container network would put it on the wire in the clear, and\n  the workload refuses that rather than warning about it.\n  None of them is required to boot: an instance that says nothing is treated as **self-hosted**\n  and reports nothing, which is the safe direction and the documented default\n  (`docs/spec/runtime/analytics.md`). `OPENCOMPANY_TENANT_ID` alone also implies\n  a hosted tenant, so shared-single-DB tenants are covered without the new\n  variable; db-per-tenant tenants need it.\n- Storage backend selection and the MongoDB backend are documented in\n  `docs/spec/runtime/storage.md`; the port traits it implements are the\n  entire persistence contract (`docs/spec/runtime/ports.md`).\n- The container must serve `/healthz` on `:8080` quickly — the manager's\n  wake-on-request proxy blocks on it and gives up after its startup timeout.\n- Run the full platform locally by following\n  `docs/local-development.md` in the superproject.\n\n## Commit & Pull Request Guidelines\n\nUse concise, imperative commit subjects. Keep the first line specific to the\nchange and avoid bundling unrelated work.\n\nKeep commits small and concise. Commit each coherent, validated slice on its\nown rather than batching many changes together, and keep the message short and\nfocused on that one change.\n\nPull requests should include a short summary, the commands run locally, and any\nAPI or behavior changes. Include updated examples or docs when public APIs,\narchitecture, or expected usage changes.\n",
     "CLAUDE.md": "# Repository Guidelines\n\n## Project Structure & Module Organization\n\nOpenCompany is a Rust 2024 Cargo workspace rooted at `Cargo.toml`, with one\nmanifest per flavour under `crates/`:\n\n- `crates/opencompany-core`: the host — package `opencompany-core`, library\n  crate `opencompany`, binary `opencompany`. Its `src/`, `tests/`, `benches/`,\n  `examples/` and `build.rs` live beneath that manifest. Every `src/...` path\n  in this file and under `docs/` is short for `crates/opencompany-core/src/...`;\n  the data the crate embeds and reads (`companies/`, `globals/`, `skills/`,\n  `frontend/`, `vendor/`) stays at the repository root, `../..` from\n  `CARGO_MANIFEST_DIR`.\n- `crates/opencompany-app`: the Tauri desktop shell. Excluded from the\n  workspace on purpose (its manifest says why); it has its own `Cargo.lock`.\n- `crates/opencompany-tui`: the terminal client, embedding the host.\n\nRust source for the host lives under `crates/opencompany-core/src/`\n(`src/` below). Public module surfaces live in\nsource module directories:\n\n- `src/app/`: runtime configuration and shared Axum state\n- `src/server/`: Axum router and HTTP handlers\n- `src/ledger/`: dynamic ledgers — declared record shapes, the append-only fold,\n  and the `derived/` folder they render into (`docs/spec/runtime/ledgers.md`)\n- `src/globals/`: the global baseline — the agents, workflows, skills and\n  starting tool belt every company gets whichever vertical it started from,\n  authored in `globals/` and embedded at build time\n  (`docs/spec/runtime/globals.md`)\n- `src/openhuman/`: launcher and integration seams for the vendored OpenHuman checkout\n- `src/tiny/`: optional TinyAgents crate feature/status surface\n\nThe command-line entrypoint lives in `src/bin/opencompany.rs`. Business types\nare data-only definitions under `companies/` (a `company.toml` manifest plus a\n`README.md` — not Cargo crates), loaded at runtime via `opencompany serve\n--company companies/<name>`. What every company has regardless of which of\nthose it started from is authored beside them in `globals/`. The operator\nconsole is a Vite/React app under `frontend/`. Design notes and module specifications live in `docs/`, with\n`docs/spec/README.md` as the top-level architecture reference and\n`docs/modules/` holding per-surface design docs.\nThe vendored runtime source is the `vendor/openhuman/` Git submodule. TinyAgents\nis inherited from OpenHuman at `vendor/openhuman/vendor/tinyagents/`.\n\nPrefer small modules with focused responsibilities. Keep core type definitions\nin a dedicated `types.rs` file and package-local tests in the module file or a\ndedicated `test.rs` file when they grow.\n\n## Build, Test, and Development Commands\n\n- `cargo fmt --all -- --check`: verify Rust formatting without changing files.\n- `cargo fmt`: format Rust source files.\n- `cargo clippy --all-targets -- -D warnings`: run lint checks.\n- `cargo build --all-targets`: compile library, binary, tests, and examples.\n- `cargo test`: run the full test suite.\n- `cargo run --bin opencompany`: run the CLI.\n- `cargo run --bin opencompany -- serve`: run the Axum HTTP server on `127.0.0.1:8080`.\n- `cargo run -p opencompany-tui`: run the terminal client over the default data root.\n- `./scripts/dump-prompt.sh --company companies/<name>`: print the system prompt each agent in that bundle is built with (`docs/spec/runtime/agents.md`).\n- `git submodule update --init vendor/openhuman`: initialize OpenHuman.\n- `scripts/ci/init-vendored-submodules.sh`: initialize its vendored crates.\n- `cargo check -p opencompany-core --features tiny`: compile against OpenHuman's TinyAgents pin.\n\nRun commands from the repository root. A command that names a feature or a\ntarget names the package too (`-p opencompany-core --features ...`); the bare\n`cargo fmt`/`clippy`/`test` lines cover every workspace member.\n\n`rust-toolchain.toml` pins an **explicit** Rust version (issue #1298), and\nevery `dtolnay/rust-toolchain` call site in `.github/workflows/` passes that\nsame version. Do not change either back to `stable`. Both said `stable` until\nrustc 1.98.0 shipped on 2026-08-18 with a newly-enforced\n`clippy::result_large_err`, at which point every open PR in the repo went red\nat once — including PRs touching no Rust — while everyone still on 1.97.x\npassed `cargo clippy` locally and could not reproduce it. A pin turns the next\nstable release into one reviewable bump PR instead.\n\nTo bump: edit `rust-toolchain.toml`, then run\n`scripts/ci/assert-toolchain-pin.sh`, which fails and names any workflow call\nsite still on the old version. That script runs in the `rust` job, so a\nhalf-finished bump is caught rather than shipped. Because the pin is in\n`rust-toolchain.toml`, a plain `cargo` in this checkout already uses it — you\ndo not need `cargo +<version>`, and if your `rustup` lacks the toolchain it\nwill fetch it.\n\n`.cargo/config.toml` sets `RUST_MIN_STACK = 8388608` for every cargo-invoked\nprocess (issue #895). Do not drop it. The gated suite exceeds libtest's 2 MiB\ndefault thread stack, and when it does the failure is a `SIGABRT` that aborts\nthe **whole test binary** — so every test after it is skipped, and the symptom\nreads as \"I broke the harness\" rather than \"this needs a bigger stack\".\n\n8 MiB is 2.7x the measured floor: the whole gated suite aborts at 2 MiB and\npasses 4182/4182 at 3 MiB (aarch64-darwin, default parallelism). The margin\ncovers x86-64 CI frame layout, higher CI parallelism, and growth. The depth is\ncumulative `async fn` composition in the vendored OpenHuman turn chain (~117 KiB\nfor its largest single future, against ~32 KiB for the largest OpenCompany-owned\none), so it is not bounded from this repo — `Box::pin` at our own seam was tried\nand moved it by nothing. Full evidence is in `.cargo/config.toml`.\n\nIf you change the value, say what you measured; an unexplained ceiling is the\nratchet #895 exists to complain about. Export `RUST_MIN_STACK` yourself to\noverride it — the file does not use `force`.\n\n## Coding Style & Naming Conventions\n\nUse standard `rustfmt` output and Rust 2024 idioms. Module and file names should\nbe `snake_case`; public types should be `PascalCase`; functions, methods,\nfields, and local variables should be `snake_case`. Return `Result<T>` using\nthe crate error type from `src/error.rs`.\n\n## Testing Guidelines\n\nAdd focused tests with every behavior change. Keep tests near the module they\nexercise unless they verify cross-module behavior, in which case place them in\nthe consuming module or in `tests/` as an integration target.\n\nA new file under `tests/` is not covered until a CI job both selects it and\nenables the features its crate-level `cfg` needs (issue #475). A target missing\neither builds, runs and reports zero without failing anything. The gated `Rust\n(openhuman, tinycortex)` job runs `--tests` and then asserts a non-zero count\nper target via `scripts/ci/assert-integration-targets-run.sh`; if your target\nneeds a feature set no lane builds, add the lane and run that script there too\nrather than loosening the `cfg`.\n\nA feature-gated test has the same problem one level up (issue #770). Cargo\nfeatures are additive and every CI lane pins an explicit feature set, so a test\nbehind `#[cfg(feature = \"x\")]` is compiled by `Check (--all-features)` and\nexecuted by nothing unless some lane enables `x` — and nothing reports the\nsilence. Every feature therefore needs a row in `scripts/ci/feature-lanes.txt`\nsaying which lane runs its tests (`tested`/`partial`) or why none does\n(`compile-only`, with a reason). `scripts/ci/assert-feature-lanes.sh` fails on an\nunclassified feature, and fails a `compile-only` row that turns out to have a\ngated test. When you add the lane, run it through\n`scripts/ci/run-scoped-suite.sh`, which asserts a non-zero count — a filter that\nselects nothing exits 0.\n\nMaintain at least 80% coverage for meaningful library behavior. Document any\nintentionally untested edge case in the PR description.\n\n## Documentation Expectations\n\nKeep `README.md`, `docs/spec/README.md`, and module docs in `docs/modules/`\naligned with code changes. Prefer concrete examples over vague descriptions,\nespecially for Axum routes, OpenHuman launcher behavior, and `tiny*` feature\nintegration.\n\nKeep every Markdown file, including this one, at 500 lines or fewer. When a\ntopic grows past that limit, split it into focused files and link them from the\nmodule's `README.md`.\n\n## Running under the platform harness (hosted mode)\n\nThis repo is also the tenant workload of the OpenCompany hosting platform:\nthe `opencompany-manager` control plane (the superproject at\n`tinyhumansai/opencompany-microservices`, where this repo is the\n`opencompany/` submodule) builds this crate into a per-tenant container and\ninjects its environment. When developing hosted behavior, know the seams:\n\n- The manager injects `OPENCOMPANY_COMPANY`, `OPENCOMPANY_BIND=0.0.0.0:8080`,\n  `OPENCOMPANY_DATA_DIR=/data`, and `OPENCOMPANY_PUBLIC_URL` into every\n  tenant container. `OPENCOMPANY_DATA_DIR` is the instance data root for\n  the workspace layout, the company-bundle home, **and** the embedded OpenHuman\n  runtime's own root: `serve` derives `<data-dir>/openhuman` and exports it as\n  `OPENHUMAN_WORKSPACE`, because the vendored runtime otherwise defaults its\n  durable agent journal into `$HOME` — the read-only root filesystem in a tenant\n  (issue #446). An unwritable journal root aborts boot; see\n  `docs/spec/runtime/storage.md`. `docker/entrypoint.sh`\n  additionally forwards it as `--home \"$OPENCOMPANY_DATA_DIR\"`, which resolves\n  identically (the flag outranks the variable). Locally it is the only knob that\n  isolates two `serve` processes from each other — see\n  `docs/spec/runtime/storage.md`. It also injects `OPENCOMPANY_ADMIN_EMAIL`, the\n  address that provisioned the instance: a standing admin invite equivalent to a\n  manifest `[users].admins` entry, without which a provisioned company (whose\n  manifest names nobody) has nobody eligible to sign in — see\n  `docs/spec/runtime/users.md`. Plus — when database-per-tenant storage is enabled —\n  `OPENCOMPANY_STORAGE=mongodb`, `OPENCOMPANY_MONGODB_URI` (credentials\n  scoped to that tenant's database only), and `OPENCOMPANY_MONGODB_DB`.\n- In the alternative **shared-single-DB** mode (all tenants on one logical\n  MongoDB), the manager also injects `OPENCOMPANY_TENANT_ID=<tenant-slug>`.\n  The workload then namespaces company ids with `<tenant>--` and records\n  `owners` rows so tenants stay apart in the shared database. Isolation is\n  application-layer only in this mode — a compromised container can reach\n  every tenant's documents; db-per-tenant stays the security default. See\n  `docs/spec/runtime/storage.md`. Unset (the default) is a full no-op.\n- The manager should also inject `OPENCOMPANY_DEPLOYMENT=hosted-tenant` and,\n  when product analytics is on, the three variables the OpenPanel transport\n  needs: `OPENCOMPANY_ANALYTICS_CLIENT_ID`,\n  `OPENCOMPANY_ANALYTICS_CLIENT_SECRET` and `OPENCOMPANY_ANALYTICS_ENDPOINT`.\n  The endpoint has **no default** — the collector is one the operator\n  self-hosts, so there is no address the workload could guess that would not be\n  somebody else's — and it must be `https`, or `http` to a loopback host: the\n  client secret is a request header on every request, so a plain-`http`\n  collector on a container network would put it on the wire in the clear, and\n  the workload refuses that rather than warning about it.\n  None of them is required to boot: an instance that says nothing is treated as **self-hosted**\n  and reports nothing, which is the safe direction and the documented default\n  (`docs/spec/runtime/analytics.md`). `OPENCOMPANY_TENANT_ID` alone also implies\n  a hosted tenant, so shared-single-DB tenants are covered without the new\n  variable; db-per-tenant tenants need it.\n- Storage backend selection and the MongoDB backend are documented in\n  `docs/spec/runtime/storage.md`; the port traits it implements are the\n  entire persistence contract (`docs/spec/runtime/ports.md`).\n- The container must serve `/healthz` on `:8080` quickly — the manager's\n  wake-on-request proxy blocks on it and gives up after its startup timeout.\n- Run the full platform locally by following\n  `docs/local-development.md` in the superproject.\n\n## Commit & Pull Request Guidelines\n\nUse concise, imperative commit subjects. Keep the first line specific to the\nchange and avoid bundling unrelated work.\n\nKeep commits small and concise. Commit each coherent, validated slice on its\nown rather than batching many changes together, and keep the message short and\nfocused on that one change.\n\nPull requests should include a short summary, the commands run locally, and any\nAPI or behavior changes. Include updated examples or docs when public APIs,\narchitecture, or expected usage changes.\n"
+  },
+  "lookups": {
+    "read crates/opencompany-core/src/harness/built_in/build.rs:87-180": {
+      "outcome": "text",
+      "text": "   87| use std::path::{Path, PathBuf};\n   88| use std::sync::Arc;\n   89| \n   90| use openhuman_core as oh;\n   91| \n   92| use oh::agent::prompts::SystemPromptBuilder;\n   93| use oh::agent::{Agent, AgentBuilder};\n   94| use oh::memory::Memory;\n   95| use oh::security::SecurityPolicy;\n   96| #[cfg(feature = \"mcp\")]\n   97| use oh::tools::McpListToolsTool;\n   98| use oh::tools::{\n   99|     EditFileTool, FileReadTool, FileWriteTool, GlobTool, GrepTool, ListFilesTool, Tool,\n  100| };\n  101| \n  102| use crate::company::Agent as ManifestAgent;\n  103| use crate::error::OpenCompanyError;\n  104| use crate::harness::HarnessDeps;\n  105| #[cfg(feature = \"mcp\")]\n  106| use crate::harness::mcp::{\n  107|     OcMcpCallTool, OcMcpListServersTool, capability_brief, granted_secrets, registry_for_agent,\n  108| };\n  109| use crate::harness::memory::OcMemory;\n  110| use crate::harness::orchestrator;\n  111| use crate::harness::policy::ApprovalPolicy;\n  112| use crate::harness::skills::EffectiveSkills;\n  113| use crate::harness::tool_dispatcher::AttrTolerantXmlDispatcher;\n  114| use crate::harness::toolbelt;\n  115| use crate::ports::skills_state::SkillState;\n  116| use crate::ports::types::CompanyId;\n  117| use crate::runtime::tools::{NAMESPACE_SEPARATORS, extends_on_boundary};\n  118| \n  119| /// The per-tool-result byte budget every OpenCompany agent runs under.\n  120| ///\n  121| /// The harness cuts **every** tool result to this many bytes on its way into\n  122| /// the model's context — `ToolOutputMiddleware`, fed from\n  123| /// `ContextManager::tool_result_budget_bytes`, which [`build_agent`] threads in\n  124| /// below via [`AgentBuilder::context_config`]. It is the real ceiling on what a\n  125| /// model ever sees from a tool, and it is *smaller* than the caps individual\n  126| /// tools tend to write for themselves.\n  127| ///\n  128| /// It is stated here rather than inherited on purpose (issue #417). Before this\n  129| /// constant existed `build_agent` never called `context_config`, so the builder\n  130| /// fell back to `ContextConfig::default()` and the 16 KiB became OpenCompany's\n  131| /// effective bound by accident — invisible from this crate, and out of step\n  132| /// with a tool that had capped itself at 64 KiB. `workspace_read` consequently\n  133| /// told the model \"nothing was dropped, you may write the complete body back\"\n  134| /// about a note the model had only seen the first 16 KiB of, and the resulting\n  135| /// `workspace_write` silently destroyed the rest.\n  136| ///\n  137| /// So any tool whose result carries a *contract* — \"this is the whole thing\",\n  138| /// \"act on the trailer below\" — must size itself against this number, not\n  139| /// against a cap of its own choosing. [`workspace_tools`] derives its read and\n  140| /// write caps from it directly.\n  141| ///\n  142| /// The value still tracks the vendored default: keeping the number identical\n  143| /// makes adopting it a no-op today, so the behaviour change belongs to the\n  144| /// consumers that now respect it, not to this line.\n  145| ///\n  146| /// [`workspace_tools`]: crate::harness::workspace_tools\n  147| pub(crate) const TOOL_RESULT_BUDGET_BYTES: usize =\n  148|     oh::agent::context::DEFAULT_TOOL_RESULT_BUDGET_BYTES;\n  149| \n  150| /// How many tool-calling iterations one OpenCompany turn may spend (issue #988).\n  151| ///\n  152| /// Stated, not inherited. Omitting the [`Agent::set_max_tool_iterations`] call\n  153| /// leaves every company agent on `AgentConfig::default()`'s **10**, which is a\n  154| /// summariser's budget: a product manager asked for a feature spec reads the\n  155| /// standards, reads the release checklist, reads the nearest prior spec, drafts,\n  156| /// and publishes — and spends the ten before delivering anything. The turn then\n  157| /// pauses at the cap and the operator gets a checkpoint digest instead of the\n  158| /// work (issue #926).\n  159| ///\n  160| /// Twenty-five is ~2.5x headroom over that observed multi-read/draft/publish\n  161| /// shape, without the 5x of jumping to openhuman's `Extended` 50. Cost grows\n  162| /// **faster** than the multiplier, because every iteration re-sends a transcript\n  163| /// that is longer than the last one's — so the number is deliberately the\n  164| /// smallest one that covers the shape rather than the largest one that is safe.\n  165| /// Revisit it from cap-rate instrumentation across templates, not from one\n  166| /// incident.\n  167| ///\n  168| /// Applied **globally**, in [`build_agent`], rather than per template: it is the\n  169| /// only shape that reaches all 22 shipped templates without editing each one.\n  170| ///\n  171| /// The lever is `set_max_tool_iterations` and nothing else. openhuman's\n  172| /// `IterationPolicy::Extended` and the `AgentDefinition` `max_iterations` field\n  173| /// are read only by `build_session_agent_inner`, a construction path this crate\n  174| /// never takes — setting either here would compile, read as a fix, and change\n  175| /// nothing.\n  176| ///\n  177| /// An in-turn spend brake ([`BudgetStopHook`](oh::agent::stop_hooks::BudgetStopHook))\n  178| /// is installed on the turn itself, but only for a teammate who declares a\n  179| /// `budget_usd_daily` cap — see [`CompanyAgent::turn_spend_cap_usd`]\n  180| /// (crate::harness::CompanyAgent::turn_spend_cap_usd).",
+      "start": 87,
+      "end": 180,
+      "total": 3639
+    },
+    "read crates/opencompany-core/src/harness/built_in/checkpoint.rs:1-120": {
+      "outcome": "text",
+      "text": "    1| //! Automatic Git checkpoints for an agent's private filesystem workspace.\n    2| //!\n    3| //! The feature is deliberately a tool decorator: file tools, patches, shell\n    4| //! redirects, downloads, and future workspace-writing tools all pass the same\n    5| //! after-call boundary. A call that changed nothing produces no commit, and a\n    6| //! Git failure is logged without replacing the tool's real result.\n    7| //!\n    8| //! History is permanent for the lifetime of the out-of-band repository: a\n    9| //! workspace file committed at one checkpoint and deleted later survives in\n   10| //! `workspace.git` objects, so operators who enable checkpoints on workspaces\n   11| //! that can hold secrets must rotate or purge history deliberately (see the\n   12| //! retention note in `docs/spec/runtime/workspace-layout.md`).\n   13| \n   14| use std::path::{Path, PathBuf};\n   15| use std::process::{Command, ExitStatus};\n   16| use std::sync::Arc;\n   17| \n   18| use async_trait::async_trait;\n   19| use serde_json::Value;\n   20| \n   21| use oh::tools::traits::{\n   22|     PermissionLevel, Tool, ToolCallOptions, ToolCategory, ToolResult, ToolScope, ToolSpec,\n   23|     ToolTimeout,\n   24| };\n   25| use openhuman_core as oh;\n   26| \n   27| use crate::store::fs::path_lock;\n   28| \n   29| const CHECKPOINT_AUTHOR_NAME: &str = \"OpenCompany Workspace\";\n   30| const CHECKPOINT_AUTHOR_EMAIL: &str = \"workspace@opencompany.local\";\n   31| \n   32| /// A Git repository whose working tree is one agent workspace.\n   33| #[derive(Clone, Debug)]\n   34| pub(crate) struct WorkspaceCheckpointer {\n   35|     workspace: PathBuf,\n   36|     git_dir: PathBuf,\n   37| }\n   38| \n   39| impl WorkspaceCheckpointer {\n   40|     /// Initializes (or reopens) the workspace repository and records a baseline.\n   41|     ///\n   42|     /// The object database always lives **beside** the workspace at\n   43|     /// `workspace.git`; `workspace/.git` is only Git's small pointer file. This\n   44|     /// keeps history out of the files agents enumerate and publish while still\n   45|     /// allowing ordinary `git` commands run inside the workspace to discover it.\n   46|     ///\n   47|     /// The pointer file is write-only from the checkpointer's point of view. An\n   48|     /// agent can plant a `.git` of its own (any file an agent can read it can\n   49|     /// rewrite), so `initialize` never resolves its Git directory through it —\n   50|     /// every Git invocation passes an explicit `--git-dir` for the out-of-band\n   51|     /// path, and a planted pointer is overwritten with the real one so commands\n   52|     /// the agent itself runs still discover the genuine repository.\n   53|     pub(crate) fn initialize(workspace: &Path) -> anyhow::Result<Self> {\n   54|         Self::initialize_with_lock_wait(workspace, true)\n   55|     }\n   56| \n   57|     fn initialize_with_lock_wait(workspace: &Path, wait_for_lock: bool) -> anyhow::Result<Self> {\n   58|         std::fs::create_dir_all(workspace)?;\n   59|         let out_of_band = workspace.with_extension(\"git\");\n   60| \n   61|         // The in-workspace `.git` is checkpoint scaffolding, not agent data: it\n   62|         // exists only so ordinary `git` commands run inside the workspace\n   63|         // discover the out-of-band repository. Normalize it, dropping anything\n   64|         // (a pointer file or a planted directory) an agent left there — a\n   65|         // planted pointer could make `git init --separate-git-dir` refuse to\n   66|         // run or redirect ordinary `git` commands at a decoy repository.\n   67|         let dot_git = workspace.join(\".git\");\n   68|         if let Ok(meta) = std::fs::symlink_metadata(&dot_git) {\n   69|             if meta.is_dir() {\n   70|                 std::fs::remove_dir_all(&dot_git)?;\n   71|             } else {\n   72|                 std::fs::remove_file(&dot_git)?;\n   73|             }\n   74|         }\n   75| \n   76|         if !out_of_band.join(\"HEAD\").is_file() {\n   77|             // Global options (`-c`, env) must precede the subcommand, so the\n   78|             // isolation is applied before `init` is named.\n   79|             let mut init = Command::new(\"git\");\n   80|             isolate_git(&mut init);\n   81|             init.args([\"init\", \"--quiet\", \"--initial-branch=checkpoints\"])\n   82|                 .arg(\"--separate-git-dir\")\n   83|                 .arg(&out_of_band)\n   84|                 .arg(workspace);\n   85|             let status = init.status()?;\n   86|             require_success(status, \"git init\")?;\n   87|         }\n   88| \n   89|         // Sanitize the in-workspace pointer to the out-of-band directory, even\n   90|         // when the agent planted one of its own. Never *read* an existing\n   91|         // pointer to derive a Git directory: an agent-controlled pointer could\n   92|         // name a repository whose hooks `git commit` would run in the host\n   93|         // process (CWE-94), which `base_git`'s explicit `--git-dir` and hook\n   94|         // suppression exist to make unreachable.\n   95|         std::fs::write(\n   96|             workspace.join(\".git\"),\n   97|             format!(\"gitdir: {}\\n\", out_of_band.display()),\n   98|         )?;\n   99| \n  100|         let checkpointer = Self {\n  101|             workspace: workspace.to_path_buf(),\n  102|             git_dir: out_of_band,\n  103|         };\n  104|         checkpointer.initialize_baseline(wait_for_lock)?;\n  105|         Ok(checkpointer)\n  106|     }\n  107| \n  108|     /// Initializes checkpointing without blocking a Tokio worker thread.\n  109|     ///\n  110|     /// [`initialize`](Self::initialize) shells out to `git init` and commits the\n  111|     /// baseline, which can take tens of milliseconds of blocking file and\n  112|     /// subprocess I/O. When this is called from an async harness path it should\n  113|     /// run off the async worker pool: on a multi-threaded runtime the work is\n  114|     /// moved off the worker via [`block_in_place`](tokio::task::block_in_place);\n  115|     /// on a current-thread runtime or outside any runtime `block_in_place`\n  116|     /// panics, so it runs inline. In practice roster builds happen on the\n  117|     /// multi-threaded runtime, making the inline path a defensive fallback.\n  118|     pub(crate) fn initialize_off_worker(workspace: &Path) -> anyhow::Result<Self> {\n  119|         match tokio::runtime::Handle::try_current() {\n  120|             Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {",
+      "start": 1,
+      "end": 120,
+      "total": 681
+    },
+    "read crates/opencompany-core/src/harness/built_in/workflow_admin.rs:95-200": {
+      "outcome": "text",
+      "text": "   95| use std::sync::Arc;\n   96| \n   97| use async_trait::async_trait;\n   98| use serde_json::{Value, json};\n   99| \n  100| use oh::tools::traits::{PermissionLevel, Tool, ToolResult};\n  101| use openhuman_core as oh;\n  102| \n  103| use crate::company::{\n  104|     RawWorkflow, WorkflowSpecProjection, delete_company_workflow, load_workflow_with_globals,\n  105|     project_workflow_spec, raw_workflow_from_toml, seed_file_exists, update_company_workflow,\n  106|     workflow_version,\n  107| };\n  108| use crate::error::OpenCompanyError;\n  109| use crate::harness::build::TOOL_RESULT_BUDGET_BYTES;\n  110| use crate::harness::orchestrator::CreateWorkflowArgs;\n  111| use crate::ports::types::{CompanyId, OverlayWorkflow};\n  112| use crate::ports::workflow_revisions::WorkflowRevisionStore;\n  113| use crate::ports::{CompanyStore, EventLog};\n  114| \n  115| /// Tool name: read one saved workflow's graph, version token and editability.\n  116| pub const READ_WORKFLOW_TOOL: &str = \"read_workflow\";\n  117| /// Tool name: replace one saved workflow's graph wholesale.\n  118| pub const UPDATE_WORKFLOW_TOOL: &str = \"update_workflow\";\n  119| /// Tool name: remove one saved workflow permanently.\n  120| pub const DELETE_WORKFLOW_TOOL: &str = \"delete_workflow\";\n  121| \n  122| /// How much of the budget one rendered graph may take. Half, so the reply that\n  123| /// quotes a graph back still has room for the sentence explaining it.\n  124| const GRAPH_RENDER_BUDGET_BYTES: usize = TOOL_RESULT_BUDGET_BYTES / 2;\n  125| \n  126| // ---------------------------------------------------------------------------\n  127| // The shared handle\n  128| // ---------------------------------------------------------------------------\n  129| \n  130| /// The wiring all three tools share: which company, where its seed graphs live,\n  131| /// and the three ports the company-layer writes need.\n  132| ///\n  133| /// Cloned into each tool rather than referenced, so the belt owns its tools\n  134| /// outright — the same shape every other orchestrator tool has.\n  135| #[derive(Clone)]\n  136| pub struct WorkflowAdmin {\n  137|     company: CompanyId,\n  138|     /// The company source directory (`companies/<name>`), whose `workflows/`\n  139|     /// subtree contributes the seed graphs. Read-only here: it decides what is\n  140|     /// *shadowed*, never what is written.\n  141|     source_dir: Option<PathBuf>,\n  142|     store: Arc<dyn CompanyStore>,\n  143|     /// Issue #274's snapshot ring. `None` means no revision store is wired, in\n  144|     /// which case the two write tools refuse rather than pretend — an update\n  145|     /// with nowhere to snapshot the prior body to is precisely the\n  146|     /// unrecoverable edit that feature exists to prevent.\n  147|     revisions: Option<Arc<dyn WorkflowRevisionStore>>,\n  148|     events: Option<Arc<dyn EventLog>>,\n  149| }\n  150| \n  151| impl WorkflowAdmin {\n  152|     /// Builds the shared handle. `revisions` is `Option` for the same reason\n  153|     /// `events` is: the default build and the tools' own tests wire neither.\n  154|     pub fn new(\n  155|         company: CompanyId,\n  156|         source_dir: Option<PathBuf>,\n  157|         store: Arc<dyn CompanyStore>,\n  158|         revisions: Option<Arc<dyn WorkflowRevisionStore>>,\n  159|         events: Option<Arc<dyn EventLog>>,\n  160|     ) -> Self {\n  161|         Self {\n  162|             company,\n  163|             source_dir,\n  164|             store,\n  165|             revisions,\n  166|             events,\n  167|         }\n  168|     }\n  169| \n  170|     /// This company's runtime-authored graph bodies, or the agent-facing error\n  171|     /// to return when the record cannot be read.\n  172|     async fn overlays(&self) -> Result<Vec<OverlayWorkflow>, ToolResult> {\n  173|         Ok(self.overlays_and_globals().await?.0)\n  174|     }\n  175| \n  176|     /// [`overlays`](Self::overlays), with the company's `[globals].disable`\n  177|     /// beside them.\n  178|     ///\n  179|     /// Read from the same record load, because the two are read together: a\n  180|     /// union that saw the overlays but not the opt-out would answer with a\n  181|     /// global graph this company disabled.\n  182|     async fn overlays_and_globals(\n  183|         &self,\n  184|     ) -> Result<(Vec<OverlayWorkflow>, Vec<String>), ToolResult> {\n  185|         match self.store.load(&self.company).await {\n  186|             Ok(record) => Ok(record\n  187|                 .map(|r| (r.overlay_workflows, r.manifest.globals.disable))\n  188|                 .unwrap_or_default()),\n  189|             Err(err) => Err(ToolResult::error(format!(\n  190|                 \"Couldn't read this company's saved workflows: {err}\"\n  191|             ))),\n  192|         }\n  193|     }\n  194| \n  195|     /// The revision store, or the refusal for a deployment without one.\n  196|     fn revisions(&self) -> Result<&Arc<dyn WorkflowRevisionStore>, ToolResult> {\n  197|         self.revisions.as_ref().ok_or_else(|| {\n  198|             ToolResult::error(\n  199|                 \"Changing saved workflows isn't available on this deployment (no workflow \\\n  200|                  revision history is wired, so an edit could not be undone).\",",
+      "start": 95,
+      "end": 200,
+      "total": 934
+    },
+    "read crates/opencompany-core/src/harness/built_in/workflow_build/agent.rs:23-60": {
+      "outcome": "text",
+      "text": "   23| use async_trait::async_trait;\n   24| use openhuman_core as oh;\n   25| \n   26| use oh::agent::dispatcher::{NativeToolDispatcher, ToolDispatcher};\n   27| use oh::agent::prompts::SystemPromptBuilder;\n   28| use oh::agent::{Agent, AgentBuilder};\n   29| use oh::memory::{Memory, MemoryCategory, MemoryEntry, NamespaceSummary, RecallOpts};\n   30| use oh::tools::traits::Tool;\n   31| \n   32| use crate::error::OpenCompanyError;\n   33| use crate::harness::HarnessDeps;\n   34| use crate::harness::build::model_for_tier;\n   35| use crate::harness::tool_dispatcher::AttrTolerantXmlDispatcher;\n   36| \n   37| use super::tools::{\n   38|     AcceptedCell, CheckWorkflowTool, CopilotContext, DiagCell, ListEffectiveToolsTool,\n   39|     ProposeWorkflowTool,\n   40| };\n   41| use super::{DESCRIPTION_NODE_KINDS, graph_contract};\n   42| \n   43| /// The ported DSL half of OpenHuman's builder prompt (issue #840): the workflow\n   44| /// model, the `=`/jq + envelope rules, minimal-graph guidance, honest\n   45| /// check-result interpretation, and OC's SAFETY paragraph — with OpenHuman's\n   46| /// save/create/run/OAuth/inference-readiness/ask-and-STOP machinery cut.\n   47| const COPILOT_PERSONA: &str = include_str!(\"copilot_prompt.md\");\n   48| \n   49| /// The copilot's full system prompt: the ported persona, then the shared\n   50| /// [`graph_contract`] for `DESCRIPTION_NODE_KINDS` — the SINGLE source of the\n   51| /// node-kind vocabulary + JSON schema both the prompt and the propose tool's\n   52| /// refusal read, so the two cannot drift (the drift is pinned by a test).\n   53| pub(super) fn copilot_persona() -> String {\n   54|     format!(\n   55|         \"{COPILOT_PERSONA}\\n\\n{}\",\n   56|         graph_contract(DESCRIPTION_NODE_KINDS)\n   57|     )\n   58| }\n   59| \n   60| /// Builds the create-time copilot agent over the harness deps (issue #840).",
+      "start": 23,
+      "end": 60,
+      "total": 200
+    },
+    "read crates/opencompany-core/src/harness/built_in/workflow_build/test.rs:1-40": {
+      "outcome": "text",
+      "text": "    1| //! Tests for the workflow builder pass (issue #580).\n    2| //!\n    3| //! Two tiers, the same split the planning station uses. The **unit** tier covers\n    4| //! the pure decisions — the parse, the graph-vs-not-automatable resolution, the\n    5| //! host-assigned id, the spec → `RawWorkflow` conversion — because a wrong answer\n    6| //! there is silent. The **pass** tier runs the real [`run_workflow_build_pass`]\n    7| //! against a real [`CompanyRuntime`] with a real store and a scripted model,\n    8| //! because the things most likely to be wrong — that a proposal lands In Review,\n    9| //! that a bad answer returns the card to To-do with no proposal, that the attempt\n   10| //! row settles, and that an operator's move wins — are properties of the whole\n   11| //! pass.\n   12| \n   13| use std::collections::VecDeque;\n   14| use std::sync::atomic::{AtomicUsize, Ordering};\n   15| use std::sync::{Arc, Weak};\n   16| \n   17| use async_trait::async_trait;\n   18| use serde_json::{Value, json};\n   19| use tinyinference::model::{ChatModel, ModelProfile, ModelResponse};\n   20| use tinyinference::tool::ToolCall;\n   21| use tinyinference::usage::Usage;\n   22| use tinyinference::{Error as InferenceError, Result as TaResult};\n   23| \n   24| use super::agent::copilot_persona;\n   25| use super::tools::{\n   26|     AcceptedCell, CheckWorkflowTool, CopilotContext, DiagCell, ListEffectiveToolsTool,\n   27|     ProposeWorkflowTool,\n   28| };\n   29| use super::*;\n   30| use crate::company::CompanyManifest;\n   31| use crate::ports::runs::{NewRun, RunStatus};\n   32| use crate::ports::tasks::TaskTitle;\n   33| use crate::ports::types::CompanyId;\n   34| use crate::ports::{UsageMeter, UsageSample};\n   35| use openhuman_core::tools::traits::Tool;\n   36| \n   37| // ---------------------------------------------------------------------------\n   38| // A scripted model\n   39| // ---------------------------------------------------------------------------\n   40| ",
+      "start": 1,
+      "end": 40,
+      "total": 3080
+    },
+    "read crates/opencompany-core/src/hivemind/episode/mod.rs:1-120": {
+      "outcome": "not_found"
+    },
+    "read crates/opencompany-core/src/hivemind/mod.rs:1-120": {
+      "outcome": "text",
+      "text": "    1| //! Hive-mind desks: a desk with two or more members answers as a room.\n    2| //!\n    3| //! A message addressed to a desk used to select exactly one responder off a\n    4| //! deterministic ladder — the desk lead, or the channel's per-message pick —\n    5| //! and that agent's single turn was the whole of the desk's answer. This module\n    6| //! is the alternative for a desk that has somebody to deliberate *with*: the\n    7| //! operator's message opens an **episode**, and the episode runs a sequence of\n    8| //! **rounds** until the room converges on an option, deadlocks between two,\n    9| //! spends its budget, or finds it has nothing to say.\n   10| //!\n   11| //! # One message is still a bounded number of turns\n   12| //!\n   13| //! An episode is not a fan-out. [`tinyhivemind_hive::step`] authorizes a\n   14| //! *round* — at most `round_width` speakers while the room is blind, at most\n   15| //! `revealed_width` once it can see itself — so the number of turns an operator\n   16| //! message can start is bounded by the desk's turn budget and by nothing else,\n   17| //! exactly as it was when a round was always one. What the room buys over a\n   18| //! single responder is still not parallelism for its own sake, it is\n   19| //! *independence* and a reason to stop: members authorized together cannot read\n   20| //! one another, so a member forms its own position before it reads its peers',\n   21| //! and the episode ends on a quorum it can name rather than when one agent\n   22| //! decides it is finished.\n   23| //!\n   24| //! A width is a bound on what the episode *authorizes*, not an instruction on\n   25| //! how to run it: this host takes a round's turns in series.\n   26| //!\n   27| //! # Nothing here is a second kind of turn\n   28| //!\n   29| //! Each turn the episode authorizes runs through the ordinary turn path — the\n   30| //! same tools, the same memory retrieve/inject/store loop, the same approval\n   31| //! gate. The episode supplies the prompt and decides who is asked; everything\n   32| //! that makes a teammate a teammate is unchanged. That is why the driver takes\n   33| //! its turn runner as a trait ([`HiveTurnRunner`]) rather than reaching for the\n   34| //! harness directly: the seam is one function wide, and a test can drive a\n   35| //! whole episode without a model.\n   36| //!\n   37| //! # What lands in the journal\n   38| //!\n   39| //! Every turn is journaled as an ordinary [`AgentReply`] on the desk, authored\n   40| //! by the teammate that spoke, carrying the one line the room counts. The\n   41| //! episode then writes one closing row under [`HIVE_REPORT_AUTHOR`] saying how\n   42| //! it ended. There is no second store and no episode record: the transcript is\n   43| //! the episode, which is what makes the standings impossible to disagree with\n   44| //! the conversation they were folded from.\n   45| //!\n   46| //! [`AgentReply`]: crate::ports::types::CompanyEvent::AgentReply\n   47| //!\n   48| //! # Modules\n   49| //!\n   50| //! - [`aside`] — two members of a desk comparing notes without the room.\n   51| //! - [`episode`] — the host loop, and the one-function turn seam.\n   52| //! - [`evidential`] — whether a `!support` reaches a fact, and the correction\n   53| //!   it gets when it does not.\n   54| //! - [`log`] — the company journal read as a `tinyhivemind` session log.\n   55| //! - [`memory`] — what the desk remembers between episodes, and the seam.\n   56| //! - [`moves`] — the per-member move grammar, and how a barred move is handled.\n   57| //! - [`prompt`] — what one authorized turn is shown, and how its answer is read.\n   58| //! - [`referral`] — the one mechanism here that leaves the room: asking another\n   59| //!   desk a question, and carrying its answer back without carrying its vote.\n   60| //! - [`scope`] — the upper bound a second, concurrent episode in the same\n   61| //!   thread needs and the shared watermark alone does not give it.\n   62| //! - [`types`] — the manifest knob, the desk snapshot, and the outcome.\n   63| //!\n   64| //! See `docs/spec/runtime/hivemind.md`.\n   65| \n   66| pub mod aside;\n   67| pub mod episode;\n   68| pub mod evidential;\n   69| pub mod log;\n   70| pub mod memory;\n   71| pub mod moves;\n   72| pub mod prompt;\n   73| pub mod referral;\n   74| pub mod scope;\n   75| pub mod types;\n   76| \n   77| #[cfg(test)]\n   78| mod aside_test;\n   79| #[cfg(test)]\n   80| mod concurrency_test;\n   81| #[cfg(test)]\n   82| mod deliberation_test;\n   83| #[cfg(test)]\n   84| mod moves_test;\n   85| #[cfg(test)]\n   86| mod referral_test;\n   87| #[cfg(test)]\n   88| mod test;\n   89| \n   90| pub use aside::{ASIDE_MARKER, AsideConfig, SURFACE_MARKER};\n   91| pub use episode::{EpisodeDriver, HiveTurnRunner};\n   92| pub use log::EventLogSessionLog;\n   93| pub use memory::{\n   94|     HIVE_MEMORY_LABEL_PREFIX, HiveMemory, HiveMemoryHit, HiveMemoryNote, NullHiveMemory,\n   95|     desk_prefix, note_label,\n   96| };\n   97| pub use moves::{MOVE_KINDS, MoveViolation, UNGATED_KINDS, line_kind, readable};\n   98| pub use prompt::{EpisodePrompt, canonical_topic, marker_line};\n   99| pub use referral::{\n  100|     AskedQuestion, EpisodeReferrals, FederationDesk, HiveFederation, HiveReferralRunner,\n  101|     REACH_WORDS, ReferralConfig, ReferralLedger,\n  102| };\n  103| pub use scope::EpisodeScope;\n  104| pub use types::{\n  105|     EpisodeEnding, EpisodeOutcome, HiveConfig, HiveDesk, HiveMember, HivePolicy, company_desks,\n  106|     desk_episode, desk_federation, effective_hive_config,\n  107| };\n  108| \n  109| /// The `agent_id` an episode's closing outcome row is journaled under.\n  110| ///\n  111| /// Hyphenated on purpose, exactly as\n  112| /// [`WORKFLOW_REPLY_AUTHOR`](crate::runtime::channel::WORKFLOW_REPLY_AUTHOR)\n  113| /// is: `agent_slug` (console-minted teammates) and `is_snake_case`\n  114| /// (manifest-declared ones) both reject a hyphen, so no roster id — minted\n  115| /// before this constant existed or after — can ever equal it. A company that\n  116| /// happened to name a teammate \"Hive\" therefore cannot have the room's own\n  117| /// summary misattributed to it, and the read path can tell an unauthored\n  118| /// outcome row from a teammate's line without consulting a roster.\n  119| pub const HIVE_REPORT_AUTHOR: &str = \"hive-report\";\n  120| ",
+      "start": 1,
+      "end": 120,
+      "total": 144
+    },
+    "read crates/opencompany-core/src/hivemind/moves.rs:1-50": {
+      "outcome": "text",
+      "text": "    1| //! The per-member move grammar: which trace kinds a seat may open a line with.\n    2| //!\n    3| //! A room whose members may all make every move is a room that votes. The live\n    4| //! evidence is unambiguous: on a nine-episode run of `companies/hive_math_lab`\n    5| //! every episode was three independent `!propose`s of the same number followed\n    6| //! by a `!commit`, and quorum carried because in `tinyhivemind` a `!propose`\n    7| //! counts as its own author's support. No `!support`, `!object`, `!evidence`,\n    8| //! `!question` or `!pin` was ever deposited. Three agents agreeing in parallel\n    9| //! is not deliberation; it is three answers with a quorum rule stapled on.\n   10| //!\n   11| //! The repair is structural rather than exhortative. A desk assigns moves —\n   12| //! one proposer, one challenger who may only object or refute, an archivist who\n   13| //! may only supply evidence — and the driver **enforces** the assignment, so a\n   14| //! member that cannot propose has to do something with the floor other than\n   15| //! restate the answer.\n   16| //!\n   17| //! What the table gates is the *deliberation* kinds only. `commit`, `question`\n   18| //! and `defer` ([`UNGATED_KINDS`]) belong to every seat however narrow its\n   19| //! entry: recording a topic the room has already carried re-derives nothing,\n   20| //! and a member with nothing to add must always have something to say that is\n   21| //! not prose. See [`UNGATED_KINDS`] for the live run that made this a rule.\n   22| //!\n   23| //! Enforcement is deliberately two-stage and never fatal: a first violation is\n   24| //! a one-line correction and a second attempt, and a second violation is\n   25| //! journaled with its leading `!` removed. A demoted line still says whatever\n   26| //! the member wanted to say — it simply deposits no trace, because\n   27| //! `tinyhivemind_hive::trace::resolve` only reads a marker at the start of a\n   28| //! line. It can therefore never be folded as support for anything, which is the\n   29| //! one outcome that would let a barred move still carry a topic.\n   30| \n   31| use std::collections::BTreeMap;\n   32| \n   33| /// Every kind a `[group_chat.hive].moves` entry may name.\n   34| ///\n   35| /// `pin` covers `!unpin` as well: both write the same desk pinboard, and a\n   36| /// member entitled to put something on the board is entitled to take it off\n   37| /// again. Splitting them would be a permission nobody could use correctly.\n   38| pub const MOVE_KINDS: &[&str] = &[\n   39|     \"propose\", \"support\", \"object\", \"refute\", \"evidence\", \"question\", \"defer\", \"commit\", \"pin\",\n   40| ];\n   41| \n   42| /// The permission kind a marker line asks for, if it asks for one.\n   43| ///\n   44| /// `None` for a line with no leading marker, and for a marker this host does\n   45| /// not police — a line the fold itself discards is not a move anybody made, and\n   46| /// demoting it would be a correction with no subject.\n   47| #[must_use]\n   48| pub fn line_kind(line: &str) -> Option<&'static str> {\n   49|     let word = line.trim_start().strip_prefix('!')?;\n   50|     let word = word.split_whitespace().next()?;",
+      "start": 1,
+      "end": 50,
+      "total": 306
+    },
+    "read crates/opencompany-core/src/hivemind/moves_test.rs:810-840": {
+      "outcome": "text",
+      "text": "  810|     let unspoken = vec![\"scout\".to_owned(), \"critic\".to_owned()];\n  811|     let prompt = EpisodePrompt::new(\n  812|         &desk.members[0],\n  813|         &desk,\n  814|         \"Decide the rollout.\",\n  815|         desk.policy().quorum,\n  816|         &[],\n  817|     )\n  818|     .with_unspoken(&unspoken);\n  819|     let turn = tinyhivemind_hive::HiveTurn {\n  820|         agent_id: \"planner\".into(),\n  821|         phase: tinyhivemind_hive::Phase::Deliberate,\n  822|         visibility: tinyhivemind_hive::Visibility::Full,\n  823|         reason: tinyhivemind_hive::BidReason::Salience,\n  824|         watermark: tinyhivemind_hive::Sequence(1),\n  825|         // A round of one: nothing was authored concurrently with this\n  826|         // turn, so the round boundary sits above every row and withholds\n  827|         // nothing — which is what made a width-one round bit-identical to\n  828|         // the sequential episode this fixture was written against.\n  829|         round_start: tinyhivemind_hive::Sequence(u64::MAX),\n  830|     };\n  831|     let rendered = prompt.render(&turn, &[]);\n  832|     assert!(\n  833|         rendered.contains(\"Members who have not spoken yet: @scout, @critic\"),\n  834|         \"{rendered}\"\n  835|     );\n  836| }\n  837| \n  838| // ---------------------------------------------------------------------------\n  839| // A failed turn is not a failed room\n  840| // ---------------------------------------------------------------------------",
+      "start": 810,
+      "end": 840,
+      "total": 1029
+    },
+    "read crates/opencompany-core/src/hivemind/test.rs:740-790": {
+      "outcome": "text",
+      "text": "  740| // The episode watermark divider\n  741| // ---------------------------------------------------------------------------\n  742| \n  743| /// One transcript row, as the projection hands it to a prompt.\n  744| fn message(sequence: u64, author: &str, content: &str) -> tinyhivemind_hive::SessionMessage {\n  745|     tinyhivemind_hive::SessionMessage {\n  746|         sequence: Sequence(sequence),\n  747|         author: SessionAuthor::Agent {\n  748|             id: author.to_owned(),\n  749|             label: author.to_owned(),\n  750|         },\n  751|         content: content.to_owned(),\n  752|         audience: tinyhivemind_hive::aside::Audience::Desk,\n  753|         elided: None,\n  754|     }\n  755| }\n  756| \n  757| /// One authorized turn, for rendering a prompt without driving an episode.\n  758| fn hive_turn(\n  759|     agent: &str,\n  760|     visibility: tinyhivemind_hive::Visibility,\n  761|     watermark: Sequence,\n  762| ) -> tinyhivemind_hive::HiveTurn {\n  763|     tinyhivemind_hive::HiveTurn {\n  764|         agent_id: agent.to_owned(),\n  765|         phase: tinyhivemind_hive::Phase::Deliberate,\n  766|         visibility,\n  767|         reason: tinyhivemind_hive::BidReason::Salience,\n  768|         watermark,\n  769|         // A round of one: nothing was authored concurrently with this\n  770|         // turn, so the round boundary sits above every row and withholds\n  771|         // nothing — which is what made a width-one round bit-identical to\n  772|         // the sequential episode this fixture was written against.\n  773|         round_start: tinyhivemind_hive::Sequence(u64::MAX),\n  774|     }\n  775| }\n  776| \n  777| #[test]\n  778| fn a_transcript_spanning_the_watermark_renders_the_divider_between_episodes() {\n  779|     // The live shape: a prior episode's propose/support pair sits below the\n  780|     // trigger, and this episode's own pair sits above it.\n  781|     let desk = desk_of(&three_member_manifest(), \"eng\").expect(\"a room\");\n  782|     let member = desk.member(\"planner\").expect(\"planner is seated\").clone();\n  783|     let quorum = desk.policy().quorum;\n  784|     let visible = [\n  785|         message(1, \"scout\", \"!propose #euler249 Old guess.\"),\n  786|         message(2, \"scout\", \"!support #euler249 ^1 Because it is odd.\"),\n  787|         message(3, \"planner\", \"!propose #euler301 New guess.\"),\n  788|         message(4, \"critic\", \"!support #euler301 ^3 Because it holds.\"),\n  789|     ];\n  790| ",
+      "start": 740,
+      "end": 790,
+      "total": 1092
+    },
+    "read crates/opencompany-core/src/lib.rs:1-80": {
+      "outcome": "text",
+      "text": "    1| //! OpenCompany Rust core.\n    2| //!\n    3| //! This crate is intentionally shaped as a light host around OpenHuman and the\n    4| //! TinyHumans Rust modules. The default build stays small; enable the `tiny`\n    5| //! feature to compile against the sibling `tiny*` crates.\n    6| \n    7| pub mod analytics;\n    8| pub mod app;\n    9| pub mod brain;\n   10| /// How `build.rs` picks the value behind [`BUILD_COMMIT`]. Compiled here only\n   11| /// under `cfg(test)`.\n   12| ///\n   13| /// The build script pulls the same file in with `include!`, so the code these\n   14| /// tests execute is the code that stamps the binary. The runtime reads the\n   15| /// finished constant and never calls the resolver, so outside a test build\n   16| /// this module would be dead code rather than a surface.\n   17| #[cfg(test)]\n   18| mod build_stamp;\n   19| /// Chargebee billing (issue #788): the REST client and the billing operations\n   20| /// the agent's tools call. The toolbelt bridge lives in `harness::chargebee`.\n   21| #[cfg(feature = \"chargebee\")]\n   22| pub mod chargebee;\n   23| pub mod company;\n   24| /// Local-only runtime host used by the packaged Tauri desktop application.\n   25| /// It embeds the existing operator API and ships the curated company presets;\n   26| /// it deliberately does not pull OpenHuman's local-AI configuration into the\n   27| /// OpenCompany product.\n   28| pub mod desktop;\n   29| pub mod economy;\n   30| pub mod error;\n   31| pub mod feedback;\n   32| /// The global baseline every company gets, whichever vertical it started from:\n   33| /// a small roster, the workflow graphs that are not vertical-specific, the\n   34| /// always-installed skills, and the tool namespaces a company with no\n   35| /// `[tools]` section of its own starts with. Authored in `globals/`, embedded\n   36| /// at build time.\n   37| pub mod globals;\n   38| /// WS4: openhuman embedded as a library (the harness). Compiled only under the\n   39| /// `openhuman` feature; the default build links none of it and keeps the\n   40| /// echo-brained, offline behaviour unchanged.\n   41| #[cfg(feature = \"openhuman\")]\n   42| pub mod harness;\n   43| /// Hive-mind desks: a `[[group_chat]]` with two or more members answers an\n   44| /// operator message as a bounded deliberation episode rather than as one\n   45| /// teammate's turn. Ungated — the episode machine is pure and the routing\n   46| /// decision is one the default build makes as readily as the harness one does.\n   47| pub mod hivemind;\n   48| /// Turning dropped files and links into memory: extraction, then chunking.\n   49| /// The console's Brain drop zone is the caller; the ports are unchanged.\n   50| pub mod ingest;\n   51| /// Dynamic ledgers: the company's own record — goals, decisions, and whatever\n   52| /// axis a workspace declares — as a folded append-only log rendered into the\n   53| /// `derived/` folder. The task board is registered here as a native ledger so\n   54| /// one discovery surface reaches every one of them.\n   55| pub mod ledger;\n   56| /// WS5: pure Usage & Finances projections over the runtime's accounting data\n   57| /// (usage samples, ledger, `[budget]`). No I/O; WS2 wraps these in GraphQL.\n   58| pub mod metering;\n   59| /// Crash and error reporting to a Sentry project the OPERATOR owns\n   60| /// (`docs/spec/runtime/crash-reporting.md`). Ungated on purpose: the\n   61| /// enable/disable decision and the secret scrubber are the two parts that have\n   62| /// to be provably right, so they compile — and are tested — in every build.\n   63| /// Only the bodies that name a `sentry::` type sit behind the\n   64| /// `crash-reporting` feature.\n   65| pub mod observability;\n   66| pub mod openhuman;\n   67| /// PayPal wallet + transaction visibility (issue #789).\n   68| #[cfg(feature = \"paypal\")]\n   69| pub mod paypal;\n   70| pub mod policy;\n   71| pub mod ports;\n   72| /// The `x-sdk-name: opencompany` identity attached to this crate's own\n   73| /// backend HTTP clients. Ungated (no `openhuman` feature requirement) because\n   74| /// `brain/` and `feedback/` need it and neither is feature-gated.\n   75| pub mod product;\n   76| /// Machines that dial out to execute this host's work (the `runner` feature).\n   77| #[cfg(feature = \"runner\")]\n   78| pub mod runner;\n   79| pub mod runtime;\n   80| pub mod server;",
+      "start": 1,
+      "end": 80,
+      "total": 132
+    },
+    "read crates/openhuman-core/src/lib.rs:1-200": {
+      "outcome": "not_found"
+    },
+    "read crates/openhuman-core/src/lib.rs:1-50": {
+      "outcome": "not_found"
+    },
+    "read openhuman_core/src/tools/traits.rs:1-50": {
+      "outcome": "not_found"
+    },
+    "read vendor/openhuman/crates/openhuman-core/Cargo.toml:1-30": {
+      "outcome": "not_found"
+    },
+    "search \"HiveStep::Speak\" in crates/opencompany-core/src/hivemind/**/*.rs": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/hivemind/episode.rs",
+          "line": 437,
+          "text": "                HiveStep::Speak { turns, next_state } => (turns, next_state),"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"McpAuthConfig\" in crates/**/*.rs": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mcp.rs",
+          "line": 27,
+          "text": "use oh::config::{Config, McpAuthConfig, McpServerConfig};"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mcp.rs",
+          "line": 137,
+          "text": "/// Maps resolved [`AuthMaterial`] onto the transport's [`McpAuthConfig`]."
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mcp.rs",
+          "line": 138,
+          "text": "fn auth_config(material: &AuthMaterial) -> McpAuthConfig {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mcp.rs",
+          "line": 140,
+          "text": "        AuthMaterial::None => McpAuthConfig::None,"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mcp.rs",
+          "line": 141,
+          "text": "        AuthMaterial::Bearer(token) => McpAuthConfig::BearerToken {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mcp.rs",
+          "line": 144,
+          "text": "        AuthMaterial::Header { name, value } => McpAuthConfig::Header {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mcp.rs",
+          "line": 151,
+          "text": "        AuthMaterial::QueryParam { name, value } => McpAuthConfig::QueryParam {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mcp.rs",
+          "line": 160,
+          "text": "        AuthMaterial::OAuth { access_token, .. } => McpAuthConfig::BearerToken {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mcp.rs",
+          "line": 258,
+          "text": "                    \"auth_configured\": !matches!(server.auth, tinymcp::McpAuthConfig::None),"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mcp.rs",
+          "line": 278,
+          "text": "                let auth = if matches!(server.auth, tinymcp::McpAuthConfig::None) {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mcp.rs",
+          "line": 392,
+          "text": "            .map(|s| !matches!(s.auth, tinymcp::McpAuthConfig::None))"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mcp.rs",
+          "line": 958,
+          "text": "        assert!(matches!(bearer, McpAuthConfig::BearerToken { .. }));"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mcp.rs",
+          "line": 969,
+          "text": "        assert!(matches!(oauth, McpAuthConfig::BearerToken { token } if token == \"at\"));"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mcp.rs",
+          "line": 974,
+          "text": "        assert!(matches!(header, McpAuthConfig::Header { .. }));"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mcp.rs",
+          "line": 979,
+          "text": "        assert!(matches!(query, McpAuthConfig::QueryParam { .. }));"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mcp.rs",
+          "line": 982,
+          "text": "            McpAuthConfig::None"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"fn step\" in **/*.rs": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/run_trace.rs",
+          "line": 267,
+          "text": "    pub fn step_count(&self) -> u32 {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/run_trace.rs",
+          "line": 328,
+          "text": "    async fn steps_land_while_the_turn_is_still_running() {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/search.rs",
+          "line": 1048,
+          "text": "    fn step_label(tools: &[Box<dyn Tool>]) -> String {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/search_byo.rs",
+          "line": 741,
+          "text": "    fn step_label(tools: &[Box<dyn openhuman_core::tools::traits::Tool>]) -> String {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/steps.rs",
+          "line": 1619,
+          "text": "    fn step_labels_keep_overrides_and_drop_the_default() {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/workspace_tools.rs",
+          "line": 3409,
+          "text": "    fn step_result(tool_name: &str, outcome: &ToolResult) -> Option<String> {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/cap_publish_test.rs",
+          "line": 178,
+          "text": "fn step(n: usize) -> Turn {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/cap_turn_test.rs",
+          "line": 195,
+          "text": "fn step(n: usize) -> Turn {"
+        },
+        {
+          "path": "crates/opencompany-core/src/ports/artifacts.rs",
+          "line": 846,
+          "text": "    fn step_seq_is_optional_and_omitted_when_absent() {"
+        },
+        {
+          "path": "crates/opencompany-core/src/ports/blockers.rs",
+          "line": 721,
+          "text": "    fn step_round_trips_through_json() {"
+        },
+        {
+          "path": "crates/opencompany-core/src/ports/runs.rs",
+          "line": 1217,
+          "text": "    fn step_records_round_trip() {"
+        },
+        {
+          "path": "crates/opencompany-core/src/runtime/cron.rs",
+          "line": 534,
+          "text": "    fn step_minute_matches_quarter_hours() {"
+        },
+        {
+          "path": "crates/opencompany-core/src/server/graphql/observability.rs",
+          "line": 202,
+          "text": "    async fn step_count(&self) -> Option<i32> {"
+        },
+        {
+          "path": "crates/opencompany-core/src/server/graphql/observability.rs",
+          "line": 210,
+          "text": "    async fn steps(&self) -> Vec<RunStepGql> {"
+        },
+        {
+          "path": "crates/opencompany-core/src/server/ops/runs.rs",
+          "line": 580,
+          "text": "    fn step(seq: u32, kind: TurnStepKind, status: TurnStepStatus, label: &str) -> TurnStep {"
+        },
+        {
+          "path": "crates/opencompany-core/src/workflows/caps/mod.rs",
+          "line": 7948,
+          "text": "        fn step(kind: TurnStepKind, status: TurnStepStatus, label: &str) -> TurnStep {"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/mod.rs",
+          "line": 63,
+          "text": "pub fn step("
+        }
+      ],
+      "truncated": false
+    },
+    "search \"fn step\" in vendor/tinyhivemind/crates/tinyhivemind-hive/src/**/*.rs": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/mod.rs",
+          "line": 63,
+          "text": "pub fn step("
+        }
+      ],
+      "truncated": false
+    },
+    "search \"mod mcp\" in crates/opencompany-core/**/*.rs": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/company/mod.rs",
+          "line": 71,
+          "text": "pub mod mcp;"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/mod.rs",
+          "line": 76,
+          "text": "pub mod mcp_file;"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/mod.rs",
+          "line": 82,
+          "text": "pub mod mcp_oauth;"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mod.rs",
+          "line": 104,
+          "text": "pub mod mcp;"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mod.rs",
+          "line": 105,
+          "text": "pub mod mcp_probe;"
+        },
+        {
+          "path": "crates/opencompany-core/src/server/mod.rs",
+          "line": 27,
+          "text": "pub mod mcp_oauth;"
+        },
+        {
+          "path": "crates/opencompany-core/src/server/ops/mod.rs",
+          "line": 62,
+          "text": "pub mod mcp;"
+        },
+        {
+          "path": "crates/opencompany-core/src/server/ops/mod.rs",
+          "line": 63,
+          "text": "pub mod mcp_config;"
+        },
+        {
+          "path": "crates/opencompany-core/src/server/ops/mod.rs",
+          "line": 64,
+          "text": "pub mod mcp_registry;"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"mod openhuman\" in crates/openhuman-core/**/*.rs": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"mod openhuman\" in crates/openhuman-core/src/**/*.rs": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"oh::\"": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/Cargo.toml",
+          "line": 246,
+          "text": "# `oh::mcp::http_client` facade still re-exports the transport and the payload"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/mcp_oauth.rs",
+          "line": 11,
+          "text": "//! **Why a bespoke module and not `oh::mcp::registry::oauth`.** OpenHuman's full"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/mcp_oauth.rs",
+          "line": 16,
+          "text": "//! so only the **discovery primitive** ([`oh::mcp::http_client::McpHttpClient`]) is"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/mcp_oauth.rs",
+          "line": 37,
+          "text": "use oh::mcp::http_client::{AuthorizationServerMetadata, McpAuthorizationContext, McpHttpClient};"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/mod.rs",
+          "line": 79,
+          "text": "// per-tenant browser sign-in flow. Needs the vendored `oh::mcp::config_servers` discovery"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/acp/run_turn.rs",
+          "line": 723,
+          "text": "        // takes `oh::AgentProgress` (`RunTraceSink::record`), which is what"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/agent_session.rs",
+          "line": 6,
+          "text": "//! [`oh::agent::Agent`] is held per `(company, agent_id)`, but"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/audit.rs",
+          "line": 52,
+          "text": "use oh::security::{AuditEvent, AuditEventType};"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/audit.rs",
+          "line": 53,
+          "text": "use oh::tools::{"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/audit.rs",
+          "line": 57,
+          "text": "// Not re-exported from `oh::tools` (upstream's `pub use traits::{…}` list omits"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/audit.rs",
+          "line": 59,
+          "text": "use oh::tools::traits::ToolTimeout;"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/audit.rs",
+          "line": 198,
+          "text": "        context: Option<&dyn oh::tools::traits::ToolRunContext>,"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/audit.rs",
+          "line": 269,
+          "text": "    // reader is a free function now: `oh::agent::tools::traits`'s"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/audit.rs",
+          "line": 308,
+          "text": "    security: Arc<oh::security::SecurityPolicy>,"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/audit.rs",
+          "line": 309,
+          "text": "    runtime: Arc<dyn oh::agent::host_runtime::RuntimeAdapter>,"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/audit/test.rs",
+          "line": 24,
+          "text": "use oh::security::SecurityPolicy;"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/audit/test.rs",
+          "line": 25,
+          "text": "use oh::tools::{Tool, ToolResult};"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/audit/test.rs",
+          "line": 439,
+          "text": "            logger: oh::security::get_or_create_workspace_audit_logger("
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/audit/test.rs",
+          "line": 440,
+          "text": "                oh::config::AuditConfig::default(),"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/audit/test.rs",
+          "line": 611,
+          "text": "    let bare = oh::tools::ShellTool::new("
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/audit/test.rs",
+          "line": 614,
+          "text": "        oh::security::AuditLogger::disabled(),"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/build.rs",
+          "line": 92,
+          "text": "use oh::agent::prompts::SystemPromptBuilder;"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/build.rs",
+          "line": 93,
+          "text": "use oh::agent::{Agent, AgentBuilder};"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/build.rs",
+          "line": 94,
+          "text": "use oh::memory::Memory;"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/build.rs",
+          "line": 95,
+          "text": "use oh::security::SecurityPolicy;"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/build.rs",
+          "line": 97,
+          "text": "use oh::tools::McpListToolsTool;"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/build.rs",
+          "line": 98,
+          "text": "use oh::tools::{"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/build.rs",
+          "line": 148,
+          "text": "    oh::agent::context::DEFAULT_TOOL_RESULT_BUDGET_BYTES;"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/build.rs",
+          "line": 177,
+          "text": "/// An in-turn spend brake ([`BudgetStopHook`](oh::agent::stop_hooks::BudgetStopHook))"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/build.rs",
+          "line": 430,
+          "text": "                    oh::mcp::registry::tools::McpRegistryListToolsTool::new(config.clone()),"
+        }
+      ],
+      "truncated": true
+    },
+    "search \"openhuman-core/src/lib.rs\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"openhuman::tools::traits\" in **/*.rs": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"pub fn init_workspace\" in **/openhuman*/**/*.rs": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"pub fn workspace_dir_for_file_backend\" in **/openhuman*/**/*.rs": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"pub mod agent\"": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mod.rs",
+          "line": 41,
+          "text": "pub mod agent_session;"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"pub mod agent\" in crates/openhuman-core/**/*.rs": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"pub mod config\" in **/openhuman*/**/*.rs": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"pub mod config\" in crates/opencompany-core/**/*.rs": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/analytics/mod.rs",
+          "line": 67,
+          "text": "pub mod config;"
+        },
+        {
+          "path": "crates/opencompany-core/src/app/mod.rs",
+          "line": 2,
+          "text": "pub mod config;"
+        },
+        {
+          "path": "crates/opencompany-core/src/observability/mod.rs",
+          "line": 30,
+          "text": "pub mod config;"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"pub mod memory\" in crates/opencompany-core/**/*.rs": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mod.rs",
+          "line": 106,
+          "text": "pub mod memory;"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mod.rs",
+          "line": 107,
+          "text": "pub mod memory_loop;"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mod.rs",
+          "line": 108,
+          "text": "pub mod memory_tools;"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/mod.rs",
+          "line": 70,
+          "text": "pub mod memory;"
+        },
+        {
+          "path": "crates/opencompany-core/src/ports/mod.rs",
+          "line": 26,
+          "text": "pub mod memory;"
+        },
+        {
+          "path": "crates/opencompany-core/src/server/graphql/mod.rs",
+          "line": 16,
+          "text": "pub mod memory_facts;"
+        },
+        {
+          "path": "crates/opencompany-core/src/server/ops/mod.rs",
+          "line": 65,
+          "text": "pub mod memory;"
+        },
+        {
+          "path": "crates/opencompany-core/src/server/ops/mod.rs",
+          "line": 66,
+          "text": "pub mod memory_engine;"
+        },
+        {
+          "path": "crates/opencompany-core/src/server/ops/mod.rs",
+          "line": 67,
+          "text": "pub mod memory_ingest;"
+        },
+        {
+          "path": "crates/opencompany-core/src/store/mod.rs",
+          "line": 70,
+          "text": "pub mod memory;"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"pub mod openhuman\"": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/lib.rs",
+          "line": 66,
+          "text": "pub mod openhuman;"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"pub mod openhuman\" in crates/**/*.rs": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/lib.rs",
+          "line": 66,
+          "text": "pub mod openhuman;"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"pub mod openhuman\" in crates/opencompany-core/**/*.rs": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/lib.rs",
+          "line": 66,
+          "text": "pub mod openhuman;"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"pub mod openhuman\" in crates/openhuman-core/src/**/*.rs": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"pub mod openhuman\" in crates/openhuman-core/src/lib.rs": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"pub mod security\" in **/openhuman*/**/*.rs": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"pub mod tools\"": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-app/src/acp/mod.rs",
+          "line": 18,
+          "text": "pub mod tools;"
+        },
+        {
+          "path": "crates/opencompany-core/src/openhuman/mod.rs",
+          "line": 13,
+          "text": "pub mod tools;"
+        },
+        {
+          "path": "crates/opencompany-core/src/ports/mod.rs",
+          "line": 37,
+          "text": "pub mod tools;"
+        },
+        {
+          "path": "crates/opencompany-core/src/runtime/mod.rs",
+          "line": 116,
+          "text": "pub mod tools;"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"pub mod tools\" in **/*.rs": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-app/src/acp/mod.rs",
+          "line": 18,
+          "text": "pub mod tools;"
+        },
+        {
+          "path": "crates/opencompany-core/src/openhuman/mod.rs",
+          "line": 13,
+          "text": "pub mod tools;"
+        },
+        {
+          "path": "crates/opencompany-core/src/ports/mod.rs",
+          "line": 37,
+          "text": "pub mod tools;"
+        },
+        {
+          "path": "crates/opencompany-core/src/runtime/mod.rs",
+          "line": 116,
+          "text": "pub mod tools;"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"pub mod tools\" in crates/openhuman-core/src/**/*.rs": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"pub mod tools\" in crates/openhuman-core/src/lib.rs": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"pub struct Sequence\"": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind/src/session/types.rs",
+          "line": 10,
+          "text": "pub struct Sequence(pub u64);"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"pub use crate::\"": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/chargebee/types.rs",
+          "line": 17,
+          "text": "pub use crate::company::billing::{API_KEY_SECRET, SITE_SECRET};"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/acp/run_turn.rs",
+          "line": 74,
+          "text": "pub use crate::ports::acp::{AcpAgent, AcpAgentFactory, AcpObserver, AcpTurn, AcpUpdate};"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/capability_budget.rs",
+          "line": 38,
+          "text": "pub use crate::metering::capability::{"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/composio.rs",
+          "line": 103,
+          "text": "pub use crate::company::composio::{"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/confine.rs",
+          "line": 77,
+          "text": "pub use crate::ports::CONFINED_AGENT_ID;"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/lifecycle.rs",
+          "line": 71,
+          "text": "pub use crate::ports::tasks::{"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/orchestrator.rs",
+          "line": 107,
+          "text": "pub use crate::company::ORCHESTRATOR_TIER;"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/orchestrator.rs",
+          "line": 161,
+          "text": "pub use crate::runtime::delegation_tools::{"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/provider.rs",
+          "line": 70,
+          "text": "pub use crate::company::inference::catalogue::{OPENROUTER_REFERER, OPENROUTER_TITLE};"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/mod.rs",
+          "line": 41,
+          "text": "pub use crate::session_key;"
+        },
+        {
+          "path": "crates/opencompany-core/src/policy/judgement.rs",
+          "line": 252,
+          "text": "pub use crate::policy::floor::is_irreversible_group;"
+        },
+        {
+          "path": "crates/opencompany-core/src/policy/judgement.rs",
+          "line": 343,
+          "text": "pub use crate::policy::floor::DEFERRED;"
+        },
+        {
+          "path": "crates/opencompany-core/src/policy/judgement.rs",
+          "line": 408,
+          "text": "pub use crate::policy::floor::{AMOUNT_KEY, declared_amount_usd};"
+        },
+        {
+          "path": "crates/opencompany-core/src/runtime/journal.rs",
+          "line": 40,
+          "text": "pub use crate::runtime::types::TaskLink;"
+        },
+        {
+          "path": "crates/opencompany-core/src/runtime/mod.rs",
+          "line": 194,
+          "text": "pub use crate::company::runtime::CompanyRuntime;"
+        },
+        {
+          "path": "crates/opencompany-core/src/server/hooks_chargebee.rs",
+          "line": 52,
+          "text": "pub use crate::company::billing::WEBHOOK_SECRET_KEY;"
+        },
+        {
+          "path": "crates/opencompany-core/src/store/memory/driver.rs",
+          "line": 23,
+          "text": "pub use crate::store::select::RemoteDeployment;"
+        },
+        {
+          "path": "docs/key-reworks/phase-1a-composio-keys.md",
+          "line": 49,
+          "text": "| `src/harness/built_in/composio.rs` | 101-106 | `pub use crate::company::composio::{…}` | re-exports renamed |"
+        },
+        {
+          "path": "docs/key-reworks/phase-1a-composio-keys.md",
+          "line": 377,
+          "text": "pub use crate::company::composio::{"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"pub use openhuman\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"pub use openhuman\" in crates/opencompany-core/src/lib.rs": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"pub use openhuman::\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"pub use openhuman_core\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"pub use\" in crates/openhuman-core/src/lib.rs": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"revealed_width\"": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/hivemind/mod.rs",
+          "line": 15,
+          "text": "//! `revealed_width` once it can see itself — so the number of turns an operator"
+        },
+        {
+          "path": "docs/spec/runtime/hivemind.md",
+          "line": 25,
+          "text": "`round_width` speakers while the room is blind, at most `revealed_width` once it"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/policy.rs",
+          "line": 17,
+          "text": "        revealed_width: SEQUENTIAL,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/policy.rs",
+          "line": 65,
+          "text": "        revealed_width: SEQUENTIAL,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/policy.rs",
+          "line": 148,
+          "text": "        revealed_width: width,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/policy.rs",
+          "line": 166,
+          "text": "        revealed_width: SEQUENTIAL,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/README.md",
+          "line": 40,
+          "text": "the room is `Blind` and by `revealed_width` once it can see itself, which is"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/mod.rs",
+          "line": 75,
+          "text": "    if policy.round_width == 0 || policy.revealed_width == 0 {"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/mod.rs",
+          "line": 227,
+          "text": "        Visibility::Full => policy.revealed_width,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/test/support.rs",
+          "line": 135,
+          "text": "        revealed_width: 1,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/test/termination.rs",
+          "line": 215,
+          "text": "    assert_eq!(policy.revealed_width, 1);"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/test/turn_dynamics.rs",
+          "line": 151,
+          "text": "        revealed_width: 2,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/test/wire_forms.rs",
+          "line": 16,
+          "text": "            \"revealed_width\": 1,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/types.rs",
+          "line": 103,
+          "text": "    pub revealed_width: u32,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/types.rs",
+          "line": 185,
+          "text": "        revealed_width: DEFAULT_REVEALED_WIDTH,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/types.rs",
+          "line": 228,
+          "text": "    /// The round is widened to the whole room and `revealed_width` is left at"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/types.rs",
+          "line": 249,
+          "text": "    /// assert_eq!(policy.revealed_width, 1);"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/types.rs",
+          "line": 261,
+          "text": "            revealed_width: DEFAULT_REVEALED_WIDTH,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/types.rs",
+          "line": 364,
+          "text": "        /// [`Visibility::Blind`], or `policy.revealed_width` of them once it"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/types.rs",
+          "line": 366,
+          "text": "        /// other, so a policy naming a wide `revealed_width` alongside a"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/lib.rs",
+          "line": 44,
+          "text": "//! round is blind or [`EpisodePolicy::revealed_width`] of them once it is"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/tests/fuzz_invariants.rs",
+          "line": 441,
+          "text": "                revealed_width: width,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/tests/fuzz_invariants.rs",
+          "line": 494,
+          "text": "        revealed_width: 1,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/tests/fuzz_invariants.rs",
+          "line": 545,
+          "text": "        revealed_width: 1,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/tests/hive_episode.rs",
+          "line": 549,
+          "text": "        revealed_width: 1,"
+        },
+        {
+          "path": "vendor/tinyhivemind/docs/adr/0014-a-round-authorizes-concurrent-turns.md",
+          "line": 94,
+          "text": "`Visibility::Blind`, and `revealed_width` caps one after. Both are finite, `0`"
+        },
+        {
+          "path": "vendor/tinyhivemind/docs/experiments/2026-09-09-depth-and-width.md",
+          "line": 70,
+          "text": "defaults to four and `revealed_width` to one: all of the free concurrency, none"
+        },
+        {
+          "path": "vendor/tinyhivemind/docs/experiments/2026-09-10-what-the-scale-run-found.md",
+          "line": 51,
+          "text": "The round is widened to the whole room, with `revealed_width` left at one —"
+        },
+        {
+          "path": "vendor/tinyhivemind/docs/specs/concurrent-rounds.md",
+          "line": 170,
+          "text": "So `round_width` caps a blind round and `revealed_width` caps a revealed one,"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"revealed_width\" in **/*.rs": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/hivemind/mod.rs",
+          "line": 15,
+          "text": "//! `revealed_width` once it can see itself — so the number of turns an operator"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/policy.rs",
+          "line": 17,
+          "text": "        revealed_width: SEQUENTIAL,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/policy.rs",
+          "line": 65,
+          "text": "        revealed_width: SEQUENTIAL,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/policy.rs",
+          "line": 148,
+          "text": "        revealed_width: width,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/policy.rs",
+          "line": 166,
+          "text": "        revealed_width: SEQUENTIAL,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/mod.rs",
+          "line": 75,
+          "text": "    if policy.round_width == 0 || policy.revealed_width == 0 {"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/mod.rs",
+          "line": 227,
+          "text": "        Visibility::Full => policy.revealed_width,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/test/support.rs",
+          "line": 135,
+          "text": "        revealed_width: 1,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/test/termination.rs",
+          "line": 215,
+          "text": "    assert_eq!(policy.revealed_width, 1);"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/test/turn_dynamics.rs",
+          "line": 151,
+          "text": "        revealed_width: 2,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/test/wire_forms.rs",
+          "line": 16,
+          "text": "            \"revealed_width\": 1,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/types.rs",
+          "line": 103,
+          "text": "    pub revealed_width: u32,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/types.rs",
+          "line": 185,
+          "text": "        revealed_width: DEFAULT_REVEALED_WIDTH,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/types.rs",
+          "line": 228,
+          "text": "    /// The round is widened to the whole room and `revealed_width` is left at"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/types.rs",
+          "line": 249,
+          "text": "    /// assert_eq!(policy.revealed_width, 1);"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/types.rs",
+          "line": 261,
+          "text": "            revealed_width: DEFAULT_REVEALED_WIDTH,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/types.rs",
+          "line": 364,
+          "text": "        /// [`Visibility::Blind`], or `policy.revealed_width` of them once it"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/types.rs",
+          "line": 366,
+          "text": "        /// other, so a policy naming a wide `revealed_width` alongside a"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/lib.rs",
+          "line": 44,
+          "text": "//! round is blind or [`EpisodePolicy::revealed_width`] of them once it is"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/tests/fuzz_invariants.rs",
+          "line": 441,
+          "text": "                revealed_width: width,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/tests/fuzz_invariants.rs",
+          "line": 494,
+          "text": "        revealed_width: 1,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/tests/fuzz_invariants.rs",
+          "line": 545,
+          "text": "        revealed_width: 1,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/tests/hive_episode.rs",
+          "line": 549,
+          "text": "        revealed_width: 1,"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"round_start\"": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/hivemind/deliberation_test.rs",
+          "line": 535,
+          "text": "        round_start: tinyhivemind_hive::Sequence(u64::MAX),"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/episode.rs",
+          "line": 459,
+          "text": "            // `project_for` withholds any peer row above `round_start`."
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/episode.rs",
+          "line": 481,
+          "text": "                    // withholds a peer row above `round_start`: a pin a"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/episode.rs",
+          "line": 489,
+          "text": "                    Some(turn.round_start),"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/moves_test.rs",
+          "line": 829,
+          "text": "        round_start: tinyhivemind_hive::Sequence(u64::MAX),"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/test.rs",
+          "line": 773,
+          "text": "        round_start: tinyhivemind_hive::Sequence(u64::MAX),"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/calibrate.rs",
+          "line": 238,
+          "text": "        round_start: Sequence(0),"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/run/mod.rs",
+          "line": 520,
+          "text": "/// `project_for` withholds anything above `round_start`. So appending as we go"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/run/turns.rs",
+          "line": 295,
+          "text": "        round_start: host"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/run/turns.rs",
+          "line": 300,
+          "text": "            .unwrap_or(last.round_start),"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/mod.rs",
+          "line": 292,
+          "text": "            round_start: round.at,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/mod.rs",
+          "line": 514,
+          "text": "        // `round_start` is folded from desk rows only (`live_traces`), so"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/mod.rs",
+          "line": 519,
+          "text": "        // At `round_width: 1` nothing is above `round_start` when the turn"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/mod.rs",
+          "line": 522,
+          "text": "        Visibility::Full => message.sequence <= turn.round_start,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/mod.rs",
+          "line": 523,
+          "text": "        // The whole episode. `round_start` is the last desk row folded and"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/test/off_floor_asides.rs",
+          "line": 158,
+          "text": "    // desk row\" rather than \"is this row above `round_start`\". That is a"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/test/off_floor_asides.rs",
+          "line": 166,
+          "text": "    // `round_start` is folded from desk rows only, so a private row never"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/test/off_floor_asides.rs",
+          "line": 171,
+          "text": "        // Authored after `round_start`: concurrent with the round, exactly"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/test/off_floor_asides.rs",
+          "line": 181,
+          "text": "        round_start: Sequence(1),"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/test/off_floor_asides.rs",
+          "line": 188,
+          "text": "        \"a private row authored above round_start must be withheld from a \\"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/test/off_floor_asides.rs",
+          "line": 192,
+          "text": "    // The same row, authored at or before `round_start`, is not concurrent"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/test/turn_dynamics.rs",
+          "line": 83,
+          "text": "        round_start: Sequence(4),"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/test/turn_dynamics.rs",
+          "line": 116,
+          "text": "        round_start: Sequence(3),"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/types.rs",
+          "line": 348,
+          "text": "    pub round_start: Sequence,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/tests/fuzz_invariants.rs",
+          "line": 481,
+          "text": "/// same argmax it always was and no peer row exists above `round_start`, so the"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/tests/public_api.rs",
+          "line": 148,
+          "text": "        round_start: Sequence(0),"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/tests/support/hive_harness.rs",
+          "line": 184,
+          "text": "            // carries a sequence above `round_start`, and `project_for`"
+        },
+        {
+          "path": "vendor/tinyhivemind/docs/adr/0014-a-round-authorizes-concurrent-turns.md",
+          "line": 105,
+          "text": "row authored above `round_start` was written concurrently with this turn and is"
+        },
+        {
+          "path": "vendor/tinyhivemind/docs/specs/concurrent-rounds.md",
+          "line": 105,
+          "text": "    pub round_start: Sequence,"
+        },
+        {
+          "path": "vendor/tinyhivemind/docs/specs/concurrent-rounds.md",
+          "line": 132,
+          "text": "a peer agent's row authored **above `round_start`** is withheld, because it was"
+        }
+      ],
+      "truncated": true
+    },
+    "search \"round_start\" in crates/opencompany-core/src/hivemind/**/*.rs": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/hivemind/deliberation_test.rs",
+          "line": 535,
+          "text": "        round_start: tinyhivemind_hive::Sequence(u64::MAX),"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/episode.rs",
+          "line": 459,
+          "text": "            // `project_for` withholds any peer row above `round_start`."
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/episode.rs",
+          "line": 481,
+          "text": "                    // withholds a peer row above `round_start`: a pin a"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/episode.rs",
+          "line": 489,
+          "text": "                    Some(turn.round_start),"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/moves_test.rs",
+          "line": 829,
+          "text": "        round_start: tinyhivemind_hive::Sequence(u64::MAX),"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/test.rs",
+          "line": 773,
+          "text": "        round_start: tinyhivemind_hive::Sequence(u64::MAX),"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"round_width\"": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/hivemind/mod.rs",
+          "line": 14,
+          "text": "//! *round* — at most `round_width` speakers while the room is blind, at most"
+        },
+        {
+          "path": "docs/spec/runtime/hivemind.md",
+          "line": 25,
+          "text": "`round_width` speakers while the room is blind, at most `revealed_width` once it"
+        },
+        {
+          "path": "vendor/tinyhivemind/AGENTS.md",
+          "line": 33,
+          "text": "   — but never more than `round_width`, and never without an approval in sight."
+        },
+        {
+          "path": "vendor/tinyhivemind/AGENTS.md",
+          "line": 117,
+          "text": "concurrently, at most `round_width` of them, plus the single state the episode"
+        },
+        {
+          "path": "vendor/tinyhivemind/AGENTS.md",
+          "line": 120,
+          "text": "concurrent round *is* a blind round. `round_width: 1` is the sequential episode"
+        },
+        {
+          "path": "vendor/tinyhivemind/CLAUDE.md",
+          "line": 33,
+          "text": "   — but never more than `round_width`, and never without an approval in sight."
+        },
+        {
+          "path": "vendor/tinyhivemind/CLAUDE.md",
+          "line": 117,
+          "text": "concurrently, at most `round_width` of them, plus the single state the episode"
+        },
+        {
+          "path": "vendor/tinyhivemind/CLAUDE.md",
+          "line": 120,
+          "text": "concurrent round *is* a blind round. `round_width: 1` is the sequential episode"
+        },
+        {
+          "path": "vendor/tinyhivemind/ROADMAP.md",
+          "line": 255,
+          "text": "  never more than `round_width` of them and never without an approval in sight —"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/COST.md",
+          "line": 75,
+          "text": "than `round_width` pays more wall clock than this reports, in proportion to how"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/LIVE.md",
+          "line": 264,
+          "text": "desk** the library decides: a step authorizes a round of up to `round_width`"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/cli/flags.rs",
+          "line": 146,
+          "text": "            options.round_width ="
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/cli/mod.rs",
+          "line": 148,
+          "text": "    pub(crate) round_width: u32,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/cli/mod.rs",
+          "line": 340,
+          "text": "            round_width: tinyhivemind_hive::DEFAULT_ROUND_WIDTH,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/compare/mod.rs",
+          "line": 329,
+          "text": "        &widened_policy(tuned, options.round_width),"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/compare/mod.rs",
+          "line": 335,
+          "text": "        &blind_wide_policy(tuned, options.round_width),"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/cost.rs",
+          "line": 35,
+          "text": "//! afford. A host with fewer seats than `round_width` pays more wall clock"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/cost.rs",
+          "line": 290,
+          "text": "    /// `1.0` is a strictly sequential protocol, whatever its `round_width`."
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/grid/mod.rs",
+          "line": 136,
+          "text": "/// The concurrency axis is spelled `round_width` here, not `concurrency`."
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/grid/mod.rs",
+          "line": 146,
+          "text": "        \"{{\\\"topic\\\":\\\"{}\\\",\\\"scale\\\":{},\\\"complexity\\\":{},\\\"round_width\\\":{},\","
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/policy.rs",
+          "line": 16,
+          "text": "        round_width: SEQUENTIAL,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/policy.rs",
+          "line": 64,
+          "text": "        round_width: SEQUENTIAL,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/policy.rs",
+          "line": 147,
+          "text": "        round_width: width,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/policy.rs",
+          "line": 165,
+          "text": "        round_width: width,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/run/scoring.rs",
+          "line": 40,
+          "text": "    /// this is what a host actually waits for, and at `round_width: 1` the two"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/scale.rs",
+          "line": 278,
+          "text": "            &widened_policy(tuned, options.round_width),"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/scale.rs",
+          "line": 284,
+          "text": "            &blind_wide_policy(tuned, options.round_width),"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/swarm/schedule.rs",
+          "line": 43,
+          "text": "//! of up to `policy.round_width` turns, and [ADR 0014][round] is what says a"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/swarm/schedule.rs",
+          "line": 55,
+          "text": "//! `desks x round_width` is the number of calls a pass makes, which is a"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/variety/mod.rs",
+          "line": 381,
+          "text": "    // seats available and by `DivisionPolicy::round_width`."
+        }
+      ],
+      "truncated": true
+    },
+    "search \"round_width\" in **/*.rs": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/hivemind/mod.rs",
+          "line": 14,
+          "text": "//! *round* — at most `round_width` speakers while the room is blind, at most"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/cli/flags.rs",
+          "line": 146,
+          "text": "            options.round_width ="
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/cli/mod.rs",
+          "line": 148,
+          "text": "    pub(crate) round_width: u32,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/cli/mod.rs",
+          "line": 340,
+          "text": "            round_width: tinyhivemind_hive::DEFAULT_ROUND_WIDTH,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/compare/mod.rs",
+          "line": 329,
+          "text": "        &widened_policy(tuned, options.round_width),"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/compare/mod.rs",
+          "line": 335,
+          "text": "        &blind_wide_policy(tuned, options.round_width),"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/cost.rs",
+          "line": 35,
+          "text": "//! afford. A host with fewer seats than `round_width` pays more wall clock"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/cost.rs",
+          "line": 290,
+          "text": "    /// `1.0` is a strictly sequential protocol, whatever its `round_width`."
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/grid/mod.rs",
+          "line": 136,
+          "text": "/// The concurrency axis is spelled `round_width` here, not `concurrency`."
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/grid/mod.rs",
+          "line": 146,
+          "text": "        \"{{\\\"topic\\\":\\\"{}\\\",\\\"scale\\\":{},\\\"complexity\\\":{},\\\"round_width\\\":{},\","
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/policy.rs",
+          "line": 16,
+          "text": "        round_width: SEQUENTIAL,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/policy.rs",
+          "line": 64,
+          "text": "        round_width: SEQUENTIAL,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/policy.rs",
+          "line": 147,
+          "text": "        round_width: width,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/policy.rs",
+          "line": 165,
+          "text": "        round_width: width,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/run/scoring.rs",
+          "line": 40,
+          "text": "    /// this is what a host actually waits for, and at `round_width: 1` the two"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/scale.rs",
+          "line": 278,
+          "text": "            &widened_policy(tuned, options.round_width),"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/scale.rs",
+          "line": 284,
+          "text": "            &blind_wide_policy(tuned, options.round_width),"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/swarm/schedule.rs",
+          "line": 43,
+          "text": "//! of up to `policy.round_width` turns, and [ADR 0014][round] is what says a"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/swarm/schedule.rs",
+          "line": 55,
+          "text": "//! `desks x round_width` is the number of calls a pass makes, which is a"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/examples/bench/variety/mod.rs",
+          "line": 381,
+          "text": "    // seats available and by `DivisionPolicy::round_width`."
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/attention/mod.rs",
+          "line": 11,
+          "text": "//! `round_width` and it is a property of the policy rather than of the type, so"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/division/mod.rs",
+          "line": 82,
+          "text": "/// runs more than [`DivisionPolicy::round_width`] assignments, and no seat"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/division/mod.rs",
+          "line": 117,
+          "text": "    if policy.round_width == 0 {"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/division/mod.rs",
+          "line": 146,
+          "text": "        assignments: packed(owned, seats.len(), policy.round_width),"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/division/mod.rs",
+          "line": 193,
+          "text": "    round_width: u32,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/division/mod.rs",
+          "line": 195,
+          "text": "    let lane = usize::try_from(round_width)"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/division/test.rs",
+          "line": 107,
+          "text": "        round_width: 64,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/division/test.rs",
+          "line": 282,
+          "text": "            round_width: 0,"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/division/test.rs",
+          "line": 353,
+          "text": "    assert_eq!(policy.round_width, crate::episode::DEFAULT_ROUND_WIDTH);"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/division/types.rs",
+          "line": 193,
+          "text": "    pub round_width: u32,"
+        }
+      ],
+      "truncated": true
+    },
+    "search \"struct Bid\"": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/attention/types.rs",
+          "line": 114,
+          "text": "pub struct Bid {"
+        },
+        {
+          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/attention/types.rs",
+          "line": 130,
+          "text": "pub struct BidContext<'a> {"
+        },
+        {
+          "path": "vendor/tinyhivemind/docs/specs/hive-mind.md",
+          "line": 147,
+          "text": "pub struct Bid { pub agent_id: String, pub urge: i64, pub reason: BidReason }"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"struct Sequence\" in crates/**/*.rs": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/harness/roster_build.rs",
+          "line": 837,
+          "text": "    struct SequencedModel {"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"tools::traits\" in crates/openhuman-core/src/**/*.rs": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"turns\" in crates/opencompany-core/src/hivemind/test.rs": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/hivemind/test.rs",
+          "line": 653,
+          "text": "    assert!(outcome.turns >= 3, \"{outcome:?}\");"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/test.rs",
+          "line": 949,
+          "text": "/// turns: referral is considered on every committed marked line. None did."
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/test.rs",
+          "line": 960,
+          "text": "        turns: 6,"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/test.rs",
+          "line": 965,
+          "text": "        failed_turns: 0,"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/test.rs",
+          "line": 1003,
+          "text": "        turns: 3,"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/test.rs",
+          "line": 1008,
+          "text": "        failed_turns: 0,"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/test.rs",
+          "line": 1034,
+          "text": "        turns: 5,"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/test.rs",
+          "line": 1039,
+          "text": "        failed_turns: 0,"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/test.rs",
+          "line": 1049,
+          "text": "/// **A member must be able to tell its own turns from its colleagues'.**"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/test.rs",
+          "line": 1057,
+          "text": "fn a_member_reads_its_own_turns_as_its_own() {"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"watermark\" in crates/opencompany-core/src/hivemind/*.rs": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/hivemind/concurrency_test.rs",
+          "line": 127,
+          "text": "/// existed, episode B's watermark (its own trigger) was the *only* bound on"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/deliberation_test.rs",
+          "line": 530,
+          "text": "        watermark: tinyhivemind_hive::Sequence(0),"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/episode.rs",
+          "line": 292,
+          "text": "    /// the room, and becomes the episode's watermark: everything at or below it"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/episode.rs",
+          "line": 317,
+          "text": "        // doc for why the watermark below cannot do this on its own."
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/mod.rs",
+          "line": 61,
+          "text": "//!   thread needs and the shared watermark alone does not give it."
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/moves_test.rs",
+          "line": 160,
+          "text": "/// The operator's message, and the watermark the episode opens on."
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/moves_test.rs",
+          "line": 824,
+          "text": "        watermark: tinyhivemind_hive::Sequence(1),"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/prompt.rs",
+          "line": 285,
+          "text": "    /// The episode's watermark — `EpisodeDriver::run`'s `trigger` — or `None`"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/prompt.rs",
+          "line": 288,
+          "text": "    /// `None` is not \"the watermark is sequence zero\": it means no divider is"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/prompt.rs",
+          "line": 365,
+          "text": "    /// Name the episode's watermark, so the transcript can show where its own"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/prompt.rs",
+          "line": 372,
+          "text": "    /// watermark this host already folds on (`EpisodeDriver::run`'s `trigger`)"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/prompt.rs",
+          "line": 594,
+          "text": "                    // No trigger: the episode watermark belongs to *this* desk,"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/prompt.rs",
+          "line": 848,
+          "text": "/// live), they are still legitimate to read and cite (the watermark hides"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/prompt.rs",
+          "line": 863,
+          "text": "/// context `EpisodeDriver::run`'s watermark lets the room read but never"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/prompt.rs",
+          "line": 866,
+          "text": "/// watermark (the overwhelmingly common case, and every call site before this"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/referral_test.rs",
+          "line": 50,
+          "text": "/// The operator's message on `eng`, and the watermark the episode opens on."
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/scope.rs",
+          "line": 3,
+          "text": "//! `EpisodeState::watermark` (in `tinyhivemind_hive`) is a **lower** bound"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/scope.rs",
+          "line": 9,
+          "text": "//! episode's watermark check sees the first episode's turns sitting above its"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/scope.rs",
+          "line": 17,
+          "text": "//! boundary companion to the watermark, scoped to one [`EpisodeDriver`]"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/scope.rs",
+          "line": 44,
+          "text": "    /// Exclusive lower bound shared with `EpisodeState::watermark`: at or"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/test.rs",
+          "line": 702,
+          "text": "    // message is — it is the task, and it predates the watermark."
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/test.rs",
+          "line": 740,
+          "text": "// The episode watermark divider"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/test.rs",
+          "line": 761,
+          "text": "    watermark: Sequence,"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/test.rs",
+          "line": 768,
+          "text": "        watermark,"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/test.rs",
+          "line": 778,
+          "text": "fn a_transcript_spanning_the_watermark_renders_the_divider_between_episodes() {"
+        },
+        {
+          "path": "crates/opencompany-core/src/hivemind/test.rs",
+          "line": 833,
+          "text": "        \"nothing precedes the watermark, so there is nothing to divide\""
+        }
+      ],
+      "truncated": false
+    }
   }
 }

@@ -1,0 +1,17 @@
+{
+  "key": "db43fc29a67061dc",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 5053,
+    "output_tokens": 680,
+    "cached_tokens": 4450,
+    "embed_tokens": 0,
+    "cost_usd": 0.0024117156
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change re-aliases the `openhuman_core::openhuman` module path to the crate root across imports and tests, a compile-time refactor with no security-relevant behavior change. It is safe to merge."
+  }
+}

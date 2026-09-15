@@ -1,0 +1,40 @@
+{
+  "key": "c0845d94959b0216",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3673,
+    "output_tokens": 2231,
+    "cached_tokens": 3235,
+    "embed_tokens": 0,
+    "cost_usd": 0.0054437481
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "pattern": "openhuman-core/src/lib.rs",
+        "why": "Check if openhuman_core crate has a lib.rs and what modules it exports"
+      },
+      {
+        "glob": "crates/openhuman-core/**/*.rs",
+        "kind": "search",
+        "pattern": "pub mod agent",
+        "why": "Check if openhuman_core has a public agent module"
+      },
+      {
+        "glob": "crates/openhuman-core/src/lib.rs",
+        "kind": "search",
+        "pattern": "pub use",
+        "why": "Check re-exports from openhuman_core root"
+      },
+      {
+        "glob": "crates/openhuman-core/**/*.rs",
+        "kind": "search",
+        "pattern": "mod openhuman",
+        "why": "Check if the openhuman submodule still exists in openhuman_core"
+      }
+    ]
+  }
+}

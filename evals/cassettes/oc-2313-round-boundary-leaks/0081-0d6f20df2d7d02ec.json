@@ -1,0 +1,26 @@
+{
+  "key": "0d6f20df2d7d02ec",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3456,
+    "output_tokens": 782,
+    "cached_tokens": 2987,
+    "embed_tokens": 0,
+    "cost_usd": 0.00235415166
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "end": 60,
+        "kind": "read",
+        "path": "crates/opencompany-core/src/harness/built_in/workflow_build/agent.rs",
+        "start": 23,
+        "why": "See downstream usages of the `oh` alias to understand whether the re-pointed import resolves to the same modules."
+      }
+    ],
+    "summary": "I need to see how `oh` is used after the import to judge whether the alias re-point breaks resolution or silently reroutes to different code."
+  }
+}

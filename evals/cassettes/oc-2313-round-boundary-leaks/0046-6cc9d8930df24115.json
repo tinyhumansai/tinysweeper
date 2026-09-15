@@ -1,0 +1,41 @@
+{
+  "key": "6cc9d8930df24115",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3461,
+    "output_tokens": 453,
+    "cached_tokens": 2985,
+    "embed_tokens": 0,
+    "cost_usd": 0.0016594431
+  },
+  "value": {
+    "lookups": [
+      {
+        "glob": "crates/opencompany-core/**/*.rs",
+        "kind": "search",
+        "pattern": "pub mod config",
+        "why": "Determine whether the crate root re-exports a `config` module (previously accessed via `openhuman_core::openhuman::config`) so I can judge whether `oh::config` still resolves correctly after the alias change."
+      },
+      {
+        "glob": "crates/**/*.rs",
+        "kind": "search",
+        "pattern": "pub mod openhuman",
+        "why": "Find where the `openhuman` module is defined, to understand what the old alias pointed to and whether paths shifted."
+      },
+      {
+        "glob": "crates/**/*.rs",
+        "kind": "search",
+        "pattern": "McpAuthConfig",
+        "why": "Locate where McpAuthConfig and related types are defined to confirm which module path the new alias must resolve to."
+      },
+      {
+        "glob": "crates/opencompany-core/**/*.rs",
+        "kind": "search",
+        "pattern": "mod mcp",
+        "why": "Confirm whether `mcp::config_servers` is accessible from the crate root (new alias) as well as from the `openhuman` submodule (old alias)."
+      }
+    ]
+  }
+}

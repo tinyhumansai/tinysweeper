@@ -1,0 +1,29 @@
+{
+  "key": "72cb19ec59da719f",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3445,
+    "output_tokens": 282,
+    "cached_tokens": 2972,
+    "embed_tokens": 0,
+    "cost_usd": 0.00129237276
+  },
+  "value": {
+    "lookups": [
+      {
+        "glob": "crates/opencompany-core/**/*.rs",
+        "kind": "search",
+        "pattern": "pub mod openhuman",
+        "why": "Determine whether `openhuman_core::openhuman` still exists as a module and whether `oh::memory` resolves under the new import path."
+      },
+      {
+        "glob": "crates/opencompany-core/**/*.rs",
+        "kind": "search",
+        "pattern": "pub mod memory",
+        "why": "Determine whether `openhuman_core::memory` exists so the new import `use openhuman_core as oh` combined with `oh::memory` is valid."
+      }
+    ]
+  }
+}
