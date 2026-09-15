@@ -23,12 +23,12 @@ because the enforcement was never really in the workflow:
   traits in `src/ports/forge.rs`. Lanes are handed a `ForgeRead`; only
   `src/apply` takes a `ForgeWrite`. A lane cannot mutate a pull request even by
   mistake, because it never holds a handle that could.
-- **The ordering carries the rest.** In `routes.rs::run_and_publish`, the
+- **The ordering carries the rest.** In `routes.rs::review_inner`, the
   read-only handle is built from an installation token minted before the lanes
-  run, `crate::app::review(...)` runs against it, and only after that call has
-  returned is a second token minted and wrapped in a `GitHubWrite` for
-  `crate::app::apply(...)`. The write handle does not exist while a model call
-  is in flight.
+  run, `run_lanes` runs `crate::app::review(...)` against it under the
+  deadline, and only after that has returned is a second token minted and
+  wrapped in a `GitHubWrite` for `crate::app::apply(...)`. The write handle
+  does not exist while a model call is in flight.
 
 ## Indexing does not block the review
 
