@@ -391,8 +391,28 @@ async fn conclude_in_flight(state: &AppState) {
         "review",
         "tinysweeper was restarted while this review was running",
     );
-    for slot in &slots {
-        close_status(state, slot, Conclusion::Failed(&err)).await;
+
+    // Concurrently, and under a deadline shorter than the grace period, not
+    // a serial loop with none. `GitHubWrite`'s client already times a single
+    // request out at `forge::github::REQUEST_TIMEOUT` (60s) — longer than
+    // Compose's whole ten seconds before `SIGKILL` on its own — so closing
+    // slots one at a time could starve every review after the first behind
+    // one stalled request, leaving their checks pending regardless of how
+    // fast they themselves would have concluded. Whatever this deadline
+    // does not reach in time stays pending until the next push, the same
+    // fallback every other best-effort write in this module already relies
+    // on.
+    let closes = slots
+        .iter()
+        .map(|slot| close_status(state, slot, Conclusion::Failed(&err)));
+    if tokio::time::timeout(SHUTDOWN_CLEANUP_DEADLINE, futures::future::join_all(closes))
+        .await
+        .is_err()
+    {
+        tracing::error!(
+            reviews = slots.len(),
+            "shutdown's grace period ran out before every in-flight check could be concluded"
+        );
     }
 }
 
