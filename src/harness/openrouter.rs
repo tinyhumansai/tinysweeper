@@ -446,12 +446,7 @@ impl GatewayModel {
             (Some(value), _) => value,
             (None, StructuredOutput::JsonObject) => {
                 let text = run.text().unwrap_or_default();
-                serde_json::from_str(text.trim()).map_err(|err| {
-                    Error::Model(format!(
-                        "{model} answered in `json_object` mode with something that is not \
-                         JSON: {err}"
-                    ))
-                })?
+                first_json_value(model, text.trim())?
             }
             (None, StructuredOutput::Schema) => {
                 return Err(Error::Model(format!(
@@ -541,6 +536,41 @@ impl GatewayModel {
 
         unreachable!("the loop returns on its last iteration")
     }
+}
+
+/// The first JSON value in `text`, tolerating what follows it.
+///
+/// OpenAI's first-party endpoints, under `json_object` mode inside the agent
+/// harness, routinely hand back one well-formed object and then more text on
+/// the next line — a second copy, a sentence — and `from_str` refuses the
+/// whole answer for the trailing part. Five of eight files on one review were
+/// lost to that. The object is what the mode guarantees; what follows it is
+/// logged and dropped. Prose *before* the object is still a failure: there is
+/// no JSON to take, and guessing at where one starts is parsing prose.
+fn first_json_value(model: &str, text: &str) -> Result<serde_json::Value> {
+    let mut stream = serde_json::Deserializer::from_str(text).into_iter::<serde_json::Value>();
+    let value = match stream.next() {
+        Some(Ok(value)) => value,
+        Some(Err(err)) => {
+            return Err(Error::Model(format!(
+                "{model} answered in `json_object` mode with something that is not JSON: {err}"
+            )));
+        }
+        None => {
+            return Err(Error::Model(format!(
+                "{model} answered in `json_object` mode with nothing"
+            )));
+        }
+    };
+    let rest = text[stream.byte_offset()..].trim();
+    if !rest.is_empty() {
+        tracing::debug!(
+            model,
+            trailing_chars = rest.len(),
+            "json_object answer carried text after the object; the object is kept"
+        );
+    }
+    Ok(value)
 }
 
 /// How many times a truncated answer is retried with a doubled ceiling before
@@ -900,6 +930,17 @@ mod tests {
             wire[1].content.contains("existing_code"),
             "the appended message must actually carry the schema"
         );
+    }
+
+    #[test]
+    fn a_json_object_answer_with_trailing_text_keeps_the_object() {
+        let value = first_json_value("m", "{\"summary\": \"ok\", \"findings\": []}\n\nDone.")
+            .expect("the object is taken");
+        assert_eq!(value["summary"], "ok");
+        let twice = first_json_value("m", "{\"a\": 1}\n{\"a\": 2}").expect("first wins");
+        assert_eq!(twice["a"], 1);
+        assert!(first_json_value("m", "Sure, here it is: {\"a\": 1}").is_err());
+        assert!(first_json_value("m", "").is_err());
     }
 
     #[test]
