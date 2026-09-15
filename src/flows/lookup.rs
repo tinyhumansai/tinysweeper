@@ -429,10 +429,15 @@ impl Ledger {
                 }
                 body.push_str("````");
                 for hit in definitions {
+                    let below = if hit.path == diff.path {
+                        SAME_FILE_BELOW
+                    } else {
+                        DEFINITION_BELOW
+                    };
                     let read = Lookup::Read {
                         path: hit.path.clone(),
                         start: Some(hit.line.saturating_sub(DEFINITION_ABOVE).max(1)),
-                        end: Some(hit.line + DEFINITION_BELOW),
+                        end: Some(hit.line + below),
                     };
                     if !self.seen.insert(read.key()) {
                         continue;
@@ -485,6 +490,11 @@ const AUTO_FOLLOW: usize = 3;
 const DEFINITION_ABOVE: u32 = 20;
 /// Lines read below it — the signature and its first lines.
 const DEFINITION_BELOW: u32 = 8;
+/// Lines read below a definition in the reviewed file itself: the body, as
+/// far as one read goes. A same-file method the change calls is the code the
+/// change most directly depends on, and the unbounded read on
+/// opencompany#2313 was a hundred lines into one.
+const SAME_FILE_BELOW: u32 = crate::ports::tree::MAX_READ_LINES - DEFINITION_ABOVE - 1;
 
 /// Whether a search hit is the line that defines something.
 ///
