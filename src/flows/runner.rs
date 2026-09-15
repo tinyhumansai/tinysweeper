@@ -39,6 +39,12 @@ pub struct Answer {
     pub model: String,
     /// Why there was no answer.
     pub error: Option<String>,
+    /// What the host read from the repository for this reviewer — seeded
+    /// definitions and answered lookups, rendered as the reviewer saw them.
+    /// Empty when nothing was looked up. Carried out so the stages after the
+    /// review — the falsifier above all — judge the finding against the same
+    /// evidence the reviewer had, rather than against the diff alone.
+    pub looked_up: String,
 }
 
 impl Answer {
@@ -49,6 +55,7 @@ impl Answer {
             value: None,
             model: String::new(),
             error: Some(error.into()),
+            looked_up: String::new(),
         }
     }
 }
@@ -132,6 +139,7 @@ async fn one_round(
                     value: Some(value),
                     model,
                     error: None,
+                    looked_up: String::new(),
                 },
                 None => Answer::failed(
                     &call.id,
@@ -434,6 +442,16 @@ pub async fn ask_all(
         {
             answers[index] = settled;
         }
+    }
+
+    // Everything the prompt grew by is what was read: the suffix started as
+    // the lane's evidence and only lookups were appended to it.
+    for (index, answer) in answers.iter_mut().enumerate() {
+        answer.looked_up = prompts[index]
+            .prompt
+            .strip_prefix(calls[index].prompt.as_str())
+            .unwrap_or_default()
+            .to_string();
     }
 
     Ok(answers)

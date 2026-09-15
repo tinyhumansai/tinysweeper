@@ -268,6 +268,8 @@ pub struct ReviewerResponse {
     pub model: String,
     /// The lane-shaped response, before anchoring or lane-specific placement.
     pub response: LaneResponse,
+    /// What was read from the repository for this reviewer, if anything.
+    pub looked_up: String,
 }
 
 /// Decode every usable council response, consistently across lanes.
