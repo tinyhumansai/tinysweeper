@@ -109,22 +109,15 @@ fn the_retired_submodules_switch_still_parses_or_says_how_to_migrate() {
     assert!(config.retrieval.submodules.is_empty());
 
     // `true` has no list equivalent; the error names the migration.
-    let table: toml::Table = "version = 1\n[retrieval]\nsubmodules = true\n"
-        .parse()
-        .unwrap();
-    let merged = crate::config::merge::merge_layers(&[
-        (crate::config::Layer::Defaults, crate::config::DEFAULTS.parse::<toml::Table>().unwrap()),
-        (crate::config::Layer::Repository, table),
-    ]);
-    let err = merged.table.try_into::<crate::config::Config>().unwrap_err().to_string();
+    let dir = repo(Some("version = 1\n[retrieval]\nsubmodules = true\n"), &[]);
+    let err = load(dir.path(), None).unwrap_err().to_string();
     assert!(err.contains("retrieval.submodules = true"), "{err}");
     assert!(err.contains("owner/name"), "{err}");
 }
 
 #[test]
 fn a_submodule_entry_that_is_not_owner_slash_name_is_rejected() {
-    let config =
-        parse("version = 1\n[retrieval]\nsubmodules = [\"acme/lib\", \"acme-lib\"]\n");
+    let config = parse("version = 1\n[retrieval]\nsubmodules = [\"acme/lib\", \"acme-lib\"]\n");
     let joined = validate::validate(&config).join("\n");
     assert!(joined.contains("`acme-lib`"), "{joined}");
     assert!(!joined.contains("`acme/lib`"), "{joined}");
