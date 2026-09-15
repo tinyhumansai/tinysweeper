@@ -861,15 +861,7 @@ impl GitHubRead {
     /// than as zero: `scan::blobs` treats `None` as "unknown", where a zero
     /// would silently mean "safely small".
     async fn blob_sizes(&self, repo: &RepoId, sha: &str) -> HashMap<String, u64> {
-        let route = format!(
-            "/repos/{}/{}/git/trees/{}?recursive=1",
-            repo.owner, repo.name, sha
-        );
-
-        // Raw route and `serde_json::Value`, matching `commits` above:
-        // octocrab has no typed model for the git-tree response, and the three
-        // fields wanted here are stable.
-        let raw: serde_json::Value = match self.client.get(&route, None::<&()>).await {
+        let raw = match self.raw_tree(repo, sha).await {
             Ok(raw) => raw,
             Err(err) => {
                 // Not fatal to the review. Sizes are an enrichment, and failing
@@ -888,6 +880,38 @@ impl GitHubRead {
         }
 
         Self::sizes_from_tree(&raw)
+    }
+
+    /// One recursive git-tree request at `sha`, shared by the two readers
+    /// that want the whole revision at once.
+    ///
+    /// Raw route and `serde_json::Value`, matching `commits` above: octocrab
+    /// has no typed model for the git-tree response, and the fields wanted
+    /// here are stable.
+    async fn raw_tree(&self, repo: &RepoId, sha: &str) -> Result<serde_json::Value> {
+        let route = format!(
+            "/repos/{}/{}/git/trees/{}?recursive=1",
+            repo.owner, repo.name, sha
+        );
+        self.client.get(&route, None::<&()>).await.map_err(api)
+    }
+
+    /// The blob paths, split out from the request so it can be tested offline.
+    fn paths_from_tree(raw: &serde_json::Value) -> TreeListing {
+        let paths = raw["tree"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            // Directories are `tree` entries; only a blob is a path a test or
+            // a workflow can live at. Submodules (`commit`) are not part of
+            // this tree either.
+            .filter(|entry| entry["type"].as_str() == Some("blob"))
+            .filter_map(|entry| entry["path"].as_str().map(str::to_string))
+            .collect();
+        TreeListing {
+            paths,
+            truncated: raw["truncated"].as_bool().unwrap_or(false),
+        }
     }
 
     /// The size map, split out from the request so it can be tested offline.
@@ -1592,27 +1616,7 @@ impl ForgeRead for GitHubRead {
         // One recursive call rather than a walk: GitHub answers the whole tree
         // in a single response and says when it could not, which is the only
         // shape under which a listing can be honest about being incomplete.
-        let route = format!(
-            "/repos/{}/{}/git/trees/{sha}?recursive=1",
-            repo.owner, repo.name
-        );
-        let raw: serde_json::Value = self.client.get(&route, None::<&()>).await.map_err(api)?;
-
-        let paths = raw["tree"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            // Directories are `tree` entries; only a blob is a path a test or
-            // a workflow can live at. Submodules (`commit`) are not part of
-            // this tree either.
-            .filter(|entry| entry["type"].as_str() == Some("blob"))
-            .filter_map(|entry| entry["path"].as_str().map(str::to_string))
-            .collect();
-
-        Ok(TreeListing {
-            paths,
-            truncated: raw["truncated"].as_bool().unwrap_or(false),
-        })
+        Ok(Self::paths_from_tree(&self.raw_tree(repo, sha).await?))
     }
 
     async fn issue(&self, repo: &RepoId, number: u64) -> Result<Issue> {
@@ -2271,6 +2275,25 @@ mod tests {
         let sizes = GitHubRead::sizes_from_tree(&json!({"truncated": true, "tree": []}));
         assert!(sizes.is_empty());
         assert_eq!(sizes.get("src/main.rs"), None);
+    }
+
+    #[test]
+    fn tree_paths_keep_blobs_only_and_carry_the_truncation_flag() {
+        let tree = json!({
+            "truncated": true,
+            "tree": [
+                {"path": "e2e", "type": "tree"},
+                {"path": "e2e/login.spec.ts", "type": "blob", "size": 120},
+                {"path": "vendor/tinyagents", "type": "commit"},
+                {"path": ".github/workflows/e2e.yml", "type": "blob", "size": 300}
+            ]
+        });
+        let listing = GitHubRead::paths_from_tree(&tree);
+        assert_eq!(
+            listing.paths,
+            vec!["e2e/login.spec.ts", ".github/workflows/e2e.yml"]
+        );
+        assert!(listing.truncated, "a truncated tree must say so, not read as complete");
     }
 
     /// A verdict, built without going near the wire format.
