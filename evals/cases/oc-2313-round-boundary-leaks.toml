@@ -1,0 +1,33 @@
+schema = 1
+id = "oc-2313-round-boundary-leaks"
+title = "chore(vendor): bump openhuman and tinyhivemind to upstream main"
+fixture = "../fixtures/oc-2313-round-boundary-leaks.json"
+labels = []
+
+[provenance]
+repo = "tinyhumansai/opencompany"
+pr = 2313
+# REQUIRED, and the loader refuses the case without it. Cite something this bot
+# did not produce: the follow-up commit that fixed it, a human review comment
+# somebody acted on, a revert. An expectation written from the bot's own output
+# measures whether the bot still agrees with itself.
+evidence = ""
+labelled_by = ""
+
+# What a good reviewer should find. Delete the block for a clean case — a
+# pull request with nothing wrong with it is how noise gets measured.
+# [[expected]]
+# id = "E1"
+# path = "src/some/file.rs"
+# lines = [10, 14]
+# severity_min = "medium"
+# summary = "One sentence a human can check the label against."
+# must_mention = ["keyword", "either|or"]
+
+# What it must not say. Every entry needs a reason, because the next person to
+# read it will otherwise assume it is a mistake and delete it.
+# [[forbidden]]
+# id = "F1"
+# path = "src/some/file.rs"
+# reason = "Three earlier runs called this dead code. It is not."
+# matches = ["dead code", "unused"]
