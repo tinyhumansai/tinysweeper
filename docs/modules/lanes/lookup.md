@@ -126,7 +126,7 @@ On the #2313 case, five lanes, default model: $0.23 before, $0.17 after, with
 50 of 58 files verified as the rename and never sent to a model. On the
 critique lane with a code-review-tuned model: the exclusive-bound finding,
 three runs out of three, at 0.67–0.81 confidence — below the posting gate,
-named in the summary as *worth a look*. The unbounded sibling read is still
-missed by every configuration tried; it needs a reviewer that chooses to trace
-what the round-mate's tools journal, which the rounds allow and no model yet
-does unprompted.
+named in the summary as *worth a look*. The unbounded sibling read is missed
+by every one-shot configuration and by that model; `gpt-5.6-luna` on the
+box's ladder reaches it two runs in three at a fiftieth of the price
+(tinysweeper#157), which is why it became the `deep` tier.
