@@ -34,7 +34,7 @@ thiserror = "2"
 toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "fs", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "fs", "sync", "time", "signal"] }
 # `url` only parses; it opens no socket, so it belongs with the offline core
 # above. `crate::memory::endpoint_allowed` needs the exact host resolution
 # `reqwest` itself uses — including how a redirect or `user@host` authority

@@ -124,6 +124,7 @@ fn title_for(err: &Error) -> &'static str {
         Error::Model(_) => "The review could not reach a model",
         Error::Forge(_) => "The review could not read the pull request",
         Error::Budget { .. } => "The review ran out of budget",
+        Error::Timeout { .. } => "The review ran out of time",
         Error::Config(_) | Error::ConfigNotFound(_) => "The review is misconfigured",
         _ => "The review could not run",
     }
@@ -149,6 +150,11 @@ fn summary_for(err: &Error) -> String {
         Error::Budget { .. } => {
             "The per-pull-request spend ceiling was reached before the lanes finished. Raise \
              `models.budget_usd_per_pr`, or narrow what this pull request changes."
+        }
+        Error::Timeout { .. } => {
+            "The lanes did not finish inside the review's wall-clock deadline. That is usually \
+             a model gateway answering very slowly, or an unusually large diff — check the \
+             gateway's latency before re-running, or narrow what this pull request changes."
         }
         _ => "Re-run the review once the underlying problem is fixed.",
     };
