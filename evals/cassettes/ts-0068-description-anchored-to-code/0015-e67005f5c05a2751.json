@@ -1,0 +1,17 @@
+{
+  "key": "e67005f5c05a2751",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 5190,
+    "output_tokens": 99,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00046918704
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change adds pricing entries for several new models and four defensive tests that verify model presence in defaults, cost ordering, and argument order. The tests themselves are sound and the added data entries are static constants with no execution logic. No security problem is introduced: all inputs are compile-time constants, no deserialization of untrusted data occurs here, no new network or subprocess calls are added, and dependencies are unchanged."
+  }
+}

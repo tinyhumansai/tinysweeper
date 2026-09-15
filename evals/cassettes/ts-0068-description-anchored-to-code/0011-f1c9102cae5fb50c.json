@@ -1,0 +1,28 @@
+{
+  "key": "f1c9102cae5fb50c",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4333,
+    "output_tokens": 5351,
+    "cached_tokens": 3725,
+    "embed_tokens": 0,
+    "cost_usd": 0.0122508603
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The new `reasoning_effort = \"high\"` is a global setting applied to every model in this gateway block, including the primary `z-ai/glm-5.2`. The comment documents GLM 5.2's clean runs (\"5/5 clean runs\") without mentioning reasoning, then separately attributes the reasoning-token measurement only to `deepseek-v4-pro` (\"measured on `deepseek-v4-pro` at `high`\"). The fallback comment says \"both were measured against the reasoning setting below\" — but that covers the fallbacks, not the primary model.\n\nThe repository's inference dialect code contains the error string `400: Extra inputs are not permitted: 'reasoning_effort'` (found at `dialect.rs:662`), proving some endpoints reject this parameter entirely. If `z-ai/glm-5.2` is one of them, every primary-model call returns 400 and either falls through to the more expensive fallback (defeating the 40x cost optimization the PR is built around) or fails outright if 400s do not trigger the fallback path.\n\nConfirm that the 5/5 clean runs for GLM 5.2 were with `reasoning_effort = \"high\"`, not with reasoning off. If they were, the comment should say so explicitly; if they were not, test before shipping.",
+        "confidence": 0.45,
+        "existing_code": "scan = \"z-ai/glm-5.2\"\ndeep = \"z-ai/glm-5.2\"",
+        "path": "src/config/defaults.toml",
+        "rule": "unverified-config-assumption",
+        "severity": "medium",
+        "suggestion": null,
+        "title": "Verify GLM 5.2 accepts reasoning_effort before relying on it"
+      }
+    ],
+    "summary": "The PR swaps the default scan/deep models to `z-ai/glm-5.2`, updates the fallback chain, and turns on `reasoning_effort = \"high\"` globally. The model and fallback choices are documented config decisions, but the diff's own comments never confirm that GLM 5.2 itself was tested with reasoning enabled — the reasoning measurement is attributed only to `deepseek-v4-pro`. Given the codebase has seen endpoints reject `reasoning_effort` outright, this gap is worth confirming before merge."
+  }
+}

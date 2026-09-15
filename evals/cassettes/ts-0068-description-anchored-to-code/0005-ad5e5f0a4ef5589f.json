@@ -1,0 +1,38 @@
+{
+  "key": "ad5e5f0a4ef5589f",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4283,
+    "output_tokens": 314,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00042764988
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The doc comment lists four valid strings: `off`, `low`, `medium`, `high`. Because the field is `String`, any arbitrary value compiles and is accepted at runtime. Callers that pass a typo or unsupported value will see a silent no-op or an error from the API only at inference time, not during config parsing. The field should use an enum or be validated in the config deserializer.",
+        "confidence": 0.9,
+        "existing_code": "    pub reasoning_effort: String,",
+        "path": "src/config/types.rs",
+        "rule": "unvalidated-input",
+        "severity": "medium",
+        "suggestion": null,
+        "title": "Validate `reasoning_effort` is one of the documented values"
+      }
+    ],
+    "lookups": [
+      {
+        "end": 410,
+        "kind": "read",
+        "path": "src/config/types.rs",
+        "start": 360,
+        "why": "Confirm the struct definition, the location of fallback/max_tokens, and whether there is any existing field-level validation logic in this file."
+      }
+    ],
+    "resolved": [],
+    "summary": "Adds a `reasoning_effort` field without validating its value or enforcing that it is only set when the model supports reasoning. This can silently produce ineffective or failing model calls."
+  }
+}

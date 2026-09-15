@@ -1,0 +1,17 @@
+{
+  "key": "a322cc7b0ec034ac",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4204,
+    "output_tokens": 445,
+    "cached_tokens": 3096,
+    "embed_tokens": 0,
+    "cost_usd": 0.00208373928
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change swaps default LLM model names and adds a `reasoning_effort` setting in a TOML defaults file. It introduces no secrets, no new code paths, no network or subprocess calls, and no dangerous sinks; the additions are configuration values and explanatory comments. Safe to merge."
+  }
+}

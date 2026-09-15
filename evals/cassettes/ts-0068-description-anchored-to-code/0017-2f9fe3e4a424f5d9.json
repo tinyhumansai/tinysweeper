@@ -1,0 +1,17 @@
+{
+  "key": "2f9fe3e4a424f5d9",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3778,
+    "output_tokens": 172,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00035894376
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request adds a `reasoning_effort` field to the config struct but stores it as a `String`, leaving the set of allowed values unenforced at the type level. The repository rules require presets to be data (not code) and do not mandate enum validation here, but the change introduces a new untrusted-string input that feeds into model behaviour without compile-time validation. However, the repository already uses `String` for other config fields (e.g. `fallback: Vec<String>`) and the reasoning_effort is consumed during review logic that I cannot see; a downstream mapping might reject invalid values. Because I cannot determine whether the crate error type or an enum would be used in practice, I cannot confirm a real defect. No findings."
+  }
+}

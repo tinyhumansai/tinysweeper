@@ -1,0 +1,25 @@
+{
+  "key": "8d4e1427a7ec2125",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 6460,
+    "output_tokens": 145,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00058779
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "fn models(",
+        "why": "Locate the Models struct to confirm reasoning_effort field definition and its source."
+      }
+    ],
+    "summary": "The change makes reasoning effort configurable per-model, replacing a hard-coded disabled state. The new field is read from config, passed through to the OpenRouter options, and tested. No untrusted input reaches a dangerous sink, no new network or subprocess calls are added, and no secrets are exposed. The change is safe to merge."
+  }
+}

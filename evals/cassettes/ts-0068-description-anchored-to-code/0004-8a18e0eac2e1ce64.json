@@ -1,0 +1,41 @@
+{
+  "key": "8a18e0eac2e1ce64",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4458,
+    "output_tokens": 429,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00046291728
+  },
+  "value": {
+    "lookups": [
+      {
+        "end": 120,
+        "kind": "read",
+        "path": "src/config/defaults.toml",
+        "start": 1,
+        "why": "Read the full file to understand the structure, existing keys, and whether `reasoning_effort` is a new key or a replacement. Also check if `scan` and `deep` are used elsewhere (e.g. in code that reads these keys) to see if the change from two different models to the same model could cause issues."
+      },
+      {
+        "kind": "search",
+        "pattern": "reasoning_effort",
+        "why": "Search the entire repository for any reference to `reasoning_effort` to see if it's a known configuration key, if it's used in code, and if the value 'high' is valid (e.g. enum or string)."
+      },
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "fallback",
+        "why": "Search Rust source code for how `fallback` is parsed and used, to check if the new model strings are expected and if the ordering matters (e.g. does the code iterate in order and stop on first success)."
+      },
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "budget_usd_per_pr",
+        "why": "Search for `budget_usd_per_pr` usage to see if the budget is enforced per pull request or per review call; the new model claims 40x cost reduction but fallbacks could still be expensive, so check if the budget is cumulative or per-call."
+      }
+    ]
+  }
+}

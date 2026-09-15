@@ -1,0 +1,17 @@
+{
+  "key": "9791e9fe9fe0d8fd",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 6543,
+    "output_tokens": 56,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0005795174
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change makes reasoning effort configurable per model, switching from a hard disable to a config-driven setting; the default remains 'high' and the escape hatch 'off' is preserved. Safe to merge."
+  }
+}

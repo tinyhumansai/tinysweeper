@@ -1,0 +1,28 @@
+{
+  "key": "21279a0afa2760b2",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3813,
+    "output_tokens": 301,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0003844582
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The doc comment tells users that valid values are `off`, `low`, `medium`, `high`, yet the field is a plain `String`. An invalid value will not be caught at parse time and will either be silently forwarded to the model (acting differently than documented) or produce a runtime error that could have been prevented. Following the repository's own practice of using PascalCase types for meaningful enums, this should be a proper enum. Define a small enum for the four variants and implement `Deserialize` (or use `serde_repr` / `strum`). This also ensures the `off`-rescues-empty-content semantic is preserved and communicated in the type system.",
+        "confidence": 1.0,
+        "existing_code": "    pub reasoning_effort: String,",
+        "path": "src/config/types.rs",
+        "rule": "unvalidated-string-enum",
+        "severity": "medium",
+        "suggestion": null,
+        "title": "Use an enum instead of String for `reasoning_effort`"
+      }
+    ],
+    "summary": "Adds a `reasoning_effort` field with a string type, but the repository's config types presumably use enums or well-known string constants; the field is unvalidated and the doc comment describes valid values without enforcing them at the type level."
+  }
+}

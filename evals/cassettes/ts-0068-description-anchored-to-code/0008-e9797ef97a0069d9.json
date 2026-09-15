@@ -1,0 +1,21 @@
+{
+  "key": "e9797ef97a0069d9",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_falsify",
+  "usage": {
+    "input_tokens": 1217,
+    "output_tokens": 124,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0001275722
+  },
+  "value": {
+    "incorrect": [
+      {
+        "index": 1,
+        "reason": "The finding claims the field should be an enum, but the diff only adds the field and its documentation; there is nothing in the diff that shows an enum is required or that a String will cause a problem. The diff does not disprove the finding — it simply does not contain the alleged deficiency in action."
+      }
+    ]
+  }
+}

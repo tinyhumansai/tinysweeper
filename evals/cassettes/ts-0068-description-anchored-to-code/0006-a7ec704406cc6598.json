@@ -1,0 +1,41 @@
+{
+  "key": "a7ec704406cc6598",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 5566,
+    "output_tokens": 1530,
+    "cached_tokens": 4210,
+    "embed_tokens": 0,
+    "cost_usd": 0.004697175
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "src/harness/pricing.rs",
+        "pattern": "fn completion_cost",
+        "why": "Verify the argument order (input, cached, output) and how cached tokens are charged — whether they replace or add to input tokens."
+      },
+      {
+        "kind": "search",
+        "path": "src/harness/pricing.rs",
+        "pattern": "fn unpriced",
+        "why": "Verify the unpriced helper used by the defaults test accepts an iterator of &str and returns the expected type."
+      },
+      {
+        "kind": "search",
+        "path": "src",
+        "pattern": "pub struct Models",
+        "why": "Verify the config fields scan, deep, and fallback exist and have the types the test assumes."
+      },
+      {
+        "kind": "search",
+        "path": "src",
+        "pattern": "const DEFAULTS",
+        "why": "Verify DEFAULTS is a const string that can be parsed as a toml::Table and deserialized into Config."
+      }
+    ]
+  }
+}
