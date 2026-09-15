@@ -66,20 +66,20 @@ pull request can never be reviewed again.
 call is capped on its own by the gateway client, but a review is dozens of
 them in sequence and nothing capped the sum: on 2026-09-15 one sat "in
 progress" for over two hours holding a permit. The deadline wraps the lookup
-checkout and the model phase — not the publish after them, which must not be
-cut off between one comment and the next — and is asserted at compile time to
-be shorter than `LEASE_TTL`,
-because a review still running when its lease lapses is exactly the duplicate
-the lease prevents. A review that misses it concludes its check as
+checkout and the model phase. A review that misses it concludes its check as
 `ActionRequired` with "ran out of time", and is not retried: the deadline is
 the budget, and a retry would spend it again.
 
-The margin between `REVIEW_DEADLINE` and `LEASE_TTL` is spent on the phases
-the deadline itself does not cover: the metadata reads before it and the
-publish after it. Those still need their own bound, because a hung socket
-does not know about either duration — `forge::github`'s client sets a
-connect and read timeout on every call for exactly this, so no single request
-in that margin can spend all of it.
+The publish after the lanes has a budget of its own, `PUBLISH_DEADLINE`,
+rather than whatever the lanes left over. `apply` is a handful of sequential,
+non-idempotent writes, and cancelling it between two of them cannot retract
+what GitHub already accepted — so its bound is deliberately generous, sized to
+fire only on a publish that is stuck, never one that is merely slow. The two
+together are asserted at compile time to be shorter than `LEASE_TTL`, because
+a review still running when its lease lapses is exactly the duplicate the
+lease prevents. What is left of that margin covers the metadata reads before
+the lease is taken, and `forge::github`'s client sets a connect and read
+timeout on every call so no single hung socket can spend all of it.
 
 ### A running review is never silent either
 
