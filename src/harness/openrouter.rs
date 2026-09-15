@@ -36,6 +36,7 @@ pub struct GatewayModel {
     fallbacks: Vec<String>,
     reasoning_effort: String,
     provider: ProviderRouting,
+    routes: Vec<crate::config::types::ModelRoute>,
     structured_output: StructuredOutput,
     langfuse: Option<LangfuseClient>,
 }
@@ -200,6 +201,7 @@ impl GatewayModel {
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
             provider: models.provider.clone(),
+            routes: models.routes.clone(),
             structured_output: models.structured_output,
             langfuse: langfuse_client(),
         })
@@ -501,7 +503,13 @@ impl GatewayModel {
         request: &ModelRequest,
         routing: &ProviderRouting,
     ) -> Result<ModelResponse> {
-        let base = request.max_tokens;
+        // A rung with its own route may set its own ceiling — including none.
+        let base = self
+            .routes
+            .iter()
+            .find(|r| r.model == model)
+            .and_then(|r| r.max_tokens)
+            .unwrap_or(request.max_tokens);
         let ladder = truncation_ladder(base);
         let last = ladder.len() - 1;
 
@@ -624,15 +632,22 @@ fn langfuse_client() -> Option<LangfuseClient> {
     }
 }
 
+impl GatewayModel {
+    /// The routing for one call: the model's own route when it has one,
+    /// otherwise the ladder-wide pin with the first-party-vendor bypass.
+    fn routing_for(&self, model: &str) -> std::borrow::Cow<'_, ProviderRouting> {
+        match self.routes.iter().find(|r| r.model == model) {
+            Some(route) => std::borrow::Cow::Owned(route.routing()),
+            None => self.provider.for_model(model),
+        }
+    }
+}
+
 #[async_trait]
 impl Model for GatewayModel {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse> {
         let mut last = match self
-            .call_until_complete(
-                &request.model,
-                &request,
-                &self.provider.for_model(&request.model),
-            )
+            .call_until_complete(&request.model, &request, &self.routing_for(&request.model))
             .await
         {
             Ok(response) => return Ok(response),
@@ -650,7 +665,7 @@ impl Model for GatewayModel {
                 "model call failed; trying the next model"
             );
             match self
-                .call_until_complete(fallback, &request, &self.provider.for_model(fallback))
+                .call_until_complete(fallback, &request, &self.routing_for(fallback))
                 .await
             {
                 Ok(response) => return Ok(response),
