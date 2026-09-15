@@ -231,7 +231,7 @@ impl Ledger {
                     let read = Lookup::Read {
                         path: hit.path.clone(),
                         start: Some(hit.line.saturating_sub(DEFINITION_ABOVE).max(1)),
-                        end: Some(hit.line + DEFINITION_BELOW),
+                        end: Some(hit.line.saturating_add(DEFINITION_BELOW)),
                     };
                     if !self.seen.insert(read.key()) {
                         continue;
@@ -574,7 +574,7 @@ impl Ledger {
                     let read = Lookup::Read {
                         path: hit.path.clone(),
                         start: Some(hit.line.saturating_sub(DEFINITION_ABOVE).max(1)),
-                        end: Some(hit.line + below),
+                        end: Some(hit.line.saturating_add(below)),
                     };
                     if !self.seen.insert(read.key()) {
                         continue;

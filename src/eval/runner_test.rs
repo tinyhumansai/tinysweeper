@@ -285,6 +285,14 @@ async fn the_config_digest_moves_when_the_prompt_inputs_move() {
     other_budget.models.budget_usd_per_pr = 0.5;
     assert_ne!(digest_of(&base), digest_of(&other_budget));
 
+    let mut fewer_rounds = base.clone();
+    fewer_rounds.lookup.rounds = 0;
+    assert_ne!(
+        digest_of(&base),
+        digest_of(&fewer_rounds),
+        "the lookup policy decides what the reviewer sees"
+    );
+
     // A path instruction's selectors decide which prompt is built even when
     // the instruction text is identical: `lanes` gates which lanes get the
     // injected instructions at all, and `rules` names the document inside them.

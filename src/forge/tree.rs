@@ -127,10 +127,7 @@ impl<'a> ForgeTree<'a> {
 
     /// Follow submodules whose remote is one of `repos` (`owner/name`).
     pub fn allowing<'s>(mut self, repos: impl IntoIterator<Item = &'s String>) -> Self {
-        self.allowed = repos
-            .into_iter()
-            .filter_map(|r| RepoId::parse(r))
-            .collect();
+        self.allowed = repos.into_iter().filter_map(|r| RepoId::parse(r)).collect();
         self
     }
 
@@ -336,6 +333,9 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(matches!(found, Found::Text { .. }), "listed, so read: {found:?}");
+        assert!(
+            matches!(found, Found::Text { .. }),
+            "listed, so read: {found:?}"
+        );
     }
 }
