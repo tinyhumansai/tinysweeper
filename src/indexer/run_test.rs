@@ -597,6 +597,67 @@ async fn a_revoked_submodule_is_gone_before_the_run_can_stop_on_budget() {
     );
 }
 
+#[tokio::test]
+async fn a_submodule_the_fetch_could_not_bring_is_kept_and_the_revision_is_not_claimed() {
+    // The operator did not take `libs/core` away; the network did, this
+    // once. Its rows keep serving, the manifest keeps the path, and the run
+    // does not claim the head — so the next delivery fetches again instead
+    // of finding a fresh index that quietly lost a submodule.
+    let checkout = Checkout::new();
+    checkout.write(
+        "libs/core/src/lib.rs",
+        "fn vendored() -> usize {\n    3\n}\n",
+    );
+    let rig = Rig::new();
+    rig.indexer()
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("indexes");
+    let before = rig.index.len();
+
+    // The same tree at a new head, with the submodule directory empty.
+    checkout.remove("libs/core/src/lib.rs");
+    let report = report(
+        rig.indexer()
+            .missing(vec!["libs/core".into()])
+            .index_repo(REPO, "sha-2", &checkout.root())
+            .await
+            .expect("runs"),
+    );
+    assert_eq!(report.unfetched, vec!["libs/core".to_string()]);
+    assert_eq!(report.deleted, 0, "{report:?}");
+    assert!(report.removed.is_empty(), "{report:?}");
+    assert_eq!(rig.index.len(), before, "the rows are kept");
+    assert!(
+        rig.manifest
+            .paths(REPO, &rig.signature())
+            .await
+            .expect("lists")
+            .contains(&"libs/core/src/lib.rs".to_string()),
+        "the manifest keeps the path"
+    );
+    let record = rig.manifest.snapshot(REPO, &rig.signature());
+    assert_eq!(record.state, IndexState::Ready);
+    assert!(
+        !record.is_fresh("sha-2"),
+        "an incomplete checkout does not claim the head"
+    );
+
+    // And when it is not missing any more — really gone — it is removed.
+    let report = report(
+        rig.indexer()
+            .index_repo(REPO, "sha-2", &checkout.root())
+            .await
+            .expect("runs"),
+    );
+    assert!(report.removed.contains(&"libs/core/src/lib.rs".to_string()));
+    assert!(
+        rig.manifest
+            .snapshot(REPO, &rig.signature())
+            .is_fresh("sha-2")
+    );
+}
+
 /// An embedder that answers `n` calls and then fails once — the provider
 /// outage that lands halfway through a run.
 struct FlakyEmbedder {
