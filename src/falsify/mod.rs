@@ -55,6 +55,24 @@ impl<'a> Falsifier<'a> {
         findings: Vec<Finding>,
         rendered_diff: &str,
     ) -> FalsifyOutcome {
+        self.filter_with(lane, findings, rendered_diff, "").await
+    }
+
+    /// [`Self::filter`], with what the reviewer read from the repository
+    /// alongside the diff.
+    ///
+    /// A finding about a callee's contract — "`before` is exclusive here" —
+    /// was being rejected against the diff alone, on the strength of the
+    /// diff's own comment saying otherwise. The filter is handed the same
+    /// evidence the reviewer had; it still may only reject, and only on
+    /// proof.
+    pub async fn filter_with(
+        &self,
+        lane: LaneId,
+        findings: Vec<Finding>,
+        rendered_diff: &str,
+        looked_up: &str,
+    ) -> FalsifyOutcome {
         if findings.is_empty() || rendered_diff.trim().is_empty() {
             return FalsifyOutcome::kept(findings);
         }
@@ -67,7 +85,7 @@ impl<'a> Falsifier<'a> {
                 .to_string(),
             messages: vec![
                 Message::system(INSTRUCTIONS),
-                Message::user(user_message(&findings, rendered_diff)),
+                Message::user(user_message(&findings, rendered_diff, looked_up)),
             ],
             schema: types::json_schema(),
             schema_name: "tinysweeper_falsify".into(),
@@ -128,10 +146,19 @@ impl<'a> Falsifier<'a> {
 /// both are fenced: the lane model read attacker-controlled input before
 /// writing these titles, so a finding body is no more trustworthy than the diff
 /// that produced it.
-fn user_message(findings: &[Finding], rendered_diff: &str) -> String {
-    let mut out = String::with_capacity(rendered_diff.len() + 1024);
+fn user_message(findings: &[Finding], rendered_diff: &str, looked_up: &str) -> String {
+    let mut out = String::with_capacity(rendered_diff.len() + looked_up.len() + 1024);
     out.push_str("## The diff\n\n");
     push_fenced(&mut out, "diff", rendered_diff);
+
+    if !looked_up.trim().is_empty() {
+        out.push_str(
+            "\n## What the reviewer read from the repository\n\n\
+             The definitions and code the reviewer looked up before deciding. Code here can \
+             disprove a finding the same way the diff can; a comment here cannot.\n\n",
+        );
+        push_fenced(&mut out, "looked-up", looked_up);
+    }
 
     out.push_str("\n## The findings\n\n");
     let mut list = String::new();

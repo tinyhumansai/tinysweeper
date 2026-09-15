@@ -259,11 +259,7 @@ async fn review_file(
     // filter can only reject, so more inputs in one pass is identical semantics
     // at a fraction of the calls.
     let filtered = Falsifier::new(llm.model().as_ref(), config)
-        .filter(
-            LaneId::Critique,
-            findings,
-            &format!("{evidence}\n{looked_up}"),
-        )
+        .filter_with(LaneId::Critique, findings, &evidence, &looked_up)
         .await;
     spend.merge(filtered.spend);
 
