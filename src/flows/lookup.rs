@@ -332,6 +332,9 @@ pub fn seed_symbols(diff: &crate::evidence::diff::FileDiff) -> Vec<String> {
                 let word = &text[start..i];
                 let rest = text[i..].trim_start();
                 let preceded_by_dot = start > 0 && bytes[start - 1] == b'.';
+                // `Enum::Variant {` names the variant; the enum before the
+                // `::` is the definition worth reading, and was taken already.
+                let preceded_by_path = start >= 2 && &bytes[start - 2..start] == b"::";
                 let is_call = rest.starts_with('(') && !rest.starts_with("(!");
                 let is_macro = rest.starts_with('!');
                 let is_type = word.chars().next().is_some_and(char::is_uppercase)
@@ -339,6 +342,7 @@ pub fn seed_symbols(diff: &crate::evidence::diff::FileDiff) -> Vec<String> {
                 let interesting = !is_macro
                     && word.len() >= 4
                     && !preceded_by_dot
+                    && !(preceded_by_path && is_type)
                     && (is_call || is_type)
                     && !SEED_STOPWORDS.contains(&word.to_ascii_lowercase().as_str());
                 if interesting && !out.iter().any(|w| w == word) {
