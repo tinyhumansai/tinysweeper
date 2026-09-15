@@ -152,9 +152,10 @@ fn summary_for(err: &Error) -> String {
              `models.budget_usd_per_pr`, or narrow what this pull request changes."
         }
         Error::Timeout { .. } => {
-            "The lanes did not finish inside the review's wall-clock deadline. That is usually \
-             a model gateway answering very slowly, or an unusually large diff — check the \
-             gateway's latency before re-running, or narrow what this pull request changes."
+            "The review did not finish inside its wall-clock deadline — the checkout, the \
+             lanes, or both. That is usually a model gateway answering very slowly, a large \
+             checkout, or an unusually large diff — check the gateway's latency before \
+             re-running, or narrow what this pull request changes."
         }
         _ => "Re-run the review once the underlying problem is fixed.",
     };
