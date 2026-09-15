@@ -236,7 +236,7 @@ async fn git_stdout(root: &Path, token: &str, args: &[&str]) -> Result<String> {
             message.trim()
         )));
     }
-    Ok(())
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// `base64(x-access-token:<token>)`, for git's HTTP basic auth.
