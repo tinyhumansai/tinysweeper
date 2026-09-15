@@ -438,6 +438,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
         "preview" => Some(&[
             "enabled",
             "public_base_url",
+            "branch",
             "max_flows",
             "max_steps",
             "budget_usd",
