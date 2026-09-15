@@ -92,6 +92,7 @@ pub const OVERRIDABLE_KEYS: [&str; 16] = [
     "preview.enabled",
     "preview.max_flows",
     "review.confidence_min",
+    "review.note_confidence",
     "review.draft_prs",
     "review.incremental",
     "review.lanes",
