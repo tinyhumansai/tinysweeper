@@ -220,6 +220,10 @@ pub struct Asking<'a> {
     pub tree: Option<&'a dyn TreeReader>,
     /// How much it may look up.
     pub lookup: Option<&'a LookupPolicy>,
+    /// The one file this conversation is about, when there is one: the
+    /// definitions its changed lines call into are fetched before the first
+    /// turn, unasked — see [`crate::flows::lookup::Ledger::seed`].
+    pub seed: Option<&'a crate::evidence::diff::FileDiff>,
 }
 
 impl<'a> Asking<'a> {
@@ -306,6 +310,28 @@ pub async fn ask_all(
         })
         .collect();
 
+    // One ledger per reviewer, for the whole conversation: what the host
+    // fetched unasked and what the reviewer then asks for share the budget
+    // and the dedupe.
+    let mut ledgers: Vec<lookup::Ledger> =
+        (0..calls.len()).map(|_| lookup::Ledger::default()).collect();
+    if let Some((tree, policy)) = lookups
+        && let Some(diff) = asking.seed
+    {
+        for (index, prompt) in prompts.iter_mut().enumerate() {
+            let seeded = ledgers[index].seed(tree, diff, policy).await;
+            if !seeded.rendered.is_empty() {
+                prompt.prompt.push_str(&seeded.rendered);
+                tracing::debug!(
+                    reviewer = %prompt.id,
+                    definitions = seeded.answered,
+                    chars = ledgers[index].chars(),
+                    "definitions looked up for the reviewer"
+                );
+            }
+        }
+    }
+
     let mut answers = one_round(
         &capabilities,
         lane,
@@ -319,9 +345,6 @@ pub async fn ask_all(
     // schema for the final permitted round offers no `lookups` key, so a
     // reviewer cannot ask for something no turn will answer.
     if let Some((tree, policy)) = lookups {
-        let mut ledgers: Vec<lookup::Ledger> = (0..calls.len())
-            .map(|_| lookup::Ledger::default())
-            .collect();
         for round in 1..=max_rounds {
             let pending: Vec<(usize, Vec<Lookup>)> = answers
                 .iter()
