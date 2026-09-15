@@ -421,6 +421,16 @@ mod tests {
     }
 
     #[test]
+    fn the_ladders_vectors_are_priced_rather_than_billed_at_the_ceiling() {
+        let ladder = embedding_cost("ladder/vectors", 1_000_000);
+        let worst = EMBED_PRICES
+            .iter()
+            .fold(0.0_f64, |worst, (_, price)| worst.max(*price));
+        assert!(ladder > 0.0);
+        assert!(ladder < worst, "a known rung must not fall through to the ceiling");
+    }
+
+    #[test]
     fn a_locally_served_model_is_free_whatever_it_is_called() {
         // The provider is the rule, not the model id: nobody bills for vectors
         // computed on this machine, and a table of every GGUF is unmaintainable.

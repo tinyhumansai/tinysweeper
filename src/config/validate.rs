@@ -429,6 +429,17 @@ fn validate_embeddings(config: &Config, problems: &mut Vec<String>) {
         );
     }
 
+    // The ladder has no default address: it is on this box, wherever the
+    // operator put it, and a blank URL would be a connection error on the
+    // first push rather than a line in `doctor`.
+    if embeddings.provider.trim() == "ladder" && embeddings.base_url.trim().is_empty() {
+        problems.push(
+            "`embeddings.provider = \"ladder\"` needs `embeddings.base_url`: the ladder's \
+             `/v1/embeddings` on this box, e.g. `http://host.docker.internal:6969/v1/embeddings`"
+                .into(),
+        );
+    }
+
     if !embeddings.base_url.trim().is_empty()
         && !embeddings.base_url.starts_with("http://")
         && !embeddings.base_url.starts_with("https://")
