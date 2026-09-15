@@ -397,6 +397,7 @@ pub async fn review_with_tree(
                     conclusion: CheckConclusion::Neutral,
                     summary: format!("Skipped: `{label}` is applied."),
                     findings: vec![],
+                    noted: Vec::new(),
                     resolved: vec![],
                     deduped: 0,
                     highest_severity: None,
@@ -1389,6 +1390,7 @@ fn publish_unclaimed(lanes: &mut Vec<LaneProposal>, scan_findings: &[scan::types
                 unclaimed.len()
             ),
             findings: unclaimed,
+            noted: Vec::new(),
             resolved: vec![],
             deduped: 0,
             highest_severity: Some(Severity::High),
