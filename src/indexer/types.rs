@@ -284,6 +284,7 @@ pub struct IndexReport {
     /// Submodule directories the checkout was missing through no decision of
     /// the operator's — a fetch that failed this time. Their rows were kept,
     /// and the revision is not claimed, so the next delivery tries again.
+    #[serde(default)]
     pub unfetched: Vec<String>,
 }
 

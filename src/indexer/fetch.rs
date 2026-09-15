@@ -48,11 +48,11 @@ pub struct Checkout {
 ///
 /// Kept apart because the indexer treats them differently. A *denied*
 /// submodule — not on `retrieval.submodules`, or unparsable, or escaping the
-/// checkout — is a policy decision: its rows in the index are revoked before
-/// anything else is embedded. A *failed* one is a transient — network, auth,
-/// a gitlink the superproject does not carry — and its rows are left to the
-/// run's ordinary removal, after the writes, where a run that fails part-way
-/// still has them.
+/// checkout, or with no gitlink at this commit — is not at this head as far
+/// as the index is concerned: its rows are revoked before anything else is
+/// embedded. A *failed* one is allowed and really there, and could not be
+/// fetched this time — network, auth — so its rows are kept and the run does
+/// not claim the head, and the next delivery tries again.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Unfetched {
     /// Paths policy refused to fetch.
@@ -183,8 +183,12 @@ impl Checkout {
                 unfetched.denied.push(sub.path.clone());
                 continue;
             }
+            // No gitlink at this commit means no submodule at this commit,
+            // whatever `.gitmodules` says — and `.gitmodules` is the
+            // contributor's. Not a fetch that failed: nothing was there to
+            // fetch, so whatever the index holds under the path is gone.
             let Some(gitlink) = gitlink(root, token, &sub.path).await? else {
-                unfetched.failed.push(sub.path.clone());
+                unfetched.denied.push(sub.path.clone());
                 continue;
             };
             let url = format!("https://{host}/{}/{}.git", repo.owner, repo.name);

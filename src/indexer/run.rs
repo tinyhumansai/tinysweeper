@@ -443,24 +443,28 @@ impl<'a> Indexer<'a> {
         // See [`Indexer::missing`].
         let under =
             |dirs: &[String], path: &String| dirs.iter().any(|dir| path.starts_with(dir.as_str()));
-        let (missing, removed): (Vec<String>, Vec<String>) = removed
+        let (_missing, removed): (Vec<String>, Vec<String>) = removed
             .into_iter()
             .partition(|path| under(&self.missing, path));
-        if !missing.is_empty() {
-            report.unfetched = self
-                .missing
-                .iter()
-                .filter(|dir| missing.iter().any(|path| path.starts_with(dir.as_str())))
-                .map(|dir| dir.trim_end_matches('/').to_string())
-                .collect();
-        }
+        // Named whether or not the index held anything under them: a cold
+        // repository, or a submodule allow-listed today, has no old rows to
+        // keep — and still must not have its head claimed as indexed.
+        report.unfetched = self
+            .missing
+            .iter()
+            .map(|dir| dir.trim_end_matches('/').to_string())
+            .collect();
         let (revoked, ordinary): (Vec<String>, Vec<String>) = removed
             .iter()
             .cloned()
             .partition(|path| under(&self.revoked, path));
         if !revoked.is_empty() {
-            report.deleted += self.confirmed_rows(repo_id, signature, &revoked).await?;
+            // Counted after the delete, not before: a delete the store
+            // refused leaves the rows, and a count that says otherwise is
+            // what a failed run would then persist.
+            let confirmed = self.confirmed_rows(repo_id, signature, &revoked).await?;
             self.index.delete_paths(repo_id, &revoked).await?;
+            report.deleted += confirmed;
         }
 
         for group in selected.chunks(self.group) {
@@ -477,8 +481,9 @@ impl<'a> Indexer<'a> {
         // also holds rows an earlier attempt wrote and never confirmed, which
         // were never counted and must not be subtracted.
         if !removed.is_empty() {
-            report.deleted += self.confirmed_rows(repo_id, signature, &ordinary).await?;
+            let confirmed = self.confirmed_rows(repo_id, signature, &ordinary).await?;
             self.index.delete_paths(repo_id, &removed).await?;
+            report.deleted += confirmed;
             self.manifest.forget(repo_id, signature, &removed).await?;
             report.removed = removed;
         }
