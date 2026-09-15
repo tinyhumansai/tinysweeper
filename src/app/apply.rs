@@ -131,16 +131,11 @@ pub async fn apply(
     // reads as an all-clear. A file the *forge* withheld is not in this list
     // — that is a property of the pull request, it recurs on every push, and
     // the check runs already carry it.
-    let unanswered_by_a_model = proposal
-        .lanes
-        .iter()
-        .any(|lane| !lane.unanswered.is_empty());
-
     if !redundant_approval
         && (!comments.is_empty()
             || event == ReviewEvent::Approve
             || event == ReviewEvent::RequestChanges
-            || unanswered_by_a_model)
+            || !proposal.answered())
     {
         write
             .create_review(
@@ -296,7 +291,14 @@ fn review_event(
     // Deliberately not gated on `draft`. Refusing to *endorse* a draft is not
     // the same as refusing to *unblock* one, and conflating them would strand
     // every draft that was ever blocked.
-    if previous == Some(ReviewEvent::RequestChanges) {
+    //
+    // Gated on the model having answered, though. "Clean now" is only a
+    // finding when somebody looked: a push during a provider outage comes
+    // back with every lane unanswered and nothing blocking, and clearing the
+    // block on that would let an outage approve what a review had objected
+    // to. Files the forge withheld are not the same case — the lanes did
+    // review what they were shown, and the objection was on those files.
+    if previous == Some(ReviewEvent::RequestChanges) && proposal.answered() {
         return ReviewEvent::Approve;
     }
 
@@ -1216,6 +1218,32 @@ mod tests {
             body.contains("not an approval") && body.contains("`src/lib.rs`"),
             "the reader is told why: {body}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_review_nobody_answered_does_not_clear_an_earlier_block() {
+        // The other direction of the same outage: the last review requested
+        // changes, the next push finds every model call failing. "Clean now"
+        // is not a finding when nobody looked, so the block stands — and the
+        // comment says why rather than leaving the author to guess.
+        let mut unanswered = proposal("abc123", vec![]);
+        for lane in &mut unanswered.lanes {
+            lane.conclusion = CheckConclusion::Neutral;
+            lane.unanswered = vec!["src/lib.rs".into()];
+        }
+
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::RequestChanges);
+        apply(&forge, &forge, &config(), &unanswered, None)
+            .await
+            .expect("applies");
+
+        let (body, event) = review_of(&forge).expect("a verdict is posted");
+        assert_ne!(
+            event,
+            ReviewEvent::Approve,
+            "an outage must not clear a block: {body}"
+        );
+        assert!(body.contains("not an approval"), "{body}");
     }
 
     #[tokio::test]

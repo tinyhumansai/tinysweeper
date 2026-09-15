@@ -227,7 +227,15 @@ impl Proposal {
     /// `Neutral`, and Neutral does not block — so a review that consulted no
     /// model at all read as clean and approved.
     pub fn complete(&self) -> bool {
-        self.unreviewed.is_empty() && self.lanes.iter().all(|lane| lane.unanswered.is_empty())
+        self.unreviewed.is_empty() && self.answered()
+    }
+
+    /// Whether every lane got an answer for everything it asked about.
+    ///
+    /// Narrower than [`complete`](Self::complete): this is only about the
+    /// model, not about files the forge withheld.
+    pub fn answered(&self) -> bool {
+        self.lanes.iter().all(|lane| lane.unanswered.is_empty())
     }
 
     /// Everything this review could not answer for, for the verdict body.
