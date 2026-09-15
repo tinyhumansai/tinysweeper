@@ -135,7 +135,9 @@ impl Error {
     pub fn timeout(what: impl Into<String>, after: std::time::Duration) -> Self {
         Self::Timeout {
             what: what.into(),
-            seconds: after.as_secs() + u64::from(after.subsec_nanos() != 0),
+            seconds: after
+                .as_secs()
+                .saturating_add(u64::from(after.subsec_nanos() != 0)),
         }
     }
 
