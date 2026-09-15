@@ -25,8 +25,7 @@ use crate::lanes::e2e::inventory::{Applies, Harness, Job, Workflow};
 /// Where one e2e job stands on the head commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum State {
-    /// Ran and concluded success (or was skipped by the forge, which is a
-    /// completed run with nothing to object to).
+    /// Ran and concluded success.
     Passed,
     /// Ran and concluded failure, cancelled, timed out, or action required.
     Failed(CheckConclusion),
