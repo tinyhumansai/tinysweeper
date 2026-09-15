@@ -236,7 +236,11 @@ impl Proposal {
             .unreviewed
             .iter()
             .map(String::as_str)
-            .chain(self.lanes.iter().flat_map(|lane| lane.unanswered.iter().map(String::as_str)))
+            .chain(
+                self.lanes
+                    .iter()
+                    .flat_map(|lane| lane.unanswered.iter().map(String::as_str)),
+            )
             .collect();
         all.sort_unstable();
         all.dedup();
@@ -1331,6 +1335,7 @@ fn lane_proposal(
         highest_severity,
         usage: spend.usage,
         models: spend.models,
+        unanswered: outcome.unanswered,
     }
 }
 

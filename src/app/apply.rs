@@ -427,6 +427,27 @@ fn review_body(
                 .to_string()
         }
         ReviewEvent::Approve => "tinysweeper found nothing blocking. Approving.".to_string(),
+        // Not approving a clean-looking review is a decision, and the reader
+        // deserves the reason: silence here reads as an all-clear.
+        ReviewEvent::Comment if blocking == 0 && !proposal.complete() => {
+            let unanswered = proposal.unanswered();
+            let shown: Vec<&str> = unanswered.iter().copied().take(8).collect();
+            let more = unanswered.len().saturating_sub(shown.len());
+            format!(
+                "tinysweeper found nothing blocking, but could not review everything, so this \
+                 is not an approval: {}{}.",
+                shown
+                    .iter()
+                    .map(|name| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                if more > 0 {
+                    format!(" and {more} more")
+                } else {
+                    String::new()
+                }
+            )
+        }
         ReviewEvent::Comment if blocking == 0 => "tinysweeper found nothing blocking.".to_string(),
         ReviewEvent::Comment => format!("tinysweeper: {blocking} lane(s) blocking."),
     };
