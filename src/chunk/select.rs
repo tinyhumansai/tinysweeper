@@ -200,9 +200,14 @@ fn gather(
             // are exempt from the skip list. Inside a fetched submodule the
             // rules apply as they do anywhere: its `.git` and `target` are
             // not source either.
-            let leads_to_submodule = submodules
-                .iter()
-                .any(|s| *s == rel || s.starts_with(&format!("{rel}/")));
+            // And only for a submodule that is actually one on disk — a
+            // `.git` inside it, which a fetch leaves and a `.gitmodules`
+            // entry alone cannot conjure — so a contributor naming
+            // `node_modules` as a submodule path indexes nothing extra.
+            let leads_to_submodule = submodules.iter().any(|s| {
+                (*s == rel || s.starts_with(&format!("{rel}/")))
+                    && root.join(s).join(".git").exists()
+            });
             if SKIPPED_DIRS.iter().any(|d| name == *d) && !leads_to_submodule {
                 continue;
             }

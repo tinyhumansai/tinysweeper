@@ -505,8 +505,10 @@ impl DirTree {
     /// checked out with `[lookup].checkout = true` but never fetched, since
     /// `[retrieval].submodules = false` or the fetch itself failed.
     fn dir_is_empty(&self, sub: &str) -> bool {
+        // A fetch that got as far as `git init` and then failed leaves a
+        // `.git` behind and nothing else; that is still no content.
         std::fs::read_dir(self.root.join(sub))
-            .map(|mut entries| entries.next().is_none())
+            .map(|entries| entries.flatten().all(|entry| entry.file_name() == ".git"))
             .unwrap_or(true)
     }
 
@@ -535,7 +537,14 @@ impl DirTree {
         let Ok(root) = self.root.canonicalize() else {
             return false;
         };
-        match self.root.join(path).canonicalize() {
+        let joined = self.root.join(path);
+        // A symlink is never read, wherever it points: a tracked `link ->
+        // .env` is on git's own file list and resolves inside the root, and
+        // would read the one file the allow-list exists to keep out.
+        if std::fs::symlink_metadata(&joined).is_ok_and(|m| m.file_type().is_symlink()) {
+            return false;
+        }
+        match joined.canonicalize() {
             Ok(resolved) => resolved.starts_with(&root),
             Err(_) => true,
         }
@@ -581,7 +590,17 @@ pub fn submodule_paths(gitmodules: &str) -> Vec<String> {
         .filter_map(|line| line.trim().strip_prefix("path"))
         .filter_map(|rest| rest.trim().strip_prefix('='))
         .map(|p| p.trim().trim_end_matches('/').to_string())
-        .filter(|p| !p.is_empty())
+        // `.gitmodules` is contributor-controlled. A path that leaves the
+        // tree or names git's own directory is not a submodule anyone gets
+        // to declare, and lifting the skip list for it would be the point of
+        // declaring it.
+        .filter(|p| {
+            !p.is_empty()
+                && !p.starts_with('/')
+                && !p
+                    .split('/')
+                    .any(|c| c == ".." || c == ".git" || c.is_empty())
+        })
         .collect()
 }
 
@@ -993,6 +1012,47 @@ mod tests {
                 .as_deref(),
             Some("abc")
         );
+
+        // A tracked symlink to the ignored file is on git's list; it is still
+        // never read.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.path().join(".env"), dir.path().join("link")).unwrap();
+            let linked = DirTree::new(dir.path()).allowing(["link".to_string()]);
+            let via_link = linked
+                .lookup(&Lookup::Read {
+                    path: "link".into(),
+                    start: None,
+                    end: None,
+                })
+                .await
+                .unwrap();
+            assert_eq!(via_link, Found::NotFound);
+        }
+
+        // A submodule whose fetch failed after `git init` holds only `.git`,
+        // and is still reported as not checked out.
+        std::fs::write(
+            dir.path().join(".gitmodules"),
+            "[submodule \"lib\"]\n\tpath = vendor/lib\n[submodule \"half\"]\n\tpath = vendor/half\n[submodule \"bad\"]\n\tpath = .git\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("vendor/half/.git")).unwrap();
+        let tree = DirTree::new(dir.path());
+        assert_eq!(
+            tree.submodules,
+            vec!["vendor/lib", "vendor/half"],
+            "`.git` is refused"
+        );
+        let half = tree
+            .lookup(&Lookup::Read {
+                path: "vendor/half/src/x.rs".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(half, Found::Unavailable { .. }), "{half:?}");
     }
 
     #[tokio::test]
