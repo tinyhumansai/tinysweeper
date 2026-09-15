@@ -81,3 +81,27 @@ test("annotate measures boxes in image pixels with the scroll offset added", asy
   // evaluate() answers 100 for both scroll offsets; the box is (10,20,30,40) at 2x.
   assert.deepEqual(shot.callouts, [{ n: 1, label: "Here", box: { x: 220, y: 240, w: 60, h: 80 } }]);
 });
+
+test("a multi-callout annotate that misses one target leaves the shot untouched", async () => {
+  const page = fakePage();
+  const missing = { first: () => missing, boundingBox: async () => null };
+  page.getByText = () => missing;
+  const ctx = { origin: "http://127.0.0.1:3001", shots: new Map(), recorder: { start() {}, stop() {} }, masks: [], scale: 1, step: 0 };
+  const results = await execute(
+    page,
+    [
+      { op: "screenshot", id: "s1" },
+      {
+        op: "annotate",
+        shot: "s1",
+        callouts: [
+          { locator: { by: "test_id", id: "ok" }, label: "Found" },
+          { locator: { by: "text", text: "gone" }, label: "Missing" },
+        ],
+      },
+    ],
+    ctx,
+  );
+  assert.equal(results[1].ok, false);
+  assert.deepEqual(ctx.shots.get("s1").callouts, []);
+});
