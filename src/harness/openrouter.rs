@@ -726,6 +726,7 @@ mod tests {
             fallback: vec![],
             vision: None,
             provider: ProviderRouting::default(),
+            routes: Vec::new(),
             max_tokens: 100,
             budget_usd_per_pr: 1.0,
         }
@@ -1013,6 +1014,7 @@ mod tests {
             base_url: "https://openrouter.ai/api/v1".into(),
             fallbacks: vec![],
             provider: ProviderRouting::default(),
+            routes: Vec::new(),
             langfuse: None,
         };
         let rendered = format!("{model:?}");
