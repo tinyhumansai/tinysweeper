@@ -106,6 +106,19 @@ pub async fn run(
         ));
     }
 
+    // `--tree` names one checkout on disk, but every case in the run would
+    // otherwise be handed the same one regardless of which repository or
+    // head it actually reviews. Recording several cases that way answers
+    // every case's lookups from one case's tree, feeding the wrong evidence
+    // into unrelated fixtures and corrupting their replay permanently. Fail
+    // before any case runs rather than after some fixtures are already
+    // overwritten.
+    if options.tree.is_some() && corpus.cases.len() > 1 {
+        return Err(crate::error::Error::config(
+            "--tree applies to one case; pass --case",
+        ));
+    }
+
     let mut scores = Vec::with_capacity(corpus.cases.len());
     let mut skipped = Vec::new();
     let mut loose_replays = 0usize;
