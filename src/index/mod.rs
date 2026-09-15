@@ -70,7 +70,8 @@ pub fn embedder_from_config(
                     .to_string(),
             ));
         }
-        let embedder = OpenRouterEmbedder::new(signature, &config.api_key_env, &config.base_url)?;
+        let embedder = OpenRouterEmbedder::new(signature, &config.api_key_env, &config.base_url)?
+            .with_requests_per_minute(config.requests_per_minute);
         return Ok(Some(std::sync::Arc::new(embedder)));
     }
 

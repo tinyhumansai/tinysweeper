@@ -43,6 +43,14 @@ pub struct OpenRouterEmbedder {
     url: String,
     api_key: String,
     signature: EmbedSignature,
+    /// The least time between two requests, from `requests_per_minute`.
+    ///
+    /// The harness's process-global limiter governs tinyagents' models, not
+    /// this client, so the ceiling `[embeddings]` promises is kept here: a
+    /// cold index otherwise sends batches as fast as answers come back and
+    /// walks into the gateway's 429 path.
+    interval: Option<Duration>,
+    last_sent: tokio::sync::Mutex<Option<std::time::Instant>>,
 }
 
 // Hand-written so the key cannot reach a log through a derived `Debug`. The
@@ -112,12 +120,36 @@ impl OpenRouterEmbedder {
             url,
             api_key,
             signature,
+            interval: None,
+            last_sent: tokio::sync::Mutex::new(None),
         })
+    }
+
+    /// Cap the request rate. Zero means no cap.
+    pub fn with_requests_per_minute(mut self, per_minute: u32) -> Self {
+        self.interval = (per_minute > 0).then(|| Duration::from_secs(60) / per_minute);
+        self
+    }
+
+    /// Wait until the next request is allowed, then mark it sent.
+    async fn pace(&self) {
+        let Some(interval) = self.interval else {
+            return;
+        };
+        let mut last = self.last_sent.lock().await;
+        if let Some(at) = *last {
+            let since = at.elapsed();
+            if since < interval {
+                tokio::time::sleep(interval - since).await;
+            }
+        }
+        *last = Some(std::time::Instant::now());
     }
 
     /// One request. Split from [`Embedder::embed`] so the batching and the
     /// wire format can be tested apart from each other.
     async fn post(&self, texts: &[String]) -> Result<EmbeddingsResponse> {
+        self.pace().await;
         let body = serde_json::json!({
             "model": self.signature.model,
             "input": texts,

@@ -76,7 +76,7 @@ pub async fn apply(
     // verdict a stale objection blocks the merge button until a human dismisses
     // it by hand — and it is how an approval that already stands avoids being
     // restated on every push.
-    let previous = own_review_state(read, &repo, proposal.number).await;
+    let (previous, previous_known) = own_review_state(read, &repo, proposal.number).await;
     let event = review_event(config, proposal, previous, live.draft);
     // Every lane is expected to leave an unpostable finding without a line,
     // but `apply` is the final boundary before GitHub sees it. One invalid
@@ -136,7 +136,11 @@ pub async fn apply(
     // one, and a repository that does not dismiss stale approvals would
     // merge this push on the strength of what was said about the last. The
     // dismissal names the reason; the comment below repeats it.
-    if !proposal.answered() && previous == Some(ReviewEvent::Approve) {
+    //
+    // Attempted whenever the lookup could not say there is nothing standing:
+    // a failed read of our own history must not become the approval's
+    // shield. The dismissal is a no-op when nothing stands.
+    if !proposal.answered() && (previous == Some(ReviewEvent::Approve) || !previous_known) {
         write
             .dismiss_own_approval(
                 &repo,
@@ -325,14 +329,22 @@ fn review_event(
 ///
 /// Read from the forge rather than remembered, so it stays correct across a
 /// restart, a redeploy, and a human dismissing the review by hand.
-async fn own_review_state(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Option<ReviewEvent> {
+///
+/// The second value says whether the answer is known: `(None, false)` is a
+/// lookup that failed, which is not the same as having never reviewed.
+async fn own_review_state(
+    read: &dyn ForgeRead,
+    repo: &RepoId,
+    number: u64,
+) -> (Option<ReviewEvent>, bool) {
     match read.own_review_state(repo, number).await {
-        Ok(state) => state,
+        Ok(state) => (state, true),
         Err(err) => {
             // Failing closed here would mean never clearing a block. Failing
-            // open at worst re-states a verdict that already stands.
+            // open at worst re-states a verdict that already stands — except
+            // for the one caller that must fail closed, which reads the flag.
             tracing::warn!(%err, "could not read the previous review state");
-            None
+            (None, false)
         }
     }
 }
