@@ -131,6 +131,25 @@ Two consequences are load-bearing:
   pass; `handle_review` declines that review outright, before it opens a
   check, and leaves it for the next push or redelivery.
 
+  What this does not close, because no amount of in-process bookkeeping can:
+  Compose's ten-second grace period is shorter than a single GitHub write can
+  legitimately take (`forge::github::REQUEST_TIMEOUT` is 60s), so a task that
+  is genuinely mid-write — `open_status` posting the initial check, or a
+  `dispatch` task still awaiting `claim_delivery` — when `SIGKILL` lands can
+  still be cut off with GitHub having already accepted a request this process
+  never learns the outcome of. Every write this module makes is built to
+  degrade the same way when that happens: a delivery claim self-heals through
+  its own 7-day TTL exactly as a review lease self-heals through `LEASE_TTL`
+  (`server::store`'s own words for it — "the backstop for the cases this
+  cannot cover, a kill, or a lost machine"), and a check left "in progress"
+  is a pending check, which blocks auto-merge rather than mismerging anything.
+  Closing this fully would mean either the grace period growing past the
+  slowest write this process makes, which is a Compose/`docker-compose.yml`
+  change on the deployment, not code here, or tracking and joining every
+  spawned worker before the process is allowed to exit, which would routinely
+  spend the *entire* grace period waiting on one write and starve the group
+  conclude above of the time it needs for the reviews it can actually see.
+
 On the write token: opening this check mints an installation token before the
 lanes run, which the security boundary otherwise reserves for after every model
 call. The property that rule protects — *the model never holds a write handle*
