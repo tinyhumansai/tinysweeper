@@ -617,16 +617,16 @@ async fn a_submodule_the_fetch_could_not_bring_is_kept_and_the_revision_is_not_c
 
     // The same tree at a new head, with the submodule directory empty.
     checkout.remove("libs/core/src/lib.rs");
-    let report = report(
+    let kept = report(
         rig.indexer()
             .missing(vec!["libs/core".into()])
             .index_repo(REPO, "sha-2", &checkout.root())
             .await
             .expect("runs"),
     );
-    assert_eq!(report.unfetched, vec!["libs/core".to_string()]);
-    assert_eq!(report.deleted, 0, "{report:?}");
-    assert!(report.removed.is_empty(), "{report:?}");
+    assert_eq!(kept.unfetched, vec!["libs/core".to_string()]);
+    assert_eq!(kept.deleted, 0, "{kept:?}");
+    assert!(kept.removed.is_empty(), "{kept:?}");
     assert_eq!(rig.index.len(), before, "the rows are kept");
     assert!(
         rig.manifest
@@ -644,13 +644,13 @@ async fn a_submodule_the_fetch_could_not_bring_is_kept_and_the_revision_is_not_c
     );
 
     // And when it is not missing any more — really gone — it is removed.
-    let report = report(
+    let gone = report(
         rig.indexer()
             .index_repo(REPO, "sha-2", &checkout.root())
             .await
             .expect("runs"),
     );
-    assert!(report.removed.contains(&"libs/core/src/lib.rs".to_string()));
+    assert!(gone.removed.contains(&"libs/core/src/lib.rs".to_string()));
     assert!(
         rig.manifest
             .snapshot(REPO, &rig.signature())
