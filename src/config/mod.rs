@@ -315,6 +315,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "graph_hops",
             "max_graph_nodes",
             "max_impact",
+            "submodules",
         ]),
         "memory" => Some(&[
             "enabled",

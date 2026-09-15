@@ -130,7 +130,12 @@ impl Selector {
     pub fn walk(&self, root: &Path) -> Result<Selection> {
         let mut files = Vec::new();
         let mut unreadable = Vec::new();
-        gather(root, root, &mut files, &mut unreadable)?;
+        // A tracked submodule is the repository's own code even when it sits
+        // under `vendor/`; when the checkout fetched it, index it.
+        let submodules = std::fs::read_to_string(root.join(".gitmodules"))
+            .map(|text| crate::ports::tree::submodule_paths(&text))
+            .unwrap_or_default();
+        gather(root, root, &submodules, &mut files, &mut unreadable)?;
         // Sorted so a re-index of an unchanged tree produces an identical plan,
         // which is what makes the incremental path's diffing meaningful.
         files.sort();
@@ -152,6 +157,7 @@ const SKIPPED_DIRS: &[&str] = &[".git", "node_modules", "target", "vendor", ".ve
 fn gather(
     root: &Path,
     directory: &Path,
+    submodules: &[String],
     files: &mut Vec<(String, u64)>,
     unreadable: &mut Vec<SkippedFile>,
 ) -> Result<()> {
@@ -189,10 +195,14 @@ fn gather(
 
         if metadata.is_dir() {
             let name = entry.file_name();
-            if SKIPPED_DIRS.iter().any(|d| name == *d) {
+            let rel = relative(root, &path);
+            let holds_submodule = submodules
+                .iter()
+                .any(|s| *s == rel || s.starts_with(&format!("{rel}/")) || rel.starts_with(&format!("{s}/")));
+            if SKIPPED_DIRS.iter().any(|d| name == *d) && !holds_submodule {
                 continue;
             }
-            gather(root, &path, files, unreadable)?;
+            gather(root, &path, submodules, files, unreadable)?;
         } else if metadata.is_file() {
             files.push((relative(root, &path), metadata.len()));
         }

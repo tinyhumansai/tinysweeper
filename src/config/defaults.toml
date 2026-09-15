@@ -468,6 +468,11 @@ max_chunks = 40
 graph_hops = 2
 max_graph_nodes = 60
 max_impact = 20
+# Fetch and index the repository's own submodules, same-host remotes only.
+# Off: it is a fetch to a URL the reviewed repository names. On for a
+# repository whose core library is vendored as a submodule, or the code a
+# changed line calls into can never be retrieved.
+submodules = false
 
 # The memory engine: what the reviewer remembers about a repository between
 # pull requests. Off until an endpoint is named; see docs/modules/memory.
