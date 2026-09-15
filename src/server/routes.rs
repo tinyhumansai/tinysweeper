@@ -1904,17 +1904,17 @@ async fn review_inner(
         )
         .await;
         if !go_on {
-            // The check is already concluded; the lease is released below
-            // like any other outcome, and the redelivery after restart
-            // reviews this commit properly.
+            // Declined, not failed: the check is already concluded as
+            // failed, and an `Err` here would have `handle_review` post a
+            // second one. The lease goes back like any other outcome; the
+            // next push, or the manual review the check points at, reviews
+            // this commit properly.
+            tracing::info!(%repo, number, "shutting down; not starting this review");
             if let Err(err) = state.store.release_lease(&lease).await {
                 tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
             }
             drop(permit);
-            return Err(Error::lane(
-                "review",
-                "tinysweeper was restarted before this review started",
-            ));
+            return Ok(None);
         }
 
         // `AssertUnwindSafe` + `catch_unwind` so a panic inside a lane still
