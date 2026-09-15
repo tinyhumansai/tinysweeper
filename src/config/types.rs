@@ -238,6 +238,8 @@ pub struct Config {
     pub lanes: BTreeMap<String, Lane>,
     /// Several reviewers on one lane's evidence.
     pub council: Council,
+    /// What a reviewer may look up in the tree before it answers.
+    pub lookup: LookupPolicy,
     /// Auto-merge policy.
     pub automerge: AutoMerge,
     /// Review-thread resolution.
@@ -927,6 +929,38 @@ pub struct Council {
     pub subagents: bool,
     /// The reviewers, in the order they run.
     pub agents: Vec<CouncilAgent>,
+}
+
+/// How much a reviewer may read before it answers.
+///
+/// The bounds are the design. A reviewer given the whole tree and no cap
+/// stops reviewing the diff and starts exploring the repository; a reviewer
+/// given nothing reports the doubt it could not settle as silence. `rounds`
+/// is how many times it may come back with more asks, `per_round` how many
+/// each time, and `max_chars` the total it may pull into its prompt across
+/// all of them. See `docs/modules/lanes/lookup.md`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LookupPolicy {
+    /// Whether a reviewer may look anything up at all.
+    pub enabled: bool,
+    /// How many follow-up turns a reviewer may take. Zero disables.
+    pub rounds: u8,
+    /// How many lookups one turn may carry.
+    pub per_round: u8,
+    /// Total characters of looked-up text one reviewer may accumulate.
+    pub max_chars: usize,
+}
+
+impl Default for LookupPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            rounds: 2,
+            per_round: 4,
+            max_chars: 40_000,
+        }
+    }
 }
 
 /// One reviewer in the council.

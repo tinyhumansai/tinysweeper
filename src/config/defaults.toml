@@ -374,6 +374,27 @@ subagents = false
 corroboration = true
 agents = []
 
+# What a reviewer may look up before it answers.
+#
+# A reviewer is shown one file's diff. When its verdict turns on something the
+# diff does not show — whether the cursor a bound is passed to is exclusive,
+# whether a sibling read in the same loop is bounded too — it may ask to read
+# a range of a file or search the tree for a literal, and it is asked again
+# with what came back. Read-only: nothing here builds or runs anything, and
+# the reviewer still holds no write token.
+#
+# The numbers are a budget, and the shape matters more than the size: two
+# rounds of four is enough to follow one definition and check one sibling,
+# and not enough to wander. `max_chars` caps what all of a reviewer's lookups
+# may add to its prompt, so a reviewer that asks for a whole file gets the
+# first 200 lines and a line count. Not overridable by a reviewed repository:
+# every round is a model call the operator pays for.
+[lookup]
+enabled = true
+rounds = 2
+per_round = 4
+max_chars = 40000
+
 # The knowledge centre. `files` are read from the pull request's head commit
 # through the forge and are untrusted input — they are put through a sandboxed
 # extraction pass rather than injected. Plain filenames only: a name containing
