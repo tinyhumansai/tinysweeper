@@ -31,7 +31,7 @@ async fn ask(model: MockModel, ids: &[&str], budget: f64) -> Vec<Answer> {
     let calls: Vec<Call> = ids.iter().map(|id| call(id)).collect();
     let llm = lane_llm(Arc::new(model), &config(), budget);
 
-    ask_all(llm, LaneId::Critique, &calls, &schema(), None)
+    ask_all(llm, LaneId::Critique, &calls, &schema(), Asking::default())
         .await
         .expect("the graph runs")
 }
@@ -116,7 +116,7 @@ async fn no_reviewers_is_no_calls() {
     let model = MockModel::new();
     let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
 
-    let answers = ask_all(llm, LaneId::Critique, &[], &schema(), None)
+    let answers = ask_all(llm, LaneId::Critique, &[], &schema(), Asking::default())
         .await
         .expect("an empty council is not an error");
 
@@ -130,7 +130,7 @@ async fn each_reviewer_is_asked_with_its_own_prompt() {
     let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
     let calls = vec![call("a"), call("b")];
 
-    ask_all(llm, LaneId::Critique, &calls, &schema(), None)
+    ask_all(llm, LaneId::Critique, &calls, &schema(), Asking::default())
         .await
         .expect("runs");
 
@@ -159,7 +159,7 @@ async fn a_reviewer_id_that_is_not_a_legal_node_id_still_gets_its_answer() {
         100.0,
     );
 
-    let answers = ask_all(llm, LaneId::Critique, &[awkward], &schema(), None)
+    let answers = ask_all(llm, LaneId::Critique, &[awkward], &schema(), Asking::default())
         .await
         .expect("runs");
 
@@ -211,7 +211,7 @@ async fn reviewers_run_concurrently_rather_than_one_after_another() {
     let llm = lane_llm(model.clone(), &config(), 100.0);
     let calls: Vec<Call> = ["a", "b", "c"].iter().map(|id| call(id)).collect();
 
-    ask_all(llm, LaneId::Critique, &calls, &schema(), None)
+    ask_all(llm, LaneId::Critique, &calls, &schema(), Asking::default())
         .await
         .expect("runs");
 
@@ -259,7 +259,10 @@ async fn ask_with_subagents(model: MockModel, ids: &[&str]) -> Vec<Answer> {
         LaneId::Critique,
         &calls,
         &schema(),
-        Some("vendor/flash"),
+        Asking {
+            subagent_model: Some("vendor/flash"),
+            ..Asking::default()
+        },
     )
     .await
     .expect("the graph runs")
@@ -298,7 +301,10 @@ async fn the_second_turn_sees_the_answer_and_the_first_turn_does_not() {
         LaneId::Critique,
         &[call("a")],
         &schema(),
-        Some("vendor/flash"),
+        Asking {
+            subagent_model: Some("vendor/flash"),
+            ..Asking::default()
+        },
     )
     .await
     .expect("runs");
@@ -333,7 +339,10 @@ async fn a_reviewer_with_no_questions_costs_exactly_one_call() {
         LaneId::Critique,
         &[call("a")],
         &schema(),
-        Some("vendor/flash"),
+        Asking {
+            subagent_model: Some("vendor/flash"),
+            ..Asking::default()
+        },
     )
     .await
     .expect("runs");
@@ -391,7 +400,10 @@ async fn questions_are_capped_at_the_documented_number() {
         LaneId::Critique,
         &[call("a")],
         &schema(),
-        Some("vendor/flash"),
+        Asking {
+            subagent_model: Some("vendor/flash"),
+            ..Asking::default()
+        },
     )
     .await
     .expect("runs");
@@ -418,7 +430,10 @@ async fn the_final_turn_is_not_offered_a_way_to_ask_again() {
         LaneId::Critique,
         &[call("a")],
         &schema(),
-        Some("vendor/flash"),
+        Asking {
+            subagent_model: Some("vendor/flash"),
+            ..Asking::default()
+        },
     )
     .await
     .expect("runs");
@@ -448,7 +463,7 @@ async fn sub_agents_off_never_mentions_them_to_the_reviewer() {
     let model = MockModel::always(json!({ "summary": "s", "findings": [] }));
     let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
 
-    ask_all(llm, LaneId::Critique, &[call("a")], &schema(), None)
+    ask_all(llm, LaneId::Critique, &[call("a")], &schema(), Asking::default())
         .await
         .expect("runs");
 
