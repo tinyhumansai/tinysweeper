@@ -485,6 +485,8 @@ mod tests {
         ("moonshotai/kimi-k2.6", 0.5415, 2.28),
         ("moonshotai/kimi-k2.7-code", 0.67, 3.40),
         ("moonshotai/kimi-k3", 2.60, 13.00),
+        // One endpoint, OpenAI's own; measured 2026-09-15.
+        ("openai/gpt-5.3-codex", 1.75, 14.00),
         ("qwen/qwen3.8-max", 2.00, 6.00),
         ("z-ai/glm-5.2", 0.336, 1.056),
     ];
