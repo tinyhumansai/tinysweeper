@@ -200,6 +200,7 @@ fn empty_body_outcome(pr: &PullRequest, files: usize) -> LaneOutcome {
         resolved: vec![],
         spend: Default::default(),
         skipped: None,
+        pending: Vec::new(),
     }
 }
 

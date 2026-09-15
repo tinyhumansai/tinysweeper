@@ -317,7 +317,7 @@ pub fn classify_workflow(path: &str, text: &str, named: &[String]) -> Option<Wor
         .trim_end_matches(".yaml");
     let name = outline
         .top_value("name")
-        .map(unquote)
+        .map(|value| unquote(&value))
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| stem.to_string());
 
