@@ -373,6 +373,23 @@ pub async fn review_with_tree(
         &context.pull_request.head_sha,
         &forge.git_host(),
     );
+    // A tree from another commit is worse than none: the reviewer would read
+    // definitions the diff does not call. A push can land between a caller
+    // fetching its checkout and this context being read, so the checkout
+    // says which commit it is and is refused when that is not the head.
+    let tree = tree.filter(|tree| match tree.revision() {
+        Some(revision) if revision != context.pull_request.head_sha => {
+            tracing::warn!(
+                %repo,
+                number,
+                checkout = %revision,
+                head = %context.pull_request.head_sha,
+                "the supplied tree is not at the reviewed head; lookups read through the forge"
+            );
+            false
+        }
+        _ => true,
+    });
     let chained;
     let tree: &dyn TreeReader = match tree {
         Some(tree) => {

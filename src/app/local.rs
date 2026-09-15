@@ -118,9 +118,30 @@ pub async fn local_review(
     );
 
     // No store: there is no earlier local run to replay, and pretending
-    // otherwise would report a cache hit that never happened. The tree is
-    // the checkout itself, so a reviewer here can search as well as read.
-    let tree = crate::ports::tree::DirTree::new(dir);
+    // otherwise would report a cache hit that never happened.
+    //
+    // The tree a reviewer may look things up in. For the dirty range — no
+    // `--head`, the working directory is what is reviewed — it is the
+    // working directory, restricted to what git would show: a developer's
+    // `.env` or private key is ignored by git and must not be read into a
+    // prompt on the strength of a diff that mentions it. For an explicit
+    // `--head` the working directory is *not* the reviewed tree, so reads go
+    // to that commit through git and search is not offered rather than
+    // answered from the wrong revision.
+    let dir_tree;
+    let git_tree;
+    let tree: &dyn crate::ports::tree::TreeReader = if range.dirty {
+        dir_tree = crate::ports::tree::DirTree::new(dir)
+            .allowing(git::reviewable_paths(dir).await?)
+            .at_revision(&range.head_sha);
+        &dir_tree
+    } else {
+        git_tree = GitTree {
+            dir: dir.to_path_buf(),
+            range: range.clone(),
+        };
+        &git_tree
+    };
     let proposal = crate::app::review::review_with_tree(
         &forge,
         model,
@@ -131,11 +152,60 @@ pub async fn local_review(
         None,
         None,
         None,
-        Some(&tree),
+        Some(tree),
     )
     .await?;
 
     Ok((proposal, LocalContext { repo, range }))
+}
+
+/// Reads at an explicit `--head` commit through git.
+///
+/// The working directory may sit on another commit entirely, so a lookup
+/// answered from disk would describe the wrong tree. Reads go through
+/// `git show`; search is not offered.
+struct GitTree {
+    dir: std::path::PathBuf,
+    range: ResolvedRange,
+}
+
+#[async_trait::async_trait]
+impl crate::ports::tree::TreeReader for GitTree {
+    async fn lookup(
+        &self,
+        lookup: &crate::ports::tree::Lookup,
+    ) -> Result<crate::ports::tree::Found> {
+        use crate::ports::tree::{Found, Lookup};
+        match lookup {
+            Lookup::Read { path, start, end } => {
+                if path.contains("..") || path.starts_with('/') {
+                    return Ok(Found::NotFound);
+                }
+                Ok(match git::file_at(&self.dir, &self.range, path).await? {
+                    Some(content) => {
+                        let (start, end) = Lookup::read_range(*start, *end);
+                        crate::ports::tree::slice_lines(&content, start, end)
+                    }
+                    None => Found::NotFound,
+                })
+            }
+            Lookup::Search { .. } => Ok(Found::Unavailable {
+                reason: "an explicit --head is read through git one file at a time; \
+                         name the path"
+                    .into(),
+            }),
+        }
+    }
+
+    fn describe(&self) -> String {
+        "Files can be read by path at the reviewed commit. Search is not available: name \
+         the path."
+            .into()
+    }
+
+    fn revision(&self) -> Option<String> {
+        Some(self.range.head_sha.clone())
+    }
 }
 
 /// The subject line of the newest commit in the range.
