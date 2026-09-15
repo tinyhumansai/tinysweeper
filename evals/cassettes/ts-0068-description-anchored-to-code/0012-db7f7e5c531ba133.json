@@ -1,0 +1,17 @@
+{
+  "key": "db7f7e5c531ba133",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 5498,
+    "output_tokens": 2874,
+    "cached_tokens": 4300,
+    "embed_tokens": 0,
+    "cost_usd": 0.0074579064
+  },
+  "value": {
+    "findings": [],
+    "summary": "Adds four model pricing entries to MODEL_PRICES and four tests covering the new rows, default-config coverage, and argument-order sanity. The new entries are hardcoded constants with no untrusted input, network, or subprocess surface; the tests use compile-time fixtures. Safe to merge."
+  }
+}

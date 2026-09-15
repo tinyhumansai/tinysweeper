@@ -1,0 +1,17 @@
+{
+  "key": "904b4658eda9f454",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 5826,
+    "output_tokens": 5761,
+    "cached_tokens": 5218,
+    "embed_tokens": 0,
+    "cost_usd": 0.01330968324
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds four model price entries to MODEL_PRICES and four tests that pin pricing behavior for the new GLM-5.2 deep tier and guard against unpriced defaults. The test math checks out against the table values, and the argument-ordering tests are self-validating regardless of the unseen completion_cost signature. No bugs introduced."
+  }
+}

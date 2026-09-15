@@ -15,8 +15,12 @@
       "priority: p1"
     ],
     "mergeable": null,
+    "open": true,
     "merged": true,
-    "approvals": 0
+    "approvals": 0,
+    "age_days": 0,
+    "quiet_days": 0,
+    "updated_at": null
   },
   "files": [
     {
@@ -90,5 +94,697 @@
   "blobs": {
     "AGENTS.md": "# Repository Guidelines\n\n## Project Structure & Module Organization\n\n- `src/` — the single crate. One responsibility per module, core types in a\n  module-local `types.rs`, and every port in `src/ports/` is one trait in one\n  file.\n- `src/bin/tinysweeper.rs` — the CLI. Every subcommand is declared even when its\n  milestone has not landed, so scripts and runbooks can be written against a\n  stable surface. `src/server/` is the only production surface: tinysweeper is\n  not distributed or run as a GitHub Action. The single, deliberate exception is\n  `.github/workflows/manual-review.yml` in *this* repository — an operator\n  button that POSTs to the deployed server's `/admin/reviews` route. It builds\n  nothing, runs no lane, and holds no model or write credential; anything that\n  would need one belongs in `src/server/`, not in a workflow.\n- `presets/` — review policy as **data**, not code. A preset is a folder with a\n  `preset.toml`, a `README.md`, and optional prompt overrides. Adding a preset\n  is a new folder, never a new module.\n- `vendor/tinyagents` — the agent harness, as a git submodule. Never edit it\n  here; change it upstream and bump the pin.\n- `docs/modules/<module>/README.md` — one document per `src/` module.\n- `examples/` — declared explicitly in `Cargo.toml` with `required-features`, so\n  credential-needing smoke tests never build in CI.\n\n## Build, Test, and Development Commands\n\n```sh\ngit submodule update --init --recursive\ncargo fmt --all -- --check\ncargo clippy --locked --all-targets -- -D warnings\ncargo test --locked\ncargo check --locked --all-features --all-targets\n```\n\nThe default build is offline: it links no HTTP client and the test suite never\ntouches the network. Anything that needs the network goes behind a feature\n(`harness`, `github`, `serve`).\n\n## Coding Style & Naming Conventions\n\n- rustfmt output, Rust 2024 idioms. `snake_case` modules and files,\n  `PascalCase` types.\n- Return `Result<T>` using the crate error type from `src/error.rs`.\n- Every file opens with a `//!` module doc describing its role and any feature\n  gating.\n- Comments explain the *decision*, not the code. When a flag or an ordering is\n  load-bearing, say so and say why.\n- Public items carry doc comments. Clap fields use `///` — it becomes the help\n  text.\n\n## Testing Guidelines\n\n- Tests live **in-crate**: a `#[cfg(test)] mod tests` block at the bottom of the\n  module, moving to a sibling `test.rs` or `<name>_test.rs` when they grow.\n  There is no `tests/` directory.\n- Every port has an always-compiled offline mock. `MockForge` records what would\n  have been written so tests can assert on exact check runs and comments.\n- Lane behaviour is covered by golden tests: fixture diff plus a canned\n  structured model response, asserting the findings that survive filtering,\n  dedupe and capping. These are the tests that keep noise control honest.\n- Maintain at least 80% coverage for meaningful library behaviour.\n\n## Documentation Expectations\n\nKeep every Markdown file, including this one, at 500 lines or fewer. When a\ntopic grows past that limit, split it into focused files and link them from the\nmodule's `README.md`.\n\n## Security Boundary\n\nThese are invariants, not preferences. Changing any of them needs an explicit\ndiscussion in the pull request:\n\n- The model never holds a write token. Lanes run against a read-only checkout;\n  write credentials are minted only in `src/apply/`, after every model call has\n  returned. A lane that leaves a change in the checkout fails.\n- Contributor code is never executed. We read the diff and the tree; we do not\n  build, install dependencies, or run the target repository's scripts.\n- Pull request bodies, comments and diffs are untrusted input. Fence and label\n  them as data in prompts. A model verdict is advisory — only deterministic\n  policy in `src/apply/` and `src/automerge/` may mutate GitHub.\n- Secrets found by the scanners are reported by type and location only. The\n  value never reaches a comment, a check-run summary, or a log.\n\n## Commit & Pull Request Guidelines\n\nUse concise, imperative commit subjects. Keep commits small; commit each\ncoherent, validated slice on its own. Pull requests state what changed, any\nbehaviour change, and how it was verified.\n",
     "CLAUDE.md": "# Repository Guidelines\n\n## Project Structure & Module Organization\n\n- `src/` — the single crate. One responsibility per module, core types in a\n  module-local `types.rs`, and every port in `src/ports/` is one trait in one\n  file.\n- `src/bin/tinysweeper.rs` — the CLI. Every subcommand is declared even when its\n  milestone has not landed, so scripts and runbooks can be written against a\n  stable surface. `src/server/` is the only production surface: tinysweeper is\n  not distributed or run as a GitHub Action. The single, deliberate exception is\n  `.github/workflows/manual-review.yml` in *this* repository — an operator\n  button that POSTs to the deployed server's `/admin/reviews` route. It builds\n  nothing, runs no lane, and holds no model or write credential; anything that\n  would need one belongs in `src/server/`, not in a workflow.\n- `presets/` — review policy as **data**, not code. A preset is a folder with a\n  `preset.toml`, a `README.md`, and optional prompt overrides. Adding a preset\n  is a new folder, never a new module.\n- `vendor/tinyagents` — the agent harness, as a git submodule. Never edit it\n  here; change it upstream and bump the pin.\n- `docs/modules/<module>/README.md` — one document per `src/` module.\n- `examples/` — declared explicitly in `Cargo.toml` with `required-features`, so\n  credential-needing smoke tests never build in CI.\n\n## Build, Test, and Development Commands\n\n```sh\ngit submodule update --init --recursive\ncargo fmt --all -- --check\ncargo clippy --locked --all-targets -- -D warnings\ncargo test --locked\ncargo check --locked --all-features --all-targets\n```\n\nThe default build is offline: it links no HTTP client and the test suite never\ntouches the network. Anything that needs the network goes behind a feature\n(`harness`, `github`, `serve`).\n\n## Coding Style & Naming Conventions\n\n- rustfmt output, Rust 2024 idioms. `snake_case` modules and files,\n  `PascalCase` types.\n- Return `Result<T>` using the crate error type from `src/error.rs`.\n- Every file opens with a `//!` module doc describing its role and any feature\n  gating.\n- Comments explain the *decision*, not the code. When a flag or an ordering is\n  load-bearing, say so and say why.\n- Public items carry doc comments. Clap fields use `///` — it becomes the help\n  text.\n\n## Testing Guidelines\n\n- Tests live **in-crate**: a `#[cfg(test)] mod tests` block at the bottom of the\n  module, moving to a sibling `test.rs` or `<name>_test.rs` when they grow.\n  There is no `tests/` directory.\n- Every port has an always-compiled offline mock. `MockForge` records what would\n  have been written so tests can assert on exact check runs and comments.\n- Lane behaviour is covered by golden tests: fixture diff plus a canned\n  structured model response, asserting the findings that survive filtering,\n  dedupe and capping. These are the tests that keep noise control honest.\n- Maintain at least 80% coverage for meaningful library behaviour.\n\n## Documentation Expectations\n\nKeep every Markdown file, including this one, at 500 lines or fewer. When a\ntopic grows past that limit, split it into focused files and link them from the\nmodule's `README.md`.\n\n## Security Boundary\n\nThese are invariants, not preferences. Changing any of them needs an explicit\ndiscussion in the pull request:\n\n- The model never holds a write token. Lanes run against a read-only checkout;\n  write credentials are minted only in `src/apply/`, after every model call has\n  returned. A lane that leaves a change in the checkout fails.\n- Contributor code is never executed. We read the diff and the tree; we do not\n  build, install dependencies, or run the target repository's scripts.\n- Pull request bodies, comments and diffs are untrusted input. Fence and label\n  them as data in prompts. A model verdict is advisory — only deterministic\n  policy in `src/apply/` and `src/automerge/` may mutate GitHub.\n- Secrets found by the scanners are reported by type and location only. The\n  value never reaches a comment, a check-run summary, or a log.\n\n## Commit & Pull Request Guidelines\n\nUse concise, imperative commit subjects. Keep commits small; commit each\ncoherent, validated slice on its own. Pull requests state what changed, any\nbehaviour change, and how it was verified.\n"
+  },
+  "lookups": {
+    "read crates/opencompany-app/src/proxy/mod.rs:178-206": {
+      "outcome": "text",
+      "text": "  178| /// The console turns *any* rejection into its own `network_error` — the\n  179| /// transport's own words are deliberately not surfaced, because they differ per\n  180| /// transport and the message is shown to a person. So there is nothing to\n  181| /// structure here.\n  182| #[derive(Debug)]\n  183| pub struct ProxyErrorWire(pub String);\n  184| \n  185| impl From<ProxyError> for ProxyErrorWire {\n  186|     fn from(error: ProxyError) -> Self {\n  187|         Self(error.to_string())\n  188|     }\n  189| }\n  190| \n  191| /// Every host this client is connected to.\n  192| #[derive(Debug)]\n  193| pub struct ProxyRegistry {\n  194|     connections: RwLock<HashMap<ConnectionId, Connection>>,\n  195|     http: reqwest::Client,\n  196| }\n  197| \n  198| impl Default for ProxyRegistry {\n  199|     fn default() -> Self {\n  200|         Self {\n  201|             connections: RwLock::new(HashMap::new()),\n  202|             http: reqwest::Client::builder()\n  203|                 .redirect(reqwest::redirect::Policy::none())\n  204|                 // A host that accepts a connection but never answers must not\n  205|                 // hold a console command open forever. Deliberately *not* a\n  206|                 // client-wide `timeout`: that would also cut the long-lived",
+      "start": 178,
+      "end": 206,
+      "total": 925
+    },
+    "read crates/opencompany-core/src/app/config.rs:464-492": {
+      "outcome": "text",
+      "text": "  464| fn gib_to_bytes(gb: Option<f64>) -> Option<u64> {\n  465|     gb.filter(|g| *g > 0.0)\n  466|         .map(|g| (g * 1024.0 * 1024.0 * 1024.0) as u64)\n  467| }\n  468| \n  469| /// Resolved `[workspace]` configuration.\n  470| #[derive(Clone, Debug)]\n  471| pub struct WorkspaceConfig {\n  472|     /// Whether private agent workspaces keep automatic Git checkpoints.\n  473|     pub git_enabled: bool,\n  474|     /// Whether the ephemeral `tmp/` scratch is cleared on startup.\n  475|     pub clear_tmp_on_startup: bool,\n  476|     /// Soft whole-workspace quota in bytes; `None` is unlimited.\n  477|     pub storage_quota_bytes: Option<u64>,\n  478|     /// Soft `tmp/` quota in bytes; `None` is unlimited.\n  479|     pub tmp_quota_bytes: Option<u64>,\n  480|     /// The workspace tree's **enforced** byte limits (issue #553).\n  481|     pub quota: crate::runtime::WorkspaceQuota,\n  482| }\n  483| \n  484| impl Default for WorkspaceConfig {\n  485|     fn default() -> Self {\n  486|         Self {\n  487|             git_enabled: false,\n  488|             clear_tmp_on_startup: true,\n  489|             storage_quota_bytes: None,\n  490|             tmp_quota_bytes: None,\n  491|             quota: crate::runtime::WorkspaceQuota::default(),\n  492|         }",
+      "start": 464,
+      "end": 492,
+      "total": 2251
+    },
+    "read crates/opencompany-core/src/app/types.rs:109-137": {
+      "outcome": "text",
+      "text": "  109|     /// and does not delete an account it already created. `None` — and an empty\n  110|     /// or whitespace-only value — is a clean no-op.\n  111|     pub admin_email: Option<String>,\n  112|     /// A host-wide override of every company's `[users].mode`\n  113|     /// (`OPENCOMPANY_AUTH_MODE`, or `auth_mode` in `config.toml`).\n  114|     ///\n  115|     /// `None` — the normal case — leaves each company to name its own sign-in\n  116|     /// mode in its manifest. It exists because two deployments own the answer\n  117|     /// rather than the company definition does: the packaged desktop app, which\n  118|     /// forces [`AuthMode::None`](crate::app::config::AuthMode::None) because\n  119|     /// there is only ever the person at the machine, and a hosting platform,\n  120|     /// which must be able to guarantee a mode across every tenant it builds\n  121|     /// regardless of what a tenant wrote.\n  122|     ///\n  123|     /// Carried to each company by\n  124|     /// [`RuntimeBuilder::with_auth_mode_override`](crate::runtime::RuntimeBuilder::with_auth_mode_override),\n  125|     /// which is where it beats the manifest.\n  126|     pub auth_mode_override: Option<AuthMode>,\n  127| }\n  128| \n  129| impl Default for AppConfig {\n  130|     fn default() -> Self {\n  131|         Self {\n  132|             bind: \"127.0.0.1:8080\".to_string(),\n  133|             openhuman_root: None,\n  134|             api_url: crate::app::config::DEFAULT_API_URL.to_string(),\n  135|             web_url: None,\n  136|             instance_name: None,\n  137|             brain_mode: BrainMode::Hosted,",
+      "start": 109,
+      "end": 137,
+      "total": 1838
+    },
+    "read crates/opencompany-core/src/company/inference/store.rs:880-908": {
+      "outcome": "text",
+      "text": "  880|     enabled: bool,\n  881| ) -> Result<()> {\n  882|     secrets\n  883|         .set(\n  884|             company,\n  885|             MANAGED_ENABLED_KEY,\n  886|             SecretValue(if enabled { \"true\" } else { \"false\" }.to_string()),\n  887|         )\n  888|         .await\n  889| }\n  890| \n  891| // ---- the default provider ---------------------------------------------------\n  892| \n  893| /// The [`SecretStore`] key naming the company's default provider.\n  894| pub const DEFAULT_PROVIDER_KEY: &str = \"inference/default\";\n  895| \n  896| /// A provider slug and the one model to send it (keys rework, issue #2306,\n  897| /// slice 2b): the only shape the new resolution path sends. Serialized field\n  898| /// order is `provider`, then `model`.\n  899| #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]\n  900| pub struct ModelChoice {\n  901|     /// A slug from [`list_providers`], which includes entry zero.\n  902|     pub provider: String,\n  903|     /// The id that provider's API accepts. Non-empty after trim.\n  904|     pub model: String,\n  905| }\n  906| \n  907| /// `inference/default`, parsed (keys rework, issue #2306, slice 2b).\n  908| #[derive(Clone, Debug, PartialEq, Eq)]",
+      "start": 880,
+      "end": 908,
+      "total": 2291
+    },
+    "read crates/opencompany-core/src/metering/model.rs:73-101": {
+      "outcome": "text",
+      "text": "   73| //! [`model_for_tier`]: crate::company::inference::model_for_tier\n   74| //! [`DEFAULT_TIER_MODELS`]: crate::company::inference::DEFAULT_TIER_MODELS\n   75| //! [`UsageSample`]: crate::ports::usage::UsageSample\n   76| \n   77| use std::fmt;\n   78| \n   79| use serde::{Deserialize, Deserializer, Serialize, Serializer};\n   80| \n   81| /// A model identity folded onto the closed vocabulary described in the\n   82| /// [module docs](self).\n   83| ///\n   84| /// The inner value is a private `&'static str`, so a `ModelSlug` **cannot** be\n   85| /// constructed from runtime data except through [`ModelSlug::classify`], which\n   86| /// only ever returns a compiled-in literal. That is what makes \"the raw model\n   87| /// name never leaves the harness\" a property of the type rather than a\n   88| /// convention a call site has to keep remembering — and it is the same\n   89| /// construction argument the analytics payload vocabulary in #1751 makes, so\n   90| /// [`as_str`](ModelSlug::as_str) drops straight into a `&'static str` property\n   91| /// with no second classifier.\n   92| #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]\n   93| pub struct ModelSlug(&'static str);\n   94| \n   95| impl ModelSlug {\n   96|     /// A model ran, but it is not one this build can name — a BYOK or\n   97|     /// self-hosted model, or a vendor the vocabulary has not been extended to.\n   98|     ///\n   99|     /// Deliberately not \"unknown\": nothing is unknown here. The endpoint was\n  100|     /// asked for a specific model and answered; what is missing is a *name for\n  101|     /// it that is safe to keep*, which is a different fact.",
+      "start": 73,
+      "end": 101,
+      "total": 411
+    },
+    "read crates/opencompany-core/src/server/inference_models.rs:436-464": {
+      "outcome": "text",
+      "text": "  436|         }\n  437|     }\n  438|     Ok(collector\n  439|         .finish()\n  440|         .into_iter()\n  441|         .map(|e| InferenceModel {\n  442|             id: e.id,\n  443|             name: e.name,\n  444|             context_length: e.context_length,\n  445|         })\n  446|         .collect())\n  447| }\n  448| \n  449| struct CacheEntry {\n  450|     at: Instant,\n  451|     models: Vec<InferenceModel>,\n  452| }\n  453| \n  454| /// One endpoint's catalog cache.\n  455| #[derive(Default)]\n  456| pub(crate) struct ModelCatalogCache {\n  457|     entry: Mutex<Option<CacheEntry>>,\n  458|     /// The last failure and when it happened — see [`MODEL_CATALOG_FAILURE_TTL`].\n  459|     failure: Mutex<Option<(Instant, String)>>,\n  460|     /// Serializes cache-miss fetches (issue #1838 follow-up). Held across the\n  461|     /// whole `discover_models` await, not just the cache write: without it,\n  462|     /// every console request that lands after startup or a TTL expiry sees\n  463|     /// the same empty/stale entry and fires its own upstream fetch, so a\n  464|     /// multi-tenant host can burst several identical registry calls at once —",
+      "start": 436,
+      "end": 464,
+      "total": 1676
+    },
+    "read src/config/types.rs:1-50": {
+      "outcome": "not_found"
+    },
+    "read src/config/types.rs:370-410": {
+      "outcome": "not_found"
+    },
+    "read src/harness/pricing.rs:1-160": {
+      "outcome": "not_found"
+    },
+    "read vendor/openhuman/tests/raw_coverage/inference_local_admin_raw_coverage_e2e.rs:439-467": {
+      "outcome": "text",
+      "text": "  439|     headers: HeaderMap,\n  440|     Json(body): Json<Value>,\n  441| ) -> impl IntoResponse {\n  442|     remember(&state, \"/v1/responses\", &headers, body.clone());\n  443|     if body[\"input\"]\n  444|         .as_str()\n  445|         .map(str::trim)\n  446|         .unwrap_or_default()\n  447|         .is_empty()\n  448|     {\n  449|         return Json(json!({ \"output\": [] })).into_response();\n  450|     }\n  451|     Json(json!({\n  452|         \"output\": [{\n  453|             \"content\": [{ \"type\": \"output_text\", \"text\": \"responses fallback\" }]\n  454|         }]\n  455|     }))\n  456|     .into_response()\n  457| }\n  458| \n  459| async fn models(State(state): State<MockState>) -> impl IntoResponse {\n  460|     let models = state\n  461|         .ollama_models\n  462|         .lock()\n  463|         .expect(\"models\")\n  464|         .iter()\n  465|         .map(|id| json!({ \"id\": id, \"owned_by\": \"round16\", \"context_window\": 8192 }))\n  466|         .collect::<Vec<_>>();\n  467|     Json(json!({ \"object\": \"list\", \"data\": models }))",
+      "start": 439,
+      "end": 467,
+      "total": 628
+    },
+    "read vendor/openhuman/tests/raw_coverage/inference_provider_raw_coverage_e2e.rs:466-494": {
+      "outcome": "text",
+      "text": "  466|             \"usage\": {\n  467|                 \"prompt_tokens\": 5,\n  468|                 \"completion_tokens\": 6,\n  469|                 \"prompt_tokens_details\": { \"cached_tokens\": 2 }\n  470|             }\n  471|         })\n  472|         .to_string(),\n  473|     ];\n  474|     let body = chunks\n  475|         .into_iter()\n  476|         .map(|chunk| format!(\"data: {chunk}\\n\\n\"))\n  477|         .chain(std::iter::once(\"data: [DONE]\\n\\n\".to_string()))\n  478|         .collect::<String>();\n  479|     Response::builder()\n  480|         .status(StatusCode::OK)\n  481|         .header(header::CONTENT_TYPE, \"text/event-stream\")\n  482|         .body(Body::from(body))\n  483|         .expect(\"sse response\")\n  484| }\n  485| \n  486| async fn models(State(state): State<MockState>, headers: HeaderMap) -> impl IntoResponse {\n  487|     remember(&state, \"/v1/models\", &headers, Value::Null);\n  488|     Json(json!({\n  489|         \"object\": \"list\",\n  490|         \"data\": [\n  491|             { \"id\": \"demo-chat\", \"owned_by\": \"test-suite\" },\n  492|             { \"id\": \"demo-coder\", \"owned_by\": \"test-suite\", \"context_window\": 8192 },\n  493|             { \"owned_by\": \"ignored-without-id\" }\n  494|         ]",
+      "start": 466,
+      "end": 494,
+      "total": 587
+    },
+    "search \"enum GatewayModel\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"enum Price\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"fn a_cached_read_is_charged_at_the_cache_rate(\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"fn an_effort_is_passed_through_as_an_effort(\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"fn completion_cost\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"fn completion_cost(\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"fn every_model_the_defaults_select_has_a_price(\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"fn models(\"": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "vendor/openhuman/tests/raw_coverage/inference_local_admin_raw_coverage_e2e.rs",
+          "line": 459,
+          "text": "async fn models(State(state): State<MockState>) -> impl IntoResponse {"
+        },
+        {
+          "path": "vendor/openhuman/tests/raw_coverage/inference_provider_raw_coverage_e2e.rs",
+          "line": 486,
+          "text": "async fn models(State(state): State<MockState>, headers: HeaderMap) -> impl IntoResponse {"
+        }
+      ],
+      "truncated": false
+    },
+    "search \"fn off_disables_reasoning_rather_than_asking_for_a_little(\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"fn reasoning_options(\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"fn the_configured_effort_reaches_the_gateway(\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"fn the_middle_argument_is_cached_tokens_not_output(\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"fn the_new_deep_tier_costs_what_the_table_says(\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"fn unpriced\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"fn unpriced(\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"impl Default for ModelConfig\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"impl Default for\"": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-app/src/proxy/mod.rs",
+          "line": 198,
+          "text": "impl Default for ProxyRegistry {"
+        },
+        {
+          "path": "crates/opencompany-core/src/app/config.rs",
+          "line": 484,
+          "text": "impl Default for WorkspaceConfig {"
+        },
+        {
+          "path": "crates/opencompany-core/src/app/types.rs",
+          "line": 129,
+          "text": "impl Default for AppConfig {"
+        },
+        {
+          "path": "crates/opencompany-core/src/brain/sidecar/mock.rs",
+          "line": 224,
+          "text": "impl Default for MockInferenceClient {"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/inference.rs",
+          "line": 142,
+          "text": "impl Default for HarnessScope {"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/inference/store.rs",
+          "line": 129,
+          "text": "impl Default for ProviderId {"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/types.rs",
+          "line": 1218,
+          "text": "impl Default for Workflows {"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/types.rs",
+          "line": 1279,
+          "text": "impl Default for Users {"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/types.rs",
+          "line": 1304,
+          "text": "impl Default for Brain {"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/types.rs",
+          "line": 1622,
+          "text": "impl Default for Tools {"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/types.rs",
+          "line": 1724,
+          "text": "impl Default for Policy {"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/types.rs",
+          "line": 1816,
+          "text": "impl Default for Plan {"
+        },
+        {
+          "path": "crates/opencompany-core/src/economy/client.rs",
+          "line": 239,
+          "text": "impl Default for MockTinyplaceClient {"
+        },
+        {
+          "path": "crates/opencompany-core/src/economy/siwx.rs",
+          "line": 189,
+          "text": "impl Default for NonceCache {"
+        },
+        {
+          "path": "crates/opencompany-core/src/feedback/board.rs",
+          "line": 148,
+          "text": "impl Default for BoardQuery {"
+        },
+        {
+          "path": "crates/opencompany-core/src/feedback/github.rs",
+          "line": 114,
+          "text": "impl Default for RateLimiter {"
+        },
+        {
+          "path": "crates/opencompany-core/src/feedback/service.rs",
+          "line": 57,
+          "text": "impl Default for FeedbackFiler {"
+        },
+        {
+          "path": "crates/opencompany-core/src/feedback/tinyhumans.rs",
+          "line": 144,
+          "text": "impl Default for MockTinyHumansClient {"
+        },
+        {
+          "path": "crates/opencompany-core/src/feedback/triage.rs",
+          "line": 411,
+          "text": "impl Default for QualityLedger {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mod.rs",
+          "line": 2752,
+          "text": "impl Default for HarnessPool {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/policy.rs",
+          "line": 459,
+          "text": "impl Default for ApprovalRequestQueue {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/provider.rs",
+          "line": 1312,
+          "text": "impl Default for MockProvider {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/pages_tools.rs",
+          "line": 145,
+          "text": "impl Default for PageManifest {"
+        },
+        {
+          "path": "crates/opencompany-core/src/ports/brain.rs",
+          "line": 95,
+          "text": "impl Default for Cognition {"
+        },
+        {
+          "path": "crates/opencompany-core/src/ports/types.rs",
+          "line": 3312,
+          "text": "impl Default for TurnStep {"
+        },
+        {
+          "path": "crates/opencompany-core/src/ports/workflow_runner.rs",
+          "line": 920,
+          "text": "impl Default for RunCancel {"
+        },
+        {
+          "path": "crates/opencompany-core/src/runtime/delegation.rs",
+          "line": 106,
+          "text": "impl Default for ChatTarget<'_> {"
+        },
+        {
+          "path": "crates/opencompany-core/src/runtime/run_supervisor.rs",
+          "line": 97,
+          "text": "impl Default for RunSupervisor {"
+        },
+        {
+          "path": "crates/opencompany-core/src/runtime/workspace_quota.rs",
+          "line": 155,
+          "text": "impl Default for WorkspaceQuota {"
+        },
+        {
+          "path": "crates/opencompany-core/src/server/ops/mailer.rs",
+          "line": 231,
+          "text": "impl Default for RecordingMailReceiver {"
+        }
+      ],
+      "truncated": true
+    },
+    "search \"impl Default for\" in src/config/types.rs": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"impl Default\"": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-app/src/proxy/mod.rs",
+          "line": 198,
+          "text": "impl Default for ProxyRegistry {"
+        },
+        {
+          "path": "crates/opencompany-core/src/app/config.rs",
+          "line": 484,
+          "text": "impl Default for WorkspaceConfig {"
+        },
+        {
+          "path": "crates/opencompany-core/src/app/types.rs",
+          "line": 129,
+          "text": "impl Default for AppConfig {"
+        },
+        {
+          "path": "crates/opencompany-core/src/brain/sidecar/mock.rs",
+          "line": 224,
+          "text": "impl Default for MockInferenceClient {"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/inference.rs",
+          "line": 142,
+          "text": "impl Default for HarnessScope {"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/inference/store.rs",
+          "line": 129,
+          "text": "impl Default for ProviderId {"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/inference/store.rs",
+          "line": 919,
+          "text": "impl DefaultChoice {"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/types.rs",
+          "line": 1218,
+          "text": "impl Default for Workflows {"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/types.rs",
+          "line": 1279,
+          "text": "impl Default for Users {"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/types.rs",
+          "line": 1304,
+          "text": "impl Default for Brain {"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/types.rs",
+          "line": 1622,
+          "text": "impl Default for Tools {"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/types.rs",
+          "line": 1724,
+          "text": "impl Default for Policy {"
+        },
+        {
+          "path": "crates/opencompany-core/src/company/types.rs",
+          "line": 1816,
+          "text": "impl Default for Plan {"
+        },
+        {
+          "path": "crates/opencompany-core/src/economy/client.rs",
+          "line": 239,
+          "text": "impl Default for MockTinyplaceClient {"
+        },
+        {
+          "path": "crates/opencompany-core/src/economy/siwx.rs",
+          "line": 189,
+          "text": "impl Default for NonceCache {"
+        },
+        {
+          "path": "crates/opencompany-core/src/feedback/board.rs",
+          "line": 148,
+          "text": "impl Default for BoardQuery {"
+        },
+        {
+          "path": "crates/opencompany-core/src/feedback/github.rs",
+          "line": 114,
+          "text": "impl Default for RateLimiter {"
+        },
+        {
+          "path": "crates/opencompany-core/src/feedback/service.rs",
+          "line": 57,
+          "text": "impl Default for FeedbackFiler {"
+        },
+        {
+          "path": "crates/opencompany-core/src/feedback/tinyhumans.rs",
+          "line": 144,
+          "text": "impl Default for MockTinyHumansClient {"
+        },
+        {
+          "path": "crates/opencompany-core/src/feedback/triage.rs",
+          "line": 411,
+          "text": "impl Default for QualityLedger {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/mod.rs",
+          "line": 2752,
+          "text": "impl Default for HarnessPool {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/policy.rs",
+          "line": 459,
+          "text": "impl Default for ApprovalRequestQueue {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/built_in/provider.rs",
+          "line": 1312,
+          "text": "impl Default for MockProvider {"
+        },
+        {
+          "path": "crates/opencompany-core/src/harness/pages_tools.rs",
+          "line": 145,
+          "text": "impl Default for PageManifest {"
+        },
+        {
+          "path": "crates/opencompany-core/src/ports/brain.rs",
+          "line": 95,
+          "text": "impl Default for Cognition {"
+        },
+        {
+          "path": "crates/opencompany-core/src/ports/types.rs",
+          "line": 3312,
+          "text": "impl Default for TurnStep {"
+        },
+        {
+          "path": "crates/opencompany-core/src/ports/workflow_runner.rs",
+          "line": 920,
+          "text": "impl Default for RunCancel {"
+        },
+        {
+          "path": "crates/opencompany-core/src/runtime/delegation.rs",
+          "line": 106,
+          "text": "impl Default for ChatTarget<'_> {"
+        },
+        {
+          "path": "crates/opencompany-core/src/runtime/run_supervisor.rs",
+          "line": 97,
+          "text": "impl Default for RunSupervisor {"
+        },
+        {
+          "path": "crates/opencompany-core/src/runtime/workspace_quota.rs",
+          "line": 155,
+          "text": "impl Default for WorkspaceQuota {"
+        }
+      ],
+      "truncated": true
+    },
+    "search \"reasoning_effort\"": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-app/tests/acp_live_smoke.rs",
+          "line": 370,
+          "text": "                    \"id\": \"reasoning_effort\","
+        },
+        {
+          "path": "crates/opencompany-core/src/company/inference/dialect.rs",
+          "line": 662,
+          "text": "                \"400: Extra inputs are not permitted: 'reasoning_effort'\","
+        },
+        {
+          "path": "docs/plans/hivemind-handoff.md",
+          "line": 130,
+          "text": "2. Consider `reasoning_effort` on the ladder's `agentic-v1` alias if"
+        },
+        {
+          "path": "vendor/tinyhivemind/docs/research/grok-bots/opengrok.md",
+          "line": 233,
+          "text": "  `thinking`/`reasoning_effort`/`chat_template_kwargs` fields synthesized."
+        }
+      ],
+      "truncated": false
+    },
+    "search \"struct GatewayModel\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"struct Model\"": {
+      "outcome": "hits",
+      "hits": [
+        {
+          "path": "crates/opencompany-core/src/company/inference/store.rs",
+          "line": 900,
+          "text": "pub struct ModelChoice {"
+        },
+        {
+          "path": "crates/opencompany-core/src/metering/model.rs",
+          "line": 93,
+          "text": "pub struct ModelSlug(&'static str);"
+        },
+        {
+          "path": "crates/opencompany-core/src/server/inference_models.rs",
+          "line": 456,
+          "text": "pub(crate) struct ModelCatalogCache {"
+        },
+        {
+          "path": "crates/opencompany-core/src/server/ops/inference.rs",
+          "line": 103,
+          "text": "struct ModelCatalogDto {"
+        },
+        {
+          "path": "docs/key-reworks/phase-2b-default-shape.md",
+          "line": 234,
+          "text": "pub struct ModelChoice {"
+        },
+        {
+          "path": "docs/key-reworks/phase-5a-routes-carry-part2.md",
+          "line": 131,
+          "text": "   `git grep -n \"fn load_default\\b\\|fn set_default_choice\\|pub struct ModelChoice\\|pub enum DefaultChoice\\|fn check_model_id\" src`."
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/agent/cost.rs",
+          "line": 36,
+          "text": "pub(crate) struct ModelPricing {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/agent/tinyagents/summarize.rs",
+          "line": 57,
+          "text": "pub(super) struct ModelSummarizer {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/channels/routes.rs",
+          "line": 27,
+          "text": "struct ModelCacheState {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/channels/routes.rs",
+          "line": 32,
+          "text": "struct ModelCacheEntry {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/channels/tests/common.rs",
+          "line": 294,
+          "text": "pub(super) struct ModelCaptureModel {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/config/ops/model.rs",
+          "line": 9,
+          "text": "pub struct ModelSettingsPatch {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/config/schema/dashboard.rs",
+          "line": 68,
+          "text": "pub struct ModelHealthConfig {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/config/schema/identity_cost.rs",
+          "line": 102,
+          "text": "pub struct ModelPricing {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/config/schema/routes.rs",
+          "line": 7,
+          "text": "pub struct ModelRouteConfig {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/config/schema/types/config.rs",
+          "line": 12,
+          "text": "pub struct ModelRegistryEntry {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/config/schemas/helpers.rs",
+          "line": 11,
+          "text": "pub(super) struct ModelRouteUpdate {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/config/schemas/helpers.rs",
+          "line": 38,
+          "text": "pub(super) struct ModelSettingsUpdate {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/desktop/dashboard/types.rs",
+          "line": 14,
+          "text": "pub struct ModelHealthEntry {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/desktop/dashboard/types.rs",
+          "line": 33,
+          "text": "pub struct ModelHealthConfigView {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/desktop/dashboard/types.rs",
+          "line": 41,
+          "text": "pub struct ModelHealthResponse {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/inference/embeddings/rpc/served_models.rs",
+          "line": 14,
+          "text": "    struct ModelEntry {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/inference/embeddings/rpc/served_models.rs",
+          "line": 18,
+          "text": "    struct ModelsResponse {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/inference/http/types.rs",
+          "line": 91,
+          "text": "pub struct ModelsResponse {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/inference/http/types.rs",
+          "line": 97,
+          "text": "pub struct ModelObject {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/inference/local/service/model_rpc.rs",
+          "line": 16,
+          "text": "pub(super) struct ModelRpcOutcome {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/inference/presets.rs",
+          "line": 92,
+          "text": "pub struct ModelPreset {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/inference/provider/ops/models/types.rs",
+          "line": 6,
+          "text": "pub struct ModelInfo {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/inference/provider/ops_tests.rs",
+          "line": 20,
+          "text": "struct ModelProbeState {"
+        },
+        {
+          "path": "vendor/openhuman/crates/openhuman-core/src/platform/cost/catalog.rs",
+          "line": 51,
+          "text": "pub struct ModelPrice {"
+        }
+      ],
+      "truncated": true
+    },
+    "search \"struct ModelConfig\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"struct Price\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"trait GatewayModel\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"trait Price\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"type GatewayModel\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"type Price\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    }
   }
 }

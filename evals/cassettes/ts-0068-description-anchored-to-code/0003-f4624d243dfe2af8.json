@@ -1,0 +1,17 @@
+{
+  "key": "f4624d243dfe2af8",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 6882,
+    "output_tokens": 113,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00061896464
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change adds a configurable reasoning effort field to the OpenRouter harness, replacing the previously hard-disabled reasoning setting with a parameterized option. The logic and wiring look correct: the `reasoning_options` function correctly handles \"off\" and empty string as disabling, passes other values through as effort, and is threaded from config through the `GatewayModel` to the `with_default_provider_options` call. Tests cover both the function and the gateway wiring. No bugs were found."
+  }
+}

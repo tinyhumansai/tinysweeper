@@ -1,0 +1,34 @@
+{
+  "key": "faf1eae4bdf620b7",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 5742,
+    "output_tokens": 213,
+    "cached_tokens": 4881,
+    "embed_tokens": 0,
+    "cost_usd": 0.00164783178
+  },
+  "value": {
+    "lookups": [
+      {
+        "end": 160,
+        "kind": "read",
+        "path": "src/harness/pricing.rs",
+        "start": 1,
+        "why": "Check the signature and argument order of completion_cost to verify the tests use the right parameter order (input, cached, output)."
+      },
+      {
+        "kind": "search",
+        "pattern": "fn completion_cost",
+        "why": "Find the exact definition of completion_cost to confirm parameter names and order."
+      },
+      {
+        "kind": "search",
+        "pattern": "fn unpriced",
+        "why": "Check the unpriced helper used in the new test to ensure it exists and its signature matches the call."
+      }
+    ]
+  }
+}
