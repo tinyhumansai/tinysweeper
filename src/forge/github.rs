@@ -1588,6 +1588,37 @@ impl ForgeRead for GitHubRead {
             .and_then(|item| item.decoded_content()))
     }
 
+    async fn submodule_at(
+        &self,
+        repo: &RepoId,
+        path: &str,
+        sha: &str,
+    ) -> Result<Option<(String, String)>> {
+        // The contents API answers a submodule path with one item of type
+        // `submodule`, carrying the gitlink commit as `sha` and the remote as
+        // `submodule_git_url`. The typed model has no field for the URL, so
+        // this reads the raw route.
+        let route = format!(
+            "/repos/{}/{}/contents/{path}?ref={sha}",
+            repo.owner, repo.name
+        );
+        let raw: serde_json::Value = match self.client.get(&route, None::<&()>).await {
+            Ok(raw) => raw,
+            Err(octocrab::Error::GitHub { source, .. }) if source.status_code == 404 => {
+                return Ok(None);
+            }
+            Err(err) => return Err(api(err)),
+        };
+        if raw.get("type").and_then(serde_json::Value::as_str) != Some("submodule") {
+            return Ok(None);
+        }
+        let commit = raw.get("sha").and_then(serde_json::Value::as_str);
+        let url = raw
+            .get("submodule_git_url")
+            .and_then(serde_json::Value::as_str);
+        Ok(commit.zip(url).map(|(c, u)| (u.to_string(), c.to_string())))
+    }
+
     async fn issue(&self, repo: &RepoId, number: u64) -> Result<Issue> {
         // The raw route rather than octocrab's typed one: its `Issue` model has
         // no `type`, and a second request just to read one field would double
