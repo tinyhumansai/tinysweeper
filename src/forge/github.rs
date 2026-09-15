@@ -15,7 +15,7 @@ use crate::evidence::diff::truncate_patch;
 use crate::forge::types::{
     ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, FileStatus, Issue, IssueComment,
     MAX_CHECK_IMAGES, PullRequest, Remark, RemarkKind, RepoId, ReviewComment, ReviewEvent,
-    ReviewThread, ReviewVerdict, ThreadComment,
+    ReviewThread, ReviewVerdict, ThreadComment, TreeListing,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -1586,6 +1586,33 @@ impl ForgeRead for GitHubRead {
             .into_iter()
             .next()
             .and_then(|item| item.decoded_content()))
+    }
+
+    async fn tree_paths(&self, repo: &RepoId, sha: &str) -> Result<TreeListing> {
+        // One recursive call rather than a walk: GitHub answers the whole tree
+        // in a single response and says when it could not, which is the only
+        // shape under which a listing can be honest about being incomplete.
+        let route = format!(
+            "/repos/{}/{}/git/trees/{sha}?recursive=1",
+            repo.owner, repo.name
+        );
+        let raw: serde_json::Value = self.client.get(&route, None::<&()>).await.map_err(api)?;
+
+        let paths = raw["tree"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            // Directories are `tree` entries; only a blob is a path a test or
+            // a workflow can live at. Submodules (`commit`) are not part of
+            // this tree either.
+            .filter(|entry| entry["type"].as_str() == Some("blob"))
+            .filter_map(|entry| entry["path"].as_str().map(str::to_string))
+            .collect();
+
+        Ok(TreeListing {
+            paths,
+            truncated: raw["truncated"].as_bool().unwrap_or(false),
+        })
     }
 
     async fn issue(&self, repo: &RepoId, number: u64) -> Result<Issue> {
