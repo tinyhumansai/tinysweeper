@@ -1764,12 +1764,6 @@ impl Previews for PreviewDispatch {
         if !config.preview.enabled {
             return Ok(off);
         }
-        let base_url = config.preview.public_base_url.as_deref().unwrap_or("");
-        if base_url.is_empty() {
-            // Validation refuses this configuration, but the check is cheap
-            // and the alternative is composing URLs onto nothing.
-            return Ok(off);
-        }
 
         let (owner, name) = request
             .repo
@@ -1953,6 +1947,13 @@ impl Previews for PreviewDispatch {
         })
     }
 
+    async fn asset(&self, id: &str, name: &str, bytes: Vec<u8>) -> Result<()> {
+        // The session has to exist: staging for an id nobody opened is a
+        // disk-filling door, and the check is one indexed read.
+        let session = self.session(id).await?;
+        staging::write(&session.id, name, &bytes)
+    }
+
     async fn finish(&self, id: &str, request: FinishRequest) -> Result<FinishReply> {
         let config = &self.state.config.config;
         // Same lock as `step`: `finish` also loads, mutates (`check_id`) and
@@ -1960,7 +1961,15 @@ impl Previews for PreviewDispatch {
         // `step` must not interleave with it either.
         let _lock = self.lock_session(id).await;
         let mut session = self.session(id).await?;
-        let base_url = config.preview.public_base_url.as_deref().unwrap_or("");
+        // A bucket when the operator named one, the store branch otherwise.
+        let storage = match config.preview.public_base_url.as_deref() {
+            Some(base_url) if !base_url.trim().is_empty() => {
+                crate::preview::manifest::Storage::Bucket { base_url }
+            }
+            _ => crate::preview::manifest::Storage::Branch {
+                branch: &config.preview.branch,
+            },
+        };
 
         let mut gallery = crate::preview::manifest::validate(
             &request.manifest,
@@ -1969,7 +1978,7 @@ impl Previews for PreviewDispatch {
                 number: session.number,
                 head_sha: &session.head_sha,
             },
-            base_url,
+            storage,
             config.preview.max_flows,
             &session.flows,
             &session.states.keys().cloned().collect(),
@@ -2045,14 +2054,35 @@ impl Previews for PreviewDispatch {
             .installation_token(session.installation)
             .await?;
         let write = crate::forge::github::GitHubWrite::new(&write_token)?;
+        // With a branch store the staged files ride along; read only the
+        // ones the gallery references, so a stray upload costs disk and
+        // nothing else.
+        let staged = match storage {
+            crate::preview::manifest::Storage::Branch { .. } => {
+                Some(staging::read(&session.id, &gallery.files)?)
+            }
+            crate::preview::manifest::Storage::Bucket { .. } => None,
+        };
+        let store = staged.as_ref().map(|files| crate::preview::apply::Store {
+            branch: &config.preview.branch,
+            files,
+        });
         let (outcome, check_id) = crate::preview::apply::publish(
             &read,
             &write,
             &repo.to_string(),
             &gallery,
             session.check_id,
+            store.as_ref(),
         )
         .await?;
+        // Published, so the staging area is done with. Best effort: a retry
+        // of `finish` after a dropped response reads nothing from disk for a
+        // branch store — the comment is edited in place and the files are
+        // already on the branch — so nothing is lost by clearing it now.
+        if matches!(outcome, crate::preview::apply::Outcome::Published) {
+            staging::clear(&session.id);
+        }
 
         // Not deleted: the hands' own HTTP client retries a dropped response,
         // and a `finish` that deleted its session on success would make that
@@ -2071,6 +2101,77 @@ impl Previews for PreviewDispatch {
         Ok(FinishReply {
             outcome: format!("{outcome:?}").to_ascii_lowercase(),
         })
+    }
+}
+
+
+/// The UI preview's staging area: uploaded assets, on this process's disk,
+/// between the hands' `assets` calls and the `finish` that commits them.
+///
+/// Disk rather than the session document because a run is several
+/// megabytes of PNG and Mongo documents stop at sixteen. Ephemeral by
+/// design: a container replaced between an upload and its `finish` loses the
+/// files, the finish fails with a message naming the missing file, and the
+/// hands' retry opens a fresh session — a rerun, never a wrong publish.
+mod staging {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    use crate::error::{Error, Result};
+    use crate::server::preview::{MAX_ASSET_BYTES, MAX_SESSION_ASSET_BYTES, is_asset_name};
+
+    fn dir(session: &str) -> PathBuf {
+        std::env::temp_dir().join("tinysweeper-preview").join(session)
+    }
+
+    /// Stage one asset, refusing what the limits or the name rule refuse.
+    pub fn write(session: &str, name: &str, bytes: &[u8]) -> Result<()> {
+        if !is_asset_name(name) {
+            return Err(Error::Config(format!("`{name}` is not an asset name")));
+        }
+        if bytes.len() > MAX_ASSET_BYTES {
+            return Err(Error::Config(format!(
+                "`{name}` is {} bytes; the ceiling is {MAX_ASSET_BYTES}",
+                bytes.len()
+            )));
+        }
+        let dir = dir(session);
+        std::fs::create_dir_all(&dir)?;
+        let staged: u64 = std::fs::read_dir(&dir)?
+            .filter_map(|entry| entry.ok()?.metadata().ok())
+            .map(|meta| meta.len())
+            .sum();
+        if staged + bytes.len() as u64 > MAX_SESSION_ASSET_BYTES {
+            return Err(Error::Config(format!(
+                "the session has {staged} bytes staged; the ceiling is {MAX_SESSION_ASSET_BYTES}"
+            )));
+        }
+        std::fs::write(dir.join(name), bytes)?;
+        Ok(())
+    }
+
+    /// The staged files with these names, or an error naming the first
+    /// that was never uploaded.
+    pub fn read(session: &str, names: &[String]) -> Result<BTreeMap<String, Vec<u8>>> {
+        let dir = dir(session);
+        let mut out = BTreeMap::new();
+        for name in names {
+            if !is_asset_name(name) {
+                return Err(Error::Config(format!("`{name}` is not an asset name")));
+            }
+            let bytes = std::fs::read(dir.join(name)).map_err(|err| {
+                Error::Config(format!(
+                    "the manifest references `{name}` but it was never uploaded to this session ({err})"
+                ))
+            })?;
+            out.insert(name.clone(), bytes);
+        }
+        Ok(out)
+    }
+
+    /// Forget a session's staged files.
+    pub fn clear(session: &str) {
+        let _ = std::fs::remove_dir_all(dir(session));
     }
 }
 
