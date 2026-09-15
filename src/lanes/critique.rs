@@ -47,6 +47,7 @@ use crate::flows::runner;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema::{self, RawFinding};
 use crate::lanes::fanout::{FileReview, per_file};
+use crate::lanes::mechanical;
 use crate::lanes::{Lane, LaneInput, LaneOutcome, reviewer_responses};
 use crate::ports::model::{Model, Spend};
 use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
@@ -94,7 +95,22 @@ impl Lane for Critique {
             .into_iter()
             .filter(|diff| !diff.changed_lines.is_empty())
             .collect();
-        let paths: Vec<String> = fresh.iter().map(|diff| diff.path.clone()).collect();
+
+        // A mechanical rename is verified, not read. Every file the
+        // substitution explains in full is proven line for line here and
+        // named as such in the summary; the model's budget goes to the files
+        // it does not explain — which, on the pull request that motivated
+        // this, was one file in fifty-nine. See `lanes::mechanical`.
+        let mechanical = mechanical::detect(&fresh);
+        let paths: Vec<String> = fresh
+            .iter()
+            .filter(|diff| {
+                mechanical
+                    .as_ref()
+                    .is_none_or(|sub| !sub.verified.contains(&diff.path))
+            })
+            .map(|diff| diff.path.clone())
+            .collect();
 
         let changed_paths = input.changed_paths();
         // One capability for the whole lane, so the pull-request budget is
@@ -129,6 +145,14 @@ impl Lane for Critique {
         // it per file would multiply the bill by the file count.
         let mut outcome = outcome.into_outcome();
         outcome.spend.merge(llm.spend());
+        if let Some(sub) = &mechanical {
+            outcome.summary = format!("{} {}", outcome.summary.trim(), mechanical::note(sub));
+            // Every file was the rename: a real verdict, reached without a
+            // model, and the outcome must say so rather than read as skipped.
+            if paths.is_empty() {
+                outcome.skipped = None;
+            }
+        }
         Ok(outcome)
     }
 }

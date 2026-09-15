@@ -170,10 +170,14 @@ pub fn note(sub: &Substitution) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::evidence::diff::parse_unified;
+    use crate::evidence::diff::parse_file_patch;
 
     fn diff(path: &str, pairs: &[(&str, &str)], extra_added: &[&str]) -> FileDiff {
-        let mut text = format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1,{} +1,{} @@\n", pairs.len(), pairs.len() + extra_added.len());
+        let mut text = format!(
+            "@@ -1,{} +1,{} @@\n",
+            pairs.len(),
+            pairs.len() + extra_added.len()
+        );
         for (r, _) in pairs {
             text.push_str(&format!("-{r}\n"));
         }
@@ -183,7 +187,7 @@ mod tests {
         for a in extra_added {
             text.push_str(&format!("+{a}\n"));
         }
-        parse_unified(&text).into_iter().next().unwrap()
+        parse_file_patch(path, &text)
     }
 
     #[test]
