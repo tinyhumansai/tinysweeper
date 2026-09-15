@@ -1672,3 +1672,24 @@ mod tests {
         assert_eq!(config.fail_on(LaneId::Security), Severity::High);
     }
 }
+
+#[cfg(test)]
+mod provider_routing_tests {
+    use super::ProviderRouting;
+
+    #[test]
+    fn a_first_party_vendor_is_routed_unpinned_and_the_rest_keep_the_pin() {
+        let pinned = ProviderRouting {
+            order: vec!["streamlake".into(), "deepinfra".into()],
+            ..ProviderRouting::default()
+        };
+        assert!(pinned.for_model("openai/gpt-5.3-codex").is_empty());
+        assert!(pinned.for_model("Anthropic/claude-sonnet-4.6").is_empty());
+        assert_eq!(
+            pinned.for_model("deepseek/deepseek-v4-flash").order,
+            vec!["streamlake".to_string(), "deepinfra".to_string()]
+        );
+        // No pin at all: nothing to lift, so the routing is returned as is.
+        assert!(ProviderRouting::default().for_model("openai/x").order.is_empty());
+    }
+}

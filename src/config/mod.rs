@@ -287,7 +287,12 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "structured_output",
             "budget_usd_per_pr",
         ]),
-        "models.provider" => Some(&["order", "allow_fallbacks", "last_resort_unpinned"]),
+        "models.provider" => Some(&[
+            "order",
+            "allow_fallbacks",
+            "last_resort_unpinned",
+            "unpinned_vendors",
+        ]),
         "knowledge" => Some(&[
             "extract",
             "files",
