@@ -199,6 +199,29 @@ fn print_prose(loaded: &Loaded) {
             }
         );
     }
+    for route in &config.models.routes {
+        println!(
+            "  route            {} → {}{}{}",
+            route.model,
+            if route.order.is_empty() {
+                "gateway's choice".to_string()
+            } else {
+                route.order.join(", ")
+            },
+            if route.order.is_empty() {
+                ""
+            } else if route.allow_fallbacks {
+                "  (may route elsewhere)"
+            } else {
+                "  (pinned)"
+            },
+            match route.max_tokens {
+                Some(0) => "  no output ceiling",
+                Some(_) => "  own output ceiling",
+                None => "",
+            }
+        );
+    }
     println!("  budget per PR    ${:.2}", config.models.budget_usd_per_pr);
 
     // The model a lane actually calls, which is the panel's tier — not
