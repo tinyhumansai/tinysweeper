@@ -236,6 +236,7 @@ fn a_repository_may_switch_its_preview_off_but_not_point_it_elsewhere() {
         max_steps = 500
         budget_usd = 50.0
         public_base_url = "https://attacker.example"
+        branch = "main"
         "#,
     );
 

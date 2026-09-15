@@ -1228,12 +1228,24 @@ pub struct Labeler {
 pub struct Preview {
     /// Whether the `/preview` routes accept sessions at all.
     pub enabled: bool,
-    /// Where the CI job's uploads are served from, e.g. `https://previews.example.org`.
+    /// An object store the pictures are served from, e.g.
+    /// `https://previews.example.org`, when the hands upload there instead
+    /// of to the server.
     ///
-    /// Every image URL the server ever publishes is composed from this and a
-    /// validated relative path. It is the trust anchor of the whole feature,
-    /// which is why a reviewed repository cannot override it.
+    /// Unset by default, and then the pictures go to a branch of the
+    /// reviewed repository instead — see [`branch`](Self::branch). Every
+    /// image URL the server ever publishes is composed from one of these two
+    /// and a validated relative path; both are trust anchors, which is why a
+    /// reviewed repository cannot override either.
     pub public_base_url: Option<String>,
+    /// The branch of the reviewed repository the pictures are committed to,
+    /// through the App, when no `public_base_url` is set.
+    ///
+    /// A store, not a line of development: orphan on first use, one commit
+    /// per run, never read back. Needs the App's `contents` permission to be
+    /// `write`. Deleting the branch costs old comments their pictures and
+    /// nothing else.
+    pub branch: String,
     /// How many user flows one pull request gets, at most.
     pub max_flows: usize,
     /// How many browser steps one flow may take before it is cut off.

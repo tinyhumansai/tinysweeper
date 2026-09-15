@@ -925,11 +925,32 @@ fn validate_preview(config: &Config, problems: &mut Vec<String>) {
             "`preview.public_base_url` must not carry a query or fragment (found `{url}`); paths are appended to it"
         )),
         Some(_) => {}
-        None if preview.enabled => problems.push(
-            "`preview.enabled = true` requires `preview.public_base_url`, the origin the CI job uploads to"
-                .into(),
-        ),
         None => {}
+    }
+
+    // A branch name the Git Data API will take, and never a branch anyone
+    // develops on: the store is written with a tree built over its own tip
+    // and nothing else, so pointing it at `main` would commit screenshots
+    // on top of the code.
+    let branch = preview.branch.trim();
+    if branch.is_empty()
+        || branch.starts_with('/')
+        || branch.ends_with('/')
+        || branch.contains("..")
+        || branch.contains("//")
+        || branch.ends_with(".lock")
+        || branch
+            .chars()
+            .any(|c| c.is_whitespace() || matches!(c, '~' | '^' | ':' | '?' | '*' | '[' | '\\'))
+    {
+        problems.push(format!(
+            "`preview.branch` is not a usable branch name (found `{}`)",
+            preview.branch
+        ));
+    } else if matches!(branch, "main" | "master" | "develop" | "trunk") {
+        problems.push(format!(
+            "`preview.branch` must be a store branch of its own, not `{branch}`"
+        ));
     }
 }
 

@@ -738,12 +738,15 @@ scrub_patterns = []
 # repo    = "tinyhumansai/backend"
 # labels  = ["area: sentry"]
 
-# UI previews. Off until an operator has a bucket to serve the pictures from:
-# `public_base_url` is where the reviewed repository's CI job uploads to, and
-# the only place a published image URL can point. `enabled` and `max_flows`
-# are the two keys a repository may override for itself.
+# UI previews. `enabled` and `max_flows` are the two keys a repository may
+# override for itself.
 [preview]
 enabled = false
+# Where the pictures live. With no `public_base_url`, the server commits
+# them to this branch of the reviewed repository through the App (which then
+# needs `contents: write`); set `public_base_url` to have the CI job upload
+# to an object store instead.
+branch = "tinysweeper/ui-previews"
 max_flows = 4
 max_steps = 25
 budget_usd = 0.50
