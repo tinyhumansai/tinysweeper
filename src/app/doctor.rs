@@ -395,7 +395,7 @@ fn print_prose(loaded: &Loaded) {
 /// that answered or by the cost the marketplace reported. Calling them
 /// unpriced would send an operator hunting for table rows that must not
 /// exist. Say what they are instead.
-fn price_line<'a>(gateway: &str, configured: Vec<&'a str>) -> Option<String> {
+fn price_line(gateway: &str, configured: Vec<&str>) -> Option<String> {
     if gateway.trim() == "ladder" {
         let mut ladders = configured;
         ladders.sort_unstable();
