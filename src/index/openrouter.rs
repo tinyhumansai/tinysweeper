@@ -86,6 +86,17 @@ impl OpenRouterEmbedder {
     /// unrelated test read a key that was never configured for it, which is a
     /// flake that presents as a security test failing at random.
     pub fn with_key(signature: EmbedSignature, api_key: String, base_url: &str) -> Result<Self> {
+        // The two gateways this client speaks to. `embedder_from_config` only
+        // ever builds it for these; the check is here so that stays true of
+        // every constructor, and a signature for some other provider cannot
+        // be sent to an OpenAI-shaped endpoint it was not written for.
+        if !matches!(signature.provider.as_str(), "openrouter" | "ladder") {
+            return Err(Error::config(format!(
+                "`{}` is not a gateway this client serves; it speaks to `openrouter` and \
+                 `ladder`",
+                signature.provider
+            )));
+        }
         let url = match base_url.trim() {
             "" => OPENROUTER_EMBEDDINGS_URL.to_string(),
             given => given.to_string(),

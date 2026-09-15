@@ -214,6 +214,17 @@ fn the_ladder_is_built_through_the_same_client_at_the_address_it_was_given() {
 }
 
 #[test]
+fn a_provider_this_client_does_not_serve_is_refused() {
+    let voyage = EmbedSignature {
+        provider: "voyage".into(),
+        model: "voyage-code-3".into(),
+        dims: 1024,
+    };
+    let err = OpenRouterEmbedder::with_key(voyage, "unused".to_string(), "").expect_err("refuses");
+    assert!(err.to_string().contains("`voyage`"), "{err}");
+}
+
+#[test]
 fn a_ladder_without_an_address_is_refused_before_the_first_push() {
     let config = crate::config::types::Embeddings {
         enabled: true,
