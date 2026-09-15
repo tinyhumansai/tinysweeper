@@ -12,8 +12,10 @@ the planning and the writing; this repository's CI does the browsing.
   can stay disabled), and `public_base_url` on the server is
   `https://<bucket>.s3.<region>.amazonaws.com`. On R2 it is a custom domain
   in front of the bucket.
-- Organisation secrets: `PREVIEW_S3_BUCKET`, `PREVIEW_S3_ENDPOINT`
-  (`https://<account>.r2.cloudflarestorage.com`), `PREVIEW_S3_ACCESS_KEY_ID`,
+- Organisation secrets: `PREVIEW_S3_BUCKET`, `PREVIEW_S3_ENDPOINT` — the
+  *service* endpoint the job uploads to, `https://s3.<region>.amazonaws.com`
+  on AWS or `https://<account>.r2.cloudflarestorage.com` on R2, never the
+  public URL (the SDK adds the bucket itself) — `PREVIEW_S3_ACCESS_KEY_ID`,
   `PREVIEW_S3_SECRET_ACCESS_KEY` — a key that can write that one bucket and
   nothing else — and `TINYSWEEPER_PREVIEW_TOKEN`, the same value the server
   has as its `TINYSWEEPER_PREVIEW_TOKEN` environment variable.
