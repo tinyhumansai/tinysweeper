@@ -39,6 +39,14 @@ struct TokenResponse {
     expires_at: String,
 }
 
+/// Bounds every request this client makes — the app JWT exchange and every
+/// installation-token mint. Deliberately the same value as
+/// `forge::github::REQUEST_TIMEOUT`: both clients sit on the same critical
+/// path (a review permit held while either one is in flight), so one being
+/// bounded and the other not would just move the "holds a permit forever"
+/// failure from one client to the other.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
 #[derive(Debug, Clone)]
 struct CachedToken {
     token: String,
