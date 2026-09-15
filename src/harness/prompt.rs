@@ -201,7 +201,6 @@ impl<'a> PromptInputs<'a> {
             pull_request_text: "",
             retrieved_context: "",
             memory_context: "",
-            tree: None,
         }
     }
 }

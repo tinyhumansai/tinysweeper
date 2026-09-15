@@ -93,7 +93,6 @@ impl Lane for Description {
             changed_paths: &changed_paths,
             pull_request_text: &pull_request_text,
             memory_context: input.memory_context,
-            tree: None,
             ..PromptInputs::new(LaneId::Description, input.config)
         });
 
@@ -288,7 +287,6 @@ mod tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
-                tree: None,
             })
             .await
             .expect("lane runs")

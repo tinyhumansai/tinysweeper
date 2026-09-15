@@ -406,7 +406,6 @@ mod tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
-                tree: None,
             })
             .await
             .expect("lane runs")
@@ -682,7 +681,6 @@ mod tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
-                tree: None,
             })
             .await
             .expect("runs");

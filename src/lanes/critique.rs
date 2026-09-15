@@ -287,7 +287,6 @@ fn build_prompt<'a>(
         persona: reviewer.persona,
         retrieved_context: input.retrieved_context,
         memory_context: input.memory_context,
-        tree: None,
         ..PromptInputs::new(LaneId::Critique, config)
     })
 }
@@ -551,7 +550,6 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
-                tree: None,
             })
             .await
             .expect("lane runs")
@@ -912,7 +910,6 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
-                tree: None,
             })
             .await
             .expect("runs");
@@ -970,7 +967,6 @@ fn helper() {
                 prior_findings: &["Close the socket on the error path".to_string()],
                 retrieved_context: "",
                 memory_context: "",
-                tree: None,
             })
             .await
             .expect("runs");
@@ -1027,7 +1023,6 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
-                tree: None,
             })
             .await
             .expect("runs");
@@ -1074,7 +1069,6 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
-                tree: None,
             })
             .await
             .expect("the failure is isolated, not propagated");
@@ -1135,7 +1129,6 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
-                tree: None,
             })
             .await
             .expect("runs");
