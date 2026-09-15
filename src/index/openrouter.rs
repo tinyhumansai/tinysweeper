@@ -160,9 +160,9 @@ impl Embedder for OpenRouterEmbedder {
         Ok(match response.usage.as_ref() {
             // Both numbers from the gateway: the tokens it counted and the cost
             // it charged.
-            Some(usage) if usage.cost.is_some() => Embedded::charged(
+            Some(usage) if usage.charged().is_some() => Embedded::charged(
                 usage.prompt_tokens.max(usage.total_tokens),
-                usage.cost.unwrap_or_default(),
+                usage.charged().unwrap_or_default(),
             ),
             // Tokens but no price. Real count, local table.
             Some(usage) => Embedded::metered(
@@ -257,6 +257,25 @@ struct UsageWire {
     total_tokens: u64,
     #[serde(default)]
     cost: Option<f64>,
+    /// Surplus's spelling, in micro-dollars, relayed verbatim by the ladder.
+    #[serde(default)]
+    buyer_cost_micro: Option<f64>,
+}
+
+impl UsageWire {
+    /// What the gateway says it charged, in dollars, when it says so.
+    ///
+    /// Surplus first, for the reason `harness::openrouter::gateway_cost`
+    /// gives: a seller there can relay an OpenRouter-shaped `cost: 0` beside
+    /// the `buyer_cost_micro` Surplus actually bills. A negative or
+    /// non-finite figure is disbelieved rather than credited to the budget.
+    fn charged(&self) -> Option<f64> {
+        let cost = match self.buyer_cost_micro {
+            Some(micro) => micro / 1_000_000.0,
+            None => self.cost?,
+        };
+        (cost.is_finite() && cost >= 0.0).then_some(cost)
+    }
 }
 
 #[cfg(test)]

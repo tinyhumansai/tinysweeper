@@ -105,6 +105,26 @@ fn a_reported_cost_is_preferred_over_the_local_table() {
 }
 
 #[test]
+fn a_surplus_micro_dollar_cost_is_read_through_the_ladder() {
+    // The body the ladder relays from a Surplus seller: `cost: 0` from the
+    // seller's own upstream, `buyer_cost_micro` from Surplus.
+    let parsed = parse(&body(
+        &[(0, vec![0.0; 4])],
+        r#","usage":{"prompt_tokens":10,"cost":0,"is_byok":true,"buyer_cost_micro":3}"#,
+    ))
+    .expect("parses");
+    let usage = parsed.usage.expect("usage");
+    assert!((usage.charged().unwrap() - 0.000003).abs() < 1e-12);
+
+    let negative = parse(&body(
+        &[(0, vec![0.0; 4])],
+        r#","usage":{"prompt_tokens":10,"buyer_cost_micro":-3}"#,
+    ))
+    .expect("parses");
+    assert_eq!(negative.usage.expect("usage").charged(), None);
+}
+
+#[test]
 fn a_response_without_a_cost_still_uses_the_real_token_count() {
     // Tokens but no price: the count is authoritative even when the price is
     // not, so it must not fall all the way back to estimating both.

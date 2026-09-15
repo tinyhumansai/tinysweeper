@@ -2325,9 +2325,8 @@ mod tests {
             Some(ReviewEvent::Comment)
         );
 
-        let theirs = [
-            serde_json::json!({ "user": { "login": "someone" }, "state": "CHANGES_REQUESTED" }),
-        ];
+        let theirs =
+            [serde_json::json!({ "user": { "login": "someone" }, "state": "CHANGES_REQUESTED" })];
         assert_eq!(own_review_state_of(theirs.iter()), None);
     }
 
