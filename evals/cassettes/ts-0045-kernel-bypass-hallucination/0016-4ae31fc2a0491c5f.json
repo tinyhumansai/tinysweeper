@@ -1,0 +1,17 @@
+{
+  "key": "4ae31fc2a0491c5f",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3657,
+    "output_tokens": 72,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00033099108
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request adds an OpenRouter embedding configuration which, while hard-coded to a known provider and model, exposes the API key via an environment variable. No untrusted input reaches the diff, no permissions are widened, and no shell interpolation occurs. The change is safe to merge."
+  }
+}

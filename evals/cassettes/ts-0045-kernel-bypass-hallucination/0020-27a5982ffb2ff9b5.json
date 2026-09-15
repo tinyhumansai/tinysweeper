@@ -1,0 +1,17 @@
+{
+  "key": "27a5982ffb2ff9b5",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4358,
+    "output_tokens": 949,
+    "cached_tokens": 3720,
+    "embed_tokens": 0,
+    "cost_usd": 0.002915388
+  },
+  "value": {
+    "findings": [],
+    "summary": "This is a deployment shim that reads the container image's own MongoDB entrypoint, patches out a kernel-compatibility check, and execs the result. The source file path is hardcoded, the input is the image's own trusted entrypoint, and the patch fails loudly if the expected function is absent. No security findings."
+  }
+}

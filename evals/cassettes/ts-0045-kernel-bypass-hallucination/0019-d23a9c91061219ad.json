@@ -1,0 +1,17 @@
+{
+  "key": "d23a9c91061219ad",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4238,
+    "output_tokens": 53,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00037827552
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds environment variable forwarding for several API keys and fixes the GitHub App credential names to match what the binary reads, which is a sound security improvement. No new security issues are introduced."
+  }
+}

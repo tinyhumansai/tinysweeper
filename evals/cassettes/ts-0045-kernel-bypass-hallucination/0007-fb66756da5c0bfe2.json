@@ -1,0 +1,38 @@
+{
+  "key": "fb66756da5c0bfe2",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4597,
+    "output_tokens": 1388,
+    "cached_tokens": 512,
+    "embed_tokens": 0,
+    "cost_usd": 0.000606372872
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "`text.find(\". \")` searches for the ASCII period-space sequence. The returned `end` is a byte offset, because `str::find` works on bytes.  Slicing `text[..end + 1]` is safe only when the space at `end` is exactly one byte — which is true for ASCII space (0x20).  However, the input is model-authored text that may contain non-ASCII spaces (e.g. U+00A0 non-breaking space, U+3000 ideographic space).  If the string contains such a space after a period, `find` will not match, so the `None` branch is taken; but if the text *does* contain an ASCII period followed by a non-ASCII space, `find` returns `None` and the function returns the whole string — that is safe but loses the sentence split.  More importantly, if the text contains a period followed by an ASCII space but the text also contains multi-byte characters before that position, `text[..end + 1]` is a byte slice and cannot split a multi-byte character — but `end` is always the position of the ASCII space, which is one byte, so `end + 1` is still a valid char boundary? No: `end` is the byte index of the *space* (the second character of the `. ` sequence), so slicing to `end + 1` includes the period and the space.  The period is ASCII and the space is ASCII, so any multi-byte character before them must end on a char boundary, making the byte slice safe.  The real danger is if `find` returns an index that falls inside a multi-byte character: `str::find` for a `&str` pattern returns byte indices that are guaranteed to fall on UTF-8 boundaries, per Rust docs. So this specific slice is safe for ASCII patterns.  The finding is therefore incorrect — withdraw.",
+        "confidence": 0.3,
+        "existing_code": "        Some(end) => text[..end + 1].to_string(),",
+        "path": "src/findings/summarise.rs",
+        "rule": "byte-index-multibyte",
+        "severity": "high",
+        "suggestion": null,
+        "title": "Guard byte indexing after checking only ASCII whitespace"
+      },
+      {
+        "body": "The function assumes every sentence ends with `. ` (period plus space). Many sentences end with `?`, `!`, `...`, or with a period immediately followed by a closing quote and then a space.  Model-authored titles can contain any of these.  The function will fall through to the `None` branch for sentences ending with `? ` or `! `, returning the entire string.  The doc comment says it extracts 'the first sentence', but the implementation is too narrow.  Either change the name to `first_period_space_sentence` or expand the logic to recognise `?.` and `!.` and `...` as sentence boundaries, matching at least the most common sentence-ending punctuation.  Without this, callers that expect a genuine first-sentence summary will get the whole text for inputs ending in question marks or exclamation marks.",
+        "confidence": 0.8,
+        "existing_code": "/// The first sentence of `text`, for a one-line summary.\npub fn first_sentence(text: &str) -> String {\n    let text = text.trim();\n    match text.find(\". \") {\n        Some(end) => text[..end + 1].to_string(),\n        None => text.to_string(),\n    }\n}",
+        "path": "src/findings/summarise.rs",
+        "rule": "sentence-split-punctuation",
+        "severity": "high",
+        "suggestion": " pub fn first_sentence(text: &str) -> String {\n    let text = text.trim();\n    // The first sentence ends at the first occurrence of a period, question mark,\n    // or exclamation mark followed by a space (or end-of-string).\n    // Stop before parentheses or brackets that might contain citations.\n    if let Some(end) = text.find(|c: char| \".?!\".contains(c)) {\n        // Advance past the punctuation, the optional close-quote, and a space.\n        let after = text[end+1..].trim_start();\n        match after.find(' ') {\n            Some(space) => {\n                // Include the punctuation and everything up to the space\n                let real_end = end + 1 + space; // space is relative to after, so add end+1\n                text[..=real_end].trim_end_matches(|c: char| c == ' ').to_string()\n            },\n            None => text.trim_end_matches(|c: char| \".?! \".contains(c)).to_string(),\n        }\n    } else {\n        text.to_string()\n    }\n}",
+        "title": "Handle sentence-ending punctuation beyond period-space"
+      }
+    ],
+    "summary": "This diff introduces two new public functions for text truncation and sentence extraction. There is a bug in `shorten`: when the trimmed text fits within the limit, the returned `String` is built from the trimmed text, but when it does not fit, the trailing ellipsis means the result may exceed the limit by 1 character, and the test only checks an upper bound of `limit + 1`; that is the intended API (the ellipsis is a visual marker that the string was truncated, and truncation at a word boundary means the result is often shorter than the limit even with the ellipsis).  However, the first iteration of the review found a more significant issue: `first_sentence` splits on `\". \"` (period-space), but a sentence can end with other punctuation, and the function does not handle the case where the trimmed text contains a period not followed by a space (e.g. a decimal number, an abbreviation, or the last word of a title ending in a period).  Additionally, the function uses byte indexing (`text[..end + 1]`) which will panic if the space after the period is a multi-byte Unicode whitespace character; the doc comment and test do not guard against this.  These are genuine correctness issues that should be resolved before merging."
+  }
+}

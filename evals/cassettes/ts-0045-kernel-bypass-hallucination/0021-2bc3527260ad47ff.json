@@ -1,0 +1,17 @@
+{
+  "key": "2bc3527260ad47ff",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4381,
+    "output_tokens": 2545,
+    "cached_tokens": 3739,
+    "embed_tokens": 0,
+    "cost_usd": 0.00631229802
+  },
+  "value": {
+    "findings": [],
+    "summary": "The new file adds two infallible string utilities, `shorten` and `first_sentence`, with tests. The code correctly uses character-based slicing to avoid panics on multibyte input, and byte-index operations only occur on ASCII characters (space, period), so they stay on char boundaries. No security issues are introduced."
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "key": "68b7ad38f2397deb",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_rule_extraction",
+  "usage": {
+    "input_tokens": 1531,
+    "output_tokens": 356,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00019532044
+  },
+  "value": {
+    "rules_markdown": "- Use Rust 2024 idioms with rustfmt output; snake_case modules/files, PascalCase types.\n- Return Result<T> using the crate error type from src/error.rs.\n- Every file opens with a //! module doc describing its role and feature gating.\n- Comments explain the decision, not the code; load-bearing flags/orderings must say why.\n- Public items carry doc comments; Clap fields use /// that becomes help text.\n- Tests live in-crate: #[cfg(test)] mod tests at end of module, move to test.rs when large. No tests/ directory.\n- Every port has an always-compiled offline mock; MockForge records writes for assertions.\n- Lane behaviour has golden tests with fixture diff and canned model response.\n- Maintain at least 80% coverage for meaningful library behaviour.\n- Keep each Markdown file at 500 lines or fewer; split and link when it grows.\n- The model never holds a write token; write credentials minted only after all model calls return.\n- Contributor code is never executed; we read diff/tree, never build or run target scripts.\n- Treat PR bodies, comments, diffs as untrusted input; fence and label them in prompts.\n- Secrets found are reported by type and location only; value never reaches comments, check-run summaries, or logs.\n- Use concise imperative commit subjects; keep commits small and coherent.\n- PRs state what changed, any behaviour change, and how verified."
+  }
+}

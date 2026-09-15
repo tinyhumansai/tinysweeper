@@ -1,0 +1,17 @@
+{
+  "key": "3304d085255d2fa4",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3852,
+    "output_tokens": 704,
+    "cached_tokens": 2830,
+    "embed_tokens": 0,
+    "cost_usd": 0.0025426086
+  },
+  "value": {
+    "findings": [],
+    "summary": "This opt-in docker-compose overlay works around a mongod startup failure on Linux 6.19+ by overriding the entrypoint with a read-only mounted script and setting a glibc tunable. The file is local-dev only, explicitly opt-in, and introduces no dangerous sinks, secrets, or widened permissions in the compose configuration itself."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "e528b21e91b1492d",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3856,
+    "output_tokens": 46,
+    "cached_tokens": 512,
+    "embed_tokens": 0,
+    "cost_usd": 0.000308123872
+  },
+  "value": {
+    "findings": [],
+    "summary": "Adds a new public `summarise` module to `src/findings/`. No bugs introduced — the diff is a single module declaration."
+  }
+}
