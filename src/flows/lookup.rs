@@ -47,7 +47,8 @@ pub fn instruction(describe: &str, policy: &LookupPolicy) -> String {
     format!(
         "\n\n## Looking things up\n\n\
          You may read the repository before you answer, and on this turn you should. \
-         {describe} Use `lookups` to read the definition of every function or type the \
+         {describe} Vendored submodules under `vendor/` are part of the tree and are where \
+         a dependency's definitions live; search without a glob when looking for one. Use `lookups` to read the definition of every function or type the \
          changed lines call into that is not defined in the diff — its doc comment and \
          signature are what decide whether a bound is exclusive or inclusive, whether a \
          sibling read in the same loop is also bounded, what a field means — and to read \
@@ -183,13 +184,64 @@ impl Ledger {
                 ));
                 continue;
             }
-            let found = match tree.lookup(lookup).await {
+            let mut found = match tree.lookup(lookup).await {
                 Ok(found) => found,
                 Err(err) => Found::Unavailable {
                     reason: format!("the repository could not be read: {err}"),
                 },
             };
-            let body = render_found(&found);
+            let mut body = String::new();
+            // A glob that finds nothing is retried across the tree and the
+            // retry is named. The definition a changed line calls into is
+            // routinely in a vendored submodule the reviewer scoped out of
+            // its search, and "no line contains that text" was where the
+            // reviewer that asked exactly the right question gave up.
+            if let (
+                Lookup::Search {
+                    pattern,
+                    glob: Some(glob),
+                },
+                Found::Hits { hits, .. },
+            ) = (lookup, &found)
+                && hits.is_empty()
+            {
+                let widened = Lookup::Search {
+                    pattern: pattern.clone(),
+                    glob: None,
+                };
+                if let Ok(again) = tree.lookup(&widened).await {
+                    body.push_str(&format!(
+                        "Nothing under `{glob}`; across the whole tree:\n\n"
+                    ));
+                    self.seen.insert(widened.key());
+                    found = again;
+                }
+            }
+            body.push_str(&render_found(&found));
+            // A hit that is a definition is followed on the spot: the doc
+            // comment above it and the signature are the answer the search
+            // was after, and fetching them costs a read here rather than a
+            // whole round.
+            if let Found::Hits { hits, .. } = &found {
+                for hit in hits.iter().filter(|h| looks_like_definition(&h.text)).take(AUTO_FOLLOW) {
+                    let read = Lookup::Read {
+                        path: hit.path.clone(),
+                        start: Some(hit.line.saturating_sub(DEFINITION_ABOVE).max(1)),
+                        end: Some(hit.line + DEFINITION_BELOW),
+                    };
+                    if !self.seen.insert(read.key()) {
+                        continue;
+                    }
+                    if let Ok(context) = tree.lookup(&read).await {
+                        body.push_str(&format!(
+                            "\n\n#### {}:{} — the definition and what is written above it\n\n{}",
+                            hit.path,
+                            hit.line,
+                            render_found(&context)
+                        ));
+                    }
+                }
+            }
             let room = policy.max_chars - self.chars;
             let body = if body.len() > room {
                 let mut cut = body;
@@ -224,6 +276,35 @@ impl Ledger {
     pub fn chars(&self) -> usize {
         self.chars
     }
+}
+
+/// How many definition hits one search follows automatically.
+const AUTO_FOLLOW: usize = 3;
+/// Lines read above a definition hit — room for a doc comment.
+const DEFINITION_ABOVE: u32 = 20;
+/// Lines read below it — the signature and its first lines.
+const DEFINITION_BELOW: u32 = 8;
+
+/// Whether a search hit is the line that defines something.
+///
+/// Language-agnostic on purpose: `fn`, `struct`, `enum`, `trait`, `type`,
+/// `class`, `def`, `func`, `interface`, `const` at the start of the line,
+/// possibly behind `pub` or `async` or `export`. A false positive costs one
+/// short read; a miss costs the reviewer a round.
+fn looks_like_definition(text: &str) -> bool {
+    let mut words = text.trim_start().split_whitespace();
+    let mut word = words.next().unwrap_or("");
+    while matches!(
+        word,
+        "pub" | "pub(crate)" | "pub(super)" | "async" | "unsafe" | "export" | "default" | "static" | "extern"
+    ) {
+        word = words.next().unwrap_or("");
+    }
+    matches!(
+        word,
+        "fn" | "struct" | "enum" | "trait" | "type" | "impl" | "const" | "class" | "def" | "func"
+            | "interface" | "function"
+    )
 }
 
 fn render_found(found: &Found) -> String {
@@ -328,6 +409,38 @@ mod tests {
         let second = ledger.gather(&tree, &[read], &policy()).await;
         assert_eq!(second.answered, 0);
         assert!(second.rendered.contains("Already answered"));
+    }
+
+    #[tokio::test]
+    async fn an_empty_glob_search_is_widened_and_a_definition_hit_is_followed() {
+        let tree = MockTree::from_files([
+            ("src/a.rs", "use vendor::lib::read_before;\n"),
+            (
+                "vendor/lib/src/x.rs",
+                "/// Reads events with sequence `< before`.\npub async fn read_before(x: u32) {}\n",
+            ),
+        ]);
+        let mut ledger = Ledger::default();
+        let gathered = ledger
+            .gather(
+                &tree,
+                &[Lookup::Search {
+                    pattern: "fn read_before".into(),
+                    glob: Some("src/**".into()),
+                }],
+                &LookupPolicy::default(),
+            )
+            .await;
+        assert!(gathered.rendered.contains("Nothing under `src/**`; across the whole tree"));
+        assert!(gathered.rendered.contains("vendor/lib/src/x.rs:2: pub async fn read_before"));
+        assert!(
+            gathered.rendered.contains("the definition and what is written above it"),
+            "{}",
+            gathered.rendered
+        );
+        assert!(gathered.rendered.contains("sequence `< before`"));
+        assert!(looks_like_definition("    pub(crate) async fn x()"));
+        assert!(!looks_like_definition("    read_before(x);"));
     }
 
     #[tokio::test]
