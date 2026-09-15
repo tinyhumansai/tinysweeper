@@ -1546,6 +1546,7 @@ mod tests {
                 conclusion: CheckConclusion::Failure,
                 summary: "Reviewed.".into(),
                 findings,
+                noted: Vec::new(),
                 resolved: vec![],
                 deduped: 0,
                 highest_severity: Some(Severity::High),
