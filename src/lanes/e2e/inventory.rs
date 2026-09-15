@@ -583,11 +583,7 @@ impl Outline {
             // `on: push` or `on: [push, pull_request]`.
             self.list(index)
                 .into_iter()
-                .chain(
-                    (!node.value.starts_with('['))
-                        .then(|| unquote(&node.value))
-                        .into_iter(),
-                )
+                .chain((!node.value.starts_with('[')).then(|| unquote(&node.value)))
                 .map(|event| (event, None))
                 .collect()
         } else {
