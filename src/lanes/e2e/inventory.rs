@@ -113,7 +113,16 @@ pub fn is_e2e_test_path(path: &str) -> bool {
 }
 
 fn is_prose(name: &str) -> bool {
-    const PROSE: &[&str] = &[".md", ".markdown", ".txt", ".rst", ".png", ".jpg", ".gif", ".svg"];
+    const PROSE: &[&str] = &[
+        ".md",
+        ".markdown",
+        ".txt",
+        ".rst",
+        ".png",
+        ".jpg",
+        ".gif",
+        ".svg",
+    ];
     PROSE.iter().any(|suffix| name.ends_with(suffix))
 }
 
@@ -713,7 +722,11 @@ fn unquote(value: &str) -> String {
     let inner = trimmed
         .strip_prefix('"')
         .and_then(|v| v.strip_suffix('"'))
-        .or_else(|| trimmed.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+        .or_else(|| {
+            trimmed
+                .strip_prefix('\'')
+                .and_then(|v| v.strip_suffix('\''))
+        })
         .unwrap_or(trimmed);
     inner.to_string()
 }
@@ -807,7 +820,11 @@ jobs:
             .expect("classified as e2e");
         assert_eq!(workflow.name, "E2E");
         assert_eq!(
-            workflow.jobs.iter().map(|j| j.name.as_str()).collect::<Vec<_>>(),
+            workflow
+                .jobs
+                .iter()
+                .map(|j| j.name.as_str())
+                .collect::<Vec<_>>(),
             ["Playwright", "lint"]
         );
         assert_eq!(
@@ -847,7 +864,8 @@ jobs:
 
     #[test]
     fn a_workflow_with_no_e2e_job_is_not_a_harness() {
-        let text = "name: CI\non: pull_request\njobs:\n  unit:\n    steps:\n      - run: cargo test\n";
+        let text =
+            "name: CI\non: pull_request\njobs:\n  unit:\n    steps:\n      - run: cargo test\n";
         assert!(classify_workflow(".github/workflows/ci.yml", text, &[]).is_none());
     }
 
@@ -883,7 +901,10 @@ jobs:
 
         let negated = "name: e2e\non: pull_request\njobs:\n  run:\n    if: \"!contains(github.event.pull_request.labels.*.name, 'skip-e2e')\"\n    steps:\n      - run: make e2e\n";
         let workflow = classify_workflow(".github/workflows/e2e.yml", negated, &[]).unwrap();
-        assert_eq!(workflow.jobs[0].label_gate, None, "a negated gate is not a gate");
+        assert_eq!(
+            workflow.jobs[0].label_gate, None,
+            "a negated gate is not a gate"
+        );
     }
 
     #[test]
@@ -892,7 +913,11 @@ jobs:
         let workflow =
             classify_workflow(".github/workflows/ci.yml", text, &strings(&["unit"])).unwrap();
         assert_eq!(
-            workflow.jobs.iter().map(|j| j.key.as_str()).collect::<Vec<_>>(),
+            workflow
+                .jobs
+                .iter()
+                .map(|j| j.key.as_str())
+                .collect::<Vec<_>>(),
             ["unit"],
             "naming `unit` counts it and stops guessing about `browser`"
         );
@@ -915,8 +940,14 @@ jobs:
             truncated: true,
         };
         let text = render(&harness, &strings(&["src/preview/apply.rs"]));
-        assert!(text.contains("tests (1 files): e2e/login.spec.ts"), "{text}");
-        assert!(text.contains("does NOT trigger: its `paths:` filter"), "{text}");
+        assert!(
+            text.contains("tests (1 files): e2e/login.spec.ts"),
+            "{text}"
+        );
+        assert!(
+            text.contains("does NOT trigger: its `paths:` filter"),
+            "{text}"
+        );
         assert!(text.contains("truncated"), "{text}");
         assert!(text.contains("job `Playwright`"), "{text}");
     }

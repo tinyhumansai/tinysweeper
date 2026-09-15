@@ -100,11 +100,7 @@ impl Evidence {
             let _ = writeln!(
                 out,
                 "- {}:{}  `{}`\n    mentions `{}` (added at {})",
-                candidate.path,
-                candidate.line,
-                candidate.text,
-                candidate.token,
-                candidate.added_at
+                candidate.path, candidate.line, candidate.text, candidate.token, candidate.added_at
             );
         }
         out
@@ -147,7 +143,9 @@ pub async fn gather(
             Ok(None) => {}
             Err(err) => {
                 tracing::warn!(%err, %path, "could not read a workflow for the e2e lane");
-                evidence.degraded.push(format!("`{path}` could not be read"));
+                evidence
+                    .degraded
+                    .push(format!("`{path}` could not be read"));
             }
         }
     }
@@ -193,7 +191,9 @@ pub async fn gather(
                 Ok(None) => {}
                 Err(err) => {
                     tracing::warn!(%err, %path, "could not read an e2e test for the e2e lane");
-                    evidence.degraded.push(format!("`{path}` could not be read"));
+                    evidence
+                        .degraded
+                        .push(format!("`{path}` could not be read"));
                 }
             }
         }
@@ -283,7 +283,9 @@ fn quoted(text: &str) -> impl Iterator<Item = &str> {
 fn bare_paths(text: &str) -> impl Iterator<Item = &str> {
     text.split(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | ',' | ';' | '"' | '\''))
         .filter(|word| {
-            (word.starts_with('/') && word.len() > 1 && word[1..].contains(|c: char| c.is_alphanumeric()))
+            (word.starts_with('/')
+                && word.len() > 1
+                && word[1..].contains(|c: char| c.is_alphanumeric()))
                 || word.starts_with("--")
         })
         .filter(|word| !word.starts_with("//") && !word.starts_with("/*"))

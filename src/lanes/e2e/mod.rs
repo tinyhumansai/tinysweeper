@@ -234,7 +234,11 @@ impl Lane for E2e {
 }
 
 /// Say in the summary what is still running and what could not be read.
-fn append_run_notes(outcome: &mut LaneOutcome, runs: &[runs::JobRun], evidence: &evidence::Evidence) {
+fn append_run_notes(
+    outcome: &mut LaneOutcome,
+    runs: &[runs::JobRun],
+    evidence: &evidence::Evidence,
+) {
     if !outcome.pending.is_empty() {
         let _ = write!(
             outcome.summary,
@@ -405,8 +409,9 @@ mod lane_tests {
         // The workflow's filter excludes the changed path, so the job will not
         // run: a deterministic finding. The model reads the spec list and says
         // nothing drives the new route: a model finding on the changed line.
-        // A third, mis-anchored finding is discarded, and a fourth restating
-        // the job state is dropped in favour of the fact.
+        // A second, mis-anchored finding is discarded, and a third restating
+        // the job state sits on a file the diff never touched, so strict
+        // anchoring drops it too — the fact is reported once, by the code.
         let evidence = evidence("src/server/**", vec![]);
         // The change is under `src/preview/`, outside the filter.
         let diff = parse_file_patch(
@@ -460,16 +465,16 @@ mod lane_tests {
             "the deterministic finding anchors on the `paths:` line and is not subject to strict anchoring"
         );
         assert!(outcome.findings.iter().all(|f| f.lane == LaneId::E2e));
-        assert!(outcome.pending.is_empty(), "a job that will not run is not pending");
         assert!(
-            outcome.summary.contains("1 finding discarded"),
+            outcome.pending.is_empty(),
+            "a job that will not run is not pending"
+        );
+        assert!(
+            outcome.summary.contains("2 findings discarded"),
             "{}",
             outcome.summary
         );
-        assert_eq!(
-            outcome.conclusion(Severity::High),
-            CheckConclusion::Failure
-        );
+        assert_eq!(outcome.conclusion(Severity::High), CheckConclusion::Failure);
     }
 
     #[tokio::test]
@@ -485,7 +490,11 @@ mod lane_tests {
             CheckConclusion::Neutral,
             "an unfinished job is never a pass"
         );
-        assert!(outcome.summary.contains("Waiting on 1 end-to-end job"), "{}", outcome.summary);
+        assert!(
+            outcome.summary.contains("Waiting on 1 end-to-end job"),
+            "{}",
+            outcome.summary
+        );
     }
 
     #[tokio::test]
@@ -501,11 +510,12 @@ mod lane_tests {
         let outcome = run_with(model, &config(), &[route_diff()], Some(&evidence)).await;
 
         assert!(outcome.pending.is_empty());
-        assert_eq!(
-            outcome.conclusion(Severity::High),
-            CheckConclusion::Success
+        assert_eq!(outcome.conclusion(Severity::High), CheckConclusion::Success);
+        assert!(
+            outcome.summary.contains("1 end-to-end job passed"),
+            "{}",
+            outcome.summary
         );
-        assert!(outcome.summary.contains("1 end-to-end job passed"), "{}", outcome.summary);
     }
 
     #[tokio::test]
@@ -522,10 +532,7 @@ mod lane_tests {
 
         assert_eq!(outcome.findings.len(), 1);
         assert_eq!(outcome.findings[0].rule, "e2e-failed");
-        assert_eq!(
-            outcome.conclusion(Severity::High),
-            CheckConclusion::Failure
-        );
+        assert_eq!(outcome.conclusion(Severity::High), CheckConclusion::Failure);
     }
 
     #[tokio::test]
@@ -548,10 +555,7 @@ mod lane_tests {
         );
         let outcome = run_with(model, &config(), &[route_diff()], Some(&evidence)).await;
         assert_eq!(outcome.findings[0].severity, Severity::Low);
-        assert_eq!(
-            outcome.conclusion(Severity::High),
-            CheckConclusion::Success
-        );
+        assert_eq!(outcome.conclusion(Severity::High), CheckConclusion::Success);
     }
 
     #[tokio::test]
@@ -570,7 +574,13 @@ mod lane_tests {
         let none = Evidence::default();
         let outcome = run_with(model.clone(), &config(), &[route_diff()], Some(&none)).await;
         assert_eq!(model.calls(), 0);
-        assert!(outcome.skipped.as_deref().unwrap_or("").contains("No end-to-end harness"));
+        assert!(
+            outcome
+                .skipped
+                .as_deref()
+                .unwrap_or("")
+                .contains("No end-to-end harness")
+        );
 
         let mut config = config();
         config
@@ -608,12 +618,24 @@ mod lane_tests {
         run_with(model.clone(), &config(), &[route_diff()], Some(&evidence)).await;
 
         let prompt = model.last_prompt().expect("recorded");
-        assert!(prompt.contains("behaviour: src/server/routes.rs"), "{prompt}");
-        assert!(prompt.contains("End-to-end harness in this repository"), "{prompt}");
-        assert!(prompt.contains("triggers for this pull request"), "{prompt}");
+        assert!(
+            prompt.contains("behaviour: src/server/routes.rs"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("End-to-end harness in this repository"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("triggers for this pull request"),
+            "{prompt}"
+        );
         assert!(prompt.contains("PENDING"), "{prompt}");
         assert!(prompt.contains("e2e/home.spec.ts:9"), "{prompt}");
-        assert!(prompt.contains("End-to-end tests changed by this pull request: none"), "{prompt}");
+        assert!(
+            prompt.contains("End-to-end tests changed by this pull request: none"),
+            "{prompt}"
+        );
     }
 
     #[tokio::test]

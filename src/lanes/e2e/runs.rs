@@ -329,8 +329,10 @@ pub fn settle(watch: &Watch, checks: &[CheckStatus], fail_on: Severity) -> Optio
         if reported.is_empty() || reported.iter().any(|check| check.conclusion.is_none()) {
             return None;
         }
-        let conclusions: Vec<CheckConclusion> =
-            reported.iter().filter_map(|check| check.conclusion).collect();
+        let conclusions: Vec<CheckConclusion> = reported
+            .iter()
+            .filter_map(|check| check.conclusion)
+            .collect();
         if let Some(conclusion) = conclusions.iter().find(|c| c.blocks()) {
             failed.push((job.clone(), *conclusion));
         } else if conclusions.contains(&CheckConclusion::Skipped) {
@@ -341,12 +343,19 @@ pub fn settle(watch: &Watch, checks: &[CheckStatus], fail_on: Severity) -> Optio
     }
 
     let mut summary = watch.summary.trim().to_string();
-    let _ = write!(summary, "\n\nEnd-to-end jobs on {}:", short(&watch.head_sha));
+    let _ = write!(
+        summary,
+        "\n\nEnd-to-end jobs on {}:",
+        short(&watch.head_sha)
+    );
     for job in &passed {
         let _ = write!(summary, "\n- `{job}`: passed");
     }
     for job in &skipped {
-        let _ = write!(summary, "\n- `{job}`: **skipped** — did not run on this pull request");
+        let _ = write!(
+            summary,
+            "\n- `{job}`: **skipped** — did not run on this pull request"
+        );
     }
     for (job, conclusion) in &failed {
         let _ = write!(summary, "\n- `{job}`: **{}**", conclusion_name(*conclusion));
@@ -539,7 +548,11 @@ mod tests {
         .expect("settled");
         assert_eq!(settled.conclusion, CheckConclusion::Success);
         assert!(settled.summary.starts_with("Coverage looks complete."));
-        assert!(settled.summary.contains("`cypress`: passed"), "{}", settled.summary);
+        assert!(
+            settled.summary.contains("`cypress`: passed"),
+            "{}",
+            settled.summary
+        );
     }
 
     #[test]
@@ -556,7 +569,9 @@ mod tests {
             CheckConclusion::Failure
         );
         assert_eq!(
-            settle(&watch, &checks, Severity::Critical).unwrap().conclusion,
+            settle(&watch, &checks, Severity::Critical)
+                .unwrap()
+                .conclusion,
             CheckConclusion::Success
         );
     }

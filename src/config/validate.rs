@@ -581,7 +581,9 @@ fn validate_lanes(config: &Config, problems: &mut Vec<String>) {
                 ));
             }
             if !lane.paths.is_empty() {
-                problems.push(format!("`lanes.{name}.paths` applies only to the `e2e` lane"));
+                problems.push(format!(
+                    "`lanes.{name}.paths` applies only to the `e2e` lane"
+                ));
             }
             if !lane.workflows.is_empty() {
                 problems.push(format!(
@@ -600,7 +602,9 @@ fn validate_lanes(config: &Config, problems: &mut Vec<String>) {
 
         for glob in &lane.paths {
             if globset::Glob::new(glob).is_err() {
-                problems.push(format!("`lanes.{name}.paths` contains an invalid glob `{glob}`"));
+                problems.push(format!(
+                    "`lanes.{name}.paths` contains an invalid glob `{glob}`"
+                ));
             }
         }
     }
