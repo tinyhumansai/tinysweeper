@@ -38,7 +38,7 @@ async fn the_committed_corpus_replays_and_holds_its_regressions() {
         // than quietly spend money in a unit test.
         None,
         &RunOptions {
-            out: out.path().to_path_buf(),
+            out: out.path().to_path_buf(), loose: true,
             ..RunOptions::default()
         },
     )
