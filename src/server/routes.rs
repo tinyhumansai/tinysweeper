@@ -1765,8 +1765,14 @@ async fn handle_review(
     // and refuse auto-merge forever. If the review died before it had a SHA,
     // there is nothing to conclude and the failure has to open its own check.
     let opened = slot.lock().expect("status slot").is_some();
+    // An empty slot after shutdown's snapshot means shutdown concluded this
+    // review's check already; a fresh failure check on top of it would be a
+    // duplicate, not a report.
+    let shutting_down = !state.in_flight.lock().expect("in-flight reviews").accepting;
     if opened {
         close_status(&state, &slot, Conclusion::Failed(&err)).await;
+    } else if shutting_down {
+        tracing::info!(%repo, number, "not reporting a failure shutdown already concluded");
     } else if let Err(report) = report_failure(&state, &repo, number, installation, &err).await {
         // Reporting is best-effort by necessity: the most likely reason it
         // fails is the same forge outage that failed the review. Log both, so
