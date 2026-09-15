@@ -494,7 +494,7 @@ impl TreeReader for DirTree {
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
         Ok(match lookup {
             Lookup::Read { path, start, end } => {
-                if !safe_relative(path) {
+                if !safe_relative(path) || !self.within_root(path) {
                     return Ok(Found::NotFound);
                 }
                 match std::fs::read_to_string(self.root.join(path)) {
