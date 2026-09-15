@@ -1,0 +1,17 @@
+{
+  "key": "6e486982d5d1e76a",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4230,
+    "output_tokens": 707,
+    "cached_tokens": 3205,
+    "embed_tokens": 0,
+    "cost_usd": 0.0025981053
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change corrects misnamed GitHub App authentication env vars (now required), adds optional provider API keys for non-default embeddings providers, and mounts the config file read-only into the container. It improves the security posture and is safe to merge."
+  }
+}

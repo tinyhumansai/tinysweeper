@@ -1,0 +1,17 @@
+{
+  "key": "cd74b74f0847346e",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4001,
+    "output_tokens": 610,
+    "cached_tokens": 3428,
+    "embed_tokens": 0,
+    "cost_usd": 0.00211432284
+  },
+  "value": {
+    "findings": [],
+    "summary": "The new docker-compose overlay provides an opt-in workaround for MongoDB failing to start on Linux 6.19+ kernels, setting GLIBC_TUNABLES to disable rseq and mounting a helper script read-only into the container. It is correctly scoped as an opt-in development overlay and introduces no security issues in this file."
+  }
+}

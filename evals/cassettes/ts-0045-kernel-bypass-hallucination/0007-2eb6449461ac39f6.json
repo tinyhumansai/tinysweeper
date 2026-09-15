@@ -1,0 +1,39 @@
+{
+  "key": "2eb6449461ac39f6",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 6753,
+    "output_tokens": 2563,
+    "cached_tokens": 5851,
+    "embed_tokens": 0,
+    "cost_usd": 0.00679158858
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "kind": "search",
+        "pattern": "AppAuth",
+        "why": "The diff comment claims `server::auth::AppAuth::from_env` reads `TINYSWEEPER_APP_ID` / `TINYSWEEPER_APP_PRIVATE_KEY` verbatim. Need to find this type to verify which env var names it actually reads."
+      },
+      {
+        "kind": "search",
+        "pattern": "TINYSWEEPER",
+        "why": "Neither `TINYSWEEPER_APP` nor `TINYSWEEPER_GITHUB` appeared anywhere in the tree. Searching for the bare prefix to find what env var names the binary actually reads."
+      },
+      {
+        "kind": "search",
+        "pattern": "api_key_env",
+        "why": "The diff comments about `embeddings.api_key_env` and `OPENROUTER_API_KEY` imply a config-driven env-var indirection. Need to see how the config maps provider to env var to verify the compose change matches."
+      },
+      {
+        "kind": "search",
+        "pattern": "openrouter",
+        "why": "The diff states openrouter is the default embeddings provider. Need to confirm this is the case in config or code to validate the compose env var additions."
+      }
+    ],
+    "summary": "The diff renames GitHub App credentials from `TINYSWEEPER_GITHUB_*` to `TINYSWEEPER_APP_*`, makes them required, and mounts a config file. I need to verify the rename against the actual binary source, which the first round of lookups could not locate in the tree."
+  }
+}

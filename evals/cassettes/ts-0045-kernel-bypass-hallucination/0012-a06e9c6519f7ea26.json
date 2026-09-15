@@ -1,0 +1,39 @@
+{
+  "key": "a06e9c6519f7ea26",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 13864,
+    "output_tokens": 4414,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00204228
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The diff claims that `server::auth::AppAuth::from_env` reads `TINYSWEEPER_APP_ID` and `TINYSWEEPER_APP_PRIVATE_KEY`, and that the old names `TINYSWEEPER_GITHUB_APP_ID` and `TINYSWEEPER_GITHUB_PRIVATE_KEY` were never read. A search for `AppAuth` in `src/server/auth*.rs` found nothing, and a repository-wide search for `TINYSWEEPER_APP` returned no matches. Without being able to inspect the binary's source, we cannot verify the claim. If the binary reads different environment variable names, the container will fail to authenticate as the GitHub App.",
+        "confidence": 0.2,
+        "existing_code": "      # These two names are read verbatim by `server::auth::AppAuth::from_env`.\n      # They were previously spelled `TINYSWEEPER_GITHUB_*` here, which the\n      # binary never reads, so the container could not authenticate as the App\n      # however the environment was set.\n      TINYSWEEPER_APP_ID: ${TINYSWEEPER_APP_ID:?set the GitHub App id}\n      TINYSWEEPER_APP_PRIVATE_KEY: ${TINYSWEEPER_APP_PRIVATE_KEY:?set the GitHub App private key}",
+        "path": "docker-compose.yml",
+        "rule": "unverified-claim",
+        "severity": "high",
+        "suggestion": null,
+        "title": "Confirm the renamed env vars are read by AppAuth::from_env"
+      },
+      {
+        "body": "The diff mounts `./.tinysweeper.toml` to `/home/tinysweeper/.tinysweeper.toml:ro` and claims that without it the server runs on built-in defaults where embeddings are off. A repository-wide search for `.tinysweeper.toml` found no references. We cannot confirm that the server reads configuration from that path. If it reads a different path or does not read this file at all, the mount will have no effect and the server will silently operate on defaults (embeddings off, diff-only reviews).",
+        "confidence": 0.3,
+        "existing_code": "    # The runtime image carries no configuration — it is a binary and nothing\n    # else — so without this mount the server runs entirely on built-in\n    # defaults. That is not a smaller version of the intended behaviour: it\n    # means `[embeddings]` is off, so the index never builds and every review is\n    # diff-only, silently. Mounting the file is the interim answer; the real one\n    # is #12, fetching each reviewed repository's own config through the forge\n    # rather than reading one from the server's filesystem.\n    volumes:\n      - ./.tinysweeper.toml:/home/tinysweeper/.tinysweeper.toml:ro",
+        "path": "docker-compose.yml",
+        "rule": "unverified-claim",
+        "severity": "medium",
+        "suggestion": null,
+        "title": "Verify that the binary reads ~/.tinysweeper.toml from the mounted path"
+      }
+    ],
+    "resolved": [],
+    "summary": "This diff updates environment variable names and adds a configuration volume mount. The changes rely on assumptions about the binary's behaviour that could not be verified; merge after confirming the binary reads the renamed env vars and the config file path."
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "key": "72b9331d2d1e8ded",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 6814,
+    "output_tokens": 109,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00061234656
+  },
+  "value": {
+    "findings": [],
+    "lookups": [],
+    "resolved": [],
+    "summary": "The diff adds an `[embeddings]` section to `.tinysweeper.toml` configuring retrieval-on through OpenRouter with OpenAI's text-embedding-3-small. The fields are consistent with what the repository's existing infrastructure expects (provider, model, dimensions, api_key_env). No logic errors, missing bounds, or resource leaks are introduced — the change is safe to merge."
+  }
+}

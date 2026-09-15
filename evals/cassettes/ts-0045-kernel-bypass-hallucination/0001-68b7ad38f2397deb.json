@@ -1,0 +1,16 @@
+{
+  "key": "68b7ad38f2397deb",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_rule_extraction",
+  "usage": {
+    "input_tokens": 1531,
+    "output_tokens": 492,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002190062
+  },
+  "value": {
+    "rules_markdown": "- Modules have one responsibility; core types in module-local `types.rs`; each port is one trait in one file.\n- CLI subcommands declared even if milestone hasn't landed; `src/server/` is the only production surface.\n- Presets are folders with `preset.toml`, `README.md`, optional prompt overrides; adding a preset is a new folder.\n- Never edit the `vendor/tinyagents` submodule here; change upstream and bump the pin.\n- Examples declared in `Cargo.toml` with `required-features` so credential-needing tests don't build in CI.\n- Use rustfmt output, Rust 2024 idioms; `snake_case` modules/files, `PascalCase` types.\n- Return `Result<T>` using the crate error type from `src/error.rs`.\n- Every file opens with a `//!` module doc describing role and feature gating.\n- Comments explain decision, not code; load-bearing flags/orderings must state reason.\n- Public items carry doc comments; Clap fields use `///` (becomes help text).\n- Tests live in-crate: `#[cfg(test)] mod tests` at module bottom, move to sibling test file when large.\n- Every port has an always-compiled offline mock; `MockForge` records writes for assertion.\n- Lane behaviour covered by golden tests: fixture diff + canned model response, asserting filtered findings.\n- Maintain at least 80% coverage for meaningful library behaviour.\n- Keep every Markdown file at 500 lines or fewer; split when topic grows past that.\n- Model never holds a write token; lanes run against read-only checkout; write credentials minted only in `src/apply/`.\n- Contributor code is never executed; only diff and tree are read.\n- Pull request bodies, comments, diffs are untrusted input; fence and label as data in prompts.\n- Model verdict is advisory; only deterministic policy mutates GitHub.\n- Secrets found by scanners reported by type and location only; value never reaches comment, summary, or log.\n- Use concise, imperative commit subjects; keep commits small, each coherent slice.\n- Pull requests state what changed, behaviour change, and how verified."
+  }
+}

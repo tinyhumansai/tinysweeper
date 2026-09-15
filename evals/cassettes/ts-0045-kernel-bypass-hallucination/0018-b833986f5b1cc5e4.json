@@ -1,0 +1,17 @@
+{
+  "key": "b833986f5b1cc5e4",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3697,
+    "output_tokens": 552,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00043209
+  },
+  "value": {
+    "findings": [],
+    "summary": "Adds a public module declaration for `summarise`; no security implications introduced."
+  }
+}

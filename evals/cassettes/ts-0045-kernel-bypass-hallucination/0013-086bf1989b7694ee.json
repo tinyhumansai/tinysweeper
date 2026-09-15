@@ -1,0 +1,16 @@
+{
+  "key": "086bf1989b7694ee",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_falsify",
+  "usage": {
+    "input_tokens": 1778,
+    "output_tokens": 309,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00021564
+  },
+  "value": {
+    ": []} but correct json: {": []
+  }
+}

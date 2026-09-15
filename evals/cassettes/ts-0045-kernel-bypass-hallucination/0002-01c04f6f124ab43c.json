@@ -1,0 +1,17 @@
+{
+  "key": "01c04f6f124ab43c",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3936,
+    "output_tokens": 38,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00034936496
+  },
+  "value": {
+    "findings": [],
+    "summary": "Introduces a new `pub mod summarise` module; no bugs or violations visible in this single-line diff."
+  }
+}
