@@ -68,6 +68,7 @@ cost nobody had checked.
 | `index.rs` | `ChunkIndex` |
 | `graph.rs` | `GraphStore` |
 | `knowledge.rs` | `KnowledgeStore` |
+| `tree.rs` | `TreeReader` — read a file range, search a literal; `MockTree`, `DirTree`, `RecordingTree`, `ChainTree` |
 
 ## The retrieval ports
 
@@ -75,6 +76,16 @@ Four traits, one adapter module. Their value types live in `src/index/types.rs`
 and the reasoning behind their shape — why `Embedder` must be able to name
 itself, why `ChunkIndex` needs deletes, and what MongoDB has to be — is in
 [`docs/modules/index/README.md`](../index/README.md).
+
+## `TreeReader`
+
+What a reviewer may look up before it answers: a range of one file at the
+reviewed commit, or every line containing a literal. Two verbs, both reads,
+so the port cannot be argued into running anything. `DirTree` serves a
+checkout and searches in-process; `forge::tree::ForgeTree` serves the
+forge API one file at a time, following one level of submodule through
+`ForgeRead::submodule_at`, and answers *unavailable* for search. See
+[`docs/modules/lanes/lookup.md`](../lanes/lookup.md).
 
 ## `Memory`
 
