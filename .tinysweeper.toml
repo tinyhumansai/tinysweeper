@@ -64,6 +64,14 @@ order = []
 allow_fallbacks = true
 last_resort_unpinned = false
 
+# The deep ladder answers at whatever length it needs: luna's reasoning was
+# taking more than half of the 16k default on a 300-line refactor, and a
+# cut-off there costs a file's review to save a fraction of a cent. No pin —
+# the ladder routes — only the ceiling is lifted.
+[[models.routes]]
+model = "deep"
+max_tokens = 0
+
 # Retrieval on, through the same gateway the completion models use. The three
 # fields below are the index partition key: change any of them and the vectors
 # already written stop matching, which is why they live here rather than in the
