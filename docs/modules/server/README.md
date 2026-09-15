@@ -123,7 +123,13 @@ Two consequences are load-bearing:
   running") *before* axum starts draining connections — after it, there may
   be no time left. Taking the status out of the slot is what keeps this safe
   against a lane that finishes in the same second: its own `close_status`
-  finds the slot empty and does nothing.
+  finds the slot empty and does nothing. `AppState::in_flight` also stops
+  accepting new registrations in the same locked step as the snapshot, so a
+  webhook accepted while the snapshot's network calls are still in flight —
+  axum has not started draining yet, only `shutdown` returning triggers that —
+  cannot land a slot after the snapshot and run unwatched by any shutdown
+  pass; `handle_review` declines that review outright, before it opens a
+  check, and leaves it for the next push or redelivery.
 
 On the write token: opening this check mints an installation token before the
 lanes run, which the security boundary otherwise reserves for after every model
