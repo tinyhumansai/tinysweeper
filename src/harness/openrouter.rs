@@ -628,7 +628,11 @@ fn langfuse_client() -> Option<LangfuseClient> {
 impl Model for GatewayModel {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse> {
         let mut last = match self
-            .call_until_complete(&request.model, &request, &self.provider)
+            .call_until_complete(
+                &request.model,
+                &request,
+                &self.provider.for_model(&request.model),
+            )
             .await
         {
             Ok(response) => return Ok(response),
@@ -646,7 +650,7 @@ impl Model for GatewayModel {
                 "model call failed; trying the next model"
             );
             match self
-                .call_until_complete(fallback, &request, &self.provider)
+                .call_until_complete(fallback, &request, &self.provider.for_model(fallback))
                 .await
             {
                 Ok(response) => return Ok(response),

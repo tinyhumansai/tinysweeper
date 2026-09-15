@@ -473,6 +473,16 @@ pub struct ProviderRouting {
     /// `budget_usd_per_pr` still bounds the call, the response reports which
     /// model actually answered, and reaching this rung logs at `warn`.
     pub last_resort_unpinned: bool,
+    /// Vendor prefixes whose models are called with no pin at all.
+    ///
+    /// The pin exists for a floating id that many hosts serve at prices
+    /// spanning 4x. A model its own vendor serves first-party through the
+    /// gateway — `openai/…`, `anthropic/…`, `google/…` — has one host and one
+    /// price, and a pin naming DeepSeek's hosts would 404 it on every rung
+    /// before the last-resort one rescued it with a warning. So those vendors
+    /// are routed unpinned, quietly: the price `harness::pricing` records for
+    /// them is the one they are billed at.
+    pub unpinned_vendors: Vec<String>,
 }
 
 impl Default for ProviderRouting {
@@ -481,6 +491,7 @@ impl Default for ProviderRouting {
             order: Vec::new(),
             allow_fallbacks: false,
             last_resort_unpinned: true,
+            unpinned_vendors: vec!["openai".into(), "anthropic".into(), "google".into()],
         }
     }
 }
@@ -497,6 +508,23 @@ impl ProviderRouting {
             order: Vec::new(),
             allow_fallbacks: true,
             last_resort_unpinned: false,
+            unpinned_vendors: Vec::new(),
+        }
+    }
+
+    /// The routing to use for `model`: this pin, unless the model's vendor is
+    /// one that is served first-party and listed in `unpinned_vendors`.
+    pub fn for_model(&self, model: &str) -> std::borrow::Cow<'_, Self> {
+        let vendor = model.split('/').next().unwrap_or("");
+        if !self.is_empty()
+            && self
+                .unpinned_vendors
+                .iter()
+                .any(|v| v.eq_ignore_ascii_case(vendor))
+        {
+            std::borrow::Cow::Owned(Self::unpinned())
+        } else {
+            std::borrow::Cow::Borrowed(self)
         }
     }
 }

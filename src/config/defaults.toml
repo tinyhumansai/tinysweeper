@@ -352,6 +352,11 @@ allow_fallbacks = false
 # deployment choosing a failed review over an unpinned one, which is coherent,
 # but it should be a decision rather than a default.
 last_resort_unpinned = true
+# Vendors whose models are called with no pin at all: served first-party
+# through the gateway, one host, one price, and a pin naming DeepSeek's hosts
+# would 404 them on every rung. Lets `deep` be a code-review-tuned model from
+# one of these while `scan`/`flash` stay pinned.
+unpinned_vendors = ["openai", "anthropic", "google"]
 
 # Several reviewers on one lane's evidence, folded into one review.
 #
