@@ -196,9 +196,9 @@ fn gather(
         if metadata.is_dir() {
             let name = entry.file_name();
             let rel = relative(root, &path);
-            let holds_submodule = submodules
-                .iter()
-                .any(|s| *s == rel || s.starts_with(&format!("{rel}/")) || rel.starts_with(&format!("{s}/")));
+            let holds_submodule = submodules.iter().any(|s| {
+                *s == rel || s.starts_with(&format!("{rel}/")) || rel.starts_with(&format!("{s}/"))
+            });
             if SKIPPED_DIRS.iter().any(|d| name == *d) && !holds_submodule {
                 continue;
             }

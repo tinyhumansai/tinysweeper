@@ -1174,7 +1174,10 @@ fn helper() {
         let outcome = run_with(model.clone(), &config, &diffs).await;
 
         assert!(model.requests().is_empty());
-        assert!(outcome.skipped.is_none(), "a verified rename is a verdict, not a skip");
+        assert!(
+            outcome.skipped.is_none(),
+            "a verified rename is a verdict, not a skip"
+        );
         assert!(outcome.findings.is_empty());
         assert!(outcome.summary.contains("verified line for line"));
     }

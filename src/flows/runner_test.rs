@@ -564,7 +564,10 @@ async fn a_reviewer_that_looks_something_up_is_asked_again_with_what_it_read() {
     let second = &requests[1];
     let evidence = &second.messages[1].content;
     assert!(evidence.contains("## What you looked up"), "{evidence}");
-    assert!(evidence.contains("sequence `< before`"), "the read reached the model");
+    assert!(
+        evidence.contains("sequence `< before`"),
+        "the read reached the model"
+    );
     assert!(
         evidence.contains("src/ports/events.rs:2: fn read_before() {}"),
         "the search hit reached the model"
@@ -616,7 +619,10 @@ async fn the_last_permitted_round_offers_no_lookups_and_the_loop_ends() {
     let last = requests.last().unwrap();
     assert!(last.schema["properties"].get("lookups").is_none());
     assert!(!last.messages[0].content.contains("## Looking things up"));
-    assert_eq!(answers[0].value.as_ref().unwrap()["summary"], "still asking");
+    assert_eq!(
+        answers[0].value.as_ref().unwrap()["summary"],
+        "still asking"
+    );
 }
 
 #[tokio::test]

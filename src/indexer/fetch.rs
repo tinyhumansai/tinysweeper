@@ -143,10 +143,23 @@ impl Checkout {
                 git(
                     &dir,
                     token,
-                    &["fetch", "--quiet", "--depth", "1", "--no-tags", &url, &gitlink],
+                    &[
+                        "fetch",
+                        "--quiet",
+                        "--depth",
+                        "1",
+                        "--no-tags",
+                        &url,
+                        &gitlink,
+                    ],
                 )
                 .await?;
-                git(&dir, token, &["checkout", "--quiet", "--detach", "FETCH_HEAD"]).await
+                git(
+                    &dir,
+                    token,
+                    &["checkout", "--quiet", "--detach", "FETCH_HEAD"],
+                )
+                .await
             }
             .await;
             if let Err(err) = fetched {
