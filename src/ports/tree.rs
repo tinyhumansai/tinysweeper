@@ -387,7 +387,14 @@ impl DirTree {
         let first = rel.split('/').next().unwrap_or("");
         let vendored = matches!(
             first,
-            ".git" | "node_modules" | "target" | "vendor" | ".venv" | "dist" | "build" | "third_party"
+            ".git"
+                | "node_modules"
+                | "target"
+                | "vendor"
+                | ".venv"
+                | "dist"
+                | "build"
+                | "third_party"
         );
         // A vendored directory is kept when a tracked submodule is it, is
         // under it, or contains it — otherwise the walk never reaches the
@@ -591,9 +598,8 @@ mod tests {
             start: Some(1),
             end: Some(2),
         };
-        let recorded = MockTree::from_recorded(
-            [(key.key(), Found::NotFound)].into_iter().collect(),
-        );
+        let recorded =
+            MockTree::from_recorded([(key.key(), Found::NotFound)].into_iter().collect());
         assert_eq!(recorded.lookup(&key).await.unwrap(), Found::NotFound);
     }
 
@@ -612,7 +618,11 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
         std::fs::create_dir_all(dir.path().join("vendor/lib")).unwrap();
         std::fs::create_dir_all(dir.path().join("vendor/other")).unwrap();
-        std::fs::write(dir.path().join(".gitmodules"), "[submodule \"lib\"]\n\tpath = vendor/lib\n").unwrap();
+        std::fs::write(
+            dir.path().join(".gitmodules"),
+            "[submodule \"lib\"]\n\tpath = vendor/lib\n",
+        )
+        .unwrap();
         std::fs::write(dir.path().join("src/a.rs"), "needle one\n").unwrap();
         std::fs::write(dir.path().join("vendor/lib/b.rs"), "needle two\n").unwrap();
         std::fs::write(dir.path().join("vendor/other/c.rs"), "needle three\n").unwrap();

@@ -159,9 +159,15 @@ async fn a_reviewer_id_that_is_not_a_legal_node_id_still_gets_its_answer() {
         100.0,
     );
 
-    let answers = ask_all(llm, LaneId::Critique, &[awkward], &schema(), Asking::default())
-        .await
-        .expect("runs");
+    let answers = ask_all(
+        llm,
+        LaneId::Critique,
+        &[awkward],
+        &schema(),
+        Asking::default(),
+    )
+    .await
+    .expect("runs");
 
     assert!(answers[0].value.is_some(), "{:?}", answers[0].error);
     assert_eq!(answers[0].id, "security-focused reviewer!");
@@ -463,9 +469,15 @@ async fn sub_agents_off_never_mentions_them_to_the_reviewer() {
     let model = MockModel::always(json!({ "summary": "s", "findings": [] }));
     let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
 
-    ask_all(llm, LaneId::Critique, &[call("a")], &schema(), Asking::default())
-        .await
-        .expect("runs");
+    ask_all(
+        llm,
+        LaneId::Critique,
+        &[call("a")],
+        &schema(),
+        Asking::default(),
+    )
+    .await
+    .expect("runs");
 
     let requests = model.requests();
     assert!(!requests[0].messages[0].content.contains("Asking instead"));

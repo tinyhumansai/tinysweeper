@@ -316,8 +316,9 @@ pub async fn ask_all(
     // schema for the final permitted round offers no `lookups` key, so a
     // reviewer cannot ask for something no turn will answer.
     if let Some((tree, policy)) = lookups {
-        let mut ledgers: Vec<lookup::Ledger> =
-            (0..calls.len()).map(|_| lookup::Ledger::default()).collect();
+        let mut ledgers: Vec<lookup::Ledger> = (0..calls.len())
+            .map(|_| lookup::Ledger::default())
+            .collect();
         for round in 1..=max_rounds {
             let pending: Vec<(usize, Vec<Lookup>)> = answers
                 .iter()
@@ -338,8 +339,11 @@ pub async fn ask_all(
                     continue;
                 }
                 prompts[index].prompt.push_str(&gathered.rendered);
-                prompts[index].system =
-                    system_for(&calls[index].system, may_lookup_again, subagent_model.is_some());
+                prompts[index].system = system_for(
+                    &calls[index].system,
+                    may_lookup_again,
+                    subagent_model.is_some(),
+                );
                 tracing::debug!(
                     reviewer = %prompts[index].id,
                     round,

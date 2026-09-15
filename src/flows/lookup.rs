@@ -289,8 +289,12 @@ mod tests {
         });
         let lookups = read_lookups(&value, &policy());
         assert_eq!(lookups.len(), 2);
-        assert!(matches!(&lookups[0], Lookup::Read { path, start: Some(3), end: Some(9) } if path == "src/a.rs"));
-        assert!(matches!(&lookups[1], Lookup::Search { pattern, glob: None } if pattern == "fn read_before"));
+        assert!(
+            matches!(&lookups[0], Lookup::Read { path, start: Some(3), end: Some(9) } if path == "src/a.rs")
+        );
+        assert!(
+            matches!(&lookups[1], Lookup::Search { pattern, glob: None } if pattern == "fn read_before")
+        );
     }
 
     #[test]
@@ -311,7 +315,9 @@ mod tests {
             start: None,
             end: None,
         };
-        let first = ledger.gather(&tree, &[read.clone()], &policy()).await;
+        let first = ledger
+            .gather(&tree, std::slice::from_ref(&read), &policy())
+            .await;
         assert_eq!(first.answered, 1);
         assert!(first.rendered.contains("truncated"), "{}", first.rendered);
         assert!(ledger.chars() <= 200 + 64);
@@ -342,7 +348,11 @@ mod tests {
                 &LookupPolicy::default(),
             )
             .await;
-        assert!(gathered.rendered.contains("src/a.rs:1: fn read_before() {}"));
+        assert!(
+            gathered
+                .rendered
+                .contains("src/a.rs:1: fn read_before() {}")
+        );
         assert!(gathered.rendered.contains("No such file"));
         assert!(gathered.rendered.contains("Untrusted data"));
     }

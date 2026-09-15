@@ -114,7 +114,11 @@ impl<'a> ForgeTree<'a> {
     async fn submodules(&self) -> &[Submodule] {
         self.submodules
             .get_or_init(|| async {
-                match self.forge.file_at(&self.repo, ".gitmodules", &self.sha).await {
+                match self
+                    .forge
+                    .file_at(&self.repo, ".gitmodules", &self.sha)
+                    .await
+                {
                     Ok(Some(text)) => parse_gitmodules(&text, &self.host),
                     _ => Vec::new(),
                 }
@@ -227,7 +231,18 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(matches!(found, Found::Text { start: 2, end: 3, total: 3, .. }), "{found:?}");
+        assert!(
+            matches!(
+                found,
+                Found::Text {
+                    start: 2,
+                    end: 3,
+                    total: 3,
+                    ..
+                }
+            ),
+            "{found:?}"
+        );
 
         let missing = tree
             .lookup(&Lookup::Read {

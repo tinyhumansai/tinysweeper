@@ -23,7 +23,6 @@ use std::time::Instant;
 use sha2::{Digest, Sha256};
 
 use crate::app::review::{Proposal, review_with_tree};
-use crate::ports::tree::TreeReader;
 use crate::config::types::Config;
 use crate::error::Result;
 use crate::eval::corpus::{Corpus, LoadedCase};
@@ -31,6 +30,7 @@ use crate::eval::types::CaseScore;
 use crate::forge::types::RepoId;
 use crate::harness::cassette::{Cassette, Mode};
 use crate::ports::model::Model;
+use crate::ports::tree::TreeReader;
 use crate::state::memory::MemoryState;
 
 /// How a corpus run behaves.
@@ -149,8 +149,7 @@ pub async fn run(
             Some(recording) => recording,
             None => &recorded,
         };
-        let outcome =
-            review_case(case, &with_lanes(&config, case), cassette.clone(), tree).await;
+        let outcome = review_case(case, &with_lanes(&config, case), cassette.clone(), tree).await;
         let wall = started.elapsed();
 
         if let Some(recording) = &recording {
@@ -158,12 +157,17 @@ pub async fn run(
             if !learned.is_empty() {
                 let mut fixture = case.fixture.clone();
                 fixture.lookups.extend(learned);
-                let path = case.path.parent().unwrap_or(&case.path).join(&case.case.fixture);
-                std::fs::write(&path, serde_json::to_string_pretty(&fixture)? + "\n")
-                    .map_err(|e| crate::error::Error::Path {
+                let path = case
+                    .path
+                    .parent()
+                    .unwrap_or(&case.path)
+                    .join(&case.case.fixture);
+                std::fs::write(&path, serde_json::to_string_pretty(&fixture)? + "\n").map_err(
+                    |e| crate::error::Error::Path {
                         path: path.clone(),
                         message: e.to_string(),
-                    })?;
+                    },
+                )?;
             }
         }
 

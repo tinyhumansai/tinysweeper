@@ -68,7 +68,9 @@ pub fn detect(diffs: &[&FileDiff]) -> Option<Substitution> {
             .map(|diff| diff.path.clone())
             .collect();
         if verified.len() >= MIN_FILES
-            && best.as_ref().is_none_or(|b| verified.len() > b.verified.len())
+            && best
+                .as_ref()
+                .is_none_or(|b| verified.len() > b.verified.len())
         {
             best = Some(Substitution { from, to, verified });
         }
@@ -194,7 +196,10 @@ mod tests {
     fn a_rename_across_files_is_detected_and_the_residue_is_not_claimed() {
         let a = diff(
             "src/a.rs",
-            &[("use openhuman_core::openhuman as oh;", "use openhuman_core as oh;")],
+            &[(
+                "use openhuman_core::openhuman as oh;",
+                "use openhuman_core as oh;",
+            )],
             &[],
         );
         let b = diff(
@@ -233,7 +238,11 @@ mod tests {
     fn a_line_that_is_not_the_substitution_disqualifies_the_file() {
         let a = diff("a", &[("foo::old()", "foo::new()")], &[]);
         let b = diff("b", &[("bar::old()", "bar::new()")], &[]);
-        let c = diff("c", &[("baz::old()", "baz::new()"), ("if x < 1", "if x <= 1")], &[]);
+        let c = diff(
+            "c",
+            &[("baz::old()", "baz::new()"), ("if x < 1", "if x <= 1")],
+            &[],
+        );
         let d = diff("d", &[("qux::old()", "qux::new()")], &[]);
         let sub = detect(&[&a, &b, &c, &d]).unwrap();
         assert_eq!(sub.verified, vec!["a", "b", "d"]);
@@ -246,9 +255,6 @@ mod tests {
             Some(("::b".into(), "".into()))
         );
         assert_eq!(differing_span("same", "same"), None);
-        assert_eq!(
-            differing_span("x", "xy"),
-            Some(("".into(), "y".into()))
-        );
+        assert_eq!(differing_span("x", "xy"), Some(("".into(), "y".into())));
     }
 }
