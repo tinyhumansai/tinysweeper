@@ -177,6 +177,9 @@ pub struct MockState {
     /// knowledge centre depends on: a test has to be able to prove a file was
     /// read at the pull request's head and not at some other ref.
     pub blobs: BTreeMap<String, String>,
+    /// The tree at each commit, keyed by SHA, for `tree_paths`. A commit
+    /// with no entry serves an empty, complete tree.
+    pub trees: BTreeMap<String, TreeListing>,
 }
 
 /// The key a file's contents are stored under.
@@ -191,6 +194,17 @@ impl MockState {
     /// Serve `content` for `path` at `sha`.
     pub fn set_file(&mut self, sha: &str, path: &str, content: &str) {
         self.blobs.insert(file_key(sha, path), content.to_string());
+    }
+
+    /// Serve `paths` as the complete tree at `sha`.
+    pub fn set_tree(&mut self, sha: &str, paths: &[&str]) {
+        self.trees.insert(
+            sha.to_string(),
+            TreeListing {
+                paths: paths.iter().map(|p| p.to_string()).collect(),
+                truncated: false,
+            },
+        );
     }
 
     /// Report `name` on `sha`. `conclusion: None` means still running.
@@ -533,6 +547,11 @@ impl ForgeRead for MockForge {
     async fn file_at(&self, _repo: &RepoId, path: &str, sha: &str) -> Result<Option<String>> {
         let state = self.state.lock().expect("mock state lock");
         Ok(state.blobs.get(&file_key(sha, path)).cloned())
+    }
+
+    async fn tree_paths(&self, _repo: &RepoId, sha: &str) -> Result<TreeListing> {
+        let state = self.state.lock().expect("mock state lock");
+        Ok(state.trees.get(sha).cloned().unwrap_or_default())
     }
 
     async fn issue(&self, _repo: &RepoId, number: u64) -> Result<Issue> {
