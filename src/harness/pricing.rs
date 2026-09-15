@@ -160,6 +160,17 @@ const MODEL_PRICES: &[(&str, Price)] = &[
         },
     ),
     (
+        // Cheapest first-party endpoint $0.10/$0.60 (openai/flex); priced at
+        // the standard one so the ceiling errs toward stopping early. Cache
+        // reads are a tenth of input. Measured 2026-09-15.
+        "openai/gpt-5.6-luna",
+        Price {
+            input: 0.20,
+            output: 1.20,
+            cached: 0.02,
+        },
+    ),
+    (
         "moonshotai/kimi-k3",
         Price {
             input: 3.00,
@@ -487,6 +498,8 @@ mod tests {
         ("moonshotai/kimi-k3", 2.60, 13.00),
         // One endpoint, OpenAI's own; measured 2026-09-15.
         ("openai/gpt-5.3-codex", 1.75, 14.00),
+        // `openai/flex` is the floor; measured 2026-09-15.
+        ("openai/gpt-5.6-luna", 0.10, 0.60),
         ("qwen/qwen3.8-max", 2.00, 6.00),
         ("z-ai/glm-5.2", 0.336, 1.056),
     ];
