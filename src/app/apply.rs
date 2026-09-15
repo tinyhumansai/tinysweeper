@@ -619,6 +619,7 @@ mod tests {
                 highest_severity,
                 usage: Default::default(),
                 models: vec![],
+                unanswered: vec![],
             }],
             cost_usd: 0.01,
             input_tokens: 10_000,

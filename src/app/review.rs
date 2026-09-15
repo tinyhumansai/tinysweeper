@@ -1609,6 +1609,7 @@ mod tests {
                 highest_severity: Some(Severity::High),
                 usage: Default::default(),
                 models: vec![],
+                unanswered: vec![],
             }
         }
 

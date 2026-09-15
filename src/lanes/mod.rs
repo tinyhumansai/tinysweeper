@@ -263,6 +263,7 @@ impl LaneOutcome {
             resolved: parsed.resolved,
             spend,
             skipped: None,
+            unanswered: Vec::new(),
         }
     }
 

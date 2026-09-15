@@ -88,6 +88,7 @@ fn proposal(findings: Vec<Finding>) -> Proposal {
             highest_severity: None,
             usage: Usage::default(),
             models: vec!["z-ai/glm-5.2".into()],
+            unanswered: vec![],
         }],
         unreviewed: vec![],
         cost_usd: 0.004,
