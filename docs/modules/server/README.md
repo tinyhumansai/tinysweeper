@@ -62,6 +62,17 @@ the lease release below it. Leases also carry a TTL in Mongo, which is the only
 thing that covers a killed process — a stranded lease would otherwise mean that
 pull request can never be reviewed again.
 
+`REVIEW_DEADLINE` bounds one review's wall clock, retries included. Each model
+call is capped on its own by the gateway client, but a review is dozens of
+them in sequence and nothing capped the sum: on 2026-09-15 one sat "in
+progress" for over two hours holding a permit. The deadline wraps the model
+phase only — the publish after it must not be cut off between one comment and
+the next — and is asserted at compile time to be shorter than `LEASE_TTL`,
+because a review still running when its lease lapses is exactly the duplicate
+the lease prevents. A review that misses it concludes its check as
+`ActionRequired` with "ran out of time", and is not retried: the deadline is
+the budget, and a retry would spend it again.
+
 ### A running review is never silent either
 
 `server::status` owns **`tinysweeper/review`**, one check with a lifecycle
@@ -97,6 +108,14 @@ Two consequences are load-bearing:
 - **The check is updated, never re-posted.** A second POST of the same name
   creates a second run and leaves the first pending forever, so `publish_check`
   returns the id and `update_check` takes it.
+- **A redeploy concludes what it interrupts.** `docker compose up` sends
+  `SIGTERM` and the reviews in flight will not finish inside its grace
+  period. `AppState::in_flight` lists every open slot, and the shutdown path
+  concludes each as `ActionRequired` ("restarted while this review was
+  running") *before* axum starts draining connections — after it, there may
+  be no time left. Taking the status out of the slot is what keeps this safe
+  against a lane that finishes in the same second: its own `close_status`
+  finds the slot empty and does nothing.
 
 On the write token: opening this check mints an installation token before the
 lanes run, which the security boundary otherwise reserves for after every model
