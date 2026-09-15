@@ -134,8 +134,11 @@ struct AppState {
     /// dies with it would otherwise leave its check "in progress" until the
     /// next push — which `automerge` reads as a review still running. Each
     /// slot is registered when its review starts and removed when it ends;
-    /// see `conclude_in_flight`.
-    in_flight: Arc<std::sync::Mutex<Vec<StatusSlot>>>,
+    /// see `conclude_in_flight`. Also carries whether new reviews are still
+    /// accepted, so shutdown can refuse one that would otherwise register
+    /// after the concluding snapshot and be orphaned exactly like the
+    /// deploy this exists to guard against.
+    in_flight: Arc<std::sync::Mutex<InFlightRegistry>>,
 }
 
 /// Run the server until the process is stopped.
