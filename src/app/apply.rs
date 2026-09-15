@@ -360,7 +360,8 @@ pub async fn settle_e2e(
     }
 
     let checks = read.check_runs(repo, &watch.head_sha).await?;
-    let Some(settled) = crate::lanes::e2e::runs::settle(&watch, &checks, config.fail_on(LaneId::E2e))
+    let Some(settled) =
+        crate::lanes::e2e::runs::settle(&watch, &checks, config.fail_on(LaneId::E2e))
     else {
         return Ok(E2eSettlement::StillPending);
     };
@@ -378,7 +379,12 @@ pub async fn settle_e2e(
                     }
                     _ => "End-to-end jobs concluded".into(),
                 },
-                summary: crate::findings::render::lane_summary(&settled.summary, &[], VERSION, true),
+                summary: crate::findings::render::lane_summary(
+                    &settled.summary,
+                    &[],
+                    VERSION,
+                    true,
+                ),
                 images: vec![],
             },
         )
@@ -712,7 +718,10 @@ mod tests {
             .await
             .expect("settles");
         assert_eq!(settled, E2eSettlement::StillPending);
-        assert!(forge.writes().is_empty(), "nothing published while a job runs");
+        assert!(
+            forge.writes().is_empty(),
+            "nothing published while a job runs"
+        );
 
         state.set_check("abc123", "playwright", Some(CheckConclusion::Failure));
         let forge = MockForge::with_state(state.clone());
@@ -721,11 +730,21 @@ mod tests {
             .expect("settles");
         assert_eq!(settled, E2eSettlement::Published(CheckConclusion::Failure));
         let checks = forge.checks();
-        let check = checks.get("tinysweeper/e2e").expect("the e2e check was published");
+        let check = checks
+            .get("tinysweeper/e2e")
+            .expect("the e2e check was published");
         assert_eq!(check.head_sha, "abc123");
         assert_eq!(check.conclusion, Some(CheckConclusion::Failure));
-        assert!(check.summary.contains("`playwright`: **failure**"), "{}", check.summary);
-        assert!(check.summary.contains("Coverage looks complete."), "{}", check.summary);
+        assert!(
+            check.summary.contains("`playwright`: **failure**"),
+            "{}",
+            check.summary
+        );
+        assert!(
+            check.summary.contains("Coverage looks complete."),
+            "{}",
+            check.summary
+        );
 
         // The watch is cleared, so the next completion event does nothing.
         let forge = MockForge::with_state(state);
@@ -777,7 +796,10 @@ mod tests {
             .await
             .expect("settles");
         assert_eq!(settled, E2eSettlement::HeadMoved);
-        assert!(forge.writes().is_empty(), "a stale verdict is never published");
+        assert!(
+            forge.writes().is_empty(),
+            "a stale verdict is never published"
+        );
         assert!(
             store.load_state(&key).await.unwrap().unwrap().e2e.is_some(),
             "the new head's review replaces the record; nothing is cleared here"
