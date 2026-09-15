@@ -235,6 +235,15 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
     // `doctor` prints both as if they applied.
     let mut seen = std::collections::BTreeSet::new();
     for route in &models.routes {
+        // Matched by exact string everywhere, so `"deep "` is a route for
+        // nobody that `doctor` would still print.
+        if route.model.is_empty() || route.model.trim() != route.model {
+            problems.push(format!(
+                "`models.routes` entry `{}` must name a model exactly, with no surrounding \
+                 whitespace",
+                route.model
+            ));
+        }
         if !seen.insert(route.model.as_str()) {
             problems.push(format!(
                 "`models.routes` names `{}` more than once; only the first entry would apply, \

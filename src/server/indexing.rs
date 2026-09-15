@@ -217,14 +217,7 @@ impl IndexBackend {
         use crate::ports::manifest::IndexManifest;
 
         let known = self.manifest.paths(repo_id, &self.signature).await?;
-        let revoked: Vec<String> = known
-            .into_iter()
-            .filter(|path| {
-                submodules
-                    .iter()
-                    .any(|sub| path.starts_with(&format!("{}/", sub.trim_end_matches('/'))))
-            })
-            .collect();
+        let revoked = paths_under(known, submodules);
         if revoked.is_empty() {
             return Ok(());
         }
@@ -442,9 +435,36 @@ fn mongo_db() -> String {
     std::env::var("TINYSWEEPER_MONGODB_DB").unwrap_or_else(|_| "tinysweeper".to_string())
 }
 
+/// The `known` paths that sit under one of `submodules` (directory paths,
+/// with or without a trailing slash). A prefix match on the directory, not
+/// the string: `vendor/lib` does not claim `vendor/libfoo/x.rs`.
+fn paths_under(known: Vec<String>, submodules: &[String]) -> Vec<String> {
+    let dirs: Vec<String> = submodules
+        .iter()
+        .map(|sub| format!("{}/", sub.trim_end_matches('/')))
+        .collect();
+    known
+        .into_iter()
+        .filter(|path| dirs.iter().any(|dir| path.starts_with(dir.as_str())))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_purge_takes_the_submodule_directory_and_nothing_beside_it() {
+        let known = vec![
+            "vendor/lib/src/a.rs".to_string(),
+            "vendor/libfoo/src/b.rs".to_string(),
+            "src/main.rs".to_string(),
+            "vendor/other/c.rs".to_string(),
+        ];
+        let revoked = paths_under(known, &["vendor/lib".into(), "vendor/other/".into()]);
+        assert_eq!(revoked, vec!["vendor/lib/src/a.rs", "vendor/other/c.rs"]);
+        assert!(paths_under(vec!["src/main.rs".into()], &[]).is_empty());
+    }
 
     #[test]
     fn the_git_host_defaults_to_github_and_tolerates_a_scheme() {
