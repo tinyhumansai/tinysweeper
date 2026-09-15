@@ -1931,14 +1931,21 @@ async fn run_and_publish(
 
     let config = config_for(config, run.mode);
 
-    // The deadline bounds the checkout and the model phase, not the publish.
-    // `tokio::time::timeout_at` drops the inner future when it elapses, which
-    // cancels every model call in flight — the right thing for the lanes, and
-    // the wrong thing for the publish below, which must not be cut off between
-    // one comment and the next. The checkout sits inside the deadline so that
+    // `review_inner` already wraps this whole call, the write-token mint and
+    // the publish below in the same `run.deadline` — the lease-held lifecycle
+    // shares one clock, so a slow publish cannot let the lease outlive it any
+    // more than a slow model call can. This inner `timeout_at` targets just
+    // the checkout and the lanes: it is what actually drops the model calls
+    // in flight rather than merely racing them against the outer wrapper, and
+    // it gives the timeout error the specific "the review of ..." wording
+    // instead of the outer, coarser one. The checkout sits inside it so that
     // a deadline already in the past — a retry after a slow failure —
     // resolves at once, before a clone is even started, which is the intended
-    // way of refusing the retry.
+    // way of refusing the retry. A timeout is non-transient (`failure::is_transient`
+    // never retries it), so a deadline that lands mid-publish costs at most
+    // one partially-posted review, never a duplicate — the exact tradeoff
+    // `REVIEW_DEADLINE`'s doc comment already accepts by keeping this shorter
+    // than `LEASE_TTL`.
     let review = async {
         // The tree the reviewers may look things up in. A shallow checkout of
         // the head when `[lookup].checkout` allows it — one commit, no history,
