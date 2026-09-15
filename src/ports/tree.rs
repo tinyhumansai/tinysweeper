@@ -442,16 +442,18 @@ impl DirTree {
     /// `safe_relative` rejects a lexical `..` escape, but a tracked symlink
     /// such as `leak -> /proc/self/environ` never contains `..` and still
     /// leaves the checkout once the filesystem follows it. Canonicalizing
-    /// both sides and requiring the prefix catches that: a path that does not
-    /// exist yet, or whose canonicalization fails, is treated as unsafe
-    /// rather than read.
+    /// both sides and requiring the prefix catches that. A path that does not
+    /// exist yet — including one under an unfetched submodule, which is an
+    /// empty directory — cannot be canonicalized either way; that is not an
+    /// escape, so it is let through to the normal "not found" or "submodule
+    /// unavailable" handling below.
     fn within_root(&self, path: &str) -> bool {
         let Ok(root) = self.root.canonicalize() else {
             return false;
         };
         match self.root.join(path).canonicalize() {
             Ok(resolved) => resolved.starts_with(&root),
-            Err(_) => false,
+            Err(_) => true,
         }
     }
 
