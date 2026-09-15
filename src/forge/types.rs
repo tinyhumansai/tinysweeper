@@ -19,9 +19,18 @@ pub struct RepoId {
 
 impl RepoId {
     /// Parse `owner/name`.
+    ///
+    /// Whitespace anywhere is a refusal, not a trim: no forge names a
+    /// repository with a space in it, so `" acme/lib"` is a typo that would
+    /// otherwise pass validation and then match nothing — an allow-list
+    /// entry that silently allows nobody.
     pub fn parse(value: &str) -> Option<Self> {
         let (owner, name) = value.split_once('/')?;
-        if owner.is_empty() || name.is_empty() || name.contains('/') {
+        if owner.is_empty()
+            || name.is_empty()
+            || name.contains('/')
+            || value.chars().any(char::is_whitespace)
+        {
             return None;
         }
         Some(Self {
