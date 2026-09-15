@@ -151,6 +151,14 @@ fn gateway_cost(raw: Option<&serde_json::Value>) -> Option<f64> {
     (cost.is_finite() && cost >= 0.0).then_some(cost)
 }
 
+/// Whether reasoning took more than half of the output ceiling.
+///
+/// No ceiling, no budget to consume half of: a routed model with
+/// `max_tokens = 0` would otherwise be warned about on every call.
+fn reasoning_crowds_the_answer(cap: u32, reasoning_tokens: u64) -> bool {
+    cap != 0 && reasoning_tokens * 2 > u64::from(cap)
+}
+
 /// The model the gateway says answered, when it says so.
 ///
 /// A ladder is asked for `deep` and answers with whichever model it
@@ -461,9 +469,7 @@ impl GatewayModel {
         // Reasoning is billed against the same ceiling as the answer, so a
         // model spending most of the budget thinking is one prompt away from
         // the truncation above. Say so while the review still succeeds.
-        // No ceiling, no budget to consume half of: a routed model with
-        // `max_tokens = 0` would otherwise trip this on every call.
-        if cap != 0 && totals.reasoning_tokens * 2 > u64::from(cap) {
+        if reasoning_crowds_the_answer(cap, totals.reasoning_tokens) {
             tracing::warn!(
                 model,
                 cap,
@@ -1059,6 +1065,16 @@ mod tests {
         assert!(
             gateway.routing_for("b").is_empty(),
             "an image call to a routed model must not inherit the text route"
+        );
+    }
+
+    #[test]
+    fn an_uncapped_route_is_never_warned_about_its_reasoning() {
+        assert!(reasoning_crowds_the_answer(16_000, 9_000));
+        assert!(!reasoning_crowds_the_answer(16_000, 8_000));
+        assert!(
+            !reasoning_crowds_the_answer(0, 50_000),
+            "no ceiling, no half of it"
         );
     }
 

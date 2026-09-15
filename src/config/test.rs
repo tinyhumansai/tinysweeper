@@ -142,10 +142,12 @@ fn a_model_routed_twice_is_rejected() {
 #[test]
 fn a_route_selector_with_stray_whitespace_is_rejected() {
     let config = parse(
-        "version = 1\n[[models.routes]]\nmodel = \"deep \"\n[[models.routes]]\nmodel = \"\"\n",
+        "version = 1\n[[models.routes]]\nmodel = \"deep \"\n[[models.routes]]\nmodel = \" deep\"\n\
+         [[models.routes]]\nmodel = \"\"\n",
     );
     let joined = validate::validate(&config).join("\n");
     assert!(joined.contains("entry `deep ` must name"), "{joined}");
+    assert!(joined.contains("entry ` deep` must name"), "{joined}");
     assert!(joined.contains("entry `` must name"), "{joined}");
 }
 
