@@ -460,7 +460,8 @@ impl<'a> Indexer<'a> {
             .cloned()
             .collect();
         if !revoked.is_empty() {
-            report.deleted += self.remove_rows(repo_id, signature, &revoked).await?;
+            self.remove_rows(repo_id, signature, &revoked, report)
+                .await?;
         }
 
         for group in selected.chunks(self.group) {
@@ -477,7 +478,8 @@ impl<'a> Indexer<'a> {
         // also holds rows an earlier attempt wrote and never confirmed, which
         // were never counted and must not be subtracted.
         if !removed.is_empty() {
-            report.deleted += self.remove_rows(repo_id, signature, &removed).await?;
+            self.remove_rows(repo_id, signature, &removed, report)
+                .await?;
             self.manifest.forget(repo_id, signature, &removed).await?;
             report.removed = removed;
         }
@@ -485,7 +487,8 @@ impl<'a> Indexer<'a> {
         Ok(())
     }
 
-    /// Delete every row under `paths`, returning how many *counted* rows went.
+    /// Delete every row under `paths`, counting the *counted* ones into the
+    /// report.
     ///
     /// Two deletes, for two different questions. The number `RepoIndex::chunks`
     /// tracks is confirmed rows, so the decrement is the confirmed ids the
@@ -495,14 +498,19 @@ impl<'a> Indexer<'a> {
     /// the path sweep, uncounted, for rows an earlier attempt wrote and never
     /// confirmed: they exist, they were never added to the count, and they
     /// must not be subtracted from it.
+    ///
+    /// The count lands in the report between the two, so a sweep the store
+    /// refuses still leaves the first delete — which happened — on record
+    /// for the failed run to settle.
     async fn remove_rows(
         &self,
         repo_id: &str,
         signature: &EmbedSignature,
         paths: &[String],
-    ) -> Result<u64> {
+        report: &mut IndexReport,
+    ) -> Result<()> {
         if paths.is_empty() {
-            return Ok(0);
+            return Ok(());
         }
         let confirmed: Vec<String> = self
             .manifest
@@ -511,13 +519,11 @@ impl<'a> Indexer<'a> {
             .into_iter()
             .flat_map(|file| file.chunks)
             .collect();
-        let counted = if confirmed.is_empty() {
-            0
-        } else {
-            self.index.delete_chunks(repo_id, &confirmed).await?
-        };
+        if !confirmed.is_empty() {
+            report.deleted += self.index.delete_chunks(repo_id, &confirmed).await?;
+        }
         self.index.delete_paths(repo_id, paths).await?;
-        Ok(counted)
+        Ok(())
     }
 
     async fn index_group(

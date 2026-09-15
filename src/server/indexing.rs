@@ -135,14 +135,17 @@ impl IndexBackend {
         let repo_id = repo.to_string();
         let indexed =
             crate::indexer::types::indexed_revision(revision, &config.retrieval.submodules);
-        if self
-            .manifest
-            .state(&repo_id, &self.signature)
-            .await?
-            .is_fresh(&indexed)
-        {
+        let before = self.manifest.state(&repo_id, &self.signature).await?;
+        if before.is_fresh(&indexed) {
             return Ok(IndexOutcome::AlreadyFresh);
         }
+        // A record with no revision is a run that never completed — cold,
+        // stopped on budget, or missing a submodule — and the graph was not
+        // synced from it, or was synced from a tree that lacked something.
+        // Whatever it holds, the graph is rebuilt whole this time rather than
+        // incrementally from a `changed` list that no longer names what the
+        // incomplete run already confirmed.
+        let rebuild_graph_whole = before.revision.is_none();
 
         // Read-only, and read-only on purpose: this is the same boundary the
         // review runs against. The write token is minted separately, in
@@ -208,23 +211,22 @@ impl IndexBackend {
             //
             // Not from a checkout missing a submodule, though: parsed against
             // a tree where those files do not exist, every import into them
-            // resolves as broken and a whole rebuild drops their nodes — and
-            // the complete run that follows sees their chunks unchanged and
-            // never puts them back. The graph is dropped instead, so that run
-            // rebuilds it whole from a tree that has everything. Expansion is
-            // lost until then; wrong edges would be worse than none.
+            // resolves as broken and a whole rebuild drops their nodes. The
+            // graph it has is kept — stale expansion beats none — and the
+            // run leaves the revision unclaimed, which is what makes the
+            // complete run that follows rebuild it whole (see
+            // `rebuild_graph_whole`) from a tree that has everything.
             if !report.unfetched.is_empty() {
-                use crate::ports::graph::GraphStore;
                 tracing::info!(
                     repo = %repo_id,
                     unfetched = ?report.unfetched,
                     "code graph not synced from an incomplete checkout; it is rebuilt whole \
                      once every submodule is fetched"
                 );
-                if let Err(err) = self.index.graph.delete_repo(&repo_id).await {
-                    tracing::warn!(%err, repo = %repo_id, "could not drop the code graph for a rebuild");
-                }
-            } else if let Err(err) = self.sync_graph(&repo_id, &checkout, config, report).await {
+            } else if let Err(err) = self
+                .sync_graph(&repo_id, &checkout, config, report, rebuild_graph_whole)
+                .await
+            {
                 // A graph failure costs expansion, not retrieval: the chunks are
                 // already written and queryable. Failing the whole run here
                 // would throw away an index that just cost money.
@@ -251,6 +253,7 @@ impl IndexBackend {
         checkout: &Checkout,
         config: &Config,
         report: &crate::indexer::types::IndexReport,
+        rebuild_whole: bool,
     ) -> Result<()> {
         let selector = crate::chunk::Selector::new(&config.paths.ignore)?;
         let selection = selector.walk(checkout.path())?;
@@ -266,7 +269,7 @@ impl IndexBackend {
             .iter()
             .chain(report.removed.iter())
             .any(|path| crate::graph::aliases::is_alias_config(path));
-        let parse = match known.is_empty() || aliases_moved {
+        let parse = match known.is_empty() || aliases_moved || rebuild_whole {
             true => None,
             false => Some(
                 crate::graph::build::rebuild_set(
