@@ -59,3 +59,30 @@ lines = [524, 528]
 severity_min = "medium"
 summary = "`elsewhere_for` is read per turn with no round bound, so an earlier round-mate's cross-desk effects (referral answers, direct messages) reach a later round-mate's prompt, breaking the isolation the round-bounded pinboard read was added for."
 must_mention = ["elsewhere", "round|bound|boundary|snapshot|isolat|round-mate|earlier"]
+
+# The rename is 92 `openhuman_core::openhuman` → `openhuman_core` references
+# across 51 files. Offline, the lane twice reported at confidence 1.0 that the
+# new alias "does not resolve" or that the crate root "does not re-export" the
+# old module — a claim about a vendored crate it was never shown, on a pull
+# request whose CI builds and whose author reports 5,600 passing tests. This is
+# the failure the critique instructions forbid in so many words ("a claim that
+# depends on code you were not shown is a claim you cannot make"), and it is
+# worse than the missed findings: it is confident, and it lands on the files
+# that carry no risk while the one file that does gets nothing.
+[[forbidden]]
+id = "F1"
+path = "*"
+lanes = ["critique"]
+reason = """
+The `use openhuman_core as oh;` rewrite compiles — CI is green on the head and
+the author ran `cargo build --all-targets`. A finding that says the alias no
+longer resolves, or that the crate root does not re-export what the old inner
+module did, is invented from the diff alone: the vendored crate's layout is not
+in the prompt and cannot be inferred from a rename.
+"""
+matches = [
+    "does not re-export|does not re‑export|not re-export",
+    "wrong crate alias|import alias",
+    "path resolves|no longer resolves|will not resolve|fails to resolve|cannot resolve",
+    "crate root does not|crate root itself",
+]
