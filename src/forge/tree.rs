@@ -271,6 +271,12 @@ mod tests {
             repo_from_url("https://github.com/acme/x.git/", "github.com"),
             RepoId::parse("acme/x")
         );
+
+        // One spelling per directory: the selector and the manifest say
+        // `libs/core/...`, so `./libs/core/` is `libs/core`.
+        let spelled =
+            "[submodule \"c\"]\n\tpath = ./libs/core/\n\turl = https://github.com/acme/c\n";
+        assert_eq!(parse_gitmodules(spelled, "github.com")[0].path, "libs/core");
     }
 
     #[tokio::test]
