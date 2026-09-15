@@ -140,8 +140,8 @@ async fn each_reviewer_is_asked_with_its_own_prompt() {
         .map(|r| r.messages[0].content.clone())
         .collect();
 
-    assert!(systems.iter().any(|s| s == "system for a"));
-    assert!(systems.iter().any(|s| s == "system for b"));
+    assert!(systems.iter().any(|s| s.starts_with("system for a")));
+    assert!(systems.iter().any(|s| s.starts_with("system for b")));
 }
 
 #[tokio::test]
@@ -648,6 +648,10 @@ async fn without_a_tree_the_prompt_is_the_plain_one() {
     .expect("runs");
 
     let request = &model.requests()[0];
-    assert_eq!(request.messages[0].content, "system for a");
+    assert_eq!(
+        request.messages[0].content,
+        format!("system for a{}", crate::harness::prompt::SETTLE_INSTRUCTION),
+        "the one turn is the last turn, and is told so; nothing about lookups"
+    );
     assert!(request.schema["properties"].is_null());
 }
