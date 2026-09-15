@@ -1733,105 +1733,124 @@ async fn review_inner(
     // keeps a blocked contributor, a draft, or a duplicate delivery from
     // announcing a review that is not going to happen.
     //
-    // Still early: everything above is metadata reads, and every model call is
-    // below. A contributor sees the check appear seconds after pushing, not
-    // minutes.
-    open_status(
-        state,
-        &run.slot,
-        &repo_id,
-        &pull_request.head_sha,
-        installation,
-    )
-    .await;
+    // Everything from here down — status publication, the repository's config
+    // overlay, the default-branch lookup, the lanes and the final publish —
+    // is the lease-held portion of the run, and all of it now shares the one
+    // `run.deadline`. A stalled forge read or a slow check-run write must lose
+    // the lease exactly as a slow model call does: the deadline exists so a
+    // review cannot outlive `LEASE_TTL`, and it only does that job if nothing
+    // between the lease claim and its release can run unbounded. A contributor
+    // still sees the check appear seconds after pushing, because `open_status`
+    // is the first thing this future awaits.
+    let outcome = tokio::time::timeout_at(run.deadline, async {
+        open_status(
+            state,
+            &run.slot,
+            &repo_id,
+            &pull_request.head_sha,
+            installation,
+        )
+        .await;
 
-    // `AssertUnwindSafe` + `catch_unwind` so a panic inside a lane still
-    // reaches the release below. Without it the `?` on the outcome is not the
-    // only way out — an unwind skips everything — and the lease survives the
-    // worker that took it.
-    // The reviewed repository's own policy, read through the forge because
-    // there is no checkout here. Without this every repository is reviewed
-    // under the *deployment's* `.tinysweeper.toml`, which is tinysweeper's own.
-    // Read at the base branch's tip rather than the head: a config is acted on
-    // deterministically, so reading it from the branch under review would let a
-    // pull request grade its own exam. See `crate::config::remote`.
-    let overlay = crate::config::remote::overlay(
-        &forge,
-        &repo_id,
-        &pull_request.base_sha,
-        &state.config.config,
-    )
-    .await;
-    if let Some(source) = &overlay.source {
-        tracing::info!(%repo, source, "reviewing under the repository's own configuration");
-    }
-
-    // Memory is fed from the *base* tip, not the head: what the repository
-    // has committed to, not what this pull request proposes. See
-    // `server::memory`. Spawned only now, under `overlay.config` rather than
-    // the deployment's own, so a repository's own `paths.ignore` — which is
-    // repository-overridable — is honored before anything from an excluded
-    // path is persisted into the engine.
-    //
-    // Skipped entirely when the overlay could not be read or applied:
-    // `overlay.config` is then only a fallback, not the repository's actual
-    // policy, and ingesting under it risks persisting paths the repository
-    // excludes. A later delivery for the same base tip that successfully
-    // loads the real overlay still ingests normally — this delivery just
-    // does not, rather than ingesting under a policy that might be wrong.
-    //
-    // And only from the default branch. Memory is repository-wide, so a
-    // pull request against a release branch must not replace `main`'s
-    // snapshot, and an older base must not roll the memory backwards; the
-    // ingest forgets a section before rewriting it, so either would.
-    if overlay.unavailable {
-        tracing::warn!(
-            %repo,
-            "skipping memory ingestion: the repository's own configuration could not be read"
-        );
-    } else if let Some(backend) = &state.memory {
-        let default_branch = {
-            use crate::ports::forge::ForgeRead;
-            forge.default_branch(&repo_id).await
-        };
-        match default_branch {
-            Ok(branch) if branch == pull_request.base_ref => {
-                tokio::spawn(ingest_in_background(
-                    backend.clone(),
-                    Arc::new(overlay.config.clone()),
-                    state.index_permits.clone(),
-                    repo_id.clone(),
-                    pull_request.base_sha.clone(),
-                    read_token.clone(),
-                ));
-            }
-            Ok(branch) => tracing::debug!(
-                %repo,
-                base = %pull_request.base_ref,
-                default = %branch,
-                "skipping memory ingestion: the base is not the default branch"
-            ),
-            Err(err) => tracing::warn!(
-                %repo,
-                %err,
-                "skipping memory ingestion: could not read the default branch"
-            ),
+        // `AssertUnwindSafe` + `catch_unwind` so a panic inside a lane still
+        // reaches the release below. Without it the `?` on the outcome is not
+        // the only way out — an unwind skips everything — and the lease
+        // survives the worker that took it.
+        // The reviewed repository's own policy, read through the forge
+        // because there is no checkout here. Without this every repository is
+        // reviewed under the *deployment's* `.tinysweeper.toml`, which is
+        // tinysweeper's own. Read at the base branch's tip rather than the
+        // head: a config is acted on deterministically, so reading it from
+        // the branch under review would let a pull request grade its own
+        // exam. See `crate::config::remote`.
+        let overlay = crate::config::remote::overlay(
+            &forge,
+            &repo_id,
+            &pull_request.base_sha,
+            &state.config.config,
+        )
+        .await;
+        if let Some(source) = &overlay.source {
+            tracing::info!(%repo, source, "reviewing under the repository's own configuration");
         }
-    }
 
-    let outcome = std::panic::AssertUnwindSafe(run_and_publish(
-        state,
-        &overlay.config,
-        &repo_id,
-        number,
-        installation,
-        &forge,
-        &read_token,
-        run,
-    ))
-    .catch_unwind()
+        // Memory is fed from the *base* tip, not the head: what the
+        // repository has committed to, not what this pull request proposes.
+        // See `server::memory`. Spawned only now, under `overlay.config`
+        // rather than the deployment's own, so a repository's own
+        // `paths.ignore` — which is repository-overridable — is honored
+        // before anything from an excluded path is persisted into the
+        // engine.
+        //
+        // Skipped entirely when the overlay could not be read or applied:
+        // `overlay.config` is then only a fallback, not the repository's
+        // actual policy, and ingesting under it risks persisting paths the
+        // repository excludes. A later delivery for the same base tip that
+        // successfully loads the real overlay still ingests normally — this
+        // delivery just does not, rather than ingesting under a policy that
+        // might be wrong.
+        //
+        // And only from the default branch. Memory is repository-wide, so a
+        // pull request against a release branch must not replace `main`'s
+        // snapshot, and an older base must not roll the memory backwards; the
+        // ingest forgets a section before rewriting it, so either would.
+        if overlay.unavailable {
+            tracing::warn!(
+                %repo,
+                "skipping memory ingestion: the repository's own configuration could not be read"
+            );
+        } else if let Some(backend) = &state.memory {
+            let default_branch = {
+                use crate::ports::forge::ForgeRead;
+                forge.default_branch(&repo_id).await
+            };
+            match default_branch {
+                Ok(branch) if branch == pull_request.base_ref => {
+                    tokio::spawn(ingest_in_background(
+                        backend.clone(),
+                        Arc::new(overlay.config.clone()),
+                        state.index_permits.clone(),
+                        repo_id.clone(),
+                        pull_request.base_sha.clone(),
+                        read_token.clone(),
+                    ));
+                }
+                Ok(branch) => tracing::debug!(
+                    %repo,
+                    base = %pull_request.base_ref,
+                    default = %branch,
+                    "skipping memory ingestion: the base is not the default branch"
+                ),
+                Err(err) => tracing::warn!(
+                    %repo,
+                    %err,
+                    "skipping memory ingestion: could not read the default branch"
+                ),
+            }
+        }
+
+        std::panic::AssertUnwindSafe(run_and_publish(
+            state,
+            &overlay.config,
+            &repo_id,
+            number,
+            installation,
+            &forge,
+            &read_token,
+            run,
+        ))
+        .catch_unwind()
+        .await
+        .unwrap_or_else(|_| Err(Error::lane("review", "the review panicked")))
+    })
     .await
-    .unwrap_or_else(|_| Err(Error::lane("review", "the review panicked")));
+    .unwrap_or_else(|_elapsed| {
+        Error::timeout(format!("the review of {repo}#{number}"), REVIEW_DEADLINE)
+    })
+    .map(Ok::<_, Error>)
+    .unwrap_or_else(Err)
+    .unwrap_or_else(|err| Err(err))
+    .and_then(std::convert::identity);
 
     // Released regardless of how the review went. The TTL in the store is the
     // backstop for the cases this cannot cover — a kill, or a lost machine.
