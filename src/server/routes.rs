@@ -1582,6 +1582,16 @@ async fn handle_review(
         // before `review_inner` does any work, is what keeps this review off
         // the leftover-grace-period path — see `conclude_in_flight`.
         tracing::info!(%repo, number, "declining to start a review: shutting down");
+        // The claim still has to be released on this path like every other:
+        // `dispatch` already persisted it before calling in here, and leaving
+        // it held would make `claim_delivery` refuse GitHub's own redelivery
+        // of the same webhook forever, with no other trigger left to review
+        // this commit until the next push.
+        if let Some(delivery) = delivery
+            && let Err(release) = state.store.release_delivery(&delivery).await
+        {
+            tracing::error!(%release, %delivery, "could not release the declined delivery claim");
+        }
         return;
     };
 
