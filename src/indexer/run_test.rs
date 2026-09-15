@@ -747,6 +747,41 @@ async fn a_run_that_fails_after_its_first_batch_does_not_count_that_batch_twice(
 }
 
 #[tokio::test]
+async fn a_path_both_revoked_and_missing_is_revoked() {
+    // `.gitmodules` is the contributor's; naming one path twice, once under a
+    // repository the operator revoked and once under an allow-listed one
+    // whose fetch failed, must not keep the revoked rows.
+    let checkout = Checkout::new();
+    checkout.write(
+        "libs/core/src/lib.rs",
+        "fn vendored() -> usize {\n    3\n}\n",
+    );
+    let rig = Rig::new();
+    rig.indexer()
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("indexes");
+    checkout.remove("libs/core/src/lib.rs");
+
+    let out = report(
+        rig.indexer()
+            .revoking(vec!["libs/core".into()])
+            .missing(vec!["libs/core".into()])
+            .index_repo(REPO, "sha-2", &checkout.root())
+            .await
+            .expect("runs"),
+    );
+    assert!(out.deleted > 0, "{out:?}");
+    assert!(
+        !rig.rows()
+            .await
+            .iter()
+            .any(|(path, _)| path == "libs/core/src/lib.rs"),
+        "denial wins the tie"
+    );
+}
+
+#[tokio::test]
 async fn a_revocation_counted_by_a_failed_run_is_not_subtracted_again_by_the_retry() {
     // The early delete succeeds, the embedding after it fails, the failed
     // run persists the decrement — and the manifest still lists the paths,
