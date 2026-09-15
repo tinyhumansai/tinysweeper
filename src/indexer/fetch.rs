@@ -100,6 +100,7 @@ impl Checkout {
         Ok(Self {
             dir,
             revision: revision.to_string(),
+            repo: repo.to_string(),
         })
     }
 
