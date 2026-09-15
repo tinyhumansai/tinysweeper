@@ -141,6 +141,7 @@ impl Lane for Security {
             let prior_findings = input.prior_findings;
             let retrieved_context = input.retrieved_context;
             let memory_context = input.memory_context;
+            let asking = input.asking();
             let diffs = input.diffs;
             let scanner = &scanner;
             async move {
@@ -156,6 +157,7 @@ impl Lane for Security {
                     prior_findings,
                     retrieved_context,
                     memory_context,
+                    asking,
                     diff,
                     scanner,
                 )
@@ -190,7 +192,7 @@ async fn review_file(
     prior_findings: &[String],
     retrieved_context: &str,
     memory_context: &str,
-    tree: None,
+    asking: runner::Asking<'_>,
     diff: &FileDiff,
     scanner: &[&ScanFinding],
 ) -> Result<FileReview> {
@@ -229,7 +231,7 @@ async fn review_file(
         LaneId::Security,
         &calls,
         &schema::json_schema(),
-        input.asking(),
+        asking,
     )
     .await?;
 
