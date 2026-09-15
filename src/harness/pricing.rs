@@ -259,6 +259,11 @@ const EMBED_PRICES: &[(&str, f64)] = &[
     ("openrouter/qwen/qwen3-embedding-4b", 0.02),
     ("openrouter/baai/bge-m3", 0.01),
     ("openrouter/google/gemini-embedding-001", 0.15),
+    // The box's LLM ladder. `vectors` is a ladder, not a model: every rung in
+    // it is a 1024-wide BGE-M3 (Venice's `text-embedding-bge-m3` today), so
+    // one rate covers whatever answered. A fallback like the OpenRouter rows
+    // above — a body that reports its cost is billed at that instead.
+    ("ladder/vectors", 0.01),
 ];
 
 /// The price of `model`, when it is known.
