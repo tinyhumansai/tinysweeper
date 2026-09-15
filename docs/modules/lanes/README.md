@@ -116,7 +116,7 @@ opencompany#2313 obeyed it and filed nothing.
 `critique` also verifies a **mechanical substitution** before the fan-out
 (`lanes::mechanical`). When one literal replacement explains a file's whole
 diff line for line — a rename across fifty files — the file is proven here,
-named in the summary as verified, and never sent to a model. The check is
+named in the summary as verified; one sample of it is still read so a uniform but semantic substitution is judged, and the rest are never sent to a model. The check is
 exact, so its only failure is a false negative: a file with one line that is
 not the substitution goes to the model like any other. On the pull request
 that motivated it, 50 of 58 files were the rename and $0.20 of $0.23 had
