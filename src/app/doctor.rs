@@ -208,7 +208,9 @@ fn print_prose(loaded: &Loaded) {
             } else {
                 route.order.join(", ")
             },
-            if route.allow_fallbacks {
+            if route.order.is_empty() {
+                ""
+            } else if route.allow_fallbacks {
                 "  (may route elsewhere)"
             } else {
                 "  (pinned)"
