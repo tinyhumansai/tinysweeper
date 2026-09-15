@@ -79,7 +79,7 @@ async function main() {
       return;
     }
     // The server's plan can exceed the repository's own cap: `max_flows` in
-    // `.tinysweeper/ui-preview.json` is documented as a hard ceiling on the
+    // `.github/tinysweeper/ui-preview.json` is documented as a hard ceiling on the
     // browser work and model turns this run performs, so enforce it here
     // even if the server already tried to.
     const flows = started.flows.slice(0, config.max_flows);
@@ -416,7 +416,7 @@ function options() {
   const opts = {
     server: get("--server", "TS_SERVER"),
     token: process.env.TS_TOKEN,
-    config: get("--config", "TS_CONFIG") ?? ".tinysweeper/ui-preview.json",
+    config: get("--config", "TS_CONFIG") ?? ".github/tinysweeper/ui-preview.json",
     beforeDir: path.resolve(get("--before", "TS_BEFORE_DIR") ?? "../before"),
     afterDir: path.resolve(get("--after", "TS_AFTER_DIR") ?? "."),
     repo: get("--repo", "TS_REPO"),

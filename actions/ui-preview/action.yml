@@ -21,7 +21,7 @@ inputs:
     required: true
   config:
     description: Path to the repository's ui-preview config
-    default: .tinysweeper/ui-preview.json
+    default: .github/tinysweeper/ui-preview.json
   before-dir:
     description: A checkout of the merge-base
     required: true

@@ -21,8 +21,7 @@ on:
       - "**/*.css"
       - "**/*.scss"
       - "**/*.html"
-      - ".tinysweeper/ui-preview.json"
-      - "scripts/ui-preview/**"
+      - ".github/tinysweeper/**"
 
 permissions:
   contents: read
