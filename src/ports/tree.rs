@@ -405,6 +405,19 @@ impl DirTree {
             })
     }
 
+    /// The submodule `path` lies under, when that submodule has no content.
+    fn unfetched_submodule(&self, path: &str) -> Option<&str> {
+        let sub = self
+            .submodules
+            .iter()
+            .find(|s| path.starts_with(&format!("{s}/")))?;
+        let dir = self.root.join(sub);
+        let empty = std::fs::read_dir(&dir)
+            .map(|mut entries| entries.next().is_none())
+            .unwrap_or(true);
+        empty.then_some(sub.as_str())
+    }
+
     fn walk(&self, dir: &std::path::Path, out: &mut Vec<String>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
@@ -460,7 +473,19 @@ impl TreeReader for DirTree {
                         let (start, end) = Lookup::read_range(*start, *end);
                         slice_lines(&content, start, end)
                     }
-                    Err(_) => Found::NotFound,
+                    // Inside a submodule that was never fetched, "not found"
+                    // would be a lie the reviewer acts on: it reported a
+                    // manifest as missing because the checkout had an empty
+                    // directory where the submodule belongs.
+                    Err(_) => match self.unfetched_submodule(path) {
+                        Some(sub) => Found::Unavailable {
+                            reason: format!(
+                                "the submodule at `{sub}` is not checked out here, so nothing \
+                                 under it can be read; do not treat its files as missing"
+                            ),
+                        },
+                        None => Found::NotFound,
+                    },
                 }
             }
             Lookup::Search { pattern, glob } => {
@@ -650,6 +675,25 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(read, Found::Text { total: 1, .. }));
+
+        // A declared submodule with nothing in it answers "unavailable", so
+        // a reviewer cannot conclude a file there is missing.
+        std::fs::write(
+            dir.path().join(".gitmodules"),
+            "[submodule \"lib\"]\n\tpath = vendor/lib\n[submodule \"empty\"]\n\tpath = vendor/empty\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("vendor/empty")).unwrap();
+        let tree = DirTree::new(dir.path());
+        let unfetched = tree
+            .lookup(&Lookup::Read {
+                path: "vendor/empty/Cargo.toml".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(unfetched, Found::Unavailable { .. }), "{unfetched:?}");
     }
 
     #[tokio::test]
