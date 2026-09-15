@@ -62,12 +62,26 @@ const MAX_CONCURRENT_REVIEWS: usize = 4;
 /// lease is what stops a redelivery from reviewing the same commit twice, and
 /// a review still running when its lease expires is exactly the duplicate the
 /// lease exists to prevent. The margin covers the metadata reads before the
-/// lease is taken and the publish after the lanes return, neither of which is
-/// under this deadline.
+/// lease is taken and the publish after the lanes return, which has a bound of
+/// its own in [`PUBLISH_DEADLINE`].
 const REVIEW_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+
+/// How long the publish after the lanes may take, wall clock.
+///
+/// A separate budget rather than the remainder of [`REVIEW_DEADLINE`], and a
+/// generous one. `apply` is a handful of sequential, non-idempotent GitHub
+/// writes, and cancelling it between two of them cannot retract what GitHub
+/// already accepted — so this must never fire on a publish that is merely
+/// slow, only on one that is stuck. Each write is capped at a minute by the
+/// forge client; a publish that needs five is already broken, and cutting it
+/// off then costs at most a partial review, which the umbrella check reports
+/// as a failure, rather than a lease that lapses under a review still holding
+/// it.
+const PUBLISH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
 const _: () = assert!(
-    REVIEW_DEADLINE.as_secs() < LEASE_TTL.as_secs(),
-    "a review must give up before its lease does"
+    REVIEW_DEADLINE.as_secs() + PUBLISH_DEADLINE.as_secs() < LEASE_TTL.as_secs(),
+    "a review and its publish must both give up before the lease does"
 );
 
 /// How many repositories may be indexed at once.
@@ -1909,15 +1923,14 @@ async fn review_inner(
         .await
         .unwrap_or_else(|_| Err(Error::lane("review", "the review panicked")));
 
-        // The publish is outside the deadline on purpose. `apply` is several
-        // sequential, non-idempotent writes — lane checks, the review body,
-        // comments — and cancelling it between two of them cannot retract
-        // what GitHub already accepted: the result would be a permanently
-        // partial review, not a clean timeout. The lanes have returned, so
-        // there is no model call left to bound; each write here is capped by
-        // the forge client's own request timeout. The write token is minted
-        // only now, after every model call has returned — the boundary in
-        // `AGENTS.md`.
+        // The publish runs under its own, separate budget rather than the
+        // remainder of `run.deadline`: a review that used all of its time in
+        // the lanes still gets a full window to publish, because cancelling
+        // `apply` between two of its non-idempotent writes leaves a
+        // permanently partial review, and that must only ever happen to a
+        // publish that is stuck. See `PUBLISH_DEADLINE`. The write token is
+        // minted only now, after every model call has returned — the
+        // boundary in `AGENTS.md`.
         let outcome = match lanes {
             Ok((config, proposal)) => {
                 let publish = async {
@@ -1925,7 +1938,15 @@ async fn review_inner(
                     let write = crate::forge::github::GitHubWrite::new(&write_token)?;
                     crate::app::apply(&forge, &write, &config, &proposal, Some(&state.store)).await
                 };
-                publish.await.map(|()| proposal)
+                tokio::time::timeout(PUBLISH_DEADLINE, publish)
+                    .await
+                    .map_err(|_elapsed| {
+                        Error::timeout(
+                            format!("publishing the review of {repo}#{number}"),
+                            PUBLISH_DEADLINE,
+                        )
+                    })
+                    .and_then(|published| published.map(|()| proposal))
             }
             Err(err) => Err(err),
         };
