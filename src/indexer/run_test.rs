@@ -747,6 +747,73 @@ async fn a_run_that_fails_after_its_first_batch_does_not_count_that_batch_twice(
 }
 
 #[tokio::test]
+async fn a_revocation_counted_by_a_failed_run_is_not_subtracted_again_by_the_retry() {
+    // The early delete succeeds, the embedding after it fails, the failed
+    // run persists the decrement — and the manifest still lists the paths,
+    // because forgetting them is the late step the run never reached. The
+    // retry must not subtract the same rows a second time.
+    let checkout = Checkout::new();
+    checkout.write(
+        "libs/core/src/lib.rs",
+        "fn vendored() -> usize {\n    3\n}\n",
+    );
+    let rig = Rig::new();
+    let embedder = FlakyEmbedder {
+        inner: MockEmbedder::new(16),
+        answers: std::sync::atomic::AtomicU64::new(u64::MAX),
+    };
+    let signature = crate::ports::embed::Embedder::signature(&embedder);
+    Indexer::new(&embedder, &rig.index, &rig.manifest)
+        .expect("builds")
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("indexes");
+    let before = rig.manifest.snapshot(REPO, &signature).chunks;
+    assert_eq!(before, rig.index.len() as u64);
+
+    // Revoke the submodule and add a file, so there is something to embed —
+    // and the next embedding call fails.
+    checkout.remove("libs/core/src/lib.rs");
+    checkout.write("src/gamma.rs", "fn gamma() {}\n");
+    embedder
+        .answers
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    let indexer = Indexer::new(&embedder, &rig.index, &rig.manifest)
+        .expect("builds")
+        .revoking(vec!["libs/core".into()]);
+    assert!(
+        indexer
+            .index_repo(REPO, "sha-2", &checkout.root())
+            .await
+            .is_err(),
+        "the first attempt fails after the revocation"
+    );
+    let failed = rig.manifest.snapshot(REPO, &signature);
+    assert_eq!(failed.state, IndexState::Failed);
+    assert_eq!(failed.chunks, before - 1, "the revocation was counted once");
+    assert!(
+        rig.manifest
+            .paths(REPO, &signature)
+            .await
+            .expect("lists")
+            .contains(&"libs/core/src/lib.rs".to_string()),
+        "the path is still on record for the retry to carry to the graph"
+    );
+
+    indexer
+        .index_repo(REPO, "sha-2", &checkout.root())
+        .await
+        .expect("the retry succeeds");
+    let record = rig.manifest.snapshot(REPO, &signature);
+    assert_eq!(record.state, IndexState::Ready);
+    assert_eq!(
+        record.chunks,
+        rig.index.len() as u64,
+        "the retry subtracts nothing a failed run already counted"
+    );
+}
+
+#[tokio::test]
 async fn a_run_that_hits_its_budget_stops_with_a_partial_index_rather_than_failing() {
     let checkout = Checkout::new();
     let rig = Rig::new();
