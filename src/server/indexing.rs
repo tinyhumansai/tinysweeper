@@ -403,7 +403,6 @@ fn mongo_db() -> String {
     std::env::var("TINYSWEEPER_MONGODB_DB").unwrap_or_else(|_| "tinysweeper".to_string())
 }
 
-
 /// What the manifest records as the revision an index reflects.
 ///
 /// The commit alone is not enough: which submodules were fetched into the
@@ -428,7 +427,10 @@ fn indexed_revision(revision: &str, submodules: &[String]) -> String {
         sha2::Digest::update(&mut hasher, b"\0");
     }
     let digest = sha2::Digest::finalize(hasher);
-    format!("{revision}+submodules:{:016x}", u64::from_be_bytes(digest[..8].try_into().unwrap()))
+    format!(
+        "{revision}+submodules:{:016x}",
+        u64::from_be_bytes(digest[..8].try_into().unwrap())
+    )
 }
 
 #[cfg(test)]
@@ -446,6 +448,26 @@ mod tests {
         unsafe { std::env::set_var(GIT_HOST_ENV, "https://ghe.example.com/") };
         assert_eq!(git_host(), "ghe.example.com");
         unsafe { std::env::remove_var(GIT_HOST_ENV) };
+    }
+
+    #[test]
+    fn the_recorded_revision_moves_with_the_submodule_policy() {
+        // No policy: the bare commit, so manifests written before the list
+        // existed are still fresh.
+        assert_eq!(indexed_revision("abc", &[]), "abc");
+
+        let one = indexed_revision("abc", &["o/lib".into()]);
+        let two = indexed_revision("abc", &["o/lib".into(), "o/core".into()]);
+        assert!(one.starts_with("abc+submodules:"));
+        assert_ne!(
+            one, two,
+            "changing the allow-list must make the index stale"
+        );
+        assert_ne!(one, "abc", "a policy is not the bare commit");
+
+        // Order and repeats are not policy.
+        let reordered = indexed_revision("abc", &["o/core".into(), "o/lib".into(), "o/lib".into()]);
+        assert_eq!(two, reordered);
     }
 
     #[tokio::test]
