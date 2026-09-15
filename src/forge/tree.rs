@@ -118,8 +118,9 @@ enum Read {
     Content(String),
     /// No such file at this commit.
     Missing,
-    /// Under a submodule policy does not let this reader open.
-    Denied,
+    /// Under a submodule policy does not let this reader open; the path
+    /// names it.
+    Denied(String),
 }
 
 impl<'a> ForgeTree<'a> {
@@ -178,7 +179,7 @@ impl<'a> ForgeTree<'a> {
             return Ok(Read::Missing);
         };
         let Some(repo) = &sub.repo else {
-            return Ok(Read::Denied);
+            return Ok(Read::Denied(sub.path.clone()));
         };
         // A `.gitmodules` edit is contributor-controlled and can name any
         // repository on this host, and the installation-wide read token
@@ -186,7 +187,7 @@ impl<'a> ForgeTree<'a> {
         // readily as anywhere. Only a repository the operator listed in
         // `retrieval.submodules` is read.
         if !self.allowed.iter().any(|a| a == repo) {
-            return Ok(Read::Denied);
+            return Ok(Read::Denied(sub.path.clone()));
         }
         let Some((_url, commit)) = self
             .forge
@@ -217,7 +218,13 @@ impl TreeReader for ForgeTree<'_> {
                         slice_lines(&content, start, end)
                     }
                     Read::Missing => Found::NotFound,
-                    Read::Denied => Found::Unavailable,
+                    Read::Denied(sub) => Found::Unavailable {
+                        reason: format!(
+                            "the submodule at `{sub}` is not one this deployment may read, \
+                             so nothing under it can be read; do not treat its files as \
+                             missing"
+                        ),
+                    },
                 })
             }
             Lookup::Search { .. } => Ok(Found::Unavailable {
@@ -338,11 +345,10 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(
-            found,
-            Found::Unavailable,
+        assert!(
+            matches!(&found, Found::Unavailable { reason } if reason.contains("vendor/lib")),
             "a submodule the operator did not list must not be read, whoever owns it — \
-             and the refusal is not a missing file"
+             and the refusal is not a missing file: {found:?}"
         );
 
         let listed = ForgeTree::new(&forge, repo(), "head", "github.com")
