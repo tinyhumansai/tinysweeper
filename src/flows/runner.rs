@@ -278,22 +278,31 @@ pub async fn ask_all(
         s
     };
 
+    // The system prompt for a turn says exactly what that turn may do: a turn
+    // that may look up is told so, a turn that may ask is told so, and the
+    // settling turn is told neither — an instruction to ask, on a turn nothing
+    // will answer, invites a question that is never answered.
+    let system_for = |base: &str, may_lookup: bool, may_ask: bool| -> String {
+        let mut system = base.to_string();
+        if may_lookup && let Some((tree, policy)) = lookups {
+            system.push_str(&lookup::instruction(&tree.describe(), policy));
+        }
+        if may_ask {
+            system.push_str(subagent::ASK_INSTRUCTION);
+        }
+        system
+    };
+
+    let max_rounds = lookups.map_or(0, |(_, p)| p.rounds);
     let mut prompts: Vec<Call> = calls
         .iter()
         .cloned()
         .map(|mut call| {
-            if let Some((tree, policy)) = lookups {
-                call.system
-                    .push_str(&lookup::instruction(&tree.describe(), policy));
-            }
-            if subagent_model.is_some() {
-                call.system.push_str(subagent::ASK_INSTRUCTION);
-            }
+            call.system = system_for(&call.system, max_rounds > 0, subagent_model.is_some());
             call
         })
         .collect();
 
-    let max_rounds = lookups.map_or(0, |(_, p)| p.rounds);
     let mut answers = one_round(
         &capabilities,
         lane,
@@ -329,6 +338,8 @@ pub async fn ask_all(
                     continue;
                 }
                 prompts[index].prompt.push_str(&gathered.rendered);
+                prompts[index].system =
+                    system_for(&calls[index].system, may_lookup_again, subagent_model.is_some());
                 tracing::debug!(
                     reviewer = %prompts[index].id,
                     round,
@@ -383,6 +394,7 @@ pub async fn ask_all(
         // after this one, so offering `questions` again would invite a question
         // nothing will ever answer.
         let mut again = prompts[index].clone();
+        again.system = calls[index].system.clone();
         again.prompt.push_str(&subagent::render(&answered));
 
         if let Ok(round_two) =

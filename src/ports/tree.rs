@@ -389,7 +389,13 @@ impl DirTree {
             first,
             ".git" | "node_modules" | "target" | "vendor" | ".venv" | "dist" | "build" | "third_party"
         );
-        vendored && !self.submodules.iter().any(|s| rel.starts_with(s.as_str()))
+        // A vendored directory is kept when a tracked submodule is it, is
+        // under it, or contains it — otherwise the walk never reaches the
+        // submodule to search it.
+        vendored
+            && !self.submodules.iter().any(|s| {
+                s == rel || s.starts_with(&format!("{rel}/")) || rel.starts_with(&format!("{s}/"))
+            })
     }
 
     fn walk(&self, dir: &std::path::Path, out: &mut Vec<String>) {
