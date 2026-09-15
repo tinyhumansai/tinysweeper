@@ -159,6 +159,8 @@ mod tests {
         Gallery {
             number: 7,
             head_sha: "abc".into(),
+            run: "run-1".into(),
+            files: vec![],
             flows: vec![GalleryFlow {
                 id: "f1".into(),
                 title: "Open settings".into(),
@@ -341,6 +343,8 @@ mod tests {
             );
         let empty = Gallery {
             head_sha: "def".into(),
+            run: "run-1".into(),
+            files: vec![],
             flows: vec![],
             ..gallery()
         };
@@ -363,6 +367,8 @@ mod tests {
         let forge = MockForge::new().with_pull_request(pull_request("def"), vec![], vec![]);
         let empty = Gallery {
             head_sha: "def".into(),
+            run: "run-1".into(),
+            files: vec![],
             flows: vec![],
             ..gallery()
         };

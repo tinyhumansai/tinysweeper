@@ -186,6 +186,8 @@ mod tests {
         Gallery {
             number: 8634,
             head_sha: "53ee083".into(),
+            run: "run-1".into(),
+            files: vec![],
             flows: vec![
                 GalleryFlow {
                     id: "f1".into(),

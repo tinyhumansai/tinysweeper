@@ -873,6 +873,15 @@ impl crate::ports::forge::ForgeWrite for RefusingForge {
     async fn resolve_review_thread(&self, _repo: &RepoId, _thread_id: &str) -> crate::Result<()> {
         unreachable!("auto-merge resolves no threads")
     }
+    async fn publish_files(
+        &self,
+        _repo: &RepoId,
+        _branch: &str,
+        _message: &str,
+        _files: &[(String, Vec<u8>)],
+    ) -> crate::Result<String> {
+        unreachable!("auto-merge publishes no files")
+    }
     async fn merge(
         &self,
         _repo: &RepoId,
