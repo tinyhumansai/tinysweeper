@@ -1983,17 +1983,19 @@ async fn review_inner(
         // this is where a budget it exhausted is noticed.
         let lanes = match run.check(repo, number) {
             Ok(()) => std::panic::AssertUnwindSafe(run_lanes(
-            state,
-            &overlay.config,
-            &repo_id,
-            number,
-            &forge,
-            &read_token,
-            run,
-        ))
-        .catch_unwind()
-        .await
-        .unwrap_or_else(|_| Err(Error::lane("review", "the review panicked")));
+                state,
+                &overlay.config,
+                &repo_id,
+                number,
+                &forge,
+                &read_token,
+                run,
+            ))
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|_| Err(Error::lane("review", "the review panicked"))),
+            Err(spent) => Err(spent),
+        };
 
         // The publish runs under its own, separate budget rather than the
         // remainder of `run.deadline`: a review that used all of its time in
