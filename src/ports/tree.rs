@@ -553,11 +553,17 @@ impl<'a> ChainTree<'a> {
 #[async_trait]
 impl TreeReader for ChainTree<'_> {
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
+        // "Unavailable" outranks "not found" when nobody answered: one reader
+        // saying the truth is unknown is not undone by a later one that could
+        // not see the path either. A fixture that recorded nothing, chained
+        // before a forge that holds two files, was answering "no such file"
+        // for the whole repository.
         let mut last = Found::NotFound;
         for reader in &self.readers {
             let found = reader.lookup(lookup).await?;
             match found {
-                Found::NotFound | Found::Unavailable { .. } => last = found,
+                Found::NotFound => {}
+                Found::Unavailable { .. } => last = found,
                 answered => return Ok(answered),
             }
         }
@@ -743,5 +749,18 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(found, Found::Text { .. }));
+
+        let unknown = chain
+            .lookup(&Lookup::Read {
+                path: "b.rs".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+        assert!(
+            matches!(unknown, Found::Unavailable { .. }),
+            "an unrecorded lookup stays unavailable past a reader that lacks the path: {unknown:?}"
+        );
     }
 }
