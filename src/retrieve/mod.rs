@@ -128,7 +128,11 @@ impl<'a> Retriever<'a> {
 
         // Freshness first: a cold index cannot be made warm by querying it, and
         // the query costs money.
-        let freshness = self.freshness(repo_id, &signature, head_sha).await;
+        // Compared against what the server *records*, which folds the
+        // submodule allow-list into the head: see `indexed_revision`.
+        let indexed =
+            crate::indexer::types::indexed_revision(head_sha, &config.retrieval.submodules);
+        let freshness = self.freshness(repo_id, &signature, &indexed).await;
         if freshness == Some(RetrievalStatus::Cold) {
             return (RetrievedContext::degraded(RetrievalStatus::Cold), spend);
         }
@@ -218,7 +222,7 @@ impl<'a> Retriever<'a> {
         &self,
         repo_id: &str,
         signature: &EmbedSignature,
-        head_sha: &str,
+        indexed: &str,
     ) -> Option<RetrievalStatus> {
         let manifest = self.manifest?;
         let state = match manifest.state(repo_id, signature).await {
@@ -235,7 +239,7 @@ impl<'a> Retriever<'a> {
             // usable, so the index really is cold.
             IndexState::Absent => Some(RetrievalStatus::Cold),
             _ if state.chunks == 0 => Some(RetrievalStatus::Cold),
-            IndexState::Ready if state.revision.as_deref() == Some(head_sha) => {
+            IndexState::Ready if state.revision.as_deref() == Some(indexed) => {
                 Some(RetrievalStatus::Ready)
             }
             // Ready-but-behind, mid-run, and failed-with-partial-results are one

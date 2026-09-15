@@ -26,6 +26,7 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_review(config, &mut problems);
     validate_paths(config, &mut problems);
     validate_models(config, &mut problems);
+    validate_submodules(config, &mut problems);
     validate_knowledge(config, &mut problems);
     validate_embeddings(config, &mut problems);
     validate_retrieval(config, &mut problems);
@@ -226,6 +227,43 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
             models.max_tokens,
             models.reasoning_effort.trim(),
         ));
+    }
+
+    // One route per model. Every reader of the list takes the first match —
+    // `routing_for`, `call_until_complete`, `Models::route_for` — so a second
+    // entry for the same model is not an override, it is ignored, while
+    // `doctor` prints both as if they applied.
+    let mut seen = std::collections::BTreeSet::new();
+    for route in &models.routes {
+        if !seen.insert(route.model.as_str()) {
+            problems.push(format!(
+                "`models.routes` names `{}` more than once; only the first entry would apply, \
+                 so merge them into one",
+                route.model
+            ));
+        }
+    }
+
+    // A route's ceiling replaces the global one for its model, so the same
+    // floor applies to it — a nonzero override below it recreates exactly the
+    // failure the check above exists for, on one rung. Zero means "no
+    // ceiling" and is exempt.
+    for route in &models.routes {
+        if let Some(cap) = route.max_tokens
+            && cap != 0
+            && cap < REASONING_FLOOR
+            && models.reasoning_effort.trim() != "off"
+            && !models.reasoning_effort.trim().is_empty()
+        {
+            problems.push(format!(
+                "`models.routes[{}].max_tokens = {cap}` is too small with \
+                 `models.reasoning_effort = \"{}\"`: reasoning is billed against the same \
+                 ceiling as the answer. Raise it to at least {REASONING_FLOOR}, set it to 0 \
+                 for no ceiling, or set `models.reasoning_effort = \"off\"`",
+                route.model,
+                models.reasoning_effort.trim(),
+            ));
+        }
     }
 
     // `!is_finite()` catches nan and inf, which sail straight through a
@@ -930,6 +968,22 @@ fn validate_preview(config: &Config, problems: &mut Vec<String>) {
                 .into(),
         ),
         None => {}
+    }
+}
+
+/// Every `retrieval.submodules` entry must be an `owner/name` the forge can
+/// resolve. A misspelt one is not a weaker allow-list, it is a missing one:
+/// `Checkout::fetch_submodules` and `ForgeTree::allowing` drop what they
+/// cannot parse, and the operator who listed `acme-lib` would be told the
+/// submodule is unavailable while `doctor` called the config fine.
+fn validate_submodules(config: &Config, problems: &mut Vec<String>) {
+    for entry in &config.retrieval.submodules {
+        if crate::forge::types::RepoId::parse(entry).is_none() {
+            problems.push(format!(
+                "`retrieval.submodules` entry `{entry}` is not `owner/name`; a submodule the \
+                 forge cannot resolve is one nothing reads"
+            ));
+        }
     }
 }
 

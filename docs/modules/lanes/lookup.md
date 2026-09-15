@@ -100,11 +100,12 @@ definition and check one sibling, and not enough to wander.
 
 The forge reader follows one level of submodule: `.gitmodules` at the head
 names the path and remote, `ForgeRead::submodule_at` gives the gitlink, and
-the file is read from that repository at that commit — when the remote is on
-the forge's own host. A remote elsewhere is never contacted: the `.gitmodules`
-URL is contributor-controlled, and the read token must not reach any other
-host. The same rule governs `retrieval.submodules`, which fetches them into
-the indexer's checkout.
+the file is read from that repository at that commit — when the operator has
+listed that repository in `retrieval.submodules`. Nothing else is followed:
+the `.gitmodules` URL is contributor-controlled, the read token would follow
+it into a private sibling under the same owner as readily as anywhere, and
+neither same host nor same owner is authorization. The same list governs
+which submodules the indexer fetches into its checkout.
 
 A checkout that has an empty directory where a submodule belongs answers
 *unavailable* for paths under it, not *not found*. The difference is a false
@@ -125,7 +126,7 @@ On the #2313 case, five lanes, default model: $0.23 before, $0.17 after, with
 50 of 58 files verified as the rename and never sent to a model. On the
 critique lane with a code-review-tuned model: the exclusive-bound finding,
 three runs out of three, at 0.67–0.81 confidence — below the posting gate,
-named in the summary as *worth a look*. The unbounded sibling read is still
-missed by every configuration tried; it needs a reviewer that chooses to trace
-what the round-mate's tools journal, which the rounds allow and no model yet
-does unprompted.
+named in the summary as *worth a look*. The unbounded sibling read is missed
+by every one-shot configuration and by that model; `gpt-5.6-luna` on the
+box's ladder reaches it two runs in three at a fiftieth of the price
+(tinysweeper#157), which is why it became the `deep` tier.

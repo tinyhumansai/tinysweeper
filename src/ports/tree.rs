@@ -100,11 +100,11 @@ impl Lookup {
     /// Returns `(start, end)`, 1-based inclusive. Shared by every backend so a
     /// range means the same thing whichever one answers.
     pub fn read_range(start: Option<u32>, end: Option<u32>) -> (u32, u32) {
+        // Saturating: a model may answer any integer the schema admits, and
+        // `u32::MAX` as a start must clamp, not wrap the cap below it.
         let start = start.unwrap_or(1).max(1);
-        let end = end
-            .unwrap_or(start + MAX_READ_LINES - 1)
-            .max(start)
-            .min(start + MAX_READ_LINES - 1);
+        let cap = start.saturating_add(MAX_READ_LINES - 1);
+        let end = end.unwrap_or(cap).max(start).min(cap);
         (start, end)
     }
 }
@@ -477,11 +477,14 @@ impl DirTree {
                 | "build"
                 | "third_party"
         );
+        // And only for a submodule that is one on disk — a `.git` inside it,
+        // which a fetch leaves and a `.gitmodules` entry alone cannot
+        // conjure — so a declared-but-ordinary `vendor/large` stays skipped.
         let leads_to_submodule = inner.len() == rel.len()
-            && self
-                .submodules
-                .iter()
-                .any(|s| s == rel || s.starts_with(&format!("{rel}/")));
+            && self.submodules.iter().any(|s| {
+                (s == rel || s.starts_with(&format!("{rel}/")))
+                    && self.root.join(s).join(".git").exists()
+            });
         skip_dir && !leads_to_submodule
     }
 
@@ -735,6 +738,11 @@ mod tests {
             (10, 10 + MAX_READ_LINES - 1)
         );
         assert_eq!(Lookup::read_range(Some(0), Some(3)), (1, 3));
+        assert_eq!(
+            Lookup::read_range(Some(u32::MAX), None),
+            (u32::MAX, u32::MAX),
+            "a start at the top of the range clamps rather than wrapping"
+        );
     }
 
     #[test]
@@ -823,7 +831,7 @@ mod tests {
     async fn a_dir_tree_reads_and_keeps_vendored_submodules_searchable() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
-        std::fs::create_dir_all(dir.path().join("vendor/lib")).unwrap();
+        std::fs::create_dir_all(dir.path().join("vendor/lib/.git")).unwrap();
         std::fs::create_dir_all(dir.path().join("vendor/other")).unwrap();
         std::fs::write(
             dir.path().join(".gitmodules"),

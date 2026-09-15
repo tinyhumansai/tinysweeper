@@ -133,11 +133,13 @@ impl IndexBackend {
         use crate::ports::manifest::IndexManifest;
 
         let repo_id = repo.to_string();
+        let indexed =
+            crate::indexer::types::indexed_revision(revision, &config.retrieval.submodules);
         if self
             .manifest
             .state(&repo_id, &self.signature)
             .await?
-            .is_fresh(revision)
+            .is_fresh(&indexed)
         {
             return Ok(IndexOutcome::AlreadyFresh);
         }
@@ -146,8 +148,10 @@ impl IndexBackend {
         // review runs against. The write token is minted separately, in
         // `routes.rs`, after every model call has returned.
         let checkout = Checkout::fetch(&git_host(), &repo_id, revision, token).await?;
-        if config.retrieval.submodules {
-            let skipped = checkout.fetch_submodules(&git_host(), token).await?;
+        if !config.retrieval.submodules.is_empty() {
+            let skipped = checkout
+                .fetch_submodules(&git_host(), token, &config.retrieval.submodules)
+                .await?;
             if !skipped.is_empty() {
                 tracing::info!(repo = %repo_id, ?skipped, "submodules not fetched for indexing");
             }
@@ -171,7 +175,7 @@ impl IndexBackend {
         .as_holder(format!("server-{}", std::process::id()));
 
         let outcome = indexer
-            .index_repo(&repo_id, revision, checkout.path())
+            .index_repo(&repo_id, &indexed, checkout.path())
             .await?;
 
         if let IndexOutcome::Indexed(report) = &outcome {

@@ -211,13 +211,16 @@ money; scoring and reporting are free and offline, because a matching rule gets
 rewritten many times before it is right.
 
 ```sh
-tinysweeper eval run --record   # live, writes cassettes and proposals
-tinysweeper eval score          # free, re-reads the proposals on disk
+tinysweeper eval run --record --config src/config/defaults.toml   # live, writes cassettes
+tinysweeper eval score --config src/config/defaults.toml          # free, re-reads the proposals
 tinysweeper eval report --baseline evals/baselines/current.json
 ```
 
-`cargo test` replays the committed cassettes on every run, so a prompt change
-that nobody re-recorded fails offline and for free. See
+The corpus is recorded under the compiled-in defaults, not this repository's
+`.tinysweeper.toml` — a cassette is keyed by the model name it was recorded
+against, and the repository config names the box's ladders. `cargo test` and
+the `eval` workflow replay the committed cassettes the same way, so a prompt
+change that nobody re-recorded fails offline and for free. See
 [evals/README.md](evals/README.md) for the labelling contract — including what
 the corpus does not measure yet.
 

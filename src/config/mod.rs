@@ -220,6 +220,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
         ["memory", "questions"] => "memory.questions.*".to_owned(),
         ["council", "agents"] => "council.agents.*".to_owned(),
         ["sentry", "route"] => "sentry.route.*".to_owned(),
+        ["models", "routes"] => "models.routes.*".to_owned(),
         _ => parts.join("."),
     };
     match path.as_str() {
@@ -286,7 +287,9 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "reasoning_effort",
             "structured_output",
             "budget_usd_per_pr",
+            "routes",
         ]),
+        "models.routes.*" => Some(&["model", "order", "allow_fallbacks", "max_tokens"]),
         "models.provider" => Some(&[
             "order",
             "allow_fallbacks",

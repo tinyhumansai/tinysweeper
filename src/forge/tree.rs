@@ -18,10 +18,10 @@
 //! miss is retried through the submodule: `.gitmodules` at the reviewed
 //! commit names the path and its remote, [`ForgeRead::submodule_at`] gives
 //! the gitlink commit, and the file is read from that repository at that
-//! commit — provided the remote is on the same host and the app can read it.
-//! A remote elsewhere is reported as not readable rather than fetched: the
-//! `.gitmodules` URL is contributor-controlled, and the only host this reader
-//! will talk to is the forge it was built over.
+//! commit — provided the operator listed that repository in
+//! `retrieval.submodules`. Nothing else is followed: the `.gitmodules` URL is
+//! contributor-controlled, and neither same host nor same owner says the
+//! reviewed repository is entitled to expose the target.
 //!
 //! Same host is not enough: a pull request can rewrite `.gitmodules` to name
 //! any repository on that host, and this reader would then use the
@@ -107,11 +107,25 @@ pub struct ForgeTree<'a> {
     sha: String,
     host: String,
     submodules: OnceCell<Vec<Submodule>>,
+    /// The submodule repositories the operator allows to be read.
+    allowed: Vec<RepoId>,
+}
+
+/// What a read of one path came back with.
+#[derive(Debug)]
+enum Read {
+    /// The file, from the superproject or a submodule this reader may follow.
+    Content(String),
+    /// No such file at this commit.
+    Missing,
+    /// Under a submodule policy does not let this reader open; the path
+    /// names it.
+    Denied(String),
 }
 
 impl<'a> ForgeTree<'a> {
-    /// Read `repo` at `sha` through `forge`; submodule remotes on `host` are
-    /// followed.
+    /// Read `repo` at `sha` through `forge`. No submodule is followed until
+    /// [`Self::allowing`] names its repository.
     pub fn new(forge: &'a dyn ForgeRead, repo: RepoId, sha: &str, host: &str) -> Self {
         Self {
             forge,
@@ -119,7 +133,14 @@ impl<'a> ForgeTree<'a> {
             sha: sha.to_string(),
             host: host.to_string(),
             submodules: OnceCell::new(),
+            allowed: Vec::new(),
         }
+    }
+
+    /// Follow submodules whose remote is one of `repos` (`owner/name`).
+    pub fn allowing<'s>(mut self, repos: impl IntoIterator<Item = &'s String>) -> Self {
+        self.allowed = repos.into_iter().filter_map(|r| RepoId::parse(r)).collect();
+        self
     }
 
     async fn submodules(&self) -> &[Submodule] {
@@ -139,9 +160,15 @@ impl<'a> ForgeTree<'a> {
 
     /// Read `path`, following one level of submodule when the superproject
     /// has no such file.
-    async fn read(&self, path: &str) -> Result<Option<String>> {
+    ///
+    /// A path under a submodule this reader may not follow — one the
+    /// operator did not list, or whose remote is not on this host — answers
+    /// [`Read::Denied`], not [`Read::Missing`]: the file may well exist in a
+    /// repository policy refused to open, and a reviewer told it is missing
+    /// reports it missing.
+    async fn read(&self, path: &str) -> Result<Read> {
         if let Some(content) = self.forge.file_at(&self.repo, path, &self.sha).await? {
-            return Ok(Some(content));
+            return Ok(Read::Content(content));
         }
         let submodules = self.submodules().await;
         let Some(sub) = submodules
@@ -149,28 +176,31 @@ impl<'a> ForgeTree<'a> {
             .filter(|s| path.starts_with(&format!("{}/", s.path)))
             .max_by_key(|s| s.path.len())
         else {
-            return Ok(None);
+            return Ok(Read::Missing);
         };
         let Some(repo) = &sub.repo else {
-            return Ok(None);
+            return Ok(Read::Denied(sub.path.clone()));
         };
         // A `.gitmodules` edit is contributor-controlled and can name any
-        // repository on this host; without this check the installation-wide
-        // read token would follow it into a sibling repository at a
-        // different trust level. Same owner is the cheap proxy for "the
-        // installation's access to this repo already covers that one".
-        if repo.owner != self.repo.owner {
-            return Ok(None);
+        // repository on this host, and the installation-wide read token
+        // would follow it — into a private sibling under the same owner as
+        // readily as anywhere. Only a repository the operator listed in
+        // `retrieval.submodules` is read.
+        if !self.allowed.iter().any(|a| a == repo) {
+            return Ok(Read::Denied(sub.path.clone()));
         }
         let Some((_url, commit)) = self
             .forge
             .submodule_at(&self.repo, &sub.path, &self.sha)
             .await?
         else {
-            return Ok(None);
+            return Ok(Read::Missing);
         };
         let inner = &path[sub.path.len() + 1..];
-        self.forge.file_at(repo, inner, &commit).await
+        Ok(match self.forge.file_at(repo, inner, &commit).await? {
+            Some(content) => Read::Content(content),
+            None => Read::Missing,
+        })
     }
 }
 
@@ -183,11 +213,18 @@ impl TreeReader for ForgeTree<'_> {
                     return Ok(Found::NotFound);
                 }
                 Ok(match self.read(path).await? {
-                    Some(content) => {
+                    Read::Content(content) => {
                         let (start, end) = Lookup::read_range(*start, *end);
                         slice_lines(&content, start, end)
                     }
-                    None => Found::NotFound,
+                    Read::Missing => Found::NotFound,
+                    Read::Denied(sub) => Found::Unavailable {
+                        reason: format!(
+                            "the submodule at `{sub}` is not one this deployment may read, \
+                             so nothing under it can be read; do not treat its files as \
+                             missing"
+                        ),
+                    },
                 })
             }
             Lookup::Search { .. } => Ok(Found::Unavailable {
@@ -240,7 +277,8 @@ mod tests {
         state.set_submodule("head", "vendor/lib", "https://github.com/acme/lib", "pin");
         state.set_file("pin", "src/x.rs", "one\ntwo\nthree\n");
         let forge = MockForge::with_state(state);
-        let tree = ForgeTree::new(&forge, repo(), "head", "github.com");
+        let tree = ForgeTree::new(&forge, repo(), "head", "github.com")
+            .allowing(&["acme/lib".to_string()]);
 
         let found = tree
             .lookup(&Lookup::Read {
@@ -307,10 +345,25 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(
-            found,
-            Found::NotFound,
-            "a submodule owned by a different owner must not be read"
+        assert!(
+            matches!(&found, Found::Unavailable { reason } if reason.contains("vendor/lib")),
+            "a submodule the operator did not list must not be read, whoever owns it — \
+             and the refusal is not a missing file: {found:?}"
+        );
+
+        let listed = ForgeTree::new(&forge, repo(), "head", "github.com")
+            .allowing(&["other/lib".to_string()]);
+        let found = listed
+            .lookup(&Lookup::Read {
+                path: "vendor/lib/src/x.rs".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+        assert!(
+            matches!(found, Found::Text { .. }),
+            "listed, so read: {found:?}"
         );
     }
 }
