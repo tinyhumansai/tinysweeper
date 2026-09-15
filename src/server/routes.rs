@@ -1312,14 +1312,13 @@ struct InFlight {
 }
 
 impl InFlight {
-    fn register(state: &AppState, slot: &StatusSlot) -> Self {
-        state
-            .in_flight
+    fn register(registry: &Arc<std::sync::Mutex<Vec<StatusSlot>>>, slot: &StatusSlot) -> Self {
+        registry
             .lock()
             .expect("in-flight reviews")
             .push(slot.clone());
         Self {
-            registry: state.in_flight.clone(),
+            registry: registry.clone(),
             slot: slot.clone(),
         }
     }
@@ -1456,7 +1455,7 @@ async fn handle_review(
     delivery: Option<String>,
 ) {
     let slot: StatusSlot = Arc::new(std::sync::Mutex::new(None));
-    let _registered = InFlight::register(&state, &slot);
+    let _registered = InFlight::register(&state.in_flight, &slot);
 
     // One deadline for the whole review, retries included. A per-attempt
     // deadline would let three transient failures late in the run stretch a
@@ -2253,6 +2252,49 @@ mod tests {
             permits.try_acquire_owned().is_ok(),
             "a freed slot is reusable"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_review_past_its_deadline_fails_as_a_timeout_and_is_not_retried() {
+        // The shape `run_and_publish` relies on: a deadline already in the
+        // past resolves immediately, so a retry that arrives after the budget
+        // is spent is refused instead of starting another twenty minutes.
+        let deadline = tokio::time::Instant::now() + REVIEW_DEADLINE;
+        tokio::time::advance(REVIEW_DEADLINE + std::time::Duration::from_secs(1)).await;
+
+        let outcome = tokio::time::timeout_at(deadline, std::future::pending::<()>())
+            .await
+            .map_err(|_| Error::timeout("the review of o/r#1", REVIEW_DEADLINE));
+        let err = outcome.expect_err("a spent deadline must not wait");
+        assert!(
+            matches!(err, Error::Timeout { seconds, .. } if seconds == REVIEW_DEADLINE.as_secs())
+        );
+        assert!(
+            !failure::is_transient(&err),
+            "retrying a timed-out review would spend the whole budget again"
+        );
+    }
+
+    #[test]
+    fn an_in_flight_review_is_listed_until_it_ends_and_only_removes_itself() {
+        let registry = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let first: StatusSlot = Arc::new(std::sync::Mutex::new(None));
+        let second: StatusSlot = Arc::new(std::sync::Mutex::new(None));
+
+        let a = InFlight::register(&registry, &first);
+        let b = InFlight::register(&registry, &second);
+        assert_eq!(registry.lock().unwrap().len(), 2);
+
+        // Finishing in the other order from registration must remove exactly
+        // the finished review, by identity, not whichever came first.
+        drop(a);
+        let left = registry.lock().unwrap();
+        assert_eq!(left.len(), 1);
+        assert!(Arc::ptr_eq(&left[0], &second));
+        drop(left);
+
+        drop(b);
+        assert!(registry.lock().unwrap().is_empty());
     }
 
     #[test]

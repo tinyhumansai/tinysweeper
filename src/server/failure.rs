@@ -212,6 +212,18 @@ mod tests {
     }
 
     #[test]
+    fn a_timed_out_review_is_reported_as_such_and_never_retried() {
+        // A deadline is a budget: retrying a run that spent it would spend it
+        // again, under a check that has said "reviewing" the whole time.
+        let err = Error::timeout("the review of o/r#1", std::time::Duration::from_secs(1200));
+        assert!(!is_transient(&err));
+        let check = check_run("abc123", &err);
+        assert_eq!(check.title, "The review ran out of time");
+        assert!(check.summary.contains("did not finish within 1200s"));
+        assert!(check.conclusion.is_some_and(CheckConclusion::blocks));
+    }
+
+    #[test]
     fn the_summary_says_it_is_not_a_verdict_on_the_code() {
         // A red check with no disclaimer reads as an accusation against the
         // contributor for something tinysweeper never even looked at.
