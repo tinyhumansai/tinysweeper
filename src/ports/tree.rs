@@ -141,6 +141,21 @@ pub enum Found {
         hits: Vec<Hit>,
         /// Whether more matched than were returned.
         truncated: bool,
+        /// Declared submodule paths this search could not look inside,
+        /// because they are not checked out here.
+        ///
+        /// `checkout = true, submodules = false` leaves every gitlink an
+        /// empty directory. A read under one already answers `Unavailable`
+        /// rather than a false "not found", but a search silently walked
+        /// past the empty directory and returned zero hits — indistinguishable
+        /// from "genuinely nothing matches anywhere in the tree", which is
+        /// exactly the vendored code this field exists to flag as unsearched
+        /// rather than searched-and-empty. `#[serde(default)]` keeps an
+        /// older fixture without this field deserializing, and a cassette
+        /// only renders differently when the list is non-empty, so replay of
+        /// an existing recording is unaffected.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        skipped: Vec<String>,
     },
     /// The path does not exist at this revision.
     NotFound,
