@@ -1197,17 +1197,13 @@ mod tests {
             .await
             .expect("applies");
 
-        match review_of(&forge) {
-            None => {}
-            Some((body, event)) => {
-                assert_ne!(event, ReviewEvent::Approve, "{body}");
-                assert_ne!(event, ReviewEvent::RequestChanges, "{body}");
-                assert!(
-                    body.contains("not an approval") && body.contains("`src/lib.rs`"),
-                    "the reader is told why: {body}"
-                );
-            }
-        }
+        let (body, event) = review_of(&forge).expect("a verdict is posted");
+        assert_ne!(event, ReviewEvent::Approve, "{body}");
+        assert_ne!(event, ReviewEvent::RequestChanges, "{body}");
+        assert!(
+            body.contains("not an approval") && body.contains("`src/lib.rs`"),
+            "the reader is told why: {body}"
+        );
     }
 
     #[tokio::test]
