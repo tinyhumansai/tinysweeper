@@ -58,13 +58,22 @@ const MAX_CONCURRENT_REVIEWS: usize = 4;
 /// large repository finishes in single-digit minutes; this is several times
 /// that, so it only ever fires on something already broken.
 ///
-/// Strictly less than [`LEASE_TTL`], and that ordering is load-bearing: the
-/// lease is what stops a redelivery from reviewing the same commit twice, and
-/// a review still running when its lease expires is exactly the duplicate the
-/// lease exists to prevent. The margin covers the metadata reads before the
-/// lease is taken and the publish after the lanes return, which has a bound of
-/// its own in [`PUBLISH_DEADLINE`].
-const REVIEW_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+/// The budget is *checked* at every phase boundary of the lease-held
+/// lifecycle — before the lease is claimed, and again before the lanes start —
+/// and *enforced* by cancellation only on the lanes themselves, in
+/// `run_lanes`. The metadata phase in between is a handful of forge calls
+/// that must not be cancelled mid-flight (a check-run POST cut off after
+/// GitHub accepted it is an orphaned check), so they are bounded per call by
+/// `forge::github::REQUEST_TIMEOUT` and the deadline is re-read once they
+/// return. See `Run::check`.
+///
+/// Strictly less than [`LEASE_TTL`] with room to spare, and that ordering is
+/// load-bearing: the lease is what stops a redelivery from reviewing the same
+/// commit twice, and a review still running when its lease expires is exactly
+/// the duplicate the lease exists to prevent. What the assertion below leaves
+/// over covers the metadata phase's per-call bounds and the publish, which
+/// has a bound of its own in [`PUBLISH_DEADLINE`].
+const REVIEW_DEADLINE: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 /// How long the publish after the lanes may take, wall clock.
 ///
@@ -79,9 +88,18 @@ const REVIEW_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20 *
 /// it.
 const PUBLISH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
+/// How long the metadata phase between the lease claim and the lanes may
+/// take at most: `open_status`, the config overlay and the default-branch
+/// read, each capped at `forge::github::REQUEST_TIMEOUT`, plus the token
+/// mint. Not enforced here — it is what the per-call bounds add up to — but
+/// counted, so the lease assertion below is about the whole lifecycle rather
+/// than the two phases that happen to have a name.
+const METADATA_ALLOWANCE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
 const _: () = assert!(
-    REVIEW_DEADLINE.as_secs() + PUBLISH_DEADLINE.as_secs() < LEASE_TTL.as_secs(),
-    "a review and its publish must both give up before the lease does"
+    REVIEW_DEADLINE.as_secs() + METADATA_ALLOWANCE.as_secs() + PUBLISH_DEADLINE.as_secs()
+        < LEASE_TTL.as_secs(),
+    "every phase of a lease-held review must give up before the lease does"
 );
 
 /// How many repositories may be indexed at once.
@@ -1396,6 +1414,25 @@ struct Run {
     deadline: tokio::time::Instant,
 }
 
+impl Run {
+    /// Refuse to start the next phase if the budget is already spent.
+    ///
+    /// The deadline is enforced by cancellation only where cancellation is
+    /// safe — the lanes. Everywhere else it is enforced here, at the boundary
+    /// between phases, which is what keeps a retry that arrives after a slow
+    /// failure from claiming a lease and opening a check for a review it can
+    /// no longer run.
+    fn check(&self, repo: &str, number: u64) -> Result<()> {
+        if tokio::time::Instant::now() >= self.deadline {
+            return Err(Error::timeout(
+                format!("the review of {repo}#{number}"),
+                REVIEW_DEADLINE,
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// The registry behind `AppState::in_flight`.
 ///
 /// `accepting` shares a lock with `slots` on purpose. `conclude_in_flight`
@@ -1819,6 +1856,10 @@ async fn review_inner(
         ));
     }
 
+    // Nothing lease-held starts on a spent budget. Before this point the run
+    // has only read metadata and holds nothing another worker could want.
+    run.check(repo, number)?;
+
     // A manual review deliberately takes a lease of its own: the operator asked
     // for this run *because* the ordinary one already happened, so sharing the
     // webhook path's key would make the button a silent no-op.
@@ -1937,8 +1978,11 @@ async fn review_inner(
         // `AssertUnwindSafe` + `catch_unwind` so a panic inside a lane still
         // reaches the release below. Without it the `?` on the outcome is not
         // the only way out — an unwind skips everything — and the lease
-        // survives the worker that took it.
-        let lanes = std::panic::AssertUnwindSafe(run_lanes(
+        // survives the worker that took it. The boundary check first: the
+        // metadata phase above was bounded per call, not by the deadline, so
+        // this is where a budget it exhausted is noticed.
+        let lanes = match run.check(repo, number) {
+            Ok(()) => std::panic::AssertUnwindSafe(run_lanes(
             state,
             &overlay.config,
             &repo_id,
