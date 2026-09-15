@@ -520,18 +520,22 @@ async fn a_completed_run_leaves_the_repository_ready_and_claimable() {
 }
 
 #[tokio::test]
-async fn a_deleted_file_is_gone_even_when_the_run_stops_on_budget() {
-    // A path that left the checkout may have left it because its submodule
-    // was taken off the allow-list. That deletion is a revocation, and it
-    // must not wait behind an embedding pass that may never finish.
+async fn a_revoked_submodule_is_gone_before_the_run_can_stop_on_budget() {
+    // The operator took `vendor/lib` off the allow-list, so the next checkout
+    // has an empty directory there. Its chunks must not outlive the first
+    // budget check: deleting them is a revocation, not a tidy-up, and a
+    // review querying this index mid-rebuild must not be handed them.
     let checkout = Checkout::new();
+    checkout.write(
+        "vendor/lib/src/lib.rs",
+        "fn vendored() -> usize {\n    3\n}\n",
+    );
     let rig = Rig::new();
     let signature = crate::index::EmbedSignature::new("voyage", "voyage-code-3", 16);
     let embedder = CountingEmbedder::new(MockEmbedder::with_signature(signature.clone()));
-    let indexer = Indexer::new(&embedder, &rig.index, &rig.manifest)
+    Indexer::new(&embedder, &rig.index, &rig.manifest)
         .expect("builds")
-        .with_batch(1);
-    indexer
+        .with_batch(1)
         .index_repo(REPO, "sha-1", &checkout.root())
         .await
         .expect("indexes");
@@ -551,10 +555,12 @@ async fn a_deleted_file_is_gone_even_when_the_run_stops_on_budget() {
         paths_under(&rig, &signature)
             .await
             .iter()
-            .any(|path| path == "src/beta.rs")
+            .any(|path| path == "vendor/lib/src/lib.rs")
     );
 
-    checkout.remove("src/beta.rs");
+    // The submodule is now unfetched: an empty directory. A new file needs
+    // embedding, and the budget refuses it before the first call.
+    checkout.remove("vendor/lib/src/lib.rs");
     checkout.write("src/gamma.rs", "fn gamma() {}\n");
     let before = embedder.calls();
     let starved = report(
@@ -562,6 +568,7 @@ async fn a_deleted_file_is_gone_even_when_the_run_stops_on_budget() {
             .expect("builds")
             .with_batch(1)
             .with_budget(0.000_000_001)
+            .revoking(vec!["vendor/lib".into()])
             .index_repo(REPO, "sha-2", &checkout.root())
             .await
             .expect("runs"),
@@ -569,13 +576,24 @@ async fn a_deleted_file_is_gone_even_when_the_run_stops_on_budget() {
     assert!(starved.budget_exhausted, "{starved:?}");
     assert_eq!(embedder.calls(), before, "nothing was embedded");
     assert!(starved.deleted > 0, "{starved:?}");
-    assert!(starved.removed.contains(&"src/beta.rs".to_string()));
+    assert!(
+        starved
+            .removed
+            .contains(&"vendor/lib/src/lib.rs".to_string())
+    );
     assert!(
         !paths_under(&rig, &signature)
             .await
             .iter()
-            .any(|path| path == "src/beta.rs"),
-        "the deletion must not wait behind the embedding pass"
+            .any(|path| path == "vendor/lib/src/lib.rs"),
+        "the revocation must not wait behind the embedding pass"
+    );
+    // And the count on record moved with it.
+    let record = rig.manifest.snapshot(REPO, &signature);
+    assert_eq!(
+        record.chunks,
+        paths_under(&rig, &signature).await.len() as u64,
+        "the settled count is what the store holds"
     );
 }
 
