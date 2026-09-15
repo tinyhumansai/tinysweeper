@@ -485,6 +485,51 @@ pub struct ProviderRouting {
     pub unpinned_vendors: Vec<String>,
 }
 
+impl Models {
+    /// The per-model route for `model`, if one is configured.
+    pub fn route_for(&self, model: &str) -> Option<&ModelRoute> {
+        self.routes.iter().find(|r| r.model == model)
+    }
+
+    /// The output ceiling for one call to `model`; `0` is no ceiling.
+    pub fn max_tokens_for(&self, model: &str) -> u32 {
+        self.route_for(model)
+            .and_then(|r| r.max_tokens)
+            .unwrap_or(self.max_tokens)
+    }
+}
+
+/// Routing for one model id, overriding the ladder-wide pin.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ModelRoute {
+    /// The model id this applies to, exactly as written in a tier.
+    pub model: String,
+    /// Providers to try, in order. Empty leaves routing to the gateway.
+    pub order: Vec<String>,
+    /// Whether the gateway may fall outside `order`. `false` makes the pin a
+    /// hard constraint, which is the point of naming an endpoint.
+    pub allow_fallbacks: bool,
+    /// Output ceiling for this rung. `0` sends no ceiling at all: the model
+    /// answers at the length it needs and a cut-off is the provider's own
+    /// limit. Absent inherits `models.max_tokens`.
+    pub max_tokens: Option<u32>,
+}
+
+impl ModelRoute {
+    /// The routing this rung asks for.
+    pub fn routing(&self) -> ProviderRouting {
+        ProviderRouting {
+            order: self.order.clone(),
+            allow_fallbacks: self.allow_fallbacks,
+            // A rung that names its endpoint means it: no quiet reroute to a
+            // price nobody chose.
+            last_resort_unpinned: false,
+            unpinned_vendors: Vec::new(),
+        }
+    }
+}
+
 impl Default for ProviderRouting {
     fn default() -> Self {
         Self {
@@ -598,6 +643,16 @@ pub struct Models {
     pub vision: Option<String>,
     /// Which upstream providers the gateway may serve these models from.
     pub provider: ProviderRouting,
+    /// Per-model routing that overrides `provider` and `max_tokens` for one
+    /// rung of the ladder.
+    ///
+    /// The one pin above is right for the DeepSeek tiers, whose floating ids
+    /// a dozen hosts serve at prices spanning 4x. A rung that should go to
+    /// one specific endpoint — OpenAI's flex tier, the surplus-capacity
+    /// endpoint at half price — and be left to answer at whatever length it
+    /// needs gets its own entry here rather than a global setting that would
+    /// apply to every other rung too.
+    pub routes: Vec<ModelRoute>,
     /// Cap on tokens generated per model call.
     ///
     /// Reasoning is billed against this same ceiling, so a thinking-heavy model

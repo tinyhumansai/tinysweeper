@@ -28,18 +28,49 @@ Flag any widening of `permissions`, any unpinned third-party action, and any
 step that interpolates untrusted context into a shell.
 """
 
-# The deep tier is the one that reads logic, and it now reads only logic: a
-# mechanical rename is verified line for line before the fan-out and never
-# sent to a model, and the reviewer looks up the definitions the changed lines
-# call into before it answers. On opencompany#2313 — 58 files, one of them a
-# refactor with two boundary bugs — the default flash model, given the callee's
-# doc comment saying the bound is exclusive, still called the call correct in
-# every run; `openai/gpt-5.3-codex` found it three runs out of three. The
-# residue is one file in fifty-nine, so the dearer model costs about what the
-# fifty-eight rename conversations used to. `scan` and `flash` stay pinned;
-# an `openai/` id is routed unpinned by `models.provider.unpinned_vendors`.
+# Every model call goes through this box's LLM ladder, not to OpenRouter
+# directly. The ladder (`llm-ladder-router`, config in the workspace repo's
+# `ladder/config.toml`, installed by `ladder-up`) prices each rung against the
+# live marketplaces and dispatches to the best value under its ceilings — so
+# the discount, the failover across marketplaces, and the provider pin all
+# live there, and the names below are *ladders*, not models. The response
+# body is the upstream's, so `model` comes back as whatever answered
+# (`deepseek/deepseek-v4-flash`, `gpt-5.6-luna`) and the cost line is what the
+# marketplace charged: OpenRouter's `usage.cost` or Surplus's
+# `buyer_cost_micro`, both read by `harness::openrouter::gateway_cost`.
+#
+# `deep` is the ladder that reads logic — a mechanical rename is verified
+# before the fan-out and the reviewer looks up what the changed lines call
+# into, so this tier sees only the residue. It is `gpt-5.6-luna` on Surplus,
+# uncapped: measured 2026-09-15 on a 58-file pull request with two boundary
+# bugs (tinysweeper#157), luna found one of the two every run and was the only
+# model to reach the second, at a thirteenth of gpt-5.3-codex's price.
+# `flash`/`scan` are the ladder's `flash`. No `fallback` here: the ladder is
+# the failover, and a model name in this list would have to be another
+# ladder. No provider pin either — that is the ladder's job now — so the
+# routing table below is empty and the unpinned last resort is off, since an
+# "unpinned" call to the ladder is the same call.
 [models]
-deep = "openai/gpt-5.3-codex"
+gateway = "ladder"
+base_url = "http://host.docker.internal:6969/v1"
+api_key_env = "LADDER_API_KEY"
+scan = "flash"
+flash = "flash"
+deep = "deep"
+fallback = []
+
+[models.provider]
+order = []
+allow_fallbacks = true
+last_resort_unpinned = false
+
+# The deep ladder answers at whatever length it needs: luna's reasoning was
+# taking more than half of the 16k default on a 300-line refactor, and a
+# cut-off there costs a file's review to save a fraction of a cent. No pin —
+# the ladder routes — only the ceiling is lifted.
+[[models.routes]]
+model = "deep"
+max_tokens = 0
 
 # Retrieval on, through the same gateway the completion models use. The three
 # fields below are the index partition key: change any of them and the vectors
