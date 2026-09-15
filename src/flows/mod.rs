@@ -19,6 +19,7 @@
 //! behaviour the golden tests pin.
 
 pub mod caps;
+pub mod lookup;
 pub mod panel;
 pub mod runner;
 pub mod subagent;
