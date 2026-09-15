@@ -127,10 +127,15 @@ impl Error {
     }
 
     /// Build a [`Error::Timeout`] for `what` after `after` elapsed.
+    ///
+    /// Rounded up, not truncated: `as_secs()` alone would report a positive
+    /// sub-second deadline — `Duration::from_millis(500)`, say — as `0s`,
+    /// which reads as "no time at all" rather than the budget that was
+    /// actually configured.
     pub fn timeout(what: impl Into<String>, after: std::time::Duration) -> Self {
         Self::Timeout {
             what: what.into(),
-            seconds: after.as_secs(),
+            seconds: after.as_secs() + u64::from(after.subsec_nanos() != 0),
         }
     }
 
