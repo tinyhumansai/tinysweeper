@@ -535,23 +535,20 @@ async fn a_deleted_file_is_gone_even_when_the_run_stops_on_budget() {
         .index_repo(REPO, "sha-1", &checkout.root())
         .await
         .expect("indexes");
-    let rows_under = |rig: &Rig| {
-        let signature = signature.clone();
-        async move {
-            let query = crate::index::HybridQuery::new(signature, "fn", vec![0.0; 16])
-                .in_repo(REPO)
-                .limit(1_000);
-            rig.index
-                .query(&query)
-                .await
-                .expect("queries")
-                .into_iter()
-                .map(|hit| hit.chunk.path.clone())
-                .collect::<Vec<_>>()
-        }
-    };
+    async fn paths_under(rig: &Rig, signature: &crate::index::EmbedSignature) -> Vec<String> {
+        let query = crate::index::HybridQuery::new(signature.clone(), "fn", vec![0.0; 16])
+            .in_repo(REPO)
+            .limit(1_000);
+        rig.index
+            .query(&query)
+            .await
+            .expect("queries")
+            .into_iter()
+            .map(|hit| hit.chunk.path.clone())
+            .collect()
+    }
     assert!(
-        rows_under(&rig)
+        paths_under(&rig, &signature)
             .await
             .iter()
             .any(|path| path == "src/beta.rs")
@@ -574,7 +571,7 @@ async fn a_deleted_file_is_gone_even_when_the_run_stops_on_budget() {
     assert!(starved.deleted > 0, "{starved:?}");
     assert!(starved.removed.contains(&"src/beta.rs".to_string()));
     assert!(
-        !rows_under(&rig)
+        !paths_under(&rig, &signature)
             .await
             .iter()
             .any(|path| path == "src/beta.rs"),
