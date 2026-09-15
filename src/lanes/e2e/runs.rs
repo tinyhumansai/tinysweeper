@@ -48,6 +48,9 @@ pub enum Reason {
     NotOnPullRequests(String),
     /// The job is gated on a label the pull request does not carry.
     LabelMissing(String),
+    /// The forge reported the job as skipped: a job-level condition the
+    /// outline could not read was false on this pull request.
+    SkippedByCondition,
 }
 
 impl Reason {
@@ -65,6 +68,10 @@ impl Reason {
             }
             Reason::LabelMissing(label) => {
                 format!("it is gated on the `{label}` label, which this pull request does not carry")
+            }
+            Reason::SkippedByCondition => {
+                "the forge reports it as skipped, so a job condition was false for this pull request"
+                    .into()
             }
         }
     }
@@ -140,18 +147,18 @@ fn state_of(
         // Several check runs for one job name is a matrix; the worst of them
         // is the job's verdict, and any still running keeps it pending.
         let mut worst: Option<CheckConclusion> = None;
+        let mut skipped = false;
         for check in reported {
             match check.conclusion {
                 None => return State::Pending,
-                Some(conclusion) => {
-                    if !conclusion.is_green() {
-                        worst = Some(conclusion);
-                    }
-                }
+                Some(conclusion) if conclusion.blocks() => worst = Some(conclusion),
+                Some(CheckConclusion::Skipped) => skipped = true,
+                Some(_) => {}
             }
         }
         return match worst {
             Some(conclusion) => State::Failed(conclusion),
+            None if skipped => State::NotTriggered(Reason::SkippedByCondition),
             None => State::Passed,
         };
     }
@@ -186,7 +193,9 @@ pub fn findings(runs: &[JobRun]) -> Vec<Finding> {
                 // by default.
                 severity: match reason {
                     Reason::PathsExcluded | Reason::AllIgnored => Severity::High,
-                    Reason::NotOnPullRequests(_) | Reason::LabelMissing(_) => Severity::Medium,
+                    Reason::NotOnPullRequests(_)
+                    | Reason::LabelMissing(_)
+                    | Reason::SkippedByCondition => Severity::Medium,
                 },
                 confidence: 1.0,
                 path: run.workflow.clone(),
@@ -220,7 +229,7 @@ pub fn findings(runs: &[JobRun]) -> Vec<Finding> {
                     "`{}` in `{}` concluded **{}** on this pull request's head commit.",
                     run.job,
                     run.workflow,
-                    conclusion.as_str()
+                    conclusion_name(*conclusion)
                 ),
                 suggestion: None,
                 applicable: None,
@@ -251,7 +260,7 @@ pub fn render(runs: &[JobRun], head_sha: &str) -> String {
     for run in runs {
         let state = match &run.state {
             State::Passed => "PASSED".to_string(),
-            State::Failed(conclusion) => format!("FAILED ({})", conclusion.as_str()),
+            State::Failed(conclusion) => format!("FAILED ({})", conclusion_name(*conclusion)),
             State::Pending => "PENDING — not yet concluded".to_string(),
             State::NotTriggered(reason) => format!("NOT TRIGGERED — {}", reason.describe()),
         };
@@ -262,6 +271,17 @@ pub fn render(runs: &[JobRun], head_sha: &str) -> String {
 
 fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
+}
+
+/// The conclusion as GitHub spells it.
+fn conclusion_name(conclusion: CheckConclusion) -> &'static str {
+    match conclusion {
+        CheckConclusion::Success => "success",
+        CheckConclusion::Failure => "failure",
+        CheckConclusion::ActionRequired => "action_required",
+        CheckConclusion::Neutral => "neutral",
+        CheckConclusion::Skipped => "skipped",
+    }
 }
 
 /// What the review recorded so a later check completion can conclude the
@@ -300,6 +320,7 @@ pub struct Settled {
 /// when the watch was written and nothing since says otherwise.
 pub fn settle(watch: &Watch, checks: &[CheckStatus], fail_on: Severity) -> Option<Settled> {
     let mut failed: Vec<(String, CheckConclusion)> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
     let mut passed: Vec<String> = Vec::new();
     for job in &watch.jobs {
         let reported: Vec<&CheckStatus> = checks
@@ -309,13 +330,14 @@ pub fn settle(watch: &Watch, checks: &[CheckStatus], fail_on: Severity) -> Optio
         if reported.is_empty() || reported.iter().any(|check| check.conclusion.is_none()) {
             return None;
         }
-        match reported
-            .iter()
-            .filter_map(|check| check.conclusion)
-            .find(|conclusion| !conclusion.is_green())
-        {
-            Some(conclusion) => failed.push((job.clone(), conclusion)),
-            None => passed.push(job.clone()),
+        let conclusions: Vec<CheckConclusion> =
+            reported.iter().filter_map(|check| check.conclusion).collect();
+        if let Some(conclusion) = conclusions.iter().find(|c| c.blocks()) {
+            failed.push((job.clone(), *conclusion));
+        } else if conclusions.contains(&CheckConclusion::Skipped) {
+            skipped.push(job.clone());
+        } else {
+            passed.push(job.clone());
         }
     }
 
@@ -324,13 +346,18 @@ pub fn settle(watch: &Watch, checks: &[CheckStatus], fail_on: Severity) -> Optio
     for job in &passed {
         let _ = write!(summary, "\n- `{job}`: passed");
     }
+    for job in &skipped {
+        let _ = write!(summary, "\n- `{job}`: **skipped** — did not run on this pull request");
+    }
     for (job, conclusion) in &failed {
-        let _ = write!(summary, "\n- `{job}`: **{}**", conclusion.as_str());
+        let _ = write!(summary, "\n- `{job}`: **{}**", conclusion_name(*conclusion));
     }
 
-    // An `e2e-failed` finding is High; whether High fails the lane is the
-    // operator's `fail_on`, the same dial the review itself used.
-    let jobs_fail = !failed.is_empty() && Severity::High >= fail_on;
+    // The same levels `findings` gives them: a failed job is High, a skipped
+    // one Medium. Whether either fails the lane is the operator's `fail_on`,
+    // the same dial the review itself used.
+    let jobs_fail = (!failed.is_empty() && Severity::High >= fail_on)
+        || (!skipped.is_empty() && Severity::Medium >= fail_on);
     let conclusion = if watch.failed || jobs_fail {
         CheckConclusion::Failure
     } else {
