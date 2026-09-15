@@ -27,6 +27,17 @@ use crate::ports::forge::{ForgeRead, ForgeWrite};
 use crate::preview::render;
 use crate::preview::types::Gallery;
 
+/// The files to commit to a store branch, when the store is a branch.
+///
+/// Absent for a bucket store: the hands uploaded there themselves and this
+/// module only links.
+pub struct Store<'a> {
+    /// The branch to commit to.
+    pub branch: &'a str,
+    /// The uploaded files by their manifest name.
+    pub files: &'a std::collections::BTreeMap<String, Vec<u8>>,
+}
+
 /// What `publish` did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
@@ -56,6 +67,7 @@ pub async fn publish(
     repo: &str,
     gallery: &Gallery,
     existing_check_id: Option<u64>,
+    store: Option<&Store<'_>>,
 ) -> Result<(Outcome, Option<u64>)> {
     let repo_id =
         RepoId::parse(repo).ok_or_else(|| Error::Forge(format!("`{repo}` is not owner/name")))?;
@@ -70,6 +82,37 @@ pub async fn publish(
         // No check to reuse or create: the caller has nothing new to
         // remember, so its existing id (if any) is handed back unchanged.
         return Ok((Outcome::HeadMoved, existing_check_id));
+    }
+
+    // The pictures first, so no comment ever links to a file that is not
+    // there yet. Only the files a shown flow references are committed; the
+    // hands may have uploaded more, and a store branch that keeps every
+    // stray upload is a store branch that grows for nothing.
+    if let Some(store) = store
+        && !gallery.files.is_empty()
+    {
+        let mut files = Vec::with_capacity(gallery.files.len());
+        for name in &gallery.files {
+            let bytes = store.files.get(name).ok_or_else(|| {
+                Error::Config(format!(
+                    "the manifest references `{name}` but the hands never uploaded it"
+                ))
+            })?;
+            files.push((
+                crate::preview::manifest::Storage::commit_path(&gallery.head_sha, &gallery.run, name),
+                bytes.clone(),
+            ));
+        }
+        let message = format!(
+            "ui-preview: #{} at {} ({})",
+            gallery.number,
+            &gallery.head_sha[..gallery.head_sha.len().min(12)],
+            gallery.run
+        );
+        let commit = write
+            .publish_files(&repo_id, store.branch, &message, &files)
+            .await?;
+        tracing::info!(branch = store.branch, %commit, files = files.len(), "committed preview files");
     }
 
     let body = render::comment(gallery);
@@ -183,7 +226,7 @@ mod tests {
     #[tokio::test]
     async fn a_first_run_creates_the_comment_and_publishes_a_neutral_check() {
         let forge = MockForge::new().with_pull_request(pull_request("abc"), vec![], vec![]);
-        let (outcome, check_id) = publish(&forge, &forge, "o/r", &gallery(), None)
+        let (outcome, check_id) = publish(&forge, &forge, "o/r", &gallery(), None, None)
             .await
             .unwrap();
         assert_eq!(outcome, Outcome::Published);
@@ -210,6 +253,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_branch_store_commits_the_referenced_files_before_the_comment() {
+        let forge = MockForge::new().with_pull_request(pull_request("abc"), vec![], vec![]);
+        let mut gallery = gallery();
+        gallery.files = vec!["change-01.crop.png".into(), "change-01.png".into()];
+        let mut uploaded = std::collections::BTreeMap::new();
+        uploaded.insert("change-01.crop.png".to_string(), vec![1u8, 2]);
+        uploaded.insert("change-01.png".to_string(), vec![3u8]);
+        uploaded.insert("stray.png".to_string(), vec![9u8]);
+        let store = Store {
+            branch: "tinysweeper/ui-previews",
+            files: &uploaded,
+        };
+        let (outcome, _) = publish(&forge, &forge, "o/r", &gallery, None, Some(&store))
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::Published);
+        let writes = forge.writes();
+        let Write::Files {
+            branch,
+            message,
+            paths,
+        } = &writes[0]
+        else {
+            panic!("the files go first: {writes:?}");
+        };
+        assert_eq!(branch, "tinysweeper/ui-previews");
+        assert!(message.starts_with("ui-preview: #7 at abc"));
+        assert_eq!(
+            paths,
+            &vec![
+                "abc/run-1/change-01.crop.png".to_string(),
+                "abc/run-1/change-01.png".to_string()
+            ],
+            "only referenced files, never the stray upload"
+        );
+        assert!(matches!(&writes[1], Write::Comment { .. }));
+    }
+
+    #[tokio::test]
+    async fn a_referenced_file_the_hands_never_uploaded_is_refused_before_anything_is_written() {
+        let forge = MockForge::new().with_pull_request(pull_request("abc"), vec![], vec![]);
+        let mut gallery = gallery();
+        gallery.files = vec!["change-01.crop.png".into()];
+        let uploaded = std::collections::BTreeMap::new();
+        let store = Store {
+            branch: "b",
+            files: &uploaded,
+        };
+        assert!(
+            publish(&forge, &forge, "o/r", &gallery, None, Some(&store))
+                .await
+                .is_err()
+        );
+        assert!(forge.writes().is_empty());
+    }
+
+    #[tokio::test]
     async fn a_second_run_edits_the_same_comment() {
         let forge = MockForge::new()
             .with_pull_request(pull_request("abc"), vec![], vec![])
@@ -221,7 +321,7 @@ mod tests {
                     body: format!("{}\nold", render::MARKER),
                 }],
             );
-        let (outcome, _) = publish(&forge, &forge, "o/r", &gallery(), None)
+        let (outcome, _) = publish(&forge, &forge, "o/r", &gallery(), None, None)
             .await
             .unwrap();
         assert_eq!(outcome, Outcome::Published);
@@ -244,7 +344,7 @@ mod tests {
                     body,
                 }],
             );
-        let (outcome, _) = publish(&forge, &forge, "o/r", &gallery(), None)
+        let (outcome, _) = publish(&forge, &forge, "o/r", &gallery(), None, None)
             .await
             .unwrap();
         assert_eq!(outcome, Outcome::Unchanged);
@@ -263,7 +363,7 @@ mod tests {
                     body: format!("{}\nmine", render::MARKER),
                 }],
             );
-        publish(&forge, &forge, "o/r", &gallery(), None)
+        publish(&forge, &forge, "o/r", &gallery(), None, None)
             .await
             .unwrap();
         assert!(matches!(&forge.writes()[0], Write::Comment { .. }));
@@ -272,7 +372,7 @@ mod tests {
     #[tokio::test]
     async fn a_moved_head_publishes_nothing() {
         let forge = MockForge::new().with_pull_request(pull_request("def"), vec![], vec![]);
-        let (outcome, check_id) = publish(&forge, &forge, "o/r", &gallery(), Some(7))
+        let (outcome, check_id) = publish(&forge, &forge, "o/r", &gallery(), Some(7), None)
             .await
             .unwrap();
         assert_eq!(outcome, Outcome::HeadMoved);
@@ -291,7 +391,7 @@ mod tests {
             flows: vec![],
             ..gallery()
         };
-        let (outcome, _) = publish(&forge, &forge, "o/r", &empty, None).await.unwrap();
+        let (outcome, _) = publish(&forge, &forge, "o/r", &empty, None, None).await.unwrap();
         assert_eq!(outcome, Outcome::NothingToShow);
         let writes = forge.writes();
         let [Write::Check(check)] = writes.as_slice() else {
@@ -313,7 +413,7 @@ mod tests {
                     body: format!("{}\nold", render::MARKER),
                 }],
             );
-        let (outcome, check_id) = publish(&forge, &forge, "o/r", &gallery(), Some(55))
+        let (outcome, check_id) = publish(&forge, &forge, "o/r", &gallery(), Some(55), None)
             .await
             .unwrap();
         assert_eq!(outcome, Outcome::Published);
@@ -348,7 +448,7 @@ mod tests {
             flows: vec![],
             ..gallery()
         };
-        let (outcome, _) = publish(&forge, &forge, "o/r", &empty, None).await.unwrap();
+        let (outcome, _) = publish(&forge, &forge, "o/r", &empty, None, None).await.unwrap();
         assert_eq!(outcome, Outcome::Published);
         let writes = forge.writes();
         let Write::CommentUpdate {
@@ -372,7 +472,7 @@ mod tests {
             flows: vec![],
             ..gallery()
         };
-        let (outcome, _) = publish(&forge, &forge, "o/r", &empty, None).await.unwrap();
+        let (outcome, _) = publish(&forge, &forge, "o/r", &empty, None, None).await.unwrap();
         assert_eq!(outcome, Outcome::NothingToShow);
         assert!(matches!(forge.writes().as_slice(), [Write::Check(_)]));
     }
