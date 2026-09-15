@@ -1449,6 +1449,29 @@ async fn open_status(
                 head_sha: head_sha.to_string(),
                 installation,
             });
+
+            // `conclude_in_flight`'s snapshot only concludes slots it can see
+            // at the instant it runs. This publish call was in flight for the
+            // whole time it was awaiting `installation_token`/`publish_check`
+            // above, so shutdown could have taken its snapshot — and flipped
+            // `accepting` off — before the slot held anything to conclude,
+            // leaving a fresh "in progress" check that nothing would ever
+            // revisit. Re-checking `accepting` right here, under the same
+            // registry lock `conclude_in_flight` uses, closes that gap
+            // exactly: either this observes `accepting` still true, in which
+            // case the slot is already registered and the shutdown pass that
+            // has not run yet will pick it up normally, or shutdown has
+            // already run and this concludes the check itself, immediately,
+            // rather than leave it orphaned.
+            let missed_the_snapshot =
+                !state.in_flight.lock().expect("in-flight reviews").accepting;
+            if missed_the_snapshot {
+                let err = Error::lane(
+                    "review",
+                    "tinysweeper was restarted while this review was running",
+                );
+                close_status(state, slot, Conclusion::Failed(&err)).await;
+            }
         }
         Err(err) => {
             tracing::warn!(%err, %repo, "could not publish the in-progress check");
