@@ -444,11 +444,26 @@ impl DirTree {
             .submodules
             .iter()
             .find(|s| path.starts_with(&format!("{s}/")))?;
-        let dir = self.root.join(sub);
-        let empty = std::fs::read_dir(&dir)
+        self.dir_is_empty(sub).then_some(sub.as_str())
+    }
+
+    /// Whether the directory a declared submodule path names is empty —
+    /// checked out with `[lookup].checkout = true` but never fetched, since
+    /// `[retrieval].submodules = false` or the fetch itself failed.
+    fn dir_is_empty(&self, sub: &str) -> bool {
+        std::fs::read_dir(self.root.join(sub))
             .map(|mut entries| entries.next().is_none())
-            .unwrap_or(true);
-        empty.then_some(sub.as_str())
+            .unwrap_or(true)
+    }
+
+    /// Declared submodule paths that matched `glob` but have no content, so a
+    /// search of them answered zero hits rather than searching them.
+    fn unfetched_submodules_matching(&self, glob: Option<&str>) -> Vec<String> {
+        self.submodules
+            .iter()
+            .filter(|s| glob_matches(glob, s) && self.dir_is_empty(s))
+            .cloned()
+            .collect()
     }
 
     /// Whether `path`, joined onto `root` and resolved, still lies inside
