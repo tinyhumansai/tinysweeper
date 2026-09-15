@@ -249,6 +249,17 @@ mod tests {
     }
 
     #[test]
+    fn an_operator_substitution_is_never_treated_as_a_rename() {
+        // `<` → `<=` across three files is a uniform textual substitution,
+        // but it is a behavior change, not a rename, and must not be
+        // silently verified and skipped.
+        let a = diff("a", &[("if x < 1", "if x <= 1")], &[]);
+        let b = diff("b", &[("if y < 2", "if y <= 2")], &[]);
+        let c = diff("c", &[("if z < 3", "if z <= 3")], &[]);
+        assert_eq!(detect(&[&a, &b, &c]), None);
+    }
+
+    #[test]
     fn two_files_are_not_a_pattern() {
         let a = diff("a", &[("x::old", "x::new")], &[]);
         let b = diff("b", &[("y::old", "y::new")], &[]);
