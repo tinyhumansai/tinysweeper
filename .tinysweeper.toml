@@ -6,6 +6,22 @@
 version = 1
 preset = "rust-library"
 
+# The eval corpus is recorded data, not code: a cassette is a model's answer
+# frozen for offline replay, and a fixture is a forge state frozen by
+# `eval add`. Reviewing them produces findings like "populate the cassette's
+# value field" — a request to edit what a model said — and two of those held
+# tinysweeper#154 at changes-requested. Cases (`evals/cases/*.toml`) are
+# labels a human wrote and stay reviewable.
+[paths]
+ignore = [
+    "**/Cargo.lock",
+    "target/**",
+    "vendor/**",
+    "**/generated/**",
+    "evals/cassettes/**",
+    "evals/fixtures/**",
+]
+
 [[path_instructions]]
 glob = "src/lanes/**"
 instructions = """
