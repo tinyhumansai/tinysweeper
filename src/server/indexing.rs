@@ -173,6 +173,10 @@ impl IndexBackend {
         // not take it away, the network did, and a run that then fails
         // part-way must not have thrown away context it could still serve.
         .revoking(unfetched.denied)
+        // And the ones the network kept out are neither revoked nor removed:
+        // their rows stay, and the revision is not claimed, so the next
+        // delivery tries the fetch again.
+        .missing(unfetched.failed)
         .with_batch(config.embeddings.batch)
         // The count ceiling above does not bound a request; this does. Without
         // it a large repository's batches are rejected outright and the review

@@ -416,17 +416,30 @@ impl<'a> Indexer<'a> {
         // absent again, deletes nothing (already gone), and carries them in
         // `removed` to the graph sync that only an `Indexed` outcome reaches.
         // Forgetting them here would make that graph cleanup unreachable.
-        let revoked: Vec<&String> = removed
+        //
+        // A path under a submodule that merely failed to fetch is not removed
+        // at all: it is absent from this checkout, not from the repository.
+        // See [`Indexer::missing`].
+        let under =
+            |dirs: &[String], path: &String| dirs.iter().any(|dir| path.starts_with(dir.as_str()));
+        let (missing, removed): (Vec<String>, Vec<String>) = removed
+            .into_iter()
+            .partition(|path| under(&self.missing, path));
+        if !missing.is_empty() {
+            report.unfetched = self
+                .missing
+                .iter()
+                .filter(|dir| missing.iter().any(|path| path.starts_with(dir.as_str())))
+                .map(|dir| dir.trim_end_matches('/').to_string())
+                .collect();
+        }
+        let (revoked, ordinary): (Vec<String>, Vec<String>) = removed
             .iter()
-            .filter(|path| {
-                self.revoked
-                    .iter()
-                    .any(|dir| path.starts_with(dir.as_str()))
-            })
-            .collect();
+            .cloned()
+            .partition(|path| under(&self.revoked, path));
         if !revoked.is_empty() {
-            let revoked: Vec<String> = revoked.into_iter().cloned().collect();
-            report.deleted += self.index.delete_paths(repo_id, &revoked).await?;
+            report.deleted += self.confirmed_rows(repo_id, signature, &revoked).await?;
+            self.index.delete_paths(repo_id, &revoked).await?;
         }
 
         for group in selected.chunks(self.group) {
@@ -438,14 +451,42 @@ impl<'a> Indexer<'a> {
         }
 
         // Rows a revocation already deleted are deleted again here for
-        // nothing — zero rows, zero count — and forgotten for the first time.
+        // nothing, and forgotten for the first time. The count comes from the
+        // manifest, not from the store's tally of rows it deleted: the store
+        // also holds rows an earlier attempt wrote and never confirmed, which
+        // were never counted and must not be subtracted.
         if !removed.is_empty() {
-            report.deleted += self.index.delete_paths(repo_id, &removed).await?;
+            report.deleted += self.confirmed_rows(repo_id, signature, &ordinary).await?;
+            self.index.delete_paths(repo_id, &removed).await?;
             self.manifest.forget(repo_id, signature, &removed).await?;
             report.removed = removed;
         }
 
         Ok(())
+    }
+
+    /// How many *counted* chunks the manifest has on record for `paths`.
+    ///
+    /// The number `RepoIndex::chunks` tracks is confirmed rows, so the number
+    /// a deletion subtracts must be too. The store may hold more under these
+    /// paths — a batch an earlier attempt wrote and never confirmed — and
+    /// those were never added.
+    async fn confirmed_rows(
+        &self,
+        repo_id: &str,
+        signature: &EmbedSignature,
+        paths: &[String],
+    ) -> Result<u64> {
+        if paths.is_empty() {
+            return Ok(0);
+        }
+        Ok(self
+            .manifest
+            .indexed(repo_id, signature, paths)
+            .await?
+            .iter()
+            .map(|file| file.chunks.len() as u64)
+            .sum())
     }
 
     async fn index_group(
