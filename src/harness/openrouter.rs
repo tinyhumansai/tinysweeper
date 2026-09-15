@@ -1072,6 +1072,7 @@ mod tests {
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
             provider: models.provider.clone(),
+            routes: models.routes.clone(),
             structured_output: models.structured_output,
             langfuse: None,
         };
