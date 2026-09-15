@@ -122,7 +122,13 @@ impl Lane for Description {
             LaneId::Description,
             &calls,
             &schema::json_schema(),
-            input.asking(),
+            // No lookups: the subject is the title and body against the
+            // diff, and a reviewer reading the tree to judge prose is one
+            // spending calls on the wrong question.
+            runner::Asking {
+                tree: None,
+                ..input.asking()
+            },
         )
         .await?;
 
