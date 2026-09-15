@@ -134,10 +134,11 @@ Two consequences are load-bearing:
   What this does not close, because no amount of in-process bookkeeping can:
   Compose's ten-second grace period is shorter than a single GitHub write can
   legitimately take (`forge::github::REQUEST_TIMEOUT` is 60s), so a task that
-  is genuinely mid-write — `open_status` posting the initial check, or a
-  `dispatch` task still awaiting `claim_delivery` — when `SIGKILL` lands can
-  still be cut off with GitHub having already accepted a request this process
-  never learns the outcome of. Every write this module makes is built to
+  is genuinely mid-write — `open_status` posting the initial check, a
+  `dispatch` task still awaiting `claim_delivery`, or the review's own
+  `close_status` mid-`update_check` on the ordinary completion path, not the
+  shutdown one — when `SIGKILL` lands can still be cut off with GitHub having
+  already accepted a request this process never learns the outcome of. Every write this module makes is built to
   degrade the same way when that happens: a delivery claim self-heals through
   its own 7-day TTL exactly as a review lease self-heals through `LEASE_TTL`
   (`server::store`'s own words for it — "the backstop for the cases this
