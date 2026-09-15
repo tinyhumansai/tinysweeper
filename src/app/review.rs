@@ -322,8 +322,47 @@ pub async fn review_with_memory(
     retrieval: Option<&Retriever<'_>>,
     memory: Option<&Recaller<'_>>,
 ) -> Result<Proposal> {
+    review_with_tree(
+        forge, model, config, repo, number, store, knowledge, retrieval, memory, None,
+    )
+    .await
+}
+
+/// Run the review with an explicit tree for the reviewers to look things up
+/// in.
+///
+/// `None` — every caller above — reads the tree through the forge at the
+/// pull request's head, which is the deployment that has no checkout. A
+/// caller with one on disk (`local-review`, the eval runner) passes a reader
+/// over it so search works and nothing is fetched twice. Either way a
+/// reviewer can check what a changed line calls into rather than guessing —
+/// see `crate::flows::lookup` — and either way it holds a read handle and
+/// nothing else.
+#[allow(clippy::too_many_arguments)]
+pub async fn review_with_tree(
+    forge: &dyn ForgeRead,
+    model: Arc<dyn Model>,
+    config: &Config,
+    repo: &RepoId,
+    number: u64,
+    store: Option<&dyn ReviewStateStore>,
+    knowledge: Option<&dyn KnowledgeStore>,
+    retrieval: Option<&Retriever<'_>>,
+    memory: Option<&Recaller<'_>>,
+    tree: Option<&dyn TreeReader>,
+) -> Result<Proposal> {
     let context = forge.pull_request_context(repo, number).await?;
     let diffs = reviewable_diffs(config, &context)?;
+    let forge_tree = crate::forge::tree::ForgeTree::new(
+        forge,
+        repo.clone(),
+        &context.pull_request.head_sha,
+        &forge.git_host(),
+    );
+    let tree: &dyn TreeReader = match tree {
+        Some(tree) => tree,
+        None => &forge_tree,
+    };
 
     // Kill switches are checked before anything expensive, so a label really
     // does stop the bot rather than merely hiding its output.
@@ -585,7 +624,7 @@ pub async fn review_with_memory(
                 prior_findings: &prior_lines,
                 retrieved_context: &retrieved_context,
                 memory_context: &memory_text,
-                tree: None,
+                tree: Some(tree),
             })
             .await?;
 

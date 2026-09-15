@@ -105,6 +105,14 @@ pub trait ForgeRead: Send + Sync {
     /// between the review starting and the file being read.
     async fn file_at(&self, repo: &RepoId, path: &str, sha: &str) -> Result<Option<String>>;
 
+    /// The git host this forge serves, for resolving submodule remotes.
+    ///
+    /// `github.com` unless an adapter says otherwise. A submodule whose
+    /// remote is on another host is never followed.
+    fn git_host(&self) -> String {
+        "github.com".to_string()
+    }
+
     /// The gitlink a submodule points at, if `path` is one at `sha`.
     ///
     /// `Some((url, commit))` when the tree entry at `path` is a submodule;
