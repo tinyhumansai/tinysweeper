@@ -248,7 +248,10 @@ async function drive({ browser, config, origin, checkoutDir, session, flow, side
       if (failed) {
         log(`[preview] ${flow.id}: step ${ctx.step} failed: ${failed.error}`);
       }
-      if (reply.done) break;
+      // A batch that failed before reaching its `done` has not ended the
+      // flow: the next turn shows the server the failure, and it decides
+      // (boundedly) whether to take the ending back.
+      if (reply.done && !failed) break;
       if (ctx.step >= maxSteps) break;
     }
     // A flow whose last batch failed before `done` did not reach its goal.

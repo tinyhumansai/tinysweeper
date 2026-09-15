@@ -106,7 +106,21 @@ pub struct FlowState {
     pub commands: Vec<Command>,
     /// Whether the flow has ended.
     pub done: bool,
+    /// How many times a `done` was taken back because the batch carrying
+    /// it failed before reaching it. Bounded by [`MAX_REOPENS`].
+    #[serde(default)]
+    pub reopens: usize,
 }
+
+/// How many times a finished flow may be reopened after its closing batch
+/// failed part-way.
+///
+/// A model that packs `annotate` and `done` into one batch has ended the
+/// flow on paper before the annotation ran; when the annotation misses, the
+/// honest thing is one more turn with the failure in front of it, not a
+/// flow marked failed for a locator typo. Twice, because a model that
+/// misses the same element three times is not going to find it.
+pub const MAX_REOPENS: usize = 2;
 
 /// What the driver needs beyond the state.
 pub struct StepContext<'a> {
@@ -144,7 +158,23 @@ pub async fn next(
     model: Arc<dyn Model>,
 ) -> Result<StepReply> {
     if state.done {
-        return Ok(finish(state, "already done"));
+        // The batch that carried `done` did not get there: the hands report
+        // a failure in it. Take the ending back and ask once more, with the
+        // failure in the observation — bounded, so a hopeless flow still
+        // ends.
+        let batch_failed = observation.results.iter().any(|r| !r.ok);
+        if batch_failed && state.reopens < MAX_REOPENS {
+            state.reopens += 1;
+            state.done = false;
+            while matches!(
+                state.commands.last(),
+                Some(Command::Done { .. } | Command::Record { start: false })
+            ) {
+                state.commands.pop();
+            }
+        } else {
+            return Ok(finish(state, "already done"));
+        }
     }
     // The ceiling is counted from the commands this server has issued, not
     // from the `steps` the hands report: an observation is untrusted, and a
@@ -497,7 +527,21 @@ fn parse(value: &Value, state: &mut FlowState) -> Vec<Command> {
 /// A wire locator as a [`Locator`], or nothing when it names no element.
 fn locator(wire: Option<WireLocator>) -> Option<Locator> {
     let wire = wire?;
-    let clean = |s: Option<String>| s.map(|s| text(&s, 120)).filter(|s| !s.is_empty());
+    // Not the safe-alphabet filter: locator text has to match the page
+    // verbatim, and a stripped em-dash or apostrophe is a locator that can
+    // never match. Trimmed, capped, and rid of control characters only — it
+    // is sent to Playwright as a string argument, never rendered anywhere.
+    let clean = |s: Option<String>| {
+        s.map(|s| {
+            s.chars()
+                .filter(|c| !c.is_control())
+                .take(200)
+                .collect::<String>()
+                .trim()
+                .to_string()
+        })
+        .filter(|s| !s.is_empty())
+    };
     match wire.by.as_str() {
         "role" => Some(Locator::Role {
             role: clean(wire.role)?,
@@ -690,6 +734,89 @@ mod tests {
             .unwrap();
         assert!(reply.done);
         assert_eq!(model.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn locator_text_reaches_the_hands_verbatim() {
+        let flow = flow();
+        let mut state = FlowState::default();
+        let model = Arc::new(MockModel::new().then(answer(json!([
+            {"op": "click", "locator": {"by": "text", "text": "Preview build — this row's here", "exact": true}}
+        ]))));
+        let reply = next(&ctx(&flow), &mut state, &observation(0), model)
+            .await
+            .unwrap();
+        assert!(reply.commands.contains(&Command::Click {
+            locator: Locator::Text {
+                text: "Preview build — this row's here".into(),
+                exact: true
+            }
+        }));
+    }
+
+    #[tokio::test]
+    async fn a_closing_batch_that_failed_reopens_the_flow_a_bounded_number_of_times() {
+        let flow = flow();
+        let mut state = FlowState {
+            commands: vec![
+                Command::Record { start: true },
+                Command::Screenshot { id: "s1".into() },
+                Command::Record { start: false },
+                Command::Done {
+                    reason: "shown".into(),
+                },
+            ],
+            screenshots: vec!["s1".into()],
+            done: true,
+            ..FlowState::default()
+        };
+        let model = Arc::new(
+            MockModel::new()
+                .then(answer(
+                    json!([{"op": "press", "key": "Enter"}, {"op": "done", "reason": "now"}]),
+                ))
+                .then(answer(json!([{"op": "done", "reason": "again"}]))),
+        );
+        let mut failed = observation(2);
+        failed.results = vec![StepResult {
+            index: 0,
+            ok: false,
+            error: Some("callout target is not visible".into()),
+        }];
+
+        // First failure: reopened, the model asked, the ending taken back.
+        let reply = next(&ctx(&flow), &mut state, &failed, model.clone())
+            .await
+            .unwrap();
+        assert_eq!(model.calls(), 1);
+        assert_eq!(state.reopens, 1);
+        assert!(reply.done);
+        assert!(
+            !state
+                .commands
+                .iter()
+                .any(|c| matches!(c, Command::Done { reason } if reason == "shown"))
+        );
+
+        // Second failure: reopened once more.
+        next(&ctx(&flow), &mut state, &failed, model.clone())
+            .await
+            .unwrap();
+        assert_eq!(model.calls(), 2);
+        assert_eq!(state.reopens, 2);
+
+        // Third: the bound holds and the flow stays done without a call.
+        let reply = next(&ctx(&flow), &mut state, &failed, model.clone())
+            .await
+            .unwrap();
+        assert_eq!(model.calls(), 2);
+        assert!(reply.done);
+        assert_eq!(
+            reply.commands.last(),
+            Some(&Command::Done {
+                reason: "already done".into()
+            })
+        );
     }
 
     #[tokio::test]
