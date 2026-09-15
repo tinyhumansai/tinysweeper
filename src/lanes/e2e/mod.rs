@@ -407,18 +407,24 @@ mod lane_tests {
         // nothing drives the new route: a model finding on the changed line.
         // A third, mis-anchored finding is discarded, and a fourth restating
         // the job state is dropped in favour of the fact.
+        let evidence = evidence("src/server/**", vec![]);
+        // The change is under `src/preview/`, outside the filter.
+        let diff = parse_file_patch(
+            "src/preview/apply.rs",
+            "@@ -1,2 +1,3 @@\n fn apply() {\n+    publish(\"/preview/sessions\");\n }\n",
+        );
         let model = MockModel::always(json!({
-            "summary": "The new route has no end-to-end coverage.",
+            "summary": "The new publish path has no end-to-end coverage.",
             "findings": [
                 {
-                    "path": "src/server/routes.rs", "line": 2,
+                    "path": "src/preview/apply.rs", "line": 2,
                     "rule": "e2e-uncovered",
-                    "title": "Drive POST /preview/sessions from an e2e test",
+                    "title": "Drive the preview publish from an e2e test",
                     "body": "e2e/home.spec.ts only loads the home page.",
                     "severity": "medium", "confidence": 0.9
                 },
                 {
-                    "path": "src/server/routes.rs", "line": 1,
+                    "path": "src/preview/apply.rs", "line": 1,
                     "rule": "e2e-uncovered",
                     "title": "Something about an unchanged line",
                     "body": "…", "severity": "medium", "confidence": 0.9
@@ -431,38 +437,6 @@ mod lane_tests {
                 }
             ]
         }));
-        let evidence = evidence("src/server/**", vec![]);
-        // The change is under `src/preview/`, outside the filter.
-        let diff = parse_file_patch(
-            "src/preview/apply.rs",
-            "@@ -1,2 +1,3 @@\n fn apply() {\n+    publish(\"/preview/sessions\");\n }\n",
-        );
-        let model_findings_path = "src/preview/apply.rs";
-        let model = MockModel::always(json!({
-            "summary": "The new publish path has no end-to-end coverage.",
-            "findings": [
-                {
-                    "path": model_findings_path, "line": 2,
-                    "rule": "e2e-uncovered",
-                    "title": "Drive the preview publish from an e2e test",
-                    "body": "e2e/home.spec.ts only loads the home page.",
-                    "severity": "medium", "confidence": 0.9
-                },
-                {
-                    "path": model_findings_path, "line": 1,
-                    "rule": "e2e-uncovered",
-                    "title": "Something about an unchanged line",
-                    "body": "…", "severity": "medium", "confidence": 0.9
-                },
-                {
-                    "path": ".github/workflows/e2e.yml", "line": 4,
-                    "rule": "e2e-not-triggered",
-                    "title": "The model noticed the filter too",
-                    "body": "…", "severity": "low", "confidence": 0.5
-                }
-            ]
-        }))
-        .or(model);
         let outcome = run_with(model, &config(), &[diff], Some(&evidence)).await;
 
         let rules: Vec<(&str, Severity)> = outcome
