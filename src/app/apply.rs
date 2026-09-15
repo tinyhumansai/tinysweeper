@@ -307,6 +307,92 @@ async fn own_review_state(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> O
     }
 }
 
+/// What settling the `e2e` check run amounted to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum E2eSettlement {
+    /// No review left that lane waiting on anything.
+    NothingWatched,
+    /// The pull request has moved on; the next review starts a new watch.
+    HeadMoved,
+    /// At least one watched job has not concluded.
+    StillPending,
+    /// The check run was concluded and the watch cleared.
+    Published(crate::forge::types::CheckConclusion),
+}
+
+/// Conclude the `e2e` check run once the jobs it was waiting on have spoken.
+///
+/// The second half of that lane's verdict, and the reason this lives here:
+/// the review decided everything it could — the harness, the coverage, the
+/// jobs that would never run — and recorded what it was still waiting on in
+/// `ReviewedState::e2e`. This function executes that recorded plan and
+/// nothing else. No model is consulted; the decision is
+/// `lanes::e2e::runs::settle`, arithmetic over the check runs the forge
+/// holds, and the only write is the one check run the review already
+/// published as `Neutral`.
+///
+/// Called on every `check_run`/`check_suite` completion the server sees for
+/// the pull request, so the cheap exits come first: no watch, wrong head, or
+/// a job still running each cost at most two reads.
+pub async fn settle_e2e(
+    read: &dyn ForgeRead,
+    write: &dyn ForgeWrite,
+    config: &Config,
+    store: &dyn ReviewStateStore,
+    repo: &RepoId,
+    number: u64,
+) -> Result<E2eSettlement> {
+    use crate::config::types::LaneId;
+
+    let key = crate::state::key(&repo.to_string(), number);
+    let Some(mut state) = store.load_state(&key).await? else {
+        return Ok(E2eSettlement::NothingWatched);
+    };
+    let Some(watch) = state.e2e.clone() else {
+        return Ok(E2eSettlement::NothingWatched);
+    };
+
+    let live = read.pull_request(repo, number).await?;
+    if live.head_sha != watch.head_sha {
+        // Not cleared: the review of the new head rewrites the whole record,
+        // and clearing here would race it.
+        return Ok(E2eSettlement::HeadMoved);
+    }
+
+    let checks = read.check_runs(repo, &watch.head_sha).await?;
+    let Some(settled) = crate::lanes::e2e::runs::settle(&watch, &checks, config.fail_on(LaneId::E2e))
+    else {
+        return Ok(E2eSettlement::StillPending);
+    };
+
+    write
+        .publish_check(
+            repo,
+            CheckRun {
+                name: LaneId::E2e.check_name(),
+                head_sha: watch.head_sha.clone(),
+                conclusion: Some(settled.conclusion),
+                title: match settled.conclusion {
+                    crate::forge::types::CheckConclusion::Failure => {
+                        "An end-to-end job did not pass".into()
+                    }
+                    _ => "End-to-end jobs concluded".into(),
+                },
+                summary: crate::findings::render::lane_summary(&settled.summary, &[], VERSION, true),
+                images: vec![],
+            },
+        )
+        .await?;
+
+    // Cleared only after the write succeeded: a failed publish leaves the
+    // watch in place so the next completion event retries it.
+    state.e2e = None;
+    if let Err(err) = store.save_state(&key, &state).await {
+        tracing::warn!(%err, "could not clear the e2e watch; the next completion will republish");
+    }
+    Ok(E2eSettlement::Published(settled.conclusion))
+}
+
 fn title_for(findings: usize, summary: &str) -> String {
     match findings {
         0 => summary.chars().take(80).collect(),
@@ -584,6 +670,118 @@ mod tests {
             models: vec!["moonshotai/kimi-k3".into()],
             threads: Default::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn settling_the_e2e_check_waits_for_the_watched_jobs_then_publishes_once() {
+        use crate::lanes::e2e::runs::Watch;
+        use crate::state::memory::MemoryState;
+        use crate::state::types::ReviewedState;
+
+        let repo = RepoId::parse("tinyhumansai/tinysweeper").unwrap();
+        let mut state = MockState::default();
+        state.pull_requests.insert(
+            7,
+            PullRequest {
+                number: 7,
+                head_sha: "abc123".into(),
+                ..PullRequest::default()
+            },
+        );
+        state.set_check("abc123", "playwright", None);
+        let forge = MockForge::with_state(state.clone());
+        let store = MemoryState::new();
+        store
+            .save_state(
+                &crate::state::key("tinyhumansai/tinysweeper", 7),
+                &ReviewedState {
+                    head_sha: "abc123".into(),
+                    e2e: Some(Watch {
+                        head_sha: "abc123".into(),
+                        jobs: vec!["playwright".into()],
+                        summary: "Coverage looks complete.".into(),
+                        failed: false,
+                    }),
+                    ..ReviewedState::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let settled = settle_e2e(&forge, &forge, &config(), &store, &repo, 7)
+            .await
+            .expect("settles");
+        assert_eq!(settled, E2eSettlement::StillPending);
+        assert!(forge.writes().is_empty(), "nothing published while a job runs");
+
+        state.set_check("abc123", "playwright", Some(CheckConclusion::Failure));
+        let forge = MockForge::with_state(state.clone());
+        let settled = settle_e2e(&forge, &forge, &config(), &store, &repo, 7)
+            .await
+            .expect("settles");
+        assert_eq!(settled, E2eSettlement::Published(CheckConclusion::Failure));
+        let checks = forge.checks();
+        let check = checks.get("tinysweeper/e2e").expect("the e2e check was published");
+        assert_eq!(check.head_sha, "abc123");
+        assert_eq!(check.conclusion, Some(CheckConclusion::Failure));
+        assert!(check.summary.contains("`playwright`: **failure**"), "{}", check.summary);
+        assert!(check.summary.contains("Coverage looks complete."), "{}", check.summary);
+
+        // The watch is cleared, so the next completion event does nothing.
+        let forge = MockForge::with_state(state);
+        let settled = settle_e2e(&forge, &forge, &config(), &store, &repo, 7)
+            .await
+            .expect("settles");
+        assert_eq!(settled, E2eSettlement::NothingWatched);
+        assert!(forge.writes().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_moved_head_leaves_the_watch_for_the_next_review_to_replace() {
+        use crate::lanes::e2e::runs::Watch;
+        use crate::state::memory::MemoryState;
+        use crate::state::types::ReviewedState;
+
+        let repo = RepoId::parse("tinyhumansai/tinysweeper").unwrap();
+        let mut state = MockState::default();
+        state.pull_requests.insert(
+            7,
+            PullRequest {
+                number: 7,
+                head_sha: "newer".into(),
+                ..PullRequest::default()
+            },
+        );
+        state.set_check("older", "playwright", Some(CheckConclusion::Success));
+        let forge = MockForge::with_state(state);
+        let store = MemoryState::new();
+        let key = crate::state::key("tinyhumansai/tinysweeper", 7);
+        store
+            .save_state(
+                &key,
+                &ReviewedState {
+                    head_sha: "older".into(),
+                    e2e: Some(Watch {
+                        head_sha: "older".into(),
+                        jobs: vec!["playwright".into()],
+                        summary: String::new(),
+                        failed: false,
+                    }),
+                    ..ReviewedState::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let settled = settle_e2e(&forge, &forge, &config(), &store, &repo, 7)
+            .await
+            .expect("settles");
+        assert_eq!(settled, E2eSettlement::HeadMoved);
+        assert!(forge.writes().is_empty(), "a stale verdict is never published");
+        assert!(
+            store.load_state(&key).await.unwrap().unwrap().e2e.is_some(),
+            "the new head's review replaces the record; nothing is cleared here"
+        );
     }
 
     fn finding() -> Finding {
