@@ -132,16 +132,17 @@ A check run that exists is the fact; the trigger analysis only explains an
 absence. A job that ran despite a filter the outline misread is reported as
 what it did.
 
-### What the graph adds
+### What the graph could add
 
 `graph::impact` already emits `Impact::untested`: changed symbols nothing in
 the graph exercises. Its `Tests` edges do not distinguish an e2e test from a
 unit test — the extractor marks a scope as a test by `#[test]`, `test_`,
 `Test` prefix — but the file path does. Filtering the test-scoped callers by
-the e2e path table gives, for free, the list of changed symbols an e2e test
-*directly* reaches.
+the e2e path table would give the list of changed symbols an e2e test
+*directly* reaches. The lane already receives the retrieved neighbourhood
+through `LaneInput::retrieved_context`; the filtered view is not wired yet.
 
-That list will usually be short, and the lane must not read its shortness as
+That list would usually be short, and the lane must not read its shortness as
 absence. E2e tests reach features through HTTP paths, CLI arguments, UI text
 and configuration keys, not through symbol calls. So the bridge the first cut
 ships is lexical, in `evidence.rs`: the quoted literals and route- or
