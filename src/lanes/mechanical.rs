@@ -68,7 +68,10 @@ pub fn detect(diffs: &[&FileDiff]) -> Option<Substitution> {
         // and be verified as one. Restricting the fast path to substitutions
         // that look like an identifier or a path keeps it to renames — an
         // operator, a literal or other punctuation change never qualifies.
-        if !is_identifier_shaped(&from) || !is_identifier_shaped(&to) {
+        if !is_identifier_shaped(&from)
+            || !is_identifier_shaped(&to)
+            || !from.chars().any(|c| c.is_ascii_alphabetic())
+        {
             continue;
         }
         let verified: Vec<String> = diffs
