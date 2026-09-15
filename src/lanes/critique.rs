@@ -553,6 +553,7 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                e2e: None,
             })
             .await
             .expect("lane runs")
@@ -913,6 +914,7 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                e2e: None,
             })
             .await
             .expect("runs");
@@ -970,6 +972,7 @@ fn helper() {
                 prior_findings: &["Close the socket on the error path".to_string()],
                 retrieved_context: "",
                 memory_context: "",
+                e2e: None,
             })
             .await
             .expect("runs");
@@ -1026,6 +1029,7 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                e2e: None,
             })
             .await
             .expect("runs");
@@ -1072,6 +1076,7 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                e2e: None,
             })
             .await
             .expect("the failure is isolated, not propagated");
@@ -1132,6 +1137,7 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                e2e: None,
             })
             .await
             .expect("runs");
