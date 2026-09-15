@@ -454,17 +454,13 @@ impl<'a> Indexer<'a> {
             .iter()
             .map(|dir| dir.trim_end_matches('/').to_string())
             .collect();
-        let (revoked, ordinary): (Vec<String>, Vec<String>) = removed
+        let revoked: Vec<String> = removed
             .iter()
+            .filter(|path| under(&self.revoked, path))
             .cloned()
-            .partition(|path| under(&self.revoked, path));
+            .collect();
         if !revoked.is_empty() {
-            // Counted after the delete, not before: a delete the store
-            // refused leaves the rows, and a count that says otherwise is
-            // what a failed run would then persist.
-            let confirmed = self.confirmed_rows(repo_id, signature, &revoked).await?;
-            self.index.delete_paths(repo_id, &revoked).await?;
-            report.deleted += confirmed;
+            report.deleted += self.remove_rows(repo_id, signature, &revoked).await?;
         }
 
         for group in selected.chunks(self.group) {
@@ -481,9 +477,7 @@ impl<'a> Indexer<'a> {
         // also holds rows an earlier attempt wrote and never confirmed, which
         // were never counted and must not be subtracted.
         if !removed.is_empty() {
-            let confirmed = self.confirmed_rows(repo_id, signature, &ordinary).await?;
-            self.index.delete_paths(repo_id, &removed).await?;
-            report.deleted += confirmed;
+            report.deleted += self.remove_rows(repo_id, signature, &removed).await?;
             self.manifest.forget(repo_id, signature, &removed).await?;
             report.removed = removed;
         }
@@ -491,13 +485,17 @@ impl<'a> Indexer<'a> {
         Ok(())
     }
 
-    /// How many *counted* chunks the manifest has on record for `paths`.
+    /// Delete every row under `paths`, returning how many *counted* rows went.
     ///
-    /// The number `RepoIndex::chunks` tracks is confirmed rows, so the number
-    /// a deletion subtracts must be too. The store may hold more under these
-    /// paths — a batch an earlier attempt wrote and never confirmed — and
-    /// those were never added.
-    async fn confirmed_rows(
+    /// Two deletes, for two different questions. The number `RepoIndex::chunks`
+    /// tracks is confirmed rows, so the decrement is the confirmed ids the
+    /// manifest has on record — deleted by id, so the store answers how many
+    /// of *those* it removed, which is zero when an earlier attempt already
+    /// removed them and the run that would have forgotten them failed. Then
+    /// the path sweep, uncounted, for rows an earlier attempt wrote and never
+    /// confirmed: they exist, they were never added to the count, and they
+    /// must not be subtracted from it.
+    async fn remove_rows(
         &self,
         repo_id: &str,
         signature: &EmbedSignature,
@@ -506,13 +504,20 @@ impl<'a> Indexer<'a> {
         if paths.is_empty() {
             return Ok(0);
         }
-        Ok(self
+        let confirmed: Vec<String> = self
             .manifest
             .indexed(repo_id, signature, paths)
             .await?
-            .iter()
-            .map(|file| file.chunks.len() as u64)
-            .sum())
+            .into_iter()
+            .flat_map(|file| file.chunks)
+            .collect();
+        let counted = if confirmed.is_empty() {
+            0
+        } else {
+            self.index.delete_chunks(repo_id, &confirmed).await?
+        };
+        self.index.delete_paths(repo_id, paths).await?;
+        Ok(counted)
     }
 
     async fn index_group(

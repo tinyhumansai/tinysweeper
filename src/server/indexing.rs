@@ -205,7 +205,26 @@ impl IndexBackend {
             // The graph is what turns "code that reads like the diff" into "the
             // caller this change breaks", so it is rebuilt from the same
             // checkout rather than left to a second fetch.
-            if let Err(err) = self.sync_graph(&repo_id, &checkout, config, report).await {
+            //
+            // Not from a checkout missing a submodule, though: parsed against
+            // a tree where those files do not exist, every import into them
+            // resolves as broken and a whole rebuild drops their nodes — and
+            // the complete run that follows sees their chunks unchanged and
+            // never puts them back. The graph is dropped instead, so that run
+            // rebuilds it whole from a tree that has everything. Expansion is
+            // lost until then; wrong edges would be worse than none.
+            if !report.unfetched.is_empty() {
+                use crate::ports::graph::GraphStore;
+                tracing::info!(
+                    repo = %repo_id,
+                    unfetched = ?report.unfetched,
+                    "code graph not synced from an incomplete checkout; it is rebuilt whole \
+                     once every submodule is fetched"
+                );
+                if let Err(err) = self.index.graph.delete_repo(&repo_id).await {
+                    tracing::warn!(%err, repo = %repo_id, "could not drop the code graph for a rebuild");
+                }
+            } else if let Err(err) = self.sync_graph(&repo_id, &checkout, config, report).await {
                 // A graph failure costs expansion, not retrieval: the chunks are
                 // already written and queryable. Failing the whole run here
                 // would throw away an index that just cost money.
