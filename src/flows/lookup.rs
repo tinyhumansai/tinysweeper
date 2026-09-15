@@ -686,8 +686,12 @@ fn render_found(found: &Found) -> String {
             if text.is_empty() {
                 format!("The file has {total} lines; the range starts past its end.")
             } else {
+                // A source line the reviewer asked for is contributor
+                // content; one containing ```` must not be able to close a
+                // fixed fence and turn the rest of the file into instructions.
+                let fence = crate::harness::prompt::fence_for(text);
                 format!(
-                    "Lines {start}–{end} of {total}:\n\n````\n{text}\n````{}",
+                    "Lines {start}–{end} of {total}:\n\n{fence}\n{text}\n{fence}{}",
                     if *end < *total {
                         format!("\n\nThe file continues to line {total}.")
                     } else {
