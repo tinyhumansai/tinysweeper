@@ -1,33 +1,55 @@
 schema = 1
 id = "oc-2313-round-boundary-leaks"
-title = "chore(vendor): bump openhuman and tinyhivemind to upstream main"
+title = "A refactor that bounds one read at a boundary and leaves its siblings unbounded"
 fixture = "../fixtures/oc-2313-round-boundary-leaks.json"
-labels = []
+labels = ["recall", "boundary", "critique", "rust", "large-diff"]
+
+# The first recall case in the corpus, and the shape it was chosen for: a
+# 62-file pull request where 58 files are a mechanical rename and one file
+# carries the logic change. The live review ran every file, spent $0.23, and
+# approved with zero findings. Two external reviewers found two real defects in
+# the one file that mattered, both about the same boundary.
+#
+# Not exhaustive: nobody has asserted these are the only defects, and the 58
+# renamed files were not read for this label.
+exhaustive = false
 
 [provenance]
 repo = "tinyhumansai/opencompany"
 pr = 2313
-# REQUIRED, and the loader refuses the case without it. Cite something this bot
-# did not produce: the follow-up commit that fixed it, a human review comment
-# somebody acted on, a revert. An expectation written from the bot's own output
-# measures whether the bot still agrees with itself.
-evidence = ""
-labelled_by = ""
+# Codex left two P2 inline comments on `episode.rs` at lines 489 and 526 of the
+# reviewed head, and CodeRabbit independently raised the second of them after
+# tracing `DmTool` and `HiveDeskRunner::speak` with eleven shell scripts. The
+# live tinysweeper review of the same head (05318664) approved with "found
+# nothing blocking".
+evidence = "https://github.com/tinyhumansai/opencompany/pull/2313#pullrequestreview-3600000000 (Codex, 2026-09-15T10:43Z and 10:50Z) and the CodeRabbit review at 10:52Z on the same PR"
+labelled_by = "enamakel"
+labelled_on = "2026-09-15"
 
-# What a good reviewer should find. Delete the block for a clean case — a
-# pull request with nothing wrong with it is how noise gets measured.
-# [[expected]]
-# id = "E1"
-# path = "src/some/file.rs"
-# lines = [10, 14]
-# severity_min = "medium"
-# summary = "One sentence a human can check the label against."
-# must_mention = ["keyword", "either|or"]
+# The pinboard read is bounded at `round_start`, but the cursor underneath
+# (`EventLog::read_before`) is exclusive — `sequence < before` — so a pin that
+# *is* the boundary row is hidden from the very next speaker. At width one the
+# author's own comment says the bound is "inert"; it is not, because the
+# boundary row is the previous turn's own row. Needs the cursor semantics from
+# outside the hunk, or a question about them.
+[[expected]]
+id = "E1"
+path = "crates/opencompany-core/src/hivemind/episode.rs"
+lines = [486, 490]
+severity_min = "medium"
+summary = "Passing `round_start` as the `before` bound of `read_pinboard` hides the boundary row itself when the cursor is exclusive, so a pin laid down by the previous turn does not reach the next speaker."
+must_mention = ["round_start|boundary", "exclusive|inclusive|off-by-one|itself|hidden|hide|withh"]
 
-# What it must not say. Every entry needs a reason, because the next person to
-# read it will otherwise assume it is a mistake and delete it.
-# [[forbidden]]
-# id = "F1"
-# path = "src/some/file.rs"
-# reason = "Three earlier runs called this dead code. It is not."
-# matches = ["dead code", "unused"]
+# The author bounded `read_pinboard` at the round and wrote a paragraph about
+# why, then left `elsewhere_for` — four lines below, in the same loop — reading
+# with no bound. Inside that same loop `referral::consider` journals rows onto
+# a peer desk synchronously, so a later round-mate's `elsewhere` block can
+# carry an earlier round-mate's effects. The inconsistency and the mechanism
+# are both inside the hunk; this one needs nothing the reviewer was not shown.
+[[expected]]
+id = "E2"
+path = "crates/opencompany-core/src/hivemind/episode.rs"
+lines = [524, 528]
+severity_min = "medium"
+summary = "`elsewhere_for` is read per turn with no round bound, so an earlier round-mate's cross-desk effects (referral answers, direct messages) reach a later round-mate's prompt, breaking the isolation the round-bounded pinboard read was added for."
+must_mention = ["elsewhere", "round|bound|boundary|snapshot|isolat|round-mate|earlier"]
