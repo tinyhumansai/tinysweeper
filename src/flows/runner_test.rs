@@ -511,6 +511,7 @@ fn lookup_policy(rounds: u8) -> crate::config::types::LookupPolicy {
         rounds,
         per_round: 3,
         max_chars: 10_000,
+        checkout: false,
     }
 }
 

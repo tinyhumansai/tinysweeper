@@ -421,8 +421,7 @@ impl Ledger {
                     continue;
                 }
                 self.seen.insert(lookup.key());
-                let mut body = format!("````
-");
+                let mut body = String::from("````\n");
                 for hit in &definitions {
                     body.push_str(&format!("{}:{}: {}
 ", hit.path, hit.line, hit.text));
@@ -503,7 +502,7 @@ const SAME_FILE_BELOW: u32 = crate::ports::tree::MAX_READ_LINES - DEFINITION_ABO
 /// possibly behind `pub` or `async` or `export`. A false positive costs one
 /// short read; a miss costs the reviewer a round.
 fn looks_like_definition(text: &str) -> bool {
-    let mut words = text.trim_start().split_whitespace();
+    let mut words = text.split_whitespace();
     let mut word = words.next().unwrap_or("");
     while matches!(
         word,
@@ -569,6 +568,7 @@ mod tests {
             rounds: 2,
             per_round: 2,
             max_chars: 200,
+            checkout: false,
         }
     }
 
