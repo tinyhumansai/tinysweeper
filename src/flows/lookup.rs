@@ -46,16 +46,19 @@ use crate::ports::tree::{Found, Lookup, TreeReader};
 pub fn instruction(describe: &str, policy: &LookupPolicy) -> String {
     format!(
         "\n\n## Looking things up\n\n\
-         You may read the repository before you answer. {describe} If your verdict \
-         turns on something this diff does not show — whether the function a changed line \
-         calls treats a bound as exclusive or inclusive, whether a sibling read in the same \
-         loop is bounded too, what a type's field means — put the lookups in `lookups` and \
-         stop; you will be asked again with what came back, and that turn is the one your \
-         verdict is taken from. Prefer reading the definition a changed line calls into over \
-         re-reading the diff. Ask for a line range, not a whole file. You may take up to \
-         {rounds} such turn(s) of {per_round} lookups each. A doubt you could have settled \
-         with a lookup and did not is not a finding and not an all-clear: look it up. \
-         If nothing is in doubt, omit the key.",
+         You may read the repository before you answer, and on this turn you should. \
+         {describe} Use `lookups` to read the definition of every function or type the \
+         changed lines call into that is not defined in the diff — its doc comment and \
+         signature are what decide whether a bound is exclusive or inclusive, whether a \
+         sibling read in the same loop is also bounded, what a field means — and to read \
+         the unchanged code around the change that the diff's comments refer to. Put the \
+         lookups in `lookups` and stop; you will be asked again with what came back, and \
+         that later turn is the one your verdict is taken from, so a verdict on this turn \
+         is provisional. Ask for line ranges, not whole files; a search for `fn name` finds \
+         a definition. You may take up to {rounds} such turn(s) of {per_round} lookups each. \
+         A doubt you could have settled with a lookup and did not is neither a finding nor \
+         an all-clear. Answer without lookups only when the change calls into nothing you \
+         have not already seen — a test fixture, a documentation edit, a rename.",
         rounds = policy.rounds,
         per_round = policy.per_round,
     )
@@ -302,7 +305,7 @@ mod tests {
         let schema = with_lookups(json!({ "type": "object" }), &policy());
         assert!(schema["properties"]["lookups"]["maxItems"] == json!(2));
         let text = instruction("Search works.", &policy());
-        assert!(text.contains("up to 2 such turn(s) of 2 lookups"));
+        assert!(text.contains("up to 2 such turn(s) of 2 lookups each"));
         assert!(text.contains("Search works."));
     }
 

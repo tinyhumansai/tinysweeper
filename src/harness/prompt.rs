@@ -494,17 +494,27 @@ comments.
 
 /// Rules every lane shares. Part of the cacheable prefix, so it must not
 /// interpolate anything.
+/// Appended to a turn that is the reviewer's last, so it does not answer as
+/// though another were coming.
+///
+/// This used to open `SHARED_RULES` — "there is no second turn" — and was
+/// therefore in the prefix of every turn, including the ones that offered a
+/// lookup. A model told in one paragraph to decide with what is in front of
+/// it and in a later one that it may read first does the former. Now it is
+/// said only when it is true.
+pub const SETTLE_INSTRUCTION: &str = "\n\n## This is your last turn\n\nAnswer once, completely. \
+There is no turn after this one: you are not going to be asked a follow-up, and nothing you \
+say is a preamble to further work. Decide with what is in front of you and report the result.";
+
 const SHARED_RULES: &str = r#"
 
 ## How to report
 
-Answer once, completely. There is no second turn: you are not going to be asked
-a follow-up, and nothing you say is a preamble to further work. Do not describe
-what you are about to do, what you would like to check, or what you would need
-in order to decide — decide with what is in front of you and report the result.
-
-The summary is your verdict, written as if the review is already finished,
-because it is.
+The summary is your verdict, written as if the review is already finished.
+Do not describe what you are about to do or what you would like to check:
+either you were given a way to check it — in which case use that, and it is
+described below — or you were not, and then you decide with what is in front
+of you and report the result.
 
 The summary and the findings must agree. If you describe a problem in the
 summary it belongs in the findings list, where it can be anchored, gated and

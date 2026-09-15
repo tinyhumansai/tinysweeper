@@ -290,6 +290,9 @@ pub async fn ask_all(
         if may_ask {
             system.push_str(subagent::ASK_INSTRUCTION);
         }
+        if !may_lookup && !may_ask {
+            system.push_str(crate::harness::prompt::SETTLE_INSTRUCTION);
+        }
         system
     };
 
@@ -398,7 +401,7 @@ pub async fn ask_all(
         // after this one, so offering `questions` again would invite a question
         // nothing will ever answer.
         let mut again = prompts[index].clone();
-        again.system = calls[index].system.clone();
+        again.system = system_for(&calls[index].system, false, false);
         again.prompt.push_str(&subagent::render(&answered));
 
         if let Ok(round_two) =
