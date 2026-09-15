@@ -209,7 +209,10 @@ fn a_ladder_without_an_address_is_refused_before_the_first_push() {
             .unwrap()
             .embeddings
     };
-    let err = crate::index::embedder_from_config(&config).expect_err("refuses");
+    let err = match crate::index::embedder_from_config(&config) {
+        Err(err) => err,
+        Ok(_) => panic!("a ladder with no address must be refused"),
+    };
     assert!(
         err.to_string().contains("needs `embeddings.base_url`"),
         "{err}"
