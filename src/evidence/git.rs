@@ -502,7 +502,13 @@ fn diff_args(diff_range: &[String]) -> Vec<String> {
 pub async fn reviewable_paths(dir: &Path) -> Result<Vec<String>> {
     let out = git(
         dir,
-        &["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        &[
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ],
     )
     .await?;
     Ok(out

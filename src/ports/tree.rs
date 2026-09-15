@@ -932,7 +932,12 @@ mod tests {
     #[tokio::test]
     async fn skip_rules_hold_inside_a_fetched_submodule_and_an_allow_list_holds_everywhere() {
         let dir = tempfile::tempdir().unwrap();
-        for d in ["src", "vendor/lib/src", "vendor/lib/target", "vendor/lib/.git"] {
+        for d in [
+            "src",
+            "vendor/lib/src",
+            "vendor/lib/target",
+            "vendor/lib/.git",
+        ] {
             std::fs::create_dir_all(dir.path().join(d)).unwrap();
         }
         std::fs::write(
@@ -967,7 +972,11 @@ mod tests {
             panic!()
         };
         let paths: Vec<&str> = hits.iter().map(|h| h.path.as_str()).collect();
-        assert_eq!(paths, vec!["src/a.rs", "vendor/lib/src/b.rs"], "an ignored file is invisible");
+        assert_eq!(
+            paths,
+            vec!["src/a.rs", "vendor/lib/src/b.rs"],
+            "an ignored file is invisible"
+        );
         let env = tracked
             .lookup(&Lookup::Read {
                 path: ".env".into(),
@@ -978,7 +987,10 @@ mod tests {
             .unwrap();
         assert_eq!(env, Found::NotFound);
         assert_eq!(
-            DirTree::new(dir.path()).at_revision("abc").revision().as_deref(),
+            DirTree::new(dir.path())
+                .at_revision("abc")
+                .revision()
+                .as_deref(),
             Some("abc")
         );
     }

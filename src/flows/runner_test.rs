@@ -639,6 +639,40 @@ async fn the_last_permitted_round_offers_no_lookups_and_the_loop_ends() {
 }
 
 #[tokio::test]
+async fn a_lookup_follow_up_that_fails_does_not_leave_the_provisional_verdict_standing() {
+    // The first turn is told its verdict is provisional; if the turn that
+    // was to settle it never answers, the file is unreviewed, not approved.
+    let model = MockModel::new()
+        .then(json!({
+            "summary": "provisional",
+            "findings": [],
+            "lookups": [{ "kind": "read", "path": "a.rs", "why": "x" }]
+        }))
+        .then_error("provider down");
+    let tree = crate::ports::tree::MockTree::from_files([("a.rs", "x")]);
+    let llm = lane_llm(Arc::new(model), &config(), 100.0);
+    let policy = lookup_policy(1);
+
+    let answers = ask_all(
+        llm,
+        LaneId::Critique,
+        &[call("a")],
+        &schema(),
+        Asking {
+            subagent_model: None,
+            tree: Some(&tree),
+            lookup: Some(&policy),
+            seed: None,
+        },
+    )
+    .await
+    .expect("runs");
+
+    assert!(answers[0].value.is_none(), "{:?}", answers[0]);
+    assert!(answers[0].error.is_some());
+}
+
+#[tokio::test]
 async fn without_a_tree_the_prompt_is_the_plain_one() {
     // Every cassette recorded before lookups existed depends on this: a
     // deployment with no tree sends exactly the prompt it always sent.
