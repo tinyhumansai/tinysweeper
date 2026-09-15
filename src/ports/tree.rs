@@ -313,9 +313,16 @@ impl TreeReader for MockTree {
     }
 
     fn describe(&self) -> String {
-        "Files can be read by path and searched by literal text.".into()
+        // Word for word what `DirTree` says: a fixture stands in for a
+        // checkout on replay, and the description is in the prompt the
+        // cassette was keyed on.
+        DIR_DESCRIPTION.into()
     }
 }
+
+/// What a reader over a checkout can do, in the reviewer's instructions.
+pub const DIR_DESCRIPTION: &str =
+    "Files can be read by path and the tree searched by literal text.";
 
 /// A reader that records what its inner reader answered.
 ///
@@ -512,7 +519,7 @@ impl TreeReader for DirTree {
     }
 
     fn describe(&self) -> String {
-        "Files can be read by path and the tree searched by literal text.".into()
+        DIR_DESCRIPTION.into()
     }
 }
 

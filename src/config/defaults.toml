@@ -398,6 +398,10 @@ enabled = true
 rounds = 2
 per_round = 4
 max_chars = 40000
+# A shallow checkout of the head per review, so the tree can be searched by
+# name. The indexer already makes this fetch on every push; off, lookups
+# read one file at a time through the API and search is unavailable.
+checkout = true
 
 # The knowledge centre. `files` are read from the pull request's head commit
 # through the forge and are untrusted input — they are put through a sandboxed

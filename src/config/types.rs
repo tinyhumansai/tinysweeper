@@ -971,6 +971,14 @@ pub struct LookupPolicy {
     pub per_round: u8,
     /// Total characters of looked-up text one reviewer may accumulate.
     pub max_chars: usize,
+    /// Fetch a shallow checkout of the head for the review, so the tree can
+    /// be searched and reads cost no API call.
+    ///
+    /// One commit, no history, no hooks — the fetch the indexer already
+    /// makes on every push. Off, reads go through the forge API one file at
+    /// a time and search is unavailable, which is a review that can still
+    /// follow a named path but cannot find a definition by name.
+    pub checkout: bool,
 }
 
 impl Default for LookupPolicy {
@@ -980,6 +988,7 @@ impl Default for LookupPolicy {
             rounds: 2,
             per_round: 4,
             max_chars: 40_000,
+            checkout: true,
         }
     }
 }

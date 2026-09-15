@@ -1734,19 +1734,15 @@ async fn run_and_publish(
     } else {
         None
     };
+    // The review chains the forge reader behind whatever it is given, so a
+    // path the shallow checkout lacks — a submodule that was not fetched —
+    // is still read through the API.
     let dir_tree = checkout
         .as_ref()
         .map(|c| crate::ports::tree::DirTree::new(c.path()));
-    let forge_tree =
-        crate::forge::tree::ForgeTree::new(forge, repo.clone(), "", &forge.git_host());
-    let head_tree;
-    let tree: Option<&dyn crate::ports::tree::TreeReader> = match &dir_tree {
-        Some(dir) => {
-            head_tree = crate::ports::tree::ChainTree::new(vec![dir, &forge_tree]);
-            Some(&head_tree)
-        }
-        None => None,
-    };
+    let tree = dir_tree
+        .as_ref()
+        .map(|dir| dir as &dyn crate::ports::tree::TreeReader);
 
     let proposal = crate::app::review::review_with_tree(
         forge,

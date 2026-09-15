@@ -344,7 +344,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
         "lanes.*" => Some(&["model", "fail_on", "secret_rulepack", "max_blob_bytes"]),
         "council" => Some(&["enabled", "corroboration", "subagents", "agents"]),
         "council.agents.*" => Some(&["id", "lanes", "model", "persona"]),
-        "lookup" => Some(&["enabled", "rounds", "per_round", "max_chars"]),
+        "lookup" => Some(&["enabled", "rounds", "per_round", "max_chars", "checkout"]),
         "automerge" => Some(&[
             "enabled",
             "require_checks",
