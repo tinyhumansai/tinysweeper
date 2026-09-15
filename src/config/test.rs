@@ -999,7 +999,7 @@ fn the_shipped_presets_load_and_validate() {
     // The presets in this repository are user-facing documentation as much as
     // configuration; a broken one is a broken example.
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    for name in ["rust-library", "security-strict"] {
+    for name in ["rust-library", "security-strict", "e2e-required"] {
         let dir = repo(
             Some(&format!("version = 1\npreset = \"{name}\"\n")),
             &[(
