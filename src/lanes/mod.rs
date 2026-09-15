@@ -10,6 +10,7 @@ pub mod anchor;
 pub mod commits;
 pub mod critique;
 pub mod description;
+pub mod e2e;
 pub mod fanout;
 pub mod security;
 pub mod tests;
@@ -74,6 +75,11 @@ pub struct LaneInput<'a> {
     /// `crate::memory::recall`. Volatile, suffix-only, for the same reasons as
     /// [`Self::retrieved_context`]. Empty when no engine is configured.
     pub memory_context: &'a str,
+    /// What the `e2e` lane needs beyond the diff: the harness at head, the
+    /// check runs on it, and candidate coverage. Gathered by
+    /// `lanes::e2e::evidence::gather` only when that lane is enabled; every
+    /// other lane ignores it, and the `e2e` lane skips without it.
+    pub e2e: Option<&'a e2e::evidence::Evidence>,
 }
 
 impl LaneInput<'_> {
@@ -137,6 +143,13 @@ pub struct LaneOutcome {
     pub spend: Spend,
     /// Set when the lane did not apply to this pull request at all.
     pub skipped: Option<String>,
+    /// Check runs this lane is still waiting on before it can conclude.
+    ///
+    /// Only the `e2e` lane sets it. A lane with something pending concludes
+    /// `Neutral` rather than `Success` — a verdict on work that has not
+    /// finished is the verdict branch protection must not see — and the
+    /// server settles it when the named checks complete.
+    pub pending: Vec<String>,
 }
 
 impl LaneOutcome {
@@ -207,6 +220,7 @@ impl LaneOutcome {
             resolved: parsed.resolved,
             spend,
             skipped: None,
+            pending: Vec::new(),
         }
     }
 
@@ -221,6 +235,9 @@ impl LaneOutcome {
         }
         if self.findings.iter().any(|f| f.severity >= fail_on) {
             return CheckConclusion::Failure;
+        }
+        if !self.pending.is_empty() {
+            return CheckConclusion::Neutral;
         }
         CheckConclusion::Success
     }

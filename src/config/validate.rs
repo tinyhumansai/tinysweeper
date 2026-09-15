@@ -573,6 +573,36 @@ fn validate_lanes(config: &Config, problems: &mut Vec<String>) {
                 "`lanes.{name}.max_blob_bytes = 0` would flag every committed file"
             ));
         }
+
+        if lane_id != LaneId::E2e {
+            if lane.missing_harness.is_some() {
+                problems.push(format!(
+                    "`lanes.{name}.missing_harness` applies only to the `e2e` lane"
+                ));
+            }
+            if !lane.paths.is_empty() {
+                problems.push(format!("`lanes.{name}.paths` applies only to the `e2e` lane"));
+            }
+            if !lane.workflows.is_empty() {
+                problems.push(format!(
+                    "`lanes.{name}.workflows` applies only to the `e2e` lane"
+                ));
+            }
+        }
+
+        if let Some(policy) = &lane.missing_harness
+            && !matches!(policy.as_str(), "skip" | "require")
+        {
+            problems.push(format!(
+                "`lanes.{name}.missing_harness = \"{policy}\"` is not a policy; expected `skip` or `require`"
+            ));
+        }
+
+        for glob in &lane.paths {
+            if globset::Glob::new(glob).is_err() {
+                problems.push(format!("`lanes.{name}.paths` contains an invalid glob `{glob}`"));
+            }
+        }
     }
 }
 

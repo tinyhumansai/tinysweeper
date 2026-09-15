@@ -524,6 +524,18 @@ max_blob_bytes = 1048576
 model = "scan"
 fail_on = "high"
 
+# Not in `review.lanes` by default. Demanding an end-to-end test from a
+# repository with no e2e harness is the noise the `tests` lane's rules were
+# written to avoid; a repository opts in when it has a suite worth holding
+# changes to. `paths` and `workflows` empty means detect; set, they replace
+# the detection rather than extend it.
+[lanes.e2e]
+model = "scan"
+fail_on = "high"
+missing_harness = "skip"
+paths = []
+workflows = []
+
 # Auto-merge. Off until a repository opts in deliberately: this is the one
 # module that can put code on the default branch without a human, and a
 # wrongly-merged pull request cannot be un-merged. Every threshold below fails
