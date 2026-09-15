@@ -1375,7 +1375,10 @@ impl InFlight {
     /// `None` once shutdown has taken its snapshot: the caller declines the
     /// review outright, before opening a check, rather than register a slot
     /// nothing will ever conclude.
-    fn register(registry: &Arc<std::sync::Mutex<InFlightRegistry>>, slot: &StatusSlot) -> Option<Self> {
+    fn register(
+        registry: &Arc<std::sync::Mutex<InFlightRegistry>>,
+        slot: &StatusSlot,
+    ) -> Option<Self> {
         let mut guard = registry.lock().expect("in-flight reviews");
         if !guard.accepting {
             return None;
