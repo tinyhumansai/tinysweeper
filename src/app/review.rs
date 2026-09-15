@@ -562,6 +562,25 @@ pub async fn review_with_memory(
         });
     }
 
+    // What the `e2e` lane needs beyond the diff, read at the head commit and
+    // only when the lane is on: the tree, the e2e workflows, the check runs.
+    // Never fatal — a forge that will not list the tree costs that lane its
+    // harness, and the lane says so, rather than costing the review.
+    let e2e_evidence = if config.enabled_lanes().contains(&LaneId::E2e) {
+        Some(
+            crate::lanes::e2e::evidence::gather(
+                forge,
+                config,
+                repo,
+                &context.pull_request.head_sha,
+                &diffs,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+
     for lane_id in config.enabled_lanes() {
         let lane: Box<dyn Lane> = match lane_id {
             LaneId::Critique => Box::new(Critique::new(model.clone())),
@@ -569,6 +588,7 @@ pub async fn review_with_memory(
             LaneId::Tests => Box::new(Tests::new(model.clone())),
             LaneId::Commits => Box::new(Commits::new()),
             LaneId::Description => Box::new(Description::new(model.clone())),
+            LaneId::E2e => Box::new(crate::lanes::e2e::E2e::new(model.clone())),
         };
 
         let outcome = lane
@@ -585,6 +605,7 @@ pub async fn review_with_memory(
                 prior_findings: &prior_lines,
                 retrieved_context: &retrieved_context,
                 memory_context: &memory_text,
+                e2e: e2e_evidence.as_ref(),
             })
             .await?;
 
