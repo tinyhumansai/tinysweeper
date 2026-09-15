@@ -704,11 +704,14 @@ fn render_found(found: &Found) -> String {
             if hits.is_empty() {
                 return "No line contains that text.".into();
             }
-            let mut s = String::from("````\n");
+            let mut hits_text = String::new();
             for hit in hits {
-                s.push_str(&format!("{}:{}: {}\n", hit.path, hit.line, hit.text));
+                hits_text.push_str(&format!("{}:{}: {}\n", hit.path, hit.line, hit.text));
             }
-            s.push_str("````");
+            let fence = crate::harness::prompt::fence_for(&hits_text);
+            let mut s = format!("{fence}\n");
+            s.push_str(&hits_text);
+            s.push_str(&fence);
             if *truncated {
                 s.push_str("\n\nMore matched than are shown; narrow the pattern or add a glob.");
             }
