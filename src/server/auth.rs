@@ -90,8 +90,18 @@ impl AppAuth {
             app_id: app_id.into(),
             key,
             cache: Arc::new(Mutex::new(HashMap::new())),
+            // `reqwest` waits forever by default. `installation_token` runs
+            // while `server::routes` holds one of `MAX_CONCURRENT_REVIEWS`
+            // permits and before `run.deadline` starts bounding anything, so
+            // an unset timeout here means a cold token exchange that never
+            // completes can hold that permit forever — a handful of those
+            // exhausts every review slot the server has, permanently, with
+            // no `Error::Timeout` ever firing to explain why. Matches
+            // `forge::github::REQUEST_TIMEOUT`, the same bound the rest of
+            // the GitHub traffic already runs under.
             http: reqwest::Client::builder()
                 .user_agent("tinysweeper")
+                .timeout(REQUEST_TIMEOUT)
                 .build()
                 .map_err(|err| Error::Forge(err.to_string()))?,
         })
