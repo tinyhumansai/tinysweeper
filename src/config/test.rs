@@ -103,6 +103,34 @@ fn a_route_ceiling_below_the_floor_is_rejected_like_the_global_one() {
 }
 
 #[test]
+fn the_retired_submodules_switch_still_parses_or_says_how_to_migrate() {
+    // Shipped as a bool for one release; `false` is the empty list.
+    let config = parse("version = 1\n[retrieval]\nsubmodules = false\n");
+    assert!(config.retrieval.submodules.is_empty());
+
+    // `true` has no list equivalent; the error names the migration.
+    let table: toml::Table = "version = 1\n[retrieval]\nsubmodules = true\n"
+        .parse()
+        .unwrap();
+    let merged = crate::config::merge::merge_layers(&[
+        (crate::config::Layer::Defaults, crate::config::DEFAULTS.parse::<toml::Table>().unwrap()),
+        (crate::config::Layer::Repository, table),
+    ]);
+    let err = merged.table.try_into::<crate::config::Config>().unwrap_err().to_string();
+    assert!(err.contains("retrieval.submodules = true"), "{err}");
+    assert!(err.contains("owner/name"), "{err}");
+}
+
+#[test]
+fn a_submodule_entry_that_is_not_owner_slash_name_is_rejected() {
+    let config =
+        parse("version = 1\n[retrieval]\nsubmodules = [\"acme/lib\", \"acme-lib\"]\n");
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("`acme-lib`"), "{joined}");
+    assert!(!joined.contains("`acme/lib`"), "{joined}");
+}
+
+#[test]
 fn lowering_the_effort_does_not_satisfy_the_budget_floor() {
     // Measured at both settings: the table in `config/defaults.toml` lists
     // `low` rows for each configured model and they burn the entire allowance

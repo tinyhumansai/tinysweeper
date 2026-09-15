@@ -964,7 +964,7 @@ fn validate_preview(config: &Config, problems: &mut Vec<String>) {
 /// submodule is unavailable while `doctor` called the config fine.
 fn validate_submodules(config: &Config, problems: &mut Vec<String>) {
     for entry in &config.retrieval.submodules {
-        if crate::ports::forge::RepoId::parse(entry).is_none() {
+        if crate::forge::types::RepoId::parse(entry).is_none() {
             problems.push(format!(
                 "`retrieval.submodules` entry `{entry}` is not `owner/name`; a submodule the \
                  forge cannot resolve is one nothing reads"
