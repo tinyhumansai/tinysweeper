@@ -402,20 +402,6 @@ pub async fn ask_all(
         }
     }
 
-    // Everything the prompt grew by is what was read: the suffix started as
-    // the lane's evidence and only lookups were appended to it. Filled here,
-    // before the sub-agent branch below, so a reviewer's own lookups reach
-    // the falsifier even with `council.subagents = false` — the default —
-    // when the early return below would otherwise skip it entirely and leave
-    // every `looked_up` empty.
-    for (index, answer) in answers.iter_mut().enumerate() {
-        answer.looked_up = prompts[index]
-            .prompt
-            .strip_prefix(calls[index].prompt.as_str())
-            .unwrap_or_default()
-            .to_string();
-    }
-
     let Some(model) = subagent_model else {
         return Ok(answers);
     };
@@ -457,6 +443,16 @@ pub async fn ask_all(
         {
             answers[index] = settled;
         }
+    }
+
+    // Everything the prompt grew by is what was read: the suffix started as
+    // the lane's evidence and only lookups were appended to it.
+    for (index, answer) in answers.iter_mut().enumerate() {
+        answer.looked_up = prompts[index]
+            .prompt
+            .strip_prefix(calls[index].prompt.as_str())
+            .unwrap_or_default()
+            .to_string();
     }
 
     Ok(answers)
