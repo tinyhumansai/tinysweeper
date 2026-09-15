@@ -99,7 +99,11 @@ pub async fn publish(
                 ))
             })?;
             files.push((
-                crate::preview::manifest::Storage::commit_path(&gallery.head_sha, &gallery.run, name),
+                crate::preview::manifest::Storage::commit_path(
+                    &gallery.head_sha,
+                    &gallery.run,
+                    name,
+                ),
                 bytes.clone(),
             ));
         }
@@ -391,7 +395,9 @@ mod tests {
             flows: vec![],
             ..gallery()
         };
-        let (outcome, _) = publish(&forge, &forge, "o/r", &empty, None, None).await.unwrap();
+        let (outcome, _) = publish(&forge, &forge, "o/r", &empty, None, None)
+            .await
+            .unwrap();
         assert_eq!(outcome, Outcome::NothingToShow);
         let writes = forge.writes();
         let [Write::Check(check)] = writes.as_slice() else {
@@ -448,7 +454,9 @@ mod tests {
             flows: vec![],
             ..gallery()
         };
-        let (outcome, _) = publish(&forge, &forge, "o/r", &empty, None, None).await.unwrap();
+        let (outcome, _) = publish(&forge, &forge, "o/r", &empty, None, None)
+            .await
+            .unwrap();
         assert_eq!(outcome, Outcome::Published);
         let writes = forge.writes();
         let Write::CommentUpdate {
@@ -472,7 +480,9 @@ mod tests {
             flows: vec![],
             ..gallery()
         };
-        let (outcome, _) = publish(&forge, &forge, "o/r", &empty, None, None).await.unwrap();
+        let (outcome, _) = publish(&forge, &forge, "o/r", &empty, None, None)
+            .await
+            .unwrap();
         assert_eq!(outcome, Outcome::NothingToShow);
         assert!(matches!(forge.writes().as_slice(), [Write::Check(_)]));
     }

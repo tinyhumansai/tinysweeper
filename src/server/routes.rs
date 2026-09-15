@@ -2104,7 +2104,6 @@ impl Previews for PreviewDispatch {
     }
 }
 
-
 /// The UI preview's staging area: uploaded assets, on this process's disk,
 /// between the hands' `assets` calls and the `finish` that commits them.
 ///
@@ -2121,7 +2120,9 @@ mod staging {
     use crate::server::preview::{MAX_ASSET_BYTES, MAX_SESSION_ASSET_BYTES, is_asset_name};
 
     fn dir(session: &str) -> PathBuf {
-        std::env::temp_dir().join("tinysweeper-preview").join(session)
+        std::env::temp_dir()
+            .join("tinysweeper-preview")
+            .join(session)
     }
 
     /// Stage one asset, refusing what the limits or the name rule refuse.
