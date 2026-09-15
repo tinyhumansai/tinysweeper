@@ -2293,7 +2293,10 @@ mod tests {
             listing.paths,
             vec!["e2e/login.spec.ts", ".github/workflows/e2e.yml"]
         );
-        assert!(listing.truncated, "a truncated tree must say so, not read as complete");
+        assert!(
+            listing.truncated,
+            "a truncated tree must say so, not read as complete"
+        );
     }
 
     /// A verdict, built without going near the wire format.
