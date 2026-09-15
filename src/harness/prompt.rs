@@ -401,13 +401,20 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
 /// advisory and only deterministic code mutates anything — but labelling data
 /// as data is what makes the instruction to ignore injected text meaningful.
 pub fn push_fenced(out: &mut String, label: &str, content: &str) {
-    // The fence has to be longer than the longest backtick run in the content,
-    // or a diff containing ```` closes its own fence and everything after it
-    // reads as instructions rather than data. A pull request author picks that
-    // content.
-    let longest_run = content.split(|c| c != '`').map(str::len).max().unwrap_or(0);
-    let fence = "`".repeat(longest_run.max(3) + 1);
+    let fence = fence_for(content);
     let _ = write!(out, "{fence}{label}\n{}\n{fence}\n", content.trim_end());
+}
+
+/// The fence delimiter to wrap `content` in: longer than the longest
+/// backtick run it contains, or a diff (or a looked-up source line)
+/// containing ```` closes the fence early and everything after it reads as
+/// instructions rather than data. Exposed separately from [`push_fenced`] for
+/// callers that render fenced content inside a larger, differently labelled
+/// string — the lookup loop's "what you looked up" sections, for one — and
+/// still need the same collision-safe rule.
+pub fn fence_for(content: &str) -> String {
+    let longest_run = content.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    "`".repeat(longest_run.max(3) + 1)
 }
 
 /// Select the rules that apply to this prompt's paths, **first match wins**.
