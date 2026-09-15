@@ -933,6 +933,40 @@ mod tests {
     }
 
     #[test]
+    fn a_routed_rung_gets_its_own_pin_and_ceiling_and_never_the_last_resort() {
+        let mut models = models();
+        models.provider = pinned(&["streamlake"], false);
+        models.routes = vec![crate::config::types::ModelRoute {
+            model: "openai/gpt-5.6-luna".into(),
+            order: vec!["openai/flex".into()],
+            allow_fallbacks: false,
+            max_tokens: Some(0),
+        }];
+        let gateway = GatewayModel {
+            api_key: "unused".into(),
+            base_url: models.base_url.clone(),
+            fallbacks: models.fallback.clone(),
+            reasoning_effort: models.reasoning_effort.clone(),
+            provider: models.provider.clone(),
+            routes: models.routes.clone(),
+            structured_output: models.structured_output,
+            langfuse: None,
+        };
+
+        let routed = gateway.routing_for("openai/gpt-5.6-luna");
+        assert_eq!(routed.order, vec!["openai/flex".to_string()]);
+        assert!(!routed.allow_fallbacks);
+        assert!(!routed.last_resort_unpinned, "a named endpoint is not rerouted");
+        assert_eq!(
+            gateway.routing_for("deepseek/deepseek-v4-flash").order,
+            vec!["streamlake".to_string()],
+            "an unrouted model keeps the ladder-wide pin"
+        );
+        assert_eq!(models.max_tokens_for("openai/gpt-5.6-luna"), 0);
+        assert_eq!(models.max_tokens_for("deepseek/deepseek-v4-flash"), models.max_tokens);
+    }
+
+    #[test]
     fn a_json_object_answer_with_trailing_text_keeps_the_object() {
         let value = first_json_value("m", "{\"summary\": \"ok\", \"findings\": []}\n\nDone.")
             .expect("the object is taken");

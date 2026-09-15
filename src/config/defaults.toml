@@ -359,6 +359,24 @@ last_resort_unpinned = true
 # one of these while `scan`/`flash` stay pinned.
 unpinned_vendors = ["openai", "anthropic", "google"]
 
+# Per-model routing, for a rung that should not share the pin above.
+#
+# The pin is right for the DeepSeek tiers, whose floating ids a dozen hosts
+# serve at prices spanning 4x. A rung meant for one specific endpoint — OpenAI's
+# flex tier, the surplus-capacity endpoint at half price — gets its own entry
+# here, with its own `order`, its own `allow_fallbacks`, and optionally its own
+# output ceiling: `max_tokens = 0` sends none, so the model answers at the
+# length it needs and a cut-off is the provider's own limit. A rung with a
+# route never falls to the unpinned last resort: naming the endpoint means it.
+# None by default; the deployment's `.tinysweeper.toml` is where one lives.
+#
+#   [[models.routes]]
+#   model = "openai/gpt-5.6-luna"
+#   order = ["openai/flex"]
+#   allow_fallbacks = false
+#   max_tokens = 0
+routes = []
+
 # Several reviewers on one lane's evidence, folded into one review.
 #
 # Off, and off is the honest default: a second reviewer doubles the calls for

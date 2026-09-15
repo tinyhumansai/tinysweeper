@@ -485,6 +485,20 @@ pub struct ProviderRouting {
     pub unpinned_vendors: Vec<String>,
 }
 
+impl Models {
+    /// The per-model route for `model`, if one is configured.
+    pub fn route_for(&self, model: &str) -> Option<&ModelRoute> {
+        self.routes.iter().find(|r| r.model == model)
+    }
+
+    /// The output ceiling for one call to `model`; `0` is no ceiling.
+    pub fn max_tokens_for(&self, model: &str) -> u32 {
+        self.route_for(model)
+            .and_then(|r| r.max_tokens)
+            .unwrap_or(self.max_tokens)
+    }
+}
+
 /// Routing for one model id, overriding the ladder-wide pin.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
