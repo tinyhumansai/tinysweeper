@@ -136,12 +136,20 @@ impl FanOut {
 
         let skipped = (reviewed == 0 && !self.failures.is_empty())
             .then(|| "No files could be reviewed; see the listed provider failures.".to_string());
+        // Every file that got no answer, whether or not others did: a lane that
+        // reviewed two files of three cannot vouch for the third.
+        let unanswered = self
+            .failures
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect();
         LaneOutcome {
             summary,
             findings,
             resolved,
             spend,
             skipped,
+            unanswered,
         }
     }
 }

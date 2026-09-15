@@ -201,6 +201,11 @@ pub struct LaneProposal {
     /// takes over is exactly what this field exists to show.
     #[serde(default)]
     pub models: Vec<String>,
+    /// What this lane was asked about and got no answer on — files whose
+    /// reviewer call failed, or the lane itself when no reviewer could be
+    /// consulted. See [`LaneOutcome::unanswered`](crate::lanes::LaneOutcome).
+    #[serde(default)]
+    pub unanswered: Vec<String>,
 }
 
 impl Proposal {
@@ -215,8 +220,27 @@ impl Proposal {
     /// clean *and* incomplete, and those deserve different verdicts. Nothing
     /// blocks, so there is nothing to object to — but there is also nothing to
     /// endorse.
+    ///
+    /// Two ways to be incomplete: a file the forge never showed us, and a
+    /// question a lane asked its model and never had answered. The second
+    /// used to be invisible here — a lane whose every call failed is
+    /// `Neutral`, and Neutral does not block — so a review that consulted no
+    /// model at all read as clean and approved.
     pub fn complete(&self) -> bool {
-        self.unreviewed.is_empty()
+        self.unreviewed.is_empty() && self.lanes.iter().all(|lane| lane.unanswered.is_empty())
+    }
+
+    /// Everything this review could not answer for, for the verdict body.
+    pub fn unanswered(&self) -> Vec<&str> {
+        let mut all: Vec<&str> = self
+            .unreviewed
+            .iter()
+            .map(String::as_str)
+            .chain(self.lanes.iter().flat_map(|lane| lane.unanswered.iter().map(String::as_str)))
+            .collect();
+        all.sort_unstable();
+        all.dedup();
+        all
     }
 
     /// Every finding across every lane.
@@ -429,6 +453,7 @@ pub async fn review_with_tree(
                     highest_severity: None,
                     usage: Usage::default(),
                     models: vec![],
+                    unanswered: vec![],
                 })
                 .collect(),
             // A kill switch means nobody asked for a verdict, so "incomplete"
@@ -1423,6 +1448,7 @@ fn publish_unclaimed(lanes: &mut Vec<LaneProposal>, scan_findings: &[scan::types
             // Scanners are deterministic and offline: no model, no spend.
             usage: Usage::default(),
             models: vec![],
+            unanswered: vec![],
         });
     }
 }

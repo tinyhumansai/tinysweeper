@@ -167,6 +167,16 @@ pub struct LaneOutcome {
     pub spend: Spend,
     /// Set when the lane did not apply to this pull request at all.
     pub skipped: Option<String>,
+    /// What the lane was asked about and got no answer on.
+    ///
+    /// Paths for a per-file lane; the lane's own name for a whole-pull-request
+    /// lane whose reviewer could not be consulted. Distinct from `skipped`,
+    /// and the distinction decides a verdict: a lane with nothing to look at
+    /// has nothing to object to, but a lane whose model never answered has
+    /// nothing to *vouch for* either, and an approval is a claim about the
+    /// change. A review that consulted no model once approved a pull request
+    /// with "found nothing blocking · $0.0000 · 0 in / 0 out".
+    pub unanswered: Vec<String>,
 }
 
 impl LaneOutcome {
@@ -176,6 +186,22 @@ impl LaneOutcome {
         Self {
             summary: reason.clone(),
             skipped: Some(reason),
+            ..Self::default()
+        }
+    }
+
+    /// A whole-pull-request lane whose reviewer could not be consulted.
+    ///
+    /// Neutral like a skip — no verdict is the truth — but it names itself
+    /// as unanswered, so the proposal cannot read the silence as clean.
+    pub fn unanswered(lane: LaneId, spend: Spend) -> Self {
+        Self {
+            summary: "No reviewer could be consulted.".into(),
+            spend,
+            skipped: Some(
+                "No reviewer could be consulted; see the provider errors in the log.".into(),
+            ),
+            unanswered: vec![lane.check_name()],
             ..Self::default()
         }
     }
