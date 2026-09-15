@@ -695,7 +695,7 @@ mod tests {
             .await
             .unwrap();
         match found {
-            Found::Hits { hits, truncated } => {
+            Found::Hits { hits, truncated, .. } => {
                 assert_eq!(hits.len(), 1);
                 assert_eq!(hits[0].path, "src/a.rs");
                 assert!(!truncated);
