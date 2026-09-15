@@ -93,6 +93,9 @@ pub struct Indexer<'a> {
     /// embedded: the submodules this checkout did not fetch. See
     /// [`Indexer::revoking`].
     revoked: Vec<String>,
+    /// Directories whose absent paths are *kept*: submodules the checkout
+    /// should have but a fetch failed to bring. See [`Indexer::missing`].
+    missing: Vec<String>,
 }
 
 impl<'a> Indexer<'a> {
@@ -114,7 +117,24 @@ impl<'a> Indexer<'a> {
             budget_usd: None,
             holder: format!("pid-{}", std::process::id()),
             revoked: Vec::new(),
+            missing: Vec::new(),
         })
+    }
+
+    /// Name the submodule directories a fetch failed to bring this time.
+    ///
+    /// The opposite of [`Indexer::revoking`]. These are allowed, and absent
+    /// only because the network or the token failed today; their paths are
+    /// left out of the run's removal step so the index keeps serving what it
+    /// had, and the run does not claim the revision, so the next delivery at
+    /// the same head fetches and indexes them rather than believing the index
+    /// is fresh without them.
+    pub fn missing(mut self, submodule_dirs: Vec<String>) -> Self {
+        self.missing = submodule_dirs
+            .into_iter()
+            .map(|dir| format!("{}/", dir.trim_end_matches('/')))
+            .collect();
+        self
     }
 
     /// Name the submodule directories this checkout did not fetch.
@@ -389,7 +409,8 @@ impl<'a> Indexer<'a> {
                 &Settled::Done {
                     // A partial run must not claim the revision: saying so would
                     // make the next push skip the work that was never finished.
-                    revision: (!report.budget_exhausted).then(|| revision.to_string()),
+                    revision: (!report.budget_exhausted && report.unfetched.is_empty())
+                        .then(|| revision.to_string()),
                     chunks,
                     usage: report.usage,
                 },
