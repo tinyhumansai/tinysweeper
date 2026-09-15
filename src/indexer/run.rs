@@ -408,17 +408,25 @@ impl<'a> Indexer<'a> {
     ) -> Result<()> {
         // Revocations first, everything else after the writes. See
         // [`Indexer::revoking`] for why the two kinds of removal are ordered
-        // differently; the bookkeeping is the same for both.
-        let (revoked, removed): (Vec<String>, Vec<String>) =
-            removed.into_iter().partition(|path| {
+        // differently.
+        //
+        // Only the *rows* go early. The manifest keeps the paths until the
+        // run's own removal step below, so a run that fails between here and
+        // there leaves them discoverable: the next full walk finds them
+        // absent again, deletes nothing (already gone), and carries them in
+        // `removed` to the graph sync that only an `Indexed` outcome reaches.
+        // Forgetting them here would make that graph cleanup unreachable.
+        let revoked: Vec<&String> = removed
+            .iter()
+            .filter(|path| {
                 self.revoked
                     .iter()
                     .any(|dir| path.starts_with(dir.as_str()))
-            });
+            })
+            .collect();
         if !revoked.is_empty() {
+            let revoked: Vec<String> = revoked.into_iter().cloned().collect();
             report.deleted += self.index.delete_paths(repo_id, &revoked).await?;
-            self.manifest.forget(repo_id, signature, &revoked).await?;
-            report.removed.extend(revoked);
         }
 
         for group in selected.chunks(self.group) {
@@ -429,10 +437,12 @@ impl<'a> Indexer<'a> {
                 .await?;
         }
 
+        // Rows a revocation already deleted are deleted again here for
+        // nothing — zero rows, zero count — and forgotten for the first time.
         if !removed.is_empty() {
             report.deleted += self.index.delete_paths(repo_id, &removed).await?;
             self.manifest.forget(repo_id, signature, &removed).await?;
-            report.removed.extend(removed);
+            report.removed = removed;
         }
 
         Ok(())
