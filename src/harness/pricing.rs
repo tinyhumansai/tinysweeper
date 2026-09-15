@@ -171,6 +171,27 @@ const MODEL_PRICES: &[(&str, Price)] = &[
         },
     ),
     (
+        // The same models as Surplus names them — no vendor prefix — which is
+        // what the ladder hands back when a Surplus rung served. Surplus
+        // reports the exact charge (`buyer_cost_micro`), so these rows are
+        // the fallback for a response that somehow does not carry it, priced
+        // at the direct rate so the ceiling errs toward stopping early.
+        "gpt-5.6-luna",
+        Price {
+            input: 0.20,
+            output: 1.20,
+            cached: 0.02,
+        },
+    ),
+    (
+        "deepseek-v4-flash",
+        Price {
+            input: 0.09,
+            output: 0.18,
+            cached: 0.018,
+        },
+    ),
+    (
         "moonshotai/kimi-k3",
         Price {
             input: 3.00,
@@ -500,6 +521,9 @@ mod tests {
         ("openai/gpt-5.3-codex", 1.75, 14.00),
         // `openai/flex` is the floor; measured 2026-09-15.
         ("openai/gpt-5.6-luna", 0.10, 0.60),
+        // Surplus order books, cheapest seller, measured 2026-09-15.
+        ("gpt-5.6-luna", 0.025, 0.07),
+        ("deepseek-v4-flash", 0.03, 0.06),
         ("qwen/qwen3.8-max", 2.00, 6.00),
         ("z-ai/glm-5.2", 0.336, 1.056),
     ];
