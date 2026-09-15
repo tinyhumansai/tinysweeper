@@ -306,6 +306,7 @@ pub fn reviewer_responses(
             id: reviewer.id.to_string(),
             model: answer.model.clone(),
             response,
+            looked_up: answer.looked_up.clone(),
         });
     }
     Ok(responses)

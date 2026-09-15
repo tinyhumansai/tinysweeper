@@ -208,9 +208,14 @@ async fn review_file(
     let mut resolved: Vec<String> = Vec::new();
     let mut unanchored = 0usize;
     let mut discarded = 0usize;
+    // What the reviewers read, for the falsifier: a finding about a callee's
+    // contract cannot be judged against the diff alone, and was being
+    // rejected on the strength of the diff's own comment about it.
+    let mut looked_up = String::new();
 
     for response in responses {
         spend.note(&response.model);
+        looked_up.push_str(&response.looked_up);
 
         let asked = match place(llm.clone(), input, diff, &evidence, response.response).await {
             Ok(asked) => asked,
@@ -254,7 +259,11 @@ async fn review_file(
     // filter can only reject, so more inputs in one pass is identical semantics
     // at a fraction of the calls.
     let filtered = Falsifier::new(llm.model().as_ref(), config)
-        .filter(LaneId::Critique, findings, &evidence)
+        .filter(
+            LaneId::Critique,
+            findings,
+            &format!("{evidence}\n{looked_up}"),
+        )
         .await;
     spend.merge(filtered.spend);
 
