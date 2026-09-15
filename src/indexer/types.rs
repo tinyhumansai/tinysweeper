@@ -281,6 +281,10 @@ pub struct IndexReport {
     /// valid and worth keeping, and the caller needs to know the index is
     /// partial without losing it.
     pub budget_exhausted: bool,
+    /// Submodule directories the checkout was missing through no decision of
+    /// the operator's — a fetch that failed this time. Their rows were kept,
+    /// and the revision is not claimed, so the next delivery tries again.
+    pub unfetched: Vec<String>,
 }
 
 impl IndexReport {
@@ -292,6 +296,12 @@ impl IndexReport {
         );
         if self.budget_exhausted {
             text.push_str(" (stopped at the spend ceiling; the index is partial)");
+        }
+        if !self.unfetched.is_empty() {
+            text.push_str(&format!(
+                " (submodule(s) not fetched, kept as indexed: {})",
+                self.unfetched.join(", ")
+            ));
         }
         if let Some(report) = crate::chunk::types::report_skips(&self.skipped) {
             text.push('\n');
