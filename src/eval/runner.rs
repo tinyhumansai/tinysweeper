@@ -161,7 +161,7 @@ pub async fn run(
                 let path = case.path.parent().unwrap_or(&case.path).join(&case.case.fixture);
                 std::fs::write(&path, serde_json::to_string_pretty(&fixture)? + "\n")
                     .map_err(|e| crate::error::Error::Path {
-                        path: path.display().to_string(),
+                        path: path.clone(),
                         message: e.to_string(),
                     })?;
             }

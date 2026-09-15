@@ -44,6 +44,7 @@ fn fixture() -> Fixture {
         commits: vec![],
         comments: vec![],
         blobs: Default::default(),
+        lookups: Default::default(),
     }
 }
 
