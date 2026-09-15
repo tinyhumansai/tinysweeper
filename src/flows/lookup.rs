@@ -223,7 +223,11 @@ impl Ledger {
             // was after, and fetching them costs a read here rather than a
             // whole round.
             if let Found::Hits { hits, .. } = &found {
-                for hit in hits.iter().filter(|h| looks_like_definition(&h.text)).take(AUTO_FOLLOW) {
+                for hit in hits
+                    .iter()
+                    .filter(|h| looks_like_definition(&h.text))
+                    .take(AUTO_FOLLOW)
+                {
                     let read = Lookup::Read {
                         path: hit.path.clone(),
                         start: Some(hit.line.saturating_sub(DEFINITION_ABOVE).max(1)),
@@ -286,21 +290,148 @@ const SEED_SYMBOLS: usize = 6;
 /// vocabulary; a miss costs one search that finds too many hits and is
 /// dropped anyway.
 const SEED_STOPWORDS: &[&str] = &[
-    "some", "ok", "err", "none", "vec", "string", "new", "clone", "unwrap", "expect", "len",
-    "iter", "into_iter", "map", "filter", "collect", "push", "format", "is_empty", "as_ref",
-    "as_str", "take", "insert", "get", "into", "to_string", "from", "default", "await",
-    "println", "eprintln", "write", "writeln", "assert", "assert_eq", "debug", "info", "warn",
-    "error", "trace", "box", "arc", "rc", "option", "result", "self", "super", "crate", "std",
-    "if", "let", "match", "for", "while", "loop", "return", "fn", "pub", "use", "mod", "impl",
-    "struct", "enum", "trait", "type", "where", "async", "move", "ref", "mut", "dyn", "as",
-    "in", "not", "and", "or", "true", "false", "then", "else", "unwrap_or", "unwrap_or_default",
-    "unwrap_or_else", "ok_or_else", "map_err", "and_then", "or_else", "saturating_add",
-    "saturating_sub", "contains", "starts_with", "ends_with", "trim", "lines", "join", "split",
-    "extend", "first", "last", "next", "any", "all", "find", "sort", "cloned", "copied",
-    "to_vec", "keys", "values", "entry", "or_default", "or_insert_with", "get_or_insert",
-    "record", "value", "min", "max", "abs", "cmp", "eq", "ne", "hash", "value_of", "try_from",
-    "from_str", "parse", "with_capacity", "chars", "bytes", "unwrap_err", "is_some", "is_none",
-    "is_ok", "is_err", "lock", "read", "send", "recv", "spawn", "sleep", "now", "elapsed",
+    "some",
+    "ok",
+    "err",
+    "none",
+    "vec",
+    "string",
+    "new",
+    "clone",
+    "unwrap",
+    "expect",
+    "len",
+    "iter",
+    "into_iter",
+    "map",
+    "filter",
+    "collect",
+    "push",
+    "format",
+    "is_empty",
+    "as_ref",
+    "as_str",
+    "take",
+    "insert",
+    "get",
+    "into",
+    "to_string",
+    "from",
+    "default",
+    "await",
+    "println",
+    "eprintln",
+    "write",
+    "writeln",
+    "assert",
+    "assert_eq",
+    "debug",
+    "info",
+    "warn",
+    "error",
+    "trace",
+    "box",
+    "arc",
+    "rc",
+    "option",
+    "result",
+    "self",
+    "super",
+    "crate",
+    "std",
+    "if",
+    "let",
+    "match",
+    "for",
+    "while",
+    "loop",
+    "return",
+    "fn",
+    "pub",
+    "use",
+    "mod",
+    "impl",
+    "struct",
+    "enum",
+    "trait",
+    "type",
+    "where",
+    "async",
+    "move",
+    "ref",
+    "mut",
+    "dyn",
+    "as",
+    "in",
+    "not",
+    "and",
+    "or",
+    "true",
+    "false",
+    "then",
+    "else",
+    "unwrap_or",
+    "unwrap_or_default",
+    "unwrap_or_else",
+    "ok_or_else",
+    "map_err",
+    "and_then",
+    "or_else",
+    "saturating_add",
+    "saturating_sub",
+    "contains",
+    "starts_with",
+    "ends_with",
+    "trim",
+    "lines",
+    "join",
+    "split",
+    "extend",
+    "first",
+    "last",
+    "next",
+    "any",
+    "all",
+    "find",
+    "sort",
+    "cloned",
+    "copied",
+    "to_vec",
+    "keys",
+    "values",
+    "entry",
+    "or_default",
+    "or_insert_with",
+    "get_or_insert",
+    "record",
+    "value",
+    "min",
+    "max",
+    "abs",
+    "cmp",
+    "eq",
+    "ne",
+    "hash",
+    "value_of",
+    "try_from",
+    "from_str",
+    "parse",
+    "with_capacity",
+    "chars",
+    "bytes",
+    "unwrap_err",
+    "is_some",
+    "is_none",
+    "is_ok",
+    "is_err",
+    "lock",
+    "read",
+    "send",
+    "recv",
+    "spawn",
+    "sleep",
+    "now",
+    "elapsed",
 ];
 
 /// Symbols the changed lines call into or name, in first-seen order.
@@ -326,7 +457,9 @@ pub fn seed_symbols(diff: &crate::evidence::diff::FileDiff) -> Vec<String> {
             let c = bytes[i] as char;
             if c.is_ascii_alphabetic() || c == '_' {
                 let start = i;
-                while i < bytes.len() && ((bytes[i] as char).is_ascii_alphanumeric() || bytes[i] == b'_') {
+                while i < bytes.len()
+                    && ((bytes[i] as char).is_ascii_alphanumeric() || bytes[i] == b'_')
+                {
                     i += 1;
                 }
                 let word = &text[start..i];
@@ -334,9 +467,8 @@ pub fn seed_symbols(diff: &crate::evidence::diff::FileDiff) -> Vec<String> {
                 // `self.method(` is a call into this file's own code, which
                 // may sit outside the hunk; any other `.method(` is a call on
                 // a value whose type the seed cannot know, and is left alone.
-                let preceded_by_dot = start > 0
-                    && bytes[start - 1] == b'.'
-                    && !text[..start].ends_with("self.");
+                let preceded_by_dot =
+                    start > 0 && bytes[start - 1] == b'.' && !text[..start].ends_with("self.");
                 // `Enum::Variant {` names the variant; the enum before the
                 // `::` is the definition worth reading, and was taken already.
                 let preceded_by_path = start >= 2 && &bytes[start - 2..start] == b"::";
@@ -423,8 +555,11 @@ impl Ledger {
                 self.seen.insert(lookup.key());
                 let mut body = String::from("````\n");
                 for hit in &definitions {
-                    body.push_str(&format!("{}:{}: {}
-", hit.path, hit.line, hit.text));
+                    body.push_str(&format!(
+                        "{}:{}: {}
+",
+                        hit.path, hit.line, hit.text
+                    ));
                 }
                 body.push_str("````");
                 for hit in definitions {
@@ -459,11 +594,14 @@ impl Ledger {
                 }
                 self.chars += body.len();
                 answered += 1;
-                rendered.push_str(&format!("
+                rendered.push_str(&format!(
+                    "
 ### {}
 
 {body}
-", lookup.key()));
+",
+                    lookup.key()
+                ));
                 break;
             }
         }
@@ -506,14 +644,31 @@ fn looks_like_definition(text: &str) -> bool {
     let mut word = words.next().unwrap_or("");
     while matches!(
         word,
-        "pub" | "pub(crate)" | "pub(super)" | "async" | "unsafe" | "export" | "default" | "static" | "extern"
+        "pub"
+            | "pub(crate)"
+            | "pub(super)"
+            | "async"
+            | "unsafe"
+            | "export"
+            | "default"
+            | "static"
+            | "extern"
     ) {
         word = words.next().unwrap_or("");
     }
     matches!(
         word,
-        "fn" | "struct" | "enum" | "trait" | "type" | "impl" | "const" | "class" | "def" | "func"
-            | "interface" | "function"
+        "fn" | "struct"
+            | "enum"
+            | "trait"
+            | "type"
+            | "impl"
+            | "const"
+            | "class"
+            | "def"
+            | "func"
+            | "interface"
+            | "function"
     )
 }
 
@@ -642,10 +797,20 @@ mod tests {
                 &LookupPolicy::default(),
             )
             .await;
-        assert!(gathered.rendered.contains("Nothing under `src/**`; across the whole tree"));
-        assert!(gathered.rendered.contains("vendor/lib/src/x.rs:2: pub async fn read_before"));
         assert!(
-            gathered.rendered.contains("the definition and what is written above it"),
+            gathered
+                .rendered
+                .contains("Nothing under `src/**`; across the whole tree")
+        );
+        assert!(
+            gathered
+                .rendered
+                .contains("vendor/lib/src/x.rs:2: pub async fn read_before")
+        );
+        assert!(
+            gathered
+                .rendered
+                .contains("the definition and what is written above it"),
             "{}",
             gathered.rendered
         );
@@ -674,7 +839,10 @@ mod tests {
                 "vendor/lib/src/pins.rs",
                 "/// `before` is an exclusive bound.\npub async fn read_pinboard(log: &Log) {}\n",
             ),
-            ("vendor/lib/src/types.rs", "/// One step.\npub enum HiveStep { Speak }\n"),
+            (
+                "vendor/lib/src/types.rs",
+                "/// One step.\npub enum HiveStep { Speak }\n",
+            ),
         ]);
         let mut ledger = Ledger::default();
         let seeded = ledger.seed(&tree, &diff, &LookupPolicy::default()).await;
@@ -688,7 +856,9 @@ mod tests {
         assert!(seeded.rendered.contains("`before` is an exclusive bound"));
         assert!(seeded.rendered.contains("pub enum HiveStep"));
         assert!(
-            !seeded.rendered.contains("src/episode.rs:1: fn read_pinboard"),
+            !seeded
+                .rendered
+                .contains("src/episode.rs:1: fn read_pinboard"),
             "a definition inside the diff's own hunk is not a lookup: {}",
             seeded.rendered
         );

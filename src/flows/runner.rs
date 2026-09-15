@@ -321,8 +321,9 @@ pub async fn ask_all(
     // One ledger per reviewer, for the whole conversation: what the host
     // fetched unasked and what the reviewer then asks for share the budget
     // and the dedupe.
-    let mut ledgers: Vec<lookup::Ledger> =
-        (0..calls.len()).map(|_| lookup::Ledger::default()).collect();
+    let mut ledgers: Vec<lookup::Ledger> = (0..calls.len())
+        .map(|_| lookup::Ledger::default())
+        .collect();
     if let Some((tree, policy)) = lookups
         && let Some(diff) = asking.seed
     {

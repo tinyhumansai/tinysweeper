@@ -700,7 +700,10 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(matches!(unfetched, Found::Unavailable { .. }), "{unfetched:?}");
+        assert!(
+            matches!(unfetched, Found::Unavailable { .. }),
+            "{unfetched:?}"
+        );
     }
 
     #[tokio::test]
