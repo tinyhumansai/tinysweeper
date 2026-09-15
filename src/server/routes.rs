@@ -1463,8 +1463,7 @@ async fn open_status(
             // has not run yet will pick it up normally, or shutdown has
             // already run and this concludes the check itself, immediately,
             // rather than leave it orphaned.
-            let missed_the_snapshot =
-                !state.in_flight.lock().expect("in-flight reviews").accepting;
+            let missed_the_snapshot = !state.in_flight.lock().expect("in-flight reviews").accepting;
             if missed_the_snapshot {
                 let err = Error::lane(
                     "review",
