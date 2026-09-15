@@ -25,16 +25,20 @@ pub enum LaneId {
     Commits,
     /// Whether the pull request body matches what the diff does.
     Description,
+    /// Whether changed behaviour is reachable by an end-to-end test, and
+    /// whether the repository's own end-to-end jobs ran on the head.
+    E2e,
 }
 
 impl LaneId {
     /// Every lane, in the order they are reported.
-    pub const ALL: [LaneId; 5] = [
+    pub const ALL: [LaneId; 6] = [
         LaneId::Critique,
         LaneId::Security,
         LaneId::Tests,
         LaneId::Commits,
         LaneId::Description,
+        LaneId::E2e,
     ];
 
     /// The lane's stable id, as written in config and in check-run names.
@@ -45,6 +49,7 @@ impl LaneId {
             LaneId::Tests => "tests",
             LaneId::Commits => "commits",
             LaneId::Description => "description",
+            LaneId::E2e => "e2e",
         }
     }
 
@@ -960,6 +965,17 @@ pub struct Lane {
     pub secret_rulepack: Option<String>,
     /// `commits` only: flag any committed blob larger than this.
     pub max_blob_bytes: Option<u64>,
+    /// `e2e` only: what to do when the tree has no end-to-end harness at
+    /// all. `skip` (the default) says so and stops; `require` raises one
+    /// finding asking for one.
+    pub missing_harness: Option<String>,
+    /// `e2e` only: globs naming the end-to-end test files. Empty means the
+    /// built-in path table; set, it replaces that table.
+    pub paths: Vec<String>,
+    /// `e2e` only: workflow or job names that count as end-to-end jobs.
+    /// Empty means detect them from their names and steps; set, it replaces
+    /// the detection.
+    pub workflows: Vec<String>,
 }
 
 /// Auto-merge policy. Deterministic: no model output reaches this.
