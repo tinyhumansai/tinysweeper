@@ -695,7 +695,9 @@ mod tests {
             .await
             .unwrap();
         match found {
-            Found::Hits { hits, truncated, .. } => {
+            Found::Hits {
+                hits, truncated, ..
+            } => {
                 assert_eq!(hits.len(), 1);
                 assert_eq!(hits[0].path, "src/a.rs");
                 assert!(!truncated);
@@ -851,7 +853,11 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            assert_eq!(read, Found::NotFound, "a symlink out of the root was followed");
+            assert_eq!(
+                read,
+                Found::NotFound,
+                "a symlink out of the root was followed"
+            );
         }
 
         // A search must not walk through the symlink either, so the outside
