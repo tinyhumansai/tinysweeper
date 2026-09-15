@@ -873,6 +873,7 @@ async fn add_case(repo: &str, pr: u64, id: &str, corpus: &std::path::Path) -> Re
         commits: context.commits,
         comments: context.comments,
         blobs,
+        lookups: Default::default(),
     };
 
     let fixtures = corpus.join("fixtures");
