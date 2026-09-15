@@ -358,6 +358,14 @@ async fn shutdown(state: AppState) {
 }
 
 /// Resolve when the process is asked to stop.
+///
+/// `SIGTERM` only exists as a signal tokio can listen for on Unix, which is
+/// the only platform this ever runs on — Compose, and every workflow in this
+/// repository, are Linux containers. `#[cfg(unix)]` still guards the import
+/// rather than depending on that: the alternative is a hard build failure on
+/// any other target, and `ctrl_c` alone is a correct, if smaller, shutdown
+/// path everywhere `tokio::signal` builds at all.
+#[cfg(unix)]
 async fn shutdown_signal() {
     use tokio::signal::unix::{SignalKind, signal};
 
@@ -377,6 +385,14 @@ async fn shutdown_signal() {
         _ = term.recv() => tracing::info!("received SIGTERM; shutting down"),
         _ = tokio::signal::ctrl_c() => tracing::info!("received SIGINT; shutting down"),
     }
+}
+
+/// The non-Unix fallback: no `SIGTERM` to listen for, so `ctrl_c` is the
+/// whole story.
+#[cfg(not(unix))]
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
+    tracing::info!("received an interrupt; shutting down");
 }
 
 /// Conclude the umbrella check of every review still running, and stop
