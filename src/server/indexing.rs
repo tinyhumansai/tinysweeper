@@ -148,13 +148,12 @@ impl IndexBackend {
         // review runs against. The write token is minted separately, in
         // `routes.rs`, after every model call has returned.
         let checkout = Checkout::fetch(&git_host(), &repo_id, revision, token).await?;
-        if !config.retrieval.submodules.is_empty() {
-            let skipped = checkout
-                .fetch_submodules(&git_host(), token, &config.retrieval.submodules)
-                .await?;
-            if !skipped.is_empty() {
-                tracing::info!(repo = %repo_id, ?skipped, "submodules not fetched for indexing");
-            }
+        let skipped = checkout
+            .fetch_submodules(&git_host(), token, &config.retrieval.submodules)
+            .await?;
+        if !skipped.is_empty() {
+            tracing::info!(repo = %repo_id, ?skipped, "submodules not fetched for indexing");
+            self.purge_under(&repo_id, &skipped).await?;
         }
 
         let selector = crate::chunk::Selector::new(&config.paths.ignore)?;
@@ -201,6 +200,45 @@ impl IndexBackend {
         }
 
         Ok(outcome)
+    }
+
+    /// Drop every chunk the index holds under submodule paths this run did
+    /// not fetch, before anything else is indexed.
+    ///
+    /// The full run would remove them anyway — a path absent from the
+    /// checkout is deleted at the end — but *at the end*, and only of a run
+    /// that gets there. An operator who takes a repository off
+    /// `retrieval.submodules` has revoked it; a review that queries the index
+    /// while the rebuild is still embedding, or after a rebuild that failed
+    /// on budget, would otherwise still be handed that repository's code.
+    /// Revocation takes effect here, first, whatever the rest of the run does.
+    async fn purge_under(&self, repo_id: &str, submodules: &[String]) -> Result<()> {
+        use crate::ports::index::ChunkIndex;
+        use crate::ports::manifest::IndexManifest;
+
+        let known = self.manifest.paths(repo_id, &self.signature).await?;
+        let revoked: Vec<String> = known
+            .into_iter()
+            .filter(|path| {
+                submodules
+                    .iter()
+                    .any(|sub| path.starts_with(&format!("{}/", sub.trim_end_matches('/'))))
+            })
+            .collect();
+        if revoked.is_empty() {
+            return Ok(());
+        }
+        let deleted = self.index.code.delete_paths(repo_id, &revoked).await?;
+        self.manifest
+            .forget(repo_id, &self.signature, &revoked)
+            .await?;
+        tracing::info!(
+            repo = %repo_id,
+            paths = revoked.len(),
+            chunks = deleted,
+            "purged chunks under submodules this deployment may not read"
+        );
+        Ok(())
     }
 
     /// Bring the code graph up to date with a checkout already on disk.
