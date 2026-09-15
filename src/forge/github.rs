@@ -2307,25 +2307,25 @@ mod tests {
         // changes request in force under it, and so must we, or the clean
         // push after the outage never sees the block it has to clear.
         let own = |state: &str| serde_json::json!({ "user": { "login": "tinysweeper[bot]" }, "state": state });
-        let reviews = vec![own("CHANGES_REQUESTED"), own("COMMENTED")];
+        let reviews = [own("CHANGES_REQUESTED"), own("COMMENTED")];
         assert_eq!(
             own_review_state_of(reviews.iter()),
             Some(ReviewEvent::RequestChanges)
         );
 
-        let cleared = vec![own("CHANGES_REQUESTED"), own("APPROVED"), own("COMMENTED")];
+        let cleared = [own("CHANGES_REQUESTED"), own("APPROVED"), own("COMMENTED")];
         assert_eq!(
             own_review_state_of(cleared.iter()),
             Some(ReviewEvent::Approve)
         );
 
-        let only_comments = vec![own("COMMENTED")];
+        let only_comments = [own("COMMENTED")];
         assert_eq!(
             own_review_state_of(only_comments.iter()),
             Some(ReviewEvent::Comment)
         );
 
-        let theirs = vec![
+        let theirs = [
             serde_json::json!({ "user": { "login": "someone" }, "state": "CHANGES_REQUESTED" }),
         ];
         assert_eq!(own_review_state_of(theirs.iter()), None);
