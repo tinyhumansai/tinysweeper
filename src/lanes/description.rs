@@ -349,6 +349,7 @@ mod tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "- **rejected — an earlier finding**\n  Maintainer's reply: no.",
+                e2e: None,
             })
             .await
             .expect("lane runs");
