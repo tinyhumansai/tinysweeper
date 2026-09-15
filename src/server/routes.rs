@@ -1516,17 +1516,21 @@ impl Drop for InFlight {
 /// `AppState`, never passed to `run_lanes`, and no lane or model can
 /// reach it. `report_failure` has always minted one on the same terms. See the
 /// pull request that introduced this for the discussion the boundary requires.
+/// Returns whether the review should go on. `false` means the process is
+/// shutting down and this check has already been concluded as failed, so
+/// running the lanes would spend model calls on a verdict nothing will
+/// publish.
 async fn open_status(
     state: &AppState,
     slot: &StatusSlot,
     repo: &RepoId,
     head_sha: &str,
     installation: u64,
-) {
+) -> bool {
     // A retry re-enters `review_inner`, so without this the second attempt
     // would open a second check and orphan the first.
     if slot.lock().expect("status slot").is_some() {
-        return;
+        return true;
     }
 
     let published = async {
@@ -1567,12 +1571,14 @@ async fn open_status(
                     "tinysweeper was restarted while this review was running",
                 );
                 close_status(state, slot, Conclusion::Failed(&err)).await;
+                return false;
             }
         }
         Err(err) => {
             tracing::warn!(%err, %repo, "could not publish the in-progress check");
         }
     }
+    true
 }
 
 /// Conclude the in-progress check, if one was ever opened.
@@ -1889,7 +1895,7 @@ async fn review_inner(
     // their own by `forge::github::REQUEST_TIMEOUT`, which is what the margin
     // between `REVIEW_DEADLINE` and `LEASE_TTL` is for.
     let outcome = {
-        open_status(
+        let go_on = open_status(
             state,
             &run.slot,
             &repo_id,
@@ -1897,6 +1903,19 @@ async fn review_inner(
             installation,
         )
         .await;
+        if !go_on {
+            // The check is already concluded; the lease is released below
+            // like any other outcome, and the redelivery after restart
+            // reviews this commit properly.
+            if let Err(err) = state.store.release_lease(&lease).await {
+                tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
+            }
+            drop(permit);
+            return Err(Error::lane(
+                "review",
+                "tinysweeper was restarted before this review started",
+            ));
+        }
 
         // `AssertUnwindSafe` + `catch_unwind` so a panic inside a lane still
         // reaches the release below. Without it the `?` on the outcome is not
