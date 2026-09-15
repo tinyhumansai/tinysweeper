@@ -570,6 +570,7 @@ mod tests {
                 summary: "Reviewed.".into(),
                 findings,
                 resolved: vec![],
+                pending: vec![],
                 deduped: 0,
                 highest_severity,
                 usage: Default::default(),

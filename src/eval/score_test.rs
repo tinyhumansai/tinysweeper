@@ -83,6 +83,7 @@ fn proposal(findings: Vec<Finding>) -> Proposal {
             summary: "reviewed".into(),
             findings,
             resolved: vec![],
+            pending: vec![],
             deduped: 0,
             highest_severity: None,
             usage: Usage::default(),

@@ -357,6 +357,7 @@ pub async fn review_with_memory(
                     summary: format!("Skipped: `{label}` is applied."),
                     findings: vec![],
                     resolved: vec![],
+                    pending: vec![],
                     deduped: 0,
                     highest_severity: None,
                     usage: Usage::default(),
@@ -1371,6 +1372,7 @@ fn publish_unclaimed(lanes: &mut Vec<LaneProposal>, scan_findings: &[scan::types
             ),
             findings: unclaimed,
             resolved: vec![],
+            pending: vec![],
             deduped: 0,
             highest_severity: Some(Severity::High),
             // Scanners are deterministic and offline: no model, no spend.
@@ -1526,6 +1528,7 @@ mod tests {
                 summary: "Reviewed.".into(),
                 findings,
                 resolved: vec![],
+                pending: vec![],
                 deduped: 0,
                 highest_severity: Some(Severity::High),
                 usage: Default::default(),
