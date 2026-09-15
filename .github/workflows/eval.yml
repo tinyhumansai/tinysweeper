@@ -48,6 +48,13 @@ permissions:
 jobs:
   replay:
     runs-on: ubuntu-latest
+    # Contributor code is never executed: the replay builds and runs the
+    # engine from the checkout, so a fork's branch must not reach it. No
+    # secret is at stake any more — the replay needs none — but the binary
+    # and its build scripts are the contributor's, and that is the invariant.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v7
         with:

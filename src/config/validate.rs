@@ -228,6 +228,28 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
         ));
     }
 
+    // A route's ceiling replaces the global one for its model, so the same
+    // floor applies to it — a nonzero override below it recreates exactly the
+    // failure the check above exists for, on one rung. Zero means "no
+    // ceiling" and is exempt.
+    for route in &models.routes {
+        if let Some(cap) = route.max_tokens
+            && cap != 0
+            && cap < REASONING_FLOOR
+            && models.reasoning_effort.trim() != "off"
+            && !models.reasoning_effort.trim().is_empty()
+        {
+            problems.push(format!(
+                "`models.routes[{}].max_tokens = {cap}` is too small with \
+                 `models.reasoning_effort = \"{}\"`: reasoning is billed against the same \
+                 ceiling as the answer. Raise it to at least {REASONING_FLOOR}, set it to 0 \
+                 for no ceiling, or set `models.reasoning_effort = \"off\"`",
+                route.model,
+                models.reasoning_effort.trim(),
+            ));
+        }
+    }
+
     // `!is_finite()` catches nan and inf, which sail straight through a
     // `<= 0.0` comparison and would disable the spend ceiling entirely.
     if !models.budget_usd_per_pr.is_finite() || models.budget_usd_per_pr <= 0.0 {
