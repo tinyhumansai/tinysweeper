@@ -32,9 +32,9 @@ const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 fn client(token: &str) -> Result<Octocrab> {
     Octocrab::builder()
-        .personal_token(token.to_string())
         .set_connect_timeout(Some(REQUEST_TIMEOUT))
         .set_read_timeout(Some(REQUEST_TIMEOUT))
+        .personal_token(token.to_string())
         .build()
         .map_err(|err| Error::Forge(format!("could not build a GitHub client: {err}")))
 }
