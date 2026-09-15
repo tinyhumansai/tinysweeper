@@ -330,6 +330,30 @@ pub trait ForgeWrite: Send + Sync {
     /// is taken by deterministic policy in `crate::threads`.
     async fn resolve_review_thread(&self, repo: &RepoId, thread_id: &str) -> Result<()>;
 
+    /// Commit files to `branch`, creating it as an orphan when it does not
+    /// exist, and return the commit's SHA.
+    ///
+    /// Exists for the UI preview's pictures: a screenshot has to be served
+    /// from somewhere a pull request comment can embed, and a branch of the
+    /// repository being reviewed is the one place that needs no bucket, no
+    /// CDN and no credential in the repository's CI — the App's own token
+    /// writes it. The branch is a store, not a line of development: nothing
+    /// is ever read back from it by this crate, every path is written once
+    /// under a commit-and-run prefix, and deleting the branch costs old
+    /// comments their pictures and nothing else.
+    ///
+    /// Through the Git Data API (blobs, a tree over the branch's current
+    /// tree, one commit, one ref update) rather than the Contents API, which
+    /// is one request per file and one commit per file. A run is a dozen
+    /// files and wants to be one commit.
+    async fn publish_files(
+        &self,
+        repo: &RepoId,
+        branch: &str,
+        message: &str,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<String>;
+
     /// Merge the pull request `approval` was granted for.
     ///
     /// ## The approval is the precondition, in the type system
