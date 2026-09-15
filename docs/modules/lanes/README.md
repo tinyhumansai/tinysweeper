@@ -133,6 +133,10 @@ reviewer never sees the workflow rules. Roughly half of each document is the
 "do NOT report" list; that half is where the precision comes from. See
 `presets/rules/README.md`.
 
+A sixth lane, `e2e`, is designed but not yet built: see [e2e.md](e2e.md).
+It owns end-to-end coverage and whether the repository's own e2e jobs ran on
+the head — the concern the `tests` rule document deliberately excludes.
+
 ## Adding a lane
 
 1. A new file in `src/lanes/`, implementing `Lane`.
