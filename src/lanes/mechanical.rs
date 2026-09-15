@@ -62,6 +62,15 @@ pub fn detect(diffs: &[&FileDiff]) -> Option<Substitution> {
         if from.is_empty() || from.len() < 3 {
             continue;
         }
+        // A uniform *textual* substitution proves only that the text is
+        // consistent, not that it is a rename: `<` → `<=` across three files
+        // would satisfy `explains` just as well as a real identifier rename,
+        // and be verified as one. Restricting the fast path to substitutions
+        // that look like an identifier or a path keeps it to renames — an
+        // operator, a literal or other punctuation change never qualifies.
+        if !is_identifier_shaped(&from) || !is_identifier_shaped(&to) {
+            continue;
+        }
         let verified: Vec<String> = diffs
             .iter()
             .filter(|diff| explains(diff, &from, &to))
