@@ -87,6 +87,17 @@ pub fn detect(diffs: &[&FileDiff]) -> Option<Substitution> {
     best
 }
 
+/// Whether `s` reads as an identifier or a path: letters, digits,
+/// underscores, `::` module separators, or `.`/`/` path separators — and
+/// nothing else. `from` is additionally required to contain a letter, so a
+/// bare separator or number never qualifies on its own.
+fn is_identifier_shaped(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | '.' | '/'))
+        || s.is_empty()
+}
+
 /// Whether `diff` is entirely `from`→`to`: every removed line contains
 /// `from`, every removed line rewritten is exactly the added line in the same
 /// position, and nothing is added or removed beyond those pairs.
