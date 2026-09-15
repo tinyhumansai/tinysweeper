@@ -31,7 +31,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::app::review::{Proposal, review_with_state};
+use crate::app::review::Proposal;
 use crate::config::types::Config;
 use crate::error::Result;
 use crate::evidence::git::{self, Range, ResolvedRange};
