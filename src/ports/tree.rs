@@ -804,6 +804,26 @@ mod tests {
             matches!(unfetched, Found::Unavailable { .. }),
             "{unfetched:?}"
         );
+
+        // A search does not have the read path's per-lookup "unavailable" to
+        // fall back on: it walks the empty directory and finds nothing, which
+        // reads exactly like "nothing in the whole tree matches" unless the
+        // unfetched submodule is named separately.
+        let found = tree
+            .lookup(&Lookup::Search {
+                pattern: "needle".into(),
+                glob: None,
+            })
+            .await
+            .unwrap();
+        let Found::Hits { skipped, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert_eq!(
+            skipped,
+            vec!["vendor/empty".to_string()],
+            "the unfetched submodule must be named, not silently searched as empty"
+        );
     }
 
     #[tokio::test]
