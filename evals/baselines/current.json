@@ -22,7 +22,7 @@
       "input_tokens": 204045,
       "output_tokens": 19728,
       "cached_tokens": 67302,
-      "wall_secs": 0.038702712,
+      "wall_secs": 0.043038835,
       "models": [
         "deepseek/deepseek-v4-flash",
         "z-ai/glm-5.2",
@@ -48,31 +48,31 @@
       "optional_hits": 1,
       "judged": [
         {
-          "lane": "tests",
+          "lane": "critique",
           "path": "src/findings/summarise.rs",
-          "line": 11,
-          "title": "Reserve one character for the ellipsis in shorten",
+          "line": 23,
+          "title": "Keep shorten output within limit when no word boundary is found",
           "verdict": "true_positive",
           "matched": "E1",
           "reason": "path, line and wording all matched (a summary note, below the posting gate)"
         }
       ],
-      "cost_usd": 0.063826298132,
+      "cost_usd": 0.06562001642000001,
       "over_budget": true,
-      "input_tokens": 87676,
-      "output_tokens": 28630,
-      "cached_tokens": 48925,
-      "wall_secs": 0.01981169,
+      "input_tokens": 94460,
+      "output_tokens": 26055,
+      "cached_tokens": 54509,
+      "wall_secs": 0.021134066,
       "models": [
         "deepseek/deepseek-v4-flash",
         "z-ai/glm-5.2"
       ],
       "lane_costs": {
         "commits": 0.0,
-        "critique": 0.030488712712000005,
-        "description": 0.00082046776,
-        "security": 0.01516945292,
-        "tests": 0.01712831022
+        "critique": 0.03741470194,
+        "description": 0.00089831728,
+        "security": 0.02654435056,
+        "tests": 0.00058578716
       }
     },
     {
@@ -80,38 +80,21 @@
       "true_positives": 0,
       "missed": [],
       "false_positives": 0,
-      "unscored": 1,
+      "unscored": 0,
       "exhaustive": false,
       "duplicates": 0,
       "forbidden_hits": [],
       "optional_hits": 0,
-      "judged": [
-        {
-          "lane": "critique",
-          "path": "src/config/types.rs",
-          "line": 397,
-          "title": "Enforce the allowed values for reasoning_effort with an enum or newtype",
-          "verdict": "unscored",
-          "reason": "the case does not claim to list every true finding"
-        }
-      ],
-      "cost_usd": 0.05350819642,
-      "over_budget": true,
-      "input_tokens": 95637,
-      "output_tokens": 18166,
-      "cached_tokens": 60303,
-      "wall_secs": 0.018304281,
-      "models": [
-        "deepseek/deepseek-v4-flash",
-        "z-ai/glm-5.2"
-      ],
-      "lane_costs": {
-        "commits": 0.0,
-        "critique": 0.02454060476,
-        "description": 0.00540871128,
-        "security": 0.0058699825800000004,
-        "tests": 0.01747354896
-      }
+      "judged": [],
+      "cost_usd": 0.0,
+      "over_budget": false,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cached_tokens": 0,
+      "wall_secs": 0.01884421,
+      "models": [],
+      "lane_costs": {},
+      "error": "1 call(s) had no recorded answer; re-record the corpus with `eval run --record`, or replay loosely and accept the numbers describe the old prompt"
     }
   ]
 }

@@ -1,0 +1,17 @@
+{
+  "key": "b1f3a83ac2f064d0",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4007,
+    "output_tokens": 753,
+    "cached_tokens": 3033,
+    "embed_tokens": 0,
+    "cost_usd": 0.00263977854
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds provider API-key environment variables, renames the GitHub App credential variables to match what the binary actually reads (making them required), and mounts the config file read-only into the container. It is safe to merge."
+  }
+}
