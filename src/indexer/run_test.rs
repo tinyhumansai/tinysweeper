@@ -521,13 +521,13 @@ async fn a_completed_run_leaves_the_repository_ready_and_claimable() {
 
 #[tokio::test]
 async fn a_revoked_submodule_is_gone_before_the_run_can_stop_on_budget() {
-    // The operator took `vendor/lib` off the allow-list, so the next checkout
+    // The operator took `libs/core` off the allow-list, so the next checkout
     // has an empty directory there. Its chunks must not outlive the first
     // budget check: deleting them is a revocation, not a tidy-up, and a
     // review querying this index mid-rebuild must not be handed them.
     let checkout = Checkout::new();
     checkout.write(
-        "vendor/lib/src/lib.rs",
+        "libs/core/src/lib.rs",
         "fn vendored() -> usize {\n    3\n}\n",
     );
     let rig = Rig::new();
@@ -555,12 +555,12 @@ async fn a_revoked_submodule_is_gone_before_the_run_can_stop_on_budget() {
         paths_under(&rig, &signature)
             .await
             .iter()
-            .any(|path| path == "vendor/lib/src/lib.rs")
+            .any(|path| path == "libs/core/src/lib.rs")
     );
 
     // The submodule is now unfetched: an empty directory. A new file needs
     // embedding, and the budget refuses it before the first call.
-    checkout.remove("vendor/lib/src/lib.rs");
+    checkout.remove("libs/core/src/lib.rs");
     checkout.write("src/gamma.rs", "fn gamma() {}\n");
     let before = embedder.calls();
     let starved = report(
@@ -568,7 +568,7 @@ async fn a_revoked_submodule_is_gone_before_the_run_can_stop_on_budget() {
             .expect("builds")
             .with_batch(1)
             .with_budget(0.000_000_001)
-            .revoking(vec!["vendor/lib".into()])
+            .revoking(vec!["libs/core".into()])
             .index_repo(REPO, "sha-2", &checkout.root())
             .await
             .expect("runs"),
@@ -579,13 +579,13 @@ async fn a_revoked_submodule_is_gone_before_the_run_can_stop_on_budget() {
     assert!(
         starved
             .removed
-            .contains(&"vendor/lib/src/lib.rs".to_string())
+            .contains(&"libs/core/src/lib.rs".to_string())
     );
     assert!(
         !paths_under(&rig, &signature)
             .await
             .iter()
-            .any(|path| path == "vendor/lib/src/lib.rs"),
+            .any(|path| path == "libs/core/src/lib.rs"),
         "the revocation must not wait behind the embedding pass"
     );
     // And the count on record moved with it.
