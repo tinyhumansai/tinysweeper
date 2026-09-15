@@ -102,12 +102,18 @@ impl Lane for Critique {
         // it does not explain — which, on the pull request that motivated
         // this, was one file in fifty-nine. See `lanes::mechanical`.
         let mechanical = mechanical::detect(&fresh);
+        // One verified file is still read: the check proves every file got
+        // the *same* substitution, not that the substitution is harmless.
+        // `check_admin()` → `allow_guest()` across fifty files is uniform and
+        // is not a rename. One conversation over one sample answers that;
+        // fifty over fifty answered it fifty times.
+        let sample = mechanical.as_ref().and_then(|sub| sub.verified.first());
         let paths: Vec<String> = fresh
             .iter()
             .filter(|diff| {
-                mechanical
-                    .as_ref()
-                    .is_none_or(|sub| !sub.verified.contains(&diff.path))
+                mechanical.as_ref().is_none_or(|sub| {
+                    !sub.verified.contains(&diff.path) || Some(&diff.path) == sample
+                })
             })
             .map(|diff| diff.path.clone())
             .collect();

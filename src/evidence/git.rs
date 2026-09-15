@@ -500,22 +500,20 @@ fn diff_args(diff_range: &[String]) -> Vec<String> {
 /// is exactly what must not be read into a prompt, and this is the same set
 /// the dirty-range diff is taken from.
 pub async fn reviewable_paths(dir: &Path) -> Result<Vec<String>> {
-    let out = git(
-        dir,
-        &[
-            "ls-files",
-            "-z",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-        ],
-    )
-    .await?;
-    Ok(out
+    // Two listings, because `--recurse-submodules` does not combine with
+    // `--others`: the tracked set descends into initialised submodules, the
+    // untracked set covers the superproject's new files.
+    let tracked = git(dir, &["ls-files", "-z", "--cached", "--recurse-submodules"]).await?;
+    let untracked = git(dir, &["ls-files", "-z", "--others", "--exclude-standard"]).await?;
+    let mut paths: Vec<String> = tracked
         .split('\0')
+        .chain(untracked.split('\0'))
         .filter(|p| !p.is_empty())
         .map(str::to_string)
-        .collect())
+        .collect();
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
 }
 
 async fn git(dir: &Path, args: &[&str]) -> Result<String> {
