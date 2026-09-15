@@ -88,16 +88,21 @@ last_resort_unpinned = false
 model = "deep"
 max_tokens = 0
 
-# Retrieval on, through the same gateway the completion models use. The three
-# fields below are the index partition key: change any of them and the vectors
-# already written stop matching, which is why they live here rather than in the
-# environment.
+# Retrieval on, through the ladder like every other model call. `vectors` is
+# the ladder's embeddings ladder — every rung in it is a 1024-wide BGE-M3, so
+# failover never changes the width — reached at its OpenAI-shaped
+# `/v1/embeddings` on this box. The three signature fields below are the index
+# partition key: change any of them and the vectors already written stop
+# matching, which is why they live here rather than in the environment, and
+# why moving here from `openrouter:openai/text-embedding-3-small:1536` means
+# each repository re-indexes on its next push.
 [embeddings]
 enabled = true
-provider = "openrouter"
-model = "openai/text-embedding-3-small"
-dimensions = 1536
-api_key_env = "OPENROUTER_API_KEY"
+provider = "ladder"
+model = "vectors"
+dimensions = 1024
+api_key_env = "LADDER_API_KEY"
+base_url = "http://host.docker.internal:6969/v1/embeddings"
 
 # The vendored libraries the reviewed repositories call into. A review may
 # read these submodules and the indexer fetches them; anything else named in
