@@ -22,7 +22,7 @@ pr = 2313
 # tracing `DmTool` and `HiveDeskRunner::speak` with eleven shell scripts. The
 # live tinysweeper review of the same head (05318664) approved with "found
 # nothing blocking".
-evidence = "https://github.com/tinyhumansai/opencompany/pull/2313#pullrequestreview-3600000000 (Codex, 2026-09-15T10:43Z and 10:50Z) and the CodeRabbit review at 10:52Z on the same PR"
+evidence = "https://github.com/tinyhumansai/opencompany/pull/2313#discussion_r4014691049 (Codex, E1), https://github.com/tinyhumansai/opencompany/pull/2313#discussion_r4014750658 (Codex, E2), https://github.com/tinyhumansai/opencompany/pull/2313#discussion_r4014768222 (CodeRabbit, E2)"
 labelled_by = "enamakel"
 labelled_on = "2026-09-15"
 
