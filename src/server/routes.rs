@@ -1845,12 +1845,11 @@ async fn review_inner(
     })
     .await
     .unwrap_or_else(|_elapsed| {
-        Error::timeout(format!("the review of {repo}#{number}"), REVIEW_DEADLINE)
-    })
-    .map(Ok::<_, Error>)
-    .unwrap_or_else(Err)
-    .unwrap_or_else(|err| Err(err))
-    .and_then(std::convert::identity);
+        Err(Error::timeout(
+            format!("the review of {repo}#{number}"),
+            REVIEW_DEADLINE,
+        ))
+    });
 
     // Released regardless of how the review went. The TTL in the store is the
     // backstop for the cases this cannot cover — a kill, or a lost machine.
