@@ -62,10 +62,18 @@ jobs:
       # Strict replay: a call the cassette cannot answer fails its case with
       # "re-record the corpus", which is the staleness this exists to make
       # loud — a prompt changed and nobody recorded it.
+      #
+      # Under the compiled-in defaults, not this repository's
+      # `.tinysweeper.toml`: the cassettes are keyed by the model name each
+      # call went to, and are recorded under the defaults so that `cargo
+      # test`'s committed-corpus replay and this one read the same tapes.
+      # The repository config names *ladders* (`flash`, `deep`) that only
+      # resolve on a box running one; replaying it here would miss every
+      # call and report a stale corpus that is not stale.
       - name: Replay the corpus
         run: |
           cargo run --locked --features harness,github -- \
-            eval run
+            eval run --config src/config/defaults.toml
 
       # `eval run` scores inline as it goes, but the documented pipeline keeps
       # scoring separate for exactly the case here: re-reading the proposals
@@ -74,7 +82,7 @@ jobs:
       - name: Score the corpus
         run: |
           cargo run --locked --features harness,github -- \
-            eval score
+            eval score --config src/config/defaults.toml
 
       - name: Compare against the committed baseline
         run: |
