@@ -956,14 +956,20 @@ mod tests {
         let routed = gateway.routing_for("openai/gpt-5.6-luna");
         assert_eq!(routed.order, vec!["openai/flex".to_string()]);
         assert!(!routed.allow_fallbacks);
-        assert!(!routed.last_resort_unpinned, "a named endpoint is not rerouted");
+        assert!(
+            !routed.last_resort_unpinned,
+            "a named endpoint is not rerouted"
+        );
         assert_eq!(
             gateway.routing_for("deepseek/deepseek-v4-flash").order,
             vec!["streamlake".to_string()],
             "an unrouted model keeps the ladder-wide pin"
         );
         assert_eq!(models.max_tokens_for("openai/gpt-5.6-luna"), 0);
-        assert_eq!(models.max_tokens_for("deepseek/deepseek-v4-flash"), models.max_tokens);
+        assert_eq!(
+            models.max_tokens_for("deepseek/deepseek-v4-flash"),
+            models.max_tokens
+        );
     }
 
     #[test]
