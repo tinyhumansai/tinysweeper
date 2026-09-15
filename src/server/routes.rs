@@ -78,6 +78,16 @@ const _: () = assert!(
 /// provider's rate limit and a good deal of the machine.
 const MAX_CONCURRENT_INDEXES: usize = 2;
 
+/// How long `conclude_in_flight` may spend concluding checks before giving up
+/// on the rest.
+///
+/// Compose sends `SIGKILL` ten seconds after `SIGTERM`; this leaves a margin
+/// under that for the runtime to actually unwind once `conclude_in_flight`
+/// returns. Deliberately shorter than `forge::github::REQUEST_TIMEOUT` (60s):
+/// a single stalled `update_check` must not be able to spend the whole grace
+/// period on its own and starve every other review's check behind it.
+const SHUTDOWN_CLEANUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8);
+
 /// How many pull requests one manual, repository-wide review may queue.
 ///
 /// The button is an escape hatch, not a way to spend an afternoon's budget in
