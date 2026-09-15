@@ -31,15 +31,31 @@ step that interpolates untrusted context into a shell.
 # The deep tier is the one that reads logic, and it now reads only logic: a
 # mechanical rename is verified line for line before the fan-out and never
 # sent to a model, and the reviewer looks up the definitions the changed lines
-# call into before it answers. On opencompany#2313 — 58 files, one of them a
-# refactor with two boundary bugs — the default flash model, given the callee's
-# doc comment saying the bound is exclusive, still called the call correct in
-# every run; `openai/gpt-5.3-codex` found it three runs out of three. The
-# residue is one file in fifty-nine, so the dearer model costs about what the
-# fifty-eight rename conversations used to. `scan` and `flash` stay pinned;
-# an `openai/` id is routed unpinned by `models.provider.unpinned_vendors`.
+# call into before it answers.
+#
+# Measured on opencompany#2313 (58 files, one refactor with two boundary bugs,
+# critique lane, three runs each, 2026-09-15): the default flash model found
+# neither bug in any run; `openai/gpt-5.3-codex` found the exclusive-cursor
+# bug 3/3 and the unbounded sibling read 0/3 at $0.26–0.30 a run;
+# `openai/gpt-5.6-luna` found one of the two every run — including the
+# sibling read, 2/3, which no other model reached — at $0.02 a run. On the
+# noise case luna posted one false high (a claim the mongo image lacks
+# python3; it has it) where codex posted none. Luna is the primary rung for
+# recall per dollar; codex is the next rung down the ladder, so a flex outage
+# degrades to the dearer model rather than to a cheaper one.
 [models]
-deep = "openai/gpt-5.3-codex"
+deep = "openai/gpt-5.6-luna"
+fallback = ["openai/gpt-5.3-codex", "z-ai/glm-5.2", "minimax/minimax-m3"]
+
+# The luna rung goes only to OpenAI's flex endpoint — surplus capacity at half
+# the standard price — with no output ceiling: the reasoning and the answer
+# are billed at $1.20/M, so a long one is cheap, and a cut-off would cost a
+# file's review. A rung with a route never falls to the unpinned last resort.
+[[models.routes]]
+model = "openai/gpt-5.6-luna"
+order = ["openai/flex"]
+allow_fallbacks = false
+max_tokens = 0
 
 # Retrieval on, through the same gateway the completion models use. The three
 # fields below are the index partition key: change any of them and the vectors
