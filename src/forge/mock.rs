@@ -165,6 +165,8 @@ pub struct MockState {
     pub issue_types: Vec<String>,
     /// tinysweeper's own last review state, keyed by pull request number.
     pub own_reviews: BTreeMap<u64, ReviewEvent>,
+    /// Whether reading our own review history fails, as a forge mid-outage.
+    pub own_review_state_fails: bool,
     /// Check runs, keyed by the commit they report on and then by check name.
     pub checks: BTreeMap<String, BTreeMap<String, CheckStatus>>,
     /// Reviews, oldest first, keyed by pull request number.
