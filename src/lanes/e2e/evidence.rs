@@ -126,6 +126,7 @@ pub async fn gather(
     config: &Config,
     repo: &RepoId,
     head_sha: &str,
+    base_sha: &str,
     diffs: &[FileDiff],
 ) -> Evidence {
     let mut evidence = Evidence::default();
