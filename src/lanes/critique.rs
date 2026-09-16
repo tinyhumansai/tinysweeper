@@ -1327,4 +1327,121 @@ fn helper() {
             vec!["Guard the index before dereferencing"]
         );
     }
+
+    // --- grouping -----------------------------------------------------------
+
+    /// A file and its underscore test sibling: grouped by name alone, with no
+    /// graph, by `lanes::grouping`.
+    fn grouped_diffs() -> Vec<FileDiff> {
+        vec![
+            parse_file_patch(
+                "src/widget.rs",
+                "@@ -1,1 +1,2 @@\n fn widget() {}\n+    let w = items[i];\n",
+            ),
+            parse_file_patch(
+                "src/widget_test.rs",
+                "@@ -1,1 +1,2 @@\n fn widget_test() {}\n+    let t = cases[j];\n",
+            ),
+        ]
+    }
+
+    #[tokio::test]
+    async fn grouping_reduces_call_count_for_a_file_and_its_test() {
+        let model = MockModel::silent();
+        run_with(model.clone(), &config(), &grouped_diffs()).await;
+
+        assert_eq!(
+            model.calls(),
+            1,
+            "one conversation for the file and its test, not two"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_isolation_clause_names_every_file_in_the_group() {
+        let model = MockModel::silent();
+        run_with(model.clone(), &config(), &grouped_diffs()).await;
+
+        let system = &model.requests()[0].messages[0].content;
+        assert!(system.contains("These files only"), "{system}");
+        assert!(system.contains("`src/widget.rs`"), "{system}");
+        assert!(system.contains("`src/widget_test.rs`"), "{system}");
+    }
+
+    #[tokio::test]
+    async fn a_grouped_finding_anchors_to_the_file_it_names_not_the_first_file_in_the_group() {
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [{
+                "path": "src/widget_test.rs",
+                "existing_code": "let t = cases[j];",
+                "rule": "unchecked-index",
+                "title": "Guard the index before dereferencing",
+                "body": "`j` is never bounds-checked.",
+                "severity": "high", "confidence": 0.9
+            }]
+        }));
+        let outcome = run_with(model, &config(), &grouped_diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
+        assert_eq!(outcome.findings[0].path, "src/widget_test.rs");
+        assert_eq!(
+            outcome.findings[0].line,
+            Some(2),
+            "anchored against its own file's diff, not the group's first file"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_finding_naming_a_path_outside_the_group_is_discarded_like_an_untouched_file() {
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [{
+                "path": "src/elsewhere.rs",
+                "existing_code": "let w = items[i];",
+                "rule": "r", "title": "t", "body": "b",
+                "severity": "high", "confidence": 0.9
+            }]
+        }));
+        let outcome = run_with(model, &config(), &grouped_diffs()).await;
+
+        assert!(outcome.findings.is_empty());
+        assert!(
+            outcome.summary.contains("did not change"),
+            "{}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn grouping_disabled_falls_back_to_per_file_fanout() {
+        let mut config = config();
+        config.grouping.enabled = false;
+        let model = MockModel::silent();
+        run_with(model.clone(), &config, &grouped_diffs()).await;
+
+        let requests = model.requests();
+        assert_eq!(
+            requests.len(),
+            2,
+            "grouping off is the plain one-conversation-per-file fan-out"
+        );
+
+        // Byte-identical to the pre-grouping single-file prompt: the same
+        // isolation clause text, naming only that file, with no group
+        // language at all — a cassette or a provider's cached prefix from
+        // before grouping existed must still match.
+        for (request, path) in requests
+            .iter()
+            .zip(["src/widget.rs", "src/widget_test.rs"])
+        {
+            let system = &request.messages[0].content;
+            assert!(system.contains("## One file only"), "{system}");
+            assert!(
+                system.contains(&format!("The file is `{path}`.")),
+                "{system}"
+            );
+            assert!(!system.contains("These files only"), "{system}");
+        }
+    }
 }
