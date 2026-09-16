@@ -702,6 +702,28 @@ mod tests {
         assert_eq!(outcome.findings[0].title, "Guard the first index");
     }
 
+    #[tokio::test]
+    async fn a_coverage_finding_updates_a_clean_round_one_summary() {
+        // Round one said "Nothing to report." before the coverage pass ever
+        // ran. If the coverage pass then finds something, the summary must
+        // not keep declaring the group clean while `findings` says otherwise.
+        let model = MockModel::new()
+            .then(json!({"summary": "Nothing to report.", "findings": []}))
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_at_line("Guard the second index", 9)]
+            }));
+
+        let outcome = run_with(model, &config_with_passes(2), &large_diffs(), &[]).await;
+
+        assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
+        assert!(
+            outcome.summary.contains("1 finding added by a second pass"),
+            "{}",
+            outcome.summary
+        );
+    }
+
     // --- golden test -------------------------------------------------------
 
     #[tokio::test]
