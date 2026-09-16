@@ -1008,10 +1008,7 @@ jobs:
             workflow.applies_to(&strings(&["src/server/routes.rs"])),
             Applies::PathsExcluded
         );
-        assert_eq!(
-            workflow.applies_to(&strings(&["src/lib.rs"])),
-            Applies::Yes
-        );
+        assert_eq!(workflow.applies_to(&strings(&["src/lib.rs"])), Applies::Yes);
     }
 
     #[test]
@@ -1025,10 +1022,7 @@ jobs:
             workflow.applies_to(&strings(&["docs/readme.md"])),
             Applies::PathsExcluded
         );
-        assert_eq!(
-            workflow.applies_to(&strings(&["src/lib.rs"])),
-            Applies::Yes
-        );
+        assert_eq!(workflow.applies_to(&strings(&["src/lib.rs"])), Applies::Yes);
     }
 
     #[test]
