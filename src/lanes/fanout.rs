@@ -268,6 +268,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_multi_file_groups_success_counts_every_member_file() {
+        // Two two-file groups: the fan-out ran two conversations, but the
+        // outcome must report four files reviewed, not two conversations.
+        let groups = vec![
+            vec!["a.rs".to_string(), "b.rs".to_string()],
+            vec!["c.rs".to_string(), "d.rs".to_string()],
+        ];
+        let outcome = per_unit(
+            &groups,
+            |g| g.join(" + "),
+            |g| g.clone(),
+            |g| async move { Ok(review_of(&format!("Reviewed {}.", g.join(" + ")))) },
+        )
+        .await
+        .into_outcome();
+
+        assert!(
+            outcome.summary.starts_with("Reviewed 4 files"),
+            "{}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_multi_file_group_names_every_member_file_as_unanswered() {
+        let groups = vec![vec!["a.rs".to_string(), "b.rs".to_string()]];
+        let outcome = per_unit(
+            &groups,
+            |g| g.join(" + "),
+            |g| g.clone(),
+            |_| async { Err(Error::Model("upstream exploded".into())) },
+        )
+        .await
+        .into_outcome();
+
+        assert_eq!(
+            outcome.unanswered,
+            vec!["a.rs".to_string(), "b.rs".to_string()],
+            "a failed two-file group must name both files, not one synthetic label"
+        );
+        assert!(
+            outcome.summary.contains("2 files could not be reviewed: a.rs, b.rs"),
+            "{}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
     async fn concurrency_is_bounded() {
         // A lane fanning out over a large pull request with no cap is an
         // unbounded bill and a provider rate limit at the same time.
