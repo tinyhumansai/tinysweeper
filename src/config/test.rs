@@ -713,6 +713,24 @@ fn automerge_with_no_required_checks_is_rejected() {
 }
 
 #[test]
+fn e2e_named_in_require_checks_is_rejected() {
+    // `tinysweeper/e2e` is published `Neutral` — a concluded state, not a
+    // pending one — while its jobs are still running, and a required
+    // check's `Neutral` is read as a pass. Naming it here would let
+    // auto-merge proceed before the suite has actually concluded.
+    let config = parse(
+        "version = 1\n[automerge]\nenabled = true\nrequire_checks = [\"tinysweeper/e2e\"]\n",
+    );
+    let problems = validate::validate(&config);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("tinysweeper/e2e") && p.contains("Neutral")),
+        "{problems:#?}"
+    );
+}
+
+#[test]
 fn a_label_in_both_allow_and_block_lists_is_flagged_as_dead() {
     let config = parse(
         "version = 1\n[automerge]\nenabled = true\nallow_labels = [\"ship\"]\nblock_labels = [\"ship\"]\n",
