@@ -135,8 +135,8 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
         // file — because the marker text is specific enough to carry no
         // false-positive risk, and a key pasted into an ordinary source file
         // is exactly the case a per-file allowlist cannot cover.
+        let mut in_key_block = false;
         for hunk in &mut diff.hunks {
-            let mut in_key_block = false;
             for line in &mut hunk.lines {
                 if scan::is_private_key_begin(&line.text) {
                     in_key_block = true;
@@ -180,7 +180,6 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
                     spans += 1;
                     masked_here = true;
                     line.text = rulepack_masked;
-                    continue;
                 }
 
                 if sensitive {
@@ -278,15 +277,24 @@ fn mask_assignment_or_whole_line(text: &str) -> String {
 /// [`render`]: crate::evidence::diff::render
 pub fn scrub_rendered(text: &str) -> String {
     let mut in_key_block = false;
+    let mut sensitive = false;
     let mut out = String::with_capacity(text.len());
 
     for (index, line) in text.split('\n').enumerate() {
         if index > 0 {
             out.push('\n');
         }
+        if let Some(path) = line.strip_prefix("--- ") {
+            sensitive = scan::is_sensitive_path(path);
+        }
         let (prefix, body) = split_render_prefix(line);
         out.push_str(prefix);
-        out.push_str(&scan::redact_stream_line(body, &mut in_key_block));
+        let masked = scan::redact_stream_line(body, &mut in_key_block);
+        out.push_str(if sensitive && !prefix.is_empty() {
+            &mask_assignment_or_whole_line(&masked)
+        } else {
+            &masked
+        });
     }
 
     out

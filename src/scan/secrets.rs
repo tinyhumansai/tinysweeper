@@ -197,14 +197,30 @@ pub fn is_private_key_end(text: &str) -> bool {
 /// cycle persisted, and [`crate::ports::tree`]'s lookup redaction for content
 /// a tree backend read fresh outside the diff entirely.
 pub fn redact_stream_line(line: &str, in_key_block: &mut bool) -> String {
-    if is_private_key_begin(line) {
+    if let Some(marker) = PEM_MARKERS
+        .iter()
+        .map(|(marker, _)| *marker)
+        .find(|marker| line.contains(marker))
+    {
         *in_key_block = true;
-        return line.to_string();
+        return redact_pem_marker_suffix(line, marker);
     }
     if *in_key_block {
         if is_private_key_end(line) {
             *in_key_block = false;
-            return line.to_string();
+            // The armour itself is safe to retain, but a malformed marker can
+            // have arbitrary credential text appended after it.
+            return line
+                .find("-----END")
+                .and_then(|start| {
+                    line[start + 5..]
+                        .find("-----")
+                        .map(|end| start + 5 + end + 5)
+                })
+                .map_or_else(
+                    || redact_line(line),
+                    |end| redact_pem_marker_suffix(line, &line[..end]),
+                );
         }
         return if line.trim().is_empty() {
             line.to_string()
@@ -217,6 +233,16 @@ pub fn redact_stream_line(line: &str, in_key_block: &mut bool) -> String {
     } else {
         redact_line(line)
     }
+}
+
+/// Preserve a PEM armour marker while applying normal redaction to text that
+/// follows it on the same line.
+fn redact_pem_marker_suffix(line: &str, marker: &str) -> String {
+    let Some(start) = line.find(marker) else {
+        return redact_line(line);
+    };
+    let end = start + marker.len();
+    format!("{}{}{}", &line[..end], redact_line(&line[end..]), "")
 }
 
 /// Whether one unarmoured line has the shape of private-key PEM body data.
@@ -391,12 +417,13 @@ pub fn scan_added_lines<'a>(
 /// This is [`redact_line`] under another name — see that function for what it
 /// applies, including the entropy-assignment pass.
 pub fn scrub(text: &str) -> String {
+    let mut in_key_block = false;
     text.split_inclusive('\n')
         .map(|line| match line.strip_suffix("\r\n") {
-            Some(body) => format!("{}\r\n", redact_line(body)),
+            Some(body) => format!("{}\r\n", redact_stream_line(body, &mut in_key_block)),
             None => match line.strip_suffix('\n') {
-                Some(body) => format!("{}\n", redact_line(body)),
-                None => redact_line(line),
+                Some(body) => format!("{}\n", redact_stream_line(body, &mut in_key_block)),
+                None => redact_stream_line(line, &mut in_key_block),
             },
         })
         .collect()
