@@ -120,9 +120,33 @@ impl Lane for Critique {
             .collect();
 
         let changed_paths = input.changed_paths();
+        // No model call: groups related changed files so a bug spanning them
+        // — a caller and its callee, a function and its test — is visible to
+        // one reviewer instead of hidden by the isolation clause each
+        // ungrouped conversation is given. Off, or a component too large to
+        // bet on, falls back to exactly the singleton fan-out this lane ran
+        // before grouping existed — see `lanes::grouping`.
+        let groups: Vec<FileGroup> = if input.config.grouping.enabled {
+            input.group(
+                &paths,
+                &GroupBounds {
+                    max_files: input.config.grouping.max_files,
+                    max_hunk_chars: input.config.grouping.max_hunk_chars,
+                },
+            )
+        } else {
+            paths
+                .iter()
+                .map(|path| FileGroup {
+                    label: path.clone(),
+                    paths: vec![path.clone()],
+                })
+                .collect()
+        };
+
         // One capability for the whole lane, so the pull-request budget is
         // enforced across every file and every reviewer at once. That is what
-        // lets the files run concurrently: this lane reviewed them one at a
+        // lets the groups run concurrently: this lane reviewed them one at a
         // time only because spend is known after a call returns, and there was
         // nowhere else to check it.
         let llm = runner::lane_llm(
@@ -131,17 +155,17 @@ impl Lane for Critique {
             input.config.models.budget_usd_per_pr,
         );
 
-        let outcome = per_file(&paths, |path| {
+        let outcome = per_unit(&groups, |group| group.label.clone(), |group| {
             let llm = llm.clone();
             let input = &input;
             let changed_paths = &changed_paths;
             async move {
-                let diff = input
-                    .diffs
+                let group_diffs: Vec<FileDiff> = group
+                    .paths
                     .iter()
-                    .find(|d| d.path == path)
-                    .expect("the path came from the diff list");
-                review_file(llm, input, changed_paths, diff).await
+                    .filter_map(|path| input.diffs.iter().find(|d| &d.path == path).cloned())
+                    .collect();
+                review_group(llm, input, changed_paths, &group.paths, &group_diffs).await
             }
         })
         .await;
