@@ -171,6 +171,8 @@ impl Lane for Security {
             input.config.models.budget_usd_per_pr,
         );
 
+        let changed_paths = input.changed_paths();
+
         let outcome = per_unit(
             &groups,
             |group| group.label.clone(),
@@ -186,6 +188,7 @@ impl Lane for Security {
                 let input = &input;
                 let diffs = input.diffs;
                 let scanner = &scanner;
+                let changed_paths = &changed_paths;
                 async move {
                     let group_diffs: Vec<FileDiff> = group
                         .paths
@@ -202,6 +205,7 @@ impl Lane for Security {
                         retrieved_context,
                         memory_context,
                         asking,
+                        changed_paths,
                         &group.paths,
                         &group_diffs,
                         scanner,
