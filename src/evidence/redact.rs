@@ -244,7 +244,7 @@ mod tests {
         )];
         let findings = scan::secrets::scan_added_lines("src/config.rs", diffs[0].added_lines());
 
-        mask(&mut diffs, &findings);
+        mask(&mut diffs, &findings, &[]);
         let rendered = replay::render(&diffs);
 
         assert!(!rendered.contains("IOSFODNN7EXAMPLE"), "{rendered}");
@@ -266,7 +266,7 @@ mod tests {
         // credential-shaped and would pass the rulepack and the heuristic.
         assert_eq!(findings.len(), 1, "{findings:#?}");
 
-        mask(&mut diffs, &findings);
+        mask(&mut diffs, &findings, &[]);
         let rendered = replay::render(&diffs);
 
         assert!(!rendered.contains("IOSFODNN7EXAMPLE"), "{rendered}");
@@ -286,7 +286,7 @@ mod tests {
         let mut diffs = vec![parse_file_patch("src/config.rs", &raw)];
         let findings = scan::secrets::scan_added_lines("src/config.rs", diffs[0].added_lines());
 
-        mask(&mut diffs, &findings);
+        mask(&mut diffs, &findings, &[]);
         let rendered = replay::render(&diffs);
 
         assert!(rendered.contains("let a = 1;"), "{rendered}");
@@ -307,7 +307,7 @@ mod tests {
         ];
         let findings = scan::secrets::scan_added_lines("src/config.rs", diffs[0].added_lines());
 
-        let redactions = mask(&mut diffs, &findings);
+        let redactions = mask(&mut diffs, &findings, &[]);
 
         // One span in `src/config.rs` (the scanner-flagged key) and one in
         // `.env` (masked wholesale, on shape of the path alone).
@@ -330,7 +330,7 @@ mod tests {
         )];
         let findings = scan::secrets::scan_added_lines("src/config.rs", diffs[0].added_lines());
 
-        let redactions = mask(&mut diffs, &findings);
+        let redactions = mask(&mut diffs, &findings, &[]);
 
         assert!(redactions.is_empty(), "{redactions:?}");
         assert_eq!(redactions.note(), "");
@@ -351,7 +351,7 @@ mod tests {
         let changed_before = diffs[0].changed_lines.clone();
         let findings = scan::secrets::scan_added_lines(".env", diffs[0].added_lines());
 
-        mask(&mut diffs, &findings);
+        mask(&mut diffs, &findings, &[]);
 
         let after: Vec<(Option<u64>, Option<u64>)> = diffs[0].hunks[0]
             .lines
