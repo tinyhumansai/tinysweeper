@@ -488,8 +488,7 @@ impl crate::ports::review_state::ReviewStateStore for Store {
         // the same `head_sha` but different `jobs`/`summary`/`failed`
         // before this runs, and matching on `head_sha` alone would clear
         // that newer watch too.
-        let watch_document =
-            bson::to_bson(watch).map_err(|err| Error::Forge(err.to_string()))?;
+        let watch_document = bson::to_bson(watch).map_err(|err| Error::Forge(err.to_string()))?;
         let result = self
             .review_state
             .update_one(
