@@ -146,3 +146,39 @@ async fn rekey_ts0045_cassette_after_a_shared_rules_edit() {
         assert!(score.error.is_none(), "{:?}", score.error);
     }
 }
+
+#[tokio::test]
+#[ignore]
+async fn rekey_ts0068_cassette_after_a_shared_rules_edit() {
+    use std::sync::Arc;
+    use crate::harness::cassette::{Cassette, Mode};
+
+    let corpus = load(&corpus_root()).expect("loads");
+    let case_id = "ts-0068-description-anchored-to-code".to_string();
+    let corpus = corpus.select(&[case_id.clone()]).expect("known case");
+    let dir = corpus.cases[0].cassette_dir(&corpus.root);
+
+    let replay = Cassette::replay(&dir, Mode::Loose).expect("old cassette loads");
+    std::fs::remove_dir_all(&dir).expect("clear stale cassette");
+
+    let out = tempfile::tempdir().expect("tempdir");
+    let outcome = run(
+        &corpus,
+        &config(),
+        Some(Arc::new(replay) as Arc<dyn crate::ports::model::Model>),
+        &crate::eval::RunOptions {
+            out: out.path().to_path_buf(),
+            record: true,
+            loose: false,
+            record_prompts: false,
+            max_cost_usd: 1000.0,
+            tree: None,
+        },
+    )
+    .await
+    .expect("re-records");
+
+    for score in &outcome.scores {
+        assert!(score.error.is_none(), "{:?}", score.error);
+    }
+}
