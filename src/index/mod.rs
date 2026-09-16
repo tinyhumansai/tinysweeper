@@ -57,8 +57,21 @@ pub fn embedder_from_config(
         return Ok(None);
     };
 
-    if signature.provider == "openrouter" {
-        let embedder = OpenRouterEmbedder::new(signature, &config.api_key_env, &config.base_url)?;
+    // Both gateways speak the OpenAI embeddings shape and both report what
+    // they billed in the body, which is what `OpenRouterEmbedder` reads. The
+    // ladder has no default address — it lives on this box, at whatever
+    // `base_url` the operator gave it — so a blank one is a configuration
+    // error here rather than a connection error on the first push.
+    if signature.provider == "openrouter" || signature.provider == "ladder" {
+        if signature.provider == "ladder" && config.base_url.trim().is_empty() {
+            return Err(crate::error::Error::config(
+                "`embeddings.provider = \"ladder\"` needs `embeddings.base_url`: the ladder's \
+                 `/v1/embeddings` on this box, e.g. `http://host.docker.internal:6969/v1/embeddings`"
+                    .to_string(),
+            ));
+        }
+        let embedder = OpenRouterEmbedder::new(signature, &config.api_key_env, &config.base_url)?
+            .with_requests_per_minute(config.requests_per_minute);
         return Ok(Some(std::sync::Arc::new(embedder)));
     }
 

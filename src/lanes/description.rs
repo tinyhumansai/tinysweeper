@@ -122,11 +122,13 @@ impl Lane for Description {
             LaneId::Description,
             &calls,
             &schema::json_schema(),
-            input
-                .config
-                .council
-                .subagents
-                .then_some(input.config.models.flash.as_str()),
+            // No lookups: the subject is the title and body against the
+            // diff, and a reviewer reading the tree to judge prose is one
+            // spending calls on the wrong question.
+            runner::Asking {
+                tree: None,
+                ..input.asking()
+            },
         )
         .await?;
 
@@ -144,14 +146,7 @@ impl Lane for Description {
             Anchoring::Demote,
             input.config.council.corroboration,
         ) else {
-            return Ok(LaneOutcome {
-                summary: "No reviewer could be consulted.".into(),
-                spend: llm.spend(),
-                skipped: Some(
-                    "No reviewer could be consulted; see the provider errors in the log.".into(),
-                ),
-                ..LaneOutcome::default()
-            });
+            return Ok(LaneOutcome::unanswered(LaneId::Description, llm.spend()));
         };
 
         outcome.spend.merge(llm.spend());
@@ -201,6 +196,7 @@ fn empty_body_outcome(pr: &PullRequest, files: usize) -> LaneOutcome {
         spend: Default::default(),
         skipped: None,
         pending: Vec::new(),
+        unanswered: Vec::new(),
     }
 }
 
@@ -287,6 +283,7 @@ mod tests {
                 retrieved_context: "",
                 memory_context: "",
                 e2e: None,
+                tree: None,
             })
             .await
             .expect("lane runs")
@@ -350,6 +347,7 @@ mod tests {
                 retrieved_context: "",
                 memory_context: "- **rejected — an earlier finding**\n  Maintainer's reply: no.",
                 e2e: None,
+                tree: None,
             })
             .await
             .expect("lane runs");

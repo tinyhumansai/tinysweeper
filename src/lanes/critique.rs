@@ -47,6 +47,7 @@ use crate::flows::runner;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema::{self, RawFinding};
 use crate::lanes::fanout::{FileReview, per_file};
+use crate::lanes::mechanical;
 use crate::lanes::{Lane, LaneInput, LaneOutcome, reviewer_responses};
 use crate::ports::model::{Model, Spend};
 use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
@@ -94,7 +95,28 @@ impl Lane for Critique {
             .into_iter()
             .filter(|diff| !diff.changed_lines.is_empty())
             .collect();
-        let paths: Vec<String> = fresh.iter().map(|diff| diff.path.clone()).collect();
+
+        // A mechanical rename is verified, not read. Every file the
+        // substitution explains in full is proven line for line here and
+        // named as such in the summary; the model's budget goes to the files
+        // it does not explain — which, on the pull request that motivated
+        // this, was one file in fifty-nine. See `lanes::mechanical`.
+        let mechanical = mechanical::detect(&fresh);
+        // One verified file is still read: the check proves every file got
+        // the *same* substitution, not that the substitution is harmless.
+        // `check_admin()` → `allow_guest()` across fifty files is uniform and
+        // is not a rename. One conversation over one sample answers that;
+        // fifty over fifty answered it fifty times.
+        let sample = mechanical.as_ref().and_then(|sub| sub.verified.first());
+        let paths: Vec<String> = fresh
+            .iter()
+            .filter(|diff| {
+                mechanical.as_ref().is_none_or(|sub| {
+                    !sub.verified.contains(&diff.path) || Some(&diff.path) == sample
+                })
+            })
+            .map(|diff| diff.path.clone())
+            .collect();
 
         let changed_paths = input.changed_paths();
         // One capability for the whole lane, so the pull-request budget is
@@ -129,6 +151,14 @@ impl Lane for Critique {
         // it per file would multiply the bill by the file count.
         let mut outcome = outcome.into_outcome();
         outcome.spend.merge(llm.spend());
+        if let Some(sub) = &mechanical {
+            outcome.summary = format!("{} {}", outcome.summary.trim(), mechanical::note(sub));
+            // Every file was the rename: a real verdict, reached without a
+            // model, and the outcome must say so rather than read as skipped.
+            if paths.is_empty() {
+                outcome.skipped = None;
+            }
+        }
         Ok(outcome)
     }
 }
@@ -173,10 +203,7 @@ async fn review_file(
         LaneId::Critique,
         &calls,
         &schema::json_schema(),
-        config
-            .council
-            .subagents
-            .then_some(config.models.flash.as_str()),
+        input.asking_about(diff),
     )
     .await?;
 
@@ -187,9 +214,14 @@ async fn review_file(
     let mut resolved: Vec<String> = Vec::new();
     let mut unanchored = 0usize;
     let mut discarded = 0usize;
+    // What the reviewers read, for the falsifier: a finding about a callee's
+    // contract cannot be judged against the diff alone, and was being
+    // rejected on the strength of the diff's own comment about it.
+    let mut looked_up = String::new();
 
     for response in responses {
         spend.note(&response.model);
+        looked_up.push_str(&response.looked_up);
 
         let asked = match place(llm.clone(), input, diff, &evidence, response.response).await {
             Ok(asked) => asked,
@@ -233,7 +265,7 @@ async fn review_file(
     // filter can only reject, so more inputs in one pass is identical semantics
     // at a fraction of the calls.
     let filtered = Falsifier::new(llm.model().as_ref(), config)
-        .filter(LaneId::Critique, findings, &evidence)
+        .filter_with(LaneId::Critique, findings, &evidence, &looked_up)
         .await;
     spend.merge(filtered.spend);
 
@@ -554,6 +586,7 @@ fn helper() {
                 retrieved_context: "",
                 memory_context: "",
                 e2e: None,
+                tree: None,
             })
             .await
             .expect("lane runs")
@@ -915,6 +948,7 @@ fn helper() {
                 retrieved_context: "",
                 memory_context: "",
                 e2e: None,
+                tree: None,
             })
             .await
             .expect("runs");
@@ -973,6 +1007,7 @@ fn helper() {
                 retrieved_context: "",
                 memory_context: "",
                 e2e: None,
+                tree: None,
             })
             .await
             .expect("runs");
@@ -1030,6 +1065,7 @@ fn helper() {
                 retrieved_context: "",
                 memory_context: "",
                 e2e: None,
+                tree: None,
             })
             .await
             .expect("runs");
@@ -1077,6 +1113,7 @@ fn helper() {
                 retrieved_context: "",
                 memory_context: "",
                 e2e: None,
+                tree: None,
             })
             .await
             .expect("the failure is isolated, not propagated");
@@ -1096,6 +1133,84 @@ fn helper() {
 
     /// The other half of the isolation rule: one file's failure must leave the
     /// rest of the review standing.
+    #[tokio::test]
+    async fn a_mechanical_rename_is_verified_and_only_the_residue_reaches_a_model() {
+        // opencompany#2313: fifty-one files of one substitution and one file
+        // of logic. The substitution is proven line for line here, the
+        // summary says so, and the model is asked about the residue alone.
+        let config = config();
+        let rename = |path: &str, line: &str| {
+            let new = line.replace("::openhuman", "");
+            parse_file_patch(path, &format!("@@ -1,1 +1,1 @@\n-{line}\n+{new}\n"))
+        };
+        let diffs = vec![
+            rename("src/a.rs", "use openhuman_core::openhuman as oh;"),
+            rename("src/b.rs", "    openhuman_core::openhuman::tools::x();"),
+            rename("src/c.rs", "let y = openhuman_core::openhuman::A;"),
+            parse_file_patch(
+                "src/logic.rs",
+                "@@ -1,1 +1,2 @@\n-use openhuman_core::openhuman as oh;\n+use openhuman_core as oh;\n+let leak = 1;\n",
+            ),
+        ];
+        let model = MockModel::always(json!({ "summary": "read the logic", "findings": [] }));
+
+        let outcome = run_with(model.clone(), &config, &diffs).await;
+
+        let requests = model.requests();
+        assert_eq!(
+            requests.len(),
+            2,
+            "two conversations: the residue, and one sample of the rename"
+        );
+        let prompts: Vec<&str> = requests
+            .iter()
+            .map(|r| r.messages[1].content.as_str())
+            .collect();
+        assert!(prompts.iter().any(|p| p.contains("src/logic.rs")));
+        assert!(
+            prompts.iter().any(|p| p.contains("src/a.rs")),
+            "the first verified file is the sample"
+        );
+        assert!(!prompts.iter().any(|p| p.contains("src/b.rs")));
+        assert!(
+            outcome
+                .summary
+                .contains("3 file(s) are the mechanical rename `::openhuman` → ``"),
+            "{}",
+            outcome.summary
+        );
+        assert!(outcome.skipped.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_pull_request_that_is_only_a_rename_reads_one_sample_and_reaches_a_verdict() {
+        let config = config();
+        let rename = |path: &str, line: &str| {
+            let new = line.replace("::openhuman", "");
+            parse_file_patch(path, &format!("@@ -1,1 +1,1 @@\n-{line}\n+{new}\n"))
+        };
+        let diffs = vec![
+            rename("src/a.rs", "use openhuman_core::openhuman as oh;"),
+            rename("src/b.rs", "    openhuman_core::openhuman::tools::x();"),
+            rename("src/c.rs", "let y = openhuman_core::openhuman::A;"),
+        ];
+        let model = MockModel::always(json!({ "summary": "a rename", "findings": [] }));
+
+        let outcome = run_with(model.clone(), &config, &diffs).await;
+
+        assert_eq!(
+            model.requests().len(),
+            1,
+            "one sample of the rename is read"
+        );
+        assert!(
+            outcome.skipped.is_none(),
+            "a verified rename is a verdict, not a skip"
+        );
+        assert!(outcome.findings.is_empty());
+        assert!(outcome.summary.contains("verified line for line"));
+    }
+
     #[tokio::test]
     async fn one_files_failure_does_not_delete_the_other_files_review() {
         let config = config();
@@ -1138,6 +1253,7 @@ fn helper() {
                 retrieved_context: "",
                 memory_context: "",
                 e2e: None,
+                tree: None,
             })
             .await
             .expect("runs");

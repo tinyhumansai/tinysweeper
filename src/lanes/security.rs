@@ -36,6 +36,7 @@ use crate::flows::runner;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
 use crate::lanes::fanout::{FileReview, per_file};
+use crate::lanes::mechanical;
 use crate::lanes::triage::triage;
 use crate::lanes::{
     Anchoring, Lane, LaneInput, LaneOutcome, aggregate_reviewer_responses, reviewer_responses,
@@ -115,7 +116,18 @@ impl Lane for Security {
         let mut considered = fresh;
         considered.extend(forced_back);
 
-        let triaged = triage(&considered, &forced);
+        let mut triaged = triage(&considered, &forced);
+
+        // A mechanical rename is verified, not read, here as in `critique`:
+        // a substitution proven line for line cannot reach a sink the line
+        // did not already reach. A file a scanner flagged stays in whatever
+        // its diff looks like — the match is the reason it is reviewed.
+        let mechanical = mechanical::detect(&considered.iter().collect::<Vec<_>>());
+        if let Some(sub) = &mechanical {
+            triaged
+                .review
+                .retain(|path| forced.contains(&path.as_str()) || !sub.verified.contains(path));
+        }
 
         if triaged.review.is_empty() && scanner.is_empty() {
             return Ok(LaneOutcome::skipped(format!(
@@ -141,6 +153,7 @@ impl Lane for Security {
             let prior_findings = input.prior_findings;
             let retrieved_context = input.retrieved_context;
             let memory_context = input.memory_context;
+            let input = &input;
             let diffs = input.diffs;
             let scanner = &scanner;
             async move {
@@ -148,6 +161,7 @@ impl Lane for Security {
                     .iter()
                     .find(|d| d.path == path)
                     .expect("the path came from the diff list");
+                let asking = input.asking_about(diff);
                 review_file(
                     llm,
                     config,
@@ -156,6 +170,7 @@ impl Lane for Security {
                     prior_findings,
                     retrieved_context,
                     memory_context,
+                    asking,
                     diff,
                     scanner,
                 )
@@ -170,6 +185,12 @@ impl Lane for Security {
         // fan-out, so per-file would multiply the bill by the file count.
         outcome.spend.merge(llm.spend());
         outcome.summary.push_str(&skip_note(&triaged.skipped));
+        if let Some(sub) = &mechanical {
+            outcome.summary = format!("{} {}", outcome.summary.trim(), mechanical::note(sub));
+            if triaged.review.is_empty() {
+                outcome.skipped = None;
+            }
+        }
         merge_scanner_findings(&mut outcome, &scanner);
         Ok(outcome)
     }
@@ -190,6 +211,7 @@ async fn review_file(
     prior_findings: &[String],
     retrieved_context: &str,
     memory_context: &str,
+    asking: runner::Asking<'_>,
     diff: &FileDiff,
     scanner: &[&ScanFinding],
 ) -> Result<FileReview> {
@@ -228,10 +250,7 @@ async fn review_file(
         LaneId::Security,
         &calls,
         &schema::json_schema(),
-        config
-            .council
-            .subagents
-            .then_some(config.models.flash.as_str()),
+        asking,
     )
     .await?;
 
@@ -407,6 +426,7 @@ mod tests {
                 retrieved_context: "",
                 memory_context: "",
                 e2e: None,
+                tree: None,
             })
             .await
             .expect("lane runs")
@@ -683,6 +703,7 @@ mod tests {
                 retrieved_context: "",
                 memory_context: "",
                 e2e: None,
+                tree: None,
             })
             .await
             .expect("runs");

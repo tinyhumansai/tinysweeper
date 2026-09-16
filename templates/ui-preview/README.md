@@ -1,7 +1,10 @@
 # Turning on UI previews for a repository
 
-Three files to copy, five secrets to set, nothing to build. The server does
+Three files to copy, a few secrets to set, nothing to build. The server does
 the planning and the writing; this repository's CI does the browsing.
+Everything lives under `.github/` — the workflow, and a `tinysweeper/` folder
+for the config, the serve script and the fixtures — beside the
+`.github/tinysweeper.toml` tinysweeper already reads.
 
 ## 1. Once per organisation
 
@@ -30,10 +33,10 @@ the planning and the writing; this repository's CI does the browsing.
 | copy | to | then |
 | --- | --- | --- |
 | `ui-preview.yml` | `.github/workflows/ui-preview.yml` | adjust the `paths:` filter and the setup step to the stack |
-| `ui-preview.json` | `.tinysweeper/ui-preview.json` | fill in auth, mocks, entry points — see `actions/ui-preview/README.md` |
-| `serve.sh` | `scripts/ui-preview/serve.sh` | make it serve one checkout on `$TS_PORT` against a mocked backend |
+| `ui-preview.json` | `.github/tinysweeper/ui-preview.json` | fill in auth, mocks, entry points — see `actions/ui-preview/README.md` |
+| `serve.sh` | `.github/tinysweeper/serve.sh` | make it serve one checkout on `$TS_PORT` against a mocked backend |
 
-Then commit a fixture directory for the mocks (`.tinysweeper/fixtures/api/…`)
+Then commit a fixture directory for the mocks (`.github/tinysweeper/fixtures/api/…`)
 holding the JSON your app needs to render its screens logged in.
 
 A repository can also turn previews off for itself, or lower the flow count,

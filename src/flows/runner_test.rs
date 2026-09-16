@@ -31,7 +31,7 @@ async fn ask(model: MockModel, ids: &[&str], budget: f64) -> Vec<Answer> {
     let calls: Vec<Call> = ids.iter().map(|id| call(id)).collect();
     let llm = lane_llm(Arc::new(model), &config(), budget);
 
-    ask_all(llm, LaneId::Critique, &calls, &schema(), None)
+    ask_all(llm, LaneId::Critique, &calls, &schema(), Asking::default())
         .await
         .expect("the graph runs")
 }
@@ -116,7 +116,7 @@ async fn no_reviewers_is_no_calls() {
     let model = MockModel::new();
     let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
 
-    let answers = ask_all(llm, LaneId::Critique, &[], &schema(), None)
+    let answers = ask_all(llm, LaneId::Critique, &[], &schema(), Asking::default())
         .await
         .expect("an empty council is not an error");
 
@@ -130,7 +130,7 @@ async fn each_reviewer_is_asked_with_its_own_prompt() {
     let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
     let calls = vec![call("a"), call("b")];
 
-    ask_all(llm, LaneId::Critique, &calls, &schema(), None)
+    ask_all(llm, LaneId::Critique, &calls, &schema(), Asking::default())
         .await
         .expect("runs");
 
@@ -140,8 +140,8 @@ async fn each_reviewer_is_asked_with_its_own_prompt() {
         .map(|r| r.messages[0].content.clone())
         .collect();
 
-    assert!(systems.iter().any(|s| s == "system for a"));
-    assert!(systems.iter().any(|s| s == "system for b"));
+    assert!(systems.iter().any(|s| s.starts_with("system for a")));
+    assert!(systems.iter().any(|s| s.starts_with("system for b")));
 }
 
 #[tokio::test]
@@ -159,9 +159,15 @@ async fn a_reviewer_id_that_is_not_a_legal_node_id_still_gets_its_answer() {
         100.0,
     );
 
-    let answers = ask_all(llm, LaneId::Critique, &[awkward], &schema(), None)
-        .await
-        .expect("runs");
+    let answers = ask_all(
+        llm,
+        LaneId::Critique,
+        &[awkward],
+        &schema(),
+        Asking::default(),
+    )
+    .await
+    .expect("runs");
 
     assert!(answers[0].value.is_some(), "{:?}", answers[0].error);
     assert_eq!(answers[0].id, "security-focused reviewer!");
@@ -211,7 +217,7 @@ async fn reviewers_run_concurrently_rather_than_one_after_another() {
     let llm = lane_llm(model.clone(), &config(), 100.0);
     let calls: Vec<Call> = ["a", "b", "c"].iter().map(|id| call(id)).collect();
 
-    ask_all(llm, LaneId::Critique, &calls, &schema(), None)
+    ask_all(llm, LaneId::Critique, &calls, &schema(), Asking::default())
         .await
         .expect("runs");
 
@@ -259,7 +265,10 @@ async fn ask_with_subagents(model: MockModel, ids: &[&str]) -> Vec<Answer> {
         LaneId::Critique,
         &calls,
         &schema(),
-        Some("vendor/flash"),
+        Asking {
+            subagent_model: Some("vendor/flash"),
+            ..Asking::default()
+        },
     )
     .await
     .expect("the graph runs")
@@ -298,7 +307,10 @@ async fn the_second_turn_sees_the_answer_and_the_first_turn_does_not() {
         LaneId::Critique,
         &[call("a")],
         &schema(),
-        Some("vendor/flash"),
+        Asking {
+            subagent_model: Some("vendor/flash"),
+            ..Asking::default()
+        },
     )
     .await
     .expect("runs");
@@ -333,7 +345,10 @@ async fn a_reviewer_with_no_questions_costs_exactly_one_call() {
         LaneId::Critique,
         &[call("a")],
         &schema(),
-        Some("vendor/flash"),
+        Asking {
+            subagent_model: Some("vendor/flash"),
+            ..Asking::default()
+        },
     )
     .await
     .expect("runs");
@@ -391,7 +406,10 @@ async fn questions_are_capped_at_the_documented_number() {
         LaneId::Critique,
         &[call("a")],
         &schema(),
-        Some("vendor/flash"),
+        Asking {
+            subagent_model: Some("vendor/flash"),
+            ..Asking::default()
+        },
     )
     .await
     .expect("runs");
@@ -418,7 +436,10 @@ async fn the_final_turn_is_not_offered_a_way_to_ask_again() {
         LaneId::Critique,
         &[call("a")],
         &schema(),
-        Some("vendor/flash"),
+        Asking {
+            subagent_model: Some("vendor/flash"),
+            ..Asking::default()
+        },
     )
     .await
     .expect("runs");
@@ -448,9 +469,15 @@ async fn sub_agents_off_never_mentions_them_to_the_reviewer() {
     let model = MockModel::always(json!({ "summary": "s", "findings": [] }));
     let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
 
-    ask_all(llm, LaneId::Critique, &[call("a")], &schema(), None)
-        .await
-        .expect("runs");
+    ask_all(
+        llm,
+        LaneId::Critique,
+        &[call("a")],
+        &schema(),
+        Asking::default(),
+    )
+    .await
+    .expect("runs");
 
     let requests = model.requests();
     assert!(!requests[0].messages[0].content.contains("Asking instead"));
@@ -476,4 +503,203 @@ async fn one_reviewers_questions_do_not_disturb_another_reviewers_answer() {
         answers[1].value.as_ref().unwrap()["findings"][0]["title"],
         json!("B untouched")
     );
+}
+
+fn lookup_policy(rounds: u8) -> crate::config::types::LookupPolicy {
+    crate::config::types::LookupPolicy {
+        enabled: true,
+        rounds,
+        per_round: 3,
+        max_chars: 10_000,
+        checkout: false,
+    }
+}
+
+#[tokio::test]
+async fn a_reviewer_that_looks_something_up_is_asked_again_with_what_it_read() {
+    // The whole point of the loop: the doubt the production model wrote into
+    // its summary on opencompany#2313 now becomes a read, and the verdict is
+    // taken from the turn that saw the answer.
+    let model = MockModel::new()
+        .then(json!({
+            "summary": "not sure yet",
+            "findings": [],
+            "lookups": [
+                { "kind": "read", "path": "src/ports/events.rs", "start": 1, "end": 3, "why": "cursor semantics" },
+                { "kind": "search", "pattern": "fn read_before", "why": "where it lives" }
+            ]
+        }))
+        .then(json!({ "summary": "settled", "findings": [] }));
+    let tree = crate::ports::tree::MockTree::from_files([(
+        "src/ports/events.rs",
+        "/// Reads events with sequence `< before`.\nfn read_before() {}\nfn other() {}\n",
+    )]);
+    let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
+    let policy = lookup_policy(2);
+
+    let answers = ask_all(
+        llm,
+        LaneId::Critique,
+        &[call("a")],
+        &schema(),
+        Asking {
+            subagent_model: None,
+            tree: Some(&tree),
+            lookup: Some(&policy),
+            seed: None,
+        },
+    )
+    .await
+    .expect("runs");
+
+    assert_eq!(answers[0].value.as_ref().unwrap()["summary"], "settled");
+
+    let requests = model.requests();
+    assert_eq!(requests.len(), 2, "one asking turn, one settled turn");
+    let first = &requests[0];
+    assert!(
+        first.messages[0].content.contains("## Looking things up"),
+        "the first turn is told it may look up"
+    );
+    assert!(first.schema["properties"].get("lookups").is_some());
+
+    let second = &requests[1];
+    let evidence = &second.messages[1].content;
+    assert!(evidence.contains("## What you looked up"), "{evidence}");
+    assert!(
+        evidence.contains("sequence `< before`"),
+        "the read reached the model"
+    );
+    assert!(
+        evidence.contains("src/ports/events.rs:2: fn read_before() {}"),
+        "the search hit reached the model"
+    );
+    assert!(
+        second.schema["properties"].get("lookups").is_some(),
+        "with a round left, the second turn may still ask"
+    );
+
+    // Sub-agents are off (`subagent_model: None`, the default), so the early
+    // return past the sub-agent branch must not skip filling `looked_up` —
+    // otherwise the falsifier sees no evidence for a finding this reviewer
+    // only reached because it looked something up.
+    assert!(
+        answers[0].looked_up.contains("## What you looked up"),
+        "{}",
+        answers[0].looked_up
+    );
+}
+
+#[tokio::test]
+async fn the_last_permitted_round_offers_no_lookups_and_the_loop_ends() {
+    // One round: the turn after the lookups answers the plain schema and is
+    // not told it may look up, so a reviewer cannot ask for something no
+    // turn will answer. A reviewer that keeps asking anyway is settled on
+    // what it said.
+    let model = MockModel::new()
+        .then(json!({
+            "summary": "asking",
+            "findings": [],
+            "lookups": [{ "kind": "read", "path": "a.rs", "why": "x" }]
+        }))
+        .then(json!({
+            "summary": "still asking",
+            "findings": [],
+            "lookups": [{ "kind": "read", "path": "b.rs", "why": "x" }]
+        }))
+        .then(json!({ "summary": "never reached", "findings": [] }));
+    let tree = crate::ports::tree::MockTree::from_files([("a.rs", "x"), ("b.rs", "y")]);
+    let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
+    let policy = lookup_policy(1);
+
+    let answers = ask_all(
+        llm,
+        LaneId::Critique,
+        &[call("a")],
+        &schema(),
+        Asking {
+            subagent_model: None,
+            tree: Some(&tree),
+            lookup: Some(&policy),
+            seed: None,
+        },
+    )
+    .await
+    .expect("runs");
+
+    let requests = model.requests();
+    assert_eq!(requests.len(), 2);
+    let last = requests.last().unwrap();
+    assert!(last.schema["properties"].get("lookups").is_none());
+    assert!(!last.messages[0].content.contains("## Looking things up"));
+    assert_eq!(
+        answers[0].value.as_ref().unwrap()["summary"],
+        "still asking"
+    );
+}
+
+#[tokio::test]
+async fn a_lookup_follow_up_that_fails_does_not_leave_the_provisional_verdict_standing() {
+    // The first turn is told its verdict is provisional; if the turn that
+    // was to settle it never answers, the file is unreviewed, not approved.
+    let model = MockModel::new()
+        .then(json!({
+            "summary": "provisional",
+            "findings": [],
+            "lookups": [{ "kind": "read", "path": "a.rs", "why": "x" }]
+        }))
+        .then_error("provider down");
+    let tree = crate::ports::tree::MockTree::from_files([("a.rs", "x")]);
+    let llm = lane_llm(Arc::new(model), &config(), 100.0);
+    let policy = lookup_policy(1);
+
+    let answers = ask_all(
+        llm,
+        LaneId::Critique,
+        &[call("a")],
+        &schema(),
+        Asking {
+            subagent_model: None,
+            tree: Some(&tree),
+            lookup: Some(&policy),
+            seed: None,
+        },
+    )
+    .await
+    .expect("runs");
+
+    assert!(answers[0].value.is_none(), "{:?}", answers[0]);
+    assert!(answers[0].error.is_some());
+}
+
+#[tokio::test]
+async fn without_a_tree_the_prompt_is_the_plain_one() {
+    // Every cassette recorded before lookups existed depends on this: a
+    // deployment with no tree sends exactly the prompt it always sent.
+    let model = MockModel::always(json!({ "summary": "s", "findings": [] }));
+    let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
+    let policy = lookup_policy(2);
+
+    ask_all(
+        llm,
+        LaneId::Critique,
+        &[call("a")],
+        &schema(),
+        Asking {
+            subagent_model: None,
+            tree: None,
+            lookup: Some(&policy),
+            seed: None,
+        },
+    )
+    .await
+    .expect("runs");
+
+    let request = &model.requests()[0];
+    assert_eq!(
+        request.messages[0].content,
+        format!("system for a{}", crate::harness::prompt::SETTLE_INSTRUCTION),
+        "the one turn is the last turn, and is told so; nothing about lookups"
+    );
+    assert!(request.schema["properties"].is_null());
 }

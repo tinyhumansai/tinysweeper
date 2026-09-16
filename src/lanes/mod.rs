@@ -12,6 +12,7 @@ pub mod critique;
 pub mod description;
 pub mod e2e;
 pub mod fanout;
+pub mod mechanical;
 pub mod security;
 pub mod tests;
 pub mod triage;
@@ -25,10 +26,11 @@ use crate::council::Reviewer;
 use crate::error::Result;
 use crate::evidence::diff::FileDiff;
 use crate::findings::types::Finding;
-use crate::flows::runner::Answer;
+use crate::flows::runner::{Answer, Asking};
 use crate::forge::types::{CheckConclusion, Commit, PullRequest};
 use crate::harness::schema::LaneResponse;
 use crate::ports::model::Spend;
+use crate::ports::tree::TreeReader;
 use crate::scan::types::{Finding as ScanFinding, ScanKind};
 
 /// Everything a lane is given.
@@ -80,9 +82,37 @@ pub struct LaneInput<'a> {
     /// `lanes::e2e::evidence::gather` only when that lane is enabled; every
     /// other lane ignores it, and the `e2e` lane skips without it.
     pub e2e: Option<&'a e2e::evidence::Evidence>,
+    /// The reviewed tree, for a reviewer that wants to check before it
+    /// answers — see `crate::flows::lookup`. `None` reviews the diff alone,
+    /// which every offline golden test does.
+    pub tree: Option<&'a dyn TreeReader>,
 }
 
-impl LaneInput<'_> {
+impl<'a> LaneInput<'a> {
+    /// How this lane's reviewers may follow up: questions when sub-agents are
+    /// on, lookups when a tree was supplied and `[lookup]` allows them.
+    pub fn asking(&self) -> Asking<'a> {
+        Asking {
+            subagent_model: self
+                .config
+                .council
+                .subagents
+                .then_some(self.config.models.flash.as_str()),
+            tree: self.tree,
+            lookup: Some(&self.config.lookup),
+            seed: None,
+        }
+    }
+
+    /// [`Self::asking`], for a conversation about one file: the definitions
+    /// its changed lines call into are fetched before the first turn.
+    pub fn asking_about(&self, diff: &'a FileDiff) -> Asking<'a> {
+        Asking {
+            seed: Some(diff),
+            ..self.asking()
+        }
+    }
+
     /// Total lines this pull request added, across every file.
     pub fn additions(&self) -> usize {
         self.diffs.iter().map(FileDiff::additions).sum()
@@ -150,6 +180,16 @@ pub struct LaneOutcome {
     /// finished is the verdict branch protection must not see — and the
     /// server settles it when the named checks complete.
     pub pending: Vec<String>,
+    /// What the lane was asked about and got no answer on.
+    ///
+    /// Paths for a per-file lane; the lane's own name for a whole-pull-request
+    /// lane whose reviewer could not be consulted. Distinct from `skipped`,
+    /// and the distinction decides a verdict: a lane with nothing to look at
+    /// has nothing to object to, but a lane whose model never answered has
+    /// nothing to *vouch for* either, and an approval is a claim about the
+    /// change. A review that consulted no model once approved a pull request
+    /// with "found nothing blocking · $0.0000 · 0 in / 0 out".
+    pub unanswered: Vec<String>,
 }
 
 impl LaneOutcome {
@@ -159,6 +199,22 @@ impl LaneOutcome {
         Self {
             summary: reason.clone(),
             skipped: Some(reason),
+            ..Self::default()
+        }
+    }
+
+    /// A whole-pull-request lane whose reviewer could not be consulted.
+    ///
+    /// Neutral like a skip — no verdict is the truth — but it names itself
+    /// as unanswered, so the proposal cannot read the silence as clean.
+    pub fn unanswered(lane: LaneId, spend: Spend) -> Self {
+        Self {
+            summary: "No reviewer could be consulted.".into(),
+            spend,
+            skipped: Some(
+                "No reviewer could be consulted; see the provider errors in the log.".into(),
+            ),
+            unanswered: vec![lane.check_name()],
             ..Self::default()
         }
     }
@@ -221,6 +277,7 @@ impl LaneOutcome {
             spend,
             skipped: None,
             pending: Vec::new(),
+            unanswered: Vec::new(),
         }
     }
 
@@ -255,6 +312,8 @@ pub struct ReviewerResponse {
     pub model: String,
     /// The lane-shaped response, before anchoring or lane-specific placement.
     pub response: LaneResponse,
+    /// What was read from the repository for this reviewer, if anything.
+    pub looked_up: String,
 }
 
 /// Decode every usable council response, consistently across lanes.
@@ -291,6 +350,7 @@ pub fn reviewer_responses(
             id: reviewer.id.to_string(),
             model: answer.model.clone(),
             response,
+            looked_up: answer.looked_up.clone(),
         });
     }
     Ok(responses)

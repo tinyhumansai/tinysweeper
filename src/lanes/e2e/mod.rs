@@ -180,11 +180,7 @@ impl Lane for E2e {
             LaneId::E2e,
             &calls,
             &schema::json_schema(),
-            input
-                .config
-                .council
-                .subagents
-                .then_some(input.config.models.flash.as_str()),
+            input.asking(),
         )
         .await?;
 
@@ -198,13 +194,16 @@ impl Lane for E2e {
             // The deterministic half stands without a reviewer: a job that
             // will not trigger is a fact whether or not anyone could read the
             // diff. What is lost is the coverage judgement, and the summary
-            // says so.
+            // says so — and the lane names itself unanswered, because a
+            // verdict on coverage nobody judged is not one the proposal may
+            // read as clean.
             let mut outcome = LaneOutcome {
                 summary: "No reviewer could be consulted; only the job states below are reported."
                     .into(),
                 findings: deterministic,
                 spend: llm.spend(),
                 pending,
+                unanswered: vec![LaneId::E2e.check_name()],
                 ..LaneOutcome::default()
             };
             append_run_notes(&mut outcome, &runs, evidence);
@@ -397,6 +396,7 @@ mod lane_tests {
                 retrieved_context: "",
                 memory_context: "",
                 e2e: evidence,
+                tree: None,
             })
             .await
             .expect("lane runs")

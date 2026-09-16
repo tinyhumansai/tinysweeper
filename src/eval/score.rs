@@ -111,7 +111,11 @@ pub fn score(case: &Case, proposal: &Proposal, wall: Duration) -> CaseScore {
                         title: finding.title.clone(),
                         verdict: Verdict::TruePositive,
                         matched: Some(expected.id.clone()),
-                        reason: "path, line and wording all matched".into(),
+                        reason: if is_noted(proposal, finding) {
+                            "path, line and wording all matched (a summary note, below the posting gate)".into()
+                        } else {
+                            "path, line and wording all matched".into()
+                        },
                     });
                 } else {
                     duplicates += 1;
@@ -230,12 +234,25 @@ pub fn failed(case: &Case, error: String, wall: Duration) -> CaseScore {
 }
 
 /// Every finding the proposal would actually post or summarise.
+///
+/// Both tiers: a posted comment and a note in the check-run summary both
+/// reach the author, and a corpus that scored only the comments would report
+/// a boundary bug the summary named as a miss. Which tier a match came from
+/// is recorded on the judgement, so the two can still be told apart.
 fn postable(proposal: &Proposal) -> Vec<&Finding> {
     proposal
         .lanes
         .iter()
-        .flat_map(|lane| &lane.findings)
+        .flat_map(|lane| lane.findings.iter().chain(lane.noted.iter()))
         .collect()
+}
+
+/// Whether the proposal carries `finding` only as a summary note.
+fn is_noted(proposal: &Proposal, finding: &Finding) -> bool {
+    proposal
+        .lanes
+        .iter()
+        .any(|lane| lane.noted.iter().any(|n| std::ptr::eq(n, finding)))
 }
 
 /// Whether `finding` is the defect `expected` describes.

@@ -243,6 +243,8 @@ pub struct Config {
     pub lanes: BTreeMap<String, Lane>,
     /// Several reviewers on one lane's evidence.
     pub council: Council,
+    /// What a reviewer may look up in the tree before it answers.
+    pub lookup: LookupPolicy,
     /// Auto-merge policy.
     pub automerge: AutoMerge,
     /// Review-thread resolution.
@@ -281,6 +283,16 @@ pub struct Review {
     pub confidence_min: Option<f64>,
     /// Hard cap on posted comments per pull request.
     pub max_comments: usize,
+    /// Keep a finding that misses the posting gate visible in the check-run
+    /// summary when it is at least `medium` and the model is at least this
+    /// sure of it.
+    ///
+    /// Not a comment, not a block, not a conclusion: a line in the summary
+    /// that names the file and the concern. The gate exists so a reviewer
+    /// that is half sure does not block a merge; it was also, before this,
+    /// the reason a correct `medium/0.61` boundary bug reached nobody. Set
+    /// above 1 to turn the notes off.
+    pub note_confidence: f64,
     /// Review only the commits added since the last reviewed SHA.
     pub incremental: bool,
     /// Review draft pull requests too.
@@ -466,6 +478,61 @@ pub struct ProviderRouting {
     /// `budget_usd_per_pr` still bounds the call, the response reports which
     /// model actually answered, and reaching this rung logs at `warn`.
     pub last_resort_unpinned: bool,
+    /// Vendor prefixes whose models are called with no pin at all.
+    ///
+    /// The pin exists for a floating id that many hosts serve at prices
+    /// spanning 4x. A model its own vendor serves first-party through the
+    /// gateway — `openai/…`, `anthropic/…`, `google/…` — has one host and one
+    /// price, and a pin naming DeepSeek's hosts would 404 it on every rung
+    /// before the last-resort one rescued it with a warning. So those vendors
+    /// are routed unpinned, quietly: the price `harness::pricing` records for
+    /// them is the one they are billed at.
+    pub unpinned_vendors: Vec<String>,
+}
+
+impl Models {
+    /// The per-model route for `model`, if one is configured.
+    pub fn route_for(&self, model: &str) -> Option<&ModelRoute> {
+        self.routes.iter().find(|r| r.model == model)
+    }
+
+    /// The output ceiling for one call to `model`; `0` is no ceiling.
+    pub fn max_tokens_for(&self, model: &str) -> u32 {
+        self.route_for(model)
+            .and_then(|r| r.max_tokens)
+            .unwrap_or(self.max_tokens)
+    }
+}
+
+/// Routing for one model id, overriding the ladder-wide pin.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ModelRoute {
+    /// The model id this applies to, exactly as written in a tier.
+    pub model: String,
+    /// Providers to try, in order. Empty leaves routing to the gateway.
+    pub order: Vec<String>,
+    /// Whether the gateway may fall outside `order`. `false` makes the pin a
+    /// hard constraint, which is the point of naming an endpoint.
+    pub allow_fallbacks: bool,
+    /// Output ceiling for this rung. `0` sends no ceiling at all: the model
+    /// answers at the length it needs and a cut-off is the provider's own
+    /// limit. Absent inherits `models.max_tokens`.
+    pub max_tokens: Option<u32>,
+}
+
+impl ModelRoute {
+    /// The routing this rung asks for.
+    pub fn routing(&self) -> ProviderRouting {
+        ProviderRouting {
+            order: self.order.clone(),
+            allow_fallbacks: self.allow_fallbacks,
+            // A rung that names its endpoint means it: no quiet reroute to a
+            // price nobody chose.
+            last_resort_unpinned: false,
+            unpinned_vendors: Vec::new(),
+        }
+    }
 }
 
 impl Default for ProviderRouting {
@@ -474,6 +541,7 @@ impl Default for ProviderRouting {
             order: Vec::new(),
             allow_fallbacks: false,
             last_resort_unpinned: true,
+            unpinned_vendors: vec!["openai".into(), "anthropic".into(), "google".into()],
         }
     }
 }
@@ -490,6 +558,23 @@ impl ProviderRouting {
             order: Vec::new(),
             allow_fallbacks: true,
             last_resort_unpinned: false,
+            unpinned_vendors: Vec::new(),
+        }
+    }
+
+    /// The routing to use for `model`: this pin, unless the model's vendor is
+    /// one that is served first-party and listed in `unpinned_vendors`.
+    pub fn for_model(&self, model: &str) -> std::borrow::Cow<'_, Self> {
+        let vendor = model.split('/').next().unwrap_or("");
+        if !self.is_empty()
+            && self
+                .unpinned_vendors
+                .iter()
+                .any(|v| v.eq_ignore_ascii_case(vendor))
+        {
+            std::borrow::Cow::Owned(Self::unpinned())
+        } else {
+            std::borrow::Cow::Borrowed(self)
         }
     }
 }
@@ -563,6 +648,16 @@ pub struct Models {
     pub vision: Option<String>,
     /// Which upstream providers the gateway may serve these models from.
     pub provider: ProviderRouting,
+    /// Per-model routing that overrides `provider` and `max_tokens` for one
+    /// rung of the ladder.
+    ///
+    /// The one pin above is right for the DeepSeek tiers, whose floating ids
+    /// a dozen hosts serve at prices spanning 4x. A rung that should go to
+    /// one specific endpoint — OpenAI's flex tier, the surplus-capacity
+    /// endpoint at half price — and be left to answer at whatever length it
+    /// needs gets its own entry here rather than a global setting that would
+    /// apply to every other rung too.
+    pub routes: Vec<ModelRoute>,
     /// Cap on tokens generated per model call.
     ///
     /// Reasoning is billed against this same ceiling, so a thinking-heavy model
@@ -745,6 +840,48 @@ pub struct Retrieval {
     /// paths above a diff read as noise rather than as a warning. `0` turns the
     /// block off.
     pub max_impact: usize,
+    /// The submodule repositories a review may read and the indexer may
+    /// fetch, as `owner/name`.
+    ///
+    /// Empty by default, and an allow-list rather than a switch on purpose:
+    /// `.gitmodules` is written by whoever opened the pull request and can
+    /// name any repository on the forge, and the installation's read token
+    /// would follow it — into a private sibling under the same owner as
+    /// readily as into a public library. Same host is not authorization and
+    /// neither is same owner; the operator naming the repository is. A
+    /// submodule whose remote is not listed here is neither fetched nor
+    /// read, and the reviewer is told the path is unavailable.
+    ///
+    /// This was a `bool` for one release — `true` meant "follow same-host
+    /// remotes" — and configs written then still parse: `false` is the empty
+    /// list, and `true` is refused with the migration spelled out rather
+    /// than with a type error, because there is no list that means what
+    /// `true` meant and guessing one would be the authorization decision
+    /// this field exists to put in the operator's hands.
+    #[serde(deserialize_with = "submodule_list")]
+    pub submodules: Vec<String>,
+}
+
+/// `retrieval.submodules`: a list of `owner/name`, or the retired boolean.
+fn submodule_list<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Either {
+        List(Vec<String>),
+        Switch(bool),
+    }
+    match Either::deserialize(deserializer)? {
+        Either::List(list) => Ok(list),
+        Either::Switch(false) => Ok(Vec::new()),
+        Either::Switch(true) => Err(serde::de::Error::custom(
+            "`retrieval.submodules = true` is no longer a setting: list the submodule \
+             repositories a review may read, as `submodules = [\"owner/name\", ...]` — \
+             same host is not authorization, so nothing is followed by default",
+        )),
+    }
 }
 
 /// The long-lived memory of a repository, and how a review consults it.
@@ -932,6 +1069,47 @@ pub struct Council {
     pub subagents: bool,
     /// The reviewers, in the order they run.
     pub agents: Vec<CouncilAgent>,
+}
+
+/// How much a reviewer may read before it answers.
+///
+/// The bounds are the design. A reviewer given the whole tree and no cap
+/// stops reviewing the diff and starts exploring the repository; a reviewer
+/// given nothing reports the doubt it could not settle as silence. `rounds`
+/// is how many times it may come back with more asks, `per_round` how many
+/// each time, and `max_chars` the total it may pull into its prompt across
+/// all of them. See `docs/modules/lanes/lookup.md`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LookupPolicy {
+    /// Whether a reviewer may look anything up at all.
+    pub enabled: bool,
+    /// How many follow-up turns a reviewer may take. Zero disables.
+    pub rounds: u8,
+    /// How many lookups one turn may carry.
+    pub per_round: u8,
+    /// Total characters of looked-up text one reviewer may accumulate.
+    pub max_chars: usize,
+    /// Fetch a shallow checkout of the head for the review, so the tree can
+    /// be searched and reads cost no API call.
+    ///
+    /// One commit, no history, no hooks — the fetch the indexer already
+    /// makes on every push. Off, reads go through the forge API one file at
+    /// a time and search is unavailable, which is a review that can still
+    /// follow a named path but cannot find a definition by name.
+    pub checkout: bool,
+}
+
+impl Default for LookupPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            rounds: 2,
+            per_round: 4,
+            max_chars: 40_000,
+            checkout: true,
+        }
+    }
 }
 
 /// One reviewer in the council.
@@ -1594,5 +1772,31 @@ mod tests {
     fn fail_on_defaults_to_high() {
         let config = Config::default();
         assert_eq!(config.fail_on(LaneId::Security), Severity::High);
+    }
+}
+
+#[cfg(test)]
+mod provider_routing_tests {
+    use super::ProviderRouting;
+
+    #[test]
+    fn a_first_party_vendor_is_routed_unpinned_and_the_rest_keep_the_pin() {
+        let pinned = ProviderRouting {
+            order: vec!["streamlake".into(), "deepinfra".into()],
+            ..ProviderRouting::default()
+        };
+        assert!(pinned.for_model("openai/gpt-5.3-codex").is_empty());
+        assert!(pinned.for_model("Anthropic/claude-sonnet-4.6").is_empty());
+        assert_eq!(
+            pinned.for_model("deepseek/deepseek-v4-flash").order,
+            vec!["streamlake".to_string(), "deepinfra".to_string()]
+        );
+        // No pin at all: nothing to lift, so the routing is returned as is.
+        assert!(
+            ProviderRouting::default()
+                .for_model("openai/x")
+                .order
+                .is_empty()
+        );
     }
 }

@@ -61,10 +61,23 @@ The stub will **not** load until a human fills in `provenance.evidence` and
 writes the labels — which is the point. Then:
 
 ```sh
-tinysweeper eval run --record          # live, costs money, writes cassettes
-tinysweeper eval score                 # free, offline, re-reads the proposals
+tinysweeper eval run --record --tree /path/to/checkout \
+  --config src/config/defaults.toml   # live, costs money, writes cassettes
+tinysweeper eval score --config src/config/defaults.toml   # free, offline
 tinysweeper eval report --baseline evals/baselines/current.json
 ```
+
+`--config src/config/defaults.toml` on purpose: a cassette is keyed by the
+model name each call went to, and the corpus is recorded under the compiled-in
+defaults so that `cargo test`, the `eval` workflow and a run on your machine
+all replay the same tapes. This repository's own `.tinysweeper.toml` names the
+box's ladders (`flash`, `deep`) instead, which only resolve where a ladder is
+running — recorded under it, the tapes would miss everywhere else.
+
+`--tree` is a checkout of the case's head, submodules included, for the
+reviewer to look things up in; what it reads is frozen into the fixture's
+`lookups` so the replay needs no checkout. Recording without one answers
+every lookup *not found*.
 
 `eval score` is the loop to iterate in. It re-reads proposals from disk, so
 rewriting a matching rule or a label costs nothing.
@@ -96,11 +109,13 @@ about which lane landed where, and no vocabulary expresses it.
 
 ## What this corpus does not measure yet
 
-**Recall.** Both current cases are regressions — they assert what the review
-must *not* say — so `recall` renders `n/a` and will until cases with
-`[[expected]]` entries land. Those need a human to read a diff and a fix and
-write down what a good reviewer should have caught, and no amount of
-machinery substitutes for it.
+**Recall, barely.** One case carries `[[expected]]` entries:
+`oc-2313-round-boundary-leaks`, a 62-file submodule bump where two external
+reviewers found two boundary defects in the one file with a logic change and
+the live review approved with nothing. The default configuration scores 0/2 on
+it, which is the number to move. One case is a floor, not a measurement; the
+labelling still owed is every pull request where a Codex or CodeRabbit
+finding was acted on and tinysweeper said nothing.
 
 **Clean pull requests.** A case with `exhaustive = true` and no expectations is
 how noise gets measured, and there are none yet. The obvious candidates —

@@ -36,6 +36,7 @@ pub struct GatewayModel {
     fallbacks: Vec<String>,
     reasoning_effort: String,
     provider: ProviderRouting,
+    routes: Vec<crate::config::types::ModelRoute>,
     structured_output: StructuredOutput,
     langfuse: Option<LangfuseClient>,
 }
@@ -124,10 +125,34 @@ fn provider_options(effort: &str, routing: &ProviderRouting) -> serde_json::Valu
 /// OpenRouter's extension, returned because [`provider_options`] asked for it.
 /// `None` means the gateway reported nothing and the estimate stands.
 fn gateway_cost(raw: Option<&serde_json::Value>) -> Option<f64> {
-    let cost = raw?.get("usage")?.get("cost")?.as_f64()?;
+    let usage = raw?.get("usage")?;
+    // Two spellings, from the two marketplaces the ladder dispatches to.
+    // OpenRouter reports `cost` in dollars; Surplus reports
+    // `buyer_cost_micro`, an integer count of micro-dollars, and reports it
+    // through the ladder verbatim — the router returns the upstream body as
+    // it came. Read either, so a call the ladder sent to Surplus is billed
+    // at what it cost rather than at the price table's fallback rate.
+    let cost = match usage.get("cost").and_then(serde_json::Value::as_f64) {
+        Some(cost) => cost,
+        None => usage.get("buyer_cost_micro")?.as_f64()? / 1_000_000.0,
+    };
     // A gateway that reports a nonsensical cost is a gateway to disbelieve: a
     // negative figure would credit the budget rather than spend it.
     (cost.is_finite() && cost >= 0.0).then_some(cost)
+}
+
+/// The model the gateway says answered, when it says so.
+///
+/// A ladder is asked for `deep` and answers with whichever model it
+/// dispatched to — the router returns the upstream body as it came, so
+/// `model` is `gpt-5.6-luna` or `deepseek/deepseek-v4-flash`, not the alias.
+/// That is the name the spend ledger, the check summary and a recorded
+/// cassette should carry: a bill attributed to `deep` says nothing about
+/// what was bought. `None` means the body named nothing usable and the
+/// requested name stands.
+fn answered_model(raw: Option<&serde_json::Value>) -> Option<&str> {
+    let model = raw?.get("model")?.as_str()?.trim();
+    (!model.is_empty()).then_some(model)
 }
 
 /// The conversation as it goes on the wire, including anything the structured
@@ -200,6 +225,7 @@ impl GatewayModel {
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
             provider: models.provider.clone(),
+            routes: models.routes.clone(),
             structured_output: models.structured_output,
             langfuse: langfuse_client(),
         })
@@ -220,6 +246,10 @@ impl GatewayModel {
         let mut gateway = Self::from_config(models)?;
         gateway.fallbacks = vec![];
         gateway.provider = ProviderRouting::unpinned();
+        // A per-model route would outrank the unpinned routing above, and a
+        // route written for the model's text endpoint pins the image call to
+        // a host that cannot see the picture.
+        gateway.routes = vec![];
         Ok(gateway)
     }
 
@@ -381,7 +411,9 @@ impl GatewayModel {
             .as_ref()
             .and_then(|response| response.finish_reason.clone())
             .unwrap_or_default();
-        let reported_cost = gateway_cost(run.final_response.as_ref().and_then(|r| r.raw.as_ref()));
+        let raw = run.final_response.as_ref().and_then(|r| r.raw.as_ref());
+        let reported_cost = gateway_cost(raw);
+        let answered = answered_model(raw).unwrap_or(model);
 
         // Every model call, at info, because the two failures this module has
         // actually had — reasoning eating the whole budget, and an answer cut
@@ -389,6 +421,7 @@ impl GatewayModel {
         // these four numbers side by side.
         tracing::info!(
             model,
+            answered,
             cap,
             input_tokens = totals.input_tokens,
             cached_tokens = totals.cache_read_tokens,
@@ -444,12 +477,7 @@ impl GatewayModel {
             (Some(value), _) => value,
             (None, StructuredOutput::JsonObject) => {
                 let text = run.text().unwrap_or_default();
-                serde_json::from_str(text.trim()).map_err(|err| {
-                    Error::Model(format!(
-                        "{model} answered in `json_object` mode with something that is not \
-                         JSON: {err}"
-                    ))
-                })?
+                first_json_value(model, text.trim())?
             }
             (None, StructuredOutput::Schema) => {
                 return Err(Error::Model(format!(
@@ -470,8 +498,10 @@ impl GatewayModel {
             // so an estimate that drifts with a provider's repricing is the
             // wrong thing to enforce a real bill against.
             cost_usd: reported_cost.unwrap_or_else(|| {
+                // Priced as what answered, not as what was asked for: the rate
+                // table has no row for a ladder alias.
                 pricing::completion_cost(
-                    model,
+                    answered,
                     totals.input_tokens,
                     totals.cache_read_tokens,
                     totals.output_tokens,
@@ -481,7 +511,7 @@ impl GatewayModel {
 
         Ok(CallOutcome::Answer(ModelResponse {
             value,
-            model: model.to_string(),
+            model: answered.to_string(),
             usage,
         }))
     }
@@ -501,7 +531,21 @@ impl GatewayModel {
         request: &ModelRequest,
         routing: &ProviderRouting,
     ) -> Result<ModelResponse> {
-        let base = request.max_tokens;
+        // A rung with its own route may set its own ceiling — including none.
+        let routed = self
+            .routes
+            .iter()
+            .find(|r| r.model == model)
+            .and_then(|r| r.max_tokens);
+        let base = routed.unwrap_or(request.max_tokens);
+        // The key the error names must be the one that set the ceiling:
+        // telling an operator to raise `models.max_tokens` while a route
+        // override stands has them change a number the next call ignores.
+        let ceiling_key = if routed.is_some() {
+            format!("`models.routes[{model}].max_tokens`")
+        } else {
+            "`models.max_tokens`".to_string()
+        };
         let ladder = truncation_ladder(base);
         let last = ladder.len() - 1;
 
@@ -516,7 +560,7 @@ impl GatewayModel {
                         return Err(Error::Model(format!(
                             "{model} ran out of output tokens at {cap} \
                              ({output_tokens} generated, {reasoning_tokens} of them reasoning); \
-                             the answer was cut off. Raise `models.max_tokens` (currently {base}) \
+                             the answer was cut off. Raise {ceiling_key} (currently {base}) \
                              or lower `models.reasoning_effort`."
                         )));
                     }
@@ -533,6 +577,41 @@ impl GatewayModel {
 
         unreachable!("the loop returns on its last iteration")
     }
+}
+
+/// The first JSON value in `text`, tolerating what follows it.
+///
+/// OpenAI's first-party endpoints, under `json_object` mode inside the agent
+/// harness, routinely hand back one well-formed object and then more text on
+/// the next line — a second copy, a sentence — and `from_str` refuses the
+/// whole answer for the trailing part. Five of eight files on one review were
+/// lost to that. The object is what the mode guarantees; what follows it is
+/// logged and dropped. Prose *before* the object is still a failure: there is
+/// no JSON to take, and guessing at where one starts is parsing prose.
+fn first_json_value(model: &str, text: &str) -> Result<serde_json::Value> {
+    let mut stream = serde_json::Deserializer::from_str(text).into_iter::<serde_json::Value>();
+    let value = match stream.next() {
+        Some(Ok(value)) => value,
+        Some(Err(err)) => {
+            return Err(Error::Model(format!(
+                "{model} answered in `json_object` mode with something that is not JSON: {err}"
+            )));
+        }
+        None => {
+            return Err(Error::Model(format!(
+                "{model} answered in `json_object` mode with nothing"
+            )));
+        }
+    };
+    let rest = text[stream.byte_offset()..].trim();
+    if !rest.is_empty() {
+        tracing::debug!(
+            model,
+            trailing_chars = rest.len(),
+            "json_object answer carried text after the object; the object is kept"
+        );
+    }
+    Ok(value)
 }
 
 /// How many times a truncated answer is retried with a doubled ceiling before
@@ -624,11 +703,22 @@ fn langfuse_client() -> Option<LangfuseClient> {
     }
 }
 
+impl GatewayModel {
+    /// The routing for one call: the model's own route when it has one,
+    /// otherwise the ladder-wide pin with the first-party-vendor bypass.
+    fn routing_for(&self, model: &str) -> std::borrow::Cow<'_, ProviderRouting> {
+        match self.routes.iter().find(|r| r.model == model) {
+            Some(route) => std::borrow::Cow::Owned(route.routing()),
+            None => self.provider.for_model(model),
+        }
+    }
+}
+
 #[async_trait]
 impl Model for GatewayModel {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse> {
         let mut last = match self
-            .call_until_complete(&request.model, &request, &self.provider)
+            .call_until_complete(&request.model, &request, &self.routing_for(&request.model))
             .await
         {
             Ok(response) => return Ok(response),
@@ -646,7 +736,7 @@ impl Model for GatewayModel {
                 "model call failed; trying the next model"
             );
             match self
-                .call_until_complete(fallback, &request, &self.provider)
+                .call_until_complete(fallback, &request, &self.routing_for(fallback))
                 .await
             {
                 Ok(response) => return Ok(response),
@@ -668,11 +758,17 @@ impl Model for GatewayModel {
         // nothing on a healthy deployment. It is loud because an unpinned call
         // is billed at a price `harness::pricing` did not predict, and an
         // operator who never learns the pin is broken keeps paying it.
-        if self.provider.last_resort_unpinned && !self.provider.is_empty() {
+        //
+        // Decided from the primary's *effective* routing, not the ladder-wide
+        // pin: a model with its own `[[models.routes]]` entry named its
+        // endpoint on purpose, and `ModelRoute::routing` turns this rung off
+        // for it. Reading `self.provider` here would put it back on.
+        let primary = self.routing_for(&request.model);
+        if primary.last_resort_unpinned && !primary.is_empty() {
             let unpinned = ProviderRouting::unpinned();
             tracing::warn!(
                 primary = %request.model,
-                pinned_to = %self.provider.order.join(", "),
+                pinned_to = %primary.order.join(", "),
                 error = %last,
                 "every model failed on the pinned provider; retrying unpinned — \
                  the cost line for this review is an estimate, and the pin needs fixing"
@@ -707,6 +803,7 @@ mod tests {
             fallback: vec![],
             vision: None,
             provider: ProviderRouting::default(),
+            routes: Vec::new(),
             max_tokens: 100,
             budget_usd_per_pr: 1.0,
         }
@@ -883,6 +980,100 @@ mod tests {
     }
 
     #[test]
+    fn a_routed_rung_gets_its_own_pin_and_ceiling_and_never_the_last_resort() {
+        let mut models = models();
+        models.provider = pinned(&["streamlake"], false);
+        models.routes = vec![crate::config::types::ModelRoute {
+            model: "openai/gpt-5.6-luna".into(),
+            order: vec!["openai/flex".into()],
+            allow_fallbacks: false,
+            max_tokens: Some(0),
+        }];
+        let gateway = GatewayModel {
+            api_key: "unused".into(),
+            base_url: models.base_url.clone(),
+            fallbacks: models.fallback.clone(),
+            reasoning_effort: models.reasoning_effort.clone(),
+            provider: models.provider.clone(),
+            routes: models.routes.clone(),
+            structured_output: models.structured_output,
+            langfuse: None,
+        };
+
+        let routed = gateway.routing_for("openai/gpt-5.6-luna");
+        assert_eq!(routed.order, vec!["openai/flex".to_string()]);
+        assert!(!routed.allow_fallbacks);
+        assert!(
+            !routed.last_resort_unpinned,
+            "a named endpoint is not rerouted"
+        );
+        assert_eq!(
+            gateway.routing_for("deepseek/deepseek-v4-flash").order,
+            vec!["streamlake".to_string()],
+            "an unrouted model keeps the ladder-wide pin"
+        );
+        assert_eq!(models.max_tokens_for("openai/gpt-5.6-luna"), 0);
+        assert_eq!(
+            models.max_tokens_for("deepseek/deepseek-v4-flash"),
+            models.max_tokens
+        );
+    }
+
+    #[test]
+    fn a_vision_gateway_drops_the_routes_with_the_pin() {
+        // `for_vision` reads the key from the environment; build the same
+        // gateway by hand and apply the same stripping.
+        let mut models = models();
+        models.provider = pinned(&["streamlake"], false);
+        models.routes = vec![crate::config::types::ModelRoute {
+            model: "b".into(),
+            order: vec!["text-only-host".into()],
+            allow_fallbacks: false,
+            max_tokens: None,
+        }];
+        let mut gateway = GatewayModel {
+            api_key: "unused".into(),
+            base_url: models.base_url.clone(),
+            fallbacks: vec!["c".into()],
+            reasoning_effort: models.reasoning_effort.clone(),
+            provider: models.provider.clone(),
+            routes: models.routes.clone(),
+            structured_output: models.structured_output,
+            langfuse: None,
+        };
+        gateway.fallbacks = vec![];
+        gateway.provider = ProviderRouting::unpinned();
+        gateway.routes = vec![];
+        assert!(
+            gateway.routing_for("b").is_empty(),
+            "an image call to a routed model must not inherit the text route"
+        );
+    }
+
+    #[test]
+    fn the_answering_model_is_read_out_of_the_raw_body() {
+        // A ladder is asked for an alias and answers with the upstream's
+        // body, whose `model` is what actually ran.
+        let raw = json!({ "model": "gpt-5.6-luna", "usage": { "buyer_cost_micro": 4 } });
+        assert_eq!(answered_model(Some(&raw)), Some("gpt-5.6-luna"));
+        assert_eq!(answered_model(Some(&json!({ "model": "  " }))), None);
+        assert_eq!(answered_model(Some(&json!({ "model": 7 }))), None);
+        assert_eq!(answered_model(Some(&json!({}))), None);
+        assert_eq!(answered_model(None), None);
+    }
+
+    #[test]
+    fn a_json_object_answer_with_trailing_text_keeps_the_object() {
+        let value = first_json_value("m", "{\"summary\": \"ok\", \"findings\": []}\n\nDone.")
+            .expect("the object is taken");
+        assert_eq!(value["summary"], "ok");
+        let twice = first_json_value("m", "{\"a\": 1}\n{\"a\": 2}").expect("first wins");
+        assert_eq!(twice["a"], 1);
+        assert!(first_json_value("m", "Sure, here it is: {\"a\": 1}").is_err());
+        assert!(first_json_value("m", "").is_err());
+    }
+
+    #[test]
     fn the_json_mode_instruction_says_the_word_json() {
         // Not a style assertion. DeepSeek's JSON mode **rejects** a request
         // whose prompt never says "json", so a well-meaning reword that drops
@@ -945,6 +1136,12 @@ mod tests {
     }
 
     #[test]
+    fn a_surplus_micro_dollar_cost_is_read_through_the_ladder() {
+        let raw = json!({ "usage": { "buyer_cost_micro": 4, "prompt_tokens": 16 } });
+        assert!((gateway_cost(Some(&raw)).unwrap() - 0.000004).abs() < 1e-12);
+    }
+
+    #[test]
     fn a_nonsensical_reported_cost_is_disbelieved() {
         // A negative cost would credit the per-pull-request budget instead of
         // spending it, which turns a hard stop into no stop at all.
@@ -994,6 +1191,7 @@ mod tests {
             base_url: "https://openrouter.ai/api/v1".into(),
             fallbacks: vec![],
             provider: ProviderRouting::default(),
+            routes: Vec::new(),
             langfuse: None,
         };
         let rendered = format!("{model:?}");
@@ -1051,6 +1249,7 @@ mod tests {
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
             provider: models.provider.clone(),
+            routes: models.routes.clone(),
             structured_output: models.structured_output,
             langfuse: None,
         };

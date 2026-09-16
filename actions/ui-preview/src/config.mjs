@@ -11,7 +11,7 @@ import path from "node:path";
 
 /** The defaults a config is laid over. */
 export const DEFAULTS = Object.freeze({
-  serve: "bash scripts/ui-preview/serve.sh",
+  serve: "bash .github/tinysweeper/serve.sh",
   ready: "/",
   timeout_s: 420,
   viewport: [1440, 900],

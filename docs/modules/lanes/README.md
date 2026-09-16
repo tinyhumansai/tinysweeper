@@ -107,6 +107,22 @@ prompt prefix the way a whole-diff lane does. Both are sound; skipping is
 strictly better, because it pays always and a cache prefix only pays when the
 provider honours it.
 
+A reviewer in a per-file conversation is not confined to the hunk. It is
+handed the definitions its changed lines call into before its first turn,
+and may read a file range or search the tree before it answers, up to
+`[lookup].rounds` times — see [`lookup.md`](lookup.md). The prompt used to
+say the opposite, and the reviewer that had the right doubt on
+opencompany#2313 obeyed it and filed nothing.
+
+`critique` also verifies a **mechanical substitution** before the fan-out
+(`lanes::mechanical`). When one literal replacement explains a file's whole
+diff line for line — a rename across fifty files — the file is proven here,
+named in the summary as verified; one sample of it is still read so a uniform but semantic substitution is judged, and the rest are never sent to a model. The check is
+exact, so its only failure is a false negative: a file with one line that is
+not the substitution goes to the model like any other. On the pull request
+that motivated it, 50 of 58 files were the rename and $0.20 of $0.23 had
+gone to reading them.
+
 Before the fan-out, `lanes::triage` decides deterministically — for free, with
 no model call — which changed files are worth one and in what order:
 
@@ -125,6 +141,14 @@ no model call — which changed files are worth one and in what order:
 
 `tests`, `commits` and `description` are pull-request-scoped. Their subject is a
 relationship between files, and a reviewer shown one file cannot see it.
+
+## Below the gate, above notice
+
+A finding that misses the posting gate but is at least `medium` and at least
+`review.note_confidence` sure is named in the check-run summary under *Worth
+a look* — never a comment, never a block, never counted toward the
+conclusion. The gate exists so a half-sure reviewer does not block a merge;
+it was also the reason a correct `medium/0.61` boundary bug reached nobody.
 
 ## Rule documents
 

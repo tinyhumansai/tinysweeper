@@ -172,12 +172,14 @@ mod tests {
                 },
                 summary: "Reviewed.".into(),
                 findings: vec![],
+                noted: vec![],
                 resolved: vec![],
                 pending: vec![],
                 deduped: 0,
                 highest_severity: highest,
                 usage: Default::default(),
                 models: vec![],
+                unanswered: vec![],
             }],
             cost_usd: 0.0,
             input_tokens: 0,
@@ -186,6 +188,7 @@ mod tests {
             embed_tokens: 0,
             models: vec![],
             unreviewed: vec![],
+            skipped: None,
         }
     }
 

@@ -196,6 +196,7 @@ mod tests {
                 retrieved_context: "",
                 memory_context: "",
                 e2e: None,
+                tree: None,
             })
             .await
             .expect("lane runs")

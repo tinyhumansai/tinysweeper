@@ -147,6 +147,51 @@ const MODEL_PRICES: &[(&str, Price)] = &[
         },
     ),
     (
+        // The deep tier this deployment reviews logic with: served first-party
+        // through the gateway, one endpoint, one price. Measured 2026-09-15.
+        // Cache reads are a tenth of input, so a reviewer's follow-up turns —
+        // the lookup rounds share the whole prefix — cost a fraction of the
+        // first.
+        "openai/gpt-5.3-codex",
+        Price {
+            input: 1.75,
+            output: 14.00,
+            cached: 0.175,
+        },
+    ),
+    (
+        // Cheapest first-party endpoint $0.10/$0.60 (openai/flex); priced at
+        // the standard one so the ceiling errs toward stopping early. Cache
+        // reads are a tenth of input. Measured 2026-09-15.
+        "openai/gpt-5.6-luna",
+        Price {
+            input: 0.20,
+            output: 1.20,
+            cached: 0.02,
+        },
+    ),
+    (
+        // The same models as Surplus names them — no vendor prefix — which is
+        // what the ladder hands back when a Surplus rung served. Surplus
+        // reports the exact charge (`buyer_cost_micro`), so these rows are
+        // the fallback for a response that somehow does not carry it, priced
+        // at the direct rate so the ceiling errs toward stopping early.
+        "gpt-5.6-luna",
+        Price {
+            input: 0.20,
+            output: 1.20,
+            cached: 0.02,
+        },
+    ),
+    (
+        "deepseek-v4-flash",
+        Price {
+            input: 0.09,
+            output: 0.18,
+            cached: 0.018,
+        },
+    ),
+    (
         "moonshotai/kimi-k3",
         Price {
             input: 3.00,
@@ -214,6 +259,11 @@ const EMBED_PRICES: &[(&str, f64)] = &[
     ("openrouter/qwen/qwen3-embedding-4b", 0.02),
     ("openrouter/baai/bge-m3", 0.01),
     ("openrouter/google/gemini-embedding-001", 0.15),
+    // The box's LLM ladder. `vectors` is a ladder, not a model: every rung in
+    // it is a 1024-wide BGE-M3 (Venice's `text-embedding-bge-m3` today), so
+    // one rate covers whatever answered. A fallback like the OpenRouter rows
+    // above — a body that reports its cost is billed at that instead.
+    ("ladder/vectors", 0.01),
 ];
 
 /// The price of `model`, when it is known.
@@ -371,6 +421,19 @@ mod tests {
     }
 
     #[test]
+    fn the_ladders_vectors_are_priced_rather_than_billed_at_the_ceiling() {
+        let ladder = embedding_cost("ladder/vectors", 1_000_000);
+        let worst = EMBED_PRICES
+            .iter()
+            .fold(0.0_f64, |worst, (_, price)| worst.max(*price));
+        assert!(ladder > 0.0);
+        assert!(
+            ladder < worst,
+            "a known rung must not fall through to the ceiling"
+        );
+    }
+
+    #[test]
     fn a_locally_served_model_is_free_whatever_it_is_called() {
         // The provider is the rule, not the model id: nobody bills for vectors
         // computed on this machine, and a table of every GGUF is unmaintainable.
@@ -472,6 +535,13 @@ mod tests {
         ("moonshotai/kimi-k2.6", 0.5415, 2.28),
         ("moonshotai/kimi-k2.7-code", 0.67, 3.40),
         ("moonshotai/kimi-k3", 2.60, 13.00),
+        // One endpoint, OpenAI's own; measured 2026-09-15.
+        ("openai/gpt-5.3-codex", 1.75, 14.00),
+        // `openai/flex` is the floor; measured 2026-09-15.
+        ("openai/gpt-5.6-luna", 0.10, 0.60),
+        // Surplus order books, cheapest seller, measured 2026-09-15.
+        ("gpt-5.6-luna", 0.025, 0.07),
+        ("deepseek-v4-flash", 0.03, 0.06),
         ("qwen/qwen3.8-max", 2.00, 6.00),
         ("z-ai/glm-5.2", 0.336, 1.056),
     ];

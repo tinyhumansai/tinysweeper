@@ -81,6 +81,103 @@ fn reasoning_with_too_small_a_budget_is_rejected() {
 }
 
 #[test]
+fn a_route_ceiling_below_the_floor_is_rejected_like_the_global_one() {
+    // A route's `max_tokens` replaces the validated global for its model, so
+    // an undersized override recreates the empty-answer failure on one rung.
+    let config = parse(
+        "version = 1\n[models]\nmax_tokens = 16000\nreasoning_effort = \"high\"\n\
+         [[models.routes]]\nmodel = \"deep\"\nmax_tokens = 4000\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(
+        joined.contains("models.routes[deep].max_tokens = 4000"),
+        "{joined}"
+    );
+
+    // Zero is "no ceiling", not a small one.
+    let config = parse(
+        "version = 1\n[models]\nmax_tokens = 16000\nreasoning_effort = \"high\"\n\
+         [[models.routes]]\nmodel = \"deep\"\nmax_tokens = 0\n",
+    );
+    assert!(validate::validate(&config).is_empty());
+}
+
+#[test]
+fn the_retired_submodules_switch_still_parses_or_says_how_to_migrate() {
+    // Shipped as a bool for one release; `false` is the empty list.
+    let config = parse("version = 1\n[retrieval]\nsubmodules = false\n");
+    assert!(config.retrieval.submodules.is_empty());
+
+    // `true` has no list equivalent; the error names the migration.
+    let dir = repo(Some("version = 1\n[retrieval]\nsubmodules = true\n"), &[]);
+    let err = load(dir.path(), None).unwrap_err().to_string();
+    assert!(err.contains("retrieval.submodules = true"), "{err}");
+    assert!(err.contains("owner/name"), "{err}");
+}
+
+#[test]
+fn a_submodule_entry_that_is_not_owner_slash_name_is_rejected() {
+    let config = parse(
+        "version = 1\n[retrieval]\nsubmodules = [\"acme/lib\", \"acme-lib\", \" acme/lib\", \
+         \"acme/lib \"]\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("`acme-lib`"), "{joined}");
+    // Stray whitespace would pass startup and then match no `.gitmodules` remote.
+    assert!(joined.contains("` acme/lib`"), "{joined}");
+    assert!(joined.contains("`acme/lib `"), "{joined}");
+    assert!(!joined.contains("`acme/lib`"), "{joined}");
+}
+
+#[test]
+fn a_model_routed_twice_is_rejected() {
+    let config = parse(
+        "version = 1\n[[models.routes]]\nmodel = \"deep\"\nmax_tokens = 0\n\
+         [[models.routes]]\nmodel = \"deep\"\norder = [\"openai/flex\"]\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("`deep` more than once"), "{joined}");
+}
+
+#[test]
+fn an_unknown_embedding_provider_is_rejected_by_doctor_not_by_the_first_push() {
+    let config = parse(
+        "version = 1\n[embeddings]\nenabled = true\nprovider = \"lader\"\nmodel = \"vectors\"\n\
+         dimensions = 1024\napi_key_env = \"LADDER_API_KEY\"\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(
+        joined.contains("names no provider") && !joined.contains("lader"),
+        "{joined}"
+    );
+}
+
+#[test]
+fn the_ladder_embedding_provider_needs_an_address() {
+    let config = parse(
+        "version = 1\n[embeddings]\nenabled = true\nprovider = \"ladder\"\nmodel = \"vectors\"\n\
+         dimensions = 1024\napi_key_env = \"LADDER_API_KEY\"\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("needs `embeddings.base_url`"), "{joined}");
+
+    // A scheme alone is not an address.
+    let config = parse(
+        "version = 1\n[embeddings]\nenabled = true\nprovider = \"ladder\"\nmodel = \"vectors\"\n\
+         dimensions = 1024\napi_key_env = \"LADDER_API_KEY\"\nbase_url = \"http://\"\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("not a URL with a host"), "{joined}");
+
+    let config = parse(
+        "version = 1\n[embeddings]\nenabled = true\nprovider = \"ladder\"\nmodel = \"vectors\"\n\
+         dimensions = 1024\napi_key_env = \"LADDER_API_KEY\"\n\
+         base_url = \"http://host.docker.internal:6969/v1/embeddings\"\n",
+    );
+    assert!(validate::validate(&config).is_empty());
+}
+
+#[test]
 fn lowering_the_effort_does_not_satisfy_the_budget_floor() {
     // Measured at both settings: the table in `config/defaults.toml` lists
     // `low` rows for each configured model and they burn the entire allowance

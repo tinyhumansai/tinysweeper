@@ -112,9 +112,10 @@ is dropped and logged.
 
 | Class | Keys | Why |
 | --- | --- | --- |
-| Overridable | `review.strictness`, `review.severity_gate`, `review.confidence_min`, `review.max_comments`, `review.lanes`, `review.incremental`, `review.draft_prs`, `review.respect_agents_md`, `paths.ignore`, `labels.*`, `knowledge.extract`, `knowledge.files`, `lanes.*.fail_on` | How loud this repository's own review is. The worst a repository can do with these is get a quieter review of itself. |
+| Overridable | `review.strictness`, `review.severity_gate`, `review.confidence_min`, `review.note_confidence`, `review.max_comments`, `review.lanes`, `review.incremental`, `review.draft_prs`, `review.respect_agents_md`, `paths.ignore`, `labels.*`, `knowledge.extract`, `knowledge.files`, `lanes.*.fail_on` | How loud this repository's own review is. The worst a repository can do with these is get a quieter review of itself. |
 | Not overridable | `[models]`, `[embeddings]` | Model choice, `base_url` and `api_key_env` spend the operator's money and name the operator's secrets. Provider/model/dimensions are the index partition key: one repository changing them invalidates every other repository's vectors. |
 | Not overridable | `[automerge]`, `[issues]`, `[automation]`, `[sentry]` | Write actions against the operator's installation. A repository that could enable auto-merge from a branch could merge that branch. |
+| Not overridable | `[lookup]`, `retrieval.submodules` | Every lookup round is a model call the operator pays for, and a checkout or a submodule fetch is a network request with the operator's read token on it. |
 | Not overridable | `[memory]` | Names the engine the operator's reviewer talks to and the variable its key lives in. A repository that could point memory elsewhere could feed the reviewer a memory of its choosing. |
 | Not overridable | `review.request_changes_at`, `review.approve_when_clean` | The verdict controls: whether a finding blocks the merge button, and whether the bot's approval can satisfy a branch protection rule. |
 | Not overridable | `path_instructions` | Free text injected unfenced into a lane's instructions. Repository prose reaches a prompt through exactly one door — the sandboxed extraction in `crate::knowledge` — and this must not become a second. |

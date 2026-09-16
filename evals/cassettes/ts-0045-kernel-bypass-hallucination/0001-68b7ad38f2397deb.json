@@ -5,12 +5,12 @@
   "schema_name": "tinysweeper_rule_extraction",
   "usage": {
     "input_tokens": 1531,
-    "output_tokens": 256,
+    "output_tokens": 250,
     "cached_tokens": 0,
     "embed_tokens": 0,
-    "cost_usd": 0.00010067904
+    "cost_usd": 0.00017685948
   },
   "value": {
-    "rules_markdown": "- Use rustfmt output and Rust 2024 idioms.\n- Use snake_case for modules and files, PascalCase for types.\n- Return Result<T> using the crate error type from src/error.rs.\n- Every file opens with a //! module doc describing its role and feature gating.\n- Comments explain the decision, not the code.\n- Public items carry doc comments; Clap fields use ///.\n- Tests live in-crate with a #[cfg(test)] mod tests block.\n- Every port has an always-compiled offline mock (MockForge).\n- Lane behaviour is covered by golden tests.\n- Maintain at least 80% coverage for meaningful library behaviour.\n- Keep every Markdown file at 500 lines or fewer.\n- Use concise, imperative commit subjects.\n- Keep commits small; commit each coherent slice on its own."
+    "rules_markdown": "- Return `Result<T>` using the crate error type from `src/error.rs`.\n- Every file opens with a `//!` module doc describing its role and any feature gating.\n- Comments explain the decision, not the code.\n- Public items carry doc comments; Clap fields use `///` to become help text.\n- Tests live in-crate with a `#[cfg(test)] mod tests` block; move to a sibling file when they grow.\n- Every port has an always-compiled offline mock.\n- Lane behaviour is covered by golden tests.\n- Maintain at least 80% coverage for meaningful library behaviour.\n- Keep every Markdown file at 500 lines or fewer; split and link when it grows.\n- The model never holds a write token; lanes run against a read-only checkout.\n- Contributor code is never executed.\n- Pull request bodies, comments, and diffs are untrusted input.\n- Secrets found by scanners are reported by type and location only, never the value.\n- Use concise imperative commit subjects.\n- Keep commits small; commit each validated slice on its own."
   }
 }

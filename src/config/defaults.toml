@@ -18,6 +18,11 @@ lanes = ["critique", "security", "tests", "commits", "description"]
 # overrode them — which is exactly the bug this replaced.
 strictness = 2
 max_comments = 20
+# A finding below the posting gate but at least `medium` and at least this
+# confident is still named in the check-run summary — no comment, no block.
+# Silence is the wrong shape for a boundary bug the model was two-thirds sure
+# of; 0.5 let a pair of compose-file guesses through on the noise case.
+note_confidence = 0.65
 incremental = true
 draft_prs = false
 respect_agents_md = true
@@ -284,6 +289,24 @@ reasoning_effort = "medium"
 structured_output = "json_object"
 budget_usd_per_pr = 1.0
 
+# Per-model routing, for a rung that should not share the pin below.
+#
+# The pin is right for the DeepSeek tiers, whose floating ids a dozen hosts
+# serve at prices spanning 4x. A rung meant for one specific endpoint — OpenAI's
+# flex tier, the surplus-capacity endpoint at half price — gets its own entry
+# here, with its own `order`, its own `allow_fallbacks`, and optionally its own
+# output ceiling: `max_tokens = 0` sends none, so the model answers at the
+# length it needs and a cut-off is the provider's own limit. A rung with a
+# route never falls to the unpinned last resort: naming the endpoint means it.
+# None by default; the deployment's `.tinysweeper.toml` is where one lives.
+#
+#   [[models.routes]]
+#   model = "openai/gpt-5.6-luna"
+#   order = ["openai/flex"]
+#   allow_fallbacks = false
+#   max_tokens = 0
+routes = []
+
 # Pin the upstream provider, so the price this repository records is the price
 # it is charged.
 #
@@ -348,6 +371,11 @@ allow_fallbacks = false
 # deployment choosing a failed review over an unpinned one, which is coherent,
 # but it should be a decision rather than a default.
 last_resort_unpinned = true
+# Vendors whose models are called with no pin at all: served first-party
+# through the gateway, one host, one price, and a pin naming DeepSeek's hosts
+# would 404 them on every rung. Lets `deep` be a code-review-tuned model from
+# one of these while `scan`/`flash` stay pinned.
+unpinned_vendors = ["openai", "anthropic", "google"]
 
 # Several reviewers on one lane's evidence, folded into one review.
 #
@@ -373,6 +401,31 @@ enabled = false
 subagents = false
 corroboration = true
 agents = []
+
+# What a reviewer may look up before it answers.
+#
+# A reviewer is shown one file's diff. When its verdict turns on something the
+# diff does not show — whether the cursor a bound is passed to is exclusive,
+# whether a sibling read in the same loop is bounded too — it may ask to read
+# a range of a file or search the tree for a literal, and it is asked again
+# with what came back. Read-only: nothing here builds or runs anything, and
+# the reviewer still holds no write token.
+#
+# The numbers are a budget, and the shape matters more than the size: two
+# rounds of four is enough to follow one definition and check one sibling,
+# and not enough to wander. `max_chars` caps what all of a reviewer's lookups
+# may add to its prompt, so a reviewer that asks for a whole file gets the
+# first 200 lines and a line count. Not overridable by a reviewed repository:
+# every round is a model call the operator pays for.
+[lookup]
+enabled = true
+rounds = 2
+per_round = 4
+max_chars = 40000
+# A shallow checkout of the head per review, so the tree can be searched by
+# name. The indexer already makes this fetch on every push; off, lookups
+# read one file at a time through the API and search is unavailable.
+checkout = true
 
 # The knowledge centre. `files` are read from the pull request's head commit
 # through the forge and are untrusted input — they are put through a sandboxed
@@ -443,6 +496,11 @@ max_chunks = 40
 graph_hops = 2
 max_graph_nodes = 60
 max_impact = 20
+# Submodule repositories a review may read and the indexer may fetch, as
+# `owner/name`. An allow-list, not a switch: `.gitmodules` is written by the
+# pull request's author and the read token would follow it anywhere on the
+# forge. Name the vendored libraries a reviewed repository's code calls into.
+submodules = []
 
 # The memory engine: what the reviewer remembers about a repository between
 # pull requests. Off until an endpoint is named; see docs/modules/memory.

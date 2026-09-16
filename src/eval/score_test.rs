@@ -72,7 +72,7 @@ fn finding(path: &str, line: u64, title: &str, body: &str) -> Finding {
 
 fn proposal(findings: Vec<Finding>) -> Proposal {
     Proposal {
-        version: 1,
+        version: crate::app::review::PROPOSAL_VERSION,
         repo: "tinyhumansai/tinysweeper".into(),
         number: 1,
         head_sha: "a".repeat(40),
@@ -82,14 +82,17 @@ fn proposal(findings: Vec<Finding>) -> Proposal {
             conclusion: CheckConclusion::Success,
             summary: "reviewed".into(),
             findings,
+            noted: Vec::new(),
             resolved: vec![],
             pending: vec![],
             deduped: 0,
             highest_severity: None,
             usage: Usage::default(),
             models: vec!["z-ai/glm-5.2".into()],
+            unanswered: vec![],
         }],
         unreviewed: vec![],
+        skipped: None,
         cost_usd: 0.004,
         input_tokens: 1000,
         output_tokens: 100,

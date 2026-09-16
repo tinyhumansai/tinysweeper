@@ -44,6 +44,7 @@ fn fixture() -> Fixture {
         commits: vec![],
         comments: vec![],
         blobs: Default::default(),
+        lookups: Default::default(),
     }
 }
 
@@ -284,6 +285,32 @@ async fn the_config_digest_moves_when_the_prompt_inputs_move() {
     other_budget.models.budget_usd_per_pr = 0.5;
     assert_ne!(digest_of(&base), digest_of(&other_budget));
 
+    // A route changes the ceiling and the endpoint one tier is served at,
+    // without changing the tier's name.
+    let mut routed = base.clone();
+    routed.models.routes.push(crate::config::types::ModelRoute {
+        model: base.models.deep.clone(),
+        order: vec![],
+        allow_fallbacks: true,
+        max_tokens: Some(0),
+    });
+    assert_ne!(
+        digest_of(&base),
+        digest_of(&routed),
+        "a route's ceiling decides whether a case completes or truncates"
+    );
+    let mut repinned = routed.clone();
+    repinned.models.routes[0].order = vec!["openai/flex".into()];
+    assert_ne!(digest_of(&routed), digest_of(&repinned));
+
+    let mut fewer_rounds = base.clone();
+    fewer_rounds.lookup.rounds = 0;
+    assert_ne!(
+        digest_of(&base),
+        digest_of(&fewer_rounds),
+        "the lookup policy decides what the reviewer sees"
+    );
+
     // A path instruction's selectors decide which prompt is built even when
     // the instruction text is identical: `lanes` gates which lanes get the
     // injected instructions at all, and `rules` names the document inside them.
@@ -474,6 +501,43 @@ async fn the_corpus_ceiling_stops_the_run_rather_than_the_bill() {
 
     assert!(outcome.scores.is_empty());
     assert_eq!(outcome.skipped, ["ts-0001"]);
+}
+
+#[tokio::test]
+async fn a_tree_option_with_more_than_one_case_is_a_config_error() {
+    // `--tree` names one checkout on disk; handing it to every case in a
+    // multi-case run would feed the same tree's lookups into unrelated
+    // fixtures. This must be refused before any case is touched, not
+    // discovered later as corrupted cassettes.
+    let dir = corpus_dir(EXPECTATION);
+    std::fs::write(dir.path().join("cases/ts-0002.toml"), {
+        let mut text = case_toml(EXPECTATION);
+        text = text.replace("ts-0001", "ts-0002");
+        text
+    })
+    .expect("write");
+    std::fs::write(
+        dir.path().join("fixtures/ts-0002.json"),
+        serde_json::to_string_pretty(&fixture()).expect("serializes"),
+    )
+    .expect("write");
+    let corpus = load(dir.path()).expect("loads");
+    assert_eq!(corpus.cases.len(), 2);
+
+    let err = run(
+        &corpus,
+        &config(),
+        None,
+        &RunOptions {
+            out: dir.path().join("runs/test"),
+            tree: Some(dir.path().to_path_buf()),
+            ..RunOptions::default()
+        },
+    )
+    .await
+    .expect_err("--tree with more than one case must be refused");
+
+    assert!(err.to_string().contains("--tree"), "{err}");
 }
 
 #[tokio::test]

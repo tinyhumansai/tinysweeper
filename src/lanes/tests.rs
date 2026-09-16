@@ -122,11 +122,7 @@ impl Lane for Tests {
             LaneId::Tests,
             &calls,
             &schema::json_schema(),
-            input
-                .config
-                .council
-                .subagents
-                .then_some(input.config.models.flash.as_str()),
+            input.asking(),
         )
         .await?;
 
@@ -144,14 +140,7 @@ impl Lane for Tests {
             Anchoring::Strict,
             input.config.council.corroboration,
         ) else {
-            return Ok(LaneOutcome {
-                summary: "No reviewer could be consulted.".into(),
-                spend: llm.spend(),
-                skipped: Some(
-                    "No reviewer could be consulted; see the provider errors in the log.".into(),
-                ),
-                ..LaneOutcome::default()
-            });
+            return Ok(LaneOutcome::unanswered(LaneId::Tests, llm.spend()));
         };
 
         outcome.spend.merge(llm.spend());
@@ -401,6 +390,7 @@ mod lane_tests {
                 retrieved_context: "",
                 memory_context: "",
                 e2e: None,
+                tree: None,
             })
             .await
             .expect("lane runs")
