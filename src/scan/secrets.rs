@@ -866,10 +866,46 @@ mod tests {
 
     #[test]
     fn scrubbing_leaves_ordinary_prose_alone() {
-        // The entropy heuristic is deliberately not applied here: it would
-        // mangle every hash and identifier a review legitimately quotes.
+        // `redact_line`'s entropy pass only ever fires on an assignment to a
+        // secret-shaped name (`secret_assignment`); this sentence has neither
+        // an `=`/`:` nor a name from `SECRET_NAMES`, so it survives untouched
+        // even though `d5f1c3e8a9b04c7e` alone would score above threshold.
         let prose = "Consider `items.get(i)` instead; the checksum d5f1c3e8a9b04c7e is fine.";
         assert_eq!(scrub(prose), prose);
+    }
+
+    /// Regression for a Codex finding on #166: `scan::scrub` (PR title/body),
+    /// `redact_stream_line` (tree reads, instruction-file extraction, e2e
+    /// candidates) and `evidence::redact::scrub_rendered` (replayed evidence)
+    /// all funnel through `redact_line`, but it used to apply only the
+    /// rulepack — an entropy-flagged assignment with no vendor prefix reached
+    /// every one of those consumers unmasked because none of them carries a
+    /// `Finding` list to anchor a fallback on the way `evidence::redact::mask`
+    /// does for a fresh diff. Fixing `redact_line` itself, the one function
+    /// every one of those helpers calls, closes all four at once instead of
+    /// teaching each call site its own copy of the heuristic.
+    #[test]
+    fn redact_line_masks_a_high_entropy_assignment_with_no_finding_to_anchor_on() {
+        let value = token("f3Kq9zR2", "mW7pL4xN8vB1cY6tH0jD5sG");
+        let line = format!("let secret_token = \"{value}\";");
+
+        let scrubbed = scrub(&line);
+        assert!(!scrubbed.contains(&value), "{scrubbed}");
+        assert!(scrubbed.contains("let secret_token ="), "{scrubbed}");
+
+        let mut in_key_block = false;
+        let streamed = redact_stream_line(&line, &mut in_key_block);
+        assert!(!streamed.contains(&value), "{streamed}");
+        assert!(!in_key_block);
+    }
+
+    #[test]
+    fn redact_line_leaves_an_assignment_with_an_ordinary_identifier_value_alone() {
+        // Guards against the entropy pass becoming the same kind of hole the
+        // rulepack has to avoid: a low-entropy, non-opaque or placeholder
+        // value assigned to a secret-shaped name must not be masked away.
+        let line = "let secret_token = \"changeme\";";
+        assert_eq!(redact_line(line), line);
     }
 
     #[test]
