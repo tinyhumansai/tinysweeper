@@ -1676,8 +1676,7 @@ impl ForgeRead for GitHubRead {
         // left to settle.
         let page = self
             .client
-            .repos(&repo.owner, &repo.name)
-            .commits()
+            .commits(&repo.owner, &repo.name)
             .associated_pull_requests(octocrab::commits::PullRequestTarget::Sha(sha.to_string()))
             .send()
             .await
