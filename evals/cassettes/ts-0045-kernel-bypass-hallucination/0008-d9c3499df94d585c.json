@@ -1,0 +1,37 @@
+{
+  "key": "d9c3499df94d585c",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4086,
+    "output_tokens": 945,
+    "cached_tokens": 3130,
+    "embed_tokens": 0,
+    "cost_usd": 0.0028963818
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "pattern": "embeddings",
+        "why": "Find where the [embeddings] config section is parsed to verify the field names and types are valid"
+      },
+      {
+        "kind": "search",
+        "pattern": "api_key_env",
+        "why": "Check how api_key_env is consumed and whether the field name matches what the parser expects"
+      },
+      {
+        "kind": "search",
+        "pattern": "tinysweeper",
+        "why": "Understand what .tinysweeper.toml is and whether there's a schema or parser for it"
+      },
+      {
+        "kind": "search",
+        "pattern": "dimensions",
+        "why": "Verify dimensions is a recognized field in the embeddings config"
+      }
+    ]
+  }
+}

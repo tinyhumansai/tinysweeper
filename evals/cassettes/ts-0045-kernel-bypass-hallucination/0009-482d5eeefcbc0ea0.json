@@ -1,0 +1,17 @@
+{
+  "key": "482d5eeefcbc0ea0",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4285,
+    "output_tokens": 1329,
+    "cached_tokens": 3788,
+    "embed_tokens": 0,
+    "cost_usd": 0.00345548052
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds an `[embeddings]` section to `.tinysweeper.toml` configuring OpenRouter-based retrieval via an environment variable for the API key. The config looks sound: it references a secret by env-var name rather than hardcoding it, and the comment explains why the fields are version-sensitive. No findings."
+  }
+}

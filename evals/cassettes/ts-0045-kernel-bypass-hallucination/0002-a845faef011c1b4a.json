@@ -1,0 +1,17 @@
+{
+  "key": "a845faef011c1b4a",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4561,
+    "output_tokens": 82,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00041866335
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change corrects environment variable names from TINYSWEEPER_GITHUB_* to TINYSWEEPER_APP_* so the container actually authenticates, adds provider API keys that the index may need, and mounts a config file to prevent silently operating in diff-only mode.  No bugs are introduced."
+  }
+}

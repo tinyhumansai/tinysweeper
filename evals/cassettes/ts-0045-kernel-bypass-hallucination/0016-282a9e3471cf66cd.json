@@ -1,0 +1,24 @@
+{
+  "key": "282a9e3471cf66cd",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4053,
+    "output_tokens": 86,
+    "cached_tokens": 2960,
+    "embed_tokens": 0,
+    "cost_usd": 0.0012292938
+  },
+  "value": {
+    "lookups": [
+      {
+        "end": 100,
+        "kind": "read",
+        "path": "deploy/mongo/kernel-bypass-entrypoint.py",
+        "start": 1,
+        "why": "The compose file mounts this script as the mongod entrypoint; I need to see what it executes."
+      }
+    ]
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "key": "3b1954365779f526",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4582,
+    "output_tokens": 3826,
+    "cached_tokens": 3656,
+    "embed_tokens": 0,
+    "cost_usd": 0.00875834424
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The doc comment promises output of at most `limit` characters, but when `head` contains no space the `None` arm returns `limit` characters plus the `…` glyph, i.e. `limit + 1` characters. The tests already encode this off-by-one with `<= 21` for `limit = 20`, so the code and tests agree but the documented contract is wrong. A caller that passes the exact platform ceiling (e.g. GitHub's check-run title limit) as `limit` can receive a string one character too long, which GitHub may reject or truncate. Reserve one character of the budget for the ellipsis so the output truly fits within `limit`.",
+        "confidence": 0.85,
+        "existing_code": "    let head: String = text.chars().take(limit).collect();",
+        "path": "src/findings/summarise.rs",
+        "rule": "off-by-one-limit",
+        "severity": "medium",
+        "suggestion": "    let head: String = text.chars().take(limit.saturating_sub(1)).collect();",
+        "title": "Keep the ellipsis inside the character limit"
+      }
+    ],
+    "summary": "The new `summarise` module truncates model-authored text on word boundaries using char-aware slicing, which avoids the multibyte panic the comment warns about. The only issue is that `shorten` can return `limit + 1` characters when no space is found, contradicting its own doc comment and risking a title that exceeds the platform ceiling by one character."
+  }
+}

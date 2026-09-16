@@ -658,7 +658,10 @@ pub async fn review_with_tree(
         None => (crate::retrieve::RetrievedContext::off(), Spend::default()),
     };
     spend.merge(retrieval_spend);
-    let retrieved_context = retrieved.render();
+    // Retrieval is separate from the diff pipeline, but its rendered chunks
+    // become model input too. Apply the same path-independent stream scrub
+    // before any lane can incorporate a related-file snippet.
+    let retrieved_context = crate::evidence::redact::scrub_rendered(&retrieved.render());
     let retrieval_note = retrieved.note();
     if !retrieved.renders_nothing() {
         let (search, graph) = retrieved.counts();

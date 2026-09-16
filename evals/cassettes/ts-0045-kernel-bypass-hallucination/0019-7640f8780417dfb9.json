@@ -1,0 +1,17 @@
+{
+  "key": "7640f8780417dfb9",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4559,
+    "output_tokens": 865,
+    "cached_tokens": 3193,
+    "embed_tokens": 0,
+    "cost_usd": 0.00300579822
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request adds an opt-in developer shim that patches the MongoDB Docker image's own entrypoint to bypass a kernel compatibility check, then executes the patched entrypoint. The patched source is read from a hardcoded path inside the image (not untrusted input), the exec target is the image's trusted entrypoint, and a guard fails loudly if the expected function signature changes. No security issues introduced."
+  }
+}

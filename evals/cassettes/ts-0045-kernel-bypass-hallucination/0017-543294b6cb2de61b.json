@@ -1,0 +1,17 @@
+{
+  "key": "543294b6cb2de61b",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4282,
+    "output_tokens": 503,
+    "cached_tokens": 3041,
+    "embed_tokens": 0,
+    "cost_usd": 0.00217623834
+  },
+  "value": {
+    "findings": [],
+    "summary": "The docker-compose change fixes mismatched GitHub App env var names, makes those credentials required at compose-up, forwards additional provider API keys optionally, and mounts the server config file read-only. No secrets are committed and no dangerous sinks are introduced; the change looks safe to merge."
+  }
+}

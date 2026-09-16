@@ -1,0 +1,17 @@
+{
+  "key": "9e47a374f51a3be9",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_description",
+  "usage": {
+    "input_tokens": 6261,
+    "output_tokens": 215,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000592862746
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request adds infrastructure for an end-to-end live deployment test (MongoDB bypass, compose overlay, embedding config, and a text-shortening utility) but is explicitly marked 'Do not merge' by its author. The changes themselves appear sound, though the docker-compose and .tinysweeper.toml additions are deployment-specific and should not be merged into main as-is."
+  }
+}

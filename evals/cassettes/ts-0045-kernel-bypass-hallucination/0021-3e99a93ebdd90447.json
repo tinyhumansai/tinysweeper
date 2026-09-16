@@ -1,0 +1,38 @@
+{
+  "key": "3e99a93ebdd90447",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 6838,
+    "output_tokens": 1338,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000842997484
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The shim reads `/usr/local/bin/docker-entrypoint.py` from the container filesystem, replaces a function definition, and `exec`s the result. The volume mount in `docker-compose.kernel-bypass.yml` makes the shim itself writable from the host, but the *target* image file (`docker-entrypoint.py`) is part of the community-server image and is not under host control, so this is not a direct vector for injecting arbitrary code from the host into the container.\n\nHowever, the `exec` call uses the string `\"__name__\": \"__main__\"`, which means any code in the patched source at module level (i.e. outside `enforce_kernel_compatibility`) will execute with full interpreter authority, including any future image changes that add new top-level blocks. The `needle` check only guards against the function definition being absent — it does not validate that the rest of the source is safe. If a future image version adds a module-level side effect (e.g. `os.system(...)` or a network call) between the architecture warning and replica-set parsing, the shim will execute it.\n\nThis is acceptable for a local-development-only overlay (the compose file says \"Use it only for local development\"), but the code as written provides no sandboxing. Consider adding a `#ok-local-dev` comment or a developer warning at startup, and document that running the overlay against an untrusted image (e.g. a different tag) would execute that image's entrypoint with no isolation. Given the intended scope, this is a low-severity finding.",
+        "confidence": 0.8,
+        "existing_code": "    source = open(ENTRYPOINT, encoding=\"utf-8\").read()\n\n    # Replace the body rather than deleting the call: the call site sits in the\n    # image's `__main__` block between the architecture warning and replica-set\n    # parsing, and editing that block would be a much larger surface to keep in\n    # step with a future image.\n    needle = \"def enforce_kernel_compatibility() -> None:\"\n    if needle not in source:\n        # The image changed shape. Fail loudly rather than starting a database\n        # with an assumption that no longer holds.\n        sys.exit(\n            \"kernel-bypass: this image no longer defines \"\n            \"enforce_kernel_compatibility; re-check whether the bypass is still \"\n            \"needed before editing this shim\"\n        )\n\n    patched = source.replace(\n        needle,\n        \"def enforce_kernel_compatibility() -> None:\\n\"\n        \"    return  # patched out by deploy/mongo/kernel-bypass-entrypoint.py\\n\"\n        \"\\n\"\n        \"def _enforce_kernel_compatibility_unused() -> None:\",\n        1,\n    )\n\n    globals_dict = runpy.run_path.__globals__  # noqa: F841 - keep runpy imported\n    compiled = compile(patched, ENTRYPOINT, \"exec\")\n    exec(compiled, {\"__name__\": \"__main__\", \"__file__\": ENTRYPOINT})  # noqa: S102",
+        "path": "deploy/mongo/kernel-bypass-entrypoint.py",
+        "rule": "unvalidated-exec-from-volume",
+        "severity": "low",
+        "suggestion": null,
+        "title": "Validate or sandbox the injected entrypoint to prevent host-file tampering"
+      },
+      {
+        "body": "If `shorten` is called with `limit = 0`, the early-return branch is skipped for any non-empty text, `head` becomes an empty string, and `rfind(' ')` returns `None`, so the output is `\"…\"` — an ellipsis with no text. This is probably harmless, but the behaviour is untested and the invariant \"ending on a word boundary\" is vacuously satisfied. A limit of 0 is a valid `usize` and a caller (especially one computing a limit dynamically) could pass it. The test suite already covers `a_short_string_is_returned_unchanged` (limit 80), `a_long_string_stops_on_a_word_boundary` (limit 20), and `a_multibyte_title_does_not_panic` (limit 20). Add a test for `shorten(\"anything\", 0)` to pin the behaviour and prevent regressions.",
+        "confidence": 1.0,
+        "existing_code": "pub fn shorten(text: &str, limit: usize) -> String {\n    let text = text.trim();\n    if text.chars().count() <= limit {\n        return text.to_string();\n    }\n\n    // Character boundaries, not byte offsets: `&text[..limit]` panics the\n    // moment a multibyte character straddles the cut, and model-authored text\n    // is full of them — an em dash in a title would take the process down.\n    let head: String = text.chars().take(limit).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),\n    }\n}",
+        "path": "src/findings/summarise.rs",
+        "rule": "missing-edge-case-test",
+        "severity": "low",
+        "suggestion": null,
+        "title": "Test `shorten` with a zero limit"
+      }
+    ],
+    "summary": "Adds a kernel bypass entrypoint for MongoDB on modern Linux kernels, enables embeddings in the config, fixes env var names in docker-compose.yml, and introduces a text shortening utility. The behavioural changes include a path that executes arbitrary code from the host filesystem inside a container (the bypass shim), and a missing test for the `shorten` function's behaviour when limit is zero. Both are reported below."
+  }
+}

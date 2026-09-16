@@ -1,0 +1,17 @@
+{
+  "key": "e4db0180f552cc4c",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3745,
+    "output_tokens": 51,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000340867282
+  },
+  "value": {
+    "findings": [],
+    "summary": "Adds a public `summarise` module declaration to the findings module. No security or correctness concern identified; this is a module registration with no new logic, dependencies, or sinks exposed."
+  }
+}

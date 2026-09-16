@@ -1,0 +1,28 @@
+{
+  "key": "91b34e57c41432e6",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4803,
+    "output_tokens": 8002,
+    "cached_tokens": 4111,
+    "embed_tokens": 0,
+    "cost_usd": 0.01709612514
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "`runpy` is imported at the top of the file but never called — the script uses `compile` and `exec` directly, not `runpy.run_path`. The `globals_dict` line assigns `runpy.run_path.__globals__` to a local variable that is never read, and the `# noqa: F841` comment suppresses the resulting \"assigned but never used\" warning. The inline comment claims this \"keep runpy imported,\" but Python imports persist for the module's lifetime without such tricks, and there is no reason to keep an unused import at all. This violates the repo rule that comments explain the decision. Remove both `import runpy` (line 27) and this line.",
+        "confidence": 0.95,
+        "existing_code": "    globals_dict = runpy.run_path.__globals__  # noqa: F841 - keep runpy imported",
+        "path": "deploy/mongo/kernel-bypass-entrypoint.py",
+        "rule": "dead-misleading-code",
+        "severity": "low",
+        "suggestion": null,
+        "title": "Remove dead globals_dict line and unused runpy import"
+      }
+    ],
+    "summary": "This shim reads the MongoDB docker entrypoint, redefines `enforce_kernel_compatibility` as a no-op by string-replacing the function signature, and execs the patched source. The patching logic is sound and fails loudly if the expected function signature is absent. The only issue is dead code: `runpy` is imported but never used, and a misleadingly commented line exists solely to suppress the resulting linter warning."
+  }
+}

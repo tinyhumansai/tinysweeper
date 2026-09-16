@@ -221,7 +221,7 @@ pub fn redact_stream_line(line: &str, in_key_block: &mut bool) -> String {
                 })
                 .map_or_else(
                     || redact_line(line),
-                    |end| redact_pem_marker_line(line, &line[..end]),
+                    |end| redact_pem_marker_line(line, &line[start..end]),
                 );
         }
         return if line.trim().is_empty() {
@@ -258,12 +258,12 @@ fn redact_pem_marker_line(line: &str, marker: &str) -> String {
 ///
 /// Diff hunks and ranged tree reads do not always include an armour boundary.
 /// Standard PEM wraps base64 at 64 characters; accepting a conservative
-/// minimum of 48 catches those body-only fragments while leaving ordinary
+/// minimum of 32 catches short terminal fragments while leaving ordinary
 /// source lines readable. A false positive only withholds opaque encoded data
 /// from a model, which is the safe side of this security boundary.
 pub fn is_private_key_body(text: &str) -> bool {
     let body = text.trim();
-    body.len() >= 16
+    body.len() >= 32
         && body
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
