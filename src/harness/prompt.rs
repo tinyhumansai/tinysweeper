@@ -21,6 +21,8 @@
 //!   │                           the pull request's own  │
 //!   │                           AGENTS.md               │
 //!   │ 5. prior findings         what was said last time │
+//!   │ 5a. confirmed this round  the coverage pass's own  │
+//!   │                           "already found" list     │
 //!   │ 5d. retrieved context     code the index returned │
 //!   │                           for *this* diff         │
 //!   │ 6. new evidence           commits since then      │
