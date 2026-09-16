@@ -1334,9 +1334,10 @@ mod tests {
             },
         ];
         let paths = ["src/main.rs".to_string(), ".github/workflows/ci.yml".into()];
+        let focus = [".github/workflows/ci.yml".to_string()];
         let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
         i.changed_paths = &paths;
-        i.focus_paths = &[".github/workflows/ci.yml".to_string()];
+        i.focus_paths = &focus;
         let prefix = build(&i).prefix().to_string();
 
         assert!(prefix.contains("WORKFLOW RULES"));
@@ -1346,8 +1347,9 @@ mod tests {
     #[test]
     fn a_focused_prompt_forbids_reporting_on_other_files() {
         let config = config();
+        let focus = ["src/main.rs".to_string()];
         let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
-        i.focus_paths = &["src/main.rs".to_string()];
+        i.focus_paths = &focus;
         let prefix = build(&i).prefix().to_string();
 
         assert!(prefix.contains("One file only"));
