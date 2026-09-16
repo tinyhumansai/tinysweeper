@@ -458,28 +458,14 @@ pub async fn settle_e2e(
     // Cleared only after the write succeeded: a failed publish leaves the
     // watch in place so the next completion event retries it.
     //
-    // Reloaded immediately before clearing, rather than reusing the copy
-    // read at the top of this call: a new review can have saved a
-    // replacement state — a new push, a new watch, or none at all — in the
-    // time it took to read checks and publish. Writing back the stale copy
-    // with `e2e` cleared would overwrite that replacement's `evidence`,
-    // `fingerprints`, `titles` and `severities` with old ones, and could
-    // clear a newer watch this call knows nothing about. Only the `e2e`
-    // field of whatever is there *now* is touched, and only when it is
-    // still the exact watch just settled.
-    match store.load_state(&key).await {
-        Ok(Some(mut fresh)) => {
-            if fresh.e2e.as_ref() == Some(&watch) {
-                fresh.e2e = None;
-                if let Err(err) = store.save_state(&key, &fresh).await {
-                    tracing::warn!(%err, "could not clear the e2e watch; the next completion will republish");
-                }
-            }
-        }
-        Ok(None) => {}
-        Err(err) => {
-            tracing::warn!(%err, "could not reload state to clear the e2e watch; the next completion will republish");
-        }
+    // `clear_e2e_watch` rather than a reload-then-`save_state`: the store
+    // applies the condition ("still exactly this watch") and the write
+    // together, so a new review's `save_state` landing in the gap between
+    // this call's own `load_state` above and now cannot be discarded by an
+    // unconditional write-back the way reloading-and-saving still could —
+    // see its doc comment on `ReviewStateStore`.
+    if let Err(err) = store.clear_e2e_watch(&key, &watch.head_sha).await {
+        tracing::warn!(%err, "could not clear the e2e watch; the next completion will republish");
     }
     Ok(E2eSettlement::Published(settled.conclusion))
 }
