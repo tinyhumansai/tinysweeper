@@ -941,6 +941,7 @@ mod tests {
                 jobs: vec!["playwright".into()],
                 summary: "Newer review's summary.".into(),
                 failed: false,
+                generation: "gen-2".into(),
             }),
             ..ReviewedState::default()
         };
