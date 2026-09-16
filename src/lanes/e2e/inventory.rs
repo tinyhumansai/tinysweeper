@@ -1185,6 +1185,30 @@ jobs:
     }
 
     #[test]
+    fn an_unconditional_e2e_step_is_not_overridden_by_a_later_gated_one() {
+        // The first e2e step here is unconditional; a later, unrelated
+        // label-gated e2e step must not make the job read as gated — the
+        // job already runs the unconditional one regardless.
+        let text = "name: e2e\non: pull_request\njobs:\n  run:\n    steps:\n      - name: Run e2e\n        run: npx playwright test\n      - name: Run flaky e2e\n        if: contains(github.event.pull_request.labels.*.name, 'run-flaky')\n        run: npx cypress run\n";
+        let workflow = classify_workflow(".github/workflows/e2e.yml", text, &[]).unwrap();
+        assert_eq!(
+            workflow.jobs[0].label_gate, None,
+            "the unconditional playwright step already decided this job runs"
+        );
+    }
+
+    #[test]
+    fn a_job_level_gate_outranks_a_step_level_guess_however_they_are_ordered() {
+        // A job-level `if:` is the more explicit signal and must win even
+        // when it happens to be written after `steps:` in the file — nothing
+        // requires `if:` to come first, and an unconditional e2e step
+        // ordered before it must not be read as clearing the job-level gate.
+        let text = "name: e2e\non: pull_request\njobs:\n  run:\n    steps:\n      - name: Run e2e\n        run: npx playwright test\n    if: contains(github.event.pull_request.labels.*.name, 'run-e2e')\n";
+        let workflow = classify_workflow(".github/workflows/e2e.yml", text, &[]).unwrap();
+        assert_eq!(workflow.jobs[0].label_gate.as_deref(), Some("run-e2e"));
+    }
+
+    #[test]
     fn explicit_workflow_names_are_the_whole_answer() {
         let text = "name: CI\non: pull_request\njobs:\n  unit:\n    steps:\n      - run: cargo test\n  browser:\n    steps:\n      - run: npx cypress run\n";
         let workflow =
