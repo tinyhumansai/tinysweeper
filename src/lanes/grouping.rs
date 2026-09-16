@@ -296,6 +296,16 @@ fn locale_siblings(a: &str, b: &str) -> bool {
     under_locale_dir
         && extension_of(file_a).is_some()
         && extension_of(file_a) == extension_of(file_b)
+        && looks_like_locale(stem_of(file_a))
+        && looks_like_locale(stem_of(file_b))
+}
+
+/// `file`'s name with its final extension removed, e.g. `en.json` → `en`.
+fn stem_of(file: &str) -> &str {
+    match file.rsplit_once('.') {
+        Some((stem, _ext)) => stem,
+        None => file,
+    }
 }
 
 /// Split `base.locale.ext` into its three parts, when `locale` reads like a
