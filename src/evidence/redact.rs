@@ -149,10 +149,10 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
                 // Removed and added lines are different revisions.  A marker
                 // in one must never change the armour state used to redact the
                 // other; context is shared by both revisions.
-                let in_key_block = match line.kind {
-                    LineKind::Added => &mut head_in_key_block,
-                    LineKind::Removed => &mut old_in_key_block,
-                    LineKind::Context => &mut head_in_key_block,
+                let mut in_key_block = match line.kind {
+                    LineKind::Added => head_in_key_block,
+                    LineKind::Removed => old_in_key_block,
+                    LineKind::Context => head_in_key_block || old_in_key_block,
                 };
                 if scan::is_private_key_begin(&line.text) {
                     let masked = scan::redact_stream_line(&line.text, &mut in_key_block);
@@ -161,10 +161,15 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
                         masked_here = true;
                         line.text = masked;
                     }
+                    match line.kind {
+                        LineKind::Added => head_in_key_block = in_key_block,
+                        LineKind::Removed => old_in_key_block = in_key_block,
+                        LineKind::Context => {
+                            old_in_key_block = in_key_block;
+                            head_in_key_block = in_key_block;
+                        }
+                    }
                     continue;
-                }
-                if line.kind == LineKind::Context {
-                    old_in_key_block = head_in_key_block;
                 }
                 if in_key_block {
                     if scan::is_private_key_end(&line.text) {
@@ -173,6 +178,14 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
                             spans += 1;
                             masked_here = true;
                             line.text = masked;
+                        }
+                        match line.kind {
+                            LineKind::Added => head_in_key_block = in_key_block,
+                            LineKind::Removed => old_in_key_block = in_key_block,
+                            LineKind::Context => {
+                                old_in_key_block = in_key_block;
+                                head_in_key_block = in_key_block;
+                            }
                         }
                         continue;
                     }
