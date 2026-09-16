@@ -444,11 +444,13 @@ fn validate_embeddings(config: &Config, problems: &mut Vec<String>) {
         && !embeddings.base_url.trim().is_empty()
         && !url::Url::parse(embeddings.base_url.trim()).is_ok_and(|url| url.host_str().is_some())
     {
-        problems.push(format!(
-            "`embeddings.base_url = \"{}\"` is not a URL with a host; the ladder's \
-             `/v1/embeddings` on this box looks like `http://host.docker.internal:6969/v1/embeddings`",
-            embeddings.base_url
-        ));
+        // The value is not echoed: a malformed URL is where a pasted
+        // credential ends up, and this text reaches a check-run summary.
+        problems.push(
+            "`embeddings.base_url` is not a URL with a host; the ladder's `/v1/embeddings` on \
+             this box looks like `http://host.docker.internal:6969/v1/embeddings`"
+                .into(),
+        );
     }
 
     if !embeddings.base_url.trim().is_empty()

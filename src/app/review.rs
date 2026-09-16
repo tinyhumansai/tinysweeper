@@ -1454,7 +1454,14 @@ fn publish_unclaimed(lanes: &mut Vec<LaneProposal>, scan_findings: &[scan::types
         }
 
         // Replace the Neutral placeholder rather than sitting beside it: two
-        // check runs of the same name is a confusing way to fail.
+        // check runs of the same name is a confusing way to fail. What the
+        // placeholder could not answer for is carried over: a scanner hit
+        // does not make the model's silence on the other files an answer.
+        let unanswered: Vec<String> = lanes
+            .iter()
+            .filter(|l| l.lane == owner)
+            .flat_map(|l| l.unanswered.iter().cloned())
+            .collect();
         lanes.retain(|l| l.lane != owner);
         lanes.push(LaneProposal {
             lane: owner,
@@ -1472,7 +1479,7 @@ fn publish_unclaimed(lanes: &mut Vec<LaneProposal>, scan_findings: &[scan::types
             // Scanners are deterministic and offline: no model, no spend.
             usage: Usage::default(),
             models: vec![],
-            unanswered: vec![],
+            unanswered,
         });
     }
 }
