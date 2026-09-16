@@ -297,6 +297,10 @@ pub fn scrub_rendered(text: &str) -> String {
         if let Some(path) = line.strip_prefix("--- ") {
             sensitive = scan::is_sensitive_path(path);
             in_key_block = false;
+            if sensitive {
+                out.push_str("--- <redacted sensitive path>");
+                continue;
+            }
         }
         if line.starts_with("@@ ") {
             in_key_block = false;

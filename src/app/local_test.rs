@@ -284,6 +284,7 @@ async fn a_secret_in_the_working_tree_never_reaches_a_model_request() {
     let repo = Repo::new();
     let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
     repo.write(".env", &format!("AWS_KEY={key}\n"));
+    repo.write("src/main.rs", "fn main() {}\n");
 
     let model = Arc::new(MockModel::always(
         json!({ "summary": "Looks fine.", "findings": [] }),

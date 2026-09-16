@@ -233,7 +233,9 @@ pub fn redact_stream_line(line: &str, in_key_block: &mut bool) -> String {
         return if line.trim().is_empty() {
             line.to_string()
         } else {
-            redact(line.trim())
+            // PEM armour establishes that every non-empty body line is key
+            // material, irrespective of whether a generic secret rule sees it.
+            format!("<redacted, {} chars>", line.trim().chars().count())
         };
     }
     // Outside armour a line is ordinary text, however base64-shaped it looks:
@@ -277,7 +279,13 @@ fn redact_pem_marker_line(line: &str, marker: &str) -> String {
         || redact(before),
         |equal| format!("{}{}", &before[..=equal], redact(&before[equal + 1..])),
     );
-    format!("{}{}{}", before, marker, redact(&line[end..]))
+    let suffix = &line[end..];
+    let suffix = if suffix.trim().is_empty() {
+        suffix.to_string()
+    } else {
+        format!("<redacted, {} chars>", suffix.trim().chars().count())
+    };
+    format!("{}{}{}", before, marker, suffix)
 }
 
 /// Whether one unarmoured line has the shape of private-key PEM body data.

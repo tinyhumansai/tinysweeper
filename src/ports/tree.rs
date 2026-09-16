@@ -537,7 +537,10 @@ impl TreeReader for RedactingTree<'_> {
                     // the same way a diff hunk proves it. Refusing the read
                     // instead would blind every ranged lookup on such a
                     // backend, and the lookups are what find the bugs.
-                    _ => opens_inside_private_key(&found),
+                    // Without preceding context we cannot prove a body line
+                    // is ordinary text. Treat the returned range as inside
+                    // armour so it is safe even in incomplete replays.
+                    _ => true,
                 }
             }
             _ => false,
@@ -566,11 +569,12 @@ impl TreeReader for RedactingTree<'_> {
                             end: Some(hit.line),
                         })
                         .await?;
-                    // An unanswerable probe leaves the hit's own line as the
-                    // only evidence, and one line outside armour is ordinary
-                    // text; dropping the hit would hide a search result from
-                    // the reviewer over a backend limitation.
-                    let mut state = private_key_state_before_last_line(&prefix).unwrap_or(false);
+                    // Search hits lack enough inline context to distinguish a
+                    // private-key body from ordinary text. Do not disclose a
+                    // hit when its bounded context read is unavailable.
+                    let Some(mut state) = private_key_state_before_last_line(&prefix) else {
+                        continue;
+                    };
                     redacted.push(Hit {
                         text: crate::scan::redact_stream_line(&hit.text, &mut state),
                         ..hit

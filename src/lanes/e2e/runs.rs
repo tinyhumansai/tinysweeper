@@ -410,16 +410,22 @@ pub fn settle(watch: &Watch, checks: &[CheckStatus], fail_on: Severity) -> Optio
         short(&watch.head_sha)
     );
     for job in &passed {
-        let _ = write!(summary, "\n- `{job}`: passed");
+        let _ = write!(summary, "\n- `{}`: passed", crate::scan::scrub(job));
     }
     for job in &skipped {
         let _ = write!(
             summary,
-            "\n- `{job}`: **skipped** — did not run on this pull request"
+            "\n- `{}`: **skipped** — did not run on this pull request",
+            crate::scan::scrub(job)
         );
     }
     for (job, conclusion) in &failed {
-        let _ = write!(summary, "\n- `{job}`: **{}**", conclusion_name(*conclusion));
+        let _ = write!(
+            summary,
+            "\n- `{}`: **{}**",
+            crate::scan::scrub(job),
+            conclusion_name(*conclusion)
+        );
     }
 
     // The same levels `findings` gives them: a failed job is High, a skipped
