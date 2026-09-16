@@ -188,9 +188,9 @@ pub fn is_private_key_end(text: &str) -> bool {
 ///
 /// `line` must already have any positional prefix — a rendered diff's
 /// `{n:>5} {marker}`, a tree read's `{n:>5}| ` — split off: this only ever
-/// runs the rulepack or private-key-body masking over text a scanner could
-/// actually match, never the anchor before it. Shared by every caller that
-/// needs the same two path-independent passes
+/// runs the rulepack, entropy-assignment or private-key-body masking over
+/// text a scanner could actually match, never the anchor before it. Shared by
+/// every caller that needs the same path-independent passes
 /// [`crate::evidence::redact::mask`] applies to a fresh diff, over text that
 /// is not a [`crate::evidence::diff::FileDiff`]:
 /// [`crate::evidence::redact::scrub_rendered`] for evidence a previous review
