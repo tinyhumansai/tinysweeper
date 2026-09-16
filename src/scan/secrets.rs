@@ -643,6 +643,23 @@ mod tests {
         assert!(findings[0].detail.contains("force-push alone does not"));
     }
 
+    /// Regression for a tinysweeper finding on #166: an encrypted PKCS#8 key's
+    /// armour reads `ENCRYPTED PRIVATE KEY`, not `PRIVATE KEY`, and none of
+    /// `PEM_MARKERS`' other entries are a substring of it — it used to pass
+    /// the scanner, and with it `evidence::redact::mask`'s private-key-body
+    /// pass, entirely.
+    #[test]
+    fn an_encrypted_private_key_armour_is_recognised_too() {
+        // Split so this file's own diff does not carry a literal, contiguous
+        // armour marker — see `token`'s note above.
+        let marker = format!("-----BEGIN {}-----", "ENCRYPTED PRIVATE KEY");
+        let findings = scan("deploy/key.pem", &marker);
+
+        assert_eq!(findings.len(), 1, "{findings:#?}");
+        assert_eq!(findings[0].rule, "private-key");
+        assert!(is_private_key_begin(&marker));
+    }
+
     #[test]
     fn a_high_entropy_assignment_to_a_secret_name_is_flagged_at_high_not_critical() {
         let value = token("f3Kq9zR2", "mW7pL4xN8vB1cY6tH0jD5sG");
