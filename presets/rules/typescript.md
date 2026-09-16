@@ -49,6 +49,9 @@ Covers `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` and `.cjs`.
 - A shallow object-literal spread (`{...a, ...b}`) of untrusted data with no
   later unsafe deep-merge of the result — spread cannot itself repoint a
   prototype.
+- Computed-key assignment or `Object.assign` onto a target created with
+  `Object.create(null)` or otherwise documented as a null-prototype
+  dictionary — it has no `__proto__` accessor for the assignment to reach.
 - Sequential `await` in a loop when each iteration depends on the previous
   result, or the collection is small and fixed at call time.
 - `innerHTML`/`dangerouslySetInnerHTML` fed a value that has already passed
