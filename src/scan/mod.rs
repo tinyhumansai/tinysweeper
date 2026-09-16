@@ -12,7 +12,7 @@ pub mod workflows;
 
 pub use crate::scan::paths::is_sensitive_path;
 pub use crate::scan::secrets::{
-    is_private_key_begin, is_private_key_body, is_private_key_end, redact_line, redact_stream_line,
-    scrub,
+    is_private_key_begin, is_private_key_body, is_private_key_end, opens_inside_private_key,
+    redact_line, redact_stream_line, scrub,
 };
 pub use crate::scan::types::{Finding, ScanKind, redact};
