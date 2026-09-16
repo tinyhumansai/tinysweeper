@@ -212,6 +212,9 @@ impl TreeReader for ForgeTree<'_> {
                 if path.contains("..") || path.starts_with('/') {
                     return Ok(Found::NotFound);
                 }
+                if crate::scan::is_sensitive_path(path) {
+                    return Ok(sensitive_path_refusal(path));
+                }
                 Ok(match self.read(path).await? {
                     Read::Content(content) => {
                         let (start, end) = Lookup::read_range(*start, *end);
