@@ -488,11 +488,35 @@ fn path_instructions(inputs: &PromptInputs<'_>) -> String {
     out
 }
 
-/// The clause that stops a per-file fan-out reporting the same problem N times.
+/// The clause that stops a fan-out reporting the same problem N times.
 ///
-/// Lifted, in substance, from open-code-review: without it every one of the N
-/// concurrent reviewers notices the same cross-file issue while gathering
-/// context and reports it, and the author gets N copies of one comment.
+/// One path is the plain per-file case, and its text is **byte-identical** to
+/// what shipped before file grouping existed — a cassette recorded then, and a
+/// provider's cached prefix from before this pull request, both still match.
+/// Several paths is a group: files a graph edge or a naming convention says
+/// are related, reviewed together because a bug spanning them is invisible to
+/// two isolated reviewers. Lifted, in substance, from open-code-review:
+/// without a clause like this every one of the N concurrent reviewers notices
+/// the same cross-file issue while gathering context and reports it, and the
+/// author gets N copies of one comment.
+fn isolation_clause(paths: &[String]) -> String {
+    match paths {
+        [] => String::new(),
+        [only] => format!("{ISOLATION_CLAUSE}\nThe file is `{only}`.\n"),
+        many => {
+            let named = many
+                .iter()
+                .map(|path| format!("`{path}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{GROUP_ISOLATION_CLAUSE}\nThe files are: {named}.\n")
+        }
+    }
+}
+
+/// The single-file isolation clause. Kept as its own constant, unchanged since
+/// before grouping existed, so [`isolation_clause`]'s one-path arm stays
+/// byte-identical to what a cache or a cassette already has on record.
 const ISOLATION_CLAUSE: &str = r#"
 ## One file only
 
@@ -502,6 +526,21 @@ file must NOT become the subject of your comments. If you notice an issue
 elsewhere while gathering context, ignore it: another reviewer is looking at that
 file, and repeating its findings here is how one problem becomes several
 comments.
+"#;
+
+/// The clause for a group of related files reviewed in one conversation.
+const GROUP_ISOLATION_CLAUSE: &str = r#"
+## These files only
+
+You are reviewing this group of files together, and only these. They were
+grouped because they call, test, or otherwise sit beside one another, so a
+change that spans them is visible in one conversation instead of hidden
+between two isolated ones. Other files may appear as context, and you should
+read them to understand what this group does — but findings about any file
+outside this group must NOT become the subject of your comments. If you notice
+an issue elsewhere while gathering context, ignore it: another reviewer is
+looking at that file, and repeating its findings here is how one problem
+becomes several comments.
 "#;
 
 /// Rules every lane shares. Part of the cacheable prefix, so it must not
