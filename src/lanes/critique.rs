@@ -640,12 +640,21 @@ fn postable_range(raw: &RawFinding, diff: &FileDiff, resolution: Resolution) -> 
 /// removed, and only the summary still claimed it. A lane that reports nothing
 /// must not narrate something. What replaces it is the rejection reasons,
 /// which say more than the discarded prose did.
+///
+/// `added_by_coverage` covers the opposite mismatch: `summary` is round one's
+/// prose, written before the opt-in coverage pass (`lanes::coverage`) ever
+/// runs, so a group round one called clean and the coverage pass then added a
+/// finding to would otherwise keep declaring itself clean while `kept` says
+/// otherwise. Folded in as a note rather than rewritten, for the same reason
+/// the other counts are — round one's own words stay round one's, and what
+/// changed after it is stated rather than silently absorbed into them.
 fn summarise(
     summary: &str,
     unanchored: usize,
     discarded: usize,
     rejected: &[Rejection],
     kept: usize,
+    added_by_coverage: usize,
 ) -> String {
     if kept == 0 && !rejected.is_empty() {
         let reasons: Vec<String> = rejected
