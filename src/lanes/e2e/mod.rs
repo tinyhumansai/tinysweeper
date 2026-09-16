@@ -82,11 +82,23 @@ impl Lane for E2e {
             return Ok(skipped);
         }
 
-        // The same classification the `tests` lane uses, for the same reason:
-        // a change with no behavioural component needs no end-to-end test,
-        // and that is decided by a path table before any spend.
+        // The same classification the `tests` lane uses, for the same
+        // reason: a change with no behavioural component needs no
+        // end-to-end test, and that is decided by a path table before any
+        // spend. Unlike `tests`, an e2e spec or an e2e workflow file is
+        // exactly this lane's own subject — `tests::Inventory::of` puts
+        // both in `tests`/`inert` rather than `source`, which would skip
+        // this lane on the one class of change it exists to review: a
+        // weakened assertion in an e2e spec, a narrowed `paths:` filter, a
+        // loosened job condition. `touches_e2e_surface` keeps the lane
+        // running for those even when nothing else in the diff is
+        // "behavioural" by the tests lane's own definition.
         let inventory = Inventory::of(input.diffs);
-        if inventory.source.is_empty() {
+        let changed_paths = input.changed_paths();
+        let touches_e2e_surface = changed_paths.iter().any(|path| {
+            inventory::is_e2e_test_path(path) || crate::scan::workflows::is_workflow(path)
+        });
+        if inventory.source.is_empty() && !touches_e2e_surface {
             return Ok(LaneOutcome::skipped(
                 "No behavioural change: nothing outside documentation, configuration and tests.",
             ));
@@ -98,7 +110,6 @@ impl Lane for E2e {
             ));
         };
 
-        let changed_paths = input.changed_paths();
         let settings = input.config.lane(LaneId::E2e);
 
         if evidence.harness.is_empty() {
