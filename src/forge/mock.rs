@@ -193,6 +193,10 @@ pub struct MockState {
     pub trees: BTreeMap<String, TreeListing>,
     /// Submodule gitlinks, keyed by [`file_key`], as `(url, commit)`.
     pub submodules: BTreeMap<String, (String, String)>,
+    /// The open pull requests a commit SHA belongs to, for
+    /// `open_pull_requests_for_commit` — the fork-PR check-completion
+    /// lookup. A SHA with no entry serves an empty list.
+    pub pull_requests_by_commit: BTreeMap<String, Vec<u64>>,
 }
 
 /// The key a file's contents are stored under.
