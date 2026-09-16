@@ -332,6 +332,7 @@ async fn review_group(
                 retrieved_context,
                 memory_context,
                 confirmed_this_round: &confirmed_lines,
+                coverage_pass: true,
                 ..PromptInputs::new(LaneId::Security, config)
             });
 
