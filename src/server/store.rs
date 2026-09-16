@@ -483,18 +483,45 @@ impl crate::ports::review_state::ReviewStateStore for Store {
         // review wrote is lost, which a reload-then-unconditional-
         // `save_state` cannot promise.
         //
-        // The whole document, not only `head_sha`: a manual re-review of the
+        // Every field matched individually by its dotted path, not the
+        // whole `e2e` sub-document matched as one value: a document written
+        // before `generation` existed has no `generation` key in storage at
+        // all, but deserializes to `Watch { generation: String::new(), .. }`
+        // through `#[serde(default)]`. Matching the whole reserialized
+        // document against that stored shape would never succeed — Mongo's
+        // document equality requires the same set of keys, and the legacy
+        // document is missing one — leaving every watch saved before this
+        // migration permanently unclearable, republishing its terminal
+        // check on every later completion event forever. The `generation`
+        // path is therefore matched with `$exists: false` (the legacy
+        // shape) or equals `""`, alongside equals `watch.generation` (the
+        // ordinary case).
+        //
+        // The other fields, not only `head_sha`: a manual re-review of the
         // same commit (`/admin/reviews`) can save a replacement watch with
         // the same `head_sha` but different `jobs`/`summary`/`failed`
         // before this runs, and matching on `head_sha` alone would clear
         // that newer watch too.
-        let watch_document = bson::to_bson(watch).map_err(|err| Error::Forge(err.to_string()))?;
+        let generation_filter = if watch.generation.is_empty() {
+            doc! { "$or": [
+                { "e2e.generation": { "$exists": false } },
+                { "e2e.generation": "" },
+            ] }
+        } else {
+            doc! { "e2e.generation": &watch.generation }
+        };
+        let jobs = bson::to_bson(&watch.jobs).map_err(|err| Error::Forge(err.to_string()))?;
+        let mut filter = doc! {
+            "_id": key,
+            "e2e.head_sha": &watch.head_sha,
+            "e2e.jobs": jobs,
+            "e2e.summary": &watch.summary,
+            "e2e.failed": watch.failed,
+        };
+        filter.extend(generation_filter);
         let result = self
             .review_state
-            .update_one(
-                doc! { "_id": key, "e2e": watch_document },
-                doc! { "$unset": { "e2e": "" } },
-            )
+            .update_one(filter, doc! { "$unset": { "e2e": "" } })
             .await
             .map_err(|err| Error::Forge(err.to_string()))?;
         Ok(result.matched_count > 0)
