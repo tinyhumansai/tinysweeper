@@ -237,45 +237,19 @@ pub async fn gather(
         for path in inventory::workflow_paths(&default_listing.paths) {
             match forge.file_at(repo, &path, &default_sha).await {
                 Ok(Some(text)) => {
-                    let is_target = |workflow: &inventory::Workflow| {
-                        matches!(
-                            workflow.trigger,
-                            inventory::Trigger::PullRequest { target: true, .. }
-                        )
-                    };
-                    match inventory::classify_workflow(&path, &text, named) {
-                        Some(workflow) if is_target(&workflow) => {
-                            workflows.insert(path, workflow);
-                        }
-                        _ => {
-                            // Not `pull_request_target` on the default
-                            // branch — the authoritative source for that
-                            // trigger. Anything the head pass classified as
-                            // `pull_request_target` for this same path was
-                            // therefore wrong; drop it rather than publish a
-                            // definition GitHub will not actually execute.
-                            if let Some(existing) = workflows.get(&path)
-                                && is_target(existing)
-                            {
-                                workflows.remove(&path);
-                            }
-                        }
-                    }
-                }
-                Ok(None) => {
-                    // Deleted, or renamed away, on the default branch: if
-                    // the head pass still had a `pull_request_target` entry
-                    // for it, that workflow no longer exists where GitHub
-                    // would execute it from.
-                    if let Some(existing) = workflows.get(&path)
-                        && matches!(
-                            existing.trigger,
-                            inventory::Trigger::PullRequest { target: true, .. }
-                        )
+                    // Only a `pull_request_target` classification is kept
+                    // here — a plain `pull_request` definition on the
+                    // default branch says nothing about this pull request
+                    // until it merges, and the head pass above already
+                    // covers `pull_request` semantics for whatever this
+                    // pull request itself proposes at this path.
+                    if let Some(workflow) = inventory::classify_workflow(&path, &text, named)
+                        && is_target(&workflow)
                     {
-                        workflows.remove(&path);
+                        workflows.push(workflow);
                     }
                 }
+                Ok(None) => {}
                 Err(err) => {
                     tracing::warn!(
                         %err, %path,
@@ -288,7 +262,7 @@ pub async fn gather(
             }
         }
     }
-    evidence.harness.workflows = workflows.into_values().collect();
+    evidence.harness.workflows = workflows;
 
     match forge.check_runs(repo, head_sha).await {
         Ok(checks) => evidence.checks = checks,
