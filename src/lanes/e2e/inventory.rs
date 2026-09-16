@@ -253,33 +253,12 @@ impl Workflow {
                 paths_ignore,
                 ..
             } => {
-                let matchers = |globs: &[String]| -> Vec<GlobMatcher> {
-                    globs
-                        .iter()
-                        .filter_map(|glob| {
-                            // GitHub's `**` spans directories and `*` does
-                            // not; globset's defaults say the same with a
-                            // literal separator.
-                            Glob::new(glob).ok().map(|g| g.compile_matcher())
-                        })
-                        .collect()
-                };
-                if !paths.is_empty() {
-                    let include = matchers(paths);
-                    if !changed
-                        .iter()
-                        .any(|path| include.iter().any(|glob| glob.is_match(path)))
-                    {
-                        return Applies::PathsExcluded;
-                    }
+                if !paths.is_empty() && github_path_matches(paths, changed).is_empty() {
+                    return Applies::PathsExcluded;
                 }
                 if !paths_ignore.is_empty() {
-                    let ignore = matchers(paths_ignore);
-                    if !changed.is_empty()
-                        && changed
-                            .iter()
-                            .all(|path| ignore.iter().any(|glob| glob.is_match(path)))
-                    {
+                    let ignored = github_path_matches(paths_ignore, changed);
+                    if !changed.is_empty() && changed.iter().all(|path| ignored.contains(path)) {
                         return Applies::AllIgnored;
                     }
                 }
