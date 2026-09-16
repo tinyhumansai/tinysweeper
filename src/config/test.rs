@@ -685,6 +685,59 @@ fn a_zero_auto_merge_cap_is_flagged_as_refusing_everything() {
 }
 
 #[test]
+fn a_zero_grouping_cap_is_flagged_when_grouping_is_enabled() {
+    let config = parse("version = 1\n[grouping]\nenabled = true\nmax_files = 0\n");
+    let problems = validate::validate(&config);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("`grouping.max_files = 0`")),
+        "{problems:#?}"
+    );
+}
+
+#[test]
+fn a_zero_grouping_cap_is_not_flagged_when_grouping_is_disabled() {
+    // Disabled grouping never calls `grouping::group`, so a zero bound is
+    // inert — and the enabled-case error above names this key as the valid
+    // way to turn grouping off. Rejecting it here would contradict that.
+    let config = parse("version = 1\n[grouping]\nenabled = false\nmax_files = 0\n");
+    let problems = validate::validate(&config);
+    assert!(
+        !problems.iter().any(|p| p.contains("grouping.max_files")),
+        "{problems:#?}"
+    );
+}
+
+#[test]
+fn a_grouping_cap_of_one_file_is_flagged_as_forming_no_group() {
+    // `grouping::fits` rejects any component over `max_files`, so 1 rejects
+    // every group of more than one file — the same silent no-op as 0.
+    let config = parse("version = 1\n[grouping]\nenabled = true\nmax_files = 1\n");
+    let problems = validate::validate(&config);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("`grouping.max_files = 1`")),
+        "{problems:#?}"
+    );
+}
+
+#[test]
+fn a_zero_hunk_char_budget_is_flagged_as_forming_no_group() {
+    let config = parse(
+        "version = 1\n[grouping]\nenabled = true\nmax_files = 4\nmax_hunk_chars = 0\n",
+    );
+    let problems = validate::validate(&config);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("`grouping.max_hunk_chars = 0`")),
+        "{problems:#?}"
+    );
+}
+
+#[test]
 fn an_api_key_pasted_where_the_variable_name_goes_is_caught() {
     let config = parse("version = 1\n[models]\napi_key_env = \"sk-or-v1-abc123\"\n");
     let problems = validate::validate(&config);

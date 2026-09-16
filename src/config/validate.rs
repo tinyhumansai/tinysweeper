@@ -629,13 +629,33 @@ fn validate_overview(config: &Config, problems: &mut Vec<String>) {
 }
 
 fn validate_grouping(config: &Config, problems: &mut Vec<String>) {
-    // A component of zero files is not a group at all, and `grouping::group`
-    // would drop every file into its own singleton — indistinguishable from
-    // grouping being off, but paying the union-find and the confusion of a
-    // config that claims to be on.
-    if config.grouping.max_files == 0 {
+    // Disabled grouping never calls `grouping::group`, so a zero bound here
+    // is inert rather than contradictory — and the error below names exactly
+    // this key as the valid way to turn grouping off. Mirrors
+    // `validate_overview`'s early return for its own inactive feature.
+    if !config.grouping.enabled {
+        return;
+    }
+
+    // `grouping::fits` rejects any component whose file count exceeds
+    // `max_files`, so `max_files < 2` rejects every group of more than one
+    // file and singletons are all `group` ever produces — indistinguishable
+    // from grouping being off, but paying the union-find and the confusion
+    // of a config that claims to be on.
+    if config.grouping.max_files < 2 {
+        problems.push(format!(
+            "`grouping.max_files = {}` would group nothing; set it to at least 2 or set \
+             `grouping.enabled = false`",
+            config.grouping.max_files
+        ));
+    }
+
+    // `fits` also rejects any component whose total rendered hunk length
+    // exceeds `max_hunk_chars`, so a zero here rejects every non-empty
+    // group just as surely as `max_files < 2` does.
+    if config.grouping.max_hunk_chars == 0 {
         problems.push(
-            "`grouping.max_files = 0` would group nothing; set it to at least 1 or set \
+            "`grouping.max_hunk_chars = 0` would group nothing; set it above zero or set \
              `grouping.enabled = false`"
                 .into(),
         );
