@@ -1,16 +1,24 @@
-//! Per-file fan-out: one conversation per changed file, bounded and isolated.
+//! Fan-out: one conversation per unit of review, bounded and isolated.
 //!
 //! A lane that reviews a forty-file pull request in one conversation reviews
 //! the first few files carefully and the rest as an afterthought. Splitting it
-//! per file fixes that, and buys two more things:
+//! fixes that, and buys two more things:
 //!
-//! - **Isolation of failure.** One file's model call failing must not fail the
-//!   lane. The remaining files are still reviewed and the failure is counted
-//!   into the summary, where a human can see it — a lane that returns nothing
-//!   because one call timed out is a lane that quietly reports "all clear".
-//! - **Isolation of subject.** Each conversation is told it owns exactly one
-//!   file (see `ISOLATION_CLAUSE` in `harness::prompt`). Without that, every
+//! - **Isolation of failure.** One unit's model call failing must not fail the
+//!   lane. The rest are still reviewed and the failure is counted into the
+//!   summary, where a human can see it — a lane that returns nothing because
+//!   one call timed out is a lane that quietly reports "all clear".
+//! - **Isolation of subject.** Each conversation is told exactly which files it
+//!   owns (see `isolation_clause` in `harness::prompt`). Without that, every
 //!   one of the N reviewers notices the same cross-file problem and reports it.
+//!
+//! The unit is one file for `security`; for `critique` it is one
+//! [`crate::lanes::grouping::FileGroup`] — a handful of related changed files
+//! reviewed together so a bug spanning them is visible to one reviewer instead
+//! of hidden between two isolated ones. [`per_unit`] is generic over which;
+//! [`per_file`] is the plain-path convenience both lanes used before grouping
+//! existed, kept because `security` and every test predating grouping still
+//! read most naturally as "one file, one conversation".
 //!
 //! The concurrency cap is the third thing. Each call is a model call, and an
 //! unbounded fan-out over a large pull request is an unbounded bill and a rate
