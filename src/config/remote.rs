@@ -30,11 +30,6 @@
 //!   reviewed, the kill-switch label names, and which instruction filenames
 //!   count as policy. A repository is entitled to decide how it is reviewed,
 //!   and the worst it can do with these is get a quieter review of itself.
-//!   `[grouping]` sits in this bucket too: it only changes how many
-//!   conversations one file's problem gets discussed in — the same "how loud"
-//!   axis strictness sits on — and spends no more than the ungrouped fan-out
-//!   already would; the worst a repository can do with it is fewer, larger
-//!   calls over the same files it was already going to have reviewed.
 //! - **Not overridable — anything that spends the operator's money, names the
 //!   operator's secrets, writes to GitHub, or partitions shared state.**
 //!   `[models]` and `[embeddings]` (model choice, `base_url`, `api_key_env`,
@@ -49,7 +44,19 @@
 //!   repository that could set it would have the bot embed pictures from a
 //!   host of its choosing. `preview.enabled` and `preview.max_flows` are
 //!   overridable for the usual reason: they can only make a repository's
-//!   own preview smaller.
+//!   own preview smaller. `[grouping]` sits here too, not in the "how loud"
+//!   bucket above: `max_files` and `max_hunk_chars` are the ceiling one
+//!   conversation's combined diff may reach before falling back to
+//!   singletons, and nothing enforces a smaller one server-side — a
+//!   repository raising either arbitrarily can make one call carry a
+//!   many-file, many-thousand-character prompt no ungrouped review of the
+//!   same files would ever have sent in one request, which is a materially
+//!   different spend shape than "fewer, larger calls over the same files",
+//!   not merely a quieter review. Disabling grouping alone is not the
+//!   concern — that only forgoes the discount consolidation gives and falls
+//!   back to the pre-grouping per-file fan-out every review already paid for
+//!   — but the allow-list has no way to admit the harmless direction while
+//!   refusing the harmful one, so the whole section stays operator-only.
 //! - **Not overridable — anything that puts repository prose into a prompt.**
 //!   `path_instructions` is free text injected straight into a lane's
 //!   instructions, unfenced. Repository prose reaches a prompt through exactly
@@ -87,10 +94,7 @@ use crate::ports::forge::ForgeRead;
 /// is safe. See the module documentation for the split; changing this list is a
 /// change to the security boundary in `AGENTS.md` and needs saying so in the
 /// pull request.
-pub const OVERRIDABLE_KEYS: [&str; 20] = [
-    "grouping.enabled",
-    "grouping.max_files",
-    "grouping.max_hunk_chars",
+pub const OVERRIDABLE_KEYS: [&str; 17] = [
     "knowledge.extract",
     "knowledge.files",
     "labels.human_review",

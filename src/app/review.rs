@@ -713,14 +713,11 @@ pub async fn review_with_tree(
     // Walked once, ahead of the lane loop, and reused by `change_map` below:
     // both want the same neighbourhood of the changed files, and a second walk
     // would be a second round trip to the graph store for an answer already in
-    // hand. Only asked for when something wants it — grouping, but only when
-    // an enabled lane actually calls `group`, or the change map — so a
-    // deployment with both off, or a tests-only review with neither `critique`
-    // nor `security` enabled, costs no query it never needed.
-    let enabled_lanes = config.enabled_lanes();
-    let grouping_has_a_consumer = config.grouping.enabled
-        && (enabled_lanes.contains(&LaneId::Critique) || enabled_lanes.contains(&LaneId::Security));
-    let changed_neighbourhood = if grouping_has_a_consumer || config.overview.enabled {
+    // hand. Only asked for when something wants it — see
+    // `changed_neighbourhood_is_needed` — so a deployment with both off, or a
+    // tests-only review with neither `critique` nor `security` enabled, costs
+    // no query it never needed.
+    let changed_neighbourhood = if changed_neighbourhood_is_needed(config) {
         walk_changed_neighbourhood(config, retrieval, repo, &diffs).await
     } else {
         None
@@ -1022,6 +1019,23 @@ async fn remember_findings_bounded(
 /// pull request that wants both pays for one round trip to the graph store,
 /// not two.
 ///
+/// Whether anything in this review would use a graph walk of the changed
+/// files: the change map when it is on, or grouping when it is on *and* an
+/// enabled lane actually calls [`crate::lanes::grouping::group`] — `critique`
+/// or `security`, the fan-out lanes grouping exists for. `overview.enabled`
+/// with grouping off, or grouping on with only `e2e`/`description` enabled,
+/// must not pay for a walk nothing downstream reads.
+fn changed_neighbourhood_is_needed(config: &Config) -> bool {
+    if config.overview.enabled {
+        return true;
+    }
+    if !config.grouping.enabled {
+        return false;
+    }
+    let enabled_lanes = config.enabled_lanes();
+    enabled_lanes.contains(&LaneId::Critique) || enabled_lanes.contains(&LaneId::Security)
+}
+
 /// `None` when no graph is configured. `Some(Err(()))` when one is configured
 /// but would not answer — logged here, once, rather than at every caller.
 async fn walk_changed_neighbourhood(
@@ -1714,6 +1728,46 @@ mod tests {
         let mut config = config();
         config.review.lanes = vec!["critique".into()];
         config
+    }
+
+    #[test]
+    fn grouping_alone_needs_no_walk_when_no_enabled_lane_consumes_it() {
+        // A tests-only review — neither `critique` nor `security` on — never
+        // calls `grouping::group`, so the default-enabled grouping flag must
+        // not trigger a graph walk nothing downstream reads. `overview` is
+        // turned off here so this isolates grouping's own contribution;
+        // `the_change_map_alone_needs_the_walk_even_with_grouping_off` and
+        // `neither_grouping_nor_the_change_map_needs_no_walk` cover the rest
+        // of the matrix.
+        let mut config = config();
+        config.review.lanes = vec!["e2e".into()];
+        config.overview.enabled = false;
+        assert!(config.grouping.enabled, "grouping is on by default");
+        assert!(!changed_neighbourhood_is_needed(&config));
+    }
+
+    #[test]
+    fn grouping_with_critique_enabled_needs_the_walk() {
+        let config = critique_config();
+        assert!(changed_neighbourhood_is_needed(&config));
+    }
+
+    #[test]
+    fn the_change_map_alone_needs_the_walk_even_with_grouping_off() {
+        let mut config = config();
+        config.review.lanes = vec!["e2e".into()];
+        config.grouping.enabled = false;
+        config.overview.enabled = true;
+        assert!(changed_neighbourhood_is_needed(&config));
+    }
+
+    #[test]
+    fn neither_grouping_nor_the_change_map_needs_no_walk() {
+        let mut config = config();
+        config.review.lanes = vec!["e2e".into()];
+        config.grouping.enabled = false;
+        config.overview.enabled = false;
+        assert!(!changed_neighbourhood_is_needed(&config));
     }
 
     #[test]

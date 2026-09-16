@@ -119,6 +119,38 @@ fn a_repository_cannot_raise_the_budget_it_spends_against() {
 }
 
 #[test]
+fn a_repository_cannot_widen_its_own_grouping_bounds() {
+    // Disabling grouping only forgoes the discount consolidation gives; the
+    // spend risk is a repository raising `max_files`/`max_hunk_chars` past
+    // what any ungrouped review of the same files would ever send in one
+    // request. Nothing enforces a smaller bound server-side, so the whole
+    // section is operator-only — see the module doc's `[grouping]` bullet.
+    let (config, ignored) = applied(
+        r#"
+        [grouping]
+        enabled = false
+        max_files = 500
+        max_hunk_chars = 5000000
+        "#,
+    );
+
+    assert_eq!(config.grouping.enabled, base().grouping.enabled);
+    assert_eq!(config.grouping.max_files, base().grouping.max_files);
+    assert_eq!(
+        config.grouping.max_hunk_chars,
+        base().grouping.max_hunk_chars
+    );
+    assert_eq!(
+        ignored,
+        vec![
+            "grouping.enabled".to_string(),
+            "grouping.max_files".to_string(),
+            "grouping.max_hunk_chars".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn a_repository_cannot_repartition_the_shared_index() {
     // Provider, model and dimensions are the index partition key. One
     // repository changing them would invalidate vectors written for every
@@ -367,11 +399,6 @@ lanes = ["critique"]
 
 [paths]
 ignore = ["docs/**"]
-
-[grouping]
-enabled = false
-max_files = 2
-max_hunk_chars = 5000
 
 [labels]
 human_review = "needs-human"

@@ -550,6 +550,7 @@ impl Ledger {
                 self.seed_symbol(
                     tree,
                     &diffs[*i],
+                    diffs,
                     &symbol,
                     policy,
                     &mut rendered,
@@ -582,10 +583,18 @@ The definitions of what the changed lines call into,                  read from 
     /// across a whole group rather than per file. The caller decides which
     /// file's symbol to try next — round-robin across a group, or simply the
     /// next one when there is only one file.
+    ///
+    /// `diff` is the file whose changed lines named `symbol`; `group_diffs`
+    /// is every file in its conversation (one entry, `diff` itself, when
+    /// there is no group) — a hit inside any of their hunks is changed code
+    /// already visible in this same conversation's evidence, not an external
+    /// definition, whichever member's diff it happens to land in.
+    #[allow(clippy::too_many_arguments)]
     async fn seed_symbol(
         &mut self,
         tree: &dyn TreeReader,
         diff: &crate::evidence::diff::FileDiff,
+        group_diffs: &[crate::evidence::diff::FileDiff],
         symbol: &str,
         policy: &LookupPolicy,
         rendered: &mut String,
@@ -616,13 +625,19 @@ The definitions of what the changed lines call into,                  read from 
             // A definition already in the diff is not looked up; one in
             // the same file but outside every hunk is — it is exactly as
             // invisible to the reviewer as one in another file, and the
-            // unbounded sibling read on opencompany#2313 lived there.
+            // unbounded sibling read on opencompany#2313 lived there. Checked
+            // against every file in the group, not just `diff`: a hit inside
+            // a sibling group member's own hunk is changed code this same
+            // conversation already has, not an external definition.
+            let already_in_this_conversations_diff = |h: &crate::ports::tree::Hit| {
+                group_diffs.iter().any(|d| {
+                    d.path == h.path && d.within_hunk(u64::from(h.line), u64::from(h.line))
+                })
+            };
             let definitions: Vec<&crate::ports::tree::Hit> = hits
                 .iter()
                 .filter(|h| {
-                    looks_like_definition(&h.text)
-                        && !(h.path == diff.path
-                            && diff.within_hunk(u64::from(h.line), u64::from(h.line)))
+                    looks_like_definition(&h.text) && !already_in_this_conversations_diff(h)
                 })
                 .collect();
             if definitions.is_empty() || definitions.len() > AUTO_FOLLOW {
@@ -979,6 +994,35 @@ mod tests {
         assert!(
             seeded.rendered.contains("`before` is an exclusive bound"),
             "the second file's own call must still be seeded: {}",
+            seeded.rendered
+        );
+    }
+
+    /// A definition in the *diff itself* is never looked up — it is already
+    /// in the reviewer's evidence. In a group, "the diff itself" is every
+    /// member's diff, not just the file the candidate symbol was drawn from.
+    #[tokio::test]
+    async fn a_definition_added_by_a_sibling_group_member_is_not_seeded_as_external() {
+        let first = crate::evidence::diff::parse_file_patch(
+            "src/a.rs",
+            "@@ -1,1 +1,2 @@\n fn a() {}\n+helper_call();\n",
+        );
+        let second = crate::evidence::diff::parse_file_patch(
+            "src/b.rs",
+            "@@ -1,1 +1,2 @@\n fn b() {}\n+fn helper_call() {}\n",
+        );
+        // The tree reflects the head commit both diffs were taken from, so
+        // `src/b.rs` already holds the newly added definition.
+        let tree = MockTree::from_files([("src/b.rs", "fn b() {}\nfn helper_call() {}\n")]);
+        let mut ledger = Ledger::default();
+        let seeded = ledger
+            .seed(&tree, &[first, second], &LookupPolicy::default())
+            .await;
+
+        assert!(
+            seeded.rendered.is_empty(),
+            "a definition the sibling group member's own diff already added must not be \
+             rendered as an external lookup: {}",
             seeded.rendered
         );
     }

@@ -366,16 +366,28 @@ fn same_stem_different_extension(a: &str, b: &str) -> bool {
 
 /// Whether `rest` — the filename after its component root — names a
 /// script: `tsx`, or `module.ts` if anyone ever writes one.
+///
+/// Exact matches only, plus the one qualifier CSS Modules uses: a bare
+/// `.ends_with(".ts")` also matched `user.model.ts`, whose middle segment
+/// names a different concern entirely rather than opting into a scoped
+/// module — `user.model.ts` and `user.profile.css` share a root but are not
+/// a component and its stylesheet.
 fn is_script_extension(rest: &str) -> bool {
-    matches!(rest, "ts" | "tsx" | "js" | "jsx") || rest.ends_with(".ts") || rest.ends_with(".tsx")
+    matches!(
+        rest,
+        "ts" | "tsx" | "js" | "jsx" | "module.ts" | "module.tsx"
+    )
 }
 
 /// Whether `rest` names a stylesheet, plain or CSS-Modules-scoped.
+///
+/// Exact matches only — see [`is_script_extension`] for why a suffix check
+/// is not narrow enough.
 fn is_style_extension(rest: &str) -> bool {
-    matches!(rest, "css" | "scss" | "less")
-        || rest.ends_with(".css")
-        || rest.ends_with(".scss")
-        || rest.ends_with(".less")
+    matches!(
+        rest,
+        "css" | "scss" | "less" | "module.css" | "module.scss" | "module.less"
+    )
 }
 
 /// A path's directory (empty for a bare filename) and its filename.
@@ -530,6 +542,20 @@ mod tests {
         let groups = group(&paths, &diffs, None, &default_bounds());
 
         assert_eq!(groups.len(), 1, "{groups:?}");
+    }
+
+    #[test]
+    fn files_sharing_a_root_but_naming_different_middle_segments_stay_singletons() {
+        // Both start with `user.` and end in a script/style extension, but
+        // `.model.` and `.profile.` name different concerns, not a component
+        // and its CSS-Modules-scoped stylesheet.
+        let paths = strings(&["ui/user.model.ts", "ui/user.profile.css"]);
+        let diffs = diffs_for(&["ui/user.model.ts", "ui/user.profile.css"]);
+
+        let groups = group(&paths, &diffs, None, &default_bounds());
+
+        assert_eq!(groups.len(), 2, "{groups:?}");
+        assert!(groups.iter().all(|g| g.paths.len() == 1));
     }
 
     #[test]
