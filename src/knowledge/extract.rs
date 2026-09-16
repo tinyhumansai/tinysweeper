@@ -399,9 +399,10 @@ impl<'a> Extractor<'a> {
         // by this one is not in the diff at all; and even one this diff *did*
         // add is masked there but re-fetched here at the full head content,
         // bypassing that masking entirely. Scrubbed before this is cached or
-        // sent to extraction, the same two path-independent passes tree
-        // lookups and replayed evidence get: the rulepack, and private-key-
-        // body masking between an armour marker and its end.
+        // sent to extraction, the same path-independent passes tree lookups
+        // and replayed evidence get: the rulepack, the entropy-assignment
+        // heuristic, and private-key-body masking between an armour marker
+        // and its end.
         let content = {
             let mut in_key_block = false;
             content
