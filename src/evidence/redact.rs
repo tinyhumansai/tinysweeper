@@ -593,9 +593,8 @@ mod tests {
     fn private_key_state_does_not_cross_hunk_boundaries() {
         let begin = format!("-----BEGIN {}-----", "RSA PRIVATE KEY");
         let body = "MIIEowIBAAKCAQEAthisisadeadbeefexamplebodyforatestcase1234567890";
-        let raw = format!(
-            "@@ -0,0 +1,2 @@\n+{begin}\n+{body}\n@@ -10,0 +12 @@\n+let ordinary = true;\n"
-        );
+        let raw =
+            format!("@@ -0,0 +1,2 @@\n+{begin}\n+{body}\n@@ -10,0 +12 @@\n+let ordinary = true;\n");
         let mut diffs = vec![parse_file_patch("src/config.rs", &raw)];
 
         mask(&mut diffs, &[], &[]);
