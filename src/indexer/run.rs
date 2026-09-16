@@ -479,9 +479,15 @@ impl<'a> Indexer<'a> {
         report.unfetched = self
             .missing
             .iter()
-            // A directory the operator revoked is not one the run is waiting
-            // on, whatever a second `.gitmodules` entry says.
-            .filter(|dir| !self.revoked.contains(dir))
+            // A directory the operator revoked — or anything under one — is
+            // not one the run is waiting on, whatever a second `.gitmodules`
+            // entry says.
+            .filter(|dir| {
+                !self
+                    .revoked
+                    .iter()
+                    .any(|revoked| dir.starts_with(revoked.as_str()))
+            })
             .map(|dir| dir.trim_end_matches('/').to_string())
             .collect();
         let revoked: Vec<String> = removed
@@ -758,6 +764,16 @@ impl<'a> Indexer<'a> {
         if !stale.is_empty() {
             report.deleted += self.index.delete_chunks(repo_id, &stale).await?;
         }
+        // Orphans go too, uncounted: they were never added.
+        let orphans: Vec<String> = work
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| finished(*index))
+            .flat_map(|(_, file)| file.orphans.clone())
+            .collect();
+        if !orphans.is_empty() {
+            self.index.delete_chunks(repo_id, &orphans).await?;
+        }
         // Delete succeeded, so stale IDs no longer need crash-recovery
         // protection in the manifest.
         let finalized: Vec<IndexedFile> = work
@@ -844,6 +860,10 @@ struct FileWork {
     to_embed: Vec<Chunk>,
     to_relocate: Vec<(String, Chunk)>,
     stale: Vec<String>,
+    /// Ids an earlier run *intended* and never confirmed, now superseded:
+    /// rows that may or may not exist, and were never counted. Deleted with
+    /// the stale ones, but never subtracted.
+    orphans: Vec<String>,
     previous: Vec<String>,
     reused: u64,
 }
@@ -881,11 +901,23 @@ impl FileWork {
         }
         let reused = ids.len().saturating_sub(to_embed.len()) as u64;
 
-        let stale: Vec<String> = previous
-            .map(IndexedFile::every_id)
-            .unwrap_or_default()
+        // Counted rows that this content supersedes: the confirmed set, and
+        // a confirmation's pending set (the old rows of a replacement whose
+        // delete never ran). An intent's pending set is the other thing —
+        // rows that may have been written and were never counted — and goes
+        // in `orphans`, to be deleted without being subtracted.
+        let (counted, uncounted): (Vec<String>, Vec<String>) = match previous {
+            Some(file) if file.pending_is_stale => (file.every_id(), Vec::new()),
+            Some(file) => (file.chunks.clone(), file.pending.clone()),
+            None => (Vec::new(), Vec::new()),
+        };
+        let stale: Vec<String> = counted
             .into_iter()
             .filter(|id| !fresh.contains(id))
+            .collect();
+        let orphans: Vec<String> = uncounted
+            .into_iter()
+            .filter(|id| !fresh.contains(id) && !stale.contains(id))
             .collect();
 
         Self {
@@ -895,6 +927,7 @@ impl FileWork {
             to_embed,
             to_relocate,
             stale,
+            orphans,
             reused,
         }
     }
@@ -913,6 +946,7 @@ impl FileWork {
     fn intent(&self) -> IndexedFile {
         let mut pending = self.ids.clone();
         pending.extend(self.stale.iter().cloned());
+        pending.extend(self.orphans.iter().cloned());
         pending.sort();
         pending.dedup();
         IndexedFile {
@@ -923,6 +957,10 @@ impl FileWork {
         }
     }
 
+    /// The record after the writes landed: the new ids confirmed, the old
+    /// counted ids pending their delete. Orphans are not carried — they are
+    /// deleted in the same step and were never counted, and carrying them
+    /// as stale would have a later removal subtract rows it never added.
     fn confirmation(&self) -> IndexedFile {
         IndexedFile {
             path: self.path.clone(),
