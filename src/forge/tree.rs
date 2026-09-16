@@ -55,6 +55,13 @@ pub struct Submodule {
 ///
 /// `host` is the forge's git host, `github.com` in production; a URL on any
 /// other host resolves to `None` and stays unread.
+/// `line` with a leading git-config `key` removed, whatever its case.
+fn strip_key<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    line.get(..key.len())
+        .filter(|head| head.eq_ignore_ascii_case(key))
+        .map(|_| &line[key.len()..])
+}
+
 pub fn parse_gitmodules(text: &str, host: &str) -> Vec<Submodule> {
     let mut out = Vec::new();
     let mut path: Option<String> = None;
@@ -74,13 +81,14 @@ pub fn parse_gitmodules(text: &str, host: &str) -> Vec<Submodule> {
             flush(&mut path, &mut url, &mut out);
             continue;
         }
-        if let Some(rest) = line.strip_prefix("path")
+        // Git-config keys are case-insensitive: `PATH = x` is `path = x`.
+        if let Some(rest) = strip_key(line, "path")
             && let Some(value) = rest.trim().strip_prefix('=')
         {
             // One spelling, shared with the selector; a path nobody may
             // declare is dropped here rather than carried along unresolved.
             path = crate::ports::tree::canonical_submodule_path(value);
-        } else if let Some(rest) = line.strip_prefix("url")
+        } else if let Some(rest) = strip_key(line, "url")
             && let Some(value) = rest.trim().strip_prefix('=')
         {
             url = Some(value.trim().to_string());
@@ -284,6 +292,13 @@ mod tests {
                 "{spelled}"
             );
         }
+        let shouted = "[submodule \"e\"]\n\tPATH = libs/e\n\tURL = https://github.com/acme/e\n";
+        let subs = parse_gitmodules(shouted, "github.com");
+        assert_eq!(
+            subs[0].path, "libs/e",
+            "git-config keys are case-insensitive"
+        );
+        assert_eq!(subs[0].repo, RepoId::parse("acme/e"));
         let escaping = "[submodule \"d\"]\n\tpath = ../up\n\turl = https://github.com/acme/d\n";
         assert!(
             parse_gitmodules(escaping, "github.com").is_empty(),

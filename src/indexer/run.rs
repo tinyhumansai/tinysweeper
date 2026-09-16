@@ -130,10 +130,7 @@ impl<'a> Indexer<'a> {
     /// the same head fetches and indexes them rather than believing the index
     /// is fresh without them.
     pub fn missing(mut self, submodule_dirs: Vec<String>) -> Self {
-        self.missing = submodule_dirs
-            .into_iter()
-            .map(|dir| format!("{}/", dir.trim_end_matches('/')))
-            .collect();
+        self.missing = dirs_of(submodule_dirs);
         self
     }
 
@@ -151,10 +148,7 @@ impl<'a> Indexer<'a> {
     /// from the checkout are touched: a `.gitmodules` entry naming a
     /// directory that is really on disk names nothing that is gone.
     pub fn revoking(mut self, submodule_dirs: Vec<String>) -> Self {
-        self.revoked = submodule_dirs
-            .into_iter()
-            .map(|dir| format!("{}/", dir.trim_end_matches('/')))
-            .collect();
+        self.revoked = dirs_of(submodule_dirs);
         self
     }
 
@@ -367,8 +361,10 @@ impl<'a> Indexer<'a> {
             // revision or a failed state, and either means the graph is
             // owed a whole rebuild rather than an incremental one keyed on
             // a `changed` list that the incomplete run already confirmed.
-            rebuild_graph: state.revision.is_none()
-                || state.state != crate::indexer::types::IndexState::Ready,
+            // Not the state: `claim` has just set it to `Indexing`. A record
+            // that never completed has no revision; one whose last run failed
+            // still carries that run's message (a completed run clears it).
+            rebuild_graph: state.revision.is_none() || state.message.is_some(),
             ..IndexReport::default()
         };
         let outcome = self
@@ -546,15 +542,24 @@ impl<'a> Indexer<'a> {
         if paths.is_empty() {
             return Ok(());
         }
-        // Confirmed ids, and the ids a confirmation left pending: the old
+        // Confirmed ids, and the ids a *confirmation* left pending: the old
         // rows of a replacement whose delete never ran are still in the
-        // store and still in the count, and go by id like the rest.
+        // store and still in the count, and go by id like the rest. An
+        // intent's pending ids are the opposite — about to be written, never
+        // counted — and are left to the uncounted sweep.
         let confirmed: Vec<String> = self
             .manifest
             .indexed(repo_id, signature, paths)
             .await?
             .into_iter()
-            .flat_map(|file| file.chunks.into_iter().chain(file.pending))
+            .flat_map(|file| {
+                let stale = if file.pending_is_stale {
+                    file.pending
+                } else {
+                    Vec::new()
+                };
+                file.chunks.into_iter().chain(stale)
+            })
             .collect();
         if !confirmed.is_empty() {
             report.deleted += self.index.delete_chunks(repo_id, &confirmed).await?;
@@ -766,6 +771,18 @@ impl<'a> Indexer<'a> {
     }
 }
 
+/// Directory prefixes, one per directory, from however they were spelled.
+fn dirs_of(dirs: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = dirs
+        .into_iter()
+        .map(|dir| format!("{}/", dir.trim_matches('/')))
+        .filter(|dir| dir != "/")
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// Which paths a run removes.
 ///
 /// A changed-path run names them; a full walk asks the manifest, and asks
@@ -902,6 +919,7 @@ impl FileWork {
             path: self.path.clone(),
             chunks: self.previous.clone(),
             pending,
+            pending_is_stale: false,
         }
     }
 
@@ -910,6 +928,7 @@ impl FileWork {
             path: self.path.clone(),
             chunks: self.ids.clone(),
             pending: self.stale.clone(),
+            pending_is_stale: true,
         }
     }
 

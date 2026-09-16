@@ -590,7 +590,12 @@ impl DirTree {
 pub fn submodule_paths(gitmodules: &str) -> Vec<String> {
     gitmodules
         .lines()
-        .filter_map(|line| line.trim().strip_prefix("path"))
+        .filter_map(|line| {
+            let line = line.trim();
+            line.get(..4)
+                .filter(|head| head.eq_ignore_ascii_case("path"))
+                .map(|_| &line[4..])
+        })
         .filter_map(|rest| rest.trim().strip_prefix('='))
         .filter_map(|p| canonical_submodule_path(p.trim()))
         .collect()
@@ -840,7 +845,7 @@ mod tests {
 
     #[test]
     fn gitmodules_paths_are_parsed_and_unsafe_paths_refused() {
-        let text = "[submodule \"x\"]\n\tpath = vendor/x\n\turl = https://e/x.git\n[submodule \"y\"]\n path=vendor/y/\n";
+        let text = "[submodule \"x\"]\n\tpath = vendor/x\n\turl = https://e/x.git\n[submodule \"y\"]\n Path=vendor/y/\n";
         assert_eq!(submodule_paths(text), vec!["vendor/x", "vendor/y"]);
         // Every spelling git resolves to one gitlink is one path here too.
         for spelled in [

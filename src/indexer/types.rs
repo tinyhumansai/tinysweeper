@@ -219,6 +219,13 @@ pub struct IndexedFile {
     /// skip embedding a chunk that was never written.
     #[serde(default)]
     pub pending: Vec<String>,
+    /// What `pending` holds. `false` at the intent: ids about to be written,
+    /// not yet in the index, never counted. `true` at the confirmation: the
+    /// *old* ids a replacement is about to delete — still in the index, and
+    /// still in the repository's chunk count until that delete lands. A
+    /// removal that counts what it subtracts needs the difference.
+    #[serde(default)]
+    pub pending_is_stale: bool,
 }
 
 impl IndexedFile {
@@ -228,6 +235,7 @@ impl IndexedFile {
             path: path.into(),
             chunks,
             pending: Vec::new(),
+            pending_is_stale: false,
         }
     }
 
