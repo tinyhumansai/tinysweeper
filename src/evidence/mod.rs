@@ -7,6 +7,7 @@
 
 pub mod diff;
 pub mod git;
+pub mod redact;
 pub mod replay;
 
 pub use crate::evidence::diff::{
