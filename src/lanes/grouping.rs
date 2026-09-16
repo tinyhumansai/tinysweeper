@@ -376,14 +376,6 @@ impl UnionFind {
     }
 }
 
-/// Whether `graph`'s nodes are consulted for symbol lookups. Kept in the graph
-/// module doc rather than here: `NodeKind` is imported only so the compiler
-/// does not flag it as unused should a future edit start filtering by kind.
-#[allow(dead_code)]
-const fn _uses_node_kind() -> Option<NodeKind> {
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
