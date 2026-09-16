@@ -83,9 +83,11 @@ lanes = ["critique", "security"]
 
 # Test files, across every language, take the test rules before any
 # language's own rules — a `_test.go` or `foo.test.ts` is judged as a test
-# first, not as Go or TypeScript source. Java's JUnit convention carries none
-# of those substrings (`UserServiceTest.java`, `src/test/java/**`), so it gets
-# its own entries below, still ahead of the general `**/*.java` rule.
+# first, not as Go or TypeScript source. Two conventions carry none of those
+# filename substrings: Java's JUnit layout (`UserServiceTest.java`,
+# `src/test/java/**`) and a directory named for its contents rather than its
+# filenames (`tests/api.py`, `__tests__/Widget.tsx`) — both get their own
+# entries below, still ahead of the general per-extension rule.
 [[path_instructions]]
 glob = "**/*{_test,test_,.test,.spec}*"
 rules = "tests"
@@ -96,6 +98,10 @@ rules = "tests"
 
 [[path_instructions]]
 glob = "**/src/test/**/*.java"
+rules = "tests"
+
+[[path_instructions]]
+glob = "**/{test,tests,__tests__}/**/*.{py,rs,go,ts,tsx,js,jsx,mjs,cjs}"
 rules = "tests"
 
 # Scoped to the two lanes that actually read code file-by-file. `commits`,
