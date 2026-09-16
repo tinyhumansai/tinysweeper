@@ -479,18 +479,29 @@ impl TreeReader for RecordingTree<'_> {
 /// and `MockTree` to each redact their own content.
 pub struct RedactingTree<'a> {
     inner: &'a dyn TreeReader,
+    refused_paths: Vec<String>,
 }
 
 impl<'a> RedactingTree<'a> {
     /// Redact everything `inner` answers.
     pub fn new(inner: &'a dyn TreeReader) -> Self {
-        Self { inner }
+        Self { inner, refused_paths: Vec::new() }
+    }
+
+    /// Also refuse head paths whose previous name was sensitive.
+    pub fn refusing_paths(inner: &'a dyn TreeReader, refused_paths: Vec<String>) -> Self {
+        Self { inner, refused_paths }
     }
 }
 
 #[async_trait]
 impl TreeReader for RedactingTree<'_> {
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
+        if let Lookup::Read { path, .. } = lookup {
+            if self.refused_paths.iter().any(|refused| refused == path) {
+                return Ok(sensitive_path_refusal());
+            }
+        }
         let found = self.inner.lookup(lookup).await?;
         // A requested range can begin in the body of an otherwise ordinary
         // source file's PEM block. Establish the state from the preceding

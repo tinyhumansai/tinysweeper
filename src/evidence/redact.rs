@@ -162,6 +162,12 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
                 if in_key_block {
                     if scan::is_private_key_end(&line.text) {
                         in_key_block = false;
+                        let masked = scan::redact_line(&line.text);
+                        if masked != line.text {
+                            spans += 1;
+                            masked_here = true;
+                            line.text = masked;
+                        }
                         continue;
                     }
                     // Blank lines inside the armour are formatting, not key
@@ -308,6 +314,10 @@ pub fn scrub_rendered(text: &str) -> String {
         }
         if let Some(path) = line.strip_prefix("--- ") {
             sensitive = scan::is_sensitive_path(path);
+            in_key_block = false;
+        }
+        if line.starts_with("@@ ") {
+            in_key_block = false;
         }
         let (prefix, body) = split_render_prefix(line);
         out.push_str(prefix);

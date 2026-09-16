@@ -203,7 +203,13 @@ pub fn redact_stream_line(line: &str, in_key_block: &mut bool) -> String {
         .find(|marker| line.contains(marker))
     {
         *in_key_block = true;
-        return redact_pem_marker_suffix(line, marker);
+        // A marker embedded in an assignment can carry the complete key on
+        // one physical line.  Keeping the prefix would retain that value.
+        return if line.trim().starts_with(marker) && line.trim().ends_with("-----") {
+            redact_pem_marker_suffix(line, marker)
+        } else {
+            redact(line)
+        };
     }
     if *in_key_block {
         if is_private_key_end(line) {

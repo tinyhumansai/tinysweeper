@@ -294,7 +294,9 @@ async fn a_secret_in_the_working_tree_never_reaches_a_model_request() {
         .await
         .expect("reviews");
 
-    for request in recorder.requests() {
+    let requests = recorder.requests();
+    assert!(!requests.is_empty(), "local review must build a model request");
+    for request in requests {
         for message in &request.messages {
             assert!(
                 !message.content.contains("IOSFODNN7EXAMPLE"),

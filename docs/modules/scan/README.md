@@ -27,8 +27,9 @@ Two matchers apply the same redaction, at two different moments:
 
 - [`scan::secrets::redact_line`] (the `scrub` a model's *output* has always
   gone through) replaces a recognised credential in a string with
-  [`redact`]'s token. It matches on **shape** — the rulepack — so it also
-  catches a secret a model quotes back into a summary.
+  [`redact`]'s token. It runs the **rulepack** and an
+  **entropy-assignment heuristic** for secret-shaped assignments the rulepack
+  cannot see, so it also catches a secret a model quotes back into a summary.
 - [`crate::evidence::redact::mask`] runs on the **parsed diff**, before any
   request is built — see `docs/modules/lanes` and the module doc on
   `src/evidence/redact.rs`. It uses `redact_line` for a line a scanner
