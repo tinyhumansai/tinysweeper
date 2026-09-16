@@ -314,12 +314,13 @@ mod tests {
     /// still renders the untouched lines around it into the model request.
     #[test]
     fn context_lines_in_a_sensitive_file_are_masked_too() {
-        let key = token("AKIA", "IOSFODNN7EXAMPLE");
-        let raw = format!(
-            "@@ -1,3 +1,3 @@\n INTERNAL_TOKEN=opaque-value\n-OLD_FLAG=off\n+OLD_FLAG=on\n FEATURE_FLAG={key}\n"
-        );
-        let mut diffs = vec![parse_file_patch(".env", &raw)];
+        let raw = "@@ -1,3 +1,3 @@\n INTERNAL_TOKEN=opaque-value\n-OLD_FLAG=off\n+OLD_FLAG=on\n";
+        let mut diffs = vec![parse_file_patch(".env", raw)];
         let findings = scan::secrets::scan_added_lines(".env", diffs[0].added_lines());
+        // Not shaped like anything the rulepack or the entropy heuristic
+        // knows: the sensitive-path fallback, not a scanner finding, is what
+        // has to catch this line.
+        assert!(findings.is_empty(), "{findings:#?}");
 
         mask(&mut diffs, &findings, &[]);
         let rendered = replay::render(&diffs);
@@ -329,7 +330,6 @@ mod tests {
             "a context line's value is still a secret in a sensitive file: {rendered}"
         );
         assert!(rendered.contains("INTERNAL_TOKEN="), "{rendered}");
-        assert!(!rendered.contains("IOSFODNN7EXAMPLE"), "{rendered}");
     }
 
     #[test]
