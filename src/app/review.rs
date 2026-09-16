@@ -1236,10 +1236,19 @@ fn e2e_watch(lanes: &[LaneProposal], head_sha: &str) -> Option<crate::lanes::e2e
 /// without a dependency neither `Cargo.toml` nor any other module here
 /// already carries.
 fn watch_generation() -> String {
+    // The nanosecond timestamp alone is not enough: the server reviews
+    // several pull requests concurrently, and two calls on different tasks
+    // can land in the same clock tick — clock resolution is coarser than a
+    // nanosecond on plenty of real systems, whatever the type says. A
+    // process-wide atomic counter closes that regardless of clock
+    // resolution or scheduling; the timestamp stays only so two generations
+    // are still ordered for anyone reading the raw value.
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
-    format!("{}-{}", now.as_nanos(), std::process::id())
+    format!("{}-{}-{sequence}", now.as_nanos(), std::process::id())
 }
 
 fn still_open_titles(prior_titles: &[String], lanes: &[LaneProposal]) -> Vec<String> {
