@@ -105,11 +105,24 @@ For each e2e workflow, whether it *would* run for this pull request:
 - `on:` includes `pull_request` (or `pull_request_target`) — or it is
   `push`-to-main only, `workflow_dispatch` only, or `schedule` only, in which
   case it never runs on a pull request and every pull request is unverified.
-- `paths:` / `paths-ignore:` filters, evaluated against the changed paths.
-  This is the one that bites: a filter written when the e2e suite covered the
-  frontend, still in place after the suite grew a backend job.
+- `paths:` / `paths-ignore:` filters, evaluated against the changed paths
+  using GitHub's own semantics — glob patterns are evaluated in order with a
+  `!`-prefixed pattern subtracting from the running match rather than adding
+  to it, and `*` does not cross a `/` the way `**` does. This is the one that
+  bites: a filter written when the e2e suite covered the frontend, still in
+  place after the suite grew a backend job.
 - A job-level `if:` naming a label (`contains(github.event.pull_request.labels.*.name, 'run-e2e')`)
   that the pull request does not carry.
+
+**Not read**: `branches:` / `branches-ignore:` and `types:` on the
+`pull_request` trigger. A workflow scoped to `branches: [release]` is
+reported as triggering for a pull request against `main`, and one scoped to
+`types: [opened]` is reported as triggering on a later push to the same pull
+request, even though GitHub would not run either. Both are read as an
+unqualified `pull_request` trigger — over-inclusive rather than
+under-inclusive, on the same reasoning the rest of this document argues for:
+a missed `e2e-not-triggered` finding is silent, but a false one just tells an
+author to look at a workflow that did in fact run.
 
 All of this is read from the workflow file at the head SHA via
 `ForgeRead::file_at` and decided in code, by an indentation-outline reader
