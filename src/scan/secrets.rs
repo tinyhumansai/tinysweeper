@@ -317,6 +317,18 @@ pub fn scan_added_lines<'a>(
 /// eager to run over prose: it would mangle every hash, identifier and base64
 /// example a review legitimately needs to quote.
 pub fn scrub(text: &str) -> String {
+    redact_line(text)
+}
+
+/// Replace every recognised credential in one line with a redacted hint.
+///
+/// The matcher and the token format ([`crate::scan::types::redact`]) are
+/// exactly [`scrub`]'s — this *is* that function, named for its other caller:
+/// [`crate::evidence::redact`] masks a diff line before it ever reaches a
+/// model, which is a different moment than scrubbing a model's own output,
+/// but must produce the same redaction so a human reading either sees one
+/// vocabulary for "a secret was here."
+pub fn redact_line(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
 
