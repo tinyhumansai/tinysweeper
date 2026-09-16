@@ -721,6 +721,28 @@ fn validate_automerge(config: &Config, problems: &mut Vec<String>) {
         );
     }
 
+    // `e2e`'s check run is published `Neutral` (a concluded, not a pending,
+    // state) while jobs are still running — see
+    // docs/modules/lanes/e2e.md#the-timing-problem-and-the-check-runs-lifecycle
+    // — and `automerge::policy::check_refusal` reads a required check's
+    // `Neutral` as a pass, the same as `Success`. Naming it here would let
+    // auto-merge treat "still waiting on the jobs" as "required check
+    // satisfied" for however long phase 1's `Neutral` stands before
+    // `settle_e2e` replaces it with the terminal conclusion.
+    if automerge
+        .require_checks
+        .iter()
+        .any(|name| name == LaneId::E2e.check_name())
+    {
+        problems.push(format!(
+            "`automerge.require_checks` names `{}`, but that check is published `Neutral` \
+             (not pending) while its jobs are still running, and a required check's `Neutral` \
+             is read as a pass — auto-merge could proceed before the e2e suite has actually \
+             concluded. Do not name it here.",
+            LaneId::E2e.check_name()
+        ));
+    }
+
     // The policy fails closed on a glob it cannot compile, which is safe but
     // silent: the operator sees a pull request that never merges and no reason
     // why. Saying so here turns a bug report into a typo.
