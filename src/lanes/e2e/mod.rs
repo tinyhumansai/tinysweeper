@@ -18,9 +18,12 @@
 //! only the part that needs reading: does an end-to-end test actually drive
 //! each behavioural change.
 //!
-//! Opt-in. Absent from the default `review.lanes`, because demanding an e2e
-//! test from a repository with no harness is the noise the gates exist to
-//! suppress.
+//! On by default, opt-out. It can be, because it is quiet where it has
+//! nothing to say: a repository with no e2e harness is skipped
+//! deterministically (`missing_harness = "skip"`), so demanding an e2e test
+//! from a repository that cannot have one — the noise the gates exist to
+//! suppress — never happens. A repository that does not want the lane lists
+//! `review.lanes` without it.
 
 pub mod evidence;
 pub mod inventory;

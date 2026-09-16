@@ -4,7 +4,7 @@ version = 1
 # positive. Everything below trades noise for coverage — deliberately.
 
 [review]
-lanes = ["critique", "security", "tests", "commits", "description"]
+lanes = ["critique", "security", "tests", "commits", "description", "e2e"]
 strictness = 3
 severity_gate = "low"
 confidence_min = 0.4
