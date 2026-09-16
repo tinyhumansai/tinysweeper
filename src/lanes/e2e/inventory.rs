@@ -745,6 +745,51 @@ impl Outline {
     }
 }
 
+/// If `value` opens a YAML block scalar (`run: |`, `run: >`, and their
+/// `-`/`+` chomping variants), fold the following more-indented lines into
+/// it and return the index of the first line after the block; otherwise
+/// return `value` and the next line unchanged.
+///
+/// Without this, `run: |` followed by `npm run e2e` on the next line records
+/// only the literal `|` as the step's value — the command itself is a plain
+/// line with no `key:` and no `- ` prefix, which the rest of this parser
+/// (correctly) treats as YAML it does not need to understand and drops. That
+/// silently blinds `E2E_STEP_MARKS` matching to a job whose only sign of
+/// being end-to-end is its `run:` command, which is the common way to spell
+/// a `playwright test` or `npm run e2e` step. Folded rather than parsed:
+/// this is text for a substring match, not something anything here executes
+/// (`lanes::e2e::mod::the_lane_never_executes_anything` guards that).
+fn read_block_scalar(
+    lines: &[&str],
+    at: usize,
+    key_indent: usize,
+    value: String,
+) -> (String, usize) {
+    if !matches!(value.as_str(), "|" | "|-" | "|+" | ">" | ">-" | ">+") {
+        return (value, at + 1);
+    }
+    let mut body = Vec::new();
+    let mut index = at + 1;
+    while index < lines.len() {
+        let candidate = lines[index].trim_end();
+        if candidate.trim().is_empty() {
+            index += 1;
+            continue;
+        }
+        let candidate_indent = candidate.len() - candidate.trim_start().len();
+        if candidate_indent <= key_indent {
+            break;
+        }
+        body.push(candidate.trim());
+        index += 1;
+    }
+    if body.is_empty() {
+        (value, at + 1)
+    } else {
+        (body.join(" "), index)
+    }
+}
+
 /// Split `key: value`, refusing lines that are not a mapping entry.
 fn split_key(body: &str) -> Option<(String, String)> {
     let (key, value) = body.split_once(':')?;
