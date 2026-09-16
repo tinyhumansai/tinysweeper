@@ -199,6 +199,18 @@ pub enum Trigger {
         paths_ignore: Vec<String>,
         /// The line the filter sits on, for anchoring a finding.
         filter_line: Option<u64>,
+        /// Whether this is `pull_request_target` rather than plain
+        /// `pull_request`.
+        ///
+        /// The distinction matters upstream of this type: GitHub resolves a
+        /// `pull_request_target` workflow's *definition* — its jobs, its own
+        /// trigger — from the base branch, never the head, precisely so a
+        /// fork cannot rewrite the workflow that runs with base-branch
+        /// secrets. Classifying one from the head-branch file (what
+        /// `evidence::gather` reads by default) can therefore describe a
+        /// workflow GitHub will never run in that shape. See
+        /// `evidence::gather`'s `pull_request_target` re-read.
+        target: bool,
     },
     /// Never runs on a pull request; the string names what it runs on.
     Never(String),
