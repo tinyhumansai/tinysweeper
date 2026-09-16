@@ -282,6 +282,7 @@ mod tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                                redaction_note: "",
                 tree: None,
             })
             .await
@@ -345,6 +346,7 @@ mod tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "- **rejected — an earlier finding**\n  Maintainer's reply: no.",
+                                redaction_note: "",
                 tree: None,
             })
             .await
