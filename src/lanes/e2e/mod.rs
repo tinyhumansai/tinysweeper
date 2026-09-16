@@ -144,21 +144,29 @@ impl Lane for E2e {
         let rendered = render_diffs(input.diffs);
         let (reviewed_evidence, fresh) =
             crate::evidence::replay::split(input.reviewed_evidence, &rendered);
-        let mut assembled = inventory.render();
+        // Every section contains independently fetched, repository-controlled
+        // text. Scrub them independently so an unmatched PEM marker in, for
+        // example, a workflow display name cannot carry stream state into the
+        // candidate or fresh-diff sections that follow it.
+        let mut assembled = crate::scan::scrub(&inventory.render());
         assembled.push('\n');
-        assembled.push_str(&render_changed_e2e_tests(&evidence.harness, &changed_paths));
-        assembled.push_str(&inventory::render(&evidence.harness, &changed_paths));
+        assembled.push_str(&crate::scan::scrub(&render_changed_e2e_tests(
+            &evidence.harness,
+            &changed_paths,
+        )));
+        assembled.push_str(&crate::scan::scrub(&inventory::render(
+            &evidence.harness,
+            &changed_paths,
+        )));
         assembled.push('\n');
-        assembled.push_str(&runs::render(&runs, &input.pull_request.head_sha));
+        assembled.push_str(&crate::scan::scrub(&runs::render(
+            &runs,
+            &input.pull_request.head_sha,
+        )));
         assembled.push('\n');
-        assembled.push_str(&evidence.render_candidates());
+        assembled.push_str(&crate::scan::scrub(&evidence.render_candidates()));
         assembled.push('\n');
-        assembled.push_str(&fresh);
-        // Workflow display names and check-run names are fetched directly
-        // from the tree/API, rather than from the already-masked diff.  Run
-        // the completed model-facing evidence through the common scrubber so
-        // those fields cannot reintroduce a credential on a later read.
-        let assembled = crate::scan::scrub(&assembled);
+        assembled.push_str(&crate::evidence::redact::scrub_rendered(&fresh));
 
         let built = prompt::build(&PromptInputs {
             repo_policy: input.repo_policy,
@@ -654,6 +662,18 @@ mod lane_tests {
             prompt.contains("End-to-end tests changed by this pull request: none"),
             "{prompt}"
         );
+    }
+
+    #[tokio::test]
+    async fn malformed_pem_metadata_does_not_mask_later_e2e_evidence() {
+        let model = MockModel::silent();
+        let mut evidence = evidence("src/server/**", vec![]);
+        evidence.harness.workflows[0].name = "-----BEGIN RSA PRIVATE KEY-----".into();
+
+        run_with(model.clone(), &config(), &[route_diff()], Some(&evidence)).await;
+
+        let prompt = model.last_prompt().expect("recorded");
+        assert!(prompt.contains("router.post"), "{prompt}");
     }
 
     /// Regression for a Codex finding on #166: the production `PromptInputs`
