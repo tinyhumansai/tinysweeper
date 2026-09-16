@@ -90,7 +90,7 @@ lanes = ["critique", "security"]
 # filenames (`tests/api.py`, `__tests__/Widget.tsx`) — both get their own
 # entries below, still ahead of the general per-extension rule.
 [[path_instructions]]
-glob = "**/*{_test,test_,.test,.spec}*"
+glob = "**/{test_*,*_test.*,*.test.*,*.spec.*}"
 rules = "tests"
 lanes = ["critique", "security"]
 
