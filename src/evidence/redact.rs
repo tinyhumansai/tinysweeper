@@ -308,6 +308,30 @@ mod tests {
         assert!(rendered.contains("FEATURE_FLAG="), "{rendered}");
     }
 
+    /// Regression for a Codex/tinysweeper finding on #166: a sensitive path is
+    /// masked "line by line" per this module's own doc, but the sensitive-path
+    /// branch used to skip `LineKind::Context` — an unrelated edit to `.env`
+    /// still renders the untouched lines around it into the model request.
+    #[test]
+    fn context_lines_in_a_sensitive_file_are_masked_too() {
+        let key = token("AKIA", "IOSFODNN7EXAMPLE");
+        let raw = format!(
+            "@@ -1,3 +1,3 @@\n INTERNAL_TOKEN=opaque-value\n-OLD_FLAG=off\n+OLD_FLAG=on\n FEATURE_FLAG={key}\n"
+        );
+        let mut diffs = vec![parse_file_patch(".env", &raw)];
+        let findings = scan::secrets::scan_added_lines(".env", diffs[0].added_lines());
+
+        mask(&mut diffs, &findings, &[]);
+        let rendered = replay::render(&diffs);
+
+        assert!(
+            !rendered.contains("opaque-value"),
+            "a context line's value is still a secret in a sensitive file: {rendered}"
+        );
+        assert!(rendered.contains("INTERNAL_TOKEN="), "{rendered}");
+        assert!(!rendered.contains("IOSFODNN7EXAMPLE"), "{rendered}");
+    }
+
     #[test]
     fn context_and_removed_lines_around_a_secret_are_untouched() {
         let key = token("AKIA", "IOSFODNN7EXAMPLE");
