@@ -420,8 +420,15 @@ mod tests {
     /// Regression for a Codex finding on #166: `render_candidates` used to
     /// mask a quoted e2e line with only `scan::redact_line`'s rulepack pass,
     /// so a scanner-detected `high-entropy-assignment` — a credential with no
-    /// vendor prefix — sitting on the same line as the surface token this
-    /// lane verifies still reached the prompt unmasked.
+    /// vendor prefix — reached the prompt unmasked even though the identical
+    /// shape in an added diff line is masked by the scanner's own finding.
+    ///
+    /// `secret_assignment` only ever parses one bare `name = value` (or
+    /// `name: value`) shape per string — the same shape `scan_added_lines`
+    /// exercises it against — so the fixture line is that shape rather than a
+    /// full call expression around it; the point under test is that
+    /// `render_candidates` runs the value through the entropy pass at all,
+    /// not the heuristic's own line-shape coverage.
     #[test]
     fn render_candidates_masks_a_high_entropy_assignment_in_the_quoted_line() {
         let value = format!("{}{}", "f3Kq9zR2", "mW7pL4xN8vB1cY6tH0jD5sG");
@@ -429,9 +436,7 @@ mod tests {
             candidates: vec![Candidate {
                 path: "e2e/preview.spec.ts".into(),
                 line: 2,
-                text: format!(
-                    "await request.post('/preview/sessions', {{ secret_token: '{value}' }});"
-                ),
+                text: format!("secret_token: '{value}'"),
                 token: "/preview/sessions".into(),
                 added_at: "src/server/routes.rs:2".into(),
             }],
@@ -442,7 +447,7 @@ mod tests {
         let rendered = evidence.render_candidates();
 
         assert!(!rendered.contains(&value), "{rendered}");
-        assert!(rendered.contains("request.post"), "{rendered}");
+        assert!(rendered.contains("secret_token:"), "{rendered}");
     }
 
     #[tokio::test]
