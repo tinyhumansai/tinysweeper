@@ -1,0 +1,30 @@
+{
+  "key": "fd9b6cdb3de80ddd",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4307,
+    "output_tokens": 6146,
+    "cached_tokens": 3025,
+    "embed_tokens": 0,
+    "cost_usd": 0.0143082471
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The doc comment says \"at most `limit` characters,\" but the `None` branch returns `head` (which is `limit` chars) plus `…` (1 char) = `limit + 1` chars. The tests confirm this by asserting `<= 21` for a limit of 20. If `limit` is set to a platform ceiling (e.g. GitHub's check-run title limit), the result can exceed it by one character, defeating the purpose of the function. The head should take `limit - 1` chars so the ellipsis fits within the limit.",
+        "confidence": 0.9,
+        "existing_code": "    let head: String = text.chars().take(limit).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),\n    }",
+        "path": "src/findings/summarise.rs",
+        "rule": "off-by-one-limit",
+        "severity": "low",
+        "suggestion": "    let head: String = text.chars().take(limit.saturating_sub(1)).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),\n    }",
+        "title": "Reserve room for the ellipsis when shortening to a character limit"
+      }
+    ],
+    "lookups": [],
+    "resolved": [],
+    "summary": "The new `summarise` module provides text-shortening helpers for check-run and finding titles. The code is safe — character-based slicing avoids the multibyte panic the comments warn about, and `first_sentence`'s byte slicing is safe because `.` is ASCII. One minor issue: `shorten` can return `limit + 1` characters because the ellipsis is not counted toward the limit, contradicting the documented contract."
+  }
+}

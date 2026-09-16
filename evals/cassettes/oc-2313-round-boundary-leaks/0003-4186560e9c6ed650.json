@@ -1,0 +1,28 @@
+{
+  "key": "4186560e9c6ed650",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3863,
+    "output_tokens": 151,
+    "cached_tokens": 3340,
+    "embed_tokens": 0,
+    "cost_usd": 0.001093995
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "vendor/openhuman",
+        "pattern": "openhuman-core",
+        "why": "Confirm the new dependency path ../../vendor/openhuman/crates/openhuman-core exists"
+      },
+      {
+        "kind": "search",
+        "pattern": "name = \"openhuman\"",
+        "why": "Verify the crate name and location of the openhuman package manifest"
+      }
+    ]
+  }
+}

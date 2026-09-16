@@ -1,0 +1,17 @@
+{
+  "key": "07a4cae5894bd0a2",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3462,
+    "output_tokens": 76,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00031470712
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request adds a single line to register a new `pub mod summarise` in the `findings` module. The addition is purely structural—no code is imported, no logic is changed, and no callers are introduced. There is nothing in this diff to review for security or correctness."
+  }
+}
