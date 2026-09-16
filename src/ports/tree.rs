@@ -1146,7 +1146,10 @@ mod tests {
         };
         assert!(!text.contains("IOSFODNN7EXAMPLE"), "{text}");
         assert!(text.contains("const KEY"), "{text}");
-        assert!(text.contains("1|"), "the line-number anchor survives: {text}");
+        assert!(
+            text.contains("1|"),
+            "the line-number anchor survives: {text}"
+        );
     }
 
     /// Regression for the same finding, on the search path: a hit line is
