@@ -681,6 +681,108 @@ mod tests {
         }
     );
 
+    store_test!(
+        clear_e2e_watch_matches_and_clears_the_exact_watch,
+        |store| async move {
+            use crate::ports::review_state::ReviewStateStore;
+
+            let key = "tinyhumansai/tinysweeper#7";
+            let watch = Watch {
+                head_sha: "abc123".into(),
+                jobs: vec!["playwright".into()],
+                summary: "Coverage looks complete.".into(),
+                failed: false,
+                generation: "gen-1".into(),
+            };
+            store
+                .save_state(
+                    key,
+                    &ReviewedState {
+                        head_sha: "abc123".into(),
+                        e2e: Some(watch.clone()),
+                        ..ReviewedState::default()
+                    },
+                )
+                .await
+                .expect("saves");
+
+            // A watch with a different generation does not match, even
+            // though every other field is identical.
+            let wrong_generation = Watch {
+                generation: "gen-2".into(),
+                ..watch.clone()
+            };
+            assert!(
+                !store
+                    .clear_e2e_watch(key, &wrong_generation)
+                    .await
+                    .expect("clears"),
+                "a different generation must not match"
+            );
+
+            assert!(
+                store.clear_e2e_watch(key, &watch).await.expect("clears"),
+                "the exact watch must match and clear"
+            );
+            let after = store.load_state(key).await.expect("loads");
+            assert_eq!(after.unwrap().e2e, None);
+        }
+    );
+
+    store_test!(
+        clear_e2e_watch_matches_a_legacy_record_with_no_generation_field,
+        |store| async move {
+            use crate::ports::review_state::ReviewStateStore;
+
+            // Simulates a document written before `generation` existed:
+            // inserted directly, bypassing `save_state` (which would always
+            // stamp a `Watch` built by this binary's own code, never one
+            // missing the field). Mongo document equality on the whole `e2e`
+            // sub-document would never match this shape against a freshly
+            // reserialized `Watch { generation: String::new(), .. }` — the
+            // set of keys differs — which is exactly the bug this test
+            // guards against regressing.
+            let key = "tinyhumansai/tinysweeper#8";
+            let legacy = doc! {
+                "_id": key,
+                "head_sha": "abc123",
+                "evidence": "",
+                "fingerprints": [],
+                "titles": [],
+                "severities": {},
+                "e2e": {
+                    "head_sha": "abc123",
+                    "jobs": ["playwright"],
+                    "summary": "Coverage looks complete.",
+                    "failed": false,
+                },
+            };
+            store
+                .review_state
+                .insert_one(legacy)
+                .await
+                .expect("inserts the legacy document directly");
+
+            // Loaded back, `#[serde(default)]` fills `generation` with an
+            // empty string — the same value a freshly built `Watch` for a
+            // legacy record would carry.
+            let loaded = store.load_state(key).await.expect("loads").unwrap();
+            let legacy_watch = loaded.e2e.expect("has a watch");
+            assert_eq!(legacy_watch.generation, "");
+
+            assert!(
+                store
+                    .clear_e2e_watch(key, &legacy_watch)
+                    .await
+                    .expect("clears"),
+                "a legacy record with no `generation` key must still match \
+                 and clear against a watch whose `generation` is empty"
+            );
+            let after = store.load_state(key).await.expect("loads");
+            assert_eq!(after.unwrap().e2e, None);
+        }
+    );
+
     // Pure logic, no database needed — these always run.
 
     #[test]
