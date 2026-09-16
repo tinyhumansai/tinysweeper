@@ -429,7 +429,18 @@ pub async fn review_with_tree(
     memory: Option<&Recaller<'_>>,
     tree: Option<&dyn TreeReader>,
 ) -> Result<Proposal> {
-    let context = forge.pull_request_context(repo, number).await?;
+    let mut context = forge.pull_request_context(repo, number).await?;
+    // Scrubbed once, here, rather than at each of its several consumers: the
+    // description lane's own prompt, `Retriever::retrieve`'s query, and
+    // `Recaller::recall`'s query all read `context.pull_request.title` (two
+    // read `.body` too), and every one of them is a model-facing text a
+    // credential pasted into the title or body — while explaining what
+    // leaked, say — must not reach. `evidence::redact::mask`, below, only
+    // ever sees the diff; scrubbing the pull request's own words is this
+    // function's job precisely because nothing downstream of this point
+    // should have to remember to do it for itself.
+    context.pull_request.title = scan::scrub(context.pull_request.title.trim());
+    context.pull_request.body = scan::scrub(context.pull_request.body.trim());
     let mut diffs = reviewable_diffs(config, &context)?;
     // The forge reader is always behind whatever the caller supplied: a
     // checkout that lacks a submodule, or a fixture that recorded nothing
