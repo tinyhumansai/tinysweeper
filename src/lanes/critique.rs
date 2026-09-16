@@ -362,9 +362,9 @@ fn build_prompt<'a>(
         .split("<redacted, ")
         .skip(1)
         .filter(|suffix| {
-            suffix
-                .split_once(" chars>")
-                .is_some_and(|(count, _)| !count.is_empty() && count.bytes().all(|b| b.is_ascii_digit()))
+            suffix.split_once(" chars>").is_some_and(|(count, _)| {
+                !count.is_empty() && count.bytes().all(|b| b.is_ascii_digit())
+            })
         })
         .count();
     let redaction_note = if redacted == 0 {

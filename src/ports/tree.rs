@@ -547,19 +547,29 @@ impl TreeReader for RedactingTree<'_> {
             _ => false,
         };
         match found {
-            Found::Hits { hits, truncated, skipped } => {
+            Found::Hits {
+                hits,
+                truncated,
+                skipped,
+            } => {
                 let mut redacted = Vec::with_capacity(hits.len());
                 for hit in hits {
                     if crate::scan::is_sensitive_path(&hit.path)
-                        || self.refused_paths.iter().any(|refused| refused == &hit.path)
+                        || self
+                            .refused_paths
+                            .iter()
+                            .any(|refused| refused == &hit.path)
                     {
                         continue;
                     }
-                    let prefix = self.inner.lookup(&Lookup::Read {
-                        path: hit.path.clone(),
-                        start: Some(hit.line.saturating_sub(MAX_READ_LINES)),
-                        end: Some(hit.line),
-                    }).await?;
+                    let prefix = self
+                        .inner
+                        .lookup(&Lookup::Read {
+                            path: hit.path.clone(),
+                            start: Some(hit.line.saturating_sub(MAX_READ_LINES)),
+                            end: Some(hit.line),
+                        })
+                        .await?;
                     let state = private_key_state_before_last_line(&prefix);
                     let mut state = state;
                     redacted.push(Hit {
@@ -567,7 +577,11 @@ impl TreeReader for RedactingTree<'_> {
                         ..hit
                     });
                 }
-                Ok(Found::Hits { hits: redacted, truncated, skipped })
+                Ok(Found::Hits {
+                    hits: redacted,
+                    truncated,
+                    skipped,
+                })
             }
             found => Ok(redact_found(found, in_key_block)),
         }
@@ -646,11 +660,15 @@ fn private_key_state(found: &Found) -> bool {
 /// Establish PEM state immediately before a search hit, whose own text is the
 /// final line of the bounded probe.
 fn private_key_state_before_last_line(found: &Found) -> bool {
-    let Found::Text { text, .. } = found else { return false; };
+    let Found::Text { text, .. } = found else {
+        return false;
+    };
     let mut state = false;
     let mut lines = text.split('\n').peekable();
     while let Some(line) = lines.next() {
-        if lines.peek().is_none() { break; }
+        if lines.peek().is_none() {
+            break;
+        }
         let body = match line.find("| ") {
             Some(offset) if offset <= 6 => &line[offset + 2..],
             _ => line,

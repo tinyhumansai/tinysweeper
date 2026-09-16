@@ -244,7 +244,12 @@ fn redact_pem_marker_line(line: &str, marker: &str) -> String {
         return redact_line(line);
     };
     let end = start + marker.len();
-    format!("{}{}{}", redact(&line[..start]), marker, redact(&line[end..]))
+    format!(
+        "{}{}{}",
+        redact(&line[..start]),
+        marker,
+        redact(&line[end..])
+    )
 }
 
 /// Whether one unarmoured line has the shape of private-key PEM body data.

@@ -143,26 +143,17 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
             let mut in_key_block = false;
             for line in &mut hunk.lines {
                 if scan::is_private_key_begin(&line.text) {
-                    in_key_block = true;
-                    // A bare armour marker is safe metadata, but a key can
-                    // be serialized on the marker's physical line (usually
-                    // as an assignment containing literal `\\n`s). In that
-                    // case the marker branch must not bypass ordinary value
-                    // masking before it starts tracking the following lines.
-                    let trimmed = line.text.trim();
-                    let marker_only =
-                        trimmed.starts_with("-----BEGIN ") && trimmed.ends_with("-----");
-                    if !marker_only {
+                    let masked = scan::redact_stream_line(&line.text, &mut in_key_block);
+                    if masked != line.text {
                         spans += 1;
                         masked_here = true;
-                        line.text = mask_assignment_or_whole_line(&line.text);
+                        line.text = masked;
                     }
                     continue;
                 }
                 if in_key_block {
                     if scan::is_private_key_end(&line.text) {
-                        in_key_block = false;
-                        let masked = scan::redact_line(&line.text);
+                        let masked = scan::redact_stream_line(&line.text, &mut in_key_block);
                         if masked != line.text {
                             spans += 1;
                             masked_here = true;
