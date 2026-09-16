@@ -995,13 +995,3 @@ jobs:
         assert!(text.contains("job `Playwright`"), "{text}");
     }
 }
-
-#[cfg(test)]
-mod scratch_probe {
-    #[test]
-    fn probe_globset_star_semantics() {
-        let g = globset::Glob::new("src/*").unwrap().compile_matcher();
-        println!("src/server/routes.rs matches src/*: {}", g.is_match("src/server/routes.rs"));
-        assert!(!g.is_match("src/server/routes.rs"), "star crossed a separator by default");
-    }
-}
