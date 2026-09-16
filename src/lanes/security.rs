@@ -304,12 +304,107 @@ async fn review_group(
         ));
     };
 
+    let mut findings = outcome.findings;
+    let mut spend = outcome.spend;
+
+    // The opt-in coverage pass — see `lanes::coverage` and the identical gate
+    // in `lanes::critique`. Anchored the same way round one is, through
+    // `LaneOutcome::from_response`, rather than critique's quote-and-relocate
+    // `Positioner`: reusing round one's own anchoring here too, not inventing
+    // a third rule. No falsify call follows it, for the same reason round one
+    // has none — see `docs/modules/falsify/README.md`: this lane's model
+    // findings are adjudicating deterministic scanner matches, not proposing
+    // unverified ones the way `critique` does.
+    if config.review.passes > 1 && changed_lines(group_diffs) >= COVERAGE_PASS_MIN_LINES {
+        let mut confirmed = findings.clone();
+
+        for _ in 1..config.review.passes {
+            let reviewer = &reviewers[0];
+            let confirmed_lines = crate::lanes::coverage::confirmed_lines(&confirmed);
+            let built = prompt::build(&PromptInputs {
+                repo_policy,
+                extracted_rules,
+                prior_findings,
+                new_evidence: &evidence,
+                focus_paths: group_paths,
+                scanner_evidence: &scanner_evidence,
+                retrieved_context,
+                memory_context,
+                confirmed_this_round: &confirmed_lines,
+                ..PromptInputs::new(LaneId::Security, config)
+            });
+
+            let coverage = crate::lanes::coverage::coverage_pass(
+                llm.clone(),
+                LaneId::Security,
+                reviewer,
+                &built,
+                &schema::json_schema(),
+                "tinysweeper_security",
+                asking,
+            )
+            .await?;
+            spend.merge(coverage.spend);
+
+            let Some(response) = coverage.response else {
+                break;
+            };
+
+            let anchored = LaneOutcome::from_response(
+                LaneId::Security,
+                response,
+                group_diffs,
+                Anchoring::Strict,
+                Spend::default(),
+            );
+
+            // Same dedupe as critique's coverage pass: drop anything that
+            // corroborates, or fingerprints identically to, a finding already
+            // confirmed this unit.
+            let new_findings: Vec<Finding> = anchored
+                .findings
+                .into_iter()
+                .filter(|candidate| {
+                    let candidate_fp = candidate.fingerprint(
+                        &crate::findings::anchor::anchor_context(candidate, group_diffs),
+                    );
+                    !confirmed.iter().any(|prior| {
+                        council::agree::corroborates(candidate, prior)
+                            || candidate_fp
+                                == prior.fingerprint(&crate::findings::anchor::anchor_context(
+                                    prior, group_diffs,
+                                ))
+                    })
+                })
+                .collect();
+
+            if new_findings.is_empty() {
+                break;
+            }
+
+            confirmed.extend(new_findings.clone());
+            findings.extend(new_findings);
+        }
+    }
+
     Ok(FileReview {
         summary: outcome.summary,
-        findings: outcome.findings,
+        findings,
         resolved: outcome.resolved,
-        spend: outcome.spend,
+        spend,
     })
+}
+
+/// Minimum changed lines a group needs before the opt-in coverage pass
+/// (`review.passes > 1`) is worth its extra call — identical threshold and
+/// reasoning to `critique::COVERAGE_PASS_MIN_LINES`, kept as its own constant
+/// per lane rather than shared, so either lane's noise-control knobs can move
+/// independently of the other's.
+const COVERAGE_PASS_MIN_LINES: usize = 40;
+
+/// How many lines this group's diffs changed, summed across every file in it.
+fn changed_lines(group_diffs: &[FileDiff]) -> usize {
+    group_diffs.iter().map(|diff| diff.changed_lines.len()).sum()
 }
 
 /// Say, in the summary, which files were never sent to a model and why.
