@@ -658,6 +658,27 @@ mod tests {
         assert!(coverage_request.contains("Guard the first index"));
     }
 
+    #[tokio::test]
+    async fn a_malformed_coverage_response_keeps_round_ones_findings() {
+        // The coverage pass is an optional extra look, not round one itself:
+        // a reviewer that answers with something that fails the schema (here,
+        // a finding missing every required field) must not discard what round
+        // one already found. `reviewer_responses` treats a schema failure from
+        // a lone reviewer as fatal, which used to propagate straight out of
+        // `coverage_pass` via `?` and fail the whole group.
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_at_line("Guard the first index", 5)]
+            }))
+            .then(json!({"summary": "…", "findings": [{"rule": "x"}]}));
+
+        let outcome = run_with(model, &config_with_passes(2), &large_diffs(), &[]).await;
+
+        assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
+        assert_eq!(outcome.findings[0].title, "Guard the first index");
+    }
+
     // --- golden test -------------------------------------------------------
 
     #[tokio::test]
