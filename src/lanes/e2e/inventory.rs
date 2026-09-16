@@ -790,7 +790,7 @@ fn flow_mapping_keys(value: &str) -> Vec<String> {
     let mut keys = Vec::new();
     let mut depth = 0i32;
     let mut start = 0usize;
-    let mut push_entry = |entry: &str, keys: &mut Vec<String>| {
+    let push_entry = |entry: &str, keys: &mut Vec<String>| {
         let entry = entry.trim();
         if entry.is_empty() {
             return;
