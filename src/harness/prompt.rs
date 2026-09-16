@@ -1002,6 +1002,33 @@ mod tests {
     }
 
     #[test]
+    fn path_instructions_select_from_every_changed_path_not_just_the_group() {
+        // A grouped conversation's `focus_paths` narrows what it may report
+        // findings on, but a repository override for a file outside the
+        // group is still a rule about a file this pull request changed, and
+        // must still reach the prompt.
+        let mut config = config();
+        config.path_instructions = vec![PathInstruction {
+            glob: "src/other.rs".into(),
+            instructions: "Rule for a file outside this group.".into(),
+            rules: None,
+            lanes: Vec::new(),
+        }];
+
+        let prompt = build(&PromptInputs {
+            changed_paths: &["src/group_file.rs".to_string(), "src/other.rs".to_string()],
+            focus_paths: &["src/group_file.rs".to_string()],
+            ..PromptInputs::new(LaneId::Critique, &config)
+        });
+
+        assert!(
+            prompt.prefix().contains("Rule for a file outside this group."),
+            "an override for a changed file outside the group must still be selected: {}",
+            prompt.prefix()
+        );
+    }
+
+    #[test]
     fn every_lane_is_told_that_a_containment_fixture_is_not_a_finding() {
         // A live false positive: the security fixture that proves a hostile
         // AGENTS.md is contained was itself reported as a prompt-injection
