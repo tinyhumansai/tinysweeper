@@ -394,6 +394,22 @@ impl<'a> Extractor<'a> {
         if content.trim().is_empty() {
             return Ok(None);
         }
+        // `evidence::redact::mask` only ever sees the diff; a credential
+        // committed to `AGENTS.md` in an earlier push and merely left alone
+        // by this one is not in the diff at all; and even one this diff *did*
+        // add is masked there but re-fetched here at the full head content,
+        // bypassing that masking entirely. Scrubbed before this is cached or
+        // sent to extraction, the same two path-independent passes tree
+        // lookups and replayed evidence get: the rulepack, and private-key-
+        // body masking between an armour marker and its end.
+        let content = {
+            let mut in_key_block = false;
+            content
+                .split('\n')
+                .map(|line| scan::redact_stream_line(line, &mut in_key_block))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
 
         Ok(Some(InstructionFile {
             content_hash: content_hash(&content),
