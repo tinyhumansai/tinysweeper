@@ -1021,6 +1021,43 @@ mod tests {
         );
     }
 
+    /// A definition found in a *sibling* group member's file must still get
+    /// the full same-file read window, not the narrow external-definition
+    /// one: the sibling's file is part of this same conversation's reviewed
+    /// set, exactly as much as the file whose diff supplied the symbol.
+    #[tokio::test]
+    async fn a_definition_in_a_sibling_group_file_gets_the_same_file_window() {
+        let first = crate::evidence::diff::parse_file_patch(
+            "src/a.rs",
+            "@@ -1,1 +1,2 @@\n fn a() {}\n+call_it();\n",
+        );
+        let second = crate::evidence::diff::parse_file_patch(
+            "src/b.rs",
+            "@@ -1,1 +1,2 @@\n fn b() {}\n+fn unrelated() {}\n",
+        );
+        // `call_it` is defined in `src/b.rs`, a group member's own file, with
+        // a body long enough that the narrow `DEFINITION_BELOW` window (8
+        // lines) would cut it off before the last line, but the wider
+        // `SAME_FILE_BELOW` window would not.
+        let mut body = "pub fn call_it() {\n".to_string();
+        for i in 0..15 {
+            body.push_str(&format!("    let step_{i} = {i};\n"));
+        }
+        body.push_str("    let last_line_marker = true;\n}\n");
+        let tree = MockTree::from_files([("src/b.rs", body.as_str())]);
+        let mut ledger = Ledger::default();
+        let seeded = ledger
+            .seed(&tree, &[first, second], &LookupPolicy::default())
+            .await;
+
+        assert!(
+            seeded.rendered.contains("last_line_marker"),
+            "a definition in a sibling group file must use the wide same-file window, not \
+             the narrow external-definition one: {}",
+            seeded.rendered
+        );
+    }
+
     /// The shared `SEED_SYMBOLS` cap is round-robin, not first-come: a first
     /// file whose diff alone offers enough candidates to exhaust the cap must
     /// not be allowed to do so before a later group member's own call is
