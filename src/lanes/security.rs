@@ -426,6 +426,7 @@ mod tests {
                 retrieved_context: "",
                 memory_context: "",
                 tree: None,
+                graph: None,
             })
             .await
             .expect("lane runs")
@@ -702,6 +703,7 @@ mod tests {
                 retrieved_context: "",
                 memory_context: "",
                 tree: None,
+                graph: None,
             })
             .await
             .expect("runs");

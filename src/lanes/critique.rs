@@ -586,6 +586,7 @@ fn helper() {
                 retrieved_context: "",
                 memory_context: "",
                 tree: None,
+                graph: None,
             })
             .await
             .expect("lane runs")
@@ -947,6 +948,7 @@ fn helper() {
                 retrieved_context: "",
                 memory_context: "",
                 tree: None,
+                graph: None,
             })
             .await
             .expect("runs");
@@ -1005,6 +1007,7 @@ fn helper() {
                 retrieved_context: "",
                 memory_context: "",
                 tree: None,
+                graph: None,
             })
             .await
             .expect("runs");
@@ -1062,6 +1065,7 @@ fn helper() {
                 retrieved_context: "",
                 memory_context: "",
                 tree: None,
+                graph: None,
             })
             .await
             .expect("runs");
@@ -1109,6 +1113,7 @@ fn helper() {
                 retrieved_context: "",
                 memory_context: "",
                 tree: None,
+                graph: None,
             })
             .await
             .expect("the failure is isolated, not propagated");
@@ -1248,6 +1253,7 @@ fn helper() {
                 retrieved_context: "",
                 memory_context: "",
                 tree: None,
+                graph: None,
             })
             .await
             .expect("runs");

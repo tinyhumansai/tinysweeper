@@ -282,6 +282,7 @@ mod tests {
                 retrieved_context: "",
                 memory_context: "",
                 tree: None,
+                graph: None,
             })
             .await
             .expect("lane runs")
@@ -345,6 +346,7 @@ mod tests {
                 retrieved_context: "",
                 memory_context: "- **rejected — an earlier finding**\n  Maintainer's reply: no.",
                 tree: None,
+                graph: None,
             })
             .await
             .expect("lane runs");

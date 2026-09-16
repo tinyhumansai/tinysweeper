@@ -390,6 +390,7 @@ mod lane_tests {
                 retrieved_context: "",
                 memory_context: "",
                 tree: None,
+                graph: None,
             })
             .await
             .expect("lane runs")
