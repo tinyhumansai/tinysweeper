@@ -918,6 +918,35 @@ mod tests {
         );
     }
 
+    /// Grouping's whole point for lookups: a reviewer given a group's files
+    /// together must not lose the seeding that made #2313's finding possible
+    /// just because the calling line sits in the *second* file of the group.
+    #[tokio::test]
+    async fn seeding_a_group_reads_a_definition_called_only_from_the_second_file() {
+        let first = crate::evidence::diff::parse_file_patch(
+            "src/a.rs",
+            "@@ -1,1 +1,2 @@\n fn a() {}\n+let x = 1;\n",
+        );
+        let second = crate::evidence::diff::parse_file_patch(
+            "src/b.rs",
+            "@@ -1,1 +1,2 @@\n fn b() {}\n+let pins = read_pinboard(&log);\n",
+        );
+        let tree = MockTree::from_files([(
+            "vendor/lib/src/pins.rs",
+            "/// `before` is an exclusive bound.\npub async fn read_pinboard(log: &Log) {}\n",
+        )]);
+        let mut ledger = Ledger::default();
+        let seeded = ledger
+            .seed(&tree, &[first, second], &LookupPolicy::default())
+            .await;
+
+        assert!(
+            seeded.rendered.contains("`before` is an exclusive bound"),
+            "the second file's own call must still be seeded: {}",
+            seeded.rendered
+        );
+    }
+
     #[tokio::test]
     async fn outcomes_are_rendered_for_the_model() {
         let tree = MockTree::from_files([("src/a.rs", "fn read_before() {}\n")]);
