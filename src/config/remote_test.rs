@@ -368,6 +368,11 @@ files = ["POLICY.md"]
 [lanes.critique]
 fail_on = "medium"
 
+[lanes.e2e]
+missing_harness = "require"
+paths = ["qa/**"]
+workflows = ["e2e"]
+
 [preview]
 enabled = false
 max_flows = 2
