@@ -150,6 +150,16 @@ impl<'a> LaneInput<'a> {
             .collect()
     }
 
+    /// Group `paths` deterministically under `bounds`, using this input's own
+    /// diffs and graph neighbourhood — see `crate::lanes::grouping`.
+    pub fn group(
+        &self,
+        paths: &[String],
+        bounds: &crate::lanes::grouping::GroupBounds,
+    ) -> Vec<crate::lanes::grouping::FileGroup> {
+        crate::lanes::grouping::group(paths, self.diffs, self.graph, bounds)
+    }
+
     /// Whether the pull request should be skipped as an unreviewed draft.
     pub fn skip_as_draft(&self) -> Option<LaneOutcome> {
         (self.pull_request.draft && !self.config.review.draft_prs).then(|| {
