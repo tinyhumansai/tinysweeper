@@ -1015,6 +1015,7 @@ mod tests {
         // dereferencing" as their own example.
         let lines = ["Close the socket on the error path (src/main.rs:2): leaked fd".to_string()];
         let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
+        i.coverage_pass = true;
         i.confirmed_this_round = &lines;
         let prompt = build(&i);
 
@@ -1025,6 +1026,22 @@ mod tests {
                 .contains("Close the socket on the error path")
         );
         assert!(!prompt.prefix().contains("Close the socket"));
+    }
+
+    #[test]
+    fn a_clean_first_pass_still_gets_the_second_pass_instruction() {
+        // A group whose first pass reported nothing to report is the common
+        // case the coverage pass exists for. Gating the whole layer on
+        // `confirmed_this_round` being non-empty made this call byte-identical
+        // to round one's — the reviewer was asked the same question twice
+        // instead of being told to look deeper.
+        let config = config();
+        let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
+        i.coverage_pass = true;
+        let prompt = build(&i);
+
+        assert!(prompt.suffix().contains("## What you already found"));
+        assert!(prompt.suffix().contains("second pass over the same evidence"));
     }
 
     #[test]
