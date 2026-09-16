@@ -1011,6 +1011,7 @@ jobs:
                 paths: strings(&["src/server/**", "e2e/**"]),
                 paths_ignore: vec![],
                 filter_line: Some(5),
+                target: false,
             }
         );
         assert_eq!(
@@ -1035,7 +1036,8 @@ jobs:
             Trigger::PullRequest {
                 paths: vec![],
                 paths_ignore: vec![],
-                filter_line: None
+                filter_line: None,
+                target: false,
             }
         );
     }
