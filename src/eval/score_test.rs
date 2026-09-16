@@ -72,7 +72,7 @@ fn finding(path: &str, line: u64, title: &str, body: &str) -> Finding {
 
 fn proposal(findings: Vec<Finding>) -> Proposal {
     Proposal {
-        version: 1,
+        version: crate::app::review::PROPOSAL_VERSION,
         repo: "tinyhumansai/tinysweeper".into(),
         number: 1,
         head_sha: "a".repeat(40),

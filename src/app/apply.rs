@@ -649,7 +649,7 @@ mod tests {
             overview: None,
             unreviewed: vec![],
             skipped: None,
-            version: 1,
+            version: crate::app::review::PROPOSAL_VERSION,
             repo: "tinyhumansai/tinysweeper".into(),
             number: 7,
             head_sha: head.into(),
@@ -1399,6 +1399,23 @@ mod tests {
                 .iter()
                 .any(|w| matches!(w, Write::DismissApproval { .. }))
         );
+    }
+
+    #[tokio::test]
+    async fn a_version_one_proposal_is_never_approved() {
+        // Written by a `review` that did not record what went unanswered:
+        // its silence is not an answer, so it can post but not endorse.
+        let mut legacy = proposal("abc123", vec![]);
+        legacy.version = 1;
+        assert!(!legacy.complete());
+
+        let forge = forge("abc123");
+        apply(&forge, &forge, &config(), &legacy, None)
+            .await
+            .expect("applies");
+        if let Some((body, event)) = review_of(&forge) {
+            assert_ne!(event, ReviewEvent::Approve, "{body}");
+        }
     }
 
     #[tokio::test]
