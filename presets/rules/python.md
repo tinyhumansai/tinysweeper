@@ -8,7 +8,7 @@
 - A bare `except:` or a broad `except Exception:` that swallows the error
   silently (`pass`, or a log line with no re-raise) instead of handling or
   propagating it.
-- `subprocess` called with `shell=True` on a command built from a source that
+- `subprocess` called with `shell equals true` on a command built from a source that
   is not a fixed literal.
 - `eval`, `exec`, `pickle.loads`, or `yaml.load` without `SafeLoader` on data
   that did not originate inside this process.
@@ -27,7 +27,7 @@
   correct place to stop an unknown failure from taking the whole process down.
 - A mutable default argument on a function the diff shows is never called with
   the default, or that never mutates it.
-- `shell=True` on a command built entirely from literals in the call itself.
+- `shell equals true` on a command built entirely from literals in the call itself.
 - Comparing to `None` with `==` instead of `is`. Correct in CPython, and not
   worth a comment.
 - Missing type hints, `Optional` vs `| None`, or other style already covered
