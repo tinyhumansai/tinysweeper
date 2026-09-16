@@ -80,11 +80,15 @@ answered before a token is spent.
   able to say so once.
 - **Workflows.** Every `.github/workflows/*.yml` whose name, job names or
   steps say e2e: a name matching `e2e|end-to-end|integration|acceptance|smoke`,
-  a step that runs `playwright`, `cypress`, `docker compose up`, `testcontainers`,
-  `k6`, or a service container block. Overridable with `lanes.e2e.workflows`,
-  a list of workflow or job names that count. The scanner in
-  `src/scan/workflows.rs` already parses these files; the classification is a
-  second reader over the same YAML, not a second parser.
+  or a step that runs `playwright`, `cypress`, `docker compose up`,
+  `testcontainers`, `k6`, and the like. A job's service-container block is
+  *not*, on its own, enough to classify it — a unit-test job running against
+  a Postgres or Redis container is common CI and not an e2e suite. It only
+  counts as corroboration once the workflow is already e2e by name.
+  Overridable with `lanes.e2e.workflows`, a list of workflow or job names
+  that count. The scanner in `src/scan/workflows.rs` already parses these
+  files; the classification is a second reader over the same YAML, not a
+  second parser.
 
 This needs a tree listing: `ForgeRead::tree_paths(repo, sha) -> TreeListing`,
 backed by the recursive `git/trees` endpoint on GitHub, with `MockForge`
