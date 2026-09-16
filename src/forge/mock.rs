@@ -614,6 +614,15 @@ impl ForgeRead for MockForge {
         Ok(state.submodules.get(&file_key(sha, path)).cloned())
     }
 
+    async fn open_pull_requests_for_commit(&self, _repo: &RepoId, sha: &str) -> Result<Vec<u64>> {
+        let state = self.state.lock().expect("mock state lock");
+        Ok(state
+            .pull_requests_by_commit
+            .get(sha)
+            .cloned()
+            .unwrap_or_default())
+    }
+
     async fn issue(&self, _repo: &RepoId, number: u64) -> Result<Issue> {
         let state = self.state.lock().expect("mock state lock");
         state
