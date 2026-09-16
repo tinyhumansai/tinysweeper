@@ -895,29 +895,19 @@ mod tests {
 
     #[tokio::test]
     async fn clearing_the_watch_does_not_discard_a_review_that_landed_concurrently() {
-        // The race `clear_e2e_watch` exists to close: a new push is reviewed
-        // and saves its own state (new head, new fingerprints, its own
-        // watch) in the window between `settle_e2e`'s own `load_state` and
-        // its write-back. A reload-then-unconditional-`save_state` would
-        // overwrite that new record with the old one, minus `e2e`. This
-        // simulates the race directly by writing the "new review" state in
-        // between building the settlement inputs and calling `settle_e2e`.
+        // The race `clear_e2e_watch` exists to close: `settle_e2e` reads the
+        // `abc123` watch, and — in the window before its own write-back — a
+        // review of a *newer* push saves its own state: a new head, new
+        // fingerprints, and its own watch. A reload-then-unconditional
+        // `save_state` at that point would overwrite the new record with the
+        // stale one, minus `e2e`. Exercised directly against the store
+        // rather than through the full `settle_e2e` flow, which has no seam
+        // to inject a concurrent write at that exact point; this is exactly
+        // the call `settle_e2e`'s write-back makes.
         use crate::lanes::e2e::runs::Watch;
         use crate::state::memory::MemoryState;
         use crate::state::types::ReviewedState;
 
-        let repo = RepoId::parse("tinyhumansai/tinysweeper").unwrap();
-        let mut state = MockState::default();
-        state.pull_requests.insert(
-            7,
-            PullRequest {
-                number: 7,
-                head_sha: "abc123".into(),
-                ..PullRequest::default()
-            },
-        );
-        state.set_check("abc123", "playwright", Some(CheckConclusion::Success));
-        let forge = MockForge::with_state(state);
         let store = MemoryState::new();
         let key = crate::state::key("tinyhumansai/tinysweeper", 7);
         store
@@ -937,9 +927,9 @@ mod tests {
             .await
             .unwrap();
 
-        // The race: a review of a *newer* push saves its own state — a new
-        // head, new fingerprints, its own watch — before this settlement's
-        // write-back runs.
+        // The concurrent write: a review of a newer push landed between
+        // `settle_e2e`'s `load_state` (which read the `abc123` watch above)
+        // and now.
         let concurrent = ReviewedState {
             head_sha: "newer".into(),
             fingerprints: vec!["fresh-finding".into()],
@@ -953,17 +943,16 @@ mod tests {
         };
         store.save_state(&key, &concurrent).await.unwrap();
 
-        let settled = settle_e2e(&forge, &forge, &config(), &store, &repo, 7)
-            .await
-            .expect("settles");
-        assert_eq!(settled, E2eSettlement::Published(CheckConclusion::Success));
+        // `settle_e2e` finishes settling the `abc123` watch it read earlier
+        // and tries to clear it.
+        let cleared = store.clear_e2e_watch(&key, "abc123").await.unwrap();
+        assert!(
+            !cleared,
+            "the stored watch is for `newer` now, not `abc123`; nothing should match"
+        );
 
-        // The concurrent review's record must survive intact: `settle_e2e`
-        // was settling `abc123`'s watch, which no longer matches what is
-        // stored (`newer`), so `clear_e2e_watch`'s condition does not match
-        // and nothing here is touched.
         let after = store.load_state(&key).await.unwrap().expect("still there");
-        assert_eq!(after, concurrent, "the concurrent review's state must survive");
+        assert_eq!(after, concurrent, "the concurrent review's state must survive intact");
     }
 
     #[tokio::test]
