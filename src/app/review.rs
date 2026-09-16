@@ -842,27 +842,44 @@ pub async fn review_with_tree(
     // fails or the head moves. Save fingerprints only after apply publishes
     // them: identities of findings that are never shown must not suppress the
     // only actionable inline comments for up to the state TTL.
-    if let Some(store) = store
-        && config.review.incremental
-    {
-        let next_titles = still_open_titles(&prior_titles, &lanes);
-        let next = ReviewedState {
-            head_sha: context.pull_request.head_sha.clone(),
-            evidence: replay::render(&diffs),
-            // New identities are recorded by `apply` after their review has
-            // been created successfully. Retaining only known posted values
-            // here makes a stale or failed publish retryable.
-            fingerprints: suppressed.into_iter().collect(),
-            // Levels for this cycle's findings as well as the ones carried in,
-            // so a finding first raised now is pinned on the *next* push rather
-            // than only once it has survived two. Restricted to the titles
-            // actually kept, so the map cannot outgrow the list it annotates.
-            severities: kept_severities(&prior_severities, &lanes, &next_titles),
-            titles: next_titles,
-            e2e: e2e_watch(&lanes, &context.pull_request.head_sha),
-        };
-        if let Err(err) = store.save_state(&state_key, &next).await {
-            tracing::warn!(%err, "could not record the review state; the next review will cost more");
+    if let Some(store) = store {
+        let e2e = e2e_watch(&lanes, &context.pull_request.head_sha);
+        if config.review.incremental {
+            let next_titles = still_open_titles(&prior_titles, &lanes);
+            let next = ReviewedState {
+                head_sha: context.pull_request.head_sha.clone(),
+                evidence: replay::render(&diffs),
+                // New identities are recorded by `apply` after their review has
+                // been created successfully. Retaining only known posted values
+                // here makes a stale or failed publish retryable.
+                fingerprints: suppressed.into_iter().collect(),
+                // Levels for this cycle's findings as well as the ones carried in,
+                // so a finding first raised now is pinned on the *next* push rather
+                // than only once it has survived two. Restricted to the titles
+                // actually kept, so the map cannot outgrow the list it annotates.
+                severities: kept_severities(&prior_severities, &lanes, &next_titles),
+                titles: next_titles,
+                e2e,
+            };
+            if let Err(err) = store.save_state(&state_key, &next).await {
+                tracing::warn!(%err, "could not record the review state; the next review will cost more");
+            }
+        } else if e2e.is_some() {
+            // Incremental replay state is deliberately not kept here, but a
+            // pending e2e watch has nowhere else to live: `settle_e2e` reads
+            // it back off `ReviewedState` when the jobs conclude, and with
+            // no record at all the published `Neutral` check can never be
+            // replaced by a terminal conclusion. Persisted independently of
+            // `review.incremental` — everything else defaults, so this never
+            // fabricates dedupe state a non-incremental review does not keep.
+            let next = ReviewedState {
+                head_sha: context.pull_request.head_sha.clone(),
+                e2e,
+                ..ReviewedState::default()
+            };
+            if let Err(err) = store.save_state(&state_key, &next).await {
+                tracing::warn!(%err, "could not record the e2e watch; its check run may not settle automatically");
+            }
         }
     }
 
