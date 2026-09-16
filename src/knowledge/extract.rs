@@ -58,6 +58,7 @@ use crate::knowledge::cache::RuleCache;
 use crate::knowledge::types::{InstructionFile, MAX_RULE_CHARS, MAX_RULES};
 use crate::ports::forge::ForgeRead;
 use crate::ports::model::{Message, Model, ModelRequest, Usage};
+use crate::scan;
 
 /// The literal an extractor emits when a file states no actionable rules.
 ///
