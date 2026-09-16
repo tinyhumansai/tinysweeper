@@ -622,6 +622,14 @@ fn validate_overview(config: &Config, problems: &mut Vec<String>) {
 }
 
 fn validate_grouping(config: &Config, problems: &mut Vec<String>) {
+    // Disabled grouping never calls `grouping::group`, so a zero bound here
+    // is inert rather than contradictory — and the error below names exactly
+    // this key as the valid way to turn grouping off. Mirrors
+    // `validate_overview`'s early return for its own inactive feature.
+    if !config.grouping.enabled {
+        return;
+    }
+
     // A component of zero files is not a group at all, and `grouping::group`
     // would drop every file into its own singleton — indistinguishable from
     // grouping being off, but paying the union-find and the confusion of a
