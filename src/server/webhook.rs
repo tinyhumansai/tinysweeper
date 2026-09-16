@@ -419,6 +419,29 @@ pub fn route(event: &str, payload: &Payload) -> Action {
         };
     }
 
+    // The fork case `automerge_trigger` cannot name a number for: a
+    // `check_run`/`check_suite` completion with an empty `pull_requests`
+    // list. Not necessarily a fork — a commit on a branch with no open pull
+    // request answers the same way, and `open_pull_requests_for_commit`
+    // resolving to nothing there is the correct, quiet outcome — but it is
+    // the only path left that can recover the case that *is* a fork.
+    if matches!(event, "check_run" | "check_suite") && payload.action == "completed" {
+        let check = match event {
+            "check_run" => payload.check_run.as_ref(),
+            _ => payload.check_suite.as_ref(),
+        };
+        if let Some(check) = check
+            && check.pull_requests.is_empty()
+            && !check.head_sha.is_empty()
+        {
+            return Action::SettleByCommit {
+                repo: repository.full_name.clone(),
+                head_sha: check.head_sha.clone(),
+                installation: installation.id,
+            };
+        }
+    }
+
     // A bot's own activity must never wake it up. Without this, posting a
     // review comment triggers a delivery that triggers a review that posts a
     // comment, and the loop is only bounded by the rate limiter.
