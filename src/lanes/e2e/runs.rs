@@ -540,6 +540,7 @@ mod tests {
             jobs: strings(&["playwright", "cypress"]),
             summary: "Coverage looks complete.".into(),
             failed: false,
+            generation: String::new(),
         };
         assert_eq!(
             settle(
@@ -587,6 +588,7 @@ mod tests {
             jobs: strings(&["playwright"]),
             summary: String::new(),
             failed: false,
+            generation: String::new(),
         };
         let checks = [check("playwright", Some(CheckConclusion::Failure))];
         assert_eq!(
@@ -608,6 +610,7 @@ mod tests {
             jobs: strings(&["playwright"]),
             summary: String::new(),
             failed: true,
+            generation: String::new(),
         };
         let settled = settle(
             &watch,
