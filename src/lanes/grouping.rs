@@ -542,6 +542,20 @@ mod tests {
     }
 
     #[test]
+    fn files_sharing_a_root_but_naming_different_middle_segments_stay_singletons() {
+        // Both start with `user.` and end in a script/style extension, but
+        // `.model.` and `.profile.` name different concerns, not a component
+        // and its CSS-Modules-scoped stylesheet.
+        let paths = strings(&["ui/user.model.ts", "ui/user.profile.css"]);
+        let diffs = diffs_for(&["ui/user.model.ts", "ui/user.profile.css"]);
+
+        let groups = group(&paths, &diffs, None, &default_bounds());
+
+        assert_eq!(groups.len(), 2, "{groups:?}");
+        assert!(groups.iter().all(|g| g.paths.len() == 1));
+    }
+
+    #[test]
     fn an_oversized_component_is_split_back_to_singletons() {
         // Six files chained by calls edges: one component of six, which is
         // over `max_files = 4`. The fallback is six singletons, never 4 + 2.
