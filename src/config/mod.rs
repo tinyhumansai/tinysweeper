@@ -240,6 +240,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "lanes",
             "council",
             "lookup",
+            "grouping",
             "automerge",
             "threads",
             "overview",
@@ -361,6 +362,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
         "council" => Some(&["enabled", "corroboration", "subagents", "agents"]),
         "council.agents.*" => Some(&["id", "lanes", "model", "persona"]),
         "lookup" => Some(&["enabled", "rounds", "per_round", "max_chars", "checkout"]),
+        "grouping" => Some(&["enabled", "max_files", "max_hunk_chars"]),
         "automerge" => Some(&[
             "enabled",
             "require_checks",

@@ -35,7 +35,8 @@ use crate::flows::panel::Call;
 use crate::flows::runner;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
-use crate::lanes::fanout::{FileReview, per_file};
+use crate::lanes::fanout::{FileReview, per_unit};
+use crate::lanes::grouping::{FileGroup, GroupBounds};
 use crate::lanes::mechanical;
 use crate::lanes::triage::triage;
 use crate::lanes::{
@@ -136,47 +137,83 @@ impl Lane for Security {
             )));
         }
 
+        // No model call: groups related changed files so a bug spanning them
+        // is visible to one reviewer instead of hidden by the isolation
+        // clause each ungrouped conversation is given — see
+        // `lanes::grouping`. Off, or a component too large to bet on, falls
+        // back to exactly the singleton fan-out this lane ran before
+        // grouping existed.
+        let groups: Vec<FileGroup> = if input.config.grouping.enabled {
+            input.group(
+                &triaged.review,
+                &GroupBounds {
+                    max_files: input.config.grouping.max_files,
+                    max_hunk_chars: input.config.grouping.max_hunk_chars,
+                },
+            )
+        } else {
+            triaged
+                .review
+                .iter()
+                .map(|path| FileGroup {
+                    label: path.clone(),
+                    paths: vec![path.clone()],
+                })
+                .collect()
+        };
+
         // One capability for the whole lane, so the pull-request budget holds
         // across every file and every reviewer at once — which is what lets the
-        // files run concurrently rather than one at a time.
+        // groups run concurrently rather than one at a time.
         let llm = runner::lane_llm(
             self.model.clone(),
             input.config,
             input.config.models.budget_usd_per_pr,
         );
 
-        let outcome = per_file(&triaged.review, |path| {
-            let llm = llm.clone();
-            let config = input.config;
-            let repo_policy = input.repo_policy;
-            let extracted_rules = input.extracted_rules;
-            let prior_findings = input.prior_findings;
-            let retrieved_context = input.retrieved_context;
-            let memory_context = input.memory_context;
-            let input = &input;
-            let diffs = input.diffs;
-            let scanner = &scanner;
-            async move {
-                let diff = diffs
-                    .iter()
-                    .find(|d| d.path == path)
-                    .expect("the path came from the diff list");
-                let asking = input.asking_about(diff);
-                review_file(
-                    llm,
-                    config,
-                    repo_policy,
-                    extracted_rules,
-                    prior_findings,
-                    retrieved_context,
-                    memory_context,
-                    asking,
-                    diff,
-                    scanner,
-                )
-                .await
-            }
-        })
+        let changed_paths = input.changed_paths();
+
+        let outcome = per_unit(
+            &groups,
+            |group| group.label.clone(),
+            |group| group.paths.clone(),
+            |group| {
+                let llm = llm.clone();
+                let config = input.config;
+                let repo_policy = input.repo_policy;
+                let extracted_rules = input.extracted_rules;
+                let prior_findings = input.prior_findings;
+                let retrieved_context = input.retrieved_context;
+                let memory_context = input.memory_context;
+                let input = &input;
+                let diffs = input.diffs;
+                let scanner = &scanner;
+                let changed_paths = &changed_paths;
+                async move {
+                    let group_diffs: Vec<FileDiff> = group
+                        .paths
+                        .iter()
+                        .filter_map(|path| diffs.iter().find(|d| &d.path == path).cloned())
+                        .collect();
+                    let asking = input.asking_about_group(&group_diffs);
+                    review_group(
+                        llm,
+                        config,
+                        repo_policy,
+                        extracted_rules,
+                        prior_findings,
+                        retrieved_context,
+                        memory_context,
+                        asking,
+                        changed_paths,
+                        &group.paths,
+                        &group_diffs,
+                        scanner,
+                    )
+                    .await
+                }
+            },
+        )
         .await;
 
         let mut outcome = outcome.into_outcome();
@@ -196,14 +233,15 @@ impl Lane for Security {
     }
 }
 
-/// Review one file, in a conversation that knows about no other file.
+/// Review one group of related changed files, in a conversation that knows
+/// about no file outside it.
 ///
 // Every argument is one prompt layer, and they are passed individually rather
 // than as a context struct because each has a different trust level — see
 // `harness::prompt`. Bundling them would make it easy to route the untrusted
 // ones to the wrong half of the prompt.
 #[allow(clippy::too_many_arguments)]
-async fn review_file(
+async fn review_group(
     llm: std::sync::Arc<crate::flows::caps::ModelCapability>,
     config: &crate::config::types::Config,
     repo_policy: Option<&str>,
@@ -212,18 +250,21 @@ async fn review_file(
     retrieved_context: &str,
     memory_context: &str,
     asking: runner::Asking<'_>,
-    diff: &FileDiff,
+    changed_paths: &[String],
+    group_paths: &[String],
+    group_diffs: &[FileDiff],
     scanner: &[&ScanFinding],
 ) -> Result<FileReview> {
-    let evidence = render_diffs(std::slice::from_ref(diff));
-    let scanner_evidence = render_scanner(scanner, Some(&diff.path));
+    let evidence = render_diffs(group_diffs);
+    let scanner_evidence = render_scanner(scanner, group_paths);
 
     let built = prompt::build(&PromptInputs {
         repo_policy,
         extracted_rules,
         prior_findings,
         new_evidence: &evidence,
-        focus_path: Some(&diff.path),
+        changed_paths,
+        focus_paths: group_paths,
         scanner_evidence: &scanner_evidence,
         retrieved_context,
         memory_context,
@@ -254,19 +295,19 @@ async fn review_file(
     )
     .await?;
 
-    // A file whose every reviewer failed is a file nobody read. Failing here is
-    // what puts it in the fan-out's failure list, where the summary names it —
-    // the alternative is an unreviewed file that reads as clean.
+    // A group whose every reviewer failed is a group nobody read. Failing here
+    // is what puts it in the fan-out's failure list, where the summary names
+    // it — the alternative is an unreviewed group that reads as clean.
     let Some(outcome) = aggregate_reviewer_responses(
         LaneId::Security,
         reviewer_responses(LaneId::Security, &reviewers, &answers)?,
-        std::slice::from_ref(diff),
+        group_diffs,
         Anchoring::Strict,
         config.council.corroboration,
     ) else {
         return Err(crate::error::Error::lane(
             LaneId::Security.as_str(),
-            format!("no reviewer could review {}", diff.path),
+            format!("no reviewer could review {}", group_paths.join(" + ")),
         ));
     };
 
@@ -305,13 +346,18 @@ fn skip_note(skipped: &[(String, &'static str)]) -> String {
 
 /// Render scanner findings for adjudication, by type and location only.
 ///
+/// `paths` restricts the findings shown to those files — a group's own paths,
+/// so a conversation is not shown a scanner match for a file another
+/// conversation owns. Empty renders every finding, which is what a
+/// whole-pull-request caller with no group of its own wants.
+///
 /// `redacted_hint` is the only thing from the match itself that is ever shown,
 /// and the scanner already guaranteed it carries no entropy. The value has no
 /// route into this string because [`ScanFinding`] has nowhere to keep it.
-pub(crate) fn render_scanner(findings: &[&ScanFinding], path: Option<&str>) -> String {
+pub(crate) fn render_scanner(findings: &[&ScanFinding], paths: &[String]) -> String {
     let mut out = String::new();
     for finding in findings {
-        if path.is_some_and(|p| p != finding.path) {
+        if !paths.is_empty() && !paths.iter().any(|p| p == &finding.path) {
             continue;
         }
         let location = match finding.line {
@@ -427,6 +473,7 @@ mod tests {
                 memory_context: "",
                 e2e: None,
                 tree: None,
+                graph: None,
             })
             .await
             .expect("lane runs")
@@ -704,6 +751,7 @@ mod tests {
                 memory_context: "",
                 e2e: None,
                 tree: None,
+                graph: None,
             })
             .await
             .expect("runs");

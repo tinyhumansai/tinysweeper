@@ -1,16 +1,24 @@
-//! Per-file fan-out: one conversation per changed file, bounded and isolated.
+//! Fan-out: one conversation per unit of review, bounded and isolated.
 //!
 //! A lane that reviews a forty-file pull request in one conversation reviews
 //! the first few files carefully and the rest as an afterthought. Splitting it
-//! per file fixes that, and buys two more things:
+//! fixes that, and buys two more things:
 //!
-//! - **Isolation of failure.** One file's model call failing must not fail the
-//!   lane. The remaining files are still reviewed and the failure is counted
-//!   into the summary, where a human can see it — a lane that returns nothing
-//!   because one call timed out is a lane that quietly reports "all clear".
-//! - **Isolation of subject.** Each conversation is told it owns exactly one
-//!   file (see `ISOLATION_CLAUSE` in `harness::prompt`). Without that, every
+//! - **Isolation of failure.** One unit's model call failing must not fail the
+//!   lane. The rest are still reviewed and the failure is counted into the
+//!   summary, where a human can see it — a lane that returns nothing because
+//!   one call timed out is a lane that quietly reports "all clear".
+//! - **Isolation of subject.** Each conversation is told exactly which files it
+//!   owns (see `isolation_clause` in `harness::prompt`). Without that, every
 //!   one of the N reviewers notices the same cross-file problem and reports it.
+//!
+//! The unit is one file for `security`; for `critique` it is one
+//! [`crate::lanes::grouping::FileGroup`] — a handful of related changed files
+//! reviewed together so a bug spanning them is visible to one reviewer instead
+//! of hidden between two isolated ones. [`per_unit`] is generic over which;
+//! [`per_file`] is the plain-path convenience both lanes used before grouping
+//! existed, kept because `security` and every test predating grouping still
+//! read most naturally as "one file, one conversation".
 //!
 //! The concurrency cap is the third thing. Each call is a model call, and an
 //! unbounded fan-out over a large pull request is an unbounded bill and a rate
@@ -45,47 +53,82 @@ pub struct FileReview {
     pub spend: Spend,
 }
 
-/// Review `paths` concurrently, at most [`MAX_CONCURRENT_FILES`] at a time.
+/// Review `units` concurrently, at most [`MAX_CONCURRENT_FILES`] at a time.
 ///
-/// Failures are collected rather than propagated: see the module doc.
-pub async fn per_file<F, Fut>(paths: &[String], review: F) -> FanOut
+/// `T` is one changed file for `security`, and one [`crate::lanes::grouping::FileGroup`]
+/// for `critique` — either way, one item is one conversation and `label`
+/// names what goes in the failure list and the summary. `member_paths` gives
+/// the individual file paths one unit stands for, so a multi-file group's
+/// success or failure is still counted and named file-by-file downstream
+/// rather than collapsed into one synthetic entry per conversation. Failures
+/// are collected rather than propagated: see the module doc.
+pub async fn per_unit<T, F, Fut>(
+    units: &[T],
+    label: impl Fn(&T) -> String,
+    member_paths: impl Fn(&T) -> Vec<String>,
+    review: F,
+) -> FanOut
 where
-    F: Fn(String) -> Fut,
+    T: Clone + Send + 'static,
+    F: Fn(T) -> Fut,
     Fut: Future<Output = crate::error::Result<FileReview>>,
 {
     let permits = Arc::new(Semaphore::new(MAX_CONCURRENT_FILES));
 
     // The future is built eagerly but polled only after a permit is held, so
     // the cap bounds work in flight rather than merely futures allocated.
-    let tasks = paths.iter().cloned().map(|path| {
+    let tasks = units.iter().cloned().map(|unit| {
         let permits = permits.clone();
-        let task = review(path.clone());
+        let name = label(&unit);
+        let paths = member_paths(&unit);
+        let task = review(unit);
         async move {
             let _permit = permits
                 .acquire_owned()
                 .await
                 .expect("the permit pool is never closed");
-            (path, task.await)
+            (name, paths, task.await)
         }
     });
 
     let mut out = FanOut::default();
-    for (path, result) in futures::future::join_all(tasks).await {
+    for (name, paths, result) in futures::future::join_all(tasks).await {
         match result {
-            Ok(review) => out.reviews.push(review),
-            Err(err) => out.failures.push((path, err)),
+            Ok(review) => out.reviews.push((paths, review)),
+            Err(err) => out.failures.push((name, paths, err)),
         }
     }
     out
 }
 
+/// [`per_unit`] over plain paths, where the label and the sole member path
+/// are both the path itself.
+///
+/// The common case — `security`, and `critique` before grouping — kept as its
+/// own name so a call site reads as "one file, one conversation" rather than
+/// spelling out an identity label closure every time.
+pub async fn per_file<F, Fut>(paths: &[String], review: F) -> FanOut
+where
+    F: Fn(String) -> Fut,
+    Fut: Future<Output = crate::error::Result<FileReview>>,
+{
+    per_unit(paths, String::clone, |path| vec![path.clone()], review).await
+}
+
 /// The results of a fan-out, successes and failures kept apart.
+///
+/// Each entry carries the individual file paths its unit stood for, so a
+/// multi-file [`crate::lanes::grouping::FileGroup`] contributes one entry per
+/// member file to the counts and lists `into_outcome` builds, not one per
+/// conversation.
 #[derive(Debug, Default)]
 pub struct FanOut {
-    /// One entry per file that was reviewed.
-    pub reviews: Vec<FileReview>,
-    /// The files whose review failed, with why.
-    pub failures: Vec<(String, Error)>,
+    /// One entry per unit that was reviewed: its member file paths, and the
+    /// review produced for the whole unit.
+    pub reviews: Vec<(Vec<String>, FileReview)>,
+    /// The units whose review failed: the unit's label, its member file
+    /// paths, and why.
+    pub failures: Vec<(String, Vec<String>, Error)>,
 }
 
 impl FanOut {
@@ -95,23 +138,31 @@ impl FanOut {
     /// like a complete one is worse than no review at all, because a human
     /// stops looking.
     pub fn into_outcome(self) -> LaneOutcome {
-        let reviewed = self.reviews.len();
+        // A multi-file group is one conversation but several files: counted
+        // and named per member path here, so "Reviewed N files" and the
+        // unanswered list stay file-accurate rather than reporting one
+        // synthetic entry per conversation.
+        let reviewed: usize = self.reviews.iter().map(|(paths, _)| paths.len()).sum();
+        let one_conversation = self.reviews.len() == 1;
         let mut findings = Vec::new();
         let mut resolved = Vec::new();
         let mut spend = Spend::default();
         let mut only_summary = None;
 
-        for review in self.reviews {
+        for (_paths, review) in self.reviews {
             spend.merge(review.spend);
             findings.extend(review.findings);
             resolved.extend(review.resolved);
+            // A lone unit's own sentence stands in for the count whether it
+            // covered one file or a whole group: it is the one verdict this
+            // fan-out reached, and reads better than a bare tally.
             only_summary = Some(review.summary);
         }
 
-        // One file is the common case for a small pull request, and its own
-        // sentence says more than a count would.
-        let mut summary = match (reviewed, only_summary) {
-            (1, Some(single)) if !single.trim().is_empty() => single.trim().to_string(),
+        // One conversation is the common case for a small pull request or a
+        // single group, and its own sentence says more than a count would.
+        let mut summary = match (one_conversation, only_summary) {
+            (true, Some(single)) if !single.trim().is_empty() => single.trim().to_string(),
             _ => format!(
                 "Reviewed {reviewed} file{}; {} finding{}.",
                 plural(reviewed),
@@ -120,25 +171,25 @@ impl FanOut {
             ),
         };
 
+        // Every path behind a failed unit, not one synthetic entry per
+        // conversation: a failed two-file group must count and name both.
+        let unanswered: Vec<String> = self
+            .failures
+            .iter()
+            .flat_map(|(_, paths, _)| paths.iter().cloned())
+            .collect();
+
         if !self.failures.is_empty() {
-            let names: Vec<&str> = self
-                .failures
-                .iter()
-                .map(|(path, _)| path.as_str())
-                .collect();
             summary.push_str(&format!(
                 " {} file{} could not be reviewed: {}.",
-                self.failures.len(),
-                plural(self.failures.len()),
-                names.join(", ")
+                unanswered.len(),
+                plural(unanswered.len()),
+                unanswered.join(", ")
             ));
         }
 
         let skipped = (reviewed == 0 && !self.failures.is_empty())
             .then(|| "No files could be reviewed; see the listed provider failures.".to_string());
-        // Every file that got no answer, whether or not others did: a lane that
-        // reviewed two files of three cannot vouch for the third.
-        let unanswered = self.failures.iter().map(|(path, _)| path.clone()).collect();
         LaneOutcome {
             summary,
             findings,
@@ -214,6 +265,56 @@ mod tests {
 
         assert!(outcome.skipped.is_some());
         assert_eq!(outcome.unanswered, vec!["bad.rs".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn a_multi_file_groups_success_counts_every_member_file() {
+        // Two two-file groups: the fan-out ran two conversations, but the
+        // outcome must report four files reviewed, not two conversations.
+        let groups = vec![
+            vec!["a.rs".to_string(), "b.rs".to_string()],
+            vec!["c.rs".to_string(), "d.rs".to_string()],
+        ];
+        let outcome = per_unit(
+            &groups,
+            |g| g.join(" + "),
+            |g| g.clone(),
+            |g| async move { Ok(review_of(&format!("Reviewed {}.", g.join(" + ")))) },
+        )
+        .await
+        .into_outcome();
+
+        assert!(
+            outcome.summary.starts_with("Reviewed 4 files"),
+            "{}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_multi_file_group_names_every_member_file_as_unanswered() {
+        let groups = vec![vec!["a.rs".to_string(), "b.rs".to_string()]];
+        let outcome = per_unit(
+            &groups,
+            |g| g.join(" + "),
+            |g| g.clone(),
+            |_| async { Err(Error::Model("upstream exploded".into())) },
+        )
+        .await
+        .into_outcome();
+
+        assert_eq!(
+            outcome.unanswered,
+            vec!["a.rs".to_string(), "b.rs".to_string()],
+            "a failed two-file group must name both files, not one synthetic label"
+        );
+        assert!(
+            outcome
+                .summary
+                .contains("2 files could not be reviewed: a.rs, b.rs"),
+            "{}",
+            outcome.summary
+        );
     }
 
     #[tokio::test]

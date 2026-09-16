@@ -427,6 +427,21 @@ max_chars = 40000
 # read one file at a time through the API and search is unavailable.
 checkout = true
 
+# Cross-file grouping for the `critique` and `security` per-file fan-out. No
+# model call: related changed files (a graph edge, or a name heuristic like a
+# file and its test) travel in one conversation instead of N isolated ones,
+# so a bug spanning them is visible to a reviewer instead of hidden by the
+# isolation clause each fanned-out conversation is given. `max_files = 4` and
+# `max_hunk_chars = 20000` are chosen to comfortably hold a file and its test,
+# or a handful of files one rename touches, while still falling back to
+# singletons well before a group would crowd out the model's attention the
+# same way the 31-file single-conversation review that motivated per-file
+# fan-out in the first place did.
+[grouping]
+enabled = true
+max_files = 4
+max_hunk_chars = 20000
+
 # The knowledge centre. `files` are read from the pull request's head commit
 # through the forge and are untrusted input — they are put through a sandboxed
 # extraction pass rather than injected. Plain filenames only: a name containing

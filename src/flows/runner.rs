@@ -228,10 +228,12 @@ pub struct Asking<'a> {
     pub tree: Option<&'a dyn TreeReader>,
     /// How much it may look up.
     pub lookup: Option<&'a LookupPolicy>,
-    /// The one file this conversation is about, when there is one: the
-    /// definitions its changed lines call into are fetched before the first
-    /// turn, unasked — see [`crate::flows::lookup::Ledger::seed`].
-    pub seed: Option<&'a crate::evidence::diff::FileDiff>,
+    /// The files this conversation is about — one for an ungrouped
+    /// conversation, several for a grouped one: the definitions their changed
+    /// lines call into are fetched before the first turn, unasked, for every
+    /// file in the slice — see [`crate::flows::lookup::Ledger::seed`]. Empty
+    /// disables seeding.
+    pub seed: &'a [crate::evidence::diff::FileDiff],
 }
 
 impl<'a> Asking<'a> {
@@ -325,10 +327,10 @@ pub async fn ask_all(
         .map(|_| lookup::Ledger::default())
         .collect();
     if let Some((tree, policy)) = lookups
-        && let Some(diff) = asking.seed
+        && !asking.seed.is_empty()
     {
         for (index, prompt) in prompts.iter_mut().enumerate() {
-            let seeded = ledgers[index].seed(tree, diff, policy).await;
+            let seeded = ledgers[index].seed(tree, asking.seed, policy).await;
             if !seeded.rendered.is_empty() {
                 prompt.prompt.push_str(&seeded.rendered);
                 tracing::debug!(

@@ -12,6 +12,7 @@ pub mod critique;
 pub mod description;
 pub mod e2e;
 pub mod fanout;
+pub mod grouping;
 pub mod mechanical;
 pub mod security;
 pub mod tests;
@@ -86,6 +87,13 @@ pub struct LaneInput<'a> {
     /// answers — see `crate::flows::lookup`. `None` reviews the diff alone,
     /// which every offline golden test does.
     pub tree: Option<&'a dyn TreeReader>,
+    /// The code-graph neighbourhood already walked for this pull request's
+    /// changed files, when a graph is configured — the same walk
+    /// `crate::retrieve::expand` and `crate::app::review::change_map` read
+    /// edges from. `None` degrades `crate::lanes::grouping` to its name
+    /// heuristics alone, which is what every offline golden test does and
+    /// what a forge-only review without a graph store does too.
+    pub graph: Option<&'a crate::index::types::Neighbourhood>,
 }
 
 impl<'a> LaneInput<'a> {
@@ -100,15 +108,23 @@ impl<'a> LaneInput<'a> {
                 .then_some(self.config.models.flash.as_str()),
             tree: self.tree,
             lookup: Some(&self.config.lookup),
-            seed: None,
+            seed: &[],
         }
     }
 
     /// [`Self::asking`], for a conversation about one file: the definitions
     /// its changed lines call into are fetched before the first turn.
     pub fn asking_about(&self, diff: &'a FileDiff) -> Asking<'a> {
+        self.asking_about_group(std::slice::from_ref(diff))
+    }
+
+    /// [`Self::asking`], for a conversation about a group of related files:
+    /// the definitions every file's changed lines call into are fetched
+    /// before the first turn, so grouping a file with its test does not
+    /// regress the single-file seeding win — see `docs/modules/lanes/lookup.md`.
+    pub fn asking_about_group(&self, diffs: &'a [FileDiff]) -> Asking<'a> {
         Asking {
-            seed: Some(diff),
+            seed: diffs,
             ..self.asking()
         }
     }
@@ -138,6 +154,16 @@ impl<'a> LaneInput<'a> {
             .iter()
             .filter(|f| kinds.contains(&f.kind))
             .collect()
+    }
+
+    /// Group `paths` deterministically under `bounds`, using this input's own
+    /// diffs and graph neighbourhood — see `crate::lanes::grouping`.
+    pub fn group(
+        &self,
+        paths: &[String],
+        bounds: &crate::lanes::grouping::GroupBounds,
+    ) -> Vec<crate::lanes::grouping::FileGroup> {
+        crate::lanes::grouping::group(paths, self.diffs, self.graph, bounds)
     }
 
     /// Whether the pull request should be skipped as an unreviewed draft.

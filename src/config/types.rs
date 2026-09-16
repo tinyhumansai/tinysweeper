@@ -245,6 +245,8 @@ pub struct Config {
     pub council: Council,
     /// What a reviewer may look up in the tree before it answers.
     pub lookup: LookupPolicy,
+    /// Deterministic cross-file grouping for the per-file fan-out.
+    pub grouping: Grouping,
     /// Auto-merge policy.
     pub automerge: AutoMerge,
     /// Review-thread resolution.
@@ -1121,6 +1123,38 @@ impl Default for LookupPolicy {
             per_round: 4,
             max_chars: 40_000,
             checkout: true,
+        }
+    }
+}
+
+/// Deterministic cross-file grouping for `critique` and `security`'s per-file
+/// fan-out. No model call: two changed files are grouped by a graph edge or a
+/// name heuristic, so a bug that spans them — a caller and its callee, a
+/// function and its test — is visible to one reviewer instead of hidden
+/// between two conversations each told to ignore the other. See
+/// `crate::lanes::grouping` and `docs/modules/lanes/README.md`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Grouping {
+    /// Whether related changed files are reviewed together at all.
+    pub enabled: bool,
+    /// How many files one group may hold. A component larger than this falls
+    /// back to reviewing every one of its files alone — never a partial
+    /// group — because a conversation is a bet that grouping makes the review
+    /// better, and a bet with this many files or this much diff in it is not
+    /// worth making.
+    pub max_files: usize,
+    /// How many characters of rendered hunks one group may hold, summed
+    /// across every file in it. The same fallback as `max_files` applies.
+    pub max_hunk_chars: usize,
+}
+
+impl Default for Grouping {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_files: 4,
+            max_hunk_chars: 20_000,
         }
     }
 }

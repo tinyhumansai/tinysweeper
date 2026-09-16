@@ -400,6 +400,7 @@ mod lane_tests {
                 memory_context: "",
                 e2e: evidence,
                 tree: None,
+                graph: None,
             })
             .await
             .expect("lane runs")

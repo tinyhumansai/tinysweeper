@@ -495,7 +495,7 @@ pub fn seed_symbols(diff: &crate::evidence::diff::FileDiff) -> Vec<String> {
 
 impl Ledger {
     /// Look up, before the reviewer's first turn, the definitions of what the
-    /// changed lines call into.
+    /// changed lines of every file in `diffs` call into.
     ///
     /// The reviewer that asked for exactly these by name was the one that
     /// found the bug; the one that did not ask was the one that did not.
@@ -503,111 +503,54 @@ impl Ledger {
     /// nothing or find a name so common it has many definitions are dropped
     /// rather than rendered: a block of "no line contains that text" is
     /// noise the reviewer has to read past.
+    ///
+    /// `diffs` is one file for an ungrouped conversation and several for a
+    /// grouped one — the budget below is shared across all of them rather
+    /// than reset per file, because it is the same `[lookup].max_chars`
+    /// ceiling either way. A single-file slice produces byte-identical output
+    /// to the pre-grouping single-file `seed`.
+    ///
+    /// Shared does not mean first-come: candidates are drawn round-robin, one
+    /// per file per round, so a file whose first candidate exhausts several
+    /// [`AUTO_FOLLOW`]-sized hits cannot starve every other member of the
+    /// group of a single lookup before they are even considered.
     pub async fn seed(
         &mut self,
         tree: &dyn TreeReader,
-        diff: &crate::evidence::diff::FileDiff,
+        diffs: &[crate::evidence::diff::FileDiff],
         policy: &LookupPolicy,
     ) -> Gathered {
         let mut rendered = String::new();
         let mut answered = 0usize;
-        for symbol in seed_symbols(diff).into_iter().take(SEED_SYMBOLS * 2) {
-            if answered >= SEED_SYMBOLS || self.chars >= policy.max_chars / 2 {
-                break;
+
+        let mut queues: Vec<std::collections::VecDeque<String>> = diffs
+            .iter()
+            .map(|diff| {
+                seed_symbols(diff)
+                    .into_iter()
+                    .take(SEED_SYMBOLS * 2)
+                    .collect()
+            })
+            .collect();
+
+        'rounds: loop {
+            let mut made_progress = false;
+            for queue in &mut queues {
+                if answered >= SEED_SYMBOLS || self.chars >= policy.max_chars / 2 {
+                    break 'rounds;
+                }
+                let Some(symbol) = queue.pop_front() else {
+                    continue;
+                };
+                made_progress = true;
+                self.seed_symbol(tree, diffs, &symbol, policy, &mut rendered, &mut answered)
+                    .await;
             }
-            let capitalised = symbol.chars().next().is_some_and(char::is_uppercase);
-            let patterns: Vec<String> = if capitalised {
-                vec![
-                    format!("struct {symbol}"),
-                    format!("enum {symbol}"),
-                    format!("type {symbol}"),
-                    format!("trait {symbol}"),
-                ]
-            } else {
-                vec![format!("fn {symbol}(")]
-            };
-            for pattern in patterns {
-                let lookup = Lookup::Search {
-                    pattern: pattern.clone(),
-                    glob: None,
-                };
-                if self.seen.contains(&lookup.key()) {
-                    continue;
-                }
-                let Ok(Found::Hits { hits, .. }) = tree.lookup(&lookup).await else {
-                    continue;
-                };
-                // A definition already in the diff is not looked up; one in
-                // the same file but outside every hunk is — it is exactly as
-                // invisible to the reviewer as one in another file, and the
-                // unbounded sibling read on opencompany#2313 lived there.
-                let definitions: Vec<&crate::ports::tree::Hit> = hits
-                    .iter()
-                    .filter(|h| {
-                        looks_like_definition(&h.text)
-                            && !(h.path == diff.path
-                                && diff.within_hunk(u64::from(h.line), u64::from(h.line)))
-                    })
-                    .collect();
-                if definitions.is_empty() || definitions.len() > AUTO_FOLLOW {
-                    continue;
-                }
-                self.seen.insert(lookup.key());
-                let mut hits_text = String::new();
-                for hit in &definitions {
-                    hits_text.push_str(&format!("{}:{}: {}\n", hit.path, hit.line, hit.text));
-                }
-                // The fence has to outrun any backtick run in a hit line — a
-                // contributor-controlled source line containing ```` would
-                // otherwise close it early and the rest of this turn's
-                // evidence would read as instructions.
-                let fence = crate::harness::prompt::fence_for(&hits_text);
-                let mut body = format!("{fence}\n");
-                body.push_str(&hits_text);
-                body.push_str(&fence);
-                for hit in definitions {
-                    let below = if hit.path == diff.path {
-                        SAME_FILE_BELOW
-                    } else {
-                        DEFINITION_BELOW
-                    };
-                    let read = Lookup::Read {
-                        path: hit.path.clone(),
-                        start: Some(hit.line.saturating_sub(DEFINITION_ABOVE).max(1)),
-                        end: Some(hit.line.saturating_add(below)),
-                    };
-                    if !self.seen.insert(read.key()) {
-                        continue;
-                    }
-                    if let Ok(context) = tree.lookup(&read).await {
-                        body.push_str(&format!(
-                            "
-
-#### {}:{} — the definition and what is written above it
-
-{}",
-                            hit.path,
-                            hit.line,
-                            render_found(&context)
-                        ));
-                    }
-                }
-                if self.chars + body.len() > policy.max_chars {
-                    break;
-                }
-                self.chars += body.len();
-                answered += 1;
-                rendered.push_str(&format!(
-                    "
-### {}
-
-{body}
-",
-                    lookup.key()
-                ));
+            if !made_progress {
                 break;
             }
         }
+
         if rendered.is_empty() {
             return Gathered::default();
         }
@@ -620,6 +563,127 @@ The definitions of what the changed lines call into,                  read from 
                  {rendered}"
             ),
             answered,
+        }
+    }
+
+    /// [`Ledger::seed`]'s body for one candidate symbol from one file,
+    /// sharing the caller's budget and accumulators so the ceiling binds
+    /// across a whole group rather than per file. The caller decides which
+    /// file's symbol to try next — round-robin across a group, or simply the
+    /// next one when there is only one file.
+    ///
+    /// `diff` is the file whose changed lines named `symbol`; `group_diffs`
+    /// is every file in its conversation (one entry, `diff` itself, when
+    /// there is no group) — a hit inside any of their hunks is changed code
+    /// already visible in this same conversation's evidence, not an external
+    /// definition, whichever member's diff it happens to land in.
+    #[allow(clippy::too_many_arguments)]
+    async fn seed_symbol(
+        &mut self,
+        tree: &dyn TreeReader,
+        group_diffs: &[crate::evidence::diff::FileDiff],
+        symbol: &str,
+        policy: &LookupPolicy,
+        rendered: &mut String,
+        answered: &mut usize,
+    ) {
+        let capitalised = symbol.chars().next().is_some_and(char::is_uppercase);
+        let patterns: Vec<String> = if capitalised {
+            vec![
+                format!("struct {symbol}"),
+                format!("enum {symbol}"),
+                format!("type {symbol}"),
+                format!("trait {symbol}"),
+            ]
+        } else {
+            vec![format!("fn {symbol}(")]
+        };
+        for pattern in patterns {
+            let lookup = Lookup::Search {
+                pattern: pattern.clone(),
+                glob: None,
+            };
+            if self.seen.contains(&lookup.key()) {
+                continue;
+            }
+            let Ok(Found::Hits { hits, .. }) = tree.lookup(&lookup).await else {
+                continue;
+            };
+            // A definition already in the diff is not looked up; one in
+            // the same file but outside every hunk is — it is exactly as
+            // invisible to the reviewer as one in another file, and the
+            // unbounded sibling read on opencompany#2313 lived there. Checked
+            // against every file in the group, not just `diff`: a hit inside
+            // a sibling group member's own hunk is changed code this same
+            // conversation already has, not an external definition.
+            let already_in_this_conversations_diff = |h: &crate::ports::tree::Hit| {
+                group_diffs.iter().any(|d| {
+                    d.path == h.path && d.within_hunk(u64::from(h.line), u64::from(h.line))
+                })
+            };
+            let definitions: Vec<&crate::ports::tree::Hit> = hits
+                .iter()
+                .filter(|h| {
+                    looks_like_definition(&h.text) && !already_in_this_conversations_diff(h)
+                })
+                .collect();
+            if definitions.is_empty() || definitions.len() > AUTO_FOLLOW {
+                continue;
+            }
+            self.seen.insert(lookup.key());
+            let mut hits_text = String::new();
+            for hit in &definitions {
+                hits_text.push_str(&format!("{}:{}: {}\n", hit.path, hit.line, hit.text));
+            }
+            // The fence has to outrun any backtick run in a hit line — a
+            // contributor-controlled source line containing ```` would
+            // otherwise close it early and the rest of this turn's
+            // evidence would read as instructions.
+            let fence = crate::harness::prompt::fence_for(&hits_text);
+            let mut body = format!("{fence}\n");
+            body.push_str(&hits_text);
+            body.push_str(&fence);
+            for hit in definitions {
+                let below = if group_diffs.iter().any(|d| d.path == hit.path) {
+                    SAME_FILE_BELOW
+                } else {
+                    DEFINITION_BELOW
+                };
+                let read = Lookup::Read {
+                    path: hit.path.clone(),
+                    start: Some(hit.line.saturating_sub(DEFINITION_ABOVE).max(1)),
+                    end: Some(hit.line.saturating_add(below)),
+                };
+                if !self.seen.insert(read.key()) {
+                    continue;
+                }
+                if let Ok(context) = tree.lookup(&read).await {
+                    body.push_str(&format!(
+                        "
+
+#### {}:{} — the definition and what is written above it
+
+{}",
+                        hit.path,
+                        hit.line,
+                        render_found(&context)
+                    ));
+                }
+            }
+            if self.chars + body.len() > policy.max_chars {
+                break;
+            }
+            self.chars += body.len();
+            *answered += 1;
+            rendered.push_str(&format!(
+                "
+### {}
+
+{body}
+",
+                lookup.key()
+            ));
+            break;
         }
     }
 }
@@ -871,7 +935,9 @@ mod tests {
             ),
         ]);
         let mut ledger = Ledger::default();
-        let seeded = ledger.seed(&tree, &diff, &LookupPolicy::default()).await;
+        let seeded = ledger
+            .seed(&tree, std::slice::from_ref(&diff), &LookupPolicy::default())
+            .await;
         assert_eq!(seeded.answered, 3, "{}", seeded.rendered);
         assert!(
             seeded.rendered.contains("Unbounded: `before: None`"),
@@ -886,6 +952,147 @@ mod tests {
                 .rendered
                 .contains("src/episode.rs:1: fn read_pinboard"),
             "a definition inside the diff's own hunk is not a lookup: {}",
+            seeded.rendered
+        );
+    }
+
+    /// Grouping's whole point for lookups: a reviewer given a group's files
+    /// together must not lose the seeding that made #2313's finding possible
+    /// just because the calling line sits in the *second* file of the group.
+    #[tokio::test]
+    async fn seeding_a_group_reads_a_definition_called_only_from_the_second_file() {
+        let first = crate::evidence::diff::parse_file_patch(
+            "src/a.rs",
+            "@@ -1,1 +1,2 @@\n fn a() {}\n+let x = 1;\n",
+        );
+        let second = crate::evidence::diff::parse_file_patch(
+            "src/b.rs",
+            "@@ -1,1 +1,2 @@\n fn b() {}\n+let pins = read_pinboard(&log);\n",
+        );
+        let tree = MockTree::from_files([(
+            "vendor/lib/src/pins.rs",
+            "/// `before` is an exclusive bound.\npub async fn read_pinboard(log: &Log) {}\n",
+        )]);
+        let mut ledger = Ledger::default();
+        let seeded = ledger
+            .seed(&tree, &[first, second], &LookupPolicy::default())
+            .await;
+
+        assert!(
+            seeded.rendered.contains("`before` is an exclusive bound"),
+            "the second file's own call must still be seeded: {}",
+            seeded.rendered
+        );
+    }
+
+    /// A definition in the *diff itself* is never looked up — it is already
+    /// in the reviewer's evidence. In a group, "the diff itself" is every
+    /// member's diff, not just the file the candidate symbol was drawn from.
+    #[tokio::test]
+    async fn a_definition_added_by_a_sibling_group_member_is_not_seeded_as_external() {
+        let first = crate::evidence::diff::parse_file_patch(
+            "src/a.rs",
+            "@@ -1,1 +1,2 @@\n fn a() {}\n+helper_call();\n",
+        );
+        let second = crate::evidence::diff::parse_file_patch(
+            "src/b.rs",
+            "@@ -1,1 +1,2 @@\n fn b() {}\n+fn helper_call() {}\n",
+        );
+        // The tree reflects the head commit both diffs were taken from, so
+        // `src/b.rs` already holds the newly added definition.
+        let tree = MockTree::from_files([("src/b.rs", "fn b() {}\nfn helper_call() {}\n")]);
+        let mut ledger = Ledger::default();
+        let seeded = ledger
+            .seed(&tree, &[first, second], &LookupPolicy::default())
+            .await;
+
+        assert!(
+            seeded.rendered.is_empty(),
+            "a definition the sibling group member's own diff already added must not be \
+             rendered as an external lookup: {}",
+            seeded.rendered
+        );
+    }
+
+    /// A definition found in a *sibling* group member's file must still get
+    /// the full same-file read window, not the narrow external-definition
+    /// one: the sibling's file is part of this same conversation's reviewed
+    /// set, exactly as much as the file whose diff supplied the symbol.
+    #[tokio::test]
+    async fn a_definition_in_a_sibling_group_file_gets_the_same_file_window() {
+        let first = crate::evidence::diff::parse_file_patch(
+            "src/a.rs",
+            "@@ -1,1 +1,2 @@\n fn a() {}\n+call_it();\n",
+        );
+        let second = crate::evidence::diff::parse_file_patch(
+            "src/b.rs",
+            "@@ -1,1 +1,2 @@\n fn b() {}\n+fn unrelated() {}\n",
+        );
+        // `call_it` is defined in `src/b.rs`, a group member's own file, well
+        // outside the diff's own hunk (lines 1-2) so it is not mistaken for
+        // code this conversation's diff already shows, with a body long
+        // enough that the narrow `DEFINITION_BELOW` window (8 lines) would
+        // cut it off before the last line, but the wider `SAME_FILE_BELOW`
+        // window would not.
+        let mut body = "// padding\n".repeat(30);
+        body.push_str("pub fn call_it() {\n");
+        for i in 0..15 {
+            body.push_str(&format!("    let step_{i} = {i};\n"));
+        }
+        body.push_str("    let last_line_marker = true;\n}\n");
+        let tree = MockTree::from_files([("src/b.rs", body.as_str())]);
+        let mut ledger = Ledger::default();
+        let seeded = ledger
+            .seed(&tree, &[first, second], &LookupPolicy::default())
+            .await;
+
+        assert!(
+            seeded.rendered.contains("last_line_marker"),
+            "a definition in a sibling group file must use the wide same-file window, not \
+             the narrow external-definition one: {}",
+            seeded.rendered
+        );
+    }
+
+    /// The shared `SEED_SYMBOLS` cap is round-robin, not first-come: a first
+    /// file whose diff alone offers enough candidates to exhaust the cap must
+    /// not be allowed to do so before a later group member's own call is
+    /// even attempted.
+    #[tokio::test]
+    async fn a_symbol_rich_first_file_does_not_starve_a_later_group_member() {
+        // Six distinct calls in the first file — enough on its own to reach
+        // SEED_SYMBOLS were the budget still spent file-by-file rather than
+        // round-robin.
+        let first = crate::evidence::diff::parse_file_patch(
+            "src/a.rs",
+            "@@ -1,1 +1,7 @@\n fn a() {}\n+call_aaaa();\n+call_bbbb();\n+call_cccc();\n\
+             +call_dddd();\n+call_eeee();\n+call_ffff();\n",
+        );
+        let second = crate::evidence::diff::parse_file_patch(
+            "src/b.rs",
+            "@@ -1,1 +1,2 @@\n fn b() {}\n+call_from_b();\n",
+        );
+        let tree = MockTree::from_files([
+            ("vendor/lib/src/a_defs.rs", "pub fn call_aaaa() {}\n"),
+            ("vendor/lib/src/b_defs.rs", "pub fn call_bbbb() {}\n"),
+            ("vendor/lib/src/c_defs.rs", "pub fn call_cccc() {}\n"),
+            ("vendor/lib/src/d_defs.rs", "pub fn call_dddd() {}\n"),
+            ("vendor/lib/src/e_defs.rs", "pub fn call_eeee() {}\n"),
+            ("vendor/lib/src/f_defs.rs", "pub fn call_ffff() {}\n"),
+            (
+                "vendor/lib/src/from_b.rs",
+                "/// Only the second file's own diff calls this.\npub fn call_from_b() {}\n",
+            ),
+        ]);
+        let mut ledger = Ledger::default();
+        let seeded = ledger
+            .seed(&tree, &[first, second], &LookupPolicy::default())
+            .await;
+
+        assert!(
+            seeded.rendered.contains("call_from_b"),
+            "the second file's own call must get a round before the shared cap is spent \
+             entirely on the first file's six candidates: {}",
             seeded.rendered
         );
     }
