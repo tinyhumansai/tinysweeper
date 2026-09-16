@@ -1028,11 +1028,14 @@ mod tests {
             "src/b.rs",
             "@@ -1,1 +1,2 @@\n fn b() {}\n+fn unrelated() {}\n",
         );
-        // `call_it` is defined in `src/b.rs`, a group member's own file, with
-        // a body long enough that the narrow `DEFINITION_BELOW` window (8
-        // lines) would cut it off before the last line, but the wider
-        // `SAME_FILE_BELOW` window would not.
-        let mut body = "pub fn call_it() {\n".to_string();
+        // `call_it` is defined in `src/b.rs`, a group member's own file, well
+        // outside the diff's own hunk (lines 1-2) so it is not mistaken for
+        // code this conversation's diff already shows, with a body long
+        // enough that the narrow `DEFINITION_BELOW` window (8 lines) would
+        // cut it off before the last line, but the wider `SAME_FILE_BELOW`
+        // window would not.
+        let mut body = "// padding\n".repeat(30);
+        body.push_str("pub fn call_it() {\n");
         for i in 0..15 {
             body.push_str(&format!("    let step_{i} = {i};\n"));
         }
