@@ -79,6 +79,13 @@ pub struct LaneInput<'a> {
     /// `crate::memory::recall`. Volatile, suffix-only, for the same reasons as
     /// [`Self::retrieved_context`]. Empty when no engine is configured.
     pub memory_context: &'a str,
+    /// One sentence saying a value was masked out of `diffs` before this lane
+    /// ever saw it, from `crate::evidence::redact::Redactions::note`. Empty
+    /// when nothing was redacted. Volatile and placed right after the diff
+    /// in the suffix — see `crate::harness::prompt::PromptInputs::redaction_note`
+    /// — because it describes *this* diff and must never touch the cacheable
+    /// prefix.
+    pub redaction_note: &'a str,
     /// What the `e2e` lane needs beyond the diff: the harness at head, the
     /// check runs on it, and candidate coverage. Gathered by
     /// `lanes::e2e::evidence::gather` only when that lane is enabled; every

@@ -274,3 +274,39 @@ async fn an_explicit_description_reaches_the_description_lane() {
         "so is the body"
     );
 }
+
+#[tokio::test]
+async fn a_secret_in_the_working_tree_never_reaches_a_model_request() {
+    // Same invariant as `app::review::a_secret_never_reaches_a_model_request`,
+    // exercised on the path that has no forge at all: a developer's
+    // uncommitted `.env` must be masked before `local_review` ever builds a
+    // request, not merely scrubbed out of whatever a lane said about it.
+    let repo = Repo::new();
+    let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+    repo.write(".env", &format!("AWS_KEY={key}\n"));
+    repo.write("src/main.rs", "fn main() {}\n");
+
+    let model = Arc::new(MockModel::always(
+        json!({ "summary": "Looks fine.", "findings": [] }),
+    ));
+    let recorder = model.clone();
+
+    local_review(repo.path(), &worktree(), model, &critique_only())
+        .await
+        .expect("reviews");
+
+    let requests = recorder.requests();
+    assert!(
+        !requests.is_empty(),
+        "local review must build a model request"
+    );
+    for request in requests {
+        for message in &request.messages {
+            assert!(
+                !message.content.contains("IOSFODNN7EXAMPLE"),
+                "a model request carried the raw credential:\n{}",
+                message.content
+            );
+        }
+    }
+}

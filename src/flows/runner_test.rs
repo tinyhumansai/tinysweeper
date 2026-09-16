@@ -591,6 +591,61 @@ async fn a_reviewer_that_looks_something_up_is_asked_again_with_what_it_read() {
 }
 
 #[tokio::test]
+async fn a_reviewer_asking_to_read_a_dotenv_file_is_told_it_is_unavailable() {
+    // The lookup loop is a second way for a secret to reach a model: a
+    // reviewer that asks to read `.env` must be refused by the tree reader
+    // itself, not merely have the answer scrubbed afterwards.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".env"), "AWS_SECRET=super-secret-value\n").unwrap();
+    let tree = crate::ports::tree::DirTree::new(dir.path());
+
+    let model = MockModel::new()
+        .then(json!({
+            "summary": "not sure yet",
+            "findings": [],
+            "lookups": [
+                { "kind": "read", "path": ".env", "start": 1, "end": 5, "why": "check config" }
+            ]
+        }))
+        .then(json!({ "summary": "settled", "findings": [] }));
+    let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
+    let policy = lookup_policy(2);
+
+    let answers = ask_all(
+        llm,
+        LaneId::Critique,
+        &[call("a")],
+        &schema(),
+        Asking {
+            subagent_model: None,
+            tree: Some(&tree),
+            lookup: Some(&policy),
+            seed: &[],
+        },
+    )
+    .await
+    .expect("runs");
+
+    let requests = model.requests();
+    let second = &requests[1];
+    let evidence = &second.messages[1].content;
+    assert!(evidence.contains("## What you looked up"), "{evidence}");
+    assert!(
+        !evidence.contains("super-secret-value"),
+        "the secret must never reach the rendered lookup block: {evidence}"
+    );
+    assert!(
+        evidence.contains("Not available"),
+        "the refusal is said, not silently empty: {evidence}"
+    );
+    assert!(
+        !answers[0].looked_up.contains("super-secret-value"),
+        "{}",
+        answers[0].looked_up
+    );
+}
+
+#[tokio::test]
 async fn the_last_permitted_round_offers_no_lookups_and_the_loop_ends() {
     // One round: the turn after the lookups answers the plain schema and is
     // not told it may look up, so a reviewer cannot ask for something no

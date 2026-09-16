@@ -129,7 +129,13 @@ impl Lane for E2e {
             &changed_paths,
             &input.pull_request.labels,
         );
-        let deterministic = runs::findings(&runs);
+        // Keep forge identities canonical for pending-watch matching. Findings
+        // and prompts receive independently scrubbed presentation copies.
+        let mut rendered_runs = runs.clone();
+        for run in &mut rendered_runs {
+            runs::scrub_for_render(run);
+        }
+        let deterministic = runs::findings(&rendered_runs);
         let pending = runs::pending(&runs);
 
         // Assembled above the diff, in the order a reader needs it: what
@@ -138,16 +144,29 @@ impl Lane for E2e {
         let rendered = render_diffs(input.diffs);
         let (reviewed_evidence, fresh) =
             crate::evidence::replay::split(input.reviewed_evidence, &rendered);
-        let mut assembled = inventory.render();
+        // Every section contains independently fetched, repository-controlled
+        // text. Scrub them independently so an unmatched PEM marker in, for
+        // example, a workflow display name cannot carry stream state into the
+        // candidate or fresh-diff sections that follow it.
+        let mut assembled = crate::scan::scrub(&inventory.render());
         assembled.push('\n');
-        assembled.push_str(&render_changed_e2e_tests(&evidence.harness, &changed_paths));
-        assembled.push_str(&inventory::render(&evidence.harness, &changed_paths));
+        assembled.push_str(&crate::scan::scrub(&render_changed_e2e_tests(
+            &evidence.harness,
+            &changed_paths,
+        )));
+        assembled.push_str(&crate::scan::scrub(&inventory::render(
+            &evidence.harness,
+            &changed_paths,
+        )));
         assembled.push('\n');
-        assembled.push_str(&runs::render(&runs, &input.pull_request.head_sha));
+        assembled.push_str(&crate::scan::scrub(&runs::render(
+            &rendered_runs,
+            &input.pull_request.head_sha,
+        )));
         assembled.push('\n');
-        assembled.push_str(&evidence.render_candidates());
+        assembled.push_str(&crate::scan::scrub(&evidence.render_candidates()));
         assembled.push('\n');
-        assembled.push_str(&fresh);
+        assembled.push_str(&crate::evidence::redact::scrub_rendered(&fresh));
 
         let built = prompt::build(&PromptInputs {
             repo_policy: input.repo_policy,
@@ -158,6 +177,7 @@ impl Lane for E2e {
             changed_paths: &changed_paths,
             retrieved_context: input.retrieved_context,
             memory_context: input.memory_context,
+            redaction_note: input.redaction_note,
             ..PromptInputs::new(LaneId::E2e, input.config)
         });
 
@@ -398,6 +418,7 @@ mod lane_tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                redaction_note: "",
                 e2e: evidence,
                 tree: None,
                 graph: None,
@@ -641,6 +662,57 @@ mod lane_tests {
             prompt.contains("End-to-end tests changed by this pull request: none"),
             "{prompt}"
         );
+    }
+
+    #[tokio::test]
+    async fn malformed_pem_metadata_does_not_mask_later_e2e_evidence() {
+        let model = MockModel::silent();
+        let mut evidence = evidence("src/server/**", vec![]);
+        evidence.harness.workflows[0].name = ["-----BEGIN RSA", " PRIVATE KEY-----"].concat();
+
+        run_with(model.clone(), &config(), &[route_diff()], Some(&evidence)).await;
+
+        let prompt = model.last_prompt().expect("recorded");
+        assert!(prompt.contains("router.post"), "{prompt}");
+    }
+
+    /// Regression for a Codex finding on #166: the production `PromptInputs`
+    /// literal here used `..PromptInputs::new(...)` for every field it did not
+    /// name explicitly, which defaulted `redaction_note` to empty instead of
+    /// forwarding `input.redaction_note` — a masked diff reached this lane's
+    /// prompt with `<redacted, N chars>` markers and no explanation of what
+    /// they meant.
+    #[tokio::test]
+    async fn the_redaction_note_reaches_the_e2e_prompt() {
+        let model = MockModel::silent();
+        let config = config();
+        let pr = pull_request();
+        let evidence = evidence("src/server/**", vec![]);
+        E2e::new(Arc::new(model.clone()))
+            .run(LaneInput {
+                config: &config,
+                pull_request: &pr,
+                diffs: &[route_diff()],
+                file_contents: &BTreeMap::new(),
+                scan_findings: &[],
+                commits: &[],
+                repo_policy: None,
+                extracted_rules: &[],
+                reviewed_evidence: "",
+                prior_findings: &[],
+                retrieved_context: "",
+                memory_context: "",
+                redaction_note: "1 credential value was removed from this diff before you saw \
+                                  it and appears as `<redacted, N chars>`.",
+                e2e: Some(&evidence),
+                tree: None,
+                graph: None,
+            })
+            .await
+            .expect("lane runs");
+
+        let prompt = model.last_prompt().expect("recorded");
+        assert!(prompt.contains("<redacted, N chars>"), "{prompt}");
     }
 
     #[tokio::test]

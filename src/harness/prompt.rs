@@ -216,6 +216,15 @@ pub struct PromptInputs<'a> {
     /// The pull request's own title and body. Attacker-controlled text, so it
     /// is fenced and labelled before it goes anywhere near the instructions.
     pub pull_request_text: &'a str,
+    /// One sentence from `crate::evidence::redact::Redactions::note`, saying
+    /// a credential was masked out of `new_evidence` before this prompt was
+    /// built. Empty when nothing was redacted.
+    ///
+    /// **Volatile, and placed immediately after the diff it describes** —
+    /// not in the prefix: it is a fact about *this* diff, and a prefix that
+    /// moved with it would lose the cache on every push a secret happened
+    /// to touch.
+    pub redaction_note: &'a str,
 }
 
 impl<'a> PromptInputs<'a> {
@@ -244,6 +253,7 @@ impl<'a> PromptInputs<'a> {
             pull_request_text: "",
             retrieved_context: "",
             memory_context: "",
+            redaction_note: "",
         }
     }
 }
@@ -463,6 +473,13 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
             }
         }
         push_fenced(&mut suffix, inputs.evidence_label, inputs.new_evidence);
+        // Right after the diff it describes, in the same volatile block: a
+        // marker inside the diff means nothing without the sentence that
+        // says what it is, and both change together with this push.
+        if !inputs.redaction_note.trim().is_empty() {
+            suffix.push_str("\n\n");
+            suffix.push_str(inputs.redaction_note);
+        }
     }
 
     Prompt { prefix, suffix }
@@ -1468,6 +1485,52 @@ mod tests {
         // The real fence is one backtick longer than anything the content has,
         // so the injected closer is inside the block rather than ending it.
         assert!(suffix.contains("`````repository-memory"), "{suffix}");
+    }
+
+    #[test]
+    fn a_redaction_note_lands_in_the_suffix_right_after_the_diff_it_describes() {
+        let config = config();
+        let mut i = inputs(
+            &config,
+            "",
+            "@@ -1 +1 @@\n+const KEY: &str = \"<redacted, 20 chars>\";\n",
+        );
+        i.redaction_note = "1 credential value was removed from this diff before you saw it \
+                             and appear as `<redacted, N chars>`; the lines are real, only the \
+                             values are gone — never ask for or guess them.";
+        let clean = build(&inputs(
+            &config,
+            "",
+            "@@ -1 +1 @@\n+const KEY: &str = \"<redacted, 20 chars>\";\n",
+        ));
+        let prompt = build(&i);
+
+        assert_eq!(
+            prompt.prefix(),
+            clean.prefix(),
+            "the note must not change the prefix by a single byte"
+        );
+        assert!(prompt.suffix().contains("never ask for or guess"));
+        // "Right after" the diff: the note comes after the fenced diff block
+        // closes, not before it or mixed into another layer.
+        let diff_at = prompt.suffix().find("<redacted, 20 chars>").unwrap();
+        let note_at = prompt.suffix().find("never ask for or guess").unwrap();
+        assert!(note_at > diff_at, "{}", prompt.suffix());
+    }
+
+    #[test]
+    fn an_empty_redaction_note_leaves_the_prompt_byte_identical() {
+        // Nothing was masked: the note must render as nothing, not as an
+        // empty section header or a stray blank line a diff tool would show
+        // as a change.
+        let config = config();
+        let a = build(&inputs(&config, "", "@@ -1 +1 @@\n+a\n"));
+        let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
+        i.redaction_note = "";
+        let b = build(&i);
+
+        assert_eq!(a.prefix(), b.prefix());
+        assert_eq!(a.suffix(), b.suffix());
     }
 
     #[test]

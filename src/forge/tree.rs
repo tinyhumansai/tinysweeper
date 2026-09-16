@@ -40,7 +40,7 @@ use tokio::sync::OnceCell;
 use crate::error::Result;
 use crate::forge::types::RepoId;
 use crate::ports::forge::ForgeRead;
-use crate::ports::tree::{Found, Lookup, TreeReader, slice_lines};
+use crate::ports::tree::{Found, Lookup, TreeReader, sensitive_path_refusal, slice_lines};
 
 /// One submodule the superproject declares.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,6 +212,9 @@ impl TreeReader for ForgeTree<'_> {
                 if path.contains("..") || path.starts_with('/') {
                     return Ok(Found::NotFound);
                 }
+                if crate::scan::is_sensitive_path(path) {
+                    return Ok(sensitive_path_refusal());
+                }
                 Ok(match self.read(path).await? {
                     Read::Content(content) => {
                         let (start, end) = Lookup::read_range(*start, *end);
@@ -362,6 +365,48 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(search, Found::Unavailable { .. }));
+    }
+
+    #[tokio::test]
+    async fn forge_tree_refuses_to_read_a_dotenv_file() {
+        let mut state = MockState::default();
+        state.set_file("head", ".env", "AWS_SECRET=super-secret-value\n");
+        let forge = MockForge::with_state(state);
+        let tree = ForgeTree::new(&forge, repo(), "head", "github.com");
+
+        let found = tree
+            .lookup(&Lookup::Read {
+                path: ".env".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(&found, Found::Unavailable { reason } if reason.contains("secret")),
+            "a sensitive path must never be read: {found:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn forge_tree_search_never_returns_a_hit_inside_a_sensitive_path() {
+        // This deployment cannot search the tree at all — `Lookup::Search`
+        // is always `Unavailable` — so a sensitive path was never reachable
+        // through it either. Pinned here so the invariant is documented next
+        // to `DirTree`'s equivalent test rather than left implicit.
+        let forge = MockForge::with_state(MockState::default());
+        let tree = ForgeTree::new(&forge, repo(), "head", "github.com");
+
+        let found = tree
+            .lookup(&Lookup::Search {
+                pattern: "needle".into(),
+                glob: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(matches!(found, Found::Unavailable { .. }), "{found:?}");
     }
 
     #[tokio::test]

@@ -489,6 +489,28 @@ fn build_prompt<'a>(
     reviewer: &council::Reviewer<'_>,
 ) -> prompt::Prompt {
     let config: &Config = input.config;
+    // Critique prompts see only this group's rendered diffs.  Derive the
+    // note from that rendered evidence so a clean group is never told about
+    // a credential removed from a different group's file.
+    // Only markers with the complete format emitted by `scan::redact` count.
+    // Diff text is untrusted and may contain the prefix literally.
+    let redacted = evidence
+        .split("<redacted, ")
+        .skip(1)
+        .filter(|suffix| {
+            suffix.split_once(" chars>").is_some_and(|(count, _)| {
+                !count.is_empty() && count.bytes().all(|b| b.is_ascii_digit())
+            })
+        })
+        .count();
+    let redaction_note = if redacted == 0 {
+        "".to_string()
+    } else {
+        let value = if redacted == 1 { "value" } else { "values" };
+        format!(
+            "{redacted} credential {value} were removed from this diff before you saw it and appear as `<redacted, N chars>`; the lines are real, only the values are gone — never ask for or guess them."
+        )
+    };
 
     prompt::build(&PromptInputs {
         repo_policy: input.repo_policy,
@@ -506,6 +528,7 @@ fn build_prompt<'a>(
         persona: reviewer.persona,
         retrieved_context: input.retrieved_context,
         memory_context: input.memory_context,
+        redaction_note: &redaction_note,
         ..PromptInputs::new(LaneId::Critique, config)
     })
 }
@@ -792,6 +815,7 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                redaction_note: "",
                 e2e: None,
                 tree: None,
                 graph: None,
@@ -1452,6 +1476,7 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                redaction_note: "",
                 e2e: None,
                 tree: None,
                 graph: None,
@@ -1512,6 +1537,7 @@ fn helper() {
                 prior_findings: &["Close the socket on the error path".to_string()],
                 retrieved_context: "",
                 memory_context: "",
+                redaction_note: "",
                 e2e: None,
                 tree: None,
                 graph: None,
@@ -1571,6 +1597,7 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                redaction_note: "",
                 e2e: None,
                 tree: None,
                 graph: None,
@@ -1620,6 +1647,7 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                redaction_note: "",
                 e2e: None,
                 tree: None,
                 graph: None,
@@ -1761,6 +1789,7 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                redaction_note: "",
                 e2e: None,
                 tree: None,
                 graph: None,

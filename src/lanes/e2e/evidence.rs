@@ -24,6 +24,7 @@ use crate::forge::types::{CheckStatus, RepoId};
 use crate::harness::prompt::push_fenced;
 use crate::lanes::e2e::inventory::{self, Harness, PathTable};
 use crate::ports::forge::ForgeRead;
+use crate::scan;
 
 /// How many e2e test files are read for candidate coverage.
 ///
@@ -110,9 +111,16 @@ impl Evidence {
             );
         }
         for candidate in &self.candidates {
+            // `gather`, below, re-reads this line from the tree at head —
+            // outside `evidence::redact::mask` entirely, which only ever
+            // sees the diff — so a scanner-detected credential sitting on
+            // the same line as the token this lane is verifying would
+            // otherwise reach this prompt unmasked even where the diff view
+            // already redacted it.
+            let text = scan::redact_line(&candidate.text);
             let body = format!(
                 "path: {}\nline: {}\nmentions token: {}\nadded at: {}\ntest line:\n{}",
-                candidate.path, candidate.line, candidate.token, candidate.added_at, candidate.text
+                candidate.path, candidate.line, candidate.token, candidate.added_at, text
             );
             push_fenced(&mut out, "e2e-candidate", &body);
         }
@@ -541,6 +549,65 @@ mod tests {
         assert_eq!(found[0].line, 2);
         assert_eq!(found[0].token, "/preview/sessions");
         assert!(found[0].text.contains("request.post"));
+    }
+
+    /// Regression for a Codex finding on #166: `gather` re-reads a candidate's
+    /// e2e test line from the tree at head, outside `evidence::redact::mask`
+    /// entirely, which only ever masks the diff. A test line that mentions
+    /// both a surface token this lane verifies and a scanner-detected
+    /// credential must not carry the credential into this lane's prompt.
+    #[test]
+    fn render_candidates_masks_a_recognisable_credential_in_the_quoted_line() {
+        let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+        let evidence = Evidence {
+            candidates: vec![Candidate {
+                path: "e2e/preview.spec.ts".into(),
+                line: 2,
+                text: format!("await request.post('/preview/sessions', {{ token: '{key}' }});"),
+                token: "/preview/sessions".into(),
+                added_at: "src/server/routes.rs:2".into(),
+            }],
+            searched: vec!["e2e/preview.spec.ts".into()],
+            ..Evidence::default()
+        };
+
+        let rendered = evidence.render_candidates();
+
+        assert!(!rendered.contains("IOSFODNN7EXAMPLE"), "{rendered}");
+        assert!(rendered.contains("request.post"), "{rendered}");
+    }
+
+    /// Regression for a Codex finding on #166: `render_candidates` used to
+    /// mask a quoted e2e line with only `scan::redact_line`'s rulepack pass,
+    /// so a scanner-detected `high-entropy-assignment` — a credential with no
+    /// vendor prefix — reached the prompt unmasked even though the identical
+    /// shape in an added diff line is masked by the scanner's own finding.
+    ///
+    /// `secret_assignment` only ever parses one bare `name = value` (or
+    /// `name: value`) shape per string — the same shape `scan_added_lines`
+    /// exercises it against — so the fixture line is that shape rather than a
+    /// full call expression around it; the point under test is that
+    /// `render_candidates` runs the value through the entropy pass at all,
+    /// not the heuristic's own line-shape coverage.
+    #[test]
+    fn render_candidates_masks_a_high_entropy_assignment_in_the_quoted_line() {
+        let value = format!("{}{}", "f3Kq9zR2", "mW7pL4xN8vB1cY6tH0jD5sG");
+        let evidence = Evidence {
+            candidates: vec![Candidate {
+                path: "e2e/preview.spec.ts".into(),
+                line: 2,
+                text: format!("secret_token: '{value}'"),
+                token: "/preview/sessions".into(),
+                added_at: "src/server/routes.rs:2".into(),
+            }],
+            searched: vec!["e2e/preview.spec.ts".into()],
+            ..Evidence::default()
+        };
+
+        let rendered = evidence.render_candidates();
+
+        assert!(!rendered.contains(&value), "{rendered}");
+        assert!(rendered.contains("secret_token:"), "{rendered}");
     }
 
     #[tokio::test]

@@ -21,9 +21,13 @@ outside contributions.
 
 ## The trade
 
-You will get findings you disagree with. Downvote them: a 👎 adds the
-fingerprint to `.tinysweeper/learned.toml` and suppresses that class thereafter,
-so the noise decays as the repository teaches the bot its preferences.
+You will get findings you disagree with. Downvote them — a 👎 is counted, not
+suppressed: there is no fingerprint list a dismissal writes to, and no class of
+finding this preset will stop raising on its own. What a 👎 changes is what an
+operator sees when they look at a repository's dismissal rate, not what the
+next review says.
 
-If it never decays, this preset is wrong for the repository — move to the
-defaults and add targeted `path_instructions` instead.
+To actually silence a class of finding, write a targeted `[[path_instructions]]`
+entry naming the rule and the paths it should stop applying to — see
+`presets/rules/README.md`. If you find yourself writing several of these, this
+preset is wrong for the repository — move to the defaults instead.
