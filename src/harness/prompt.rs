@@ -1193,6 +1193,44 @@ mod tests {
     }
 
     #[test]
+    fn a_redaction_note_lands_in_the_suffix_right_after_the_diff_it_describes() {
+        let config = config();
+        let mut i = inputs(&config, "", "@@ -1 +1 @@\n+const KEY: &str = \"<redacted, 20 chars>\";\n");
+        i.redaction_note = "1 credential value was removed from this diff before you saw it \
+                             and appear as `<redacted, N chars>`; the lines are real, only the \
+                             values are gone — never ask for or guess them.";
+        let clean = build(&inputs(&config, "", "@@ -1 +1 @@\n+const KEY: &str = \"<redacted, 20 chars>\";\n"));
+        let prompt = build(&i);
+
+        assert_eq!(
+            prompt.prefix(),
+            clean.prefix(),
+            "the note must not change the prefix by a single byte"
+        );
+        assert!(prompt.suffix().contains("never ask for or guess"));
+        // "Right after" the diff: the note comes after the fenced diff block
+        // closes, not before it or mixed into another layer.
+        let diff_at = prompt.suffix().find("<redacted, 20 chars>").unwrap();
+        let note_at = prompt.suffix().find("never ask for or guess").unwrap();
+        assert!(note_at > diff_at, "{}", prompt.suffix());
+    }
+
+    #[test]
+    fn an_empty_redaction_note_leaves_the_prompt_byte_identical() {
+        // Nothing was masked: the note must render as nothing, not as an
+        // empty section header or a stray blank line a diff tool would show
+        // as a change.
+        let config = config();
+        let a = build(&inputs(&config, "", "@@ -1 +1 @@\n+a\n"));
+        let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
+        i.redaction_note = "";
+        let b = build(&i);
+
+        assert_eq!(a.prefix(), b.prefix());
+        assert_eq!(a.suffix(), b.suffix());
+    }
+
+    #[test]
     fn changing_the_retrieved_context_does_not_change_the_prefix() {
         let config = config();
         let mut a = inputs(&config, "", "x");
