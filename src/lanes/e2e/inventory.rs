@@ -980,7 +980,12 @@ jobs:
 
     #[test]
     fn paths_ignore_excludes_only_when_everything_is_ignored() {
-        let text = "name: e2e\non:\n  pull_request:\n    paths-ignore:\n      - '**.md'\njobs:\n  run:\n    steps:\n      - run: make e2e\n";
+        // `**/*.md`, not `**.md`: a bare `**` only spans directories as a
+        // whole path segment, on GitHub and in `globset` alike (see
+        // `github_path_matches`). Glued directly to a literal — `**.md` — it
+        // is just `*.md`, which stays inside one directory and would not
+        // reach `docs/a.md` at all.
+        let text = "name: e2e\non:\n  pull_request:\n    paths-ignore:\n      - '**/*.md'\njobs:\n  run:\n    steps:\n      - run: make e2e\n";
         let workflow = classify_workflow(".github/workflows/e2e.yml", text, &[]).unwrap();
         assert_eq!(
             workflow.applies_to(&strings(&["README.md", "docs/a.md"])),
@@ -988,6 +993,40 @@ jobs:
         );
         assert_eq!(
             workflow.applies_to(&strings(&["README.md", "src/a.rs"])),
+            Applies::Yes
+        );
+    }
+
+    #[test]
+    fn a_star_does_not_cross_a_directory_separator() {
+        // The bug `github_path_matches` exists to fix: GitHub's `*` stays
+        // inside one path segment, so `src/*` must not match a file nested
+        // two levels deep under `src/`.
+        let text = "name: e2e\non:\n  pull_request:\n    paths:\n      - 'src/*'\njobs:\n  run:\n    steps:\n      - run: make e2e\n";
+        let workflow = classify_workflow(".github/workflows/e2e.yml", text, &[]).unwrap();
+        assert_eq!(
+            workflow.applies_to(&strings(&["src/server/routes.rs"])),
+            Applies::PathsExcluded
+        );
+        assert_eq!(
+            workflow.applies_to(&strings(&["src/lib.rs"])),
+            Applies::Yes
+        );
+    }
+
+    #[test]
+    fn a_negated_pattern_carves_an_exception_out_of_an_earlier_one() {
+        // GitHub evaluates `paths:` in order: `!docs/**` after `**` removes
+        // `docs/` from the match rather than the first pattern's match
+        // standing regardless of what comes after it.
+        let text = "name: e2e\non:\n  pull_request:\n    paths:\n      - '**'\n      - '!docs/**'\njobs:\n  run:\n    steps:\n      - run: make e2e\n";
+        let workflow = classify_workflow(".github/workflows/e2e.yml", text, &[]).unwrap();
+        assert_eq!(
+            workflow.applies_to(&strings(&["docs/readme.md"])),
+            Applies::PathsExcluded
+        );
+        assert_eq!(
+            workflow.applies_to(&strings(&["src/lib.rs"])),
             Applies::Yes
         );
     }
