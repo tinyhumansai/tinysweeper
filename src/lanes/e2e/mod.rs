@@ -395,6 +395,7 @@ mod lane_tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                redaction_note: "",
                 e2e: evidence,
                 tree: None,
             })
