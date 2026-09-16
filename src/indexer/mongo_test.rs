@@ -199,6 +199,7 @@ live_test!(
             path: "src/a.rs".into(),
             chunks: vec!["id-1".into()],
             pending: vec!["id-2".into()],
+            pending_is_stale: true,
         };
         manifest
             .record(&repo, &signature(), std::slice::from_ref(&file))

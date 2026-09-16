@@ -10,6 +10,7 @@ pub mod anchor;
 pub mod commits;
 pub mod critique;
 pub mod description;
+pub mod e2e;
 pub mod fanout;
 pub mod mechanical;
 pub mod security;
@@ -83,6 +84,11 @@ pub struct LaneInput<'a> {
     /// — because it describes *this* diff and must never touch the cacheable
     /// prefix.
     pub redaction_note: &'a str,
+    /// What the `e2e` lane needs beyond the diff: the harness at head, the
+    /// check runs on it, and candidate coverage. Gathered by
+    /// `lanes::e2e::evidence::gather` only when that lane is enabled; every
+    /// other lane ignores it, and the `e2e` lane skips without it.
+    pub e2e: Option<&'a e2e::evidence::Evidence>,
     /// The reviewed tree, for a reviewer that wants to check before it
     /// answers — see `crate::flows::lookup`. `None` reviews the diff alone,
     /// which every offline golden test does.
@@ -174,6 +180,13 @@ pub struct LaneOutcome {
     pub spend: Spend,
     /// Set when the lane did not apply to this pull request at all.
     pub skipped: Option<String>,
+    /// Check runs this lane is still waiting on before it can conclude.
+    ///
+    /// Only the `e2e` lane sets it. A lane with something pending concludes
+    /// `Neutral` rather than `Success` — a verdict on work that has not
+    /// finished is the verdict branch protection must not see — and the
+    /// server settles it when the named checks complete.
+    pub pending: Vec<String>,
     /// What the lane was asked about and got no answer on.
     ///
     /// Paths for a per-file lane; the lane's own name for a whole-pull-request
@@ -270,6 +283,7 @@ impl LaneOutcome {
             resolved: parsed.resolved,
             spend,
             skipped: None,
+            pending: Vec::new(),
             unanswered: Vec::new(),
         }
     }
@@ -285,6 +299,9 @@ impl LaneOutcome {
         }
         if self.findings.iter().any(|f| f.severity >= fail_on) {
             return CheckConclusion::Failure;
+        }
+        if !self.pending.is_empty() {
+            return CheckConclusion::Neutral;
         }
         CheckConclusion::Success
     }

@@ -195,7 +195,8 @@ mod tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
-                                redaction_note: "",
+                redaction_note: "",
+                e2e: None,
                 tree: None,
             })
             .await

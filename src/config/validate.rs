@@ -235,6 +235,15 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
     // `doctor` prints both as if they applied.
     let mut seen = std::collections::BTreeSet::new();
     for route in &models.routes {
+        // Matched by exact string everywhere, so `"deep "` is a route for
+        // nobody that `doctor` would still print.
+        if route.model.is_empty() || route.model.trim() != route.model {
+            problems.push(format!(
+                "`models.routes` entry `{}` must name a model exactly, with no surrounding \
+                 whitespace",
+                route.model
+            ));
+        }
         if !seen.insert(route.model.as_str()) {
             problems.push(format!(
                 "`models.routes` names `{}` more than once; only the first entry would apply, \
@@ -658,6 +667,40 @@ fn validate_lanes(config: &Config, problems: &mut Vec<String>) {
             problems.push(format!(
                 "`lanes.{name}.max_blob_bytes = 0` would flag every committed file"
             ));
+        }
+
+        if lane_id != LaneId::E2e {
+            if lane.missing_harness.is_some() {
+                problems.push(format!(
+                    "`lanes.{name}.missing_harness` applies only to the `e2e` lane"
+                ));
+            }
+            if !lane.paths.is_empty() {
+                problems.push(format!(
+                    "`lanes.{name}.paths` applies only to the `e2e` lane"
+                ));
+            }
+            if !lane.workflows.is_empty() {
+                problems.push(format!(
+                    "`lanes.{name}.workflows` applies only to the `e2e` lane"
+                ));
+            }
+        }
+
+        if let Some(policy) = &lane.missing_harness
+            && !matches!(policy.as_str(), "skip" | "require")
+        {
+            problems.push(format!(
+                "`lanes.{name}.missing_harness = \"{policy}\"` is not a policy; expected `skip` or `require`"
+            ));
+        }
+
+        for glob in &lane.paths {
+            if globset::Glob::new(glob).is_err() {
+                problems.push(format!(
+                    "`lanes.{name}.paths` contains an invalid glob `{glob}`"
+                ));
+            }
         }
     }
 }

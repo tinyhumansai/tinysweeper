@@ -55,6 +55,10 @@ impl IndexState {
     }
 }
 
+/// The marker a failed run leaves in its message when the chunk count it
+/// settled cannot be trusted, so the next run recounts rather than adds.
+pub const COUNT_UNCERTAIN: &str = "[chunk count uncertain]";
+
 /// How an indexing run ended, as reported back to the manifest.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "settled", rename_all = "lowercase")]
@@ -72,6 +76,15 @@ pub enum Settled {
     Failed {
         /// Why, for a human reading the repository's status.
         message: String,
+        /// How many chunks the repository has *now*, when the run changed
+        /// that before it failed. A deletion that happened is a deletion
+        /// whether or not the embedding after it did; leaving the old count
+        /// on record would report chunks that are not there, and a run that
+        /// deleted the last of them would look `Ready` rather than cold.
+        /// `None` leaves the count as it was — and is what a record written
+        /// before this field existed reads as.
+        #[serde(default)]
+        chunks: Option<u64>,
     },
 }
 
@@ -210,6 +223,13 @@ pub struct IndexedFile {
     /// skip embedding a chunk that was never written.
     #[serde(default)]
     pub pending: Vec<String>,
+    /// What `pending` holds. `false` at the intent: ids about to be written,
+    /// not yet in the index, never counted. `true` at the confirmation: the
+    /// *old* ids a replacement is about to delete — still in the index, and
+    /// still in the repository's chunk count until that delete lands. A
+    /// removal that counts what it subtracts needs the difference.
+    #[serde(default)]
+    pub pending_is_stale: bool,
 }
 
 impl IndexedFile {
@@ -219,6 +239,7 @@ impl IndexedFile {
             path: path.into(),
             chunks,
             pending: Vec::new(),
+            pending_is_stale: false,
         }
     }
 
@@ -272,6 +293,22 @@ pub struct IndexReport {
     /// valid and worth keeping, and the caller needs to know the index is
     /// partial without losing it.
     pub budget_exhausted: bool,
+    /// Submodule directories the checkout was missing through no decision of
+    /// the operator's — a fetch that failed this time. Their rows were kept,
+    /// and the revision is not claimed, so the next delivery tries again.
+    #[serde(default)]
+    pub unfetched: Vec<String>,
+    /// Whether the code graph must be rebuilt whole after this run rather
+    /// than incrementally from `changed`: the record this run started from
+    /// was one that never completed, and its graph was never synced from —
+    /// or was synced from a tree that lacked something.
+    #[serde(default)]
+    pub rebuild_graph: bool,
+    /// Whether the running count can no longer be trusted: a confirmation
+    /// landed that this run could not account for. The settlement then
+    /// recounts from the manifest instead of applying deltas.
+    #[serde(default)]
+    pub recount: bool,
 }
 
 impl IndexReport {
@@ -283,6 +320,12 @@ impl IndexReport {
         );
         if self.budget_exhausted {
             text.push_str(" (stopped at the spend ceiling; the index is partial)");
+        }
+        if !self.unfetched.is_empty() {
+            text.push_str(&format!(
+                " (submodule(s) not fetched, kept as indexed: {})",
+                self.unfetched.join(", ")
+            ));
         }
         if let Some(report) = crate::chunk::types::report_skips(&self.skipped) {
             text.push('\n');
@@ -376,6 +419,7 @@ mod tests {
     fn a_failed_run_leaves_the_repository_retryable_rather_than_wedged() {
         let settled = Settled::Failed {
             message: "provider down".into(),
+            chunks: None,
         };
         let after = IndexState::Indexing.after(&settled);
         assert_eq!(after, IndexState::Failed);

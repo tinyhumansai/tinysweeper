@@ -84,6 +84,7 @@ fn proposal(findings: Vec<Finding>) -> Proposal {
             findings,
             noted: Vec::new(),
             resolved: vec![],
+            pending: vec![],
             deduped: 0,
             highest_severity: None,
             usage: Usage::default(),

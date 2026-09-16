@@ -145,6 +145,7 @@ impl FanOut {
             resolved,
             spend,
             skipped,
+            pending: Vec::new(),
             unanswered,
         }
     }

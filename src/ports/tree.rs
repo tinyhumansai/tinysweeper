@@ -605,23 +605,139 @@ impl DirTree {
 
 /// The `path = ` entries of a `.gitmodules` file.
 pub fn submodule_paths(gitmodules: &str) -> Vec<String> {
-    gitmodules
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("path"))
-        .filter_map(|rest| rest.trim().strip_prefix('='))
-        .map(|p| p.trim().trim_end_matches('/').to_string())
-        // `.gitmodules` is contributor-controlled. A path that leaves the
-        // tree or names git's own directory is not a submodule anyone gets
-        // to declare, and lifting the skip list for it would be the point of
-        // declaring it.
-        .filter(|p| {
-            !p.is_empty()
-                && !p.starts_with('/')
-                && !p
-                    .split('/')
-                    .any(|c| c == ".." || c == ".git" || c.is_empty())
+    git_config_lines(gitmodules)
+        .iter()
+        .filter_map(|line| git_config_key(line.trim(), "path"))
+        .filter_map(|p| canonical_submodule_path(p.trim()))
+        // Two declarations of one directory are one directory.
+        .fold(Vec::new(), |mut paths, path| {
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+            paths
         })
-        .collect()
+}
+
+/// The value part of `line` when its key is `key` (case-insensitive, as
+/// git-config keys are), or `None`. The key must end where the `=` or the
+/// whitespace before it begins: `pathology = x` is not a `path`.
+pub fn git_config_key<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let head = line.get(..key.len())?;
+    if !head.eq_ignore_ascii_case(key) {
+        return None;
+    }
+    let rest = line[key.len()..].trim_start();
+    if rest.len() == line[key.len()..].len() && !rest.starts_with('=') {
+        // No whitespace after the key and no `=`: a longer key.
+        return None;
+    }
+    rest.strip_prefix('=')
+}
+
+/// A git-config value as git reads it: `"quoted"` up to the closing quote,
+/// ignoring what follows; unquoted up to a `#` or `;` comment; trimmed.
+///
+/// Git concatenates quoted and unquoted runs — `"libs/core"suffix` is
+/// `libs/coresuffix` — so this walks the value rather than splitting it:
+/// inside quotes everything is literal (with `\"` and `\\` escapes); outside
+/// them a `#` or `;` ends the value.
+pub fn git_config_value(raw: &str) -> String {
+    // Each character with whether it came from inside quotes, because only
+    // the unquoted whitespace at either end is git's to drop: `" vendor/x "`
+    // keeps its spaces.
+    let mut out: Vec<(char, bool)> = Vec::with_capacity(raw.len());
+    let mut quoted = false;
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        match (quoted, c) {
+            (_, '"') => quoted = !quoted,
+            // Git's escapes: `\n`, `\t`, `\b`, and a backslash before
+            // anything else (`\"`, `\\`) is that character.
+            (true, '\\') => match chars.next() {
+                Some('n') => out.push(('\n', true)),
+                Some('t') => out.push(('\t', true)),
+                Some('b') => out.push(('\u{8}', true)),
+                Some(escaped) => out.push((escaped, true)),
+                None => {}
+            },
+            (false, '#' | ';') => break,
+            // Unquoted whitespace is kept in count but spelled as spaces,
+            // which is how git reads it; quoted whitespace is kept as written.
+            (false, c) if c.is_whitespace() => out.push((' ', false)),
+            (_, c) => out.push((c, quoted)),
+        }
+    }
+    let unquoted_space = |&(c, quoted): &(char, bool)| !quoted && c.is_whitespace();
+    let start = out.iter().position(|item| !unquoted_space(item));
+    let end = out.iter().rposition(|item| !unquoted_space(item));
+    match (start, end) {
+        (Some(start), Some(end)) => out[start..=end].iter().map(|(c, _)| c).collect(),
+        _ => String::new(),
+    }
+}
+
+/// A git-config file as logical lines: a physical line ending in an
+/// unescaped `\` continues on the next one.
+pub fn git_config_lines(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    // Whether the logical line so far ends inside quotes — carried across a
+    // continuation with the escapes already accounted for, rather than
+    // recounted from the text, where `\"` would read as a delimiter.
+    let mut quoted = false;
+    for physical in text.lines() {
+        // A comment ends at the newline whatever it ends with: a `\` inside
+        // one continues nothing. Quotes are tracked across the logical line
+        // so a `#` inside them is not a comment.
+        let mut in_comment = false;
+        let mut chars = physical.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '"' if !in_comment => quoted = !quoted,
+                '\\' if quoted => {
+                    chars.next();
+                }
+                '#' | ';' if !quoted => in_comment = true,
+                _ => {}
+            }
+        }
+        let trailing_backslashes = physical.chars().rev().take_while(|c| *c == '\\').count();
+        if !in_comment && trailing_backslashes % 2 == 1 {
+            current.push_str(&physical[..physical.len() - 1]);
+            continue;
+        }
+        current.push_str(physical);
+        lines.push(std::mem::take(&mut current));
+        quoted = false;
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// The one spelling of a submodule path, or `None` for one nobody may declare.
+///
+/// Git resolves `./libs/core`, `libs//core` and `libs/./core` to the same
+/// gitlink; the selector, the manifest and the fetch all say `libs/core`.
+/// One canonical form for every reader, or the same directory is several
+/// paths and a policy applied to one of them misses the rest. `.gitmodules`
+/// is contributor-controlled: a path that leaves the tree, is absolute, or
+/// names git's own directory is refused rather than repaired.
+pub fn canonical_submodule_path(raw: &str) -> Option<String> {
+    let raw = git_config_value(raw);
+    let raw = raw.as_str();
+    if raw.is_empty() || raw.starts_with('/') || raw.contains('\\') {
+        return None;
+    }
+    let parts: Vec<&str> = raw
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect();
+    if parts.is_empty() || parts.iter().any(|part| *part == ".." || *part == ".git") {
+        return None;
+    }
+    Some(parts.join("/"))
 }
 
 /// Reject a path that could leave the tree.
@@ -841,8 +957,67 @@ mod tests {
 
     #[test]
     fn gitmodules_paths_are_parsed_and_unsafe_paths_refused() {
-        let text = "[submodule \"x\"]\n\tpath = vendor/x\n\turl = https://e/x.git\n[submodule \"y\"]\n path=vendor/y/\n";
-        assert_eq!(submodule_paths(text), vec!["vendor/x", "vendor/y"]);
+        let text = "[submodule \"x\"]\n\tpath = vendor/x\n\turl = https://e/x.git\n[submodule \"y\"]\n Path=vendor/y/\n[submodule \"x2\"]\n\tpath = ./vendor/x\n";
+        assert_eq!(
+            submodule_paths(text),
+            vec!["vendor/x", "vendor/y"],
+            "two spellings of one directory are one entry"
+        );
+        // Every spelling git resolves to one gitlink is one path here too.
+        for spelled in [
+            "./vendor/x",
+            "vendor//x",
+            "vendor/./x/",
+            "./vendor/./x//",
+            "\"vendor/x\"",
+            "\"./vendor/x/\"",
+            "vendor/x # the note git ignores",
+            "vendor/x ; and this one",
+            "\"vendor/x\" # quoted, then a note",
+            "\"vendor/\"x",
+        ] {
+            assert_eq!(
+                canonical_submodule_path(spelled).as_deref(),
+                Some("vendor/x"),
+                "{spelled}"
+            );
+        }
+        // A decoded escape is a real character in the path: a tab is a tab.
+        assert_eq!(git_config_value("\"vendor\\tcore\""), "vendor\tcore");
+        // Quoted whitespace is git's to keep; unquoted whitespace at the
+        // ends is not, and unquoted whitespace inside is kept in count.
+        assert_eq!(git_config_value("  \" vendor/x \"  "), " vendor/x ");
+        assert_eq!(git_config_value("vendor/  core\t"), "vendor/  core");
+        assert_eq!(git_config_key("path = x", "path"), Some(" x"));
+        assert_eq!(git_config_key("PATH=x", "path"), Some("x"));
+        assert_eq!(git_config_key("pathology = x", "path"), None);
+        assert_eq!(
+            git_config_lines("path = vendor/\\\nx\nurl = u\\\\\n"),
+            vec!["path = vendor/x".to_string(), "url = u\\\\".to_string()],
+            "a trailing backslash continues the line; an escaped one does not"
+        );
+        assert_eq!(
+            git_config_lines("path = a # note\\\nurl = u\n"),
+            vec!["path = a # note\\".to_string(), "url = u".to_string()],
+            "a comment ends at the newline, backslash or not"
+        );
+        // An escaped quote is not a delimiter, across a continuation too:
+        // `"libs/\"one\` + `#two\` + `bar"` is one quoted value.
+        let joined = git_config_lines("path = \"libs/\\\"one\\\n#two\\\nbar\"\n");
+        assert_eq!(joined, vec!["path = \"libs/\\\"one#twobar\"".to_string()]);
+        assert_eq!(git_config_value(&joined[0][7..]), "libs/\"one#twobar");
+        assert_eq!(git_config_value("\"vendor/x\\\"\""), "vendor/x\"");
+        for refused in [
+            "../x",
+            "vendor/../x",
+            "/vendor/x",
+            ".git",
+            "vendor/.git/x",
+            "",
+            ".",
+        ] {
+            assert_eq!(canonical_submodule_path(refused), None, "{refused}");
+        }
         assert!(!safe_relative("../etc/passwd"));
         assert!(!safe_relative("/etc/passwd"));
         assert!(safe_relative("src/lib.rs"));

@@ -148,13 +148,16 @@ impl IndexBackend {
         // review runs against. The write token is minted separately, in
         // `routes.rs`, after every model call has returned.
         let checkout = Checkout::fetch(&git_host(), &repo_id, revision, token).await?;
-        if !config.retrieval.submodules.is_empty() {
-            let skipped = checkout
-                .fetch_submodules(&git_host(), token, &config.retrieval.submodules)
-                .await?;
-            if !skipped.is_empty() {
-                tracing::info!(repo = %repo_id, ?skipped, "submodules not fetched for indexing");
-            }
+        let unfetched = checkout
+            .fetch_submodules(&git_host(), token, &config.retrieval.submodules)
+            .await?;
+        if !unfetched.is_empty() {
+            tracing::info!(
+                repo = %repo_id,
+                denied = ?unfetched.denied,
+                failed = ?unfetched.failed,
+                "submodules not fetched for indexing"
+            );
         }
 
         let selector = crate::chunk::Selector::new(&config.paths.ignore)?;
@@ -164,6 +167,16 @@ impl IndexBackend {
             self.manifest.as_ref(),
         )?
         .with_selector(selector)
+        // Only the submodules *policy* kept out of this checkout are revoked
+        // ahead of the embedding pass. One that merely failed to fetch keeps
+        // its rows until the run's ordinary removal step: the operator did
+        // not take it away, the network did, and a run that then fails
+        // part-way must not have thrown away context it could still serve.
+        .revoking(unfetched.denied)
+        // And the ones the network kept out are neither revoked nor removed:
+        // their rows stay, and the revision is not claimed, so the next
+        // delivery tries the fetch again.
+        .missing(unfetched.failed)
         .with_batch(config.embeddings.batch)
         // The count ceiling above does not bound a request; this does. Without
         // it a large repository's batches are rejected outright and the review
@@ -192,7 +205,25 @@ impl IndexBackend {
             // The graph is what turns "code that reads like the diff" into "the
             // caller this change breaks", so it is rebuilt from the same
             // checkout rather than left to a second fetch.
-            if let Err(err) = self.sync_graph(&repo_id, &checkout, config, report).await {
+            //
+            // Not from a checkout missing a submodule, though: parsed against
+            // a tree where those files do not exist, every import into them
+            // resolves as broken and a whole rebuild drops their nodes. The
+            // graph it has is kept — stale expansion beats none — and the
+            // run leaves the revision unclaimed, which is what makes the
+            // complete run that follows rebuild it whole (see
+            // `rebuild_graph_whole`) from a tree that has everything.
+            if !report.unfetched.is_empty() {
+                tracing::info!(
+                    repo = %repo_id,
+                    unfetched = ?report.unfetched,
+                    "code graph not synced from an incomplete checkout; it is rebuilt whole \
+                     once every submodule is fetched"
+                );
+            } else if let Err(err) = self
+                .sync_graph(&repo_id, &checkout, config, report, report.rebuild_graph)
+                .await
+            {
                 // A graph failure costs expansion, not retrieval: the chunks are
                 // already written and queryable. Failing the whole run here
                 // would throw away an index that just cost money.
@@ -219,6 +250,7 @@ impl IndexBackend {
         checkout: &Checkout,
         config: &Config,
         report: &crate::indexer::types::IndexReport,
+        rebuild_whole: bool,
     ) -> Result<()> {
         let selector = crate::chunk::Selector::new(&config.paths.ignore)?;
         let selection = selector.walk(checkout.path())?;
@@ -234,7 +266,7 @@ impl IndexBackend {
             .iter()
             .chain(report.removed.iter())
             .any(|path| crate::graph::aliases::is_alias_config(path));
-        let parse = match known.is_empty() || aliases_moved {
+        let parse = match known.is_empty() || aliases_moved || rebuild_whole {
             true => None,
             false => Some(
                 crate::graph::build::rebuild_set(

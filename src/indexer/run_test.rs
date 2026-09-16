@@ -520,6 +520,380 @@ async fn a_completed_run_leaves_the_repository_ready_and_claimable() {
 }
 
 #[tokio::test]
+async fn a_revoked_submodule_is_gone_before_the_run_can_stop_on_budget() {
+    // The operator took `libs/core` off the allow-list, so the next checkout
+    // has an empty directory there. Its chunks must not outlive the first
+    // budget check: deleting them is a revocation, not a tidy-up, and a
+    // review querying this index mid-rebuild must not be handed them.
+    let checkout = Checkout::new();
+    checkout.write(
+        "libs/core/src/lib.rs",
+        "fn vendored() -> usize {\n    3\n}\n",
+    );
+    let rig = Rig::new();
+    let signature = crate::index::EmbedSignature::new("voyage", "voyage-code-3", 16);
+    let embedder = CountingEmbedder::new(MockEmbedder::with_signature(signature.clone()));
+    Indexer::new(&embedder, &rig.index, &rig.manifest)
+        .expect("builds")
+        .with_batch(1)
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("indexes");
+    async fn paths_under(rig: &Rig, signature: &crate::index::EmbedSignature) -> Vec<String> {
+        let query = crate::index::HybridQuery::new(signature.clone(), "fn", vec![0.0; 16])
+            .in_repo(REPO)
+            .limit(1_000);
+        rig.index
+            .query(&query)
+            .await
+            .expect("queries")
+            .into_iter()
+            .map(|hit| hit.chunk.path.clone())
+            .collect()
+    }
+    assert!(
+        paths_under(&rig, &signature)
+            .await
+            .iter()
+            .any(|path| path == "libs/core/src/lib.rs")
+    );
+
+    // The submodule is now unfetched: an empty directory. A new file needs
+    // embedding, and the budget refuses it before the first call.
+    checkout.remove("libs/core/src/lib.rs");
+    checkout.write("src/gamma.rs", "fn gamma() {}\n");
+    let before = embedder.calls();
+    let starved = report(
+        Indexer::new(&embedder, &rig.index, &rig.manifest)
+            .expect("builds")
+            .with_batch(1)
+            .with_budget(0.000_000_001)
+            .revoking(vec!["libs/core".into()])
+            .index_repo(REPO, "sha-2", &checkout.root())
+            .await
+            .expect("runs"),
+    );
+    assert!(starved.budget_exhausted, "{starved:?}");
+    assert_eq!(embedder.calls(), before, "nothing was embedded");
+    assert!(starved.deleted > 0, "{starved:?}");
+    assert!(
+        starved
+            .removed
+            .contains(&"libs/core/src/lib.rs".to_string())
+    );
+    assert!(
+        !paths_under(&rig, &signature)
+            .await
+            .iter()
+            .any(|path| path == "libs/core/src/lib.rs"),
+        "the revocation must not wait behind the embedding pass"
+    );
+    // And the count on record moved with it.
+    let record = rig.manifest.snapshot(REPO, &signature);
+    assert_eq!(
+        record.chunks,
+        paths_under(&rig, &signature).await.len() as u64,
+        "the settled count is what the store holds"
+    );
+}
+
+#[tokio::test]
+async fn a_submodule_the_fetch_could_not_bring_is_kept_and_the_revision_is_not_claimed() {
+    // The operator did not take `libs/core` away; the network did, this
+    // once. Its rows keep serving, the manifest keeps the path, and the run
+    // does not claim the head — so the next delivery fetches again instead
+    // of finding a fresh index that quietly lost a submodule.
+    let checkout = Checkout::new();
+    checkout.write(
+        "libs/core/src/lib.rs",
+        "fn vendored() -> usize {\n    3\n}\n",
+    );
+    let rig = Rig::new();
+    rig.indexer()
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("indexes");
+    let before = rig.index.len();
+
+    // The same tree at a new head, with the submodule directory empty.
+    checkout.remove("libs/core/src/lib.rs");
+    let kept = report(
+        rig.indexer()
+            .missing(vec!["libs/core".into()])
+            .index_repo(REPO, "sha-2", &checkout.root())
+            .await
+            .expect("runs"),
+    );
+    assert_eq!(kept.unfetched, vec!["libs/core".to_string()]);
+    assert_eq!(kept.deleted, 0, "{kept:?}");
+    assert!(kept.removed.is_empty(), "{kept:?}");
+    assert_eq!(rig.index.len(), before, "the rows are kept");
+    assert!(
+        rig.manifest
+            .paths(REPO, &rig.signature())
+            .await
+            .expect("lists")
+            .contains(&"libs/core/src/lib.rs".to_string()),
+        "the manifest keeps the path"
+    );
+    let record = rig.manifest.snapshot(REPO, &rig.signature());
+    assert_eq!(record.state, IndexState::Ready);
+    assert!(
+        !record.is_fresh("sha-2"),
+        "an incomplete checkout does not claim the head"
+    );
+
+    // A cold repository with nothing under the submodule yet is the same
+    // case: no rows to keep, and still no head to claim.
+    let cold = Rig::new();
+    let first = report(
+        cold.indexer()
+            .missing(vec!["libs/core".into()])
+            .index_repo(REPO, "sha-2", &checkout.root())
+            .await
+            .expect("runs"),
+    );
+    assert_eq!(first.unfetched, vec!["libs/core".to_string()]);
+    assert!(
+        !cold
+            .manifest
+            .snapshot(REPO, &cold.signature())
+            .is_fresh("sha-2"),
+        "a first index missing a submodule is not fresh either"
+    );
+
+    // And when it is not missing any more — really gone — it is removed.
+    let gone = report(
+        rig.indexer()
+            .index_repo(REPO, "sha-2", &checkout.root())
+            .await
+            .expect("runs"),
+    );
+    assert!(gone.removed.contains(&"libs/core/src/lib.rs".to_string()));
+    assert!(
+        rig.manifest
+            .snapshot(REPO, &rig.signature())
+            .is_fresh("sha-2")
+    );
+}
+
+/// An embedder that answers `n` calls and then fails once — the provider
+/// outage that lands halfway through a run.
+struct FlakyEmbedder {
+    inner: MockEmbedder,
+    answers: std::sync::atomic::AtomicU64,
+}
+
+#[async_trait::async_trait]
+impl crate::ports::embed::Embedder for FlakyEmbedder {
+    fn signature(&self) -> crate::index::EmbedSignature {
+        self.inner.signature()
+    }
+
+    async fn embed(&self, texts: &[String]) -> crate::error::Result<crate::index::Embedded> {
+        use std::sync::atomic::Ordering;
+        if self.answers.load(Ordering::Relaxed) == 0 {
+            // Fail exactly once, then recover: the retry must succeed.
+            self.answers.store(u64::MAX, Ordering::Relaxed);
+            return Err(crate::error::Error::Model("provider down".into()));
+        }
+        if self.answers.load(Ordering::Relaxed) != u64::MAX {
+            self.answers.fetch_sub(1, Ordering::Relaxed);
+        }
+        self.inner.embed(texts).await
+    }
+}
+
+#[tokio::test]
+async fn a_run_that_fails_after_its_first_batch_does_not_count_that_batch_twice() {
+    // First attempt: one batch lands, the next call fails, the run settles
+    // as failed. Its written chunks belong to a file that never confirmed,
+    // so the retry embeds and upserts them again — an `upsert` that reports
+    // the replacement as a write. Counted at write time, the total would be
+    // one attempt too high forever; counted at confirmation, it is the
+    // number of rows the store actually holds.
+    let checkout = Checkout::new();
+    let rig = Rig::new();
+    let embedder = FlakyEmbedder {
+        inner: MockEmbedder::new(16),
+        answers: std::sync::atomic::AtomicU64::new(1),
+    };
+    let signature = crate::ports::embed::Embedder::signature(&embedder);
+    let indexer = Indexer::new(&embedder, &rig.index, &rig.manifest)
+        .expect("builds")
+        .with_batch(1);
+
+    let failed = indexer.index_repo(REPO, "sha-1", &checkout.root()).await;
+    assert!(failed.is_err(), "the first attempt fails");
+    assert_eq!(rig.index.len(), 1, "one batch landed before the failure");
+    let after_failure = rig.manifest.snapshot(REPO, &signature);
+    assert_eq!(after_failure.state, IndexState::Failed);
+    assert_eq!(
+        after_failure.chunks, 0,
+        "an unconfirmed write is not yet a counted chunk"
+    );
+
+    indexer
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("the retry succeeds");
+    let record = rig.manifest.snapshot(REPO, &signature);
+    assert_eq!(record.state, IndexState::Ready);
+    assert_eq!(
+        record.chunks,
+        rig.index.len() as u64,
+        "the settled count is what the store holds, not one per attempt"
+    );
+}
+
+#[tokio::test]
+async fn a_path_both_revoked_and_missing_is_revoked() {
+    // `.gitmodules` is the contributor's; naming one path twice, once under a
+    // repository the operator revoked and once under an allow-listed one
+    // whose fetch failed, must not keep the revoked rows.
+    let checkout = Checkout::new();
+    checkout.write(
+        "libs/core/src/lib.rs",
+        "fn vendored() -> usize {\n    3\n}\n",
+    );
+    let rig = Rig::new();
+    rig.indexer()
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("indexes");
+    checkout.remove("libs/core/src/lib.rs");
+
+    let out = report(
+        rig.indexer()
+            .revoking(vec!["libs/core".into()])
+            .missing(vec!["libs/core".into()])
+            .index_repo(REPO, "sha-2", &checkout.root())
+            .await
+            .expect("runs"),
+    );
+    assert!(out.deleted > 0, "{out:?}");
+    assert!(
+        !rig.rows()
+            .await
+            .iter()
+            .any(|(path, _)| path == "libs/core/src/lib.rs"),
+        "denial wins the tie"
+    );
+}
+
+#[tokio::test]
+async fn a_revocation_counted_by_a_failed_run_is_not_subtracted_again_by_the_retry() {
+    // The early delete succeeds, the embedding after it fails, the failed
+    // run persists the decrement — and the manifest still lists the paths,
+    // because forgetting them is the late step the run never reached. The
+    // retry must not subtract the same rows a second time.
+    let checkout = Checkout::new();
+    checkout.write(
+        "libs/core/src/lib.rs",
+        "fn vendored() -> usize {\n    3\n}\n",
+    );
+    let rig = Rig::new();
+    let embedder = FlakyEmbedder {
+        inner: MockEmbedder::new(16),
+        answers: std::sync::atomic::AtomicU64::new(u64::MAX),
+    };
+    let signature = crate::ports::embed::Embedder::signature(&embedder);
+    Indexer::new(&embedder, &rig.index, &rig.manifest)
+        .expect("builds")
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("indexes");
+    let before = rig.manifest.snapshot(REPO, &signature).chunks;
+    assert_eq!(before, rig.index.len() as u64);
+
+    // Revoke the submodule and add a file, so there is something to embed —
+    // and the next embedding call fails.
+    checkout.remove("libs/core/src/lib.rs");
+    checkout.write("src/gamma.rs", "fn gamma() {}\n");
+    embedder
+        .answers
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    let indexer = Indexer::new(&embedder, &rig.index, &rig.manifest)
+        .expect("builds")
+        .revoking(vec!["libs/core".into()]);
+    assert!(
+        indexer
+            .index_repo(REPO, "sha-2", &checkout.root())
+            .await
+            .is_err(),
+        "the first attempt fails after the revocation"
+    );
+    let failed = rig.manifest.snapshot(REPO, &signature);
+    assert_eq!(failed.state, IndexState::Failed);
+    assert_eq!(failed.chunks, before - 1, "the revocation was counted once");
+    assert!(
+        rig.manifest
+            .paths(REPO, &signature)
+            .await
+            .expect("lists")
+            .contains(&"libs/core/src/lib.rs".to_string()),
+        "the path is still on record for the retry to carry to the graph"
+    );
+
+    indexer
+        .index_repo(REPO, "sha-2", &checkout.root())
+        .await
+        .expect("the retry succeeds");
+    let record = rig.manifest.snapshot(REPO, &signature);
+    assert_eq!(record.state, IndexState::Ready);
+    assert_eq!(
+        record.chunks,
+        rig.index.len() as u64,
+        "the retry subtracts nothing a failed run already counted"
+    );
+}
+
+#[tokio::test]
+async fn a_run_after_an_uncertain_count_recounts_from_the_manifest() {
+    // A failed run that could not tell which confirmations landed leaves the
+    // marker in its message and a count nobody should add to. The next run
+    // recounts from the manifest instead.
+    let checkout = Checkout::new();
+    let rig = Rig::new();
+    rig.indexer()
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("indexes");
+    let truth = rig.manifest.snapshot(REPO, &rig.signature()).chunks;
+    assert_eq!(truth, rig.index.len() as u64);
+
+    // What such a failure leaves behind: a wrong count and the marker.
+    let signature = rig.signature();
+    let lease = match rig
+        .manifest
+        .claim(REPO, &signature, "worker-x")
+        .await
+        .expect("claims")
+    {
+        crate::indexer::types::Claim::Granted(lease) => lease,
+        other => panic!("{other:?}"),
+    };
+    rig.manifest
+        .release(
+            &lease,
+            &crate::indexer::types::Settled::Failed {
+                message: format!("provider down {}", crate::indexer::types::COUNT_UNCERTAIN),
+                chunks: Some(truth + 40),
+            },
+        )
+        .await
+        .expect("releases");
+
+    rig.indexer()
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("runs");
+    let record = rig.manifest.snapshot(REPO, &signature);
+    assert_eq!(record.state, IndexState::Ready);
+    assert_eq!(record.chunks, truth, "recounted, not added to");
+}
+
+#[tokio::test]
 async fn a_run_that_hits_its_budget_stops_with_a_partial_index_rather_than_failing() {
     let checkout = Checkout::new();
     let rig = Rig::new();
