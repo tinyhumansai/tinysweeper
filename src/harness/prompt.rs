@@ -988,11 +988,11 @@ mod tests {
         }];
 
         let security = build(&PromptInputs {
-            focus_path: Some("src/handler.rs"),
+            focus_paths: &["src/handler.rs".to_string()],
             ..PromptInputs::new(LaneId::Security, &config)
         });
         let critique = build(&PromptInputs {
-            focus_path: Some("src/handler.rs"),
+            focus_paths: &["src/handler.rs".to_string()],
             ..PromptInputs::new(LaneId::Critique, &config)
         });
 
@@ -1024,7 +1024,7 @@ mod tests {
         ];
 
         let critique = build(&PromptInputs {
-            focus_path: Some("src/handler.rs"),
+            focus_paths: &["src/handler.rs".to_string()],
             ..PromptInputs::new(LaneId::Critique, &config)
         });
 
@@ -1336,7 +1336,7 @@ mod tests {
         let paths = ["src/main.rs".to_string(), ".github/workflows/ci.yml".into()];
         let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
         i.changed_paths = &paths;
-        i.focus_path = Some(".github/workflows/ci.yml");
+        i.focus_paths = &[".github/workflows/ci.yml".to_string()];
         let prefix = build(&i).prefix().to_string();
 
         assert!(prefix.contains("WORKFLOW RULES"));
@@ -1347,7 +1347,7 @@ mod tests {
     fn a_focused_prompt_forbids_reporting_on_other_files() {
         let config = config();
         let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
-        i.focus_path = Some("src/main.rs");
+        i.focus_paths = &["src/main.rs".to_string()];
         let prefix = build(&i).prefix().to_string();
 
         assert!(prefix.contains("One file only"));
