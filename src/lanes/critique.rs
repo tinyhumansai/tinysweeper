@@ -385,7 +385,7 @@ async fn review_group(
                             group_diffs,
                         ));
                     !confirmed.iter().any(|prior| {
-                        false
+                        council::agree::corroborates(candidate, prior)
                             || candidate_fp
                                 == prior.fingerprint(&crate::findings::anchor::anchor_context(
                                     prior, group_diffs,
