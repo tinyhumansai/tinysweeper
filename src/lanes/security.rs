@@ -334,6 +334,7 @@ async fn review_group(
                 extracted_rules,
                 prior_findings,
                 new_evidence: &evidence,
+                changed_paths,
                 focus_paths: group_paths,
                 scanner_evidence: &scanner_evidence,
                 retrieved_context,

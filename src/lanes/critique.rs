@@ -272,11 +272,12 @@ async fn review_group(
         .await
         {
             Ok(asked) => asked,
-            Err(err) if reviewers.len() > 1 => {
-                tracing::warn!(agent = response.id, %err, "a council reviewer failed");
+            Err(failure) if reviewers.len() > 1 => {
+                spend.merge(failure.spend);
+                tracing::warn!(agent = response.id, err = %failure.error, "a council reviewer failed");
                 continue;
             }
-            Err(err) => return Err(err),
+            Err(failure) => return Err(failure.error),
         };
 
         spend.merge(asked.spend);
@@ -375,8 +376,13 @@ async fn review_group(
             // every finding round one already produced and falsified.
             let asked = match place(llm.clone(), input, group_diffs, &evidence, response).await {
                 Ok(asked) => asked,
-                Err(err) => {
-                    tracing::warn!(%err, "a coverage pass failed to place its findings");
+                Err(failure) => {
+                    // The failed placement can already have paid for several
+                    // relocation calls. It remains part of this review's
+                    // bill even though this optional coverage response adds
+                    // no findings.
+                    spend.merge(failure.spend);
+                    tracing::warn!(err = %failure.error, "a coverage pass failed to place its findings");
                     break;
                 }
             };
@@ -476,6 +482,16 @@ struct Asked {
     discarded: usize,
 }
 
+/// A placement failure together with the relocation usage incurred first.
+///
+/// Placement enforces its budget between findings, so it can fail after
+/// successful relocation calls. Keeping that partial spend is necessary for
+/// accurate reporting and for subsequent budget accounting.
+struct PlacementFailure {
+    error: crate::error::Error,
+    spend: Spend,
+}
+
 /// Build one reviewer's prompt for one group.
 ///
 /// Split from [`place`] so every reviewer's prompt is assembled before any call
@@ -524,7 +540,7 @@ async fn place(
     group_diffs: &[FileDiff],
     evidence: &str,
     parsed: schema::LaneResponse,
-) -> Result<Asked> {
+) -> std::result::Result<Asked, PlacementFailure> {
     let config: &Config = input.config;
 
     // The call's own cost is already tallied inside the capability; what is
@@ -554,9 +570,12 @@ async fn place(
         // finding, so enforce the limit inside the loop before escalating to
         // stage 3. Do not wait until the lane finishes.
         if spend.cost_usd() > config.models.budget_usd_per_pr {
-            return Err(crate::error::Error::Budget {
-                spent: spend.cost_usd(),
-                limit: config.models.budget_usd_per_pr,
+            return Err(PlacementFailure {
+                error: crate::error::Error::Budget {
+                    spent: spend.cost_usd(),
+                    limit: config.models.budget_usd_per_pr,
+                },
+                spend,
             });
         }
 
