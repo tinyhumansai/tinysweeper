@@ -38,7 +38,11 @@ glob = "**/*.tf"
 rules = "terraform"
 
 [[path_instructions]]
-glob = "**/*.tfstate{,.backup}"
+glob = "**/*.tfstate"
+rules = "terraform"
+
+[[path_instructions]]
+glob = "**/*.tfstate.backup"
 rules = "terraform"
 
 [[path_instructions]]
