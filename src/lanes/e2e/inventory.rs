@@ -772,6 +772,50 @@ fn strip_comment(line: &str) -> &str {
     line
 }
 
+/// The top-level keys of a YAML flow mapping like `{pull_request: {paths:
+/// [...]}}`, without parsing it as YAML.
+///
+/// Split on commas at bracket depth zero so a nested `{...}` or `[...]`
+/// value is not itself split, then take the text before each entry's first
+/// `:` as its key. Good enough to recognise which events a compact `on:`
+/// names; nested filters (`paths:` inside the mapping) are not read, on the
+/// same "no YAML parser" reasoning as the rest of this module — they are
+/// left for `applies_to` to treat as unfiltered.
+fn flow_mapping_keys(value: &str) -> Vec<String> {
+    let inner = value
+        .trim()
+        .strip_prefix('{')
+        .and_then(|v| v.strip_suffix('}'))
+        .unwrap_or(value);
+    let mut keys = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    let mut push_entry = |entry: &str, keys: &mut Vec<String>| {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            return;
+        }
+        let key = entry.split_once(':').map_or(entry, |(key, _)| key);
+        let key = unquote(key.trim());
+        if !key.is_empty() {
+            keys.push(key);
+        }
+    };
+    for (i, ch) in inner.char_indices() {
+        match ch {
+            '{' | '[' => depth += 1,
+            '}' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                push_entry(&inner[start..i], &mut keys);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    push_entry(&inner[start..], &mut keys);
+    keys
+}
+
 fn unquote(value: &str) -> String {
     let trimmed = value.trim();
     let inner = trimmed
