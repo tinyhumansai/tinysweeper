@@ -13,6 +13,7 @@
 use async_trait::async_trait;
 
 use crate::error::Result;
+use crate::lanes::e2e::runs::Watch;
 use crate::state::types::ReviewedState;
 
 /// Somewhere durable to keep the last review of a pull request.
