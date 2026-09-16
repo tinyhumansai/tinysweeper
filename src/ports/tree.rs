@@ -1061,8 +1061,9 @@ mod tests {
         let paths: Vec<&str> = hits.iter().map(|h| h.path.as_str()).collect();
         assert_eq!(
             paths,
-            vec![".env", "src/a.rs", "vendor/lib/src/b.rs"],
-            "the submodule's own target and .git are skipped"
+            vec!["src/a.rs", "vendor/lib/src/b.rs"],
+            "the submodule's own target and .git are skipped, and so is .env — a sensitive \
+             path is never searched, however the pattern matches"
         );
 
         let tracked = DirTree::new(dir.path())
