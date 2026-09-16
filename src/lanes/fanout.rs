@@ -143,25 +143,26 @@ impl FanOut {
         // unanswered list stay file-accurate rather than reporting one
         // synthetic entry per conversation.
         let reviewed: usize = self.reviews.iter().map(|(paths, _)| paths.len()).sum();
+        let one_conversation = self.reviews.len() == 1;
         let mut findings = Vec::new();
         let mut resolved = Vec::new();
         let mut spend = Spend::default();
         let mut only_summary = None;
 
-        for (paths, review) in self.reviews {
+        for (_paths, review) in self.reviews {
             spend.merge(review.spend);
             findings.extend(review.findings);
             resolved.extend(review.resolved);
-            // Only a lone single-file unit's own sentence stands in for the
-            // count; a multi-file group's summary talks about several files
-            // at once and would misrepresent "the" file reviewed.
-            only_summary = (paths.len() == 1).then_some(review.summary);
+            // A lone unit's own sentence stands in for the count whether it
+            // covered one file or a whole group: it is the one verdict this
+            // fan-out reached, and reads better than a bare tally.
+            only_summary = Some(review.summary);
         }
 
-        // One file is the common case for a small pull request, and its own
-        // sentence says more than a count would.
-        let mut summary = match (reviewed, only_summary) {
-            (1, Some(single)) if !single.trim().is_empty() => single.trim().to_string(),
+        // One conversation is the common case for a small pull request or a
+        // single group, and its own sentence says more than a count would.
+        let mut summary = match (one_conversation, only_summary) {
+            (true, Some(single)) if !single.trim().is_empty() => single.trim().to_string(),
             _ => format!(
                 "Reviewed {reviewed} file{}; {} finding{}.",
                 plural(reviewed),
