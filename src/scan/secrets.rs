@@ -159,6 +159,25 @@ const PEM_MARKERS: &[(&str, &str)] = &[
     ("-----BEGIN PRIVATE KEY-----", "a private key"),
 ];
 
+/// Whether `text` opens a private-key PEM block.
+///
+/// The marker line itself names a key type, not the key — masking it would
+/// hide nothing sensitive. What has to be masked is everything between this
+/// line and [`is_private_key_end`]: the base64 body is the actual secret, and
+/// it carries no vendor prefix or assignment shape for the rulepack or the
+/// entropy heuristic to anchor on. [`crate::evidence::redact::mask`] uses this
+/// to mask that body wholesale, line by line, regardless of which scanner (if
+/// any) flagged the line individually.
+pub fn is_private_key_begin(text: &str) -> bool {
+    PEM_MARKERS.iter().any(|(marker, _)| text.contains(marker))
+}
+
+/// Whether `text` closes a private-key PEM block opened by
+/// [`is_private_key_begin`].
+pub fn is_private_key_end(text: &str) -> bool {
+    text.contains("-----END") && text.contains("PRIVATE KEY")
+}
+
 /// Variable names that make a high-entropy value on the right-hand side
 /// suspicious.
 /// Deliberately excludes a bare `auth`: it matches `authenticate`, `author` and
