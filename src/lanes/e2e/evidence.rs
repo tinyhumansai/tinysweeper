@@ -738,4 +738,63 @@ mod tests {
             evidence.harness.workflows
         );
     }
+
+    #[tokio::test]
+    async fn one_workflow_declaring_both_triggers_keeps_both_executions() {
+        // `on: [pull_request_target, pull_request]` on a *single* file:
+        // GitHub fires both independently, off the same job list. Dropping
+        // either — which a naive "first event wins" classification would do
+        // — would exclude that execution's pending job from the watch.
+        let mut state = MockState::default();
+        state.set_tree("head", &[".github/workflows/e2e.yml"]);
+        state.set_tree("main", &[".github/workflows/e2e.yml"]);
+        let text = "name: e2e\non: [pull_request_target, pull_request]\njobs:\n  playwright:\n    steps:\n      - run: npx playwright test\n";
+        state.set_file("head", ".github/workflows/e2e.yml", text);
+        state.set_file("main", ".github/workflows/e2e.yml", text);
+        let forge = MockForge::with_state(state);
+
+        let evidence = gather(&forge, &config(), &RepoId::parse("o/r").unwrap(), "head", &[]).await;
+
+        let targets: Vec<bool> = evidence
+            .harness
+            .workflows
+            .iter()
+            .map(|w| {
+                matches!(
+                    w.trigger,
+                    inventory::Trigger::PullRequest { target: true, .. }
+                )
+            })
+            .collect();
+        assert_eq!(
+            evidence.harness.workflows.len(),
+            2,
+            "one execution off the head, one off the default branch: {:?}",
+            evidence.harness.workflows
+        );
+        assert!(targets.contains(&true) && targets.contains(&false), "{targets:?}");
+    }
+
+    #[tokio::test]
+    async fn a_truncated_default_branch_tree_degrades_the_evidence() {
+        let mut state = MockState::default();
+        state.set_tree("head", &[]);
+        state.trees.insert(
+            "main".into(),
+            crate::forge::types::TreeListing {
+                paths: vec![],
+                truncated: true,
+            },
+        );
+        let forge = MockForge::with_state(state);
+
+        let evidence = gather(&forge, &config(), &RepoId::parse("o/r").unwrap(), "head", &[]).await;
+
+        assert!(evidence.harness.truncated, "{:?}", evidence.degraded);
+        assert!(
+            evidence.degraded.iter().any(|d| d.contains("truncated")),
+            "{:?}",
+            evidence.degraded
+        );
+    }
 }
