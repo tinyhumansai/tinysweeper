@@ -990,6 +990,24 @@ jobs:
     }
 
     #[test]
+    fn a_quoted_on_key_is_still_read_as_a_trigger() {
+        // `'on':` and `"on":` are how a YAML 1.1 author avoids `on` being
+        // read as the boolean `true`; GitHub accepts both. Previously any
+        // quoted key was rejected outright, so this workflow read as having
+        // no `on:` block at all.
+        for quoted in ["'on': pull_request", "\"on\": pull_request"] {
+            let text = format!("name: e2e\n{quoted}\njobs:\n  run:\n    steps:\n      - run: make e2e\n");
+            let workflow = classify_workflow(".github/workflows/e2e.yml", &text, &[])
+                .unwrap_or_else(|| panic!("{quoted} should classify as e2e"));
+            assert!(
+                matches!(workflow.trigger, Trigger::PullRequest { .. }),
+                "{quoted}: {:?}",
+                workflow.trigger
+            );
+        }
+    }
+
+    #[test]
     fn a_dispatch_only_workflow_never_triggers() {
         let text = "name: Nightly e2e\non:\n  schedule:\n    - cron: '0 3 * * *'\n  workflow_dispatch:\njobs:\n  run:\n    steps:\n      - run: make e2e\n";
         let workflow = classify_workflow(".github/workflows/nightly.yml", text, &[]).unwrap();
