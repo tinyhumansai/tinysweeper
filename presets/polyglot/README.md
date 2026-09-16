@@ -31,9 +31,9 @@ from most specific to least, on purpose:
 3. Dependency manifests and lockfiles for every ecosystem this preset routes
    (`Cargo.toml`/`Cargo.lock`, `package.json`/`package-lock.json`/`yarn.lock`/
    `pnpm-lock.yaml`, `go.mod`/`go.sum`, `requirements*.txt`/`pyproject.toml`/
-   `poetry.lock`, `pom.xml`/`build.gradle`/`build.gradle.kts`) — a manifest or
-   its lockfile is a manifest regardless of which language it declares
-   dependencies for.
+   `poetry.lock`, `pom.xml`/`build.gradle`/`build.gradle.kts`,
+   `.terraform.lock.hcl`) — a manifest or its lockfile is a manifest
+   regardless of which language it declares dependencies for.
 4. Test files, by filename shape anchored to a prefix, suffix, or `.test.`/
    `.spec.` segment (`test_*`, `*_test.*`, `*.test.*`, `*.spec.*` — not a bare
    substring match, which would also catch a production file like
