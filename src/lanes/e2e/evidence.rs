@@ -118,6 +118,13 @@ pub async fn gather(
     let mut evidence = Evidence::default();
     let settings = config.lane(crate::config::types::LaneId::E2e);
     let table = PathTable::new(settings.map(|l| l.paths.as_slice()).unwrap_or(&[]));
+    if table.invalid_globs() > 0 {
+        evidence.degraded.push(format!(
+            "{} of the configured `lanes.e2e.paths` glob(s) did not compile and were dropped; \
+             the default path table was not used in their place",
+            table.invalid_globs()
+        ));
+    }
     let named: &[String] = settings.map(|l| l.workflows.as_slice()).unwrap_or(&[]);
 
     let listing = match forge.tree_paths(repo, head_sha).await {
