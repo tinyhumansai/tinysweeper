@@ -57,19 +57,20 @@ impl ReviewStateStore for MemoryState {
         Ok(())
     }
 
-    async fn clear_e2e_watch(&self, key: &str, head_sha: &str) -> Result<bool> {
+    async fn clear_e2e_watch(&self, key: &str, watch: &Watch) -> Result<bool> {
         let mut entries = self.entries.lock().expect("memory state lock");
         // One critical section for the whole read-check-write: the same
         // guarantee `update_one`'s filter gives the Mongo-backed `Store`,
         // just held with a mutex instead of an atomic document filter.
+        //
+        // Compared whole, not just by `head_sha`: a manual re-review of the
+        // same commit can save a replacement watch with the same `head_sha`
+        // but different `jobs`/`summary`/`failed`, and that one must survive
+        // this clear.
         let Some(state) = entries.get_mut(key) else {
             return Ok(false);
         };
-        if state
-            .e2e
-            .as_ref()
-            .is_some_and(|watch| watch.head_sha == head_sha)
-        {
+        if state.e2e.as_ref() == Some(watch) {
             state.e2e = None;
             Ok(true)
         } else {
