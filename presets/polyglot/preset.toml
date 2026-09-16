@@ -19,7 +19,11 @@ ignore = [
     "**/node_modules/**",
     "**/vendor/**",
     "**/dist/**",
-    "**/build/**",
+    # Top-level only: unlike `node_modules` or `vendor`, "build" is also a
+    # common source-directory name (a Java package segment, `src/build/`
+    # tooling code). `**/build/**` would drop that source from review
+    # entirely, before any lane or path instruction saw it.
+    "build/**",
     "**/__pycache__/**",
     "**/.terraform/**",
     "target/**",
@@ -78,19 +82,22 @@ lanes = ["critique", "security"]
 # preset routes, get the dependency rules regardless of which language they
 # declare dependencies for.
 [[path_instructions]]
-glob = "**/{Cargo.toml,Cargo.lock,package.json,package-lock.json,yarn.lock,pnpm-lock.yaml,go.mod,go.sum,requirements*.txt,pyproject.toml,poetry.lock,pom.xml,build.gradle,build.gradle.kts}"
+glob = "**/{Cargo.toml,Cargo.lock,package.json,package-lock.json,yarn.lock,pnpm-lock.yaml,go.mod,go.sum,requirements*.txt,pyproject.toml,poetry.lock,pom.xml,build.gradle,build.gradle.kts,.terraform.lock.hcl}"
 rules = "dependencies"
 lanes = ["critique", "security"]
 
 # Test files, across every language, take the test rules before any
-# language's own rules — a `_test.go` or `foo.test.ts` is judged as a test
-# first, not as Go or TypeScript source. Two conventions carry none of those
-# filename substrings: Java's JUnit layout (`UserServiceTest.java`,
+# language's own rules — a `foo_test.go` or `foo.test.ts` is judged as a test
+# first, not as Go or TypeScript source. The shapes are anchored to a
+# filename boundary (prefix, suffix, or a `.test.`/`.spec.` segment) rather
+# than matched as a bare substring, so `contest_service.py` does not trip the
+# `test_` token the way `**/*{...}* ` would. Two conventions carry none of
+# these shapes at all: Java's JUnit layout (`UserServiceTest.java`,
 # `src/test/java/**`) and a directory named for its contents rather than its
 # filenames (`tests/api.py`, `__tests__/Widget.tsx`) — both get their own
 # entries below, still ahead of the general per-extension rule.
 [[path_instructions]]
-glob = "**/*{_test,test_,.test,.spec}*"
+glob = "**/{test_*,*_test.*,*.test.*,*.spec.*}"
 rules = "tests"
 lanes = ["critique", "security"]
 

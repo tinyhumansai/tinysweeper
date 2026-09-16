@@ -31,19 +31,21 @@ from most specific to least, on purpose:
 3. Dependency manifests and lockfiles for every ecosystem this preset routes
    (`Cargo.toml`/`Cargo.lock`, `package.json`/`package-lock.json`/`yarn.lock`/
    `pnpm-lock.yaml`, `go.mod`/`go.sum`, `requirements*.txt`/`pyproject.toml`/
-   `poetry.lock`, `pom.xml`/`build.gradle`/`build.gradle.kts`) — a manifest or
-   its lockfile is a manifest regardless of which language it declares
-   dependencies for.
-4. Test files, by filename shape (`_test`, `test_`, `.test`, `.spec`), plus
-   two Java-specific entries (`*Test.java`/`*Tests.java`/`*IT.java` and
-   `src/test/**/*.java`) and one for a test *directory* rather than a test
-   *filename* (`test/`, `tests/`, or `__tests__/` anywhere in the path, for
-   the extensions that use that convention) — ahead of every language
-   extension, so a `handler_test.go` is judged as a test first and a Go file
-   never, a conventionally-named JUnit file is judged as a test even with
-   none of those substrings in its name, and `tests/api.py` or
-   `__tests__/Widget.tsx` is judged as a test even though nothing in its own
-   filename says so.
+   `poetry.lock`, `pom.xml`/`build.gradle`/`build.gradle.kts`,
+   `.terraform.lock.hcl`) — a manifest or its lockfile is a manifest
+   regardless of which language it declares dependencies for.
+4. Test files, by filename shape anchored to a prefix, suffix, or `.test.`/
+   `.spec.` segment (`test_*`, `*_test.*`, `*.test.*`, `*.spec.*` — not a bare
+   substring match, which would also catch a production file like
+   `contest_service.py`), plus two Java-specific entries
+   (`*Test.java`/`*Tests.java`/`*IT.java` and `src/test/**/*.java`) and one
+   for a test *directory* rather than a test *filename* (`test/`, `tests/`,
+   or `__tests__/` anywhere in the path, for the extensions that use that
+   convention) — ahead of every language extension, so a `handler_test.go` is
+   judged as a test first and a Go file never, a conventionally-named JUnit
+   file is judged as a test even with none of those shapes in its name, and
+   `tests/api.py` or `__tests__/Widget.tsx` is judged as a test even though
+   nothing in its own filename says so.
 5. One entry per language extension, ending in Rust — this repository's own
    dogfood case, and the reason the ordering comment in every preset here
    points back at `rust-library`.

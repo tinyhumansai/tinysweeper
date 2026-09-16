@@ -17,8 +17,11 @@ Covers `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` and `.cjs`.
 - User input assigned into an object via a computed key (`obj[key] = value`),
   or merged onto an existing object with `Object.assign`, without checking
   against `__proto__`, `constructor` or `prototype` — both go through
-  `[[Set]]` and can reach the prototype-chain accessor. A fresh object
-  literal's own spread (`{...a, ...b}`) is not this: spread uses
+  `[[Set]]` and can reach the prototype-chain accessor. Not this when the
+  target was created with `Object.create(null)` or is otherwise documented as
+  a null-prototype dictionary: it has no `__proto__` accessor to reach, so
+  those keys land as ordinary own properties. A fresh object literal's own
+  spread (`{...a, ...b}`) is not this either: spread uses
   `CreateDataProperty`, which never invokes that setter, so `{...untrusted}`
   cannot repoint the result's prototype on its own — only report it where the
   spread result is later deep-merged into another object unsafely.
@@ -46,6 +49,9 @@ Covers `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` and `.cjs`.
 - A shallow object-literal spread (`{...a, ...b}`) of untrusted data with no
   later unsafe deep-merge of the result — spread cannot itself repoint a
   prototype.
+- Computed-key assignment or `Object.assign` onto a target created with
+  `Object.create(null)` or otherwise documented as a null-prototype
+  dictionary — it has no `__proto__` accessor for the assignment to reach.
 - Sequential `await` in a loop when each iteration depends on the previous
   result, or the collection is small and fixed at call time.
 - `innerHTML`/`dangerouslySetInnerHTML` fed a value that has already passed
