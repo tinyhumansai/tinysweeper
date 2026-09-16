@@ -444,11 +444,14 @@ fn path_instructions(inputs: &PromptInputs<'_>) -> String {
         .filter(|rule| rule.lanes.is_empty() || rule.lanes.contains(&inputs.lane))
         .collect();
 
-    let paths: Vec<&str> = if inputs.focus_paths.is_empty() {
-        inputs.changed_paths.iter().map(String::as_str).collect()
-    } else {
-        inputs.focus_paths.iter().map(String::as_str).collect()
-    };
+    // Always the full changed-path set, never `focus_paths`. `focus_paths`
+    // scopes which files *this* conversation may report on — a group's
+    // isolation clause — not which repository rules load. A path-specific
+    // override written for a file outside the group is still a rule about a
+    // file this pull request touched, and dropping it because that file
+    // landed in a sibling conversation would silently disable it for the
+    // whole review.
+    let paths: Vec<&str> = inputs.changed_paths.iter().map(String::as_str).collect();
 
     // No paths means the caller did not say which files this is about, so the
     // whole table applies: dropping every rule would be a silent regression.
