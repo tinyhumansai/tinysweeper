@@ -1219,6 +1219,10 @@ fn helper() {
         config.models.budget_usd_per_pr = 0.025;
 
         let model = MockModel::new()
+            .with_usage(crate::ports::model::Usage {
+                cost_usd: 0.01,
+                ..crate::ports::model::Usage::default()
+            })
             .then(json!({
                 "summary": "…",
                 "findings": [finding_named("Guard the first index", 3)]
