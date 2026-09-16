@@ -3,6 +3,27 @@
 Review rules for one kind of file, as **data**. Adding a rule document is a new
 Markdown file in this folder and one line of TOML — never a new module.
 
+## Available documents
+
+| Document | For |
+| --- | --- |
+| [`rust.md`](rust.md) | `.rs` |
+| [`tests.md`](tests.md) | test files, by filename shape, in any language |
+| [`security.md`](security.md) | the `security` lane's taxonomy, language-agnostic |
+| [`workflows.md`](workflows.md) | `.github/workflows/**` |
+| [`dependencies.md`](dependencies.md) | dependency manifests and lockfiles |
+| [`go.md`](go.md) | `.go` |
+| [`python.md`](python.md) | `.py` |
+| [`typescript.md`](typescript.md) | `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` |
+| [`java.md`](java.md) | `.java` |
+| [`dockerfile.md`](dockerfile.md) | `Dockerfile*` |
+| [`shell.md`](shell.md) | `.sh` |
+| [`sql.md`](sql.md) | `.sql` |
+| [`terraform.md`](terraform.md) | `.tf` |
+
+`presets/polyglot/` is the preset that wires all of them into one ordered
+table; see its `README.md` for why that order is what it is.
+
 A preset points at one from its ordered `[[path_instructions]]` table:
 
 ```toml
