@@ -537,10 +537,17 @@ impl TreeReader for RedactingTree<'_> {
                     // the same way a diff hunk proves it. Refusing the read
                     // instead would blind every ranged lookup on such a
                     // backend, and the lookups are what find the bugs.
-                    // Without preceding context we cannot prove a body line
-                    // is ordinary text. Treat the returned range as inside
-                    // armour so it is safe even in incomplete replays.
-                    _ => true,
+                    // A backend that cannot answer the probe — a replayed
+                    // recording that never made it, a forge read that failed
+                    // — still has the range itself: a closing marker inside
+                    // it with no opening one proves the read began mid-key,
+                    // the same way a diff hunk proves it. Treating the range
+                    // as key material instead would redact every seeded
+                    // definition read on such a backend, and the lookups are
+                    // what find the bugs (see `docs/modules/lanes/lookup.md`).
+                    // `a_ranged_read_with_no_probe_context_is_still_served`
+                    // pins this.
+                    _ => opens_inside_private_key(&found),
                 }
             }
             _ => false,
@@ -569,12 +576,13 @@ impl TreeReader for RedactingTree<'_> {
                             end: Some(hit.line),
                         })
                         .await?;
-                    // Search hits lack enough inline context to distinguish a
-                    // private-key body from ordinary text. Do not disclose a
-                    // hit when its bounded context read is unavailable.
-                    let Some(mut state) = private_key_state_before_last_line(&prefix) else {
-                        continue;
-                    };
+                    // An unanswerable probe leaves the hit's own line as the
+                    // only evidence, and one line outside armour is ordinary
+                    // text; dropping the hit would hide a search result from
+                    // the reviewer over a backend limitation.
+                    // `a_search_hit_with_no_probe_context_is_still_served`
+                    // pins this.
+                    let mut state = private_key_state_before_last_line(&prefix).unwrap_or(false);
                     redacted.push(Hit {
                         text: crate::scan::redact_stream_line(&hit.text, &mut state),
                         ..hit
