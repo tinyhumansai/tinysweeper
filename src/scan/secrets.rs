@@ -420,13 +420,24 @@ pub fn scrub(text: &str) -> String {
     let mut in_key_block = false;
     text.split_inclusive('\n')
         .map(|line| match line.strip_suffix("\r\n") {
-            Some(body) => format!("{}\r\n", redact_stream_line(body, &mut in_key_block)),
+            Some(body) => format!("{}\r\n", redact_scrub_line(body, &mut in_key_block)),
             None => match line.strip_suffix('\n') {
-                Some(body) => format!("{}\n", redact_stream_line(body, &mut in_key_block)),
-                None => redact_stream_line(line, &mut in_key_block),
+                Some(body) => format!("{}\n", redact_scrub_line(body, &mut in_key_block)),
+                None => redact_scrub_line(line, &mut in_key_block),
             },
         })
         .collect()
+}
+
+/// Stateful scrub for whole strings. Unlike a diff hunk or a ranged tree
+/// read, a generic title/body has no reason to treat a long opaque word as a
+/// boundary-less PEM fragment; that fallback would redact ordinary prose.
+fn redact_scrub_line(line: &str, in_key_block: &mut bool) -> String {
+    if *in_key_block || is_private_key_begin(line) {
+        redact_stream_line(line, in_key_block)
+    } else {
+        redact_line(line)
+    }
 }
 
 /// Replace every recognised credential in one line with a redacted hint.
