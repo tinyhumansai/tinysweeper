@@ -27,27 +27,51 @@ ignore = [
 ]
 
 # Ordered, first match wins: the most specific glob has to come first, or the
-# broader entry below it never fires. See presets/rules/README.md.
-
+# broader entry below it never fires. See presets/rules/README.md. Every
+# entry down to the test routing below is scoped to lanes = ["critique",
+# "security"] for the same reason the language entries are: `tests`,
+# `commits` and `description` build one prompt over every changed path with
+# no `focus_path`, so an unscoped entry's rules leak into lanes that never
+# review that file on its own.
 [[path_instructions]]
 glob = "**/Dockerfile*"
 rules = "dockerfile"
+lanes = ["critique", "security"]
 
 [[path_instructions]]
 glob = "**/*.tf"
 rules = "terraform"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/*.tfvars"
+rules = "terraform"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/*.tfvars.json"
+rules = "terraform"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/*.tf.json"
+rules = "terraform"
+lanes = ["critique", "security"]
 
 [[path_instructions]]
 glob = "**/*.tfstate"
 rules = "terraform"
+lanes = ["critique", "security"]
 
 [[path_instructions]]
 glob = "**/*.tfstate.backup"
 rules = "terraform"
+lanes = ["critique", "security"]
 
 [[path_instructions]]
 glob = "**/.github/workflows/**"
 rules = "workflows"
+lanes = ["critique", "security"]
 
 # Dependency manifests and their lockfiles, across every ecosystem this
 # preset routes, get the dependency rules regardless of which language they
@@ -55,6 +79,7 @@ rules = "workflows"
 [[path_instructions]]
 glob = "**/{Cargo.toml,Cargo.lock,package.json,package-lock.json,yarn.lock,pnpm-lock.yaml,go.mod,go.sum,requirements*.txt,pyproject.toml,poetry.lock,pom.xml,build.gradle,build.gradle.kts}"
 rules = "dependencies"
+lanes = ["critique", "security"]
 
 # Test files, across every language, take the test rules before any
 # language's own rules — a `_test.go` or `foo.test.ts` is judged as a test
