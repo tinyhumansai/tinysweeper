@@ -912,8 +912,7 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let config_dir = tempfile::tempdir().expect("tempdir");
         let config_path = config_dir.path().join(".tinysweeper.toml");
-        std::fs::write(&config_path, "version = 1\npreset = \"polyglot\"\n")
-            .expect("write config");
+        std::fs::write(&config_path, "version = 1\npreset = \"polyglot\"\n").expect("write config");
         let config = crate::config::load(root, Some(&config_path))
             .expect("the polyglot preset loads")
             .config;
