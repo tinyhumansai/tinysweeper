@@ -138,9 +138,13 @@ pub struct PromptInputs<'a> {
     /// injected — the pre-selection behaviour, kept so a caller that has no
     /// path list does not silently lose its rules.
     pub changed_paths: &'a [String],
-    /// The single file this prompt is scoped to, when the lane fans out one
-    /// conversation per changed file.
-    pub focus_path: Option<&'a str>,
+    /// The files this prompt is scoped to, when the lane fans out one
+    /// conversation per changed file or per [`crate::lanes::grouping::FileGroup`].
+    ///
+    /// One path is the plain per-file case; several is a group, related by a
+    /// graph edge or a naming convention, reviewed together in one
+    /// conversation. Empty means the lane is not fanning out at all.
+    pub focus_paths: &'a [String],
     /// The reviewing angle this conversation is given, when a council is
     /// running several reviewers over the same evidence.
     ///
