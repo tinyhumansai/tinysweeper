@@ -336,19 +336,9 @@ impl<'a> Indexer<'a> {
         // run, is the reading nobody has to think about. A read that fails
         // releases the claim, or every later delivery requeues against a
         // lease nobody holds until its TTL.
-        let release_failed = |err: Error| async move {
-            let settled = Settled::Failed {
-                message: err.to_string(),
-                chunks: None,
-            };
-            if let Err(nested) = self.manifest.release(&lease, &settled).await {
-                tracing::warn!(error = %nested, "could not release the index claim");
-            }
-            err
-        };
         let state = match self.manifest.state(repo_id, &signature).await {
             Ok(state) => state,
-            Err(err) => return Err(release_failed(err).await),
+            Err(err) => return Err(self.release_failed(&lease, err).await),
         };
         let before = state.chunks;
         // Read under the claim for the same reason: a worker under the old
@@ -364,7 +354,7 @@ impl<'a> Indexer<'a> {
                         .into_iter()
                         .filter(|path| !seen.contains(path))
                         .collect(),
-                    Err(err) => return Err(release_failed(err).await),
+                    Err(err) => return Err(self.release_failed(&lease, err).await),
                 }
             }
         };
@@ -414,6 +404,19 @@ impl<'a> Indexer<'a> {
                 Err(err)
             }
         }
+    }
+
+    /// Release a claim for a run that failed before it wrote anything,
+    /// handing the error back to return.
+    async fn release_failed(&self, lease: &IndexLease, err: Error) -> Error {
+        let settled = Settled::Failed {
+            message: err.to_string(),
+            chunks: None,
+        };
+        if let Err(nested) = self.manifest.release(lease, &settled).await {
+            tracing::warn!(error = %nested, "could not release the index claim");
+        }
+        err
     }
 
     async fn settle(
