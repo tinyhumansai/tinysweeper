@@ -147,7 +147,7 @@ fn an_unknown_embedding_provider_is_rejected_by_doctor_not_by_the_first_push() {
     );
     let joined = validate::validate(&config).join("\n");
     assert!(
-        joined.contains("\"lader\"") && joined.contains("ladder"),
+        joined.contains("names no provider") && !joined.contains("lader"),
         "{joined}"
     );
 }

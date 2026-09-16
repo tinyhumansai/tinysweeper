@@ -1408,6 +1408,12 @@ mod tests {
         let mut legacy = proposal("abc123", vec![]);
         legacy.version = 1;
         assert!(!legacy.complete());
+        let mut newer = proposal("abc123", vec![]);
+        newer.version = crate::app::review::PROPOSAL_VERSION + 1;
+        assert!(
+            !newer.complete(),
+            "nor is one this binary cannot fully read"
+        );
 
         let forge = forge("abc123");
         apply(&forge, &forge, &config(), &legacy, None)

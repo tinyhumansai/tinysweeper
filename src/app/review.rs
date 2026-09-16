@@ -47,8 +47,10 @@ const REMEMBER_FINDINGS_TIMEOUT: std::time::Duration = std::time::Duration::from
 /// 2 added `unanswered` on every lane and `skipped` on the proposal. A
 /// version-1 file has neither, and `serde(default)` reads their absence as
 /// "everything answered, nothing skipped" — which for a file written during a
-/// provider outage is exactly wrong. So a version-1 proposal is never
-/// complete: `apply` can still post its findings, but cannot approve on it.
+/// provider outage is exactly wrong. And a version-3 file may carry a signal
+/// this binary ignores. So only a proposal of exactly this version is ever
+/// complete: `apply` can still post another's findings, but cannot approve
+/// on them.
 pub const PROPOSAL_VERSION: u32 = 2;
 
 /// What a review run concluded, ready for `apply` to publish.
@@ -244,7 +246,9 @@ impl Proposal {
     /// `Neutral`, and Neutral does not block — so a review that consulted no
     /// model at all read as clean and approved.
     pub fn complete(&self) -> bool {
-        self.version >= PROPOSAL_VERSION
+        // Exactly this binary's schema: an older file lacks the signals, and a
+        // newer one may carry a signal this binary does not read.
+        self.version == PROPOSAL_VERSION
             && self.skipped.is_none()
             && self.unreviewed.is_empty()
             && self.answered()

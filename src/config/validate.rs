@@ -443,8 +443,9 @@ fn validate_embeddings(config: &Config, problems: &mut Vec<String>) {
     ];
     let provider = embeddings.provider.trim();
     if !provider.is_empty() && !PROVIDERS.contains(&provider) {
+        // The value is not echoed; this text reaches a check-run summary.
         problems.push(format!(
-            "`embeddings.provider = \"{provider}\"` names no provider this build knows; one of {}",
+            "`embeddings.provider` names no provider this build knows; one of {}",
             PROVIDERS.join(", ")
         ));
     }
