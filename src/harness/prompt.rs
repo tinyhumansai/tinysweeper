@@ -425,6 +425,12 @@ pub fn fence_for(content: &str) -> String {
 /// thing it can decide to have an opinion about, and rules written for another
 /// language are opinions it should never have had the chance to form.
 ///
+/// An entry with `merge = true` is the documented exception: its path also
+/// takes the *next* matching (lane-scoped) entry after it, rendered second,
+/// separated by a blank line. That is one level only — if that second entry
+/// is itself a merge entry, it does not keep looking for a third. A merge
+/// entry with nothing further to match renders alone; that is not an error.
+///
 /// An unparseable glob is skipped rather than fatal — `config::validate`
 /// reports it as a configuration problem, and losing the whole review over one
 /// bad pattern would be a worse failure than losing one rule.
