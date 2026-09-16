@@ -604,7 +604,13 @@ pub async fn review_with_tree(
     // The bare titles stay separate because everything else that matches on
     // them — the still-open bookkeeping, the state record — matches on the
     // title alone, and annotating those would break the match.
-    let prior_lines = annotate(&prior_titles, &prior_severities);
+    // Matching and severity lookup keep the original titles, but prior
+    // reviews may have been recorded before entropy-assignment redaction
+    // existed. Only the prompt-facing copies are scrubbed.
+    let prior_lines = annotate(&prior_titles, &prior_severities)
+        .into_iter()
+        .map(|line| crate::scan::scrub(&line))
+        .collect();
     let suppressed = suppressed_fingerprints(&prior, remembered.as_ref());
     // No checkout on the forge-only path, so `src/position` has no whole-file
     // fallback to run. It degrades to hunk matching rather than failing.

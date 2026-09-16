@@ -202,7 +202,10 @@ pub fn redact_stream_line(line: &str, in_key_block: &mut bool) -> String {
         .map(|(marker, _)| *marker)
         .find(|marker| line.contains(marker))
     {
-        *in_key_block = true;
+        // A malformed serialization can place both armour markers on one
+        // physical line. It is still redacted as key material, but must not
+        // make unrelated later lines look like its body.
+        *in_key_block = !is_private_key_end(line);
         // Armour is metadata, but either side of it can contain key material
         // when malformed input packs a key onto the marker's physical line.
         return redact_pem_marker_line(line, marker);
