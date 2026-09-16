@@ -716,15 +716,8 @@ pub async fn review_with_tree(
     // harness, and the lane says so, rather than costing the review.
     let e2e_evidence = if config.enabled_lanes().contains(&LaneId::E2e) {
         Some(
-            crate::lanes::e2e::evidence::gather(
-                forge,
-                config,
-                repo,
-                &context.pull_request.head_sha,
-                &context.pull_request.base_sha,
-                &diffs,
-            )
-            .await,
+            crate::lanes::e2e::evidence::gather(forge, config, repo, &context.pull_request.head_sha, &diffs)
+                .await,
         )
     } else {
         None
