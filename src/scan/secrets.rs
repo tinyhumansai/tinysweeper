@@ -182,6 +182,39 @@ pub fn is_private_key_end(text: &str) -> bool {
     text.contains("-----END") && text.contains("PRIVATE KEY")
 }
 
+/// Redact one line of a stream that must be walked line by line while
+/// tracking a private-key PEM block across lines — `in_key_block` is the
+/// caller's state, read and updated in place.
+///
+/// `line` must already have any positional prefix — a rendered diff's
+/// `{n:>5} {marker}`, a tree read's `{n:>5}| ` — split off: this only ever
+/// runs the rulepack or private-key-body masking over text a scanner could
+/// actually match, never the anchor before it. Shared by every caller that
+/// needs the same two path-independent passes
+/// [`crate::evidence::redact::mask`] applies to a fresh diff, over text that
+/// is not a [`crate::evidence::diff::FileDiff`]:
+/// [`crate::evidence::redact::scrub_rendered`] for evidence a previous review
+/// cycle persisted, and [`crate::ports::tree`]'s lookup redaction for content
+/// a tree backend read fresh outside the diff entirely.
+pub fn redact_stream_line(line: &str, in_key_block: &mut bool) -> String {
+    if is_private_key_begin(line) {
+        *in_key_block = true;
+        return line.to_string();
+    }
+    if *in_key_block {
+        if is_private_key_end(line) {
+            *in_key_block = false;
+            return line.to_string();
+        }
+        return if line.trim().is_empty() {
+            line.to_string()
+        } else {
+            redact(line.trim())
+        };
+    }
+    redact_line(line)
+}
+
 /// Variable names that make a high-entropy value on the right-hand side
 /// suspicious.
 /// Deliberately excludes a bare `auth`: it matches `authenticate`, `author` and
