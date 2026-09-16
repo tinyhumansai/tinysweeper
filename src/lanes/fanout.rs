@@ -138,17 +138,24 @@ impl FanOut {
     /// like a complete one is worse than no review at all, because a human
     /// stops looking.
     pub fn into_outcome(self) -> LaneOutcome {
-        let reviewed = self.reviews.len();
+        // A multi-file group is one conversation but several files: counted
+        // and named per member path here, so "Reviewed N files" and the
+        // unanswered list stay file-accurate rather than reporting one
+        // synthetic entry per conversation.
+        let reviewed: usize = self.reviews.iter().map(|(paths, _)| paths.len()).sum();
         let mut findings = Vec::new();
         let mut resolved = Vec::new();
         let mut spend = Spend::default();
         let mut only_summary = None;
 
-        for review in self.reviews {
+        for (paths, review) in self.reviews {
             spend.merge(review.spend);
             findings.extend(review.findings);
             resolved.extend(review.resolved);
-            only_summary = Some(review.summary);
+            // Only a lone single-file unit's own sentence stands in for the
+            // count; a multi-file group's summary talks about several files
+            // at once and would misrepresent "the" file reviewed.
+            only_summary = (paths.len() == 1).then_some(review.summary);
         }
 
         // One file is the common case for a small pull request, and its own
@@ -163,25 +170,25 @@ impl FanOut {
             ),
         };
 
+        // Every path behind a failed unit, not one synthetic entry per
+        // conversation: a failed two-file group must count and name both.
+        let unanswered: Vec<String> = self
+            .failures
+            .iter()
+            .flat_map(|(_, paths, _)| paths.iter().cloned())
+            .collect();
+
         if !self.failures.is_empty() {
-            let names: Vec<&str> = self
-                .failures
-                .iter()
-                .map(|(path, _)| path.as_str())
-                .collect();
             summary.push_str(&format!(
                 " {} file{} could not be reviewed: {}.",
-                self.failures.len(),
-                plural(self.failures.len()),
-                names.join(", ")
+                unanswered.len(),
+                plural(unanswered.len()),
+                unanswered.join(", ")
             ));
         }
 
         let skipped = (reviewed == 0 && !self.failures.is_empty())
             .then(|| "No files could be reviewed; see the listed provider failures.".to_string());
-        // Every file that got no answer, whether or not others did: a lane that
-        // reviewed two files of three cannot vouch for the third.
-        let unanswered = self.failures.iter().map(|(path, _)| path.clone()).collect();
         LaneOutcome {
             summary,
             findings,
