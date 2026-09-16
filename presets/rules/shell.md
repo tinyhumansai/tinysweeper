@@ -32,6 +32,8 @@
   literal, an integer, or a value with no possible whitespace.
 - `rm -rf` on a path built entirely from literals in the same line, with no
   variable in it.
+- `rm -rf "$path"` with no trailing `/` or `/*` — a quoted empty `$path`
+  expands to one empty argument, not to the root or the current directory.
 - Style: two-space vs four-space indent, `[ ]` vs `[[ ]]` where both are
   valid in the script's declared shell, or quoting style beyond correctness.
 - A `shellcheck` finding already visible as a suppressed, commented directive
