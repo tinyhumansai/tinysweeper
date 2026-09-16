@@ -234,8 +234,13 @@ impl IndexManifest for MongoManifest {
                     "cost_usd": usage.cost_usd,
                 },
             },
-            Settled::Failed { message } => doc! {
-                "$set": { "state": "failed", "message": message.clone() },
+            Settled::Failed { message, chunks } => match chunks {
+                Some(chunks) => doc! {
+                    "$set": { "state": "failed", "message": message.clone(), "chunks": *chunks as i64 },
+                },
+                None => doc! {
+                    "$set": { "state": "failed", "message": message.clone() },
+                },
             },
         };
 
@@ -291,6 +296,7 @@ impl IndexManifest for MongoManifest {
                 path: document.get_str("path").unwrap_or_default().to_string(),
                 chunks: strings(&document, "chunks"),
                 pending: strings(&document, "pending"),
+                pending_is_stale: document.get_bool("pending_is_stale").unwrap_or(false),
             });
         }
         Ok(files)
@@ -331,6 +337,7 @@ impl IndexManifest for MongoManifest {
                     doc! { "$set": {
                         "chunks": file.chunks.clone(),
                         "pending": file.pending.clone(),
+                        "pending_is_stale": file.pending_is_stale,
                     } },
                 )
                 .upsert(true)
