@@ -464,7 +464,7 @@ pub async fn settle_e2e(
     // this call's own `load_state` above and now cannot be discarded by an
     // unconditional write-back the way reloading-and-saving still could —
     // see its doc comment on `ReviewStateStore`.
-    if let Err(err) = store.clear_e2e_watch(&key, &watch.head_sha).await {
+    if let Err(err) = store.clear_e2e_watch(&key, &watch).await {
         tracing::warn!(%err, "could not clear the e2e watch; the next completion will republish");
     }
     Ok(E2eSettlement::Published(settled.conclusion))
