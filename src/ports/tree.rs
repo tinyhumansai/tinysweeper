@@ -322,8 +322,21 @@ impl MockTree {
 #[async_trait]
 impl TreeReader for MockTree {
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
+        // Checked before the recorded map and before `self.files`: a
+        // cassette can carry a `Lookup::Read` recorded before this guard
+        // existed, or before whichever live backend produced it filtered
+        // sensitive paths out. `DirTree`, `GitTree` and `ForgeTree` all
+        // refuse before consulting anything; a fixture standing in for one
+        // of them on replay has to refuse the same path the same way, or a
+        // cassette becomes the one place the invariant does not hold.
+        if let Lookup::Read { path, .. } = lookup
+            && crate::scan::is_sensitive_path(path)
+        {
+            return Ok(sensitive_path_refusal());
+        }
+
         if let Some(found) = self.recorded.get(&lookup.key()) {
-            return Ok(found.clone());
+            return Ok(strip_sensitive_hits(found.clone()));
         }
         // A replay answers only what was recorded. "Not found" here would be
         // a claim about the repository the fixture never made, and a model
@@ -353,7 +366,8 @@ impl TreeReader for MockTree {
                 let mut hits = Vec::new();
                 let mut truncated = false;
                 for (path, content) in &self.files {
-                    if !glob_matches(glob.as_deref(), path) {
+                    if !glob_matches(glob.as_deref(), path) || crate::scan::is_sensitive_path(path)
+                    {
                         continue;
                     }
                     if search_lines(path, content, pattern, &mut hits) {
