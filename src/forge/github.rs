@@ -1666,6 +1666,32 @@ impl ForgeRead for GitHubRead {
         Ok(commit.zip(url).map(|(c, u)| (u.to_string(), c.to_string())))
     }
 
+    async fn open_pull_requests_for_commit(&self, repo: &RepoId, sha: &str) -> Result<Vec<u64>> {
+        // The one endpoint that answers "which pull request is this commit
+        // on" without already knowing the number — exactly the gap
+        // `check_run`/`check_suite` payloads leave for a fork pull request.
+        // Answers every pull request the commit is associated with, open or
+        // closed, so closed ones are filtered out here: a completion for a
+        // commit whose pull request has since merged or closed has nothing
+        // left to settle.
+        let page = self
+            .client
+            .repos(&repo.owner, &repo.name)
+            .commits()
+            .associated_pull_requests(octocrab::params::repos::commits::PullRequestTarget::Sha(
+                sha.to_string(),
+            ))
+            .send()
+            .await
+            .map_err(api)?;
+        Ok(page
+            .items
+            .into_iter()
+            .filter(|pr| matches!(pr.state, Some(octocrab::models::IssueState::Open)))
+            .map(|pr| pr.number)
+            .collect())
+    }
+
     async fn issue(&self, repo: &RepoId, number: u64) -> Result<Issue> {
         // The raw route rather than octocrab's typed one: its `Issue` model has
         // no `type`, and a second request just to read one field would double
