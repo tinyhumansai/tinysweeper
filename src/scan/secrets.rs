@@ -452,7 +452,12 @@ fn mask_entropy_assignment(text: &str) -> Option<String> {
     // line for an unrelated reason.
     let offset = value.as_ptr() as usize - text.as_ptr() as usize;
     let end = offset + value.len();
-    Some(format!("{}{}{}", &text[..offset], redact(value), &text[end..]))
+    Some(format!(
+        "{}{}{}",
+        &text[..offset],
+        redact(value),
+        &text[end..]
+    ))
 }
 
 /// Byte offset and length of the first rulepack match in `text`.
