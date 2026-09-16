@@ -12,6 +12,11 @@ max_comments = 40
 incremental = true
 draft_prs = true
 respect_agents_md = true
+# One coverage pass: the first council reviewer looks once more at a large
+# group, told what it already found, before the check run concludes. Costs
+# one extra model call per group over the coverage pass's own line threshold —
+# worth it here, where a missed vulnerability costs more than the call.
+passes = 2
 
 [paths]
 ignore = ["**/*.lock"]
