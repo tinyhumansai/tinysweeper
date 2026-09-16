@@ -535,12 +535,11 @@ impl TreeReader for RedactingTree<'_> {
                     // not guess and expose it: tell the model this ranged
                     // read is unavailable instead of returning unredacted
                     // source from a backend that cannot establish state.
-                    Found::Unavailable { .. } => {
+                    _ => {
                         return Ok(Found::Unavailable {
                             reason: "cannot safely redact this range because its preceding context is unavailable".into(),
                         });
                     }
-                    _ => false,
                 }
             }
             _ => false,
@@ -569,7 +568,9 @@ impl TreeReader for RedactingTree<'_> {
                             end: Some(hit.line),
                         })
                         .await?;
-                    let state = private_key_state_before_last_line(&prefix);
+                    let Some(state) = private_key_state_before_last_line(&prefix) else {
+                        continue;
+                    };
                     let mut state = state;
                     redacted.push(Hit {
                         text: crate::scan::redact_stream_line(&hit.text, &mut state),
@@ -658,9 +659,9 @@ fn private_key_state(found: &Found) -> bool {
 
 /// Establish PEM state immediately before a search hit, whose own text is the
 /// final line of the bounded probe.
-fn private_key_state_before_last_line(found: &Found) -> bool {
+fn private_key_state_before_last_line(found: &Found) -> Option<bool> {
     let Found::Text { text, .. } = found else {
-        return false;
+        return None;
     };
     let mut state = false;
     let mut lines = text.split('\n').peekable();
@@ -674,7 +675,7 @@ fn private_key_state_before_last_line(found: &Found) -> bool {
         };
         let _ = crate::scan::redact_stream_line(body, &mut state);
     }
-    state
+    Some(state)
 }
 
 /// A tree on disk: a checkout, or the working directory `local-review` runs in.

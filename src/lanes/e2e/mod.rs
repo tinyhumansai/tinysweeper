@@ -129,13 +129,13 @@ impl Lane for E2e {
             &changed_paths,
             &input.pull_request.labels,
         );
-        // These names are copied into deterministic findings as well as the
-        // model prompt, so scrub the shared metadata before either consumer.
-        for run in &mut runs {
-            run.workflow = crate::scan::scrub(&run.workflow);
-            run.job = crate::scan::scrub(&run.job);
+        // Keep forge identities canonical for pending-watch matching. Findings
+        // and prompts receive independently scrubbed presentation copies.
+        let mut rendered_runs = runs.clone();
+        for run in &mut rendered_runs {
+            runs::scrub_for_render(run);
         }
-        let deterministic = runs::findings(&runs);
+        let deterministic = runs::findings(&rendered_runs);
         let pending = runs::pending(&runs);
 
         // Assembled above the diff, in the order a reader needs it: what

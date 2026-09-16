@@ -264,12 +264,12 @@ fn redact_pem_marker_line(line: &str, marker: &str) -> String {
 ///
 /// Diff hunks and ranged tree reads do not always include an armour boundary.
 /// Standard PEM wraps base64 at 64 characters; accepting a conservative
-/// minimum of 32 catches short terminal fragments while leaving ordinary
+/// minimum of 16 catches short terminal fragments while leaving ordinary
 /// source lines readable. A false positive only withholds opaque encoded data
 /// from a model, which is the safe side of this security boundary.
 pub fn is_private_key_body(text: &str) -> bool {
     let body = text.trim();
-    body.len() >= 32
+    body.len() >= 16
         && body
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))

@@ -229,13 +229,13 @@ fn suggested_body(pr: &PullRequest, files: usize) -> String {
 /// running it on prose would mangle a sentence that legitimately needs to
 /// quote a hash or an identifier.
 fn render_pull_request(pr: &PullRequest) -> String {
-    format!(
+    scan::scrub(&format!(
         "title: {}\nbase: {}\nhead: {}\n\nbody:\n{}",
-        scan::scrub(pr.title.trim()),
+        pr.title.trim(),
         pr.base_ref,
         pr.head_ref,
-        scan::scrub(pr.body.trim())
-    )
+        pr.body.trim()
+    ))
 }
 
 #[cfg(test)]

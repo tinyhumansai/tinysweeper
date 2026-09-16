@@ -35,6 +35,7 @@ pub fn is_sensitive_path(path: &str) -> bool {
     if lower.starts_with("id_rsa")
         || lower.starts_with("id_ed25519")
         || lower.starts_with("id_ecdsa")
+        || lower.starts_with("id_dsa")
     {
         return true;
     }

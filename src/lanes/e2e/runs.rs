@@ -76,6 +76,20 @@ impl Reason {
     }
 }
 
+/// Replace prompt-facing, untrusted metadata without changing matching state.
+pub fn scrub_for_render(run: &mut JobRun) {
+    run.workflow = crate::scan::scrub(&run.workflow);
+    run.job = crate::scan::scrub(&run.job);
+    if let State::NotTriggered(reason) = &mut run.state {
+        match reason {
+            Reason::NotOnPullRequests(on) | Reason::LabelMissing(on) => {
+                *on = crate::scan::scrub(on);
+            }
+            Reason::PathsExcluded | Reason::AllIgnored | Reason::SkippedByCondition => {}
+        }
+    }
+}
+
 /// One job's verdict, with what it belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobRun {

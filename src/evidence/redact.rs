@@ -336,7 +336,16 @@ pub fn scrub_rendered(text: &str) -> String {
 /// returned whole as its own body: the rulepack still runs on it, harmlessly,
 /// because neither header shape matches a credential.
 fn split_render_prefix(line: &str) -> (&str, &str) {
-    if line.len() >= 7 && matches!(line.as_bytes()[6], b'+' | b'-' | b' ') {
+    // The marker offset alone is not an anchor: ordinary prose such as
+    // `token= opaque` also has a space at byte six. Rendered anchors have a
+    // five-column line number (or five spaces for an unnumbered line).
+    if line.len() >= 7
+        && line.as_bytes()[..5]
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || *byte == b' ')
+        && line.as_bytes()[5] == b' '
+        && matches!(line.as_bytes()[6], b'+' | b'-' | b' ')
+    {
         line.split_at(7)
     } else {
         ("", line)
