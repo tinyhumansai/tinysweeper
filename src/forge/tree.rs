@@ -75,7 +75,7 @@ pub fn parse_gitmodules(text: &str, host: &str) -> Vec<Submodule> {
         }
         *url = None;
     };
-    for line in text.lines() {
+    for line in crate::ports::tree::git_config_lines(text) {
         let line = line.trim();
         if line.starts_with('[') {
             flush(&mut path, &mut url, &mut out);
@@ -293,6 +293,13 @@ mod tests {
                 "{spelled}"
             );
         }
+        let continued =
+            "[submodule \"k\"]\n\tpath = libs/k\n\turl = https://github.com/\\\n\t\tacme/k.git\n";
+        assert_eq!(
+            parse_gitmodules(continued, "github.com")[0].repo,
+            RepoId::parse("acme/k"),
+            "a continuation line is joined before the value is read"
+        );
         let quoted_url = "[submodule \"q\"]\n\tpath = libs/q\n\turl = \"https://github.com/acme/q.git\" # note\n";
         assert_eq!(
             parse_gitmodules(quoted_url, "github.com")[0].repo,

@@ -588,8 +588,8 @@ impl DirTree {
 
 /// The `path = ` entries of a `.gitmodules` file.
 pub fn submodule_paths(gitmodules: &str) -> Vec<String> {
-    gitmodules
-        .lines()
+    git_config_lines(gitmodules)
+        .iter()
         .filter_map(|line| {
             let line = line.trim();
             line.get(..4)
@@ -615,26 +615,55 @@ pub fn submodule_paths(gitmodules: &str) -> Vec<String> {
 /// inside quotes everything is literal (with `\"` and `\\` escapes); outside
 /// them a `#` or `;` ends the value.
 pub fn git_config_value(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
+    // Each character with whether it came from inside quotes, because only
+    // the unquoted whitespace at either end is git's to drop: `" vendor/x "`
+    // keeps its spaces.
+    let mut out: Vec<(char, bool)> = Vec::with_capacity(raw.len());
     let mut quoted = false;
-    let mut chars = raw.trim().chars();
+    let mut chars = raw.chars();
     while let Some(c) = chars.next() {
         match (quoted, c) {
             (_, '"') => quoted = !quoted,
             // Git's escapes: `\n`, `\t`, `\b`, and a backslash before
             // anything else (`\"`, `\\`) is that character.
             (true, '\\') => match chars.next() {
-                Some('n') => out.push('\n'),
-                Some('t') => out.push('\t'),
-                Some('b') => out.push('\u{8}'),
-                Some(escaped) => out.push(escaped),
+                Some('n') => out.push(('\n', true)),
+                Some('t') => out.push(('\t', true)),
+                Some('b') => out.push(('\u{8}', true)),
+                Some(escaped) => out.push((escaped, true)),
                 None => {}
             },
             (false, '#' | ';') => break,
-            (_, c) => out.push(c),
+            (_, c) => out.push((c, quoted)),
         }
     }
-    out.trim().to_string()
+    let unquoted_space = |&(c, quoted): &(char, bool)| !quoted && c.is_whitespace();
+    let start = out.iter().position(|item| !unquoted_space(item));
+    let end = out.iter().rposition(|item| !unquoted_space(item));
+    match (start, end) {
+        (Some(start), Some(end)) => out[start..=end].iter().map(|(c, _)| c).collect(),
+        _ => String::new(),
+    }
+}
+
+/// A git-config file as logical lines: a physical line ending in an
+/// unescaped `\` continues on the next one.
+pub fn git_config_lines(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for physical in text.lines() {
+        let trailing_backslashes = physical.chars().rev().take_while(|c| *c == '\\').count();
+        if trailing_backslashes % 2 == 1 {
+            current.push_str(&physical[..physical.len() - 1]);
+            continue;
+        }
+        current.push_str(physical);
+        lines.push(std::mem::take(&mut current));
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
 }
 
 /// The one spelling of a submodule path, or `None` for one nobody may declare.
@@ -901,6 +930,13 @@ mod tests {
         }
         // A decoded escape is a real character in the path: a tab is a tab.
         assert_eq!(git_config_value("\"vendor\\tcore\""), "vendor\tcore");
+        // Quoted whitespace is git's to keep; unquoted whitespace is not.
+        assert_eq!(git_config_value("  \" vendor/x \"  "), " vendor/x ");
+        assert_eq!(
+            git_config_lines("path = vendor/\\\nx\nurl = u\\\\\n"),
+            vec!["path = vendor/x".to_string(), "url = u\\\\".to_string()],
+            "a trailing backslash continues the line; an escaped one does not"
+        );
         assert_eq!(git_config_value("\"vendor/x\\\"\""), "vendor/x\"");
         for refused in [
             "../x",
