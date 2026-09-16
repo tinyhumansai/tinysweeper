@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use crate::error::{Error, Result};
 use crate::forge::types::{
     ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, Issue, IssueComment, PullRequest,
-    Remark, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict,
+    Remark, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict, TreeListing,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -188,6 +188,9 @@ pub struct MockState {
     /// knowledge centre depends on: a test has to be able to prove a file was
     /// read at the pull request's head and not at some other ref.
     pub blobs: BTreeMap<String, String>,
+    /// The tree at each commit, keyed by SHA, for `tree_paths`. A commit
+    /// with no entry serves an empty, complete tree.
+    pub trees: BTreeMap<String, TreeListing>,
     /// Submodule gitlinks, keyed by [`file_key`], as `(url, commit)`.
     pub submodules: BTreeMap<String, (String, String)>,
 }
@@ -204,6 +207,17 @@ impl MockState {
     /// Serve `content` for `path` at `sha`.
     pub fn set_file(&mut self, sha: &str, path: &str, content: &str) {
         self.blobs.insert(file_key(sha, path), content.to_string());
+    }
+
+    /// Serve `paths` as the complete tree at `sha`.
+    pub fn set_tree(&mut self, sha: &str, paths: &[&str]) {
+        self.trees.insert(
+            sha.to_string(),
+            TreeListing {
+                paths: paths.iter().map(|p| p.to_string()).collect(),
+                truncated: false,
+            },
+        );
     }
 
     /// Serve a submodule gitlink at `path` for `sha`.
@@ -573,6 +587,11 @@ impl ForgeRead for MockForge {
     async fn file_at(&self, _repo: &RepoId, path: &str, sha: &str) -> Result<Option<String>> {
         let state = self.state.lock().expect("mock state lock");
         Ok(state.blobs.get(&file_key(sha, path)).cloned())
+    }
+
+    async fn tree_paths(&self, _repo: &RepoId, sha: &str) -> Result<TreeListing> {
+        let state = self.state.lock().expect("mock state lock");
+        Ok(state.trees.get(sha).cloned().unwrap_or_default())
     }
 
     async fn submodule_at(

@@ -585,6 +585,7 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                e2e: None,
                 tree: None,
             })
             .await
@@ -946,6 +947,7 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                e2e: None,
                 tree: None,
             })
             .await
@@ -1004,6 +1006,7 @@ fn helper() {
                 prior_findings: &["Close the socket on the error path".to_string()],
                 retrieved_context: "",
                 memory_context: "",
+                e2e: None,
                 tree: None,
             })
             .await
@@ -1061,6 +1064,7 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                e2e: None,
                 tree: None,
             })
             .await
@@ -1108,6 +1112,7 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                e2e: None,
                 tree: None,
             })
             .await
@@ -1247,6 +1252,7 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                e2e: None,
                 tree: None,
             })
             .await

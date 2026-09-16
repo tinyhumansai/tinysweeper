@@ -120,6 +120,14 @@ const MAX_CONCURRENT_INDEXES: usize = 2;
 /// period on its own and starve every other review's check behind it.
 const SHUTDOWN_CLEANUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// How many times an `e2e` settlement retries the per-pull-request lease
+/// before giving up, and how long it waits between attempts.
+///
+/// Bounded low: this is only meant to ride out a settlement that is already
+/// nearly done, not to turn a lease into a queue. See `settle_e2e_inner`.
+const LEASE_CONTENTION_RETRIES: u32 = 4;
+const LEASE_CONTENTION_BACKOFF: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// How many pull requests one manual, repository-wide review may queue.
 ///
 /// The button is an escape hatch, not a way to spend an afternoon's budget in
@@ -645,7 +653,13 @@ async fn dispatch(state: AppState, action: Action, delivery: String, event: Stri
             installation,
         } => {
             for number in numbers {
-                tokio::spawn(handle_automerge(
+                // Two consumers of the same event, and the order matters: the
+                // `e2e` check run has to be concluded before the merge gate
+                // reads it, or a pull request whose only red job just
+                // finished would be evaluated against the `Neutral` the
+                // review left behind. `settle_e2e` publishes the terminal
+                // conclusion; the merge evaluation then sees it.
+                tokio::spawn(handle_check_completed(
                     state.clone(),
                     repo.clone(),
                     number,
@@ -654,6 +668,126 @@ async fn dispatch(state: AppState, action: Action, delivery: String, event: Stri
             }
         }
     }
+}
+
+/// A check completed on a pull request: settle the `e2e` lane if it was
+/// waiting on that check, then reconsider the merge.
+///
+/// Not gated on the *deployment's* `enabled_lanes()`: `review.lanes` is a
+/// repository override (`crate::config::remote::overlay`), so a repository
+/// can run `e2e` while the deployment default does not. Gating on the
+/// deployment list here would skip settlement for exactly that repository
+/// and leave its `tinysweeper/e2e` check `Neutral` forever. The cheap guard
+/// that actually matters — is anything being watched — lives inside
+/// `settle_e2e_inner`, keyed off the stored review state rather than config.
+async fn handle_check_completed(state: AppState, repo: String, number: u64, installation: u64) {
+    if let Err(err) = settle_e2e_inner(&state, &repo, number, installation).await {
+        // Logged and dropped, like auto-merge: the watch stays in the store,
+        // and the next completion event on the same head retries it.
+        tracing::error!(%err, %repo, number, "could not settle the e2e check run");
+    }
+    handle_automerge(state, repo, number, installation).await;
+}
+
+async fn settle_e2e_inner(
+    state: &AppState,
+    repo: &str,
+    number: u64,
+    installation: u64,
+) -> Result<()> {
+    let repo_id =
+        RepoId::parse(repo).ok_or_else(|| Error::Forge(format!("`{repo}` is not owner/name")))?;
+
+    // The cheap exit before any credential is minted: most completions land
+    // on pull requests with nothing to settle.
+    let key = crate::state::key(repo, number);
+    let watching = crate::ports::review_state::ReviewStateStore::load_state(&state.store, &key)
+        .await?
+        .is_some_and(|reviewed| reviewed.e2e.is_some());
+    if !watching {
+        return Ok(());
+    }
+
+    // Serialised with the review's own lease shape: several jobs finishing at
+    // once is the normal case, and two settlements racing would publish the
+    // same check twice.
+    //
+    // Contention is retried rather than dropped: several jobs from the same
+    // matrix typically conclude within milliseconds of each other, and the
+    // event that loses the race is often the one whose job just completed
+    // the watch. Bailing outright on that event would leave the check
+    // `Neutral` until some *other*, unrelated completion happened to retry
+    // it — not guaranteed to ever happen. A short bounded retry lets the
+    // loser re-attempt once the winner (a settlement that reads checks,
+    // possibly publishes, and releases) has had time to finish.
+    let lease = format!("{repo}#e2e-settle-{number}");
+    let mut acquired = state.store.claim_lease(&lease, "server").await?;
+    for _ in 0..LEASE_CONTENTION_RETRIES {
+        if acquired {
+            break;
+        }
+        tokio::time::sleep(LEASE_CONTENTION_BACKOFF).await;
+        acquired = state.store.claim_lease(&lease, "server").await?;
+    }
+    if !acquired {
+        tracing::debug!(%lease, "another worker is still settling this e2e check");
+        return Ok(());
+    }
+
+    let token = state.auth.installation_token(installation).await;
+    let outcome = match token {
+        Ok(token) => {
+            let read = crate::forge::github::GitHubRead::new(&token);
+            let write = crate::forge::github::GitHubWrite::new(&token);
+            match (read, write) {
+                (Ok(read), Ok(write)) => {
+                    // The repository's own policy, not the deployment
+                    // default: `lanes.e2e.fail_on` is a repository override
+                    // like `review.lanes` above, and settling against the
+                    // deployment default can publish `Success` for a job the
+                    // repository's own threshold would have failed. Read at
+                    // the pull request's base tip, on the same reasoning as
+                    // `crate::config::remote::overlay`'s other callers.
+                    let live = read.pull_request(&repo_id, number).await;
+                    match live {
+                        Ok(live) => {
+                            let overlay = crate::config::remote::overlay(
+                                &read,
+                                &repo_id,
+                                &live.base_sha,
+                                &state.config.config,
+                            )
+                            .await;
+                            crate::app::apply::settle_e2e(
+                                &read,
+                                &write,
+                                &overlay.config,
+                                &state.store,
+                                &repo_id,
+                                number,
+                            )
+                            .await
+                        }
+                        Err(err) => Err(err),
+                    }
+                }
+                (Err(err), _) | (_, Err(err)) => Err(err),
+            }
+        }
+        Err(err) => Err(err),
+    };
+
+    if let Err(err) = state.store.release_lease(&lease).await {
+        tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
+    }
+
+    match outcome? {
+        crate::app::apply::E2eSettlement::Published(conclusion) => {
+            tracing::info!(%repo, number, ?conclusion, "settled the e2e check run");
+        }
+        other => tracing::debug!(%repo, number, ?other, "e2e check run not settled"),
+    }
+    Ok(())
 }
 
 /// Re-evaluate one pull request against the auto-merge policy, off the request
