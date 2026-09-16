@@ -540,7 +540,7 @@ async fn place(
     group_diffs: &[FileDiff],
     evidence: &str,
     parsed: schema::LaneResponse,
-) -> std::result::Result<Asked, PlacementFailure> {
+) -> std::result::Result<Asked, Box<PlacementFailure>> {
     let config: &Config = input.config;
 
     // The call's own cost is already tallied inside the capability; what is
@@ -570,13 +570,13 @@ async fn place(
         // finding, so enforce the limit inside the loop before escalating to
         // stage 3. Do not wait until the lane finishes.
         if spend.cost_usd() > config.models.budget_usd_per_pr {
-            return Err(PlacementFailure {
+            return Err(Box::new(PlacementFailure {
                 error: crate::error::Error::Budget {
                     spent: spend.cost_usd(),
                     limit: config.models.budget_usd_per_pr,
                 },
                 spend,
-            });
+            }));
         }
 
         let comment = format!("{}\n\n{}", raw.title, raw.body);
