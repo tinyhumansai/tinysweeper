@@ -607,7 +607,7 @@ pub async fn review_with_tree(
     // Matching and severity lookup keep the original titles, but prior
     // reviews may have been recorded before entropy-assignment redaction
     // existed. Only the prompt-facing copies are scrubbed.
-    let prior_lines = annotate(&prior_titles, &prior_severities)
+    let prior_lines: Vec<String> = annotate(&prior_titles, &prior_severities)
         .into_iter()
         .map(|line| crate::scan::scrub(&line))
         .collect();
