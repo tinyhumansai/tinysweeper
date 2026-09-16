@@ -193,6 +193,13 @@ pub struct MockState {
     pub trees: BTreeMap<String, TreeListing>,
     /// Submodule gitlinks, keyed by [`file_key`], as `(url, commit)`.
     pub submodules: BTreeMap<String, (String, String)>,
+    /// Branch names `branch_head` answers `Ok(None)` for, instead of the
+    /// usual name-resolves-to-itself fallback — a branch that exists but
+    /// currently has no resolvable head (a rename race, say).
+    pub branches_without_head: std::collections::BTreeSet<String>,
+    /// File keys (see [`file_key`]) `file_at` answers `Err` for, instead of
+    /// its usual `Ok(Some(_))`/`Ok(None)`.
+    pub unreadable_files: std::collections::BTreeSet<String>,
 }
 
 /// The key a file's contents are stored under.
