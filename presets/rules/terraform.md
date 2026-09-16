@@ -32,6 +32,8 @@
 
 - A deliberately wide version constraint (`~>`, an explicit range) that
   matches the pattern of sibling entries in the same file.
+- A `.tfstate`/`.tfstate.backup` file removed entirely by the diff — the
+  removal is what this rule wants, not a new instance of it.
 - Removing `ignore_changes` from a `lifecycle` block. That resumes Terraform
   planning updates for the attributes it named — restoring drift correction,
   not weakening destruction protection — unless the diff or its description
