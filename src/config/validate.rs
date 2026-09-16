@@ -732,7 +732,7 @@ fn validate_automerge(config: &Config, problems: &mut Vec<String>) {
     if automerge
         .require_checks
         .iter()
-        .any(|name| name == LaneId::E2e.check_name())
+        .any(|name| *name == LaneId::E2e.check_name())
     {
         problems.push(format!(
             "`automerge.require_checks` names `{}`, but that check is published `Neutral` \
