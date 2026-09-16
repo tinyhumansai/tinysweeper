@@ -834,6 +834,25 @@ mod tests {
     fn gitmodules_paths_are_parsed_and_unsafe_paths_refused() {
         let text = "[submodule \"x\"]\n\tpath = vendor/x\n\turl = https://e/x.git\n[submodule \"y\"]\n path=vendor/y/\n";
         assert_eq!(submodule_paths(text), vec!["vendor/x", "vendor/y"]);
+        // Every spelling git resolves to one gitlink is one path here too.
+        for spelled in ["./vendor/x", "vendor//x", "vendor/./x/", "./vendor/./x//"] {
+            assert_eq!(
+                canonical_submodule_path(spelled).as_deref(),
+                Some("vendor/x"),
+                "{spelled}"
+            );
+        }
+        for refused in [
+            "../x",
+            "vendor/../x",
+            "/vendor/x",
+            ".git",
+            "vendor/.git/x",
+            "",
+            ".",
+        ] {
+            assert_eq!(canonical_submodule_path(refused), None, "{refused}");
+        }
         assert!(!safe_relative("../etc/passwd"));
         assert!(!safe_relative("/etc/passwd"));
         assert!(safe_relative("src/lib.rs"));
