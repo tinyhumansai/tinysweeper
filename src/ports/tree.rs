@@ -260,6 +260,33 @@ pub fn sensitive_path_refusal() -> Found {
     }
 }
 
+/// Drop any search hit inside a sensitive path from an already-produced
+/// [`Found`].
+///
+/// Used on a [`MockTree`] recorded outcome, which can predate whichever push
+/// first filtered sensitive paths out of a live search. Applied
+/// unconditionally on replay so an old cassette gets the same guard a fresh
+/// search gives: everything but [`Found::Hits`] passes through untouched,
+/// since a `Read` recorded for a sensitive path is already refused before
+/// this runs.
+fn strip_sensitive_hits(found: Found) -> Found {
+    match found {
+        Found::Hits {
+            hits,
+            truncated,
+            skipped,
+        } => Found::Hits {
+            hits: hits
+                .into_iter()
+                .filter(|hit| !crate::scan::is_sensitive_path(&hit.path))
+                .collect(),
+            truncated,
+            skipped,
+        },
+        other => other,
+    }
+}
+
 /// Whether `path` matches `glob`, or there is no glob.
 pub fn glob_matches(glob: Option<&str>, path: &str) -> bool {
     match glob {
