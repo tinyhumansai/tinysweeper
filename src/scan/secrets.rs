@@ -221,7 +221,10 @@ pub fn redact_stream_line(line: &str, in_key_block: &mut bool) -> String {
                 })
                 .map_or_else(
                     || redact_line(line),
-                    |end| redact_pem_marker_line(line, &line[start..end]),
+                    |end| {
+                        let start = line.find("-----END").expect("end marker was found above");
+                        redact_pem_marker_line(line, &line[start..end])
+                    },
                 );
         }
         return if line.trim().is_empty() {
