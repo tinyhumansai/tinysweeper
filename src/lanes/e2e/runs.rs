@@ -492,6 +492,27 @@ mod tests {
     }
 
     #[test]
+    fn a_pending_pull_request_target_job_is_never_watched() {
+        // Its check run lands on GitHub's chosen default-branch tip, not
+        // this pull request's head — `check_runs(repo, head_sha)` will
+        // never see it, so watching it would mean a `tinysweeper/e2e` stuck
+        // `Neutral` forever with nothing left to settle it.
+        let text = "name: e2e\non: pull_request_target\njobs:\n  playwright:\n    steps:\n      - run: npx playwright test\n";
+        let harness = Harness {
+            tests: strings(&["e2e/login.spec.ts"]),
+            workflows: vec![classify_workflow(".github/workflows/e2e.yml", text, &[]).unwrap()],
+            truncated: false,
+        };
+        let runs = job_runs(&harness, &[], &strings(&["src/main.rs"]), &[]);
+        assert_eq!(runs[0].state, State::Pending);
+        assert!(runs[0].target);
+        assert!(
+            pending(&runs).is_empty(),
+            "a target job must never be added to the watch"
+        );
+    }
+
+    #[test]
     fn a_matrix_job_is_as_bad_as_its_worst_leg_and_pending_while_any_runs() {
         let harness = harness(&["src/**"]);
         let changed = strings(&["src/main.rs"]);
