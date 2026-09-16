@@ -689,6 +689,12 @@ fn summarise(
             plural(rejected)
         ));
     }
+    if added_by_coverage > 0 {
+        notes.push(format!(
+            "{added_by_coverage} finding{} added by a second pass",
+            plural(added_by_coverage)
+        ));
+    }
 
     if notes.is_empty() {
         return summary.to_string();
