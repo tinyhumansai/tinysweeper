@@ -267,10 +267,14 @@ As of GitHub's November 2025 change, `pull_request_target` executes — and
 reports its check run — against the repository's default branch tip,
 whichever commit that happens to be at run time, never against any commit of
 the pull request itself. `check_runs(repo, head_sha)`, what phase 2 above
-reads, can therefore never see it. `runs::pending` excludes any job whose
-workflow is `pull_request_target` from the watch for exactly this reason:
+reads, can therefore never see it. `runs::pending` excludes jobs from the
+`pull_request_target` execution from the watch for exactly this reason:
 watching one would mean a `tinysweeper/e2e` stuck `Neutral` forever, with no
-completion event able to settle it. Its trigger and path-filter analysis are
+completion event able to settle it. (A workflow that lists both
+`pull_request` and `pull_request_target` is two independent executions —
+see `evidence::gather`'s `also_plain` handling — and only the
+`pull_request_target` one is excluded; the ordinary `pull_request` execution
+is watched as usual.) Its trigger and path-filter analysis are
 still inventoried and still produce deterministic findings (an
 `e2e-not-triggered` for a filter that excludes this change is just as real);
 only the "wait for it to conclude, then settle" half is skipped.
