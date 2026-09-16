@@ -137,47 +137,78 @@ impl Lane for Security {
             )));
         }
 
+        // No model call: groups related changed files so a bug spanning them
+        // is visible to one reviewer instead of hidden by the isolation
+        // clause each ungrouped conversation is given — see
+        // `lanes::grouping`. Off, or a component too large to bet on, falls
+        // back to exactly the singleton fan-out this lane ran before
+        // grouping existed.
+        let groups: Vec<FileGroup> = if input.config.grouping.enabled {
+            input.group(
+                &triaged.review,
+                &GroupBounds {
+                    max_files: input.config.grouping.max_files,
+                    max_hunk_chars: input.config.grouping.max_hunk_chars,
+                },
+            )
+        } else {
+            triaged
+                .review
+                .iter()
+                .map(|path| FileGroup {
+                    label: path.clone(),
+                    paths: vec![path.clone()],
+                })
+                .collect()
+        };
+
         // One capability for the whole lane, so the pull-request budget holds
         // across every file and every reviewer at once — which is what lets the
-        // files run concurrently rather than one at a time.
+        // groups run concurrently rather than one at a time.
         let llm = runner::lane_llm(
             self.model.clone(),
             input.config,
             input.config.models.budget_usd_per_pr,
         );
 
-        let outcome = per_file(&triaged.review, |path| {
-            let llm = llm.clone();
-            let config = input.config;
-            let repo_policy = input.repo_policy;
-            let extracted_rules = input.extracted_rules;
-            let prior_findings = input.prior_findings;
-            let retrieved_context = input.retrieved_context;
-            let memory_context = input.memory_context;
-            let input = &input;
-            let diffs = input.diffs;
-            let scanner = &scanner;
-            async move {
-                let diff = diffs
-                    .iter()
-                    .find(|d| d.path == path)
-                    .expect("the path came from the diff list");
-                let asking = input.asking_about(diff);
-                review_file(
-                    llm,
-                    config,
-                    repo_policy,
-                    extracted_rules,
-                    prior_findings,
-                    retrieved_context,
-                    memory_context,
-                    asking,
-                    diff,
-                    scanner,
-                )
-                .await
-            }
-        })
+        let outcome = per_unit(
+            &groups,
+            |group| group.label.clone(),
+            |group| {
+                let llm = llm.clone();
+                let config = input.config;
+                let repo_policy = input.repo_policy;
+                let extracted_rules = input.extracted_rules;
+                let prior_findings = input.prior_findings;
+                let retrieved_context = input.retrieved_context;
+                let memory_context = input.memory_context;
+                let input = &input;
+                let diffs = input.diffs;
+                let scanner = &scanner;
+                async move {
+                    let group_diffs: Vec<FileDiff> = group
+                        .paths
+                        .iter()
+                        .filter_map(|path| diffs.iter().find(|d| &d.path == path).cloned())
+                        .collect();
+                    let asking = input.asking_about_group(&group_diffs);
+                    review_group(
+                        llm,
+                        config,
+                        repo_policy,
+                        extracted_rules,
+                        prior_findings,
+                        retrieved_context,
+                        memory_context,
+                        asking,
+                        &group.paths,
+                        &group_diffs,
+                        scanner,
+                    )
+                    .await
+                }
+            },
+        )
         .await;
 
         let mut outcome = outcome.into_outcome();
