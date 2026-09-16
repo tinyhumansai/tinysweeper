@@ -1022,7 +1022,9 @@ mod tests {
         });
 
         assert!(
-            prompt.prefix().contains("Rule for a file outside this group."),
+            prompt
+                .prefix()
+                .contains("Rule for a file outside this group."),
             "an override for a changed file outside the group must still be selected: {}",
             prompt.prefix()
         );

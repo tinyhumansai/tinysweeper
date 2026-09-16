@@ -543,15 +543,8 @@ impl Ledger {
                     continue;
                 };
                 made_progress = true;
-                self.seed_symbol(
-                    tree,
-                    diffs,
-                    &symbol,
-                    policy,
-                    &mut rendered,
-                    &mut answered,
-                )
-                .await;
+                self.seed_symbol(tree, diffs, &symbol, policy, &mut rendered, &mut answered)
+                    .await;
             }
             if !made_progress {
                 break;

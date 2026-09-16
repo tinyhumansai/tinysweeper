@@ -332,8 +332,8 @@ fn locale_segment(file: &str) -> Option<(&str, &str, &str)> {
 /// same base name, not translations of each other, and must not be grouped
 /// as locale siblings.
 const ORDINARY_QUALIFIERS: &[&str] = &[
-    "min", "dev", "prod", "src", "lib", "bin", "raw", "tmp", "bak", "old",
-    "new", "esm", "cjs", "umd", "amd", "doc", "api", "mod", "d",
+    "min", "dev", "prod", "src", "lib", "bin", "raw", "tmp", "bak", "old", "new", "esm", "cjs",
+    "umd", "amd", "doc", "api", "mod", "d",
 ];
 
 /// Whether `segment` reads as a locale code rather than an ordinary extension
