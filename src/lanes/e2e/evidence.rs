@@ -685,7 +685,14 @@ mod tests {
         );
         let forge = MockForge::with_state(state);
 
-        let evidence = gather(&forge, &config(), &RepoId::parse("o/r").unwrap(), "head", &[]).await;
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            &[],
+        )
+        .await;
 
         let job_keys: std::collections::BTreeSet<&str> = evidence
             .harness
