@@ -379,16 +379,15 @@ async fn review_group(
                 .findings
                 .into_iter()
                 .filter(|candidate| {
-                    let candidate_fp = candidate
-                        .fingerprint(&crate::findings::anchor::anchor_context(
-                            candidate,
-                            group_diffs,
-                        ));
+                    let candidate_fp = candidate.fingerprint(
+                        &crate::findings::anchor::anchor_context(candidate, group_diffs),
+                    );
                     !confirmed.iter().any(|prior| {
                         council::agree::corroborates(candidate, prior)
                             || candidate_fp
                                 == prior.fingerprint(&crate::findings::anchor::anchor_context(
-                                    prior, group_diffs,
+                                    prior,
+                                    group_diffs,
                                 ))
                     })
                 })
@@ -418,7 +417,13 @@ async fn review_group(
     }
 
     Ok(FileReview {
-        summary: summarise(summary.trim(), unanchored, discarded, &rejected, findings.len()),
+        summary: summarise(
+            summary.trim(),
+            unanchored,
+            discarded,
+            &rejected,
+            findings.len(),
+        ),
         findings,
         resolved,
         spend,
@@ -438,7 +443,10 @@ const COVERAGE_PASS_MIN_LINES: usize = 40;
 
 /// How many lines this group's diffs changed, summed across every file in it.
 fn changed_lines(group_diffs: &[FileDiff]) -> usize {
-    group_diffs.iter().map(|diff| diff.changed_lines.len()).sum()
+    group_diffs
+        .iter()
+        .map(|diff| diff.changed_lines.len())
+        .sum()
 }
 
 /// What one reviewer said about one group.

@@ -372,7 +372,8 @@ async fn review_group(
                         council::agree::corroborates(candidate, prior)
                             || candidate_fp
                                 == prior.fingerprint(&crate::findings::anchor::anchor_context(
-                                    prior, group_diffs,
+                                    prior,
+                                    group_diffs,
                                 ))
                     })
                 })
@@ -404,7 +405,10 @@ const COVERAGE_PASS_MIN_LINES: usize = 40;
 
 /// How many lines this group's diffs changed, summed across every file in it.
 fn changed_lines(group_diffs: &[FileDiff]) -> usize {
-    group_diffs.iter().map(|diff| diff.changed_lines.len()).sum()
+    group_diffs
+        .iter()
+        .map(|diff| diff.changed_lines.len())
+        .sum()
 }
 
 /// Say, in the summary, which files were never sent to a model and why.

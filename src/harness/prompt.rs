@@ -991,7 +991,11 @@ mod tests {
         let prompt = build(&i);
 
         assert!(prompt.suffix().contains("## What you already found"));
-        assert!(prompt.suffix().contains("Close the socket on the error path"));
+        assert!(
+            prompt
+                .suffix()
+                .contains("Close the socket on the error path")
+        );
         assert!(!prompt.prefix().contains("Close the socket"));
     }
 
