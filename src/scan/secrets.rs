@@ -242,7 +242,7 @@ fn redact_pem_marker_suffix(line: &str, marker: &str) -> String {
         return redact_line(line);
     };
     let end = start + marker.len();
-    format!("{}{}{}", &line[..end], redact_line(&line[end..]), "")
+    format!("{}{}", &line[..end], redact_line(&line[end..]))
 }
 
 /// Whether one unarmoured line has the shape of private-key PEM body data.

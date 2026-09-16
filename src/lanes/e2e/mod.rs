@@ -148,6 +148,11 @@ impl Lane for E2e {
         assembled.push_str(&evidence.render_candidates());
         assembled.push('\n');
         assembled.push_str(&fresh);
+        // Workflow display names and check-run names are fetched directly
+        // from the tree/API, rather than from the already-masked diff.  Run
+        // the completed model-facing evidence through the common scrubber so
+        // those fields cannot reintroduce a credential on a later read.
+        let assembled = crate::scan::scrub(&assembled);
 
         let built = prompt::build(&PromptInputs {
             repo_policy: input.repo_policy,
