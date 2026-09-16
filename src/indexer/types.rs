@@ -55,6 +55,10 @@ impl IndexState {
     }
 }
 
+/// The marker a failed run leaves in its message when the chunk count it
+/// settled cannot be trusted, so the next run recounts rather than adds.
+pub const COUNT_UNCERTAIN: &str = "[chunk count uncertain]";
+
 /// How an indexing run ended, as reported back to the manifest.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "settled", rename_all = "lowercase")]
@@ -300,6 +304,11 @@ pub struct IndexReport {
     /// or was synced from a tree that lacked something.
     #[serde(default)]
     pub rebuild_graph: bool,
+    /// Whether the running count can no longer be trusted: a confirmation
+    /// landed that this run could not account for. The settlement then
+    /// recounts from the manifest instead of applying deltas.
+    #[serde(default)]
+    pub recount: bool,
 }
 
 impl IndexReport {

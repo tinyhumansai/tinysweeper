@@ -365,6 +365,12 @@ impl<'a> Indexer<'a> {
             // that never completed has no revision; one whose last run failed
             // still carries that run's message (a completed run clears it).
             rebuild_graph: state.revision.is_none() || state.message.is_some(),
+            // A previous run that could not account for what it confirmed
+            // said so; this run settles from a recount, not from deltas.
+            recount: state
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains(crate::indexer::types::COUNT_UNCERTAIN)),
             ..IndexReport::default()
         };
         let outcome = self
@@ -376,23 +382,33 @@ impl<'a> Indexer<'a> {
         // requeued for nothing.
         match outcome {
             Ok(()) => {
-                self.settle(&lease, before, revision, &report).await?;
+                let chunks = if report.recount {
+                    self.recount(repo_id, &signature).await?
+                } else {
+                    before
+                        .saturating_add(report.upserted)
+                        .saturating_sub(report.deleted)
+                };
+                self.settle(&lease, chunks, revision, &report).await?;
                 Ok(IndexOutcome::Indexed(report))
             }
             Err(err) => {
                 // What the run wrote and deleted before it failed is on disk
                 // whatever the error says; the count on record must say so
                 // too, or the next run inherits a total for chunks that are
-                // not there.
+                // not there. A run that could not tell what it confirmed
+                // says so in its message, and the next run recounts.
                 let chunks = (report.upserted != 0 || report.deleted != 0).then(|| {
                     before
                         .saturating_add(report.upserted)
                         .saturating_sub(report.deleted)
                 });
-                let settled = Settled::Failed {
-                    message: err.to_string(),
-                    chunks,
+                let message = if report.recount {
+                    format!("{err} {}", crate::indexer::types::COUNT_UNCERTAIN)
+                } else {
+                    err.to_string()
                 };
+                let settled = Settled::Failed { message, chunks };
                 // A release failure must not mask the error that caused it.
                 if let Err(nested) = self.manifest.release(&lease, &settled).await {
                     tracing::warn!(error = %nested, "could not release the index claim");
@@ -415,16 +431,33 @@ impl<'a> Indexer<'a> {
         err
     }
 
+    /// The repository's counted rows, from the manifest rather than from a
+    /// running total: every confirmed id, plus every confirmation's pending
+    /// set. One repository-wide read, spent only after a run that could not
+    /// account for itself.
+    async fn recount(&self, repo_id: &str, signature: &EmbedSignature) -> Result<u64> {
+        let paths = self.manifest.paths(repo_id, signature).await?;
+        let files = self.manifest.indexed(repo_id, signature, &paths).await?;
+        Ok(files
+            .iter()
+            .map(|file| {
+                file.chunks.len() as u64
+                    + if file.pending_is_stale {
+                        file.pending.len() as u64
+                    } else {
+                        0
+                    }
+            })
+            .sum())
+    }
+
     async fn settle(
         &self,
         lease: &IndexLease,
-        before: u64,
+        chunks: u64,
         revision: &str,
         report: &IndexReport,
     ) -> Result<()> {
-        let chunks = before
-            .saturating_add(report.upserted)
-            .saturating_sub(report.deleted);
         self.manifest
             .release(
                 lease,
@@ -751,7 +784,17 @@ impl<'a> Indexer<'a> {
                 .collect(),
             Err(_) => {
                 let paths: Vec<String> = complete.iter().map(|file| file.path.clone()).collect();
-                let landed = self.manifest.indexed(repo_id, signature, &paths).await?;
+                let landed = match self.manifest.indexed(repo_id, signature, &paths).await {
+                    Ok(landed) => landed,
+                    Err(read_err) => {
+                        // The same incident, twice. Which confirmations
+                        // landed is now unknowable here, so the count is
+                        // marked as such and the next run recounts from the
+                        // manifest instead of trusting a delta.
+                        report.recount = true;
+                        return Err(read_err);
+                    }
+                };
                 work.iter()
                     .enumerate()
                     .filter(|(index, file)| {
