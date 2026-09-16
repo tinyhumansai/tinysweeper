@@ -624,7 +624,14 @@ mod tests {
         state.set_branch_without_head("main");
         let forge = MockForge::with_state(state);
 
-        let evidence = gather(&forge, &config(), &RepoId::parse("o/r").unwrap(), "head", &[]).await;
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            &[],
+        )
+        .await;
 
         assert!(
             evidence
@@ -644,15 +651,21 @@ mod tests {
         state.set_unreadable_file("main", ".github/workflows/e2e.yml");
         let forge = MockForge::with_state(state);
 
-        let evidence = gather(&forge, &config(), &RepoId::parse("o/r").unwrap(), "head", &[]).await;
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            &[],
+        )
+        .await;
 
         assert!(evidence.harness.workflows.is_empty());
         assert!(
             evidence
                 .degraded
                 .iter()
-                .any(|d| d.contains(".github/workflows/e2e.yml")
-                    && d.contains("default branch")),
+                .any(|d| d.contains(".github/workflows/e2e.yml") && d.contains("default branch")),
             "{:?}",
             evidence.degraded
         );
