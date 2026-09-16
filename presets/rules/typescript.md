@@ -17,8 +17,11 @@ Covers `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` and `.cjs`.
 - User input assigned into an object via a computed key (`obj[key] = value`),
   or merged onto an existing object with `Object.assign`, without checking
   against `__proto__`, `constructor` or `prototype` — both go through
-  `[[Set]]` and can reach the prototype-chain accessor. A fresh object
-  literal's own spread (`{...a, ...b}`) is not this: spread uses
+  `[[Set]]` and can reach the prototype-chain accessor. Not this when the
+  target was created with `Object.create(null)` or is otherwise documented as
+  a null-prototype dictionary: it has no `__proto__` accessor to reach, so
+  those keys land as ordinary own properties. A fresh object literal's own
+  spread (`{...a, ...b}`) is not this either: spread uses
   `CreateDataProperty`, which never invokes that setter, so `{...untrusted}`
   cannot repoint the result's prototype on its own — only report it where the
   spread result is later deep-merged into another object unsafely.
