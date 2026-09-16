@@ -223,8 +223,12 @@ fn test_siblings(a: &str, b: &str) -> bool {
 
     let (py_a, py_b) = (strip_suffix(file_a, ".py"), strip_suffix(file_b, ".py"));
     if let (Some(stem_a), Some(stem_b)) = (py_a, py_b)
-        && (stem_a.strip_prefix("test_").is_some_and(|base| base == stem_b)
-            || stem_b.strip_prefix("test_").is_some_and(|base| base == stem_a))
+        && (stem_a
+            .strip_prefix("test_")
+            .is_some_and(|base| base == stem_b)
+            || stem_b
+                .strip_prefix("test_")
+                .is_some_and(|base| base == stem_a))
     {
         return true;
     }
@@ -239,11 +243,14 @@ fn test_siblings(a: &str, b: &str) -> bool {
         }
     }
 
-    if let (Some(stem_a), Some(stem_b)) = (
-        strip_suffix(file_a, ".java"),
-        strip_suffix(file_b, ".java"),
-    ) && (stem_a.strip_suffix("Test").is_some_and(|base| base == stem_b)
-        || stem_b.strip_suffix("Test").is_some_and(|base| base == stem_a))
+    if let (Some(stem_a), Some(stem_b)) =
+        (strip_suffix(file_a, ".java"), strip_suffix(file_b, ".java"))
+        && (stem_a
+            .strip_suffix("Test")
+            .is_some_and(|base| base == stem_b)
+            || stem_b
+                .strip_suffix("Test")
+                .is_some_and(|base| base == stem_a))
     {
         return true;
     }
@@ -253,12 +260,14 @@ fn test_siblings(a: &str, b: &str) -> bool {
 
 /// The base name of a Rust test-module stem, e.g. `foo_test` → `foo`.
 fn rust_test_stem(stem: &str) -> Option<&str> {
-    stem.strip_suffix("_tests").or_else(|| stem.strip_suffix("_test"))
+    stem.strip_suffix("_tests")
+        .or_else(|| stem.strip_suffix("_test"))
 }
 
 /// The base name of a JS/TS test-file stem, e.g. `foo.test` → `foo`.
 fn js_test_stem(stem: &str) -> Option<&str> {
-    stem.strip_suffix(".test").or_else(|| stem.strip_suffix(".spec"))
+    stem.strip_suffix(".test")
+        .or_else(|| stem.strip_suffix(".spec"))
 }
 
 /// Same directory, one of `messages.en.json` / `messages.fr.json`, or two
@@ -284,7 +293,9 @@ fn locale_siblings(a: &str, b: &str) -> bool {
     let under_locale_dir = dir_a
         .split('/')
         .any(|segment| segment == "i18n" || segment == "locales");
-    under_locale_dir && extension_of(file_a).is_some() && extension_of(file_a) == extension_of(file_b)
+    under_locale_dir
+        && extension_of(file_a).is_some()
+        && extension_of(file_a) == extension_of(file_b)
 }
 
 /// Split `base.locale.ext` into its three parts, when `locale` reads like a
@@ -311,7 +322,9 @@ fn looks_like_locale(segment: &str) -> bool {
     let core = segment.split(['-', '_']).next().unwrap_or(segment);
     (2..=3).contains(&core.len())
         && core.chars().all(|c| c.is_ascii_alphabetic())
-        && segment.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && segment
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Same directory, same component name, one a script and the other its
@@ -435,8 +448,12 @@ mod tests {
         let diffs = diffs_for(&["src/a.rs", "src/b.rs"]);
 
         let mut graph = Neighbourhood::default();
-        graph.nodes.push(GraphNode::symbol("r", "src/a.rs", "caller"));
-        graph.nodes.push(GraphNode::symbol("r", "src/b.rs", "callee"));
+        graph
+            .nodes
+            .push(GraphNode::symbol("r", "src/a.rs", "caller"));
+        graph
+            .nodes
+            .push(GraphNode::symbol("r", "src/b.rs", "callee"));
         graph.edges.push(GraphEdge::new(
             "r",
             "src/a.rs#caller",
@@ -500,18 +517,11 @@ mod tests {
         // over `max_files = 4`. The fallback is six singletons, never 4 + 2.
         let names = ["a", "b", "c", "d", "e", "f"];
         let file_paths: Vec<String> = names.iter().map(|n| format!("src/{n}.rs")).collect();
-        let diffs = diffs_for(
-            &file_paths
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-        );
+        let diffs = diffs_for(&file_paths.iter().map(String::as_str).collect::<Vec<_>>());
 
         let mut graph = Neighbourhood::default();
         for path in &file_paths {
-            graph
-                .nodes
-                .push(GraphNode::symbol("r", path, "sym"));
+            graph.nodes.push(GraphNode::symbol("r", path, "sym"));
         }
         for pair in file_paths.windows(2) {
             graph.edges.push(GraphEdge::new(
@@ -532,10 +542,7 @@ mod tests {
     #[test]
     fn a_component_over_the_char_budget_is_split_even_when_file_count_is_fine() {
         let paths = strings(&["src/big_test.rs", "src/big.rs"]);
-        let huge_hunk = format!(
-            "@@ -1,1 +1,2 @@\n a\n+{}\n",
-            "x".repeat(30_000)
-        );
+        let huge_hunk = format!("@@ -1,1 +1,2 @@\n a\n+{}\n", "x".repeat(30_000));
         let diffs = vec![
             parse_file_patch("src/big_test.rs", &huge_hunk),
             parse_file_patch("src/big.rs", &huge_hunk),
@@ -584,9 +591,12 @@ mod tests {
 
         let groups = group(&paths, &diffs, None, &default_bounds());
 
-        assert_eq!(groups, vec![FileGroup {
-            label: "src/only.rs".to_string(),
-            paths: vec!["src/only.rs".to_string()],
-        }]);
+        assert_eq!(
+            groups,
+            vec![FileGroup {
+                label: "src/only.rs".to_string(),
+                paths: vec!["src/only.rs".to_string()],
+            }]
+        );
     }
 }

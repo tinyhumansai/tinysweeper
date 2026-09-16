@@ -155,19 +155,23 @@ impl Lane for Critique {
             input.config.models.budget_usd_per_pr,
         );
 
-        let outcome = per_unit(&groups, |group| group.label.clone(), |group| {
-            let llm = llm.clone();
-            let input = &input;
-            let changed_paths = &changed_paths;
-            async move {
-                let group_diffs: Vec<FileDiff> = group
-                    .paths
-                    .iter()
-                    .filter_map(|path| input.diffs.iter().find(|d| &d.path == path).cloned())
-                    .collect();
-                review_group(llm, input, changed_paths, &group.paths, &group_diffs).await
-            }
-        })
+        let outcome = per_unit(
+            &groups,
+            |group| group.label.clone(),
+            |group| {
+                let llm = llm.clone();
+                let input = &input;
+                let changed_paths = &changed_paths;
+                async move {
+                    let group_diffs: Vec<FileDiff> = group
+                        .paths
+                        .iter()
+                        .filter_map(|path| input.diffs.iter().find(|d| &d.path == path).cloned())
+                        .collect();
+                    review_group(llm, input, changed_paths, &group.paths, &group_diffs).await
+                }
+            },
+        )
         .await;
 
         // The graph's own calls are tallied inside the capability, which is the
@@ -257,7 +261,15 @@ async fn review_group(
         spend.note(&response.model);
         looked_up.push_str(&response.looked_up);
 
-        let asked = match place(llm.clone(), input, group_diffs, &evidence, response.response).await {
+        let asked = match place(
+            llm.clone(),
+            input,
+            group_diffs,
+            &evidence,
+            response.response,
+        )
+        .await
+        {
             Ok(asked) => asked,
             Err(err) if reviewers.len() > 1 => {
                 tracing::warn!(agent = response.id, %err, "a council reviewer failed");
@@ -1431,10 +1443,7 @@ fn helper() {
         // isolation clause text, naming only that file, with no group
         // language at all — a cassette or a provider's cached prefix from
         // before grouping existed must still match.
-        for (request, path) in requests
-            .iter()
-            .zip(["src/widget.rs", "src/widget_test.rs"])
-        {
+        for (request, path) in requests.iter().zip(["src/widget.rs", "src/widget_test.rs"]) {
             let system = &request.messages[0].content;
             assert!(system.contains("## One file only"), "{system}");
             assert!(
