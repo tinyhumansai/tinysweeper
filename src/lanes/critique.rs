@@ -1007,6 +1007,22 @@ fn helper() {
         config
     }
 
+    /// A finding on `large_diffs`'s file whose quote matches nothing there,
+    /// forcing `place` to spend a relocation call on it — the shape a
+    /// coverage response takes when it names findings the relocation budget
+    /// cannot all afford.
+    fn finding_hopeless(title: &str, quote: &str) -> serde_json::Value {
+        json!({
+            "path": "src/large.rs",
+            "existing_code": quote,
+            "rule": "unchecked-index",
+            "title": title,
+            "body": "detail.",
+            "severity": "high",
+            "confidence": 0.9
+        })
+    }
+
     #[tokio::test]
     async fn a_coverage_pass_is_not_run_below_the_line_threshold() {
         // `diffs()` is two lines, well under the threshold — passes = 2 must
