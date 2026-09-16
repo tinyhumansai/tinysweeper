@@ -24,6 +24,7 @@ use mongodb::{Collection, IndexModel};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::lanes::e2e::runs::Watch;
 use crate::preview::session::Session as PreviewSession;
 use crate::state::types::ReviewedState;
 
