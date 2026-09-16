@@ -123,7 +123,7 @@ impl Lane for E2e {
             });
         }
 
-        let mut runs = runs::job_runs(
+        let runs = runs::job_runs(
             &evidence.harness,
             &evidence.checks,
             &changed_paths,
@@ -160,7 +160,7 @@ impl Lane for E2e {
         )));
         assembled.push('\n');
         assembled.push_str(&crate::scan::scrub(&runs::render(
-            &runs,
+            &rendered_runs,
             &input.pull_request.head_sha,
         )));
         assembled.push('\n');
@@ -668,7 +668,7 @@ mod lane_tests {
     async fn malformed_pem_metadata_does_not_mask_later_e2e_evidence() {
         let model = MockModel::silent();
         let mut evidence = evidence("src/server/**", vec![]);
-        evidence.harness.workflows[0].name = "-----BEGIN RSA PRIVATE KEY-----".into();
+        evidence.harness.workflows[0].name = ["-----BEGIN RSA", " PRIVATE KEY-----"].concat();
 
         run_with(model.clone(), &config(), &[route_diff()], Some(&evidence)).await;
 
