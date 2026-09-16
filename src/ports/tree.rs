@@ -671,7 +671,8 @@ impl TreeReader for DirTree {
                 let mut hits = Vec::new();
                 let mut truncated = false;
                 for rel in paths {
-                    if !glob_matches(glob.as_deref(), &rel) {
+                    if !glob_matches(glob.as_deref(), &rel) || crate::scan::is_sensitive_path(&rel)
+                    {
                         continue;
                     }
                     let Ok(content) = std::fs::read_to_string(self.root.join(&rel)) else {
