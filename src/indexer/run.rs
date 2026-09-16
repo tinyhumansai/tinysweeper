@@ -377,7 +377,8 @@ impl<'a> Indexer<'a> {
             // revision or a failed state, and either means the graph is
             // owed a whole rebuild rather than an incremental one keyed on
             // a `changed` list that the incomplete run already confirmed.
-            rebuild_graph: state.revision.is_none() || state.state != IndexState::Ready,
+            rebuild_graph: state.revision.is_none()
+                || state.state != crate::indexer::types::IndexState::Ready,
             ..IndexReport::default()
         };
         let outcome = self
