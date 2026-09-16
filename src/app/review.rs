@@ -959,20 +959,45 @@ async fn remember_findings_bounded(
     }
 }
 
-/// Build the change map for this review, or `None` when it is switched off.
+/// Walk the code graph out from this pull request's changed files, once.
 ///
-/// The walk is its own bounded query rather than a by-product of retrieval: the
-/// two want different things out of the graph — retrieval wants the *chunks* of
-/// what a change reaches so a lane can read them, the map wants the *shape* —
-/// and a review with retrieval disabled should still get a picture.
+/// Its own bounded query rather than a by-product of retrieval: the two want
+/// different things out of the graph — retrieval wants the *chunks* of what a
+/// change reaches so a lane can read them, this wants the *shape*, and a
+/// review with retrieval disabled should still get one. Shared by
+/// [`change_map`] and by every lane's [`crate::lanes::grouping`] call, so a
+/// pull request that wants both pays for one round trip to the graph store,
+/// not two.
+///
+/// `None` when no graph is configured. `Some(Err(()))` when one is configured
+/// but would not answer — logged here, once, rather than at every caller.
+async fn walk_changed_neighbourhood(
+    config: &Config,
+    retrieval: Option<&Retriever<'_>>,
+    repo: &RepoId,
+    diffs: &[FileDiff],
+) -> Option<Result<crate::index::types::Neighbourhood, ()>> {
+    let graph = retrieval.and_then(|retriever| retriever.graph)?;
+    let query = crate::graph::NeighbourQuery::new(crate::retrieve::seeds(diffs))
+        .hops(config.retrieval.graph_hops)
+        .max_nodes(config.retrieval.max_graph_nodes);
+    match crate::graph::neighbours(graph, &repo.to_string(), &query).await {
+        Ok(neighbourhood) => Some(Ok(neighbourhood)),
+        Err(err) => {
+            tracing::warn!(%err, "could not walk the graph for this pull request's changed files");
+            Some(Err(()))
+        }
+    }
+}
+
+/// Build the change map for this review, or `None` when it is switched off.
 ///
 /// It cannot fail the review. A graph that will not answer costs the arrows and
 /// says so in the comment; it never costs the verdict, which was reached before
 /// this ran and does not depend on it.
-async fn change_map(
+fn change_map(
     config: &Config,
-    retrieval: Option<&Retriever<'_>>,
-    repo: &RepoId,
+    walk: &Option<Result<crate::index::types::Neighbourhood, ()>>,
     diffs: &[FileDiff],
     lanes: &[LaneProposal],
 ) -> Option<crate::overview::ChangeMap> {
@@ -985,23 +1010,7 @@ async fn change_map(
         .flat_map(|lane| lane.findings.iter().cloned())
         .collect();
 
-    let walk = match retrieval.and_then(|retriever| retriever.graph) {
-        None => None,
-        Some(graph) => {
-            let query = crate::graph::NeighbourQuery::new(crate::retrieve::seeds(diffs))
-                .hops(config.retrieval.graph_hops)
-                .max_nodes(config.retrieval.max_graph_nodes);
-            match crate::graph::neighbours(graph, &repo.to_string(), &query).await {
-                Ok(neighbourhood) => Some(Ok(neighbourhood)),
-                Err(err) => {
-                    tracing::warn!(%err, "could not walk the graph for the change map");
-                    Some(Err(()))
-                }
-            }
-        }
-    };
-
-    let view = match &walk {
+    let view = match walk {
         None => crate::overview::GraphView::Absent,
         Some(Err(())) => crate::overview::GraphView::Unavailable,
         Some(Ok(neighbourhood)) => crate::overview::GraphView::Walked(neighbourhood),
