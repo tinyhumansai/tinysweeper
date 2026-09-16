@@ -190,21 +190,19 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
     }
 }
 
-/// Mask one line of a sensitive-path file.
+/// Mask one line whose value must be hidden regardless of its shape: either a
+/// sensitive-path line, or a line the scanner specifically flagged whose
+/// value the rulepack matcher itself cannot see (an entropy-flagged
+/// assignment, or a private-key marker with nothing to split on).
 ///
-/// Tries the same matcher a flagged line gets first, so a line that happens
-/// to carry a recognisable credential keeps everything around it readable.
-/// Falls back to masking the assigned value — or, lacking an assignment, the
-/// whole line — because a sensitive file's whole point is that its values are
-/// secret whether or not they are shaped like one the scanner knows.
-fn mask_whole_line(text: &str) -> String {
+/// Callers try [`scan::redact_line`] first, so this only ever runs once that
+/// has already failed to find a recognisable shape. Masks the assigned value
+/// when the line looks like an assignment, or the whole line when it does
+/// not — a sensitive file's or a flagged line's whole point is that its value
+/// is secret whether or not it is shaped like one the rulepack knows.
+fn mask_assignment_or_whole_line(text: &str) -> String {
     if text.trim().is_empty() {
         return text.to_string();
-    }
-
-    let scrubbed = scan::redact_line(text);
-    if scrubbed != text {
-        return scrubbed;
     }
 
     match text.find(['=', ':']) {
