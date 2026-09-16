@@ -81,6 +81,13 @@ pub struct LaneInput<'a> {
     /// answers — see `crate::flows::lookup`. `None` reviews the diff alone,
     /// which every offline golden test does.
     pub tree: Option<&'a dyn TreeReader>,
+    /// The code-graph neighbourhood already walked for this pull request's
+    /// changed files, when a graph is configured — the same walk
+    /// `crate::retrieve::expand` and `crate::app::review::change_map` read
+    /// edges from. `None` degrades `crate::lanes::grouping` to its name
+    /// heuristics alone, which is what every offline golden test does and
+    /// what a forge-only review without a graph store does too.
+    pub graph: Option<&'a crate::index::types::Neighbourhood>,
 }
 
 impl<'a> LaneInput<'a> {
