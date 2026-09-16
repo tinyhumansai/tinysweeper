@@ -50,7 +50,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::evidence::diff::{FileDiff, LineKind};
+use crate::evidence::diff::FileDiff;
 use crate::forge::types::ChangedFile;
 use crate::scan::{self, Finding, ScanKind};
 
