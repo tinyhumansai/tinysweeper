@@ -3,6 +3,27 @@
 Review rules for one kind of file, as **data**. Adding a rule document is a new
 Markdown file in this folder and one line of TOML — never a new module.
 
+## Available documents
+
+| Document | For |
+| --- | --- |
+| [`rust.md`](rust.md) | `.rs` |
+| [`tests.md`](tests.md) | test files, by filename shape, in any language |
+| [`security.md`](security.md) | the `security` lane's taxonomy, language-agnostic |
+| [`workflows.md`](workflows.md) | `.github/workflows/**` |
+| [`dependencies.md`](dependencies.md) | dependency manifests and lockfiles |
+| [`go.md`](go.md) | `.go` |
+| [`python.md`](python.md) | `.py` |
+| [`typescript.md`](typescript.md) | `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` |
+| [`java.md`](java.md) | `.java` |
+| [`dockerfile.md`](dockerfile.md) | `Dockerfile*` |
+| [`shell.md`](shell.md) | `.sh` |
+| [`sql.md`](sql.md) | `.sql` |
+| [`terraform.md`](terraform.md) | `.tf` |
+
+`presets/polyglot/` is the preset that wires all of them into one ordered
+table; see its `README.md` for why that order is what it is.
+
 A preset points at one from its ordered `[[path_instructions]]` table:
 
 ```toml
@@ -41,6 +62,37 @@ another language is noise with a citation attached.
 
 Put the specific globs first. A `**/*.rs` entry above a `src/ports/**` entry
 means the ports rules are dead.
+
+## Merge a specific entry with the language document beneath it
+
+Shadowing is what the previous section wants most of the time — a `.rs` file's
+reviewer should not see the workflow rules. Occasionally an entry wants both
+its own rules **and** the broader language document a later entry would have
+supplied, without duplicating that document's text into the specific entry:
+
+```toml
+[[path_instructions]]
+glob = "src/ports/**"
+instructions = "One trait per file."
+merge = true
+
+[[path_instructions]]
+glob = "**/*.rs"
+rules = "rust"
+```
+
+`merge = true` keeps looking, past this entry, for the next matching
+(lane-scoped) entry — here, the `rust` document — and appends its instructions
+after this one's, specific first, separated by a blank line. A `src/ports/x.rs`
+reviewer now sees both; anything else under `src/ports/**` that is not a `.rs`
+file still only sees the ports rules, because the second search still has to
+match.
+
+This is **one level only**: if the entry `merge` reaches were itself
+`merge = true`, that flag is ignored — it does not keep looking for a third
+entry. A `merge = true` entry with no further match simply renders alone; that
+is not an error. Off by default: most entries want plain shadowing, and this
+exists for the narrower "my own rule *and* the language document" case.
 
 ## Write the negative list first
 

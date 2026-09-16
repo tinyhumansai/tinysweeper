@@ -498,6 +498,9 @@ pub fn digest_of(config: &Config) -> String {
         if let Some(rules) = &instruction.rules {
             field(b"rules\0", rules.as_bytes());
         }
+        // `merge` decides whether the next matching entry is appended too, so
+        // the same table renders two different prompts with it on and off.
+        field(b"merge\0", &[u8::from(instruction.merge)]);
         field(
             b"lanes\0",
             instruction

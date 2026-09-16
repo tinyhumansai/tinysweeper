@@ -1108,7 +1108,12 @@ fn the_shipped_presets_load_and_validate() {
     // The presets in this repository are user-facing documentation as much as
     // configuration; a broken one is a broken example.
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    for name in ["rust-library", "security-strict", "e2e-required"] {
+    for name in [
+        "rust-library",
+        "security-strict",
+        "e2e-required",
+        "polyglot",
+    ] {
         let dir = repo(
             Some(&format!("version = 1\npreset = \"{name}\"\n")),
             &[(
@@ -1158,6 +1163,29 @@ fn the_shipped_security_taxonomy_is_scoped_to_the_security_lane() {
         .expect("the preset wires the security taxonomy");
     assert_eq!(entry.lanes, vec![LaneId::Security]);
     assert!(entry.instructions.contains("Do NOT report"));
+}
+
+#[test]
+fn merge_defaults_to_false_and_round_trips() {
+    // Off by default: shadowing is the table's documented behaviour, and an
+    // operator who wants a specific entry to also pick up the language
+    // document beneath it has to say so.
+    let dir = repo(
+        Some("version = 1\n[[path_instructions]]\nglob = \"**/*.rs\"\ninstructions = \"a\"\n"),
+        &[],
+    );
+    let config = load(dir.path(), None).expect("loads").config;
+    assert!(!config.path_instructions[0].merge);
+
+    let dir = repo(
+        Some(
+            "version = 1\n[[path_instructions]]\nglob = \"**/*.rs\"\n\
+             instructions = \"a\"\nmerge = true\n",
+        ),
+        &[],
+    );
+    let config = load(dir.path(), None).expect("loads").config;
+    assert!(config.path_instructions[0].merge);
 }
 
 #[test]

@@ -30,6 +30,7 @@ each effective value.
 | [`rust-library`](rust-library/) | Rust crates: API stability, error handling, feature-gate hygiene |
 | [`security-strict`](security-strict/) | Repositories where a missed vulnerability costs more than a false positive |
 | [`e2e-required`](e2e-required/) | Repositories with an end-to-end suite worth holding changes to: adds the `e2e` lane |
+| [`polyglot`](polyglot/) | Repositories mixing languages: each file gets the rules written for its own |
 
 ## Adding one
 
