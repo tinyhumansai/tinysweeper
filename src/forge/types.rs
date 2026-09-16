@@ -286,6 +286,21 @@ impl CheckConclusion {
     }
 }
 
+/// The blob paths of a tree at one commit.
+///
+/// A struct rather than a bare `Vec` so the one thing a caller must not
+/// ignore — that the listing may be incomplete — travels with the paths
+/// instead of being lost in a log line. GitHub truncates a recursive tree
+/// past 100 000 entries, and an inventory built from a truncated listing is
+/// silently missing the harness it was asked to find.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreeListing {
+    /// Repository-relative blob paths, in tree order.
+    pub paths: Vec<String>,
+    /// Whether the forge cut the listing short.
+    pub truncated: bool,
+}
+
 /// A check run as it was observed on a commit.
 ///
 /// Distinct from [`CheckRun`], which is a check being *written*: a check being

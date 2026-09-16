@@ -132,13 +132,32 @@ fn gateway_cost(raw: Option<&serde_json::Value>) -> Option<f64> {
     // through the ladder verbatim — the router returns the upstream body as
     // it came. Read either, so a call the ladder sent to Surplus is billed
     // at what it cost rather than at the price table's fallback rate.
-    let cost = match usage.get("cost").and_then(serde_json::Value::as_f64) {
-        Some(cost) => cost,
-        None => usage.get("buyer_cost_micro")?.as_f64()? / 1_000_000.0,
+    //
+    // Surplus first. Some of its sellers relay an OpenRouter-shaped usage
+    // block alongside their own, and in it `cost` is `0` with
+    // `is_byok: true` — the seller's key paid upstream, not ours — while
+    // `buyer_cost_micro` is what Surplus bills. Measured on
+    // `deepseek-v4-flash` via Alibaba: `cost: 0`, `buyer_cost_micro: 1`.
+    // Reading `cost` first billed every flash call as free.
+    let cost = match usage
+        .get("buyer_cost_micro")
+        .and_then(serde_json::Value::as_f64)
+    {
+        Some(micro) => micro / 1_000_000.0,
+        None => usage.get("cost")?.as_f64()?,
     };
     // A gateway that reports a nonsensical cost is a gateway to disbelieve: a
     // negative figure would credit the budget rather than spend it.
     (cost.is_finite() && cost >= 0.0).then_some(cost)
+}
+
+/// Whether reasoning took more than half of the output ceiling.
+///
+/// No ceiling, no budget to consume half of: a routed model with
+/// `max_tokens = 0` would otherwise be warned about on every call.
+fn reasoning_crowds_the_answer(cap: u32, reasoning_tokens: u64) -> bool {
+    // Divided rather than doubled: the count is the provider's and unbounded.
+    cap != 0 && reasoning_tokens > u64::from(cap) / 2
 }
 
 /// The model the gateway says answered, when it says so.
@@ -451,7 +470,7 @@ impl GatewayModel {
         // Reasoning is billed against the same ceiling as the answer, so a
         // model spending most of the budget thinking is one prompt away from
         // the truncation above. Say so while the review still succeeds.
-        if totals.reasoning_tokens * 2 > u64::from(cap) {
+        if reasoning_crowds_the_answer(cap, totals.reasoning_tokens) {
             tracing::warn!(
                 model,
                 cap,
@@ -1051,6 +1070,20 @@ mod tests {
     }
 
     #[test]
+    fn an_uncapped_route_is_never_warned_about_its_reasoning() {
+        assert!(reasoning_crowds_the_answer(16_000, 9_000));
+        assert!(!reasoning_crowds_the_answer(16_000, 8_000));
+        assert!(
+            !reasoning_crowds_the_answer(0, 50_000),
+            "no ceiling, no half of it"
+        );
+        assert!(
+            reasoning_crowds_the_answer(16_000, u64::MAX),
+            "and no overflow"
+        );
+    }
+
+    #[test]
     fn the_answering_model_is_read_out_of_the_raw_body() {
         // A ladder is asked for an alias and answers with the upstream's
         // body, whose `model` is what actually ran.
@@ -1139,6 +1172,15 @@ mod tests {
     fn a_surplus_micro_dollar_cost_is_read_through_the_ladder() {
         let raw = json!({ "usage": { "buyer_cost_micro": 4, "prompt_tokens": 16 } });
         assert!((gateway_cost(Some(&raw)).unwrap() - 0.000004).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_relayed_byok_zero_does_not_hide_what_surplus_bills() {
+        // The body a Surplus seller relays from its own upstream: an
+        // OpenRouter-shaped `cost: 0` (their key paid) beside the
+        // `buyer_cost_micro` we are charged.
+        let raw = json!({ "usage": { "cost": 0, "is_byok": true, "buyer_cost_micro": 1 } });
+        assert!((gateway_cost(Some(&raw)).unwrap() - 0.000001).abs() < 1e-12);
     }
 
     #[test]

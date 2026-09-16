@@ -14,6 +14,7 @@ That boundary is enforced by the type system rather than by discipline.
 | `tests` | `tinysweeper/tests` | Whether changed behaviour is covered | — |
 | `commits` | `tinysweeper/commits` | What entered the history — **no model call** | `secret`, `blob`, `junk` |
 | `description` | `tinysweeper/description` | Title and body against the diff | — |
+| `e2e` | `tinysweeper/e2e` | Whether changed behaviour is reachable end to end, and whether the repository's e2e jobs ran on the head — **opt-in** | — |
 
 The scanner-kind column is a **partition, not an overlap**. Each deterministic
 finding has exactly one owning lane, because two lanes discussing one match
@@ -70,13 +71,22 @@ does not take it back out.
 
 `lanes::anchor` holds the two rules, and the difference between them matters:
 
-- **Strict** (`critique`, `security`, `tests`) — a finding must sit on a line
+- **Strict** (`critique`, `security`, `tests`, `e2e`) — a finding must sit on a line
   this pull request changed, or it is dropped and counted into the summary.
   A comment on unrelated code is the fastest way to lose a team's trust.
 - **Demote** (`commits`, `description`) — the subject is a commit message or a
   missing body, which has no line at all. The bad anchor is removed rather than
   the finding, and `apply` renders it in the check-run summary instead of as an
   inline comment.
+
+  This rule governs the *model's* findings; it does not reach `e2e`'s
+  deterministic ones. `e2e-not-triggered` and `e2e-failed`
+  (`src/lanes/e2e/runs.rs`) are built by code, not returned from
+  `LaneResponse`, so they never pass through `LaneOutcome::from_response` and
+  are neither dropped nor demoted — `e2e-not-triggered` anchors on the
+  workflow's `paths:` line when there is one, `e2e-failed` carries no line at
+  all, and both are always rendered in the summary regardless of whether that
+  line changed. See `docs/modules/lanes/e2e.md`.
 
 ## Per-file fan-out
 
@@ -202,6 +212,16 @@ ordered `path_instructions` table — **first match wins**, so a Rust file's
 reviewer never sees the workflow rules. Roughly half of each document is the
 "do NOT report" list; that half is where the precision comes from. See
 `presets/rules/README.md`.
+
+## The `e2e` lane is opt-in and settles later
+
+It owns end-to-end coverage and whether the repository's own e2e jobs ran on
+the head — the concern the `tests` rule document deliberately excludes. It is
+absent from the default `review.lanes`; `presets/e2e-required/` turns it on.
+Its harness inventory, trigger analysis and job states are decided in code
+before any model call, and a job still running when the review finishes
+leaves the check `neutral` until the server settles it on the job's
+completion. See [e2e.md](e2e.md).
 
 ## Adding a lane
 

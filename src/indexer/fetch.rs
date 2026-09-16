@@ -44,6 +44,39 @@ pub struct Checkout {
     revision: String,
 }
 
+/// The submodule directories a checkout is missing, by reason.
+///
+/// Kept apart because the indexer treats them differently. A *denied*
+/// submodule — not on `retrieval.submodules`, or unparsable, or escaping the
+/// checkout, or with no gitlink at this commit — is not at this head as far
+/// as the index is concerned: its rows are revoked before anything else is
+/// embedded. A *failed* one is allowed and really there, and could not be
+/// fetched this time — network, auth — so its rows are kept and the run does
+/// not claim the head, and the next delivery tries again.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Unfetched {
+    /// Paths policy refused to fetch.
+    pub denied: Vec<String>,
+    /// Paths that were allowed and could not be fetched this time.
+    pub failed: Vec<String>,
+}
+
+impl Unfetched {
+    /// Every path that is not on disk, whatever the reason.
+    pub fn all(&self) -> Vec<String> {
+        self.denied
+            .iter()
+            .chain(self.failed.iter())
+            .cloned()
+            .collect()
+    }
+
+    /// Whether everything was fetched.
+    pub fn is_empty(&self) -> bool {
+        self.denied.is_empty() && self.failed.is_empty()
+    }
+}
+
 impl Checkout {
     /// Fetch `revision` of `repo` into a fresh temporary directory.
     ///
@@ -113,8 +146,9 @@ impl Checkout {
     /// the remote's default branch and fails when the pinned commit is not
     /// its tip.
     ///
-    /// A submodule that cannot be fetched is skipped and named in the
-    /// returned list; the checkout is still usable without it.
+    /// A submodule that is not fetched is named in the returned
+    /// [`Unfetched`], under the reason: the checkout is still usable without
+    /// it, but the two reasons mean different things to whoever indexes it.
     ///
     /// Only submodules whose repository is in `allowed` (`owner/name`) are
     /// fetched: `.gitmodules` is written by whoever opened the pull request,
@@ -125,36 +159,41 @@ impl Checkout {
         host: &str,
         token: &str,
         allowed: &[String],
-    ) -> Result<Vec<String>> {
+    ) -> Result<Unfetched> {
         let root = self.dir.path();
         let allowed: Vec<crate::forge::types::RepoId> = allowed
             .iter()
             .filter_map(|r| crate::forge::types::RepoId::parse(r))
             .collect();
         let Ok(text) = std::fs::read_to_string(root.join(".gitmodules")) else {
-            return Ok(Vec::new());
+            return Ok(Unfetched::default());
         };
-        let mut skipped = Vec::new();
+        let mut unfetched = Unfetched::default();
+        let mut fetched: Vec<String> = Vec::new();
         for sub in crate::forge::tree::parse_gitmodules(&text, host) {
             let Some(repo) = &sub.repo else {
-                skipped.push(sub.path.clone());
+                unfetched.denied.push(sub.path.clone());
                 continue;
             };
             if !allowed.iter().any(|a| a == repo) {
-                skipped.push(sub.path.clone());
+                unfetched.denied.push(sub.path.clone());
                 continue;
             }
             let dir = root.join(&sub.path);
             if !dir.starts_with(root) || sub.path.contains("..") {
-                skipped.push(sub.path.clone());
+                unfetched.denied.push(sub.path.clone());
                 continue;
             }
+            // No gitlink at this commit means no submodule at this commit,
+            // whatever `.gitmodules` says — and `.gitmodules` is the
+            // contributor's. Not a fetch that failed: nothing was there to
+            // fetch, so whatever the index holds under the path is gone.
             let Some(gitlink) = gitlink(root, token, &sub.path).await? else {
-                skipped.push(sub.path.clone());
+                unfetched.denied.push(sub.path.clone());
                 continue;
             };
             let url = format!("https://{host}/{}/{}.git", repo.owner, repo.name);
-            let fetched = async {
+            let fetched_now = async {
                 std::fs::create_dir_all(&dir)
                     .map_err(|err| Error::Forge(format!("could not make {}: {err}", sub.path)))?;
                 git(&dir, token, &["init", "--quiet"]).await?;
@@ -180,12 +219,26 @@ impl Checkout {
                 .await
             }
             .await;
-            if let Err(err) = fetched {
-                tracing::warn!(path = %sub.path, %err, "a submodule could not be fetched; indexed without it");
-                skipped.push(sub.path.clone());
+            match fetched_now {
+                Ok(()) => fetched.push(sub.path.clone()),
+                Err(err) => {
+                    tracing::warn!(path = %sub.path, %err, "a submodule could not be fetched; indexed without it");
+                    unfetched.failed.push(sub.path.clone());
+                }
             }
         }
-        Ok(skipped)
+        // A path named twice by `.gitmodules` — the contributor's file — is
+        // classified once. Denial wins over everything: a second entry that
+        // is allow-listed must not turn a revocation into a "keep it for
+        // now". And a fetch that succeeded wins over one that failed: the
+        // files are on disk, so the checkout is not missing them.
+        let mut seen = std::collections::BTreeSet::new();
+        unfetched.denied.retain(|path| seen.insert(path.clone()));
+        let denied = unfetched.denied.clone();
+        unfetched.failed.retain(|path| {
+            !denied.contains(path) && !fetched.contains(path) && seen.insert(path.clone())
+        });
+        Ok(unfetched)
     }
 
     /// The directory the tree was checked out into.

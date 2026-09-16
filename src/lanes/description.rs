@@ -195,6 +195,7 @@ fn empty_body_outcome(pr: &PullRequest, files: usize) -> LaneOutcome {
         resolved: vec![],
         spend: Default::default(),
         skipped: None,
+        pending: Vec::new(),
         unanswered: Vec::new(),
     }
 }
@@ -281,6 +282,7 @@ mod tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                e2e: None,
                 tree: None,
                 graph: None,
             })
@@ -345,6 +347,7 @@ mod tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "- **rejected — an earlier finding**\n  Maintainer's reply: no.",
+                e2e: None,
                 tree: None,
                 graph: None,
             })

@@ -18,6 +18,7 @@ use crate::error::Result;
 use crate::forge::types::{
     ChangedFile, CheckRun, CheckStatus, Commit, Issue, IssueComment, PullRequest,
     PullRequestContext, Remark, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict,
+    TreeListing,
 };
 
 /// How many commits of a range get their patch fetched.
@@ -104,6 +105,21 @@ pub trait ForgeRead: Send + Sync {
     /// applying another tree's policy — and would let a push land new policy
     /// between the review starting and the file being read.
     async fn file_at(&self, repo: &RepoId, path: &str, sha: &str) -> Result<Option<String>>;
+
+    /// Every path in the tree at a commit, in tree order.
+    ///
+    /// Pinned to a commit for the same reason [`file_at`](Self::file_at) is:
+    /// the `e2e` lane classifies this tree as the harness the pull request is
+    /// judged against, and a listing at a moving ref could describe a tree the
+    /// diff was never applied to. Directories are omitted; only blobs are
+    /// paths a test or a workflow can live at.
+    ///
+    /// The listing may be **truncated** on a very large repository. The
+    /// adapter reports that through [`TreeListing::truncated`] rather than by
+    /// erroring, because "the harness could not be fully inventoried" is a
+    /// sentence the lane can say honestly, and an error would cost the whole
+    /// review.
+    async fn tree_paths(&self, repo: &RepoId, sha: &str) -> Result<TreeListing>;
 
     /// The git host this forge serves, for resolving submodule remotes.
     ///

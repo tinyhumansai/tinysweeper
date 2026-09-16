@@ -174,6 +174,7 @@ mod tests {
                 findings: vec![],
                 noted: vec![],
                 resolved: vec![],
+                pending: vec![],
                 deduped: 0,
                 highest_severity: highest,
                 usage: Default::default(),

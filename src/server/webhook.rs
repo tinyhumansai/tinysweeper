@@ -223,6 +223,12 @@ pub enum Action {
     /// Carries no author. Auto-merge reads no model, spends no money and
     /// attributes nothing to anybody — it is arithmetic over state the forge
     /// already holds — so the contributor record has nothing to record.
+    ///
+    /// A check completing is also what the `e2e` lane waits on, and the
+    /// server settles that lane's check run on this same action before the
+    /// merge is reconsidered — see `routes::handle_check_completed`. It is
+    /// one action rather than two because both are "a check finished, look
+    /// again", and the settle is a read of the same store the merge reads.
     AutoMerge {
         /// `owner/name`.
         repo: String,
