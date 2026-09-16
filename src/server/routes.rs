@@ -703,9 +703,27 @@ async fn settle_e2e_inner(
     // Serialised with the review's own lease shape: several jobs finishing at
     // once is the normal case, and two settlements racing would publish the
     // same check twice.
+    //
+    // Contention is retried rather than dropped: several jobs from the same
+    // matrix typically conclude within milliseconds of each other, and the
+    // event that loses the race is often the one whose job just completed
+    // the watch. Bailing outright on that event would leave the check
+    // `Neutral` until some *other*, unrelated completion happened to retry
+    // it — not guaranteed to ever happen. A short bounded retry lets the
+    // loser re-attempt once the winner (a settlement that reads checks,
+    // possibly publishes, and releases) has had time to finish.
     let lease = format!("{repo}#e2e-settle-{number}");
-    if !state.store.claim_lease(&lease, "server").await? {
-        tracing::debug!(%lease, "another worker is already settling this e2e check");
+    let mut acquired = state.store.claim_lease(&lease, "server").await?;
+    for attempt in 0..LEASE_CONTENTION_RETRIES {
+        if acquired {
+            break;
+        }
+        tokio::time::sleep(LEASE_CONTENTION_BACKOFF).await;
+        acquired = state.store.claim_lease(&lease, "server").await?;
+        let _ = attempt;
+    }
+    if !acquired {
+        tracing::debug!(%lease, "another worker is still settling this e2e check");
         return Ok(());
     }
 
@@ -716,15 +734,35 @@ async fn settle_e2e_inner(
             let write = crate::forge::github::GitHubWrite::new(&token);
             match (read, write) {
                 (Ok(read), Ok(write)) => {
-                    crate::app::apply::settle_e2e(
-                        &read,
-                        &write,
-                        &state.config.config,
-                        &state.store,
-                        &repo_id,
-                        number,
-                    )
-                    .await
+                    // The repository's own policy, not the deployment
+                    // default: `lanes.e2e.fail_on` is a repository override
+                    // like `review.lanes` above, and settling against the
+                    // deployment default can publish `Success` for a job the
+                    // repository's own threshold would have failed. Read at
+                    // the pull request's base tip, on the same reasoning as
+                    // `crate::config::remote::overlay`'s other callers.
+                    let live = read.pull_request(&repo_id, number).await;
+                    match live {
+                        Ok(live) => {
+                            let overlay = crate::config::remote::overlay(
+                                &read,
+                                &repo_id,
+                                &live.base_sha,
+                                &state.config.config,
+                            )
+                            .await;
+                            crate::app::apply::settle_e2e(
+                                &read,
+                                &write,
+                                &overlay.config,
+                                &state.store,
+                                &repo_id,
+                                number,
+                            )
+                            .await
+                        }
+                        Err(err) => Err(err),
+                    }
                 }
                 (Err(err), _) | (_, Err(err)) => Err(err),
             }
