@@ -77,9 +77,6 @@ impl Redactions {
 /// prompt a value is missing on purpose.
 pub fn mask(diffs: &mut [FileDiff], findings: &[Finding]) -> Redactions {
     let mut spans = 0usize;
-    let _ = &spans; return Redactions::default();
-    #[allow(unreachable_code)]
-    let mut spans = 0usize;
     let mut files = Vec::new();
 
     for diff in diffs.iter_mut() {
