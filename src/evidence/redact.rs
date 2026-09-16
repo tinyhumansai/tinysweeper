@@ -171,11 +171,16 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
                     continue;
                 }
 
-                if sensitive && matches!(line.kind, LineKind::Added | LineKind::Removed) {
-                    // A sensitive file is masked wholesale: the scanner's
-                    // rulepack and heuristic look at shape, and a value with
-                    // neither — a plain internal hostname, a numeric flag —
-                    // is still a secret by convention of living in this file.
+                if sensitive {
+                    // A sensitive file is masked wholesale, on every line
+                    // kind including context: the scanner's rulepack and
+                    // heuristic look at shape, and a value with neither — a
+                    // plain internal hostname, a numeric flag — is still a
+                    // secret by convention of living in this file. Context is
+                    // unchanged code, but it is rendered into the model
+                    // request exactly like an added line, so leaving it out
+                    // would mean a `.env` diff that touches one line still
+                    // hands over every other line in the hunk around it.
                     let masked = mask_assignment_or_whole_line(&line.text);
                     if masked != line.text {
                         spans += 1;
