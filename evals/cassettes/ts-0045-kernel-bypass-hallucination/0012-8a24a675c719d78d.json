@@ -1,8 +1,8 @@
 {
-  "key": "6da23ac96b05b8af",
+  "key": "8a24a675c719d78d",
   "model_requested": "deepseek/deepseek-v4-flash",
   "model_answered": "z-ai/glm-5.2",
-  "schema_name": "tinysweeper_critique",
+  "schema_name": "tinysweeper_security",
   "usage": {
     "input_tokens": 4025,
     "output_tokens": 930,
