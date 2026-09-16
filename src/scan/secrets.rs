@@ -156,6 +156,10 @@ const PEM_MARKERS: &[(&str, &str)] = &[
         "an OpenSSH private key",
     ),
     ("-----BEGIN PGP PRIVATE KEY BLOCK-----", "a PGP private key"),
+    (
+        "-----BEGIN ENCRYPTED PRIVATE KEY-----",
+        "an encrypted private key",
+    ),
     ("-----BEGIN PRIVATE KEY-----", "a private key"),
 ];
 
