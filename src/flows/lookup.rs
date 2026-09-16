@@ -509,6 +509,11 @@ impl Ledger {
     /// than reset per file, because it is the same `[lookup].max_chars`
     /// ceiling either way. A single-file slice produces byte-identical output
     /// to the pre-grouping single-file `seed`.
+    ///
+    /// Shared does not mean first-come: candidates are drawn round-robin, one
+    /// per file per round, so a file whose first candidate exhausts several
+    /// [`AUTO_FOLLOW`]-sized hits cannot starve every other member of the
+    /// group of a single lookup before they are even considered.
     pub async fn seed(
         &mut self,
         tree: &dyn TreeReader,
@@ -517,13 +522,36 @@ impl Ledger {
     ) -> Gathered {
         let mut rendered = String::new();
         let mut answered = 0usize;
-        for diff in diffs {
-            if answered >= SEED_SYMBOLS || self.chars >= policy.max_chars / 2 {
+
+        let mut queues: Vec<(usize, std::collections::VecDeque<String>)> = diffs
+            .iter()
+            .enumerate()
+            .map(|(i, diff)| {
+                (
+                    i,
+                    seed_symbols(diff).into_iter().take(SEED_SYMBOLS * 2).collect(),
+                )
+            })
+            .collect();
+
+        'rounds: loop {
+            let mut made_progress = false;
+            for (i, queue) in &mut queues {
+                if answered >= SEED_SYMBOLS || self.chars >= policy.max_chars / 2 {
+                    break 'rounds;
+                }
+                let Some(symbol) = queue.pop_front() else {
+                    continue;
+                };
+                made_progress = true;
+                self.seed_symbol(tree, &diffs[*i], &symbol, policy, &mut rendered, &mut answered)
+                    .await;
+            }
+            if !made_progress {
                 break;
             }
-            self.seed_one(tree, diff, policy, &mut rendered, &mut answered)
-                .await;
         }
+
         if rendered.is_empty() {
             return Gathered::default();
         }
