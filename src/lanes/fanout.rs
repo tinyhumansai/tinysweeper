@@ -45,38 +45,56 @@ pub struct FileReview {
     pub spend: Spend,
 }
 
-/// Review `paths` concurrently, at most [`MAX_CONCURRENT_FILES`] at a time.
+/// Review `units` concurrently, at most [`MAX_CONCURRENT_FILES`] at a time.
 ///
-/// Failures are collected rather than propagated: see the module doc.
-pub async fn per_file<F, Fut>(paths: &[String], review: F) -> FanOut
+/// `T` is one changed file for `security`, and one [`crate::lanes::grouping::FileGroup`]
+/// for `critique` — either way, one item is one conversation and `label`
+/// names what goes in the failure list and the summary. Failures are
+/// collected rather than propagated: see the module doc.
+pub async fn per_unit<T, F, Fut>(units: &[T], label: impl Fn(&T) -> String, review: F) -> FanOut
 where
-    F: Fn(String) -> Fut,
+    T: Clone + Send + 'static,
+    F: Fn(T) -> Fut,
     Fut: Future<Output = crate::error::Result<FileReview>>,
 {
     let permits = Arc::new(Semaphore::new(MAX_CONCURRENT_FILES));
 
     // The future is built eagerly but polled only after a permit is held, so
     // the cap bounds work in flight rather than merely futures allocated.
-    let tasks = paths.iter().cloned().map(|path| {
+    let tasks = units.iter().cloned().map(|unit| {
         let permits = permits.clone();
-        let task = review(path.clone());
+        let name = label(&unit);
+        let task = review(unit);
         async move {
             let _permit = permits
                 .acquire_owned()
                 .await
                 .expect("the permit pool is never closed");
-            (path, task.await)
+            (name, task.await)
         }
     });
 
     let mut out = FanOut::default();
-    for (path, result) in futures::future::join_all(tasks).await {
+    for (name, result) in futures::future::join_all(tasks).await {
         match result {
             Ok(review) => out.reviews.push(review),
-            Err(err) => out.failures.push((path, err)),
+            Err(err) => out.failures.push((name, err)),
         }
     }
     out
+}
+
+/// [`per_unit`] over plain paths, where the label is the path itself.
+///
+/// The common case — `security`, and `critique` before grouping — kept as its
+/// own name so a call site reads as "one file, one conversation" rather than
+/// spelling out an identity label closure every time.
+pub async fn per_file<F, Fut>(paths: &[String], review: F) -> FanOut
+where
+    F: Fn(String) -> Fut,
+    Fut: Future<Output = crate::error::Result<FileReview>>,
+{
+    per_unit(paths, String::clone, review).await
 }
 
 /// The results of a fan-out, successes and failures kept apart.
