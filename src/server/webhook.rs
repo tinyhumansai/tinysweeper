@@ -721,6 +721,16 @@ mod tests {
         }
     }
 
+    fn check_payload_with_sha(event: &str, action: &str, head_sha: &str) -> Payload {
+        payload(serde_json::json!({
+            "action": action,
+            "repository": {"full_name": "tinyhumansai/tinysweeper"},
+            "installation": {"id": 152184043},
+            "sender": {"login": "github-actions[bot]", "type": "Bot"},
+            event: {"pull_requests": [], "head_sha": head_sha},
+        }))
+    }
+
     #[test]
     fn a_finished_check_with_no_named_pull_request_settles_by_commit() {
         // The documented fork quirk: `pull_requests` comes back empty for a
@@ -728,12 +738,8 @@ mod tests {
         // every other completion-driven settlement) would be unreachable for
         // any fork-originated pull request.
         for event in ["check_run", "check_suite"] {
-            let mut delivery = check_payload(event, "completed", &[]);
-            if let Some(obj) = delivery_field_mut(&mut delivery, event) {
-                obj["head_sha"] = serde_json::json!("abc123");
-            }
             assert_eq!(
-                route(event, &delivery),
+                route(event, &check_payload_with_sha(event, "completed", "abc123")),
                 Action::SettleByCommit {
                     repo: "tinyhumansai/tinysweeper".into(),
                     head_sha: "abc123".into(),
@@ -754,17 +760,6 @@ mod tests {
                 Action::SettleByCommit { .. } | Action::AutoMerge { .. }
             ));
         }
-    }
-
-    fn delivery_field_mut<'a>(
-        payload: &'a mut Payload,
-        event: &str,
-    ) -> Option<&'a mut serde_json::Value> {
-        // The test payloads are built from `serde_json::json!` and then
-        // deserialised into `Payload`, so there is no raw `Value` left to
-        // mutate after the fact; rebuild the check object directly instead.
-        let _ = (payload, event);
-        None
     }
 
     #[test]
