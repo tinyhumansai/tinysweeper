@@ -386,13 +386,14 @@ async fn review_group(
                 break;
             }
 
+            added_by_coverage += new_findings.len();
             confirmed.extend(new_findings.clone());
             findings.extend(new_findings);
         }
     }
 
     Ok(FileReview {
-        summary: outcome.summary,
+        summary: coverage_note(&outcome.summary, added_by_coverage),
         findings,
         resolved: outcome.resolved,
         spend,
