@@ -39,8 +39,14 @@ Two matchers apply the same redaction, at two different moments:
 
 Both use [`redact`]'s token format: a known vendor prefix and a length, never
 the value. A human or a model reading either sees one vocabulary for "a secret
-was here" — see `harness::prompt::SHARED_RULES`, which tells a reviewer what
-the marker means and that the line is still present.
+was here". `mask` also returns a [`crate::evidence::redact::Redactions`]
+summary; when it masked anything, the review pushes its one-sentence note —
+"N credential values were removed … never ask for or guess them" — into the
+**volatile suffix**, right after the diff it describes, via
+`harness::prompt::PromptInputs::redaction_note`. It is not in the always-on
+`SHARED_RULES` prefix on purpose: that text is byte-identical on every call
+for the prompt cache to hit, and a note that only applies when something was
+actually masked would otherwise sit there unconditionally, true or not.
 
 The two are independent on purpose. `redact_line`/`scrub` is the second line
 of defence — it still runs on model output, because a lane can compose new
