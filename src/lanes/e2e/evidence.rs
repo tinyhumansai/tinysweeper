@@ -24,6 +24,7 @@ use crate::forge::types::{CheckStatus, RepoId};
 use crate::harness::prompt::push_fenced;
 use crate::lanes::e2e::inventory::{self, Harness, PathTable};
 use crate::ports::forge::ForgeRead;
+use crate::scan;
 
 /// How many e2e test files are read for candidate coverage.
 ///
