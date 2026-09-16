@@ -905,6 +905,35 @@ mod tests {
     }
 
     #[test]
+    fn dockerfile_rules_reach_a_dockerfile_reviewer_and_not_a_python_reviewer() {
+        // Loads the real `polyglot` preset table rather than a hand-built
+        // stand-in, so a regression in the shipped ordering or a shipped rule
+        // document fails this test too.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let config_dir = tempfile::tempdir().expect("tempdir");
+        let config_path = config_dir.path().join(".tinysweeper.toml");
+        std::fs::write(&config_path, "version = 1\npreset = \"polyglot\"\n")
+            .expect("write config");
+        let config = crate::config::load(root, Some(&config_path))
+            .expect("the polyglot preset loads")
+            .config;
+
+        let dockerfile = build(&PromptInputs {
+            focus_path: Some("Dockerfile"),
+            ..PromptInputs::new(LaneId::Critique, &config)
+        });
+        let python = build(&PromptInputs {
+            focus_path: Some("app.py"),
+            ..PromptInputs::new(LaneId::Critique, &config)
+        });
+
+        assert!(dockerfile.prefix().contains("remote URL"));
+        assert!(!dockerfile.prefix().contains("shell=True"));
+        assert!(python.prefix().contains("shell=True"));
+        assert!(!python.prefix().contains("remote URL"));
+    }
+
+    #[test]
     fn every_lane_is_told_that_a_containment_fixture_is_not_a_finding() {
         // A live false positive: the security fixture that proves a hostile
         // AGENTS.md is contained was itself reported as a prompt-injection
