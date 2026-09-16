@@ -1149,6 +1149,29 @@ fn the_shipped_security_taxonomy_is_scoped_to_the_security_lane() {
 }
 
 #[test]
+fn merge_defaults_to_false_and_round_trips() {
+    // Off by default: shadowing is the table's documented behaviour, and an
+    // operator who wants a specific entry to also pick up the language
+    // document beneath it has to say so.
+    let dir = repo(
+        Some("version = 1\n[[path_instructions]]\nglob = \"**/*.rs\"\ninstructions = \"a\"\n"),
+        &[],
+    );
+    let config = load(dir.path(), None).expect("loads").config;
+    assert!(!config.path_instructions[0].merge);
+
+    let dir = repo(
+        Some(
+            "version = 1\n[[path_instructions]]\nglob = \"**/*.rs\"\n\
+             instructions = \"a\"\nmerge = true\n",
+        ),
+        &[],
+    );
+    let config = load(dir.path(), None).expect("loads").config;
+    assert!(config.path_instructions[0].merge);
+}
+
+#[test]
 fn a_rule_document_is_inlined_into_its_path_instruction() {
     // Rule documents are data under presets/. Adding one is a file and a line
     // of TOML, never a module.
