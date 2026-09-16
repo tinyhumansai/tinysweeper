@@ -126,6 +126,16 @@ pub struct PromptInputs<'a> {
     pub reviewed_evidence: &'a str,
     /// Titles of findings raised on earlier cycles.
     pub prior_findings: &'a [String],
+    /// This unit's own surviving findings from round one, for the opt-in
+    /// coverage pass (`lanes::coverage`).
+    ///
+    /// **Volatile**, and empty on every call except the one extra call a
+    /// coverage pass makes: a lane that never runs one leaves this `&[]`,
+    /// which is what keeps every existing prompt byte-identical. Distinct
+    /// from [`Self::prior_findings`] — that layer is what an earlier *push*
+    /// found, this one is what the *same* reviewer already said about the
+    /// *same* evidence, one call ago in this run.
+    pub confirmed_this_round: &'a [String],
     /// The evidence that is new this run.
     pub new_evidence: &'a str,
     /// What kind of thing `new_evidence` is: `diff`, `commits`, and so on. It
