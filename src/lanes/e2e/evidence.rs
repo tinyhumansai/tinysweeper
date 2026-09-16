@@ -120,15 +120,6 @@ impl Evidence {
     }
 }
 
-/// Whether `workflow`'s trigger is `pull_request_target`, not plain
-/// `pull_request`.
-fn is_target(workflow: &inventory::Workflow) -> bool {
-    matches!(
-        workflow.trigger,
-        inventory::Trigger::PullRequest { target: true, .. }
-    )
-}
-
 /// `workflow` if it is (or, via `also_plain`, also covers) the
 /// `want_target` side of a pull-request trigger; `None` otherwise.
 ///
