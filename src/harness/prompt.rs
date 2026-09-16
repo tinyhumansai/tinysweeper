@@ -979,6 +979,33 @@ mod tests {
     }
 
     #[test]
+    fn confirmed_findings_land_in_the_volatile_suffix() {
+        let config = config();
+        let lines = ["Guard the index (src/main.rs:2): unchecked access".to_string()];
+        let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
+        i.confirmed_this_round = &lines;
+        let prompt = build(&i);
+
+        assert!(prompt.suffix().contains("## What you already found"));
+        assert!(prompt.suffix().contains("Guard the index (src/main.rs:2)"));
+        assert!(!prompt.prefix().contains("Guard the index"));
+    }
+
+    #[test]
+    fn an_empty_confirmed_list_leaves_the_prompt_byte_identical() {
+        let config = config();
+        let i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
+        let without = build(&i);
+
+        let mut with_empty = i;
+        with_empty.confirmed_this_round = &[];
+        let with_empty = build(&with_empty);
+
+        assert_eq!(without.prefix(), with_empty.prefix());
+        assert_eq!(without.suffix(), with_empty.suffix());
+    }
+
+    #[test]
     fn repository_policy_is_cacheable_and_fenced() {
         let config = config();
         let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
