@@ -264,7 +264,14 @@ pub fn findings(runs: &[JobRun]) -> Vec<Finding> {
 /// The jobs still to hear from.
 pub fn pending(runs: &[JobRun]) -> Vec<String> {
     runs.iter()
-        .filter(|run| run.state == State::Pending)
+        // `target` jobs are excluded on purpose, not merely left out by
+        // accident of never matching a check: their check run is not on
+        // this pull request's head SHA at all (see `JobRun::target`), so
+        // `check_runs(repo, head_sha)` — what `settle` reads — can never
+        // find it and `settle` would then never conclude. Watching one
+        // would mean a `tinysweeper/e2e` stuck `Neutral` forever, worse
+        // than not watching it.
+        .filter(|run| run.state == State::Pending && !run.target)
         .map(|run| run.job.clone())
         .collect()
 }
