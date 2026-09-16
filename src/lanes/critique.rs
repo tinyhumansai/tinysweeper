@@ -315,18 +315,130 @@ async fn review_group(
         .await;
     spend.merge(filtered.spend);
 
+    let mut findings = filtered.findings;
+    let mut rejected = filtered.rejected;
+
+    // The opt-in coverage pass. Gated on the group's own size, not the whole
+    // pull request's — a lane fans out per group, so a two-line group must
+    // not build a second prompt just because the change elsewhere is large.
+    if config.review.passes > 1 && changed_lines(group_diffs) >= COVERAGE_PASS_MIN_LINES {
+        // Fed cumulatively: the second coverage pass (pass 3) is told about
+        // everything round one *and* the first coverage pass found, so it
+        // does not rediscover the first pass's own additions.
+        let mut confirmed = findings.clone();
+
+        for _ in 1..config.review.passes {
+            let reviewer = &reviewers[0];
+            let confirmed_lines = crate::lanes::coverage::confirmed_lines(&confirmed);
+            let built = prompt::build(&PromptInputs {
+                repo_policy: input.repo_policy,
+                extracted_rules: input.extracted_rules,
+                prior_findings: input.prior_findings,
+                new_evidence: &evidence,
+                changed_paths,
+                focus_paths: group_paths,
+                persona: reviewer.persona,
+                retrieved_context: input.retrieved_context,
+                memory_context: input.memory_context,
+                confirmed_this_round: &confirmed_lines,
+                ..PromptInputs::new(LaneId::Critique, config)
+            });
+
+            let coverage = crate::lanes::coverage::coverage_pass(
+                llm.clone(),
+                LaneId::Critique,
+                reviewer,
+                &built,
+                &schema::json_schema(),
+                "tinysweeper_critique",
+                input.asking_about_group(group_diffs),
+            )
+            .await?;
+            spend.merge(coverage.spend);
+            looked_up.push_str(&coverage.looked_up);
+
+            // No answer this round: nothing new to place, and a round that
+            // could not be reached is not evidence a further one would fare
+            // better, so stop rather than pay for another.
+            let Some(response) = coverage.response else {
+                break;
+            };
+
+            let asked = place(llm.clone(), input, group_diffs, &evidence, response).await?;
+            spend.merge(asked.spend);
+            unanchored += asked.unanchored;
+            discarded += asked.discarded;
+
+            // Drop anything that is really a round-one finding said again.
+            // `corroborates` catches the common paraphrase on the same lines;
+            // the fingerprint catches an exact repeat the reviewer quoted
+            // differently. Both are computed here rather than trusted from
+            // the model, which has no channel to report "this is the same
+            // one" and no reason to be honest about it if it did.
+            let new_findings: Vec<Finding> = asked
+                .findings
+                .into_iter()
+                .filter(|candidate| {
+                    let candidate_fp = candidate
+                        .fingerprint(&crate::findings::anchor::anchor_context(
+                            candidate,
+                            group_diffs,
+                        ));
+                    !confirmed.iter().any(|prior| {
+                        council::agree::corroborates(candidate, prior)
+                            || candidate_fp
+                                == prior.fingerprint(&crate::findings::anchor::anchor_context(
+                                    prior, group_diffs,
+                                ))
+                    })
+                })
+                .collect();
+
+            // Nothing new: a further pass over the same evidence would not
+            // find more either, so stop rather than pay for one.
+            if new_findings.is_empty() {
+                break;
+            }
+
+            // Falsify only what this pass added — free when empty, and it
+            // never re-judges what round one's own pass already kept.
+            let new_filtered = Falsifier::new(llm.model().as_ref(), config)
+                .filter_with(LaneId::Critique, new_findings, &evidence, &looked_up)
+                .await;
+            spend.merge(new_filtered.spend);
+            rejected.extend(new_filtered.rejected);
+
+            if new_filtered.findings.is_empty() {
+                break;
+            }
+
+            confirmed.extend(new_filtered.findings.clone());
+            findings.extend(new_filtered.findings);
+        }
+    }
+
     Ok(FileReview {
-        summary: summarise(
-            summary.trim(),
-            unanchored,
-            discarded,
-            &filtered.rejected,
-            filtered.findings.len(),
-        ),
-        findings: filtered.findings,
+        summary: summarise(summary.trim(), unanchored, discarded, &rejected, findings.len()),
+        findings,
         resolved,
         spend,
     })
+}
+
+/// Minimum changed lines a group needs before the opt-in coverage pass
+/// (`review.passes > 1`) is worth its extra call.
+///
+/// Not configurable: a repository that wants coverage passes at all is opting
+/// into the per-pass cost already, and a second dial here would only let it
+/// re-enable the noise this threshold exists to avoid on the two-line groups
+/// that make up most pull requests. 40 is comfortably above what a rename or a
+/// one-line fix touches, and comfortably below what a group large enough to
+/// need a second reviewer look would be.
+const COVERAGE_PASS_MIN_LINES: usize = 40;
+
+/// How many lines this group's diffs changed, summed across every file in it.
+fn changed_lines(group_diffs: &[FileDiff]) -> usize {
+    group_diffs.iter().map(|diff| diff.changed_lines.len()).sum()
 }
 
 /// What one reviewer said about one group.
