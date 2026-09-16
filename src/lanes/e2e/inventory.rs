@@ -558,24 +558,30 @@ impl StepBeingRead {
         }
     }
 
-    /// Apply this step's gate to `label_gate`, if this step earned the right
-    /// to (it ran something e2e-shaped) and no earlier e2e step already
-    /// decided one.
-    ///
-    /// `decided` is tracked separately from `label_gate.is_none()`: an
-    /// earlier, *unconditional* e2e step deciding "no gate" also leaves
-    /// `label_gate` at `None`, which is indistinguishable from "no e2e step
-    /// has spoken yet" if that were the only signal. Without `decided`, a
-    /// later e2e step that happens to be label-gated would overwrite the
-    /// earlier unconditional step's `None` with its own gate — reporting
-    /// the whole job as gated on a label when it already runs an
-    /// unconditional e2e step regardless.
-    fn commit(&self, label_gate: &mut Option<String>, decided: &mut bool) {
-        if self.is_e2e_step && !*decided {
-            *label_gate = self.gate.clone();
-            *decided = true;
-        }
+    /// This step's own gate, if it earned the right to have one (it ran
+    /// something e2e-shaped) — `None` when the step isn't e2e-shaped at
+    /// all, distinct from `Some(None)` meaning "an e2e step, unconditional".
+    fn e2e_gate(&self) -> Option<Option<String>> {
+        self.is_e2e_step.then(|| self.gate.clone())
     }
+}
+
+/// The job's aggregate label gate, from every e2e-shaped step's own gate.
+///
+/// A job with several e2e-shaped steps runs all of them, so the *job*
+/// requires a label only when *every* such step does — one unconditional
+/// e2e step means the job runs regardless of any other step's label,
+/// whichever order they're written in. Two e2e steps gated on different
+/// labels can't be expressed as one gate either; `None` there too, since
+/// "not gated" is the safe direction (a finding that should have fired
+/// still can, from whichever step actually ran) and "gated on the wrong
+/// label" is not.
+fn combined_step_gate(e2e_step_gates: &[Option<String>]) -> Option<String> {
+    let (first, rest) = e2e_step_gates.split_first()?;
+    let first = first.as_ref()?;
+    rest.iter()
+        .all(|gate| gate.as_deref() == Some(first.as_str()))
+        .then(|| first.clone())
 }
 
 impl Outline {
