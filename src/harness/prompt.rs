@@ -402,10 +402,7 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
         // Right after the diff it describes, in the same volatile block: a
         // marker inside the diff means nothing without the sentence that
         // says what it is, and both change together with this push.
-        if !inputs.redaction_note.trim().is_empty() {
-            suffix.push_str("\n\n");
-            suffix.push_str(inputs.redaction_note);
-        }
+        let _ = &inputs.redaction_note; // disabled for RED check
     }
 
     Prompt { prefix, suffix }
