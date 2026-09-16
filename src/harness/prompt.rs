@@ -437,6 +437,12 @@ pub fn fence_for(content: &str) -> String {
 /// thing it can decide to have an opinion about, and rules written for another
 /// language are opinions it should never have had the chance to form.
 ///
+/// An entry with `merge = true` is the documented exception: its path also
+/// takes the *next* matching (lane-scoped) entry after it, rendered second,
+/// separated by a blank line. That is one level only — if that second entry
+/// is itself a merge entry, it does not keep looking for a third. A merge
+/// entry with nothing further to match renders alone; that is not an error.
+///
 /// An unparseable glob is skipped rather than fatal — `config::validate`
 /// reports it as a configuration problem, and losing the whole review over one
 /// bad pattern would be a worse failure than losing one rule.
@@ -475,18 +481,30 @@ fn path_instructions(inputs: &PromptInputs<'_>) -> String {
             })
             .collect();
 
+        let is_match =
+            |index: usize, path: &str| matchers[index].as_ref().is_some_and(|m| m.is_match(path));
+
         let mut selected = Vec::new();
         for path in paths {
-            if let Some(index) = matchers
-                .iter()
-                .position(|m| m.as_ref().is_some_and(|m| m.is_match(path)))
-                && !selected.contains(&index)
+            let Some(primary) = (0..table.len()).find(|&i| is_match(i, path)) else {
+                continue;
+            };
+            if !selected.contains(&primary) {
+                selected.push(primary);
+            }
+            // One level only: the second entry is never itself followed
+            // further, even when it also has `merge = true`.
+            if table[primary].merge
+                && let Some(secondary) = (primary + 1..table.len()).find(|&i| is_match(i, path))
+                && !selected.contains(&secondary)
             {
-                selected.push(index);
+                selected.push(secondary);
             }
         }
         // Table order, not path order, so the same set of files always renders
-        // the same prefix and stays cacheable.
+        // the same prefix and stays cacheable. A merge pair is always
+        // rendered specific-first because the second match's index is always
+        // greater than the first's.
         selected.sort_unstable();
         selected
     };
@@ -994,6 +1012,7 @@ mod tests {
             instructions: "One trait per file.".into(),
             rules: None,
             lanes: Vec::new(),
+            merge: false,
         }];
         let prompt = build(&inputs(&config, "", "@@ -1 +1 @@\n+a\n"));
 
@@ -1013,6 +1032,7 @@ mod tests {
             instructions: "Rule for a file outside this group.".into(),
             rules: None,
             lanes: Vec::new(),
+            merge: false,
         }];
 
         let prompt = build(&PromptInputs {
@@ -1028,6 +1048,34 @@ mod tests {
             "an override for a changed file outside the group must still be selected: {}",
             prompt.prefix()
         );
+    }
+
+    #[test]
+    fn dockerfile_rules_reach_a_dockerfile_reviewer_and_not_a_python_reviewer() {
+        // Loads the real `polyglot` preset table rather than a hand-built
+        // stand-in, so a regression in the shipped ordering or a shipped rule
+        // document fails this test too.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let config_dir = tempfile::tempdir().expect("tempdir");
+        let config_path = config_dir.path().join(".tinysweeper.toml");
+        std::fs::write(&config_path, "version = 1\npreset = \"polyglot\"\n").expect("write config");
+        let config = crate::config::load(root, Some(&config_path))
+            .expect("the polyglot preset loads")
+            .config;
+
+        let dockerfile = build(&PromptInputs {
+            changed_paths: &["Dockerfile".to_string()],
+            ..PromptInputs::new(LaneId::Critique, &config)
+        });
+        let python = build(&PromptInputs {
+            changed_paths: &["app.py".to_string()],
+            ..PromptInputs::new(LaneId::Critique, &config)
+        });
+
+        assert!(dockerfile.prefix().contains("remote URL"));
+        assert!(!dockerfile.prefix().contains("shell=True"));
+        assert!(python.prefix().contains("shell=True"));
+        assert!(!python.prefix().contains("remote URL"));
     }
 
     #[test]
@@ -1067,6 +1115,7 @@ mod tests {
             instructions: "Trace tainted input to its sink.".into(),
             rules: None,
             lanes: vec![LaneId::Security],
+            merge: false,
         }];
 
         let security = build(&PromptInputs {
@@ -1096,12 +1145,14 @@ mod tests {
                 instructions: "Security only.".into(),
                 rules: None,
                 lanes: vec![LaneId::Security],
+                merge: false,
             },
             PathInstruction {
                 glob: "**/*.rs".into(),
                 instructions: "Everyone.".into(),
                 rules: None,
                 lanes: Vec::new(),
+                merge: false,
             },
         ];
 
@@ -1380,18 +1431,21 @@ mod tests {
                 instructions: "RUST RULES".into(),
                 rules: None,
                 lanes: Vec::new(),
+                merge: false,
             },
             PathInstruction {
                 glob: "src/**".into(),
                 instructions: "BROADER RULES".into(),
                 rules: None,
                 lanes: Vec::new(),
+                merge: false,
             },
             PathInstruction {
                 glob: ".github/workflows/**".into(),
                 instructions: "WORKFLOW RULES".into(),
                 rules: None,
                 lanes: Vec::new(),
+                merge: false,
             },
         ];
         let paths = ["src/main.rs".to_string()];
@@ -1402,6 +1456,178 @@ mod tests {
         assert!(prefix.contains("RUST RULES"));
         assert!(!prefix.contains("BROADER RULES"), "first match wins");
         assert!(!prefix.contains("WORKFLOW RULES"));
+    }
+
+    #[test]
+    fn a_non_merge_entry_still_shadows_completely() {
+        // Regression guard for the default: without `merge = true` the
+        // broader entry beneath a specific one must never be pulled in.
+        let mut config = config();
+        config.path_instructions = vec![
+            PathInstruction {
+                glob: "src/ports/**".into(),
+                instructions: "PORTS RULES".into(),
+                rules: None,
+                lanes: Vec::new(),
+                merge: false,
+            },
+            PathInstruction {
+                glob: "**/*.rs".into(),
+                instructions: "RUST RULES".into(),
+                rules: None,
+                lanes: Vec::new(),
+                merge: false,
+            },
+        ];
+        let paths = ["src/ports/forge.rs".to_string()];
+        let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
+        i.changed_paths = &paths;
+        let prefix = build(&i).prefix().to_string();
+
+        assert!(prefix.contains("PORTS RULES"));
+        assert!(!prefix.contains("RUST RULES"));
+    }
+
+    #[test]
+    fn a_merge_entry_appends_the_next_matching_entrys_instructions() {
+        let mut config = config();
+        config.path_instructions = vec![
+            PathInstruction {
+                glob: "src/ports/**".into(),
+                instructions: "PORTS RULES".into(),
+                rules: None,
+                lanes: Vec::new(),
+                merge: true,
+            },
+            PathInstruction {
+                glob: "**/*.rs".into(),
+                instructions: "RUST RULES".into(),
+                rules: None,
+                lanes: Vec::new(),
+                merge: false,
+            },
+        ];
+        let paths = ["src/ports/forge.rs".to_string()];
+        let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
+        i.changed_paths = &paths;
+        let prefix = build(&i).prefix().to_string();
+
+        assert!(prefix.contains("PORTS RULES"));
+        assert!(prefix.contains("RUST RULES"));
+        let ports_at = prefix.find("PORTS RULES").expect("present");
+        let rust_at = prefix.find("RUST RULES").expect("present");
+        assert!(
+            ports_at < rust_at,
+            "the specific entry must render before the broader one: {prefix}"
+        );
+    }
+
+    #[test]
+    fn merge_with_no_further_match_renders_alone() {
+        let mut config = config();
+        config.path_instructions = vec![
+            PathInstruction {
+                glob: "src/ports/**".into(),
+                instructions: "PORTS RULES".into(),
+                rules: None,
+                lanes: Vec::new(),
+                merge: true,
+            },
+            PathInstruction {
+                glob: ".github/workflows/**".into(),
+                instructions: "WORKFLOW RULES".into(),
+                rules: None,
+                lanes: Vec::new(),
+                merge: false,
+            },
+        ];
+        let paths = ["src/ports/forge.rs".to_string()];
+        let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
+        i.changed_paths = &paths;
+        let prefix = build(&i).prefix().to_string();
+
+        assert!(prefix.contains("PORTS RULES"));
+        assert!(!prefix.contains("WORKFLOW RULES"));
+    }
+
+    #[test]
+    fn merge_respects_lane_scoping() {
+        // The next match still has to pass the lane filter: a merge entry
+        // must not reach across to an entry written for another lane.
+        let mut config = config();
+        config.path_instructions = vec![
+            PathInstruction {
+                glob: "src/ports/**".into(),
+                instructions: "PORTS RULES".into(),
+                rules: None,
+                lanes: Vec::new(),
+                merge: true,
+            },
+            PathInstruction {
+                glob: "**/*.rs".into(),
+                instructions: "SECURITY ONLY RULES".into(),
+                rules: None,
+                lanes: vec![LaneId::Security],
+                merge: false,
+            },
+            PathInstruction {
+                glob: "**/*.rs".into(),
+                instructions: "EVERYONE RULES".into(),
+                rules: None,
+                lanes: Vec::new(),
+                merge: false,
+            },
+        ];
+        let paths = ["src/ports/forge.rs".to_string()];
+        let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
+        i.changed_paths = &paths;
+        i.lane = LaneId::Critique;
+        let prefix = build(&i).prefix().to_string();
+
+        assert!(prefix.contains("PORTS RULES"));
+        assert!(!prefix.contains("SECURITY ONLY RULES"));
+        assert!(prefix.contains("EVERYONE RULES"));
+    }
+
+    #[test]
+    fn merge_does_not_chain_past_one_level() {
+        // A merge entry found as the *second* match does not itself keep
+        // looking for a third.
+        let mut config = config();
+        config.path_instructions = vec![
+            PathInstruction {
+                glob: "src/ports/**".into(),
+                instructions: "PORTS RULES".into(),
+                rules: None,
+                lanes: Vec::new(),
+                merge: true,
+            },
+            PathInstruction {
+                glob: "src/**".into(),
+                instructions: "SRC RULES".into(),
+                rules: None,
+                lanes: Vec::new(),
+                merge: true,
+            },
+            PathInstruction {
+                glob: "**/*.rs".into(),
+                instructions: "RUST RULES".into(),
+                rules: None,
+                lanes: Vec::new(),
+                merge: false,
+            },
+        ];
+        let paths = ["src/ports/forge.rs".to_string()];
+        let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
+        i.changed_paths = &paths;
+        let prefix = build(&i).prefix().to_string();
+
+        assert!(prefix.contains("PORTS RULES"));
+        assert!(prefix.contains("SRC RULES"));
+        assert!(
+            !prefix.contains("RUST RULES"),
+            "a merge entry found as the second match must not itself chain"
+        );
     }
 
     #[test]
@@ -1417,12 +1643,14 @@ mod tests {
                 instructions: "RUST RULES".into(),
                 rules: None,
                 lanes: Vec::new(),
+                merge: false,
             },
             PathInstruction {
                 glob: ".github/workflows/**".into(),
                 instructions: "WORKFLOW RULES".into(),
                 rules: None,
                 lanes: Vec::new(),
+                merge: false,
             },
         ];
         let paths = ["src/main.rs".to_string(), ".github/workflows/ci.yml".into()];

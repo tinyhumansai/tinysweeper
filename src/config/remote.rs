@@ -94,12 +94,22 @@ use crate::ports::forge::ForgeRead;
 /// is safe. See the module documentation for the split; changing this list is a
 /// change to the security boundary in `AGENTS.md` and needs saying so in the
 /// pull request.
-pub const OVERRIDABLE_KEYS: [&str; 17] = [
+pub const OVERRIDABLE_KEYS: [&str; 20] = [
     "knowledge.extract",
     "knowledge.files",
     "labels.human_review",
     "labels.manual_only",
     "lanes.*.fail_on",
+    // `e2e` detection, specifically: where its harness lives, is squarely
+    // "how loud this repository's own review is" — the same bucket
+    // `lanes.*.fail_on` is in — not "what it spends" or "what it writes".
+    // Without these a repository documented as being able to say
+    // `lanes.e2e.paths = ["qa/**"]` (docs/modules/lanes/e2e.md,
+    // presets/e2e-required/README.md) has that setting silently dropped by
+    // this filter and reviewed under the default path table instead.
+    "lanes.e2e.missing_harness",
+    "lanes.e2e.paths",
+    "lanes.e2e.workflows",
     "paths.ignore",
     "preview.enabled",
     "preview.max_flows",

@@ -209,8 +209,11 @@ it was also the reason a correct `medium/0.61` boundary bug reached nobody.
 
 Per-path review rules live under `presets/rules/` as data, selected by the
 ordered `path_instructions` table — **first match wins**, so a Rust file's
-reviewer never sees the workflow rules. Roughly half of each document is the
-"do NOT report" list; that half is where the precision comes from. See
+reviewer never sees the workflow rules. An entry can opt out of that with
+`merge = true`, which also takes the next matching entry — one level only — so
+a specific entry (`src/ports/**`) can keep the broader language document
+(`rust.md`) beneath it instead of duplicating it. Roughly half of each document
+is the "do NOT report" list; that half is where the precision comes from. See
 `presets/rules/README.md`.
 
 ## The `e2e` lane is opt-in and settles later

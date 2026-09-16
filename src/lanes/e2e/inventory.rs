@@ -199,6 +199,29 @@ pub enum Trigger {
         paths_ignore: Vec<String>,
         /// The line the filter sits on, for anchoring a finding.
         filter_line: Option<u64>,
+        /// Whether this is `pull_request_target` rather than plain
+        /// `pull_request`.
+        ///
+        /// The distinction matters upstream of this type: GitHub resolves a
+        /// `pull_request_target` workflow's *definition* — its jobs, its own
+        /// trigger — from the base branch, never the head, precisely so a
+        /// fork cannot rewrite the workflow that runs with base-branch
+        /// secrets. Classifying one from the head-branch file (what
+        /// `evidence::gather` reads by default) can therefore describe a
+        /// workflow GitHub will never run in that shape. See
+        /// `evidence::gather`'s `pull_request_target` re-read.
+        target: bool,
+        /// Whether the `on:` block *also* separately lists the other
+        /// pull-request-family event (`on: [pull_request_target,
+        /// pull_request]`).
+        ///
+        /// GitHub fires both independently when both are listed — same job
+        /// list, two separate executions, one off the head and one off the
+        /// default branch. `target` can only record which one this
+        /// particular `Trigger` is (the first-listed wins, in `trigger()`);
+        /// `also_plain` is how `evidence::gather` knows not to simply drop
+        /// the other execution when this one says `target: true`.
+        also_plain: bool,
     },
     /// Never runs on a pull request; the string names what it runs on.
     Never(String),
@@ -512,6 +535,55 @@ struct OutlineJob {
     steps: Vec<String>,
 }
 
+/// One step's fields, accumulated while `jobs()` walks the flattened list
+/// under `steps:`, so a step's own `if:` is only ever attributed to that
+/// step.
+///
+/// Only a step that itself runs something e2e-shaped (`E2E_STEP_MARKS`) may
+/// set the job's label gate — an unrelated auxiliary step (a label-gated
+/// artifact upload ahead of an unconditional `playwright test`) must not
+/// make the whole job read as gated on a label it does not require. This
+/// deliberately leaves a job-wide `if:` (read directly off the job, not a
+/// step) alone; that one already gates every step including the e2e one.
+#[derive(Default)]
+struct StepBeingRead {
+    gate: Option<String>,
+    is_e2e_step: bool,
+}
+
+impl StepBeingRead {
+    fn note_e2e_mark(&mut self, lower_value: &str) {
+        if E2E_STEP_MARKS.iter().any(|mark| lower_value.contains(mark)) {
+            self.is_e2e_step = true;
+        }
+    }
+
+    /// This step's own gate, if it earned the right to have one (it ran
+    /// something e2e-shaped) — `None` when the step isn't e2e-shaped at
+    /// all, distinct from `Some(None)` meaning "an e2e step, unconditional".
+    fn e2e_gate(&self) -> Option<Option<String>> {
+        self.is_e2e_step.then(|| self.gate.clone())
+    }
+}
+
+/// The job's aggregate label gate, from every e2e-shaped step's own gate.
+///
+/// A job with several e2e-shaped steps runs all of them, so the *job*
+/// requires a label only when *every* such step does — one unconditional
+/// e2e step means the job runs regardless of any other step's label,
+/// whichever order they're written in. Two e2e steps gated on different
+/// labels can't be expressed as one gate either; `None` there too, since
+/// "not gated" is the safe direction (a finding that should have fired
+/// still can, from whichever step actually ran) and "gated on the wrong
+/// label" is not.
+fn combined_step_gate(e2e_step_gates: &[Option<String>]) -> Option<String> {
+    let (first, rest) = e2e_step_gates.split_first()?;
+    let first = first.as_ref()?;
+    rest.iter()
+        .all(|gate| gate.as_deref() == Some(first.as_str()))
+        .then(|| first.clone())
+}
+
 impl Outline {
     fn parse(text: &str) -> Self {
         let mut nodes = Vec::new();
@@ -658,6 +730,19 @@ impl Outline {
                 .collect()
         };
 
+        // Both `pull_request` and `pull_request_target` can be listed on the
+        // same workflow (`on: [pull_request_target, pull_request]`), and
+        // GitHub fires both independently — the jobs are the same list
+        // either way, but one execution reads from the head and the other
+        // from the default branch. A single `Trigger` can only carry one
+        // `target` value; `also_plain` is how the other execution is not
+        // simply dropped when `target` wins the "which comes first" pick
+        // below.
+        let also_plain = events.iter().any(|(event, _)| event == "pull_request")
+            && events
+                .iter()
+                .any(|(event, _)| event == "pull_request_target");
+
         let mut on_names = Vec::new();
         for (event, index) in &events {
             if event == "pull_request" || event == "pull_request_target" {
@@ -683,6 +768,8 @@ impl Outline {
                     paths,
                     paths_ignore,
                     filter_line,
+                    target: event == "pull_request_target",
+                    also_plain,
                 };
             }
             on_names.push(event.clone());
@@ -708,25 +795,67 @@ impl Outline {
                     has_services: false,
                     steps: Vec::new(),
                 };
+                // Every e2e-shaped step's own gate (`Some(label)`
+                // conditional, `None` unconditional), reduced to the job's
+                // aggregate gate by `combined_step_gate` once every step has
+                // been read — see that function for why this can't just be
+                // "the first e2e step decides".
+                let mut e2e_step_gates: Vec<Option<String>> = Vec::new();
+                // The job-level `if:`, applied after every field is read
+                // rather than in document order: nothing here requires
+                // `if:` to appear before `steps:` in the file, and a
+                // job-level condition always outranks a step-level guess
+                // however the two are ordered.
+                let mut job_level_gate: Option<Option<String>> = None;
                 for (j, field) in self.direct(i) {
                     match field.key.as_str() {
                         "name" => job.name = Some(unquote(&field.value)),
-                        "if" => job.label_gate = label_in(&field.value),
+                        "if" => {
+                            // Only when the job-level condition actually
+                            // mentions a label at all — positively
+                            // (`Some(label)`) or negated (`None`, "a
+                            // negated gate is not a gate") — does it decide
+                            // anything here. An unrelated condition
+                            // (`github.repository_owner == 'acme'`) says
+                            // nothing about a label gate one way or the
+                            // other, and must not erase what a step already
+                            // inferred.
+                            if mentions_label(&field.value) {
+                                job_level_gate = Some(label_in(&field.value));
+                            }
+                        }
                         "services" => job.has_services = true,
                         "steps" => {
+                            // `self.children(j)` is every field of every step,
+                            // flattened — a step boundary is only visible as
+                            // `item: true` on the field that opened it (`- name:
+                            // ...`, `- run: ...`). Grouped by hand here so an
+                            // `if:` is only ever attributed to the step it
+                            // actually sits on, not to whichever step happens to
+                            // come next.
+                            let mut current = StepBeingRead::default();
                             for step in self.children(j) {
-                                if step.key == "uses" || step.key == "run" {
-                                    job.steps.push(step.value.to_ascii_lowercase());
+                                if step.item {
+                                    e2e_step_gates.extend(current.e2e_gate());
+                                    current = StepBeingRead::default();
                                 }
-                                // A step's `if:` gating on a label gates the
-                                // whole job's usefulness just as well.
-                                if step.key == "if" && job.label_gate.is_none() {
-                                    job.label_gate = label_in(&step.value);
+                                if step.key == "uses" || step.key == "run" {
+                                    let text = step.value.to_ascii_lowercase();
+                                    current.note_e2e_mark(&text);
+                                    job.steps.push(text);
+                                }
+                                if step.key == "if" {
+                                    current.gate = label_in(&step.value);
                                 }
                             }
+                            e2e_step_gates.extend(current.e2e_gate());
                         }
                         _ => {}
                     }
+                }
+                job.label_gate = combined_step_gate(&e2e_step_gates);
+                if let Some(gate) = job_level_gate {
+                    job.label_gate = gate;
                 }
                 job
             })
@@ -736,21 +865,42 @@ impl Outline {
 
 /// Split `key: value`, refusing lines that are not a mapping entry.
 fn split_key(body: &str) -> Option<(String, String)> {
-    let (key, value) = body.split_once(':')?;
-    let key = key.trim();
+    let (raw_key, value) = body.split_once(':')?;
+    let key = unquote_key(raw_key.trim())?;
     // `http://…` inside a value is not a key, and neither is `${{ a:b }}`.
-    if key.is_empty()
-        || key.contains(' ')
-        || key.contains('{')
-        || key.starts_with('"')
-        || key.starts_with('\'')
-    {
+    if key.is_empty() || key.contains(' ') || key.contains('{') {
         return None;
     }
     if !(value.is_empty() || value.starts_with(' ')) {
         return None;
     }
-    Some((key.to_string(), value.trim().to_string()))
+    Some((key, value.trim().to_string()))
+}
+
+/// A mapping key, plain or quoted — `on:`, `'on':` and `"on":` are all the
+/// same key.
+///
+/// GitHub accepts `'on':`/`"on":` (quoting is how a YAML 1.1 author avoids
+/// `on` being read as the boolean `true`), and rejecting every quoted key
+/// outright — the previous rule — misread `'on': pull_request` as a workflow
+/// with no `on:` block at all, which `Outline::trigger` reads as
+/// `Trigger::Never`. Only a *fully* quoted key is accepted; anything that
+/// merely starts with a quote (a plain scalar value that happens to contain
+/// a colon, `- "http://example.com: see docs"`) still falls through to
+/// `None`, exactly as it did before.
+fn unquote_key(raw: &str) -> Option<String> {
+    for quote in ['\'', '"'] {
+        if let Some(inner) = raw
+            .strip_prefix(quote)
+            .and_then(|rest| rest.strip_suffix(quote))
+        {
+            return (!inner.is_empty() && !inner.contains(quote)).then(|| inner.to_string());
+        }
+    }
+    if raw.starts_with('"') || raw.starts_with('\'') {
+        return None;
+    }
+    Some(raw.to_string())
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -836,6 +986,16 @@ fn unquote(value: &str) -> String {
 /// `contains(github.event.pull_request.labels.*.name, 'run-e2e')` — and only
 /// when it is not negated. Anything else is not a label gate as far as this
 /// lane can tell, and saying nothing is better than a wrong gate.
+/// Whether `expr` mentions a label condition at all, whichever way it comes
+/// out — `label_in` returns `None` both for a recognized-but-negated label
+/// condition and for a condition that has nothing to do with a label, and
+/// those two cases must be told apart by a caller deciding whether to
+/// override an existing gate: an unrelated condition says nothing about a
+/// label, so it must not erase a gate a step already earned.
+fn mentions_label(expr: &str) -> bool {
+    expr.to_ascii_lowercase().contains("labels.*.name")
+}
+
 fn label_in(expr: &str) -> Option<String> {
     let lower = expr.to_ascii_lowercase();
     let at = lower.find("labels.*.name")?;
@@ -932,6 +1092,8 @@ jobs:
                 paths: strings(&["src/server/**", "e2e/**"]),
                 paths_ignore: vec![],
                 filter_line: Some(5),
+                target: false,
+                also_plain: false,
             }
         );
         assert_eq!(
@@ -956,7 +1118,9 @@ jobs:
             Trigger::PullRequest {
                 paths: vec![],
                 paths_ignore: vec![],
-                filter_line: None
+                filter_line: None,
+                target: false,
+                also_plain: false,
             }
         );
     }
@@ -966,6 +1130,25 @@ jobs:
         let text =
             "name: CI\non: pull_request\njobs:\n  unit:\n    steps:\n      - run: cargo test\n";
         assert!(classify_workflow(".github/workflows/ci.yml", text, &[]).is_none());
+    }
+
+    #[test]
+    fn a_quoted_on_key_is_still_read_as_a_trigger() {
+        // `'on':` and `"on":` are how a YAML 1.1 author avoids `on` being
+        // read as the boolean `true`; GitHub accepts both. Previously any
+        // quoted key was rejected outright, so this workflow read as having
+        // no `on:` block at all.
+        for quoted in ["'on': pull_request", "\"on\": pull_request"] {
+            let text =
+                format!("name: e2e\n{quoted}\njobs:\n  run:\n    steps:\n      - run: make e2e\n");
+            let workflow = classify_workflow(".github/workflows/e2e.yml", &text, &[])
+                .unwrap_or_else(|| panic!("{quoted} should classify as e2e"));
+            assert!(
+                matches!(workflow.trigger, Trigger::PullRequest { .. }),
+                "{quoted}: {:?}",
+                workflow.trigger
+            );
+        }
     }
 
     #[test]
@@ -1037,6 +1220,76 @@ jobs:
             workflow.jobs[0].label_gate, None,
             "a negated gate is not a gate"
         );
+    }
+
+    #[test]
+    fn an_unrelated_conditional_step_does_not_gate_the_whole_job() {
+        // A label-gated artifact upload ahead of an unconditional Playwright
+        // step must not make the job read as gated on that label — the
+        // actual e2e step runs unconditionally.
+        let text = "name: e2e\non: pull_request\njobs:\n  run:\n    steps:\n      - name: Upload debug artifact\n        if: contains(github.event.pull_request.labels.*.name, 'debug')\n        uses: actions/upload-artifact@v4\n      - name: Run e2e\n        run: npx playwright test\n";
+        let workflow = classify_workflow(".github/workflows/e2e.yml", text, &[]).unwrap();
+        assert_eq!(
+            workflow.jobs[0].label_gate, None,
+            "the unconditional playwright step should not have inherited the upload step's gate"
+        );
+    }
+
+    #[test]
+    fn a_later_unconditional_e2e_step_clears_an_earlier_steps_gate() {
+        // The reverse ordering from `an_unconditional_e2e_step_is_not_overridden_by_a_later_gated_one`:
+        // the *first* e2e-shaped step is label-gated (a flaky Cypress
+        // suite), the *second* is an unconditional Playwright step. The job
+        // still runs the unconditional one regardless of the label, so the
+        // aggregate gate must clear rather than lock onto whichever e2e
+        // step happened to be read first.
+        let text = "name: e2e\non: pull_request\njobs:\n  run:\n    steps:\n      - name: Run flaky e2e\n        if: contains(github.event.pull_request.labels.*.name, 'run-flaky')\n        run: npx cypress run\n      - name: Run e2e\n        run: npx playwright test\n";
+        let workflow = classify_workflow(".github/workflows/e2e.yml", text, &[]).unwrap();
+        assert_eq!(
+            workflow.jobs[0].label_gate, None,
+            "the unconditional playwright step means the job runs regardless of the label"
+        );
+    }
+
+    #[test]
+    fn a_gate_on_the_e2e_step_itself_is_still_read() {
+        let text = "name: e2e\non: pull_request\njobs:\n  run:\n    steps:\n      - name: Run e2e\n        if: contains(github.event.pull_request.labels.*.name, 'run-e2e')\n        run: npx playwright test\n";
+        let workflow = classify_workflow(".github/workflows/e2e.yml", text, &[]).unwrap();
+        assert_eq!(workflow.jobs[0].label_gate.as_deref(), Some("run-e2e"));
+    }
+
+    #[test]
+    fn an_unconditional_e2e_step_is_not_overridden_by_a_later_gated_one() {
+        // The first e2e step here is unconditional; a later, unrelated
+        // label-gated e2e step must not make the job read as gated — the
+        // job already runs the unconditional one regardless.
+        let text = "name: e2e\non: pull_request\njobs:\n  run:\n    steps:\n      - name: Run e2e\n        run: npx playwright test\n      - name: Run flaky e2e\n        if: contains(github.event.pull_request.labels.*.name, 'run-flaky')\n        run: npx cypress run\n";
+        let workflow = classify_workflow(".github/workflows/e2e.yml", text, &[]).unwrap();
+        assert_eq!(
+            workflow.jobs[0].label_gate, None,
+            "the unconditional playwright step already decided this job runs"
+        );
+    }
+
+    #[test]
+    fn a_job_level_gate_outranks_a_step_level_guess_however_they_are_ordered() {
+        // A job-level `if:` is the more explicit signal and must win even
+        // when it happens to be written after `steps:` in the file — nothing
+        // requires `if:` to come first, and an unconditional e2e step
+        // ordered before it must not be read as clearing the job-level gate.
+        let text = "name: e2e\non: pull_request\njobs:\n  run:\n    steps:\n      - name: Run e2e\n        run: npx playwright test\n    if: contains(github.event.pull_request.labels.*.name, 'run-e2e')\n";
+        let workflow = classify_workflow(".github/workflows/e2e.yml", text, &[]).unwrap();
+        assert_eq!(workflow.jobs[0].label_gate.as_deref(), Some("run-e2e"));
+    }
+
+    #[test]
+    fn an_unrelated_job_condition_does_not_erase_a_steps_label_gate() {
+        // The job-level `if:` here is about the repository, not a label —
+        // it must not be read as "no gate", which would erase the label
+        // gate the e2e step itself earned.
+        let text = "name: e2e\non: pull_request\njobs:\n  run:\n    if: github.repository_owner == 'acme'\n    steps:\n      - name: Run e2e\n        if: contains(github.event.pull_request.labels.*.name, 'run-e2e')\n        run: npx playwright test\n";
+        let workflow = classify_workflow(".github/workflows/e2e.yml", text, &[]).unwrap();
+        assert_eq!(workflow.jobs[0].label_gate.as_deref(), Some("run-e2e"));
     }
 
     #[test]
