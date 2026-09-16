@@ -682,7 +682,12 @@ async fn dispatch(state: AppState, action: Action, delivery: String, event: Stri
 /// the number(s) through the forge, then does the same
 /// settle-then-reconsider-merge work `Action::AutoMerge`'s handler does for
 /// each one.
-async fn handle_settle_by_commit(state: AppState, repo: String, head_sha: String, installation: u64) {
+async fn handle_settle_by_commit(
+    state: AppState,
+    repo: String,
+    head_sha: String,
+    installation: u64,
+) {
     let Some(repo_id) = RepoId::parse(&repo) else {
         tracing::error!(%repo, "not owner/name");
         return;
@@ -702,7 +707,10 @@ async fn handle_settle_by_commit(state: AppState, repo: String, head_sha: String
             return;
         }
     };
-    let numbers = match read.open_pull_requests_for_commit(&repo_id, &head_sha).await {
+    let numbers = match read
+        .open_pull_requests_for_commit(&repo_id, &head_sha)
+        .await
+    {
         Ok(numbers) => numbers,
         Err(err) => {
             tracing::error!(%err, %repo, %head_sha, "could not resolve the commit's pull requests");

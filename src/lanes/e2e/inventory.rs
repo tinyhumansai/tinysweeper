@@ -1031,7 +1031,11 @@ jobs:
         // service block relies entirely on that line being read.
         let text = "name: CI\non: pull_request\njobs:\n  verify:\n    steps:\n      - name: Run suite\n        run: |\n          npm ci\n          npm run e2e\n";
         let workflow = classify_workflow(".github/workflows/ci.yml", text, &[]).unwrap();
-        assert_eq!(workflow.jobs.len(), 1, "the block-scalar body should have named the job e2e");
+        assert_eq!(
+            workflow.jobs.len(),
+            1,
+            "the block-scalar body should have named the job e2e"
+        );
     }
 
     #[test]
