@@ -460,13 +460,23 @@ pub async fn review_with_tree(
         _ => true,
     });
     let chained;
-    let tree: &dyn TreeReader = match tree {
+    let composed: &dyn TreeReader = match tree {
         Some(tree) => {
             chained = crate::ports::tree::ChainTree::new(vec![tree, &forge_tree]);
             &chained
         }
         None => &forge_tree,
     };
+    // The one choke point every backend's answer passes through before a
+    // lane sees it: `is_sensitive_path` already refuses a whole file by
+    // name, but an ordinary path that merely gained a credential in this
+    // diff has no such guard on a `read` or `search` lookup, which fetches
+    // content fresh and outside `evidence::redact::mask` entirely. Wrapping
+    // here, once, covers every caller's tree — supplied checkout, forge
+    // fallback, or the chain of both — rather than teaching each backend to
+    // redact its own content.
+    let redacting = crate::ports::tree::RedactingTree::new(composed);
+    let tree: &dyn TreeReader = &redacting;
 
     // Kill switches are checked before anything expensive, so a label really
     // does stop the bot rather than merely hiding its output.
