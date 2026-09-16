@@ -641,6 +641,7 @@ mod tests {
         Proposal {
             overview: None,
             unreviewed: vec![],
+            skipped: None,
             version: 1,
             repo: "tinyhumansai/tinysweeper".into(),
             number: 7,

@@ -91,6 +91,7 @@ fn proposal(findings: Vec<Finding>) -> Proposal {
             unanswered: vec![],
         }],
         unreviewed: vec![],
+        skipped: None,
         cost_usd: 0.004,
         input_tokens: 1000,
         output_tokens: 100,

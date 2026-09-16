@@ -243,8 +243,17 @@ fn a_ladder_error_names_the_ladder() {
     let bad = parse("not json").expect_err("refused");
     assert!(bad.to_string().contains("openrouter embeddings"));
     let relabelled = relabel(bad, "ladder");
-    assert!(relabelled.to_string().starts_with("model: ladder embeddings") || relabelled.to_string().contains("ladder embeddings"), "{relabelled}");
-    assert!(!relabelled.to_string().contains("openrouter"), "{relabelled}");
+    assert!(
+        relabelled
+            .to_string()
+            .starts_with("model: ladder embeddings")
+            || relabelled.to_string().contains("ladder embeddings"),
+        "{relabelled}"
+    );
+    assert!(
+        !relabelled.to_string().contains("openrouter"),
+        "{relabelled}"
+    );
 }
 
 #[test]

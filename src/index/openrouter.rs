@@ -167,12 +167,9 @@ impl OpenRouterEmbedder {
             })?;
 
         let status = response.status();
-        let text = response
-            .text()
-            .await
-            .map_err(|err| {
-                Error::Model(format!("{} embeddings: {err}", self.signature.provider))
-            })?;
+        let text = response.text().await.map_err(|err| {
+            Error::Model(format!("{} embeddings: {err}", self.signature.provider))
+        })?;
 
         if !status.is_success() {
             // The body is the provider's error message, which names the model
@@ -233,9 +230,11 @@ impl Embedder for OpenRouterEmbedder {
 /// wrong service. The client knows which one it spoke to, so it relabels.
 fn relabel(err: Error, provider: &str) -> Error {
     match err {
-        Error::Model(text) if provider != "openrouter" => {
-            Error::Model(text.replacen("openrouter embeddings", &format!("{provider} embeddings"), 1))
-        }
+        Error::Model(text) if provider != "openrouter" => Error::Model(text.replacen(
+            "openrouter embeddings",
+            &format!("{provider} embeddings"),
+            1,
+        )),
         other => other,
     }
 }
