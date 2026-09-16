@@ -327,10 +327,10 @@ pub async fn ask_all(
         .map(|_| lookup::Ledger::default())
         .collect();
     if let Some((tree, policy)) = lookups
-        && let Some(diff) = asking.seed
+        && !asking.seed.is_empty()
     {
         for (index, prompt) in prompts.iter_mut().enumerate() {
-            let seeded = ledgers[index].seed(tree, diff, policy).await;
+            let seeded = ledgers[index].seed(tree, asking.seed, policy).await;
             if !seeded.rendered.is_empty() {
                 prompt.prompt.push_str(&seeded.rendered);
                 tracing::debug!(
