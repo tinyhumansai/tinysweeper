@@ -444,9 +444,10 @@ fn path_instructions(inputs: &PromptInputs<'_>) -> String {
         .filter(|rule| rule.lanes.is_empty() || rule.lanes.contains(&inputs.lane))
         .collect();
 
-    let paths: Vec<&str> = match inputs.focus_path {
-        Some(path) => vec![path],
-        None => inputs.changed_paths.iter().map(String::as_str).collect(),
+    let paths: Vec<&str> = if inputs.focus_paths.is_empty() {
+        inputs.changed_paths.iter().map(String::as_str).collect()
+    } else {
+        inputs.focus_paths.iter().map(String::as_str).collect()
     };
 
     // No paths means the caller did not say which files this is about, so the
