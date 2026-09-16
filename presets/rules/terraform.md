@@ -18,9 +18,9 @@
 - An IAM policy or resource policy granting a wildcard action (`"Action":
   "*"`) or wildcard resource (`"Resource": "*"`) where a scoped set would
   cover the actual usage shown in the diff.
-- Removing or weakening a `lifecycle { prevent_destroy = true }` (or
-  `ignore_changes`) guard on a stateful resource — database, persistent
-  volume, KMS key — with no explanation in the diff.
+- Removing or weakening a `lifecycle { prevent_destroy = true }` guard on a
+  stateful resource — database, persistent volume, KMS key — with no
+  explanation in the diff.
 - A `.tfstate` or `.tfstate.backup` file included in the diff. State can
   contain every attribute of every resource, secrets included, in plaintext.
 
