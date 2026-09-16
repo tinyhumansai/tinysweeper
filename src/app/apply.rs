@@ -845,6 +845,7 @@ mod tests {
                         jobs: vec!["playwright".into()],
                         summary: "Coverage looks complete.".into(),
                         failed: false,
+                        generation: "gen-1".into(),
                     }),
                     ..ReviewedState::default()
                 },
