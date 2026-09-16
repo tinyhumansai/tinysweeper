@@ -74,6 +74,14 @@ pub struct Proposal {
     /// longer exists.
     #[serde(default)]
     pub unreviewed: Vec<String>,
+    /// Why no lane ran at all, when none did: a kill-switch label.
+    ///
+    /// Not the same as a review that found nothing. A proposal with every
+    /// lane skipped is clean, complete and unanswered by nobody — and would
+    /// be approved, which is an endorsement of a pull request the bot was
+    /// told to stay out of.
+    #[serde(default)]
+    pub skipped: Option<String>,
     /// Total model spend for the run.
     pub cost_usd: f64,
     /// Prompt tokens sent, including any served from cache.
@@ -227,7 +235,7 @@ impl Proposal {
     /// `Neutral`, and Neutral does not block — so a review that consulted no
     /// model at all read as clean and approved.
     pub fn complete(&self) -> bool {
-        self.unreviewed.is_empty() && self.answered()
+        self.skipped.is_none() && self.unreviewed.is_empty() && self.answered()
     }
 
     /// Whether every lane got an answer for everything it asked about.
@@ -469,8 +477,10 @@ pub async fn review_with_tree(
                 })
                 .collect(),
             // A kill switch means nobody asked for a verdict, so "incomplete"
-            // would be the wrong word for it. There is simply no review.
+            // would be the wrong word for it. There is simply no review —
+            // and `skipped` is what keeps that from reading as a clean one.
             unreviewed: Vec::new(),
+            skipped: Some(format!("`{label}` is applied")),
             // Nor a diagram: drawing the change of a pull request the bot was
             // switched off for is still commenting on it.
             overview: None,
@@ -874,6 +884,7 @@ pub async fn review_with_tree(
         lanes,
         overview,
         unreviewed: uninspected,
+        skipped: None,
         threads,
         cost_usd: spend.usage.cost_usd,
         input_tokens: spend.usage.input_tokens,

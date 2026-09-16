@@ -170,7 +170,9 @@ impl OpenRouterEmbedder {
         let text = response
             .text()
             .await
-            .map_err(|err| Error::Model(format!("openrouter embeddings: {err}")))?;
+            .map_err(|err| {
+                Error::Model(format!("{} embeddings: {err}", self.signature.provider))
+            })?;
 
         if !status.is_success() {
             // The body is the provider's error message, which names the model
@@ -178,11 +180,12 @@ impl OpenRouterEmbedder {
             // is not worth a screenful, and never logged with the key.
             let detail: String = text.chars().take(400).collect();
             return Err(Error::Model(format!(
-                "openrouter embeddings returned {status}: {detail}"
+                "{} embeddings returned {status}: {detail}",
+                self.signature.provider
             )));
         }
 
-        parse(&text)
+        parse(&text).map_err(|err| relabel(err, &self.signature.provider))
     }
 }
 
@@ -198,7 +201,9 @@ impl Embedder for OpenRouterEmbedder {
         }
 
         let response = self.post(texts).await?;
-        let vectors = response.vectors(texts.len(), self.signature.dims)?;
+        let vectors = response
+            .vectors(texts.len(), self.signature.dims)
+            .map_err(|err| relabel(err, &self.signature.provider))?;
 
         Ok(match response.usage.as_ref() {
             // Both numbers from the gateway: the tokens it counted and the cost
@@ -217,6 +222,21 @@ impl Embedder for OpenRouterEmbedder {
             None => Embedded::billed(&self.signature, texts, vectors.clone()),
         }
         .with_vectors(vectors))
+    }
+}
+
+/// Name the gateway an error came from.
+///
+/// The parsing and shape checks below are written once, against the wire
+/// format both gateways share, and say `openrouter`; a ladder deployment
+/// reading "openrouter embeddings returned 402" would go looking at the
+/// wrong service. The client knows which one it spoke to, so it relabels.
+fn relabel(err: Error, provider: &str) -> Error {
+    match err {
+        Error::Model(text) if provider != "openrouter" => {
+            Error::Model(text.replacen("openrouter embeddings", &format!("{provider} embeddings"), 1))
+        }
+        other => other,
     }
 }
 

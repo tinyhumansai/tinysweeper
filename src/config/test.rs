@@ -148,6 +148,14 @@ fn the_ladder_embedding_provider_needs_an_address() {
     let joined = validate::validate(&config).join("\n");
     assert!(joined.contains("needs `embeddings.base_url`"), "{joined}");
 
+    // A scheme alone is not an address.
+    let config = parse(
+        "version = 1\n[embeddings]\nenabled = true\nprovider = \"ladder\"\nmodel = \"vectors\"\n\
+         dimensions = 1024\napi_key_env = \"LADDER_API_KEY\"\nbase_url = \"http://\"\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("not a URL with a host"), "{joined}");
+
     let config = parse(
         "version = 1\n[embeddings]\nenabled = true\nprovider = \"ladder\"\nmodel = \"vectors\"\n\
          dimensions = 1024\napi_key_env = \"LADDER_API_KEY\"\n\

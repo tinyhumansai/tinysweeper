@@ -440,6 +440,17 @@ fn validate_embeddings(config: &Config, problems: &mut Vec<String>) {
         );
     }
 
+    if embeddings.provider.trim() == "ladder"
+        && !embeddings.base_url.trim().is_empty()
+        && url::Url::parse(embeddings.base_url.trim()).is_err_or(|url| url.host_str().is_none())
+    {
+        problems.push(format!(
+            "`embeddings.base_url = \"{}\"` is not a URL with a host; the ladder's \
+             `/v1/embeddings` on this box looks like `http://host.docker.internal:6969/v1/embeddings`",
+            embeddings.base_url
+        ));
+    }
+
     if !embeddings.base_url.trim().is_empty()
         && !embeddings.base_url.starts_with("http://")
         && !embeddings.base_url.starts_with("https://")
