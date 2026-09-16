@@ -915,6 +915,192 @@ fn helper() {
         );
     }
 
+    /// How many changed lines a group needs to clear [`COVERAGE_PASS_MIN_LINES`].
+    const LARGE_LINES: usize = COVERAGE_PASS_MIN_LINES;
+
+    /// A synthetic patch whose group is large enough for a coverage pass to
+    /// run at all — `diffs()` is deliberately two lines, so every coverage
+    /// pass test needs its own, bigger fixture.
+    fn large_patch() -> String {
+        let mut patch = String::from("@@ -1,2 +1,42 @@\n fn main() {\n");
+        for i in 0..LARGE_LINES {
+            patch.push_str(&format!("+    let x{i} = {i};\n"));
+        }
+        patch.push_str(" }\n");
+        patch
+    }
+
+    fn large_diffs() -> Vec<FileDiff> {
+        vec![parse_file_patch("src/large.rs", &large_patch())]
+    }
+
+    /// A finding quoting one of `large_diffs`'s added lines, named and titled
+    /// by the caller so round one and a coverage pass can be told apart.
+    fn finding_named(title: &str, index: usize) -> serde_json::Value {
+        json!({
+            "path": "src/large.rs",
+            "existing_code": format!("let x{index} = {index};"),
+            "rule": "unchecked-index",
+            "title": title,
+            "body": "detail.",
+            "severity": "high",
+            "confidence": 0.9
+        })
+    }
+
+    fn config_with_passes(passes: u8) -> Config {
+        let mut config = config();
+        config.review.passes = passes;
+        config
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_is_not_run_below_the_line_threshold() {
+        // `diffs()` is two lines, well under the threshold — passes = 2 must
+        // not build a second prompt over it.
+        let model = MockModel::new().then(json!({
+            "summary": "Nothing to report.",
+            "findings": []
+        }));
+        let handle = model.clone();
+
+        run_with(model, &config_with_passes(2), &diffs()).await;
+
+        assert_eq!(handle.calls(), 1, "no coverage call should have been made");
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_runs_once_more_above_the_threshold() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({"summary": "…", "findings": []}));
+        let handle = model.clone();
+
+        run_with(model, &config_with_passes(2), &large_diffs()).await;
+
+        assert_eq!(
+            handle.calls(),
+            3,
+            "round one's review, round one's falsify, and the coverage pass"
+        );
+        let coverage_request = handle
+            .requests()
+            .last()
+            .expect("the coverage pass made a request")
+            .messages
+            .iter()
+            .map(|m| m.content.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(coverage_request.contains("## What you already found"));
+        assert!(coverage_request.contains("Guard the first index"));
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_finding_that_corroborates_round_one_is_dropped() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({
+                "summary": "…",
+                // Same line, a different-sounding title: still the same
+                // observation by two calls, not two findings.
+                "findings": [finding_named("Bounds-check x3 before use", 3)]
+            }));
+
+        let outcome = run_with(model, &config_with_passes(2), &large_diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(outcome.findings[0].title, "Guard the first index");
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_finding_on_a_new_line_survives_and_is_falsified() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the second index", 30)]
+            }))
+            .then(json!({
+                "incorrect": [{"index": 1, "reason": "x30 is never dereferenced"}]
+            }));
+
+        let outcome = run_with(model, &config_with_passes(2), &large_diffs()).await;
+
+        assert_eq!(
+            outcome.findings.len(),
+            1,
+            "the disproved coverage-pass finding must not survive"
+        );
+        assert_eq!(outcome.findings[0].title, "Guard the first index");
+    }
+
+    #[tokio::test]
+    async fn passes_1_never_makes_a_second_call() {
+        let model = MockModel::new().then(json!({
+            "summary": "Nothing to report.",
+            "findings": []
+        }));
+        let handle = model.clone();
+
+        // The default config ships `passes = 1`.
+        run_with(model, &config(), &large_diffs()).await;
+
+        assert_eq!(handle.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_with_zero_new_findings_makes_no_extra_falsify_call() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({"summary": "Nothing further.", "findings": []}));
+        let handle = model.clone();
+
+        run_with(model, &config_with_passes(2), &large_diffs()).await;
+
+        assert_eq!(
+            handle.calls(),
+            3,
+            "an empty coverage answer must not falsify anything"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_third_pass_is_skipped_when_the_second_added_nothing() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({"summary": "Nothing further.", "findings": []}));
+        let handle = model.clone();
+
+        run_with(model, &config_with_passes(3), &large_diffs()).await;
+
+        assert_eq!(
+            handle.calls(),
+            3,
+            "the second coverage pass added nothing, so a third must not run"
+        );
+    }
+
     /// The bug this lane shipped: a check run whose summary asserted a bug,
     /// reported no findings, concluded success and approved the pull request.
     /// The model's prose is written before falsification runs, so once the
