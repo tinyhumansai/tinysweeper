@@ -465,18 +465,33 @@ fn path_instructions(inputs: &PromptInputs<'_>) -> String {
             })
             .collect();
 
+        let is_match = |index: usize, path: &str| {
+            matchers[index]
+                .as_ref()
+                .is_some_and(|m| m.is_match(path))
+        };
+
         let mut selected = Vec::new();
         for path in paths {
-            if let Some(index) = matchers
-                .iter()
-                .position(|m| m.as_ref().is_some_and(|m| m.is_match(path)))
-                && !selected.contains(&index)
+            let Some(primary) = (0..table.len()).find(|&i| is_match(i, path)) else {
+                continue;
+            };
+            if !selected.contains(&primary) {
+                selected.push(primary);
+            }
+            // One level only: the second entry is never itself followed
+            // further, even when it also has `merge = true`.
+            if table[primary].merge
+                && let Some(secondary) = (primary + 1..table.len()).find(|&i| is_match(i, path))
+                && !selected.contains(&secondary)
             {
-                selected.push(index);
+                selected.push(secondary);
             }
         }
         // Table order, not path order, so the same set of files always renders
-        // the same prefix and stays cacheable.
+        // the same prefix and stays cacheable. A merge pair is always
+        // rendered specific-first because the second match's index is always
+        // greater than the first's.
         selected.sort_unstable();
         selected
     };
