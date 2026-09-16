@@ -21,8 +21,12 @@
 - Removing or weakening a `lifecycle { prevent_destroy = true }` guard on a
   stateful resource — database, persistent volume, KMS key — with no
   explanation in the diff.
-- A `.tfstate` or `.tfstate.backup` file included in the diff. State can
-  contain every attribute of every resource, secrets included, in plaintext.
+- A `.tfstate` or `.tfstate.backup` file added or modified in the diff. State
+  can contain every attribute of every resource, secrets included, in
+  plaintext. A deletion is the fix, not the defect — flag it only if the diff
+  or its description shows the deletion is incomplete (the file is still
+  tracked elsewhere, or history scrubbing for an earlier exposure is called
+  for and hasn't happened).
 
 ### Do NOT report
 
