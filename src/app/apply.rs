@@ -383,7 +383,13 @@ fn code_span(text: &str) -> String {
     let clean: String = text.chars().filter(|c| !c.is_control()).collect();
     let longest = clean.split(|c| c != '`').map(str::len).max().unwrap_or(0);
     let fence = "`".repeat(longest + 1);
-    format!("{fence} {clean} {fence}")
+    if clean.contains('`') {
+        // A space each side is what lets a span begin or end with a backtick;
+        // CommonMark strips exactly one from each end.
+        format!("{fence} {clean} {fence}")
+    } else {
+        format!("{fence}{clean}{fence}")
+    }
 }
 
 fn title_for(findings: usize, summary: &str) -> String {
@@ -1456,7 +1462,7 @@ mod tests {
 
     #[test]
     fn a_contributor_path_cannot_break_out_of_its_code_span() {
-        assert_eq!(code_span("src/lib.rs"), "` src/lib.rs `");
+        assert_eq!(code_span("src/lib.rs"), "`src/lib.rs`");
         let hostile = "x`.rs` **bold**\n# heading";
         let rendered = code_span(hostile);
         assert!(rendered.starts_with("`` "), "{rendered}");
