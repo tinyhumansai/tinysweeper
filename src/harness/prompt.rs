@@ -1041,7 +1041,11 @@ mod tests {
         let prompt = build(&i);
 
         assert!(prompt.suffix().contains("## What you already found"));
-        assert!(prompt.suffix().contains("second pass over the same evidence"));
+        assert!(
+            prompt
+                .suffix()
+                .contains("second pass over the same evidence")
+        );
     }
 
     #[test]
