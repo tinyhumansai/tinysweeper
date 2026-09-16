@@ -29,6 +29,7 @@ use crate::lanes::{
     Anchoring, Lane, LaneInput, LaneOutcome, aggregate_reviewer_responses, reviewer_responses,
 };
 use crate::ports::model::Model;
+use crate::scan;
 
 /// Bodies shorter than this are treated as no body at all.
 ///
