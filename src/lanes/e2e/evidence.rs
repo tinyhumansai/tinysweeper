@@ -111,9 +111,16 @@ impl Evidence {
             );
         }
         for candidate in &self.candidates {
+            // `gather`, below, re-reads this line from the tree at head —
+            // outside `evidence::redact::mask` entirely, which only ever
+            // sees the diff — so a scanner-detected credential sitting on
+            // the same line as the token this lane is verifying would
+            // otherwise reach this prompt unmasked even where the diff view
+            // already redacted it.
+            let text = scan::redact_line(&candidate.text);
             let body = format!(
                 "path: {}\nline: {}\nmentions token: {}\nadded at: {}\ntest line:\n{}",
-                candidate.path, candidate.line, candidate.token, candidate.added_at, candidate.text
+                candidate.path, candidate.line, candidate.token, candidate.added_at, text
             );
             push_fenced(&mut out, "e2e-candidate", &body);
         }
