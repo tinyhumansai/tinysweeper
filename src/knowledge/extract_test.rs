@@ -339,6 +339,25 @@ async fn a_credential_in_an_instruction_file_never_reaches_the_extraction_prompt
     assert!(!prompt.contains("IOSFODNN7EXAMPLE"), "{prompt}");
 }
 
+/// Regression for a Codex finding on #166: `redact_stream_line` used to apply
+/// only the rulepack, so an entropy-flagged assignment with no vendor prefix
+/// committed to an instruction file reached the extraction prompt even though
+/// the identical shape in an added diff line is masked by the scanner's own
+/// `high-entropy-assignment` finding.
+#[tokio::test]
+async fn a_high_entropy_assignment_in_an_instruction_file_never_reaches_the_extraction_prompt() {
+    let value = format!("{}{}", "f3Kq9zR2", "mW7pL4xN8vB1cY6tH0jD5sG");
+    let forge = forge_with(
+        "AGENTS.md",
+        &format!("# Project rules\n\nsecret_token = \"{value}\"\n\n- Use four spaces.\n"),
+    );
+    let model = answering("- Use four spaces.");
+    extract_with(&forge, &model, &["AGENTS.md"]).await;
+
+    let prompt = model.last_prompt().expect("recorded");
+    assert!(!prompt.contains(&value), "{prompt}");
+}
+
 /// This repository's own `AGENTS.md`, read from the source tree.
 ///
 /// The real file rather than a paraphrase of it: issue #48 was a live failure
