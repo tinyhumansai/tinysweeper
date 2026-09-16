@@ -605,16 +605,40 @@ mod tests {
         assert!(rendered.contains("let ordinary = true;"), "{rendered}");
     }
 
+    /// A hunk that opens inside a private key — `BEGIN` in omitted context,
+    /// `END` still in view — is masked up to the closing marker.
     #[test]
-    fn a_body_only_private_key_hunk_is_masked() {
+    fn a_hunk_that_opens_mid_key_is_masked_up_to_the_end_marker() {
         let body = "MIIEowIBAAKCAQEAthisisadeadbeefexamplebodyforatestcase1234567890";
-        let raw = format!("@@ -2 +2 @@\n+{body}\n");
+        let end = format!("-----END {} KEY-----", "RSA PRIVATE");
+        let raw = format!("@@ -2,3 +2,3 @@\n+{body}\n+{end}\n+let after = 1;\n");
         let mut diffs = vec![parse_file_patch("src/config.rs", &raw)];
 
         mask(&mut diffs, &[], &[]);
         let rendered = replay::render(&diffs);
 
         assert!(!rendered.contains(body), "{rendered}");
+        assert!(rendered.contains("let after = 1;"), "{rendered}");
+    }
+
+    /// Regression for the corpus replay breaking on opencompany#2313: a bare
+    /// base64-alphabet line outside any armour — a commit hash, a path, a
+    /// long identifier — is ordinary text and must render untouched. The
+    /// body heuristic only ever applies inside a key.
+    #[test]
+    fn a_bare_hash_or_path_line_outside_armour_is_not_masked() {
+        let raw = "@@ -1,3 +1,3 @@\n+e75d31e10e6af6ebe699c54c79eafad1aade20e5\n+vendor/tinyhivemind\n+SomeVeryLongIdentifierNameOnItsOwn\n";
+        let mut diffs = vec![parse_file_patch("notes.txt", raw)];
+
+        let redactions = mask(&mut diffs, &[], &[]);
+        let rendered = replay::render(&diffs);
+
+        assert!(redactions.is_empty(), "{redactions:?}");
+        assert!(
+            rendered.contains("e75d31e10e6af6ebe699c54c79eafad1aade20e5"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("vendor/tinyhivemind"), "{rendered}");
     }
 
     /// Regression for a Codex finding on #166: `scan::redact_line`'s rulepack
