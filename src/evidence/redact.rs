@@ -71,14 +71,20 @@ impl Redactions {
 /// Mask secrets in `diffs` in place, using `findings` from the scanners that
 /// already ran over them.
 ///
+/// `files` is the same [`ChangedFile`] list the diffs were parsed from — it is
+/// consulted for `previous_path`, which [`FileDiff`] does not carry: a rename
+/// out of a sensitive path (`.env` to `config.txt`) is still a sensitive edit
+/// on the base-revision side of the diff even though the head path alone would
+/// say otherwise.
+///
 /// Call this immediately after the scanners and before anything that renders
 /// or caches the diff — retrieval, a `LaneInput`, `evidence::replay::split`
 /// — so every downstream consumer, including the cached prefix, only ever
 /// sees the masked text. The [`Redactions`] it returns is what tells that
 /// prompt a value is missing on purpose.
-pub fn mask(diffs: &mut [FileDiff], findings: &[Finding]) -> Redactions {
+pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile]) -> Redactions {
     let mut spans = 0usize;
-    let mut files = Vec::new();
+    let mut files_masked = Vec::new();
 
     for diff in diffs.iter_mut() {
         let flagged: BTreeSet<u64> = findings
@@ -86,23 +92,64 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding]) -> Redactions {
             .filter(|finding| finding.kind == ScanKind::Secret && finding.path == diff.path)
             .filter_map(|finding| finding.line)
             .collect();
-        let sensitive = scan::is_sensitive_path(&diff.path);
-
-        // Neither trigger applies to this file: nothing to do, and the
-        // common case, so it is worth skipping the walk over every hunk.
-        if flagged.is_empty() && !sensitive {
-            continue;
-        }
+        let previous_sensitive = files
+            .iter()
+            .find(|file| file.path == diff.path)
+            .and_then(|file| file.previous_path.as_deref())
+            .is_some_and(scan::is_sensitive_path);
+        let sensitive = scan::is_sensitive_path(&diff.path) || previous_sensitive;
 
         let mut masked_here = false;
+        // A private key's armour line names the key type, not the key: the
+        // base64 body between it and the matching end marker is the actual
+        // secret, and it carries no vendor prefix or assignment shape for
+        // either scanner to anchor a per-line finding on. This runs over
+        // every line of every diff — not just a flagged or sensitive-path
+        // file — because the marker text is specific enough to carry no
+        // false-positive risk, and a key pasted into an ordinary source file
+        // is exactly the case a per-file allowlist cannot cover.
+        let mut in_key_block = false;
         for hunk in &mut diff.hunks {
+            in_key_block = false;
             for line in &mut hunk.lines {
+                if scan::is_private_key_begin(&line.text) {
+                    in_key_block = true;
+                    continue;
+                }
+                if in_key_block {
+                    if scan::is_private_key_end(&line.text) {
+                        in_key_block = false;
+                        continue;
+                    }
+                    let masked = scan::redact(line.text.trim());
+                    if masked != line.text.trim() || !line.text.trim().is_empty() {
+                        spans += 1;
+                        masked_here = true;
+                        line.text = masked;
+                    }
+                    continue;
+                }
+
+                // The deterministic rulepack runs over every line kind: a
+                // credential shaped like a known vendor's is just as live in
+                // a removed or context line — code the base revision already
+                // carried — as in an added one. It is applied unconditionally
+                // because it only ever matches a known shape; there is no
+                // heuristic here to false-positive on ordinary code.
+                let rulepack_masked = scan::redact_line(&line.text);
+                if rulepack_masked != line.text {
+                    spans += 1;
+                    masked_here = true;
+                    line.text = rulepack_masked;
+                    continue;
+                }
+
                 if sensitive && matches!(line.kind, LineKind::Added | LineKind::Removed) {
                     // A sensitive file is masked wholesale: the scanner's
                     // rulepack and heuristic look at shape, and a value with
                     // neither — a plain internal hostname, a numeric flag —
                     // is still a secret by convention of living in this file.
-                    let masked = mask_whole_line(&line.text);
+                    let masked = mask_assignment_or_whole_line(&line.text);
                     if masked != line.text {
                         spans += 1;
                         masked_here = true;
@@ -110,13 +157,19 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding]) -> Redactions {
                     }
                     continue;
                 }
-                // Context is never masked here: it is unchanged code, already
-                // in the base revision, and this pass only ever touches what
-                // a scanner or a sensitive path names about *this* diff.
+
+                // A finding the scanner anchored to this exact head line but
+                // whose value the rulepack itself cannot see — an
+                // entropy-flagged assignment, or a private-key marker with no
+                // `=`/`:` to split on — still names a value that must not
+                // reach a model. Fall back to the same assignment-or-whole-line
+                // masking a sensitive path gets, but only for a line the
+                // scanner specifically flagged, so an ordinary assignment
+                // elsewhere in the same file is left readable.
                 if let Some(head_line) = line.new_line
                     && flagged.contains(&head_line)
                 {
-                    let masked = scan::redact_line(&line.text);
+                    let masked = mask_assignment_or_whole_line(&line.text);
                     if masked != line.text {
                         spans += 1;
                         masked_here = true;
@@ -126,11 +179,14 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding]) -> Redactions {
             }
         }
         if masked_here {
-            files.push(diff.path.clone());
+            files_masked.push(diff.path.clone());
         }
     }
 
-    Redactions { spans, files }
+    Redactions {
+        spans,
+        files: files_masked,
+    }
 }
 
 /// Mask one line of a sensitive-path file.
