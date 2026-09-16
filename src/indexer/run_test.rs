@@ -849,6 +849,51 @@ async fn a_revocation_counted_by_a_failed_run_is_not_subtracted_again_by_the_ret
 }
 
 #[tokio::test]
+async fn a_run_after_an_uncertain_count_recounts_from_the_manifest() {
+    // A failed run that could not tell which confirmations landed leaves the
+    // marker in its message and a count nobody should add to. The next run
+    // recounts from the manifest instead.
+    let checkout = Checkout::new();
+    let rig = Rig::new();
+    rig.indexer()
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("indexes");
+    let truth = rig.manifest.snapshot(REPO, &rig.signature()).chunks;
+    assert_eq!(truth, rig.index.len() as u64);
+
+    // What such a failure leaves behind: a wrong count and the marker.
+    let signature = rig.signature();
+    let lease = match rig
+        .manifest
+        .claim(REPO, &signature, "worker-x")
+        .await
+        .expect("claims")
+    {
+        crate::indexer::types::Claim::Granted(lease) => lease,
+        other => panic!("{other:?}"),
+    };
+    rig.manifest
+        .release(
+            &lease,
+            &crate::indexer::types::Settled::Failed {
+                message: format!("provider down {}", crate::indexer::types::COUNT_UNCERTAIN),
+                chunks: Some(truth + 40),
+            },
+        )
+        .await
+        .expect("releases");
+
+    rig.indexer()
+        .index_repo(REPO, "sha-1", &checkout.root())
+        .await
+        .expect("runs");
+    let record = rig.manifest.snapshot(REPO, &signature);
+    assert_eq!(record.state, IndexState::Ready);
+    assert_eq!(record.chunks, truth, "recounted, not added to");
+}
+
+#[tokio::test]
 async fn a_run_that_hits_its_budget_stops_with_a_partial_index_rather_than_failing() {
     let checkout = Checkout::new();
     let rig = Rig::new();
