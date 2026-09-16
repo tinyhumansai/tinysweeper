@@ -1295,6 +1295,113 @@ mod tests {
         );
     }
 
+    /// Pins the fallback that keeps lookups alive on a backend that cannot
+    /// answer the preceding-lines probe: a replayed recording that never made
+    /// it, a forge read that failed. The range itself carries no armour, so
+    /// it is ordinary text and is served as recorded. Refusing it, or
+    /// treating it as key material, redacts every seeded definition read in
+    /// eval replay and on a degraded forge — which is how #166 broke the
+    /// `oc-2313` corpus case twice before this test existed.
+    #[tokio::test]
+    async fn a_ranged_read_with_no_probe_context_is_still_served() {
+        let read = Lookup::Read {
+            path: "src/lib.rs".into(),
+            start: Some(40),
+            end: Some(42),
+        };
+        let inner = MockTree::from_recorded(
+            [(
+                read.key(),
+                Found::Text {
+                    text: "   40| pub fn read_before(t: u64) -> u64 {\n   41|     t.saturating_sub(1)\n   42| }".into(),
+                    start: 40,
+                    total: 90,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree.lookup(&read).await.unwrap();
+
+        let Found::Text { text, .. } = found else {
+            panic!("a range with no armour must be served, got {found:?}")
+        };
+        assert!(text.contains("pub fn read_before"), "{text}");
+        assert!(!text.contains("redacted"), "{text}");
+    }
+
+    /// A range that provably opens mid-key — closing armour with no opening
+    /// one — is still masked without a probe, by the same lookahead a diff
+    /// hunk uses.
+    #[tokio::test]
+    async fn a_ranged_read_that_opens_mid_key_is_masked_without_a_probe() {
+        let read = Lookup::Read {
+            path: "src/keys.rs".into(),
+            start: Some(7),
+            end: Some(9),
+        };
+        let end = format!("-----END {} KEY-----", "RSA PRIVATE");
+        let inner = MockTree::from_recorded(
+            [(
+                read.key(),
+                Found::Text {
+                    text: format!("    7| MIIEowIBAAKCAQEAexamplebodyline\n    8| {end}\n    9| let after = 1;"),
+                    start: 7,
+                    total: 20,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree.lookup(&read).await.unwrap();
+
+        let Found::Text { text, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert!(!text.contains("MIIEowIBAAKCAQEAexamplebodyline"), "{text}");
+        assert!(text.contains("let after = 1;"), "{text}");
+    }
+
+    /// Same fallback for search: a hit whose bounded context read is not
+    /// answerable is one line outside armour, and is served rather than
+    /// silently dropped.
+    #[tokio::test]
+    async fn a_search_hit_with_no_probe_context_is_still_served() {
+        let search = Lookup::Search {
+            pattern: "read_before".into(),
+            glob: None,
+        };
+        let inner = MockTree::from_recorded(
+            [(
+                search.key(),
+                Found::Hits {
+                    hits: vec![Hit {
+                        path: "src/lib.rs".into(),
+                        line: 40,
+                        text: "pub fn read_before(t: u64) -> u64 {".into(),
+                    }],
+                    truncated: false,
+                    skipped: Vec::new(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree.lookup(&search).await.unwrap();
+
+        let Found::Hits { hits, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(hits[0].text.contains("read_before"), "{hits:?}");
+    }
+
     /// Regression for a Codex finding on #166: `redact_stream_line` used to
     /// apply only the rulepack, so a scanner-flagged high-entropy assignment
     /// with no vendor prefix — no `AKIA`, no `ghp_` — reached a tree read
