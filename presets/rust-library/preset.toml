@@ -1,7 +1,7 @@
 version = 1
 
 [review]
-lanes = ["critique", "security", "tests", "commits", "description"]
+lanes = ["critique", "security", "tests", "commits", "description", "e2e"]
 strictness = 2
 severity_gate = "medium"
 confidence_min = 0.6
