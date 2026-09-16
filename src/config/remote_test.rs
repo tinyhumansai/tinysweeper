@@ -431,6 +431,17 @@ fn a_wildcard_matches_exactly_one_segment() {
     assert!(!overridable("review"));
 }
 
+#[test]
+fn e2e_detection_keys_are_overridable() {
+    // docs/modules/lanes/e2e.md and presets/e2e-required/README.md both
+    // document these as repository-settable; without them in
+    // `OVERRIDABLE_KEYS` this filter silently drops the setting a
+    // repository documented as able to make.
+    assert!(overridable("lanes.e2e.paths"));
+    assert!(overridable("lanes.e2e.workflows"));
+    assert!(overridable("lanes.e2e.missing_harness"));
+}
+
 #[tokio::test]
 async fn a_repositorys_own_config_is_fetched_at_the_commit_it_is_asked_for() {
     let forge = forge_with("basesha", ".tinysweeper.toml", "[review]\nstrictness = 3\n");
