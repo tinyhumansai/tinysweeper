@@ -567,37 +567,85 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_pull_request_target_workflow_is_classified_from_the_base_branch() {
+    async fn a_pull_request_target_workflow_is_classified_from_the_default_branch() {
         // GitHub resolves a `pull_request_target` workflow's definition from
-        // the base branch, never the head — the fork could rewrite it
-        // otherwise. The head copy here renames the job (so its check-run
-        // name would never match anything GitHub actually reports) and the
-        // base copy is the one that must win.
+        // the repository's *default* branch — an unregistered branch name
+        // resolves to itself in `MockForge`, so this exercises exactly that
+        // resolution path (`default_branch` -> "main" -> `branch_head`
+        // "main" -> "main"), not a base-branch shortcut. The head copy here
+        // renames the job (so its check-run name would never match anything
+        // GitHub actually reports) and the default-branch copy is the one
+        // that must win.
         let mut state = MockState::default();
         state.set_tree("head", &[".github/workflows/e2e.yml"]);
+        state.set_tree("main", &[".github/workflows/e2e.yml"]);
         state.set_file(
             "head",
             ".github/workflows/e2e.yml",
             "name: e2e\non: pull_request_target\njobs:\n  renamed-on-head:\n    steps:\n      - run: npx playwright test\n",
         );
         state.set_file(
-            "base",
+            "main",
             ".github/workflows/e2e.yml",
             "name: e2e\non: pull_request_target\njobs:\n  playwright:\n    steps:\n      - run: npx playwright test\n",
         );
         let forge = MockForge::with_state(state);
 
-        let evidence = gather(
-            &forge,
-            &config(),
-            &RepoId::parse("o/r").unwrap(),
-            "head",
-            "base",
-            &[],
-        )
-        .await;
+        let evidence = gather(&forge, &config(), &RepoId::parse("o/r").unwrap(), "head", &[]).await;
 
         assert_eq!(evidence.harness.workflows.len(), 1);
         assert_eq!(evidence.harness.workflows[0].jobs[0].key, "playwright");
+    }
+
+    #[tokio::test]
+    async fn a_pull_request_target_workflow_deleted_on_head_is_still_inventoried() {
+        // This pull request deletes the workflow file — it is not in the
+        // head tree at all — but GitHub still executes the default branch's
+        // copy for `pull_request_target`, so the lane must still see it.
+        let mut state = MockState::default();
+        state.set_tree("head", &[]);
+        state.set_tree("main", &[".github/workflows/e2e.yml"]);
+        state.set_file(
+            "main",
+            ".github/workflows/e2e.yml",
+            "name: e2e\non: pull_request_target\njobs:\n  playwright:\n    steps:\n      - run: npx playwright test\n",
+        );
+        let forge = MockForge::with_state(state);
+
+        let evidence = gather(&forge, &config(), &RepoId::parse("o/r").unwrap(), "head", &[]).await;
+
+        assert_eq!(evidence.harness.workflows.len(), 1);
+        assert_eq!(evidence.harness.workflows[0].jobs[0].key, "playwright");
+    }
+
+    #[tokio::test]
+    async fn a_head_copy_that_only_looks_like_pull_request_target_is_not_trusted() {
+        // This pull request's head copy claims `pull_request_target`, but
+        // the default branch — the actually-executing definition, since
+        // nothing has merged yet — does not have that trigger at all.
+        // Trusting the head copy would publish a verdict about a workflow
+        // identity GitHub is not going to run.
+        let mut state = MockState::default();
+        state.set_tree("head", &[".github/workflows/e2e.yml"]);
+        state.set_tree("main", &[".github/workflows/e2e.yml"]);
+        state.set_file(
+            "head",
+            ".github/workflows/e2e.yml",
+            "name: e2e\non: pull_request_target\njobs:\n  playwright:\n    steps:\n      - run: npx playwright test\n",
+        );
+        state.set_file(
+            "main",
+            ".github/workflows/e2e.yml",
+            "name: e2e\non: workflow_dispatch\njobs:\n  playwright:\n    steps:\n      - run: npx playwright test\n",
+        );
+        let forge = MockForge::with_state(state);
+
+        let evidence = gather(&forge, &config(), &RepoId::parse("o/r").unwrap(), "head", &[]).await;
+
+        assert!(
+            evidence.harness.workflows.is_empty(),
+            "the default branch has no `pull_request_target` trigger for this file: {:?}",
+            evidence.harness.workflows
+        );
     }
 }
