@@ -671,6 +671,31 @@ fn a_zero_auto_merge_cap_is_flagged_as_refusing_everything() {
 }
 
 #[test]
+fn a_zero_grouping_cap_is_flagged_when_grouping_is_enabled() {
+    let config = parse("version = 1\n[grouping]\nenabled = true\nmax_files = 0\n");
+    let problems = validate::validate(&config);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("`grouping.max_files = 0`")),
+        "{problems:#?}"
+    );
+}
+
+#[test]
+fn a_zero_grouping_cap_is_not_flagged_when_grouping_is_disabled() {
+    // Disabled grouping never calls `grouping::group`, so a zero bound is
+    // inert — and the enabled-case error above names this key as the valid
+    // way to turn grouping off. Rejecting it here would contradict that.
+    let config = parse("version = 1\n[grouping]\nenabled = false\nmax_files = 0\n");
+    let problems = validate::validate(&config);
+    assert!(
+        !problems.iter().any(|p| p.contains("grouping.max_files")),
+        "{problems:#?}"
+    );
+}
+
+#[test]
 fn an_api_key_pasted_where_the_variable_name_goes_is_caught() {
     let config = parse("version = 1\n[models]\napi_key_env = \"sk-or-v1-abc123\"\n");
     let problems = validate::validate(&config);
