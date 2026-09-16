@@ -28,14 +28,13 @@ pub fn is_sensitive_path(path: &str) -> bool {
         );
     }
 
-    if matches!(
-        lower.as_str(),
-        ".netrc" | ".pgpass" | ".npmrc"
-    ) {
+    if matches!(lower.as_str(), ".netrc" | ".pgpass" | ".npmrc") {
         return true;
     }
 
-    if lower.starts_with("id_rsa") || lower.starts_with("id_ed25519") || lower.starts_with("id_ecdsa")
+    if lower.starts_with("id_rsa")
+        || lower.starts_with("id_ed25519")
+        || lower.starts_with("id_ecdsa")
     {
         return true;
     }
