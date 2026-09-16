@@ -5,12 +5,12 @@
   "schema_name": "tinysweeper_rule_extraction",
   "usage": {
     "input_tokens": 3844,
-    "output_tokens": 334,
-    "cached_tokens": 3840,
+    "output_tokens": 261,
+    "cached_tokens": 0,
     "embed_tokens": 0,
-    "cost_usd": 0.00012759264
+    "cost_usd": 0.00037346764
   },
   "value": {
-    "rules_markdown": "- Use standard `rustfmt` output and Rust 2024 idioms.\n- Module and file names should be `snake_case`; public types `PascalCase`; functions, methods, fields, and local variables `snake_case`.\n- Return `Result<T>` using the crate error type from `src/error.rs`.\n- Prefer small modules with focused responsibilities; keep core types in a dedicated `types.rs` file.\n- Package-local tests go in the module file or a `test.rs` file; cross-module tests go in the consuming module or `tests/`.\n- Add focused tests with every behavior change; maintain at least 80% coverage for meaningful library behavior.\n- Document intentionally untested edge cases in the PR description.\n- Keep `README.md`, `docs/spec/README.md`, and module docs aligned with code changes; prefer concrete examples.\n- Keep every Markdown file at 500 lines or fewer; split topics into focused files when they grow past that limit.\n- Use concise, imperative commit subjects; keep the first line specific and avoid bundling unrelated changes.\n- Keep commits small and concise; commit each coherent, validated slice on its own.\n- Pull requests should include a short summary, commands run locally, and API or behavior changes with updated docs."
+    "rules_markdown": "- Prefer small modules with focused responsibilities.\n- Keep core type definitions in a dedicated `types.rs` file.\n- Use standard `rustfmt` output and Rust 2024 idioms.\n- Module and file names in `snake_case`; public types in `PascalCase`.\n- Functions, methods, fields, and local variables in `snake_case`.\n- Return `Result<T>` using the crate error type from `src/error.rs`.\n- Add focused tests with every behavior change.\n- Keep tests near the module they exercise unless cross-module.\n- Maintain at least 80% coverage for meaningful library behavior.\n- Keep `README.md`, `docs/spec/README.md`, and module docs aligned with code changes.\n- Prefer concrete examples over vague descriptions in documentation.\n- Keep every Markdown file at 500 lines or fewer.\n- Use concise, imperative commit subjects.\n- Keep commits small and concise; commit each validated slice on its own.\n- Include a short summary, commands run, and API/behavior changes in PRs.\n- Use `RUST_MIN_STACK = 8388608` — do not drop it."
   }
 }
