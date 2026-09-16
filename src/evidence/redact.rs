@@ -135,11 +135,28 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
         // file — because the marker text is specific enough to carry no
         // false-positive risk, and a key pasted into an ordinary source file
         // is exactly the case a per-file allowlist cannot cover.
-        let mut in_key_block = false;
         for hunk in &mut diff.hunks {
+            // Diff hunks omit arbitrary stretches of the file, so armour
+            // state cannot safely cross their boundary. A closing marker may
+            // be in omitted context; carrying this state would hide an
+            // unrelated later hunk from every reviewing lane.
+            let mut in_key_block = false;
             for line in &mut hunk.lines {
                 if scan::is_private_key_begin(&line.text) {
                     in_key_block = true;
+                    // A bare armour marker is safe metadata, but a key can
+                    // be serialized on the marker's physical line (usually
+                    // as an assignment containing literal `\\n`s). In that
+                    // case the marker branch must not bypass ordinary value
+                    // masking before it starts tracking the following lines.
+                    let trimmed = line.text.trim();
+                    let marker_only = trimmed.starts_with("-----BEGIN ")
+                        && trimmed.ends_with("-----");
+                    if !marker_only {
+                        spans += 1;
+                        masked_here = true;
+                        line.text = mask_assignment_or_whole_line(&line.text);
+                    }
                     continue;
                 }
                 if in_key_block {
@@ -547,6 +564,45 @@ mod tests {
             rendered.contains(&begin),
             "the armour line itself names no secret: {rendered}"
         );
+    }
+
+    /// A PEM can be serialized into an assignment with literal `\\n` escape
+    /// sequences, leaving key material on the same physical line as its
+    /// opening marker. The marker branch must mask that value before it
+    /// begins tracking subsequent armour lines.
+    #[test]
+    fn a_private_key_serialized_on_its_marker_line_is_masked() {
+        let begin = format!("-----BEGIN {}-----", "RSA PRIVATE KEY");
+        let body = "MIIEowIBAAKCAQEAthisisadeadbeefexamplebodyforatestcase1234567890";
+        let value = format!("{begin}\\\\n{body}\\\\n-----END RSA PRIVATE KEY-----");
+        let raw = format!("@@ -0,0 +1 @@\\n+KEY=\\\"{value}\\\"\\n");
+        let mut diffs = vec![parse_file_patch("src/config.rs", &raw)];
+
+        mask(&mut diffs, &[], &[]);
+        let rendered = replay::render(&diffs);
+
+        assert!(!rendered.contains(&value), "{rendered}");
+        assert!(!rendered.contains(body), "{rendered}");
+        assert!(rendered.contains("KEY="), "{rendered}");
+    }
+
+    /// A hunk can omit the closing marker of an earlier PEM block. State must
+    /// restart at the later hunk, otherwise ordinary changed code there would
+    /// be hidden as if it were key material.
+    #[test]
+    fn private_key_state_does_not_cross_hunk_boundaries() {
+        let begin = format!("-----BEGIN {}-----", "RSA PRIVATE KEY");
+        let body = "MIIEowIBAAKCAQEAthisisadeadbeefexamplebodyforatestcase1234567890";
+        let raw = format!(
+            "@@ -0,0 +1,2 @@\\n+{begin}\\n+{body}\\n@@ -10,0 +12 @@\\n+let ordinary = true;\\n"
+        );
+        let mut diffs = vec![parse_file_patch("src/config.rs", &raw)];
+
+        mask(&mut diffs, &[], &[]);
+        let rendered = replay::render(&diffs);
+
+        assert!(!rendered.contains(body), "{rendered}");
+        assert!(rendered.contains("let ordinary = true;"), "{rendered}");
     }
 
     #[test]
