@@ -26,9 +26,11 @@ from most specific to least, on purpose:
    because `*.tf` does not match them.
 2. `.github/workflows/**` — the deterministic scanner already checked
    permissions and pinning; the workflow rules adjudicate what it found.
-3. Dependency manifests (`Cargo.toml`, `package.json`, `go.mod`,
-   `requirements*.txt`) — reused verbatim from `security-strict`, because a
-   manifest is a manifest regardless of which language it declares
+3. Dependency manifests and lockfiles for every ecosystem this preset routes
+   (`Cargo.toml`/`Cargo.lock`, `package.json`/`package-lock.json`/`yarn.lock`/
+   `pnpm-lock.yaml`, `go.mod`/`go.sum`, `requirements*.txt`/`pyproject.toml`/
+   `poetry.lock`, `pom.xml`/`build.gradle`/`build.gradle.kts`) — a manifest or
+   its lockfile is a manifest regardless of which language it declares
    dependencies for.
 4. Test files, by filename shape (`_test`, `test_`, `.test`, `.spec`), plus
    two Java-specific entries (`*Test.java`/`*Tests.java`/`*IT.java` and
