@@ -257,7 +257,7 @@ async fn review_group(
         spend.note(&response.model);
         looked_up.push_str(&response.looked_up);
 
-        let asked = match place(llm.clone(), input, diff, &evidence, response.response).await {
+        let asked = match place(llm.clone(), input, group_diffs, &evidence, response.response).await {
             Ok(asked) => asked,
             Err(err) if reviewers.len() > 1 => {
                 tracing::warn!(agent = response.id, %err, "a council reviewer failed");
