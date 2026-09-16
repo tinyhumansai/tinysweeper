@@ -55,13 +55,6 @@ pub struct Submodule {
 ///
 /// `host` is the forge's git host, `github.com` in production; a URL on any
 /// other host resolves to `None` and stays unread.
-/// `line` with a leading git-config `key` removed, whatever its case.
-fn strip_key<'a>(line: &'a str, key: &str) -> Option<&'a str> {
-    line.get(..key.len())
-        .filter(|head| head.eq_ignore_ascii_case(key))
-        .map(|_| &line[key.len()..])
-}
-
 pub fn parse_gitmodules(text: &str, host: &str) -> Vec<Submodule> {
     let mut out = Vec::new();
     let mut path: Option<String> = None;
@@ -82,15 +75,11 @@ pub fn parse_gitmodules(text: &str, host: &str) -> Vec<Submodule> {
             continue;
         }
         // Git-config keys are case-insensitive: `PATH = x` is `path = x`.
-        if let Some(rest) = strip_key(line, "path")
-            && let Some(value) = rest.trim().strip_prefix('=')
-        {
+        if let Some(value) = crate::ports::tree::git_config_key(line, "path") {
             // One spelling, shared with the selector; a path nobody may
             // declare is dropped here rather than carried along unresolved.
             path = crate::ports::tree::canonical_submodule_path(value);
-        } else if let Some(rest) = strip_key(line, "url")
-            && let Some(value) = rest.trim().strip_prefix('=')
-        {
+        } else if let Some(value) = crate::ports::tree::git_config_key(line, "url") {
             // Quoted and commented the same way a path may be.
             url = Some(crate::ports::tree::git_config_value(value));
         }

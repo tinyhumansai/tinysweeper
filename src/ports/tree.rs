@@ -590,13 +590,7 @@ impl DirTree {
 pub fn submodule_paths(gitmodules: &str) -> Vec<String> {
     git_config_lines(gitmodules)
         .iter()
-        .filter_map(|line| {
-            let line = line.trim();
-            line.get(..4)
-                .filter(|head| head.eq_ignore_ascii_case("path"))
-                .map(|_| &line[4..])
-        })
-        .filter_map(|rest| rest.trim().strip_prefix('='))
+        .filter_map(|line| git_config_key(line.trim(), "path"))
         .filter_map(|p| canonical_submodule_path(p.trim()))
         // Two declarations of one directory are one directory.
         .fold(Vec::new(), |mut paths, path| {
@@ -605,6 +599,22 @@ pub fn submodule_paths(gitmodules: &str) -> Vec<String> {
             }
             paths
         })
+}
+
+/// The value part of `line` when its key is `key` (case-insensitive, as
+/// git-config keys are), or `None`. The key must end where the `=` or the
+/// whitespace before it begins: `pathology = x` is not a `path`.
+pub fn git_config_key<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let head = line.get(..key.len())?;
+    if !head.eq_ignore_ascii_case(key) {
+        return None;
+    }
+    let rest = line[key.len()..].trim_start();
+    if rest.len() == line[key.len()..].len() && !rest.starts_with('=') {
+        // No whitespace after the key and no `=`: a longer key.
+        return None;
+    }
+    rest.strip_prefix('=')
 }
 
 /// A git-config value as git reads it: `"quoted"` up to the closing quote,
@@ -634,13 +644,9 @@ pub fn git_config_value(raw: &str) -> String {
                 None => {}
             },
             (false, '#' | ';') => break,
-            // Unquoted internal whitespace collapses to one space, as git
-            // reads it; quoted whitespace is kept as written.
-            (false, c) if c.is_whitespace() => {
-                if !matches!(out.last(), Some((' ', false))) {
-                    out.push((' ', false));
-                }
-            }
+            // Unquoted whitespace is kept in count but spelled as spaces,
+            // which is how git reads it; quoted whitespace is kept as written.
+            (false, c) if c.is_whitespace() => out.push((' ', false)),
             (_, c) => out.push((c, quoted)),
         }
     }
@@ -937,8 +943,13 @@ mod tests {
         }
         // A decoded escape is a real character in the path: a tab is a tab.
         assert_eq!(git_config_value("\"vendor\\tcore\""), "vendor\tcore");
-        // Quoted whitespace is git's to keep; unquoted whitespace is not.
+        // Quoted whitespace is git's to keep; unquoted whitespace at the
+        // ends is not, and unquoted whitespace inside is kept in count.
         assert_eq!(git_config_value("  \" vendor/x \"  "), " vendor/x ");
+        assert_eq!(git_config_value("vendor/  core\t"), "vendor/  core");
+        assert_eq!(git_config_key("path = x", "path"), Some(" x"));
+        assert_eq!(git_config_key("PATH=x", "path"), Some("x"));
+        assert_eq!(git_config_key("pathology = x", "path"), None);
         assert_eq!(
             git_config_lines("path = vendor/\\\nx\nurl = u\\\\\n"),
             vec!["path = vendor/x".to_string(), "url = u\\\\".to_string()],
