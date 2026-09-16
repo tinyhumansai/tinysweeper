@@ -1085,6 +1085,7 @@ jobs:
                 paths_ignore: vec![],
                 filter_line: Some(5),
                 target: false,
+                also_plain: false,
             }
         );
         assert_eq!(
@@ -1111,6 +1112,7 @@ jobs:
                 paths_ignore: vec![],
                 filter_line: None,
                 target: false,
+                also_plain: false,
             }
         );
     }
