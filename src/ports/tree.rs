@@ -1001,6 +1001,93 @@ mod tests {
         );
     }
 
+    /// Regression for a tinysweeper finding on #166: the sensitive-path guard
+    /// was added only to `DirTree`. `MockTree::from_files` stands in for a
+    /// live checkout in tests and fixtures, and its `Lookup::Read` used to
+    /// serve `.env` content straight from `self.files` with no equivalent
+    /// refusal.
+    #[tokio::test]
+    async fn the_mock_refuses_to_read_a_sensitive_path_too() {
+        let tree = MockTree::from_files([(".env", "AWS_SECRET=super-secret-value")]);
+
+        let found = tree
+            .lookup(&Lookup::Read {
+                path: ".env".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+
+        let Found::Unavailable { reason } = found else {
+            panic!("a sensitive path must never be read: {found:?}")
+        };
+        assert!(reason.contains("secret"), "{reason}");
+    }
+
+    /// Regression for the same finding: a search over `MockTree::from_files`
+    /// used to walk every file including a sensitive one, so a `.env` value
+    /// could come back as a hit — the path and the line, exactly the shape
+    /// [`sensitive_path_refusal`]'s doc says must never reach a model.
+    #[tokio::test]
+    async fn the_mock_never_returns_a_search_hit_inside_a_sensitive_path() {
+        let tree = MockTree::from_files([
+            (".env", "AWS_SECRET=needle"),
+            ("src/a.rs", "// needle, but not a secret"),
+        ]);
+
+        let found = tree
+            .lookup(&Lookup::Search {
+                pattern: "needle".into(),
+                glob: None,
+            })
+            .await
+            .unwrap();
+
+        let Found::Hits { hits, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert_eq!(hits.len(), 1, "{hits:#?}");
+        assert_eq!(hits[0].path, "src/a.rs");
+    }
+
+    /// Regression for the same finding, on the replay path: a cassette
+    /// recorded before the guard existed can carry a `Found::Hits` naming a
+    /// sensitive path, and `MockTree::from_recorded` used to hand that back
+    /// verbatim since the recorded map is consulted before anything else.
+    #[tokio::test]
+    async fn a_recorded_search_hit_inside_a_sensitive_path_is_stripped_on_replay() {
+        let key = Lookup::Search {
+            pattern: "needle".into(),
+            glob: None,
+        };
+        let recorded = Found::Hits {
+            hits: vec![
+                Hit {
+                    path: ".env".into(),
+                    line: 1,
+                    text: "AWS_SECRET=needle".into(),
+                },
+                Hit {
+                    path: "src/a.rs".into(),
+                    line: 2,
+                    text: "// needle".into(),
+                },
+            ],
+            truncated: false,
+            skipped: Vec::new(),
+        };
+        let tree = MockTree::from_recorded([(key.key(), recorded)].into_iter().collect());
+
+        let found = tree.lookup(&key).await.unwrap();
+
+        let Found::Hits { hits, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert_eq!(hits.len(), 1, "{hits:#?}");
+        assert_eq!(hits[0].path, "src/a.rs");
+    }
+
     #[test]
     fn gitmodules_paths_are_parsed_and_unsafe_paths_refused() {
         let text = "[submodule \"x\"]\n\tpath = vendor/x\n\turl = https://e/x.git\n[submodule \"y\"]\n Path=vendor/y/\n[submodule \"x2\"]\n\tpath = ./vendor/x\n";
