@@ -230,6 +230,12 @@ impl MockState {
             .insert(file_key(sha, path), (url.to_string(), commit.to_string()));
     }
 
+    /// Serve `numbers` as the open pull requests `sha` belongs to.
+    pub fn set_pull_requests_for_commit(&mut self, sha: &str, numbers: &[u64]) {
+        self.pull_requests_by_commit
+            .insert(sha.to_string(), numbers.to_vec());
+    }
+
     /// Report `name` on `sha`. `conclusion: None` means still running.
     pub fn set_check(&mut self, sha: &str, name: &str, conclusion: Option<CheckConclusion>) {
         self.checks.entry(sha.to_string()).or_default().insert(
