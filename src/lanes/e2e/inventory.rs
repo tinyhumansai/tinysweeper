@@ -515,11 +515,14 @@ struct OutlineJob {
 impl Outline {
     fn parse(text: &str) -> Self {
         let mut nodes = Vec::new();
-        for (index, raw) in text.lines().enumerate() {
+        let lines: Vec<&str> = text.lines().collect();
+        let mut index = 0usize;
+        while index < lines.len() {
             let line = index as u64 + 1;
-            let without_comment = strip_comment(raw);
+            let without_comment = strip_comment(lines[index]);
             let trimmed = without_comment.trim_end();
             if trimmed.trim().is_empty() {
+                index += 1;
                 continue;
             }
             let indent = trimmed.len() - trimmed.trim_start().len();
@@ -529,25 +532,30 @@ impl Outline {
                 // plain item. Both matter: steps are the former, `paths:` the
                 // latter.
                 if let Some((key, value)) = split_key(item) {
+                    let node_indent = indent + 2;
+                    let (value, consumed) = read_block_scalar(&lines, index, node_indent, value);
                     nodes.push(Node {
-                        indent: indent + 2,
+                        indent: node_indent,
                         key,
                         value,
                         item: true,
                         line,
                     });
-                } else {
-                    nodes.push(Node {
-                        indent,
-                        key: String::new(),
-                        value: item.trim().to_string(),
-                        item: true,
-                        line,
-                    });
+                    index = consumed;
+                    continue;
                 }
+                nodes.push(Node {
+                    indent,
+                    key: String::new(),
+                    value: item.trim().to_string(),
+                    item: true,
+                    line,
+                });
             } else if body == "-" {
+                index += 1;
                 continue;
             } else if let Some((key, value)) = split_key(body) {
+                let (value, consumed) = read_block_scalar(&lines, index, indent, value);
                 nodes.push(Node {
                     indent,
                     key,
@@ -555,7 +563,10 @@ impl Outline {
                     item: false,
                     line,
                 });
+                index = consumed;
+                continue;
             }
+            index += 1;
         }
         Self { nodes }
     }
