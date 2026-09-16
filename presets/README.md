@@ -29,6 +29,7 @@ each effective value.
 | --- | --- |
 | [`rust-library`](rust-library/) | Rust crates: API stability, error handling, feature-gate hygiene |
 | [`security-strict`](security-strict/) | Repositories where a missed vulnerability costs more than a false positive |
+| [`polyglot`](polyglot/) | Repositories mixing languages: each file gets the rules written for its own |
 
 ## Adding one
 
