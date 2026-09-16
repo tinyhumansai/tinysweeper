@@ -1236,6 +1236,22 @@ jobs:
     }
 
     #[test]
+    fn a_later_unconditional_e2e_step_clears_an_earlier_steps_gate() {
+        // The reverse ordering from `an_unconditional_e2e_step_is_not_overridden_by_a_later_gated_one`:
+        // the *first* e2e-shaped step is label-gated (a flaky Cypress
+        // suite), the *second* is an unconditional Playwright step. The job
+        // still runs the unconditional one regardless of the label, so the
+        // aggregate gate must clear rather than lock onto whichever e2e
+        // step happened to be read first.
+        let text = "name: e2e\non: pull_request\njobs:\n  run:\n    steps:\n      - name: Run flaky e2e\n        if: contains(github.event.pull_request.labels.*.name, 'run-flaky')\n        run: npx cypress run\n      - name: Run e2e\n        run: npx playwright test\n";
+        let workflow = classify_workflow(".github/workflows/e2e.yml", text, &[]).unwrap();
+        assert_eq!(
+            workflow.jobs[0].label_gate, None,
+            "the unconditional playwright step means the job runs regardless of the label"
+        );
+    }
+
+    #[test]
     fn a_gate_on_the_e2e_step_itself_is_still_read() {
         let text = "name: e2e\non: pull_request\njobs:\n  run:\n    steps:\n      - name: Run e2e\n        if: contains(github.event.pull_request.labels.*.name, 'run-e2e')\n        run: npx playwright test\n";
         let workflow = classify_workflow(".github/workflows/e2e.yml", text, &[]).unwrap();
