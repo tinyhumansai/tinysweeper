@@ -94,14 +94,29 @@ pub async fn coverage_pass(
     spend.note(&answer.model);
     let looked_up = answer.looked_up.clone();
 
-    let responses = reviewer_responses(
+    // `reviewer_responses` treats a malformed response from a solo reviewer
+    // (a slice of one, exactly what this call always passes) as fatal — the
+    // right call for round one, where a lane with no usable answer has
+    // nothing to report at all. This call is different: it is one optional
+    // extra look on top of round one's already-successful findings, so a
+    // schema-invalid answer here must be swallowed the same way a failed
+    // call already is above, not propagated to fail the whole group and
+    // discard what round one found. `CoverageOutcome::response`'s own
+    // documentation promises exactly this — `None`, not an error.
+    let response = match reviewer_responses(
         lane,
         std::slice::from_ref(reviewer),
         std::slice::from_ref(&answer),
-    )?;
+    ) {
+        Ok(mut responses) => responses.pop().map(|r| r.response),
+        Err(err) => {
+            tracing::warn!(agent = reviewer.id, %err, "the coverage pass reviewer's answer did not parse");
+            None
+        }
+    };
 
     Ok(CoverageOutcome {
-        response: responses.into_iter().next().map(|r| r.response),
+        response,
         spend,
         looked_up,
     })
