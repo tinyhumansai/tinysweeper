@@ -422,7 +422,7 @@ pub async fn review_with_tree(
     tree: Option<&dyn TreeReader>,
 ) -> Result<Proposal> {
     let context = forge.pull_request_context(repo, number).await?;
-    let diffs = reviewable_diffs(config, &context)?;
+    let mut diffs = reviewable_diffs(config, &context)?;
     // The forge reader is always behind whatever the caller supplied: a
     // checkout that lacks a submodule, or a fixture that recorded nothing
     // for a path, falls through to a read at the head commit through the
