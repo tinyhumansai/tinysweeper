@@ -87,6 +87,17 @@ pub struct JobRun {
     pub filter_line: Option<u64>,
     /// The verdict.
     pub state: State,
+    /// Whether this job's workflow is `pull_request_target`.
+    ///
+    /// Its check run is not attached to this pull request's head SHA — as
+    /// of GitHub's November 2025 change, `pull_request_target` executes
+    /// (and reports check runs) against the repository's default branch
+    /// tip, whatever that happens to be at run time, not against any
+    /// commit of this pull request at all. `pending()` uses this to keep
+    /// such a job out of the watch: `check_runs(repo, head_sha)` will never
+    /// see its check run, so watching it would mean a `Neutral`
+    /// `tinysweeper/e2e` that no completion event can ever settle.
+    pub target: bool,
 }
 
 /// Whether `check` reports on the job named `job`.
