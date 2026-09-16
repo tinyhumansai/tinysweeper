@@ -97,7 +97,8 @@ discussion in the pull request:
   pull request, and the bar is the same each time: the module holds a `ForgeWrite` and *only* executes a plan
   some other module already decided on.
 - Secrets found by the scanners are reported by type and location only. The
-  value never reaches a comment, a check-run summary, or a log.
+  value never reaches a comment, a check-run summary, a log, or a model
+  request.
 
 ## Commit & Pull Request Guidelines
 
