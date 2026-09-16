@@ -815,7 +815,18 @@ impl ForgeWrite for MockForge {
                     comment.author = "tinysweeper[bot]".into();
                     comment
                 }));
-            state.own_reviews.insert(number, event);
+            // GitHub's semantics, so multi-push tests see what production
+            // sees: a comment leaves a standing verdict in force, and only a
+            // verdict replaces a verdict.
+            match (event, state.own_reviews.get(&number)) {
+                (
+                    ReviewEvent::Comment,
+                    Some(ReviewEvent::Approve | ReviewEvent::RequestChanges),
+                ) => {}
+                _ => {
+                    state.own_reviews.insert(number, event);
+                }
+            }
         }
         self.record(Write::Review {
             number,
