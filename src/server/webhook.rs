@@ -97,6 +97,12 @@ pub struct CheckRef {
     /// which is why an empty list is ignored rather than treated as an error.
     #[serde(default)]
     pub pull_requests: Vec<PullRequestNumberRef>,
+    /// The commit this check ran on.
+    ///
+    /// Read only when `pull_requests` came back empty — [`Action::SettleByCommit`]
+    /// uses it to recover the pull request number GitHub declined to name.
+    #[serde(default)]
+    pub head_sha: String,
 }
 
 /// A pull request reduced to its number.
