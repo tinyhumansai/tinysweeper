@@ -357,11 +357,6 @@ lanes = ["critique"]
 [paths]
 ignore = ["docs/**"]
 
-[grouping]
-enabled = false
-max_files = 2
-max_hunk_chars = 5000
-
 [labels]
 human_review = "needs-human"
 manual_only = "no-bots"
