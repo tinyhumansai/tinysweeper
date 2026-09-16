@@ -44,10 +44,14 @@ every test file in that language stops seeing the test rules.
 This preset does not turn the `security` lane's taxonomy on — that document
 is broad enough to cover every language already and duplicating it per
 language would just be the same list eight times. If the repository also
-wants that taxonomy, copy `security-strict`'s last `[[path_instructions]]`
-entry (`rules = "security"`, `lanes = ["security"]`) into this table, **after**
-the language-specific entries so it only catches what nothing more specific
-did, and raise `severity_gate`/`confidence_min` to taste.
+wants that taxonomy, copy `security-strict`'s `[[path_instructions]]` entry
+(`rules = "security"`, `lanes = ["security"]`) into this table, **before**
+the language-specific entries. Lane scoping is applied before first-match
+selection (see `presets/rules/README.md`), so the language entries above are
+unscoped and still visible to the security lane's own table; putting the
+catch-all after them means every file that also matches a language extension
+never reaches it, and the taxonomy never fires. Every other lane filters this
+entry out entirely, so moving it first costs those lanes nothing.
 
 ## When not to use it
 
