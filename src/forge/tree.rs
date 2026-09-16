@@ -40,7 +40,7 @@ use tokio::sync::OnceCell;
 use crate::error::Result;
 use crate::forge::types::RepoId;
 use crate::ports::forge::ForgeRead;
-use crate::ports::tree::{Found, Lookup, TreeReader, slice_lines};
+use crate::ports::tree::{Found, Lookup, TreeReader, sensitive_path_refusal, slice_lines};
 
 /// One submodule the superproject declares.
 #[derive(Debug, Clone, PartialEq, Eq)]
