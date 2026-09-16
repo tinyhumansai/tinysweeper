@@ -1,0 +1,90 @@
+version = 1
+
+# For repositories that mix languages: a service in Go or Python, infra in
+# Terraform, a frontend in TypeScript, all in one tree. Each file gets the
+# rules written for its own language, and nothing else.
+
+[review]
+lanes = ["critique", "security", "tests", "commits", "description"]
+strictness = 2
+severity_gate = "medium"
+confidence_min = 0.6
+max_comments = 20
+incremental = true
+draft_prs = false
+respect_agents_md = true
+
+[paths]
+ignore = [
+    "**/node_modules/**",
+    "**/vendor/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/__pycache__/**",
+    "**/.terraform/**",
+    "target/**",
+    "**/*.lock",
+    "**/generated/**",
+]
+
+# Ordered, first match wins: the most specific glob has to come first, or the
+# broader entry below it never fires. See presets/rules/README.md.
+
+[[path_instructions]]
+glob = "**/Dockerfile*"
+rules = "dockerfile"
+
+[[path_instructions]]
+glob = "**/*.tf"
+rules = "terraform"
+
+[[path_instructions]]
+glob = "**/.github/workflows/**"
+rules = "workflows"
+
+# Reused verbatim from security-strict: dependency manifests get the
+# dependency rules regardless of which language they declare dependencies for.
+[[path_instructions]]
+glob = "**/{Cargo.toml,Cargo.lock,package.json,go.mod,requirements*.txt}"
+rules = "dependencies"
+
+# Test files, across every language, take the test rules before any
+# language's own rules — a `_test.go` or `foo.test.ts` is judged as a test
+# first, not as Go or TypeScript source.
+[[path_instructions]]
+glob = "**/*{_test,test_,.test,.spec}*"
+rules = "tests"
+
+[[path_instructions]]
+glob = "**/*.go"
+rules = "go"
+
+[[path_instructions]]
+glob = "**/*.{ts,tsx,js,jsx,mjs,cjs}"
+rules = "typescript"
+
+[[path_instructions]]
+glob = "**/*.java"
+rules = "java"
+
+[[path_instructions]]
+glob = "**/*.py"
+rules = "python"
+
+[[path_instructions]]
+glob = "**/*.sql"
+rules = "sql"
+
+[[path_instructions]]
+glob = "**/*.sh"
+rules = "shell"
+
+[[path_instructions]]
+glob = "**/*.rs"
+rules = "rust"
+
+[lanes.tests]
+model = "scan"
+
+[lanes.security]
+model = "deep"
