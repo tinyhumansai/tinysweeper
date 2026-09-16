@@ -288,19 +288,19 @@ async fn review_group(
     )
     .await?;
 
-    // A file whose every reviewer failed is a file nobody read. Failing here is
-    // what puts it in the fan-out's failure list, where the summary names it —
-    // the alternative is an unreviewed file that reads as clean.
+    // A group whose every reviewer failed is a group nobody read. Failing here
+    // is what puts it in the fan-out's failure list, where the summary names
+    // it — the alternative is an unreviewed group that reads as clean.
     let Some(outcome) = aggregate_reviewer_responses(
         LaneId::Security,
         reviewer_responses(LaneId::Security, &reviewers, &answers)?,
-        std::slice::from_ref(diff),
+        group_diffs,
         Anchoring::Strict,
         config.council.corroboration,
     ) else {
         return Err(crate::error::Error::lane(
             LaneId::Security.as_str(),
-            format!("no reviewer could review {}", diff.path),
+            format!("no reviewer could review {}", group_paths.join(" + ")),
         ));
     };
 
