@@ -589,6 +589,7 @@ The definitions of what the changed lines call into,                  read from 
     /// there is no group) — a hit inside any of their hunks is changed code
     /// already visible in this same conversation's evidence, not an external
     /// definition, whichever member's diff it happens to land in.
+    #[allow(clippy::too_many_arguments)]
     async fn seed_symbol(
         &mut self,
         tree: &dyn TreeReader,
