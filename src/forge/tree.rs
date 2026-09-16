@@ -344,6 +344,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn forge_tree_search_never_returns_a_hit_inside_a_sensitive_path() {
+        // This deployment cannot search the tree at all — `Lookup::Search`
+        // is always `Unavailable` — so a sensitive path was never reachable
+        // through it either. Pinned here so the invariant is documented next
+        // to `DirTree`'s equivalent test rather than left implicit.
+        let forge = MockForge::with_state(MockState::default());
+        let tree = ForgeTree::new(&forge, repo(), "head", "github.com");
+
+        let found = tree
+            .lookup(&Lookup::Search {
+                pattern: "needle".into(),
+                glob: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(matches!(found, Found::Unavailable { .. }), "{found:?}");
+    }
+
+    #[tokio::test]
     async fn a_same_host_different_owner_submodule_is_not_followed() {
         // `.gitmodules` is contributor-controlled; pointing it at a same-host
         // repository owned by someone else must not pull that repository in
