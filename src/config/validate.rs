@@ -457,11 +457,14 @@ fn validate_embeddings(config: &Config, problems: &mut Vec<String>) {
         && !embeddings.base_url.starts_with("http://")
         && !embeddings.base_url.starts_with("https://")
     {
-        problems.push(format!(
-            "`embeddings.base_url = \"{}\"` is not an http(s) URL; leave it empty for the \
-             provider's own default",
-            embeddings.base_url
-        ));
+        // Not echoed, for the same reason as the ladder check above: this
+        // text reaches a check-run summary, and a malformed URL is where a
+        // pasted credential ends up.
+        problems.push(
+            "`embeddings.base_url` is not an http(s) URL; leave it empty for the provider's \
+             own default"
+                .into(),
+        );
     }
 
     if embeddings.batch == 0 {
