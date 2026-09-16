@@ -30,6 +30,11 @@
 //!   reviewed, the kill-switch label names, and which instruction filenames
 //!   count as policy. A repository is entitled to decide how it is reviewed,
 //!   and the worst it can do with these is get a quieter review of itself.
+//!   `[grouping]` sits in this bucket too: it only changes how many
+//!   conversations one file's problem gets discussed in — the same "how loud"
+//!   axis strictness sits on — and spends no more than the ungrouped fan-out
+//!   already would; the worst a repository can do with it is fewer, larger
+//!   calls over the same files it was already going to have reviewed.
 //! - **Not overridable — anything that spends the operator's money, names the
 //!   operator's secrets, writes to GitHub, or partitions shared state.**
 //!   `[models]` and `[embeddings]` (model choice, `base_url`, `api_key_env`,
