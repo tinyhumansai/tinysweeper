@@ -153,6 +153,7 @@ impl Lane for Security {
             let prior_findings = input.prior_findings;
             let retrieved_context = input.retrieved_context;
             let memory_context = input.memory_context;
+            let redaction_note = input.redaction_note;
             let input = &input;
             let diffs = input.diffs;
             let scanner = &scanner;
@@ -170,6 +171,7 @@ impl Lane for Security {
                     prior_findings,
                     retrieved_context,
                     memory_context,
+                    redaction_note,
                     asking,
                     diff,
                     scanner,
@@ -211,6 +213,7 @@ async fn review_file(
     prior_findings: &[String],
     retrieved_context: &str,
     memory_context: &str,
+    redaction_note: &str,
     asking: runner::Asking<'_>,
     diff: &FileDiff,
     scanner: &[&ScanFinding],
@@ -227,6 +230,7 @@ async fn review_file(
         scanner_evidence: &scanner_evidence,
         retrieved_context,
         memory_context,
+        redaction_note,
         ..PromptInputs::new(LaneId::Security, config)
     });
 
