@@ -736,6 +736,7 @@ pub async fn review_with_tree(
                 prior_findings: &prior_lines,
                 retrieved_context: &retrieved_context,
                 memory_context: &memory_text,
+                redaction_note: &redaction_note,
                 tree: Some(tree),
             })
             .await?;
