@@ -333,7 +333,6 @@ async fn review_group(
             let confirmed_lines = crate::lanes::coverage::confirmed_lines(&confirmed);
             let built = prompt::build(&PromptInputs {
                 repo_policy: input.repo_policy,
-                // placeholder-marker
                 extracted_rules: input.extracted_rules,
                 prior_findings: input.prior_findings,
                 new_evidence: &evidence,
