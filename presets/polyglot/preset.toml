@@ -1,0 +1,158 @@
+version = 1
+
+# For repositories that mix languages: a service in Go or Python, infra in
+# Terraform, a frontend in TypeScript, all in one tree. Each file gets the
+# rules written for its own language, and nothing else.
+
+[review]
+lanes = ["critique", "security", "tests", "commits", "description"]
+strictness = 2
+severity_gate = "medium"
+confidence_min = 0.6
+max_comments = 20
+incremental = true
+draft_prs = false
+respect_agents_md = true
+
+[paths]
+ignore = [
+    "**/node_modules/**",
+    "**/vendor/**",
+    "**/dist/**",
+    # Top-level only: unlike `node_modules` or `vendor`, "build" is also a
+    # common source-directory name (a Java package segment, `src/build/`
+    # tooling code). `**/build/**` would drop that source from review
+    # entirely, before any lane or path instruction saw it.
+    "build/**",
+    "**/__pycache__/**",
+    "**/.terraform/**",
+    "target/**",
+    "**/generated/**",
+]
+
+# Ordered, first match wins: the most specific glob has to come first, or the
+# broader entry below it never fires. See presets/rules/README.md. Every
+# entry in this table is scoped to lanes = ["critique", "security"] — the
+# only two that build a prompt for one file at a time. `tests`, `commits`
+# and `description` build one prompt over every changed path with no
+# `focus_path`, so an unscoped entry's rules would leak into lanes that never
+# review that file on its own — a Go file in the diff putting the Go
+# checklist in front of the description reviewer, say.
+[[path_instructions]]
+glob = "**/Dockerfile*"
+rules = "dockerfile"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/*.tf"
+rules = "terraform"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/*.tfvars"
+rules = "terraform"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/*.tfvars.json"
+rules = "terraform"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/*.tf.json"
+rules = "terraform"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/*.tfstate"
+rules = "terraform"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/*.tfstate.backup"
+rules = "terraform"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/.github/workflows/**"
+rules = "workflows"
+lanes = ["critique", "security"]
+
+# Dependency manifests and their lockfiles, across every ecosystem this
+# preset routes, get the dependency rules regardless of which language they
+# declare dependencies for.
+[[path_instructions]]
+glob = "**/{Cargo.toml,Cargo.lock,package.json,package-lock.json,yarn.lock,pnpm-lock.yaml,go.mod,go.sum,requirements*.txt,pyproject.toml,poetry.lock,pom.xml,build.gradle,build.gradle.kts,.terraform.lock.hcl}"
+rules = "dependencies"
+lanes = ["critique", "security"]
+
+# Test files, across every language, take the test rules before any
+# language's own rules — a `foo_test.go` or `foo.test.ts` is judged as a test
+# first, not as Go or TypeScript source. The shapes are anchored to a
+# filename boundary (prefix, suffix, or a `.test.`/`.spec.` segment) rather
+# than matched as a bare substring, so `contest_service.py` does not trip the
+# `test_` token the way `**/*{...}* ` would. Two conventions carry none of
+# these shapes at all: Java's JUnit layout (`UserServiceTest.java`,
+# `src/test/java/**`) and a directory named for its contents rather than its
+# filenames (`tests/api.py`, `__tests__/Widget.tsx`) — both get their own
+# entries below, still ahead of the general per-extension rule.
+[[path_instructions]]
+glob = "**/{test_*,*_test.*,*.test.*,*.spec.*}"
+rules = "tests"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/*{Test,Tests,IT}.java"
+rules = "tests"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/src/test/**/*.java"
+rules = "tests"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/{test,tests,__tests__}/**/*.{py,rs,go,ts,tsx,js,jsx,mjs,cjs}"
+rules = "tests"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/*.go"
+rules = "go"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/*.{ts,tsx,js,jsx,mjs,cjs}"
+rules = "typescript"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/*.java"
+rules = "java"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/*.py"
+rules = "python"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/*.sql"
+rules = "sql"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/*.sh"
+rules = "shell"
+lanes = ["critique", "security"]
+
+[[path_instructions]]
+glob = "**/*.rs"
+rules = "rust"
+lanes = ["critique", "security"]
+
+[lanes.tests]
+model = "scan"
+
+[lanes.security]
+model = "deep"

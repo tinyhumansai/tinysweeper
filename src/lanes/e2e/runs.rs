@@ -87,6 +87,17 @@ pub struct JobRun {
     pub filter_line: Option<u64>,
     /// The verdict.
     pub state: State,
+    /// Whether this job's workflow is `pull_request_target`.
+    ///
+    /// Its check run is not attached to this pull request's head SHA — as
+    /// of GitHub's November 2025 change, `pull_request_target` executes
+    /// (and reports check runs) against the repository's default branch
+    /// tip, whatever that happens to be at run time, not against any
+    /// commit of this pull request at all. `pending()` uses this to keep
+    /// such a job out of the watch: `check_runs(repo, head_sha)` will never
+    /// see its check run, so watching it would mean a `Neutral`
+    /// `tinysweeper/e2e` that no completion event can ever settle.
+    pub target: bool,
 }
 
 /// Whether `check` reports on the job named `job`.
@@ -117,6 +128,10 @@ pub fn job_runs(
             job: job.name.clone(),
             filter_line: filter_line(workflow),
             state: state_of(workflow, job, checks, changed, labels),
+            target: matches!(
+                workflow.trigger,
+                crate::lanes::e2e::inventory::Trigger::PullRequest { target: true, .. }
+            ),
         })
         .collect()
 }
@@ -249,7 +264,14 @@ pub fn findings(runs: &[JobRun]) -> Vec<Finding> {
 /// The jobs still to hear from.
 pub fn pending(runs: &[JobRun]) -> Vec<String> {
     runs.iter()
-        .filter(|run| run.state == State::Pending)
+        // `target` jobs are excluded on purpose, not merely left out by
+        // accident of never matching a check: their check run is not on
+        // this pull request's head SHA at all (see `JobRun::target`), so
+        // `check_runs(repo, head_sha)` — what `settle` reads — can never
+        // find it and `settle` would then never conclude. Watching one
+        // would mean a `tinysweeper/e2e` stuck `Neutral` forever, worse
+        // than not watching it.
+        .filter(|run| run.state == State::Pending && !run.target)
         .map(|run| run.job.clone())
         .collect()
 }
@@ -306,6 +328,21 @@ pub struct Watch {
     /// Whether the review's own findings already failed the lane. A failed
     /// static half stays failed whatever the jobs say.
     pub failed: bool,
+    /// Distinguishes this watch from any other, even one that is otherwise
+    /// byte-identical (same head, same jobs, same summary, same verdict).
+    ///
+    /// A same-head manual re-review (the `/admin/reviews` route can trigger
+    /// one at any time) can save a new watch that happens to match the old
+    /// one on every other field. `ReviewStateStore::clear_e2e_watch`
+    /// compares the whole `Watch` so a settlement in flight for the old one
+    /// cannot clear the new one out from under it — without a field that
+    /// changes on every save regardless of content, "otherwise identical"
+    /// would still compare equal and defeat that guard. `#[serde(default)]`
+    /// so a record written before this field existed deserializes to an
+    /// empty generation, which — correctly — never matches a freshly
+    /// created watch's generation, rather than being read as a match.
+    #[serde(default)]
+    pub generation: String,
 }
 
 /// The settled verdict, once every watched job has concluded.
@@ -455,6 +492,27 @@ mod tests {
     }
 
     #[test]
+    fn a_pending_pull_request_target_job_is_never_watched() {
+        // Its check run lands on GitHub's chosen default-branch tip, not
+        // this pull request's head — `check_runs(repo, head_sha)` will
+        // never see it, so watching it would mean a `tinysweeper/e2e` stuck
+        // `Neutral` forever with nothing left to settle it.
+        let text = "name: e2e\non: pull_request_target\njobs:\n  playwright:\n    steps:\n      - run: npx playwright test\n";
+        let harness = Harness {
+            tests: strings(&["e2e/login.spec.ts"]),
+            workflows: vec![classify_workflow(".github/workflows/e2e.yml", text, &[]).unwrap()],
+            truncated: false,
+        };
+        let runs = job_runs(&harness, &[], &strings(&["src/main.rs"]), &[]);
+        assert_eq!(runs[0].state, State::Pending);
+        assert!(runs[0].target);
+        assert!(
+            pending(&runs).is_empty(),
+            "a target job must never be added to the watch"
+        );
+    }
+
+    #[test]
     fn a_matrix_job_is_as_bad_as_its_worst_leg_and_pending_while_any_runs() {
         let harness = harness(&["src/**"]);
         let changed = strings(&["src/main.rs"]);
@@ -525,6 +583,7 @@ mod tests {
             jobs: strings(&["playwright", "cypress"]),
             summary: "Coverage looks complete.".into(),
             failed: false,
+            generation: String::new(),
         };
         assert_eq!(
             settle(
@@ -572,6 +631,7 @@ mod tests {
             jobs: strings(&["playwright"]),
             summary: String::new(),
             failed: false,
+            generation: String::new(),
         };
         let checks = [check("playwright", Some(CheckConclusion::Failure))];
         assert_eq!(
@@ -593,6 +653,7 @@ mod tests {
             jobs: strings(&["playwright"]),
             summary: String::new(),
             failed: true,
+            generation: String::new(),
         };
         let settled = settle(
             &watch,

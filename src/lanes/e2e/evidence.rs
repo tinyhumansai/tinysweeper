@@ -128,6 +128,40 @@ impl Evidence {
     }
 }
 
+/// `workflow` if it is (or, via `also_plain`, also covers) the
+/// `want_target` side of a pull-request trigger; `None` otherwise.
+///
+/// `Trigger::PullRequest::target` only ever names whichever event
+/// `Outline::trigger` saw first in the `on:` block — `on: [pull_request,
+/// pull_request_target]` classifies `target: false` even on a pass that
+/// exists specifically to find the `pull_request_target` side. `also_plain`
+/// is how both the head pass (which wants `want_target: false`) and the
+/// default-branch pass (which wants `want_target: true`) recover the side
+/// `target` alone doesn't name — re-flagged to `want_target` rather than
+/// read literally, since both sides run the same job list either way. One
+/// function for both callers on purpose: the same asymmetric-fix mistake
+/// bit each pass once already, in opposite directions, when this logic was
+/// duplicated between them.
+fn matching_execution(
+    mut workflow: inventory::Workflow,
+    want_target: bool,
+) -> Option<inventory::Workflow> {
+    let inventory::Trigger::PullRequest {
+        target, also_plain, ..
+    } = &mut workflow.trigger
+    else {
+        return None;
+    };
+    if *target == want_target {
+        Some(workflow)
+    } else if *also_plain {
+        *target = want_target;
+        Some(workflow)
+    } else {
+        None
+    }
+}
+
 /// Gather the lane's evidence at `head_sha`.
 pub async fn gather(
     forge: &dyn ForgeRead,
@@ -161,11 +195,33 @@ pub async fn gather(
     evidence.harness.truncated = listing.truncated;
     evidence.harness.tests = inventory::e2e_tests(&listing.paths, &table);
 
+    // Two independent lists, not one merged by path — a `pull_request` and
+    // a `pull_request_target` workflow that happen to share a file path are
+    // two independent executions with independent job lists (GitHub reads
+    // one from the head/merge ref and the other from the default branch's
+    // current tip, entirely regardless of each other), and this pull
+    // request can genuinely trigger both at once: it can propose changing a
+    // file from `pull_request_target` to `pull_request` while the default
+    // branch — what GitHub actually still executes as the target trigger,
+    // until this merges — has not seen that change yet. Overwriting one
+    // list entry with the other by path would silently drop whichever
+    // wasn't kept, and its later job failures with it.
+    let mut workflows: Vec<inventory::Workflow> = Vec::new();
+
     for path in inventory::workflow_paths(&listing.paths) {
         match forge.file_at(repo, &path, head_sha).await {
             Ok(Some(text)) => {
-                if let Some(workflow) = inventory::classify_workflow(&path, &text, named) {
-                    evidence.harness.workflows.push(workflow);
+                // A head copy classified as `pull_request_target` is not a
+                // real head-side execution at all: GitHub never reads head
+                // content to decide or run that trigger. Only the
+                // default-branch pass below can speak for
+                // `pull_request_target` — `matching_execution` keeps this
+                // one only when it is (or, via `also_plain`, also covers)
+                // the ordinary `pull_request` side.
+                if let Some(workflow) = inventory::classify_workflow(&path, &text, named)
+                    .and_then(|workflow| matching_execution(workflow, false))
+                {
+                    workflows.push(workflow);
                 }
             }
             Ok(None) => {}
@@ -177,6 +233,96 @@ pub async fn gather(
             }
         }
     }
+
+    // `pull_request_target` is resolved by GitHub from the repository's
+    // *default* branch — not the pull request's base branch, which can be
+    // some other branch entirely, and not the head, which the whole event
+    // exists to keep untrusted. A second, independent pass over the default
+    // branch's own tree is the only source that can speak for it: it finds
+    // a `pull_request_target` workflow this pull request's head never had
+    // (deleted, renamed, or detargeted on head) just as well as one both
+    // copies agree on.
+    let default_sha = match forge.default_branch(repo).await {
+        Ok(branch) => match forge.branch_head(repo, &branch).await {
+            Ok(sha) => sha,
+            Err(err) => {
+                tracing::warn!(%err, "could not resolve the default branch's tip for the e2e lane");
+                evidence.degraded.push(
+                    "the default branch's tip could not be read, so a `pull_request_target` \
+                     workflow may be inventoried from the wrong definition"
+                        .into(),
+                );
+                None
+            }
+        },
+        Err(err) => {
+            tracing::warn!(%err, "could not resolve the default branch for the e2e lane");
+            evidence.degraded.push(
+                "the default branch could not be resolved, so a `pull_request_target` workflow \
+                 may be inventoried from the wrong definition"
+                    .into(),
+            );
+            None
+        }
+    };
+    if let Some(default_sha) = default_sha {
+        let default_listing = match forge.tree_paths(repo, &default_sha).await {
+            Ok(listing) => listing,
+            Err(err) => {
+                tracing::warn!(%err, "could not list the default branch's tree for the e2e lane");
+                evidence.degraded.push(
+                    "the default branch's tree could not be listed, so a `pull_request_target` \
+                     workflow may be inventoried from the wrong definition"
+                        .into(),
+                );
+                Default::default()
+            }
+        };
+        if default_listing.truncated {
+            // The same signal `harness.truncated` already carries for the
+            // head tree, now also true when the *default* branch's tree was
+            // cut short: a `pull_request_target` workflow in the omitted
+            // tail is invisible to the pass below, and the lane must say so
+            // rather than publish a clean verdict over an incomplete scan.
+            evidence.harness.truncated = true;
+            evidence.degraded.push(
+                "the default branch's tree listing was truncated, so a `pull_request_target` \
+                 workflow may be missing from the inventory"
+                    .into(),
+            );
+        }
+        for path in inventory::workflow_paths(&default_listing.paths) {
+            match forge.file_at(repo, &path, &default_sha).await {
+                Ok(Some(text)) => {
+                    // Only a `pull_request_target` classification is kept
+                    // here — a plain `pull_request` definition on the
+                    // default branch says nothing about this pull request
+                    // until it merges, and the head pass above already
+                    // covers `pull_request` semantics for whatever this
+                    // pull request itself proposes at this path.
+                    // `matching_execution` keeps this one only when it is
+                    // (or, via `also_plain`, also covers) the
+                    // `pull_request_target` side.
+                    if let Some(workflow) = inventory::classify_workflow(&path, &text, named)
+                        .and_then(|workflow| matching_execution(workflow, true))
+                    {
+                        workflows.push(workflow);
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::warn!(
+                        %err, %path,
+                        "could not read a default-branch workflow for the e2e lane"
+                    );
+                    evidence.degraded.push(format!(
+                        "`{path}` could not be read from the default branch"
+                    ));
+                }
+            }
+        }
+    }
+    evidence.harness.workflows = workflows;
 
     match forge.check_runs(repo, head_sha).await {
         Ok(checks) => evidence.checks = checks,
@@ -518,5 +664,281 @@ mod tests {
         .await;
         assert!(evidence.harness.is_empty());
         assert!(evidence.candidates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_pull_request_target_workflow_is_classified_from_the_default_branch() {
+        // GitHub resolves a `pull_request_target` workflow's definition from
+        // the repository's *default* branch — an unregistered branch name
+        // resolves to itself in `MockForge`, so this exercises exactly that
+        // resolution path (`default_branch` -> "main" -> `branch_head`
+        // "main" -> "main"), not a base-branch shortcut. The head copy here
+        // renames the job (so its check-run name would never match anything
+        // GitHub actually reports) and the default-branch copy is the one
+        // that must win.
+        let mut state = MockState::default();
+        state.set_tree("head", &[".github/workflows/e2e.yml"]);
+        state.set_tree("main", &[".github/workflows/e2e.yml"]);
+        state.set_file(
+            "head",
+            ".github/workflows/e2e.yml",
+            "name: e2e\non: pull_request_target\njobs:\n  renamed-on-head:\n    steps:\n      - run: npx playwright test\n",
+        );
+        state.set_file(
+            "main",
+            ".github/workflows/e2e.yml",
+            "name: e2e\non: pull_request_target\njobs:\n  playwright:\n    steps:\n      - run: npx playwright test\n",
+        );
+        let forge = MockForge::with_state(state);
+
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            &[],
+        )
+        .await;
+
+        assert_eq!(evidence.harness.workflows.len(), 1);
+        assert_eq!(evidence.harness.workflows[0].jobs[0].key, "playwright");
+    }
+
+    #[tokio::test]
+    async fn a_pull_request_target_workflow_deleted_on_head_is_still_inventoried() {
+        // This pull request deletes the workflow file — it is not in the
+        // head tree at all — but GitHub still executes the default branch's
+        // copy for `pull_request_target`, so the lane must still see it.
+        let mut state = MockState::default();
+        state.set_tree("head", &[]);
+        state.set_tree("main", &[".github/workflows/e2e.yml"]);
+        state.set_file(
+            "main",
+            ".github/workflows/e2e.yml",
+            "name: e2e\non: pull_request_target\njobs:\n  playwright:\n    steps:\n      - run: npx playwright test\n",
+        );
+        let forge = MockForge::with_state(state);
+
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            &[],
+        )
+        .await;
+
+        assert_eq!(evidence.harness.workflows.len(), 1);
+        assert_eq!(evidence.harness.workflows[0].jobs[0].key, "playwright");
+    }
+
+    #[tokio::test]
+    async fn a_head_copy_that_only_looks_like_pull_request_target_is_not_trusted() {
+        // This pull request's head copy claims `pull_request_target`, but
+        // the default branch — the actually-executing definition, since
+        // nothing has merged yet — does not have that trigger at all.
+        // Trusting the head copy would publish a verdict about a workflow
+        // identity GitHub is not going to run.
+        let mut state = MockState::default();
+        state.set_tree("head", &[".github/workflows/e2e.yml"]);
+        state.set_tree("main", &[".github/workflows/e2e.yml"]);
+        state.set_file(
+            "head",
+            ".github/workflows/e2e.yml",
+            "name: e2e\non: pull_request_target\njobs:\n  playwright:\n    steps:\n      - run: npx playwright test\n",
+        );
+        state.set_file(
+            "main",
+            ".github/workflows/e2e.yml",
+            "name: e2e\non: workflow_dispatch\njobs:\n  playwright:\n    steps:\n      - run: npx playwright test\n",
+        );
+        let forge = MockForge::with_state(state);
+
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            &[],
+        )
+        .await;
+
+        assert!(
+            evidence.harness.workflows.is_empty(),
+            "the default branch has no `pull_request_target` trigger for this file: {:?}",
+            evidence.harness.workflows
+        );
+    }
+
+    #[tokio::test]
+    async fn a_trigger_change_on_the_same_path_keeps_both_definitions() {
+        // This pull request proposes changing `.github/workflows/e2e.yml`
+        // from `pull_request_target` to plain `pull_request` — but until it
+        // merges, the default branch's `pull_request_target` job is still
+        // independently live (GitHub still executes it from there) *and*
+        // the head's own `pull_request` job is independently live (GitHub
+        // always reads `pull_request` from the head/merge ref). Both must
+        // be inventoried; overwriting one by path would silently drop the
+        // other, and its later failure with it.
+        let mut state = MockState::default();
+        state.set_tree("head", &[".github/workflows/e2e.yml"]);
+        state.set_tree("main", &[".github/workflows/e2e.yml"]);
+        state.set_file(
+            "head",
+            ".github/workflows/e2e.yml",
+            "name: e2e\non: pull_request\njobs:\n  playwright-pr:\n    steps:\n      - run: npx playwright test\n",
+        );
+        state.set_file(
+            "main",
+            ".github/workflows/e2e.yml",
+            "name: e2e\non: pull_request_target\njobs:\n  playwright-target:\n    steps:\n      - run: npx playwright test\n",
+        );
+        let forge = MockForge::with_state(state);
+
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            &[],
+        )
+        .await;
+
+        let job_keys: std::collections::BTreeSet<&str> = evidence
+            .harness
+            .workflows
+            .iter()
+            .flat_map(|w| w.jobs.iter().map(|j| j.key.as_str()))
+            .collect();
+        assert_eq!(
+            job_keys,
+            std::collections::BTreeSet::from(["playwright-pr", "playwright-target"]),
+            "both the head's pull_request job and the default branch's \
+             pull_request_target job must survive: {:?}",
+            evidence.harness.workflows
+        );
+    }
+
+    #[tokio::test]
+    async fn one_workflow_declaring_both_triggers_keeps_both_executions() {
+        // `on: [pull_request_target, pull_request]` on a *single* file:
+        // GitHub fires both independently, off the same job list. Dropping
+        // either — which a naive "first event wins" classification would do
+        // — would exclude that execution's pending job from the watch.
+        let mut state = MockState::default();
+        state.set_tree("head", &[".github/workflows/e2e.yml"]);
+        state.set_tree("main", &[".github/workflows/e2e.yml"]);
+        let text = "name: e2e\non: [pull_request_target, pull_request]\njobs:\n  playwright:\n    steps:\n      - run: npx playwright test\n";
+        state.set_file("head", ".github/workflows/e2e.yml", text);
+        state.set_file("main", ".github/workflows/e2e.yml", text);
+        let forge = MockForge::with_state(state);
+
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            &[],
+        )
+        .await;
+
+        let targets: Vec<bool> = evidence
+            .harness
+            .workflows
+            .iter()
+            .map(|w| {
+                matches!(
+                    w.trigger,
+                    inventory::Trigger::PullRequest { target: true, .. }
+                )
+            })
+            .collect();
+        assert_eq!(
+            evidence.harness.workflows.len(),
+            2,
+            "one execution off the head, one off the default branch: {:?}",
+            evidence.harness.workflows
+        );
+        assert!(
+            targets.contains(&true) && targets.contains(&false),
+            "{targets:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn one_workflow_declaring_both_triggers_keeps_both_whichever_comes_first() {
+        // Same as the previous test, but with `pull_request` listed first
+        // (`trigger()` then classifies `target: false`) — the
+        // `pull_request_target` execution must still be found by the
+        // default-branch pass via `also_plain`, not silently dropped
+        // because the first-seen event happened to be the other one.
+        let mut state = MockState::default();
+        state.set_tree("head", &[".github/workflows/e2e.yml"]);
+        state.set_tree("main", &[".github/workflows/e2e.yml"]);
+        let text = "name: e2e\non: [pull_request, pull_request_target]\njobs:\n  playwright:\n    steps:\n      - run: npx playwright test\n";
+        state.set_file("head", ".github/workflows/e2e.yml", text);
+        state.set_file("main", ".github/workflows/e2e.yml", text);
+        let forge = MockForge::with_state(state);
+
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            &[],
+        )
+        .await;
+
+        let targets: Vec<bool> = evidence
+            .harness
+            .workflows
+            .iter()
+            .map(|w| {
+                matches!(
+                    w.trigger,
+                    inventory::Trigger::PullRequest { target: true, .. }
+                )
+            })
+            .collect();
+        assert_eq!(
+            evidence.harness.workflows.len(),
+            2,
+            "one execution off the head, one off the default branch: {:?}",
+            evidence.harness.workflows
+        );
+        assert!(
+            targets.contains(&true) && targets.contains(&false),
+            "{targets:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_truncated_default_branch_tree_degrades_the_evidence() {
+        let mut state = MockState::default();
+        state.set_tree("head", &[]);
+        state.trees.insert(
+            "main".into(),
+            crate::forge::types::TreeListing {
+                paths: vec![],
+                truncated: true,
+            },
+        );
+        let forge = MockForge::with_state(state);
+
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            &[],
+        )
+        .await;
+
+        assert!(evidence.harness.truncated, "{:?}", evidence.degraded);
+        assert!(
+            evidence.degraded.iter().any(|d| d.contains("truncated")),
+            "{:?}",
+            evidence.degraded
+        );
     }
 }

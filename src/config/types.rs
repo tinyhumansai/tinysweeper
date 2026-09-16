@@ -410,6 +410,19 @@ pub struct PathInstruction {
     /// more subject each of those reviewers can form an opinion about. Scoping
     /// is what makes a long document — a security taxonomy, say — affordable.
     pub lanes: Vec<LaneId>,
+    /// Keep looking for a second, broader match instead of stopping here.
+    ///
+    /// Off by default: shadowing is the understood, documented behaviour of
+    /// this table, and most entries want it — a `.github/workflows/**` entry
+    /// has no business also picking up whatever generic rule sits below it.
+    /// This exists for the narrower case of an entry that wants *both* its own
+    /// rule **and** the language document beneath it — a `src/ports/**` entry
+    /// with port-shaped advice that would otherwise have to duplicate
+    /// `rust.md` to keep it. Set it there instead: the next matching entry
+    /// (lane-scoped exactly as the first-match search is) is appended after
+    /// this one's instructions, specific first. One level only — a merge entry
+    /// found as that second match does not itself keep looking.
+    pub merge: bool,
 }
 
 /// Review-cache behaviour. See `docs/modules/cache/README.md`.
