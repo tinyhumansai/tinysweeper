@@ -5,8 +5,10 @@
 //! They are cheap, certain, and offline.
 
 pub mod blobs;
+pub mod paths;
 pub mod secrets;
 pub mod types;
 pub mod workflows;
 
+pub use crate::scan::paths::is_sensitive_path;
 pub use crate::scan::types::{Finding, ScanKind, redact};
