@@ -369,21 +369,38 @@ pub fn scan_added_lines<'a>(
 /// in a finding body — and scanner findings being carefully redacted counts for
 /// nothing if the critique lane prints the value two comments later.
 ///
-/// Only the deterministic rulepack is applied. The entropy heuristic is far too
-/// eager to run over prose: it would mangle every hash, identifier and base64
-/// example a review legitimately needs to quote.
+/// This is [`redact_line`] under another name — see that function for what it
+/// applies, including the entropy-assignment pass.
 pub fn scrub(text: &str) -> String {
     redact_line(text)
 }
 
 /// Replace every recognised credential in one line with a redacted hint.
 ///
-/// The matcher and the token format ([`crate::scan::types::redact`]) are
-/// exactly [`scrub`]'s — this *is* that function, named for its other caller:
-/// [`crate::evidence::redact`] masks a diff line before it ever reaches a
-/// model, which is a different moment than scrubbing a model's own output,
-/// but must produce the same redaction so a human reading either sees one
-/// vocabulary for "a secret was here."
+/// Two independent passes, mirroring [`scan_added_lines`]'s two layers so a
+/// value masked in a diff is masked exactly the same way wherever else this
+/// module's callers read the same text:
+///
+/// 1. The deterministic **rulepack** ([`next_credential`]) — a known vendor
+///    shape, matched regardless of context.
+/// 2. The **entropy-assignment heuristic** ([`secret_assignment`] plus
+///    [`is_opaque_token`], a length floor and [`shannon_entropy`]) — a
+///    `secret_token = "<opaque value>"` shape the rulepack cannot see. Unlike
+///    [`scan_added_lines`], this runs unconditionally rather than only on
+///    lines a `Finding` already named: every caller of this function —
+///    [`crate::evidence::redact::mask`]'s per-line fallback,
+///    [`redact_stream_line`], `scrub`, and every tree read, extraction or
+///    PR-metadata scrub that funnels through one of those — reads a line the
+///    scanner never anchored a finding to in the first place, so the mask has
+///    to reach the same conclusion the entropy check would, on sight, not by
+///    consulting a finding list that does not exist at this call site.
+///
+/// This is deliberately the *only* place either pass is implemented: every
+/// caller in this crate that needs to mask free-standing text — a tree read,
+/// an extracted instruction file, a PR title or body, a rendered diff being
+/// replayed — goes through this function (directly, or through [`scrub`] or
+/// [`redact_stream_line`]) rather than re-implementing either pass at the call
+/// site, so a rulepack or heuristic change only has to be made once.
 pub fn redact_line(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -402,7 +419,40 @@ pub fn redact_line(text: &str) -> String {
         }
     }
 
-    out
+    mask_entropy_assignment(&out).unwrap_or(out)
+}
+
+/// Mask the value of a high-entropy secret-shaped assignment that carries no
+/// rulepack prefix — `secret_token = "<opaque value>"` — using the same
+/// guardrails as [`scan_added_lines`]'s entropy branch: an assignment to a
+/// [`SECRET_NAMES`]-shaped name, a value that reads as one opaque token
+/// ([`is_opaque_token`]) rather than a placeholder ([`looks_like_placeholder`]),
+/// long enough and disordered enough ([`shannon_entropy`]) to be a credential
+/// rather than an identifier.
+///
+/// Returns `None` when nothing qualifies, so [`redact_line`] can fall back to
+/// its already-rulepack-masked text unchanged instead of allocating a second
+/// copy on the common case.
+fn mask_entropy_assignment(text: &str) -> Option<String> {
+    if text.len() > MAX_HEURISTIC_LINE {
+        return None;
+    }
+    let (_, value) = secret_assignment(text)?;
+    if looks_like_placeholder(value) || !is_opaque_token(value) || value.len() < 20 {
+        return None;
+    }
+    if shannon_entropy(value) < ENTROPY_THRESHOLD {
+        return None;
+    }
+
+    // `value` is a sub-slice of `text` produced entirely by trimming, so this
+    // offset always lands on a valid char boundary; a `text.find(value)`
+    // lookup would instead mask the *first* occurrence of that exact
+    // substring, which is wrong when the same value appears earlier in the
+    // line for an unrelated reason.
+    let offset = value.as_ptr() as usize - text.as_ptr() as usize;
+    let end = offset + value.len();
+    Some(format!("{}{}{}", &text[..offset], redact(value), &text[end..]))
 }
 
 /// Byte offset and length of the first rulepack match in `text`.
