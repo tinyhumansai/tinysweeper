@@ -73,33 +73,46 @@ rules = "tests"
 glob = "**/src/test/**/*.java"
 rules = "tests"
 
+# Scoped to the two lanes that actually read code file-by-file. `commits`,
+# `description` and `tests` build one prompt over every changed path with no
+# `focus_path`, so an unscoped entry here would inject every touched
+# language's checklist into lanes that have nothing to do with that
+# language's correctness — a Go file in the diff would put the Go rules in
+# front of the description reviewer.
 [[path_instructions]]
 glob = "**/*.go"
 rules = "go"
+lanes = ["critique", "security"]
 
 [[path_instructions]]
 glob = "**/*.{ts,tsx,js,jsx,mjs,cjs}"
 rules = "typescript"
+lanes = ["critique", "security"]
 
 [[path_instructions]]
 glob = "**/*.java"
 rules = "java"
+lanes = ["critique", "security"]
 
 [[path_instructions]]
 glob = "**/*.py"
 rules = "python"
+lanes = ["critique", "security"]
 
 [[path_instructions]]
 glob = "**/*.sql"
 rules = "sql"
+lanes = ["critique", "security"]
 
 [[path_instructions]]
 glob = "**/*.sh"
 rules = "shell"
+lanes = ["critique", "security"]
 
 [[path_instructions]]
 glob = "**/*.rs"
 rules = "rust"
+lanes = ["critique", "security"]
 
 [lanes.tests]
 model = "scan"
