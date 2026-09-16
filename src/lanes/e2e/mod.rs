@@ -631,7 +631,8 @@ mod lane_tests {
             "{prompt}"
         );
         assert!(prompt.contains("PENDING"), "{prompt}");
-        assert!(prompt.contains("e2e/home.spec.ts:9"), "{prompt}");
+        assert!(prompt.contains("path: e2e/home.spec.ts"), "{prompt}");
+        assert!(prompt.contains("line: 9"), "{prompt}");
         assert!(
             prompt.contains("End-to-end tests changed by this pull request: none"),
             "{prompt}"
