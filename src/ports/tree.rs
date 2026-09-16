@@ -607,12 +607,10 @@ pub fn submodule_paths(gitmodules: &str) -> Vec<String> {
 pub fn canonical_submodule_path(raw: &str) -> Option<String> {
     let raw = raw.trim();
     // Git accepts `path = "libs/core"`; the quotes are not part of the path.
-    // Unquoted, git reads `path = libs/core # note` up to the comment.
-    let raw = match raw
-        .strip_prefix('"')
-        .and_then(|rest| rest.strip_suffix('"'))
-    {
-        Some(quoted) => quoted,
+    // Unquoted, git reads `path = libs/core # note` up to the comment;
+    // quoted, it reads up to the closing quote and ignores what follows.
+    let raw = match raw.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or_default(),
         None => raw.split(['#', ';']).next().unwrap_or_default(),
     }
     .trim();
@@ -854,6 +852,7 @@ mod tests {
             "\"./vendor/x/\"",
             "vendor/x # the note git ignores",
             "vendor/x ; and this one",
+            "\"vendor/x\" # quoted, then a note",
         ] {
             assert_eq!(
                 canonical_submodule_path(spelled).as_deref(),
