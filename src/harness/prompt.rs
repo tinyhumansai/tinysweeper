@@ -175,6 +175,15 @@ pub struct PromptInputs<'a> {
     /// The pull request's own title and body. Attacker-controlled text, so it
     /// is fenced and labelled before it goes anywhere near the instructions.
     pub pull_request_text: &'a str,
+    /// One sentence from `crate::evidence::redact::Redactions::note`, saying
+    /// a credential was masked out of `new_evidence` before this prompt was
+    /// built. Empty when nothing was redacted.
+    ///
+    /// **Volatile, and placed immediately after the diff it describes** —
+    /// not in the prefix: it is a fact about *this* diff, and a prefix that
+    /// moved with it would lose the cache on every push a secret happened
+    /// to touch.
+    pub redaction_note: &'a str,
 }
 
 impl<'a> PromptInputs<'a> {
@@ -201,6 +210,7 @@ impl<'a> PromptInputs<'a> {
             pull_request_text: "",
             retrieved_context: "",
             memory_context: "",
+            redaction_note: "",
         }
     }
 }
@@ -389,6 +399,13 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
             }
         }
         push_fenced(&mut suffix, inputs.evidence_label, inputs.new_evidence);
+        // Right after the diff it describes, in the same volatile block: a
+        // marker inside the diff means nothing without the sentence that
+        // says what it is, and both change together with this push.
+        if !inputs.redaction_note.trim().is_empty() {
+            suffix.push_str("\n\n");
+            suffix.push_str(inputs.redaction_note);
+        }
     }
 
     Prompt { prefix, suffix }
