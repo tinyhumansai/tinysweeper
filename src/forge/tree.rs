@@ -92,7 +92,7 @@ pub fn parse_gitmodules(text: &str, host: &str) -> Vec<Submodule> {
             && let Some(value) = rest.trim().strip_prefix('=')
         {
             // Quoted and commented the same way a path may be.
-            url = Some(crate::ports::tree::git_config_value(value).to_string());
+            url = Some(crate::ports::tree::git_config_value(value));
         }
     }
     flush(&mut path, &mut url, &mut out);

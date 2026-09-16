@@ -383,7 +383,25 @@ impl<'a> Indexer<'a> {
         match outcome {
             Ok(()) => {
                 let chunks = if report.recount {
-                    self.recount(repo_id, &signature).await?
+                    match self.recount(repo_id, &signature).await {
+                        Ok(chunks) => chunks,
+                        // The recount is the one read that decides the count,
+                        // so a failure there keeps the marker for the next
+                        // claimant — and releases the claim, or nobody is.
+                        Err(err) => {
+                            let settled = Settled::Failed {
+                                message: format!(
+                                    "{err} {}",
+                                    crate::indexer::types::COUNT_UNCERTAIN
+                                ),
+                                chunks: None,
+                            };
+                            if let Err(nested) = self.manifest.release(&lease, &settled).await {
+                                tracing::warn!(error = %nested, "could not release the index claim");
+                            }
+                            return Err(err);
+                        }
+                    }
                 } else {
                     before
                         .saturating_add(report.upserted)

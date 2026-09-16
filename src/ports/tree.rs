@@ -598,18 +598,39 @@ pub fn submodule_paths(gitmodules: &str) -> Vec<String> {
         })
         .filter_map(|rest| rest.trim().strip_prefix('='))
         .filter_map(|p| canonical_submodule_path(p.trim()))
-        .collect()
+        // Two declarations of one directory are one directory.
+        .fold(Vec::new(), |mut paths, path| {
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+            paths
+        })
 }
 
 /// A git-config value as git reads it: `"quoted"` up to the closing quote,
 /// ignoring what follows; unquoted up to a `#` or `;` comment; trimmed.
-pub fn git_config_value(raw: &str) -> &str {
-    let raw = raw.trim();
-    match raw.strip_prefix('"') {
-        Some(rest) => rest.split('"').next().unwrap_or_default(),
-        None => raw.split(['#', ';']).next().unwrap_or_default(),
+///
+/// Git concatenates quoted and unquoted runs — `"libs/core"suffix` is
+/// `libs/coresuffix` — so this walks the value rather than splitting it:
+/// inside quotes everything is literal (with `\"` and `\\` escapes); outside
+/// them a `#` or `;` ends the value.
+pub fn git_config_value(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut quoted = false;
+    let mut chars = raw.trim().chars();
+    while let Some(c) = chars.next() {
+        match (quoted, c) {
+            (_, '"') => quoted = !quoted,
+            (true, '\\') => {
+                if let Some(escaped) = chars.next() {
+                    out.push(escaped);
+                }
+            }
+            (false, '#' | ';') => break,
+            (_, c) => out.push(c),
+        }
     }
-    .trim()
+    out.trim().to_string()
 }
 
 /// The one spelling of a submodule path, or `None` for one nobody may declare.
@@ -622,6 +643,7 @@ pub fn git_config_value(raw: &str) -> &str {
 /// names git's own directory is refused rather than repaired.
 pub fn canonical_submodule_path(raw: &str) -> Option<String> {
     let raw = git_config_value(raw);
+    let raw = raw.as_str();
     if raw.is_empty() || raw.starts_with('/') || raw.contains('\\') {
         return None;
     }
@@ -848,8 +870,12 @@ mod tests {
 
     #[test]
     fn gitmodules_paths_are_parsed_and_unsafe_paths_refused() {
-        let text = "[submodule \"x\"]\n\tpath = vendor/x\n\turl = https://e/x.git\n[submodule \"y\"]\n Path=vendor/y/\n";
-        assert_eq!(submodule_paths(text), vec!["vendor/x", "vendor/y"]);
+        let text = "[submodule \"x\"]\n\tpath = vendor/x\n\turl = https://e/x.git\n[submodule \"y\"]\n Path=vendor/y/\n[submodule \"x2\"]\n\tpath = ./vendor/x\n";
+        assert_eq!(
+            submodule_paths(text),
+            vec!["vendor/x", "vendor/y"],
+            "two spellings of one directory are one entry"
+        );
         // Every spelling git resolves to one gitlink is one path here too.
         for spelled in [
             "./vendor/x",
@@ -861,6 +887,7 @@ mod tests {
             "vendor/x # the note git ignores",
             "vendor/x ; and this one",
             "\"vendor/x\" # quoted, then a note",
+            "\"vendor/\"x",
         ] {
             assert_eq!(
                 canonical_submodule_path(spelled).as_deref(),
