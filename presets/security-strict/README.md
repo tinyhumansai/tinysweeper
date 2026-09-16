@@ -11,6 +11,10 @@ outside contributions.
 - `confidence_min = 0.4` — the model is allowed to raise something it is only
   moderately sure about. This is the main source of extra noise.
 - `security` fails the check at **medium**, not high.
+- `passes = 2` — a large group's first council reviewer gets one coverage
+  pass: told what it already found in this unit, asked once more for what a
+  first pass misses. One extra model call per group over the threshold in
+  `docs/modules/lanes/README.md`.
 - Draft pull requests are reviewed too.
 - Explicit rules for workflow files and Dockerfiles, which is where the
   expensive mistakes actually happen.

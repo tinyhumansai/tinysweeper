@@ -205,6 +205,42 @@ a look* — never a comment, never a block, never counted toward the
 conclusion. The gate exists so a half-sure reviewer does not block a merge;
 it was also the reason a correct `medium/0.61` boundary bug reached nobody.
 
+## Coverage pass
+
+`review.passes = 1` ships as the default, and every existing prompt is
+byte-identical whether it is set or not. Above one, `critique` and `security`
+each ask their group's first council reviewer — index `0`, never the whole
+council again — one more time after round one's own findings are placed
+(and, for `critique`, falsified), told plainly what it already found and
+asked to look for what a first pass misses. `lanes::coverage` builds that
+call; see its module doc for why anchoring the answer is left to the caller
+rather than done once in that module.
+
+This is recall, not verification — the opposite direction from
+`src/falsify`, which asks "is this correct" of a reviewer that saw less than
+the first one did. Asking the *same* reviewer to look again, told what it
+already said, is cheap enough to offer at all because it reuses round one's
+own prompt prefix, evidence and `flows::runner::ask_all` entry point for
+exactly one more call.
+
+Two things keep it from being a second council for every unit:
+
+- **A line gate.** `COVERAGE_PASS_MIN_LINES` (40, one constant per lane) has
+  to be cleared by the *group's* own changed lines before the second prompt
+  is even built. A rename or a one-line fix never pays for a call it cannot
+  use.
+- **Dedupe before falsify.** A new finding that `council::agree::corroborates`
+  a round-one finding, or shares its `Finding::fingerprint`, is dropped before
+  anything else runs against it — `critique`'s falsify call included, which
+  is why that call is free when a coverage pass finds nothing new.
+
+`review.passes = 3` runs two coverage passes, the second told about
+everything the first found in addition to round one's own list, and a pass
+that adds nothing new stops the loop rather than paying for the next one.
+`review.passes` is not in `config::remote::OVERRIDABLE_KEYS`: each pass above
+one is another model call per qualifying unit, and that is the operator's
+money, exactly like the per-pull-request budget in `[models]`.
+
 ## Rule documents
 
 Per-path review rules live under `presets/rules/` as data, selected by the

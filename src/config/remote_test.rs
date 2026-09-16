@@ -220,6 +220,17 @@ fn a_repository_cannot_decide_whether_the_review_blocks_or_approves() {
 }
 
 #[test]
+fn a_repository_cannot_raise_review_passes() {
+    // Each pass above one is another model call per unit that clears the
+    // coverage pass's line threshold — the operator's money, exactly like the
+    // per-pull-request budget in `[models]`.
+    let (config, ignored) = applied("[review]\npasses = 3\n");
+
+    assert_eq!(config.review.passes, base().review.passes);
+    assert_eq!(ignored, vec!["review.passes".to_string()]);
+}
+
+#[test]
 fn a_preset_name_is_ignored_because_it_would_bypass_the_whole_allow_list() {
     // A preset is read from the *server's* filesystem and may set any key at
     // all. Honouring one named by the reviewed repository would make every

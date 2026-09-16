@@ -21,6 +21,8 @@
 //!   │                           the pull request's own  │
 //!   │                           AGENTS.md               │
 //!   │ 5. prior findings         what was said last time │
+//!   │ 5a. confirmed this round  the coverage pass's own  │
+//!   │                           "already found" list     │
 //!   │ 5d. retrieved context     code the index returned │
 //!   │                           for *this* diff         │
 //!   │ 6. new evidence           commits since then      │
@@ -126,6 +128,33 @@ pub struct PromptInputs<'a> {
     pub reviewed_evidence: &'a str,
     /// Titles of findings raised on earlier cycles.
     pub prior_findings: &'a [String],
+    /// This unit's own surviving findings from round one, for the opt-in
+    /// coverage pass (`lanes::coverage`).
+    ///
+    /// **Volatile**, and empty on every call except the one extra call a
+    /// coverage pass makes: a lane that never runs one leaves this `&[]`,
+    /// which is what keeps every existing prompt byte-identical. Distinct
+    /// from [`Self::prior_findings`] — that layer is what an earlier *push*
+    /// found, this one is what the *same* reviewer already said about the
+    /// *same* evidence, one call ago in this run.
+    ///
+    /// Whether the "what you already found" layer renders at all is decided
+    /// by [`Self::coverage_pass`], not by whether this list is empty — a
+    /// group whose first pass reported nothing to report still needs the
+    /// second-pass instruction, or the coverage call is byte-identical to
+    /// round one and pays for a duplicate answer instead of a deeper look.
+    pub confirmed_this_round: &'a [String],
+    /// Whether this prompt is the opt-in coverage pass's own call, rather
+    /// than round one.
+    ///
+    /// `false` on every call except the one extra call a coverage pass
+    /// makes, which is what keeps every existing prompt byte-identical — see
+    /// `an_empty_confirmed_list_leaves_the_prompt_byte_identical`. Kept
+    /// separate from [`Self::confirmed_this_round`] being empty, because
+    /// "round one found nothing" and "this is not a coverage call at all"
+    /// are different facts: the former still needs the second-pass
+    /// instruction, the latter must not emit it.
+    pub coverage_pass: bool,
     /// The evidence that is new this run.
     pub new_evidence: &'a str,
     /// What kind of thing `new_evidence` is: `diff`, `commits`, and so on. It
@@ -203,6 +232,8 @@ impl<'a> PromptInputs<'a> {
             extracted_rules: &[],
             reviewed_evidence: "",
             prior_findings: &[],
+            confirmed_this_round: &[],
+            coverage_pass: false,
             new_evidence: "",
             evidence_label: "diff",
             changed_paths: &[],
@@ -308,6 +339,37 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
             &inputs.prior_findings.join("\n"),
         );
         suffix.push_str(CONTINUITY_CONTRACT);
+    }
+
+    // Layer 5a — what this same reviewer already found in this unit, for the
+    // opt-in coverage pass (`lanes::coverage`). Gated on `coverage_pass`
+    // itself, not on whether the confirmed list is empty: a group whose
+    // first pass found nothing to report is exactly the common case this
+    // pass exists for, and it still needs telling that this is a second
+    // look, not a repeat of the first question. `false` on every call except
+    // the one extra call a coverage pass makes, which is what keeps every
+    // other prompt in this crate byte-identical to before this layer
+    // existed — see `an_empty_confirmed_list_leaves_the_prompt_byte_identical`.
+    if inputs.coverage_pass {
+        suffix.push_str(
+            "\n## What you already found\n\n\
+             This is a second pass over the same evidence, not a fresh review. Look for what a \
+             first pass misses.\n\n",
+        );
+        if inputs.confirmed_this_round.is_empty() {
+            suffix.push_str(
+                "Nothing survived the first pass for this unit. Look again with fresh eyes.\n",
+            );
+        } else {
+            suffix.push_str("Do not repeat what you already reported here:\n\n");
+            let rendered = inputs
+                .confirmed_this_round
+                .iter()
+                .map(|line| format!("- {line}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            push_fenced(&mut suffix, "confirmed-findings", &rendered);
+        }
     }
 
     // Layer 5b — the pull request's own words. Volatile, and the single most
@@ -981,6 +1043,62 @@ mod tests {
         assert!(prompt.suffix().contains("Close the socket"));
         assert!(!prompt.prefix().contains("Close the socket"));
         assert!(prompt.suffix().contains("silently dropping an unfixed"));
+    }
+
+    #[test]
+    fn confirmed_findings_land_in_the_volatile_suffix() {
+        let config = config();
+        // A distinctive title, for the same reason
+        // `prior_findings_are_volatile_and_carry_the_continuity_contract` picks
+        // one: the static instructions use "Guard the index before
+        // dereferencing" as their own example.
+        let lines = ["Close the socket on the error path (src/main.rs:2): leaked fd".to_string()];
+        let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
+        i.coverage_pass = true;
+        i.confirmed_this_round = &lines;
+        let prompt = build(&i);
+
+        assert!(prompt.suffix().contains("## What you already found"));
+        assert!(
+            prompt
+                .suffix()
+                .contains("Close the socket on the error path")
+        );
+        assert!(!prompt.prefix().contains("Close the socket"));
+    }
+
+    #[test]
+    fn a_clean_first_pass_still_gets_the_second_pass_instruction() {
+        // A group whose first pass reported nothing to report is the common
+        // case the coverage pass exists for. Gating the whole layer on
+        // `confirmed_this_round` being non-empty made this call byte-identical
+        // to round one's — the reviewer was asked the same question twice
+        // instead of being told to look deeper.
+        let config = config();
+        let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
+        i.coverage_pass = true;
+        let prompt = build(&i);
+
+        assert!(prompt.suffix().contains("## What you already found"));
+        assert!(
+            prompt
+                .suffix()
+                .contains("second pass over the same evidence")
+        );
+    }
+
+    #[test]
+    fn an_empty_confirmed_list_leaves_the_prompt_byte_identical() {
+        let config = config();
+        let i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
+        let without = build(&i);
+
+        let mut with_empty = i;
+        with_empty.confirmed_this_round = &[];
+        let with_empty = build(&with_empty);
+
+        assert_eq!(without.prefix(), with_empty.prefix());
+        assert_eq!(without.suffix(), with_empty.suffix());
     }
 
     #[test]

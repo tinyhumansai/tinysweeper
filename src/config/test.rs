@@ -635,6 +635,20 @@ budget_usd_per_pr = 0.0
 }
 
 #[test]
+fn review_passes_out_of_range_is_rejected() {
+    let config = parse("version = 1\n[review]\npasses = 4\n");
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("review.passes = 4"), "{joined}");
+
+    let config = parse("version = 1\n[review]\npasses = 0\n");
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("review.passes = 0"), "{joined}");
+
+    let config = parse("version = 1\n[review]\npasses = 2\n");
+    assert!(validate::validate(&config).is_empty());
+}
+
+#[test]
 fn an_unreadable_auto_merge_glob_is_caught_before_it_can_refuse_everything() {
     // The policy fails closed on a malformed glob, which is safe but silent:
     // the operator sees a pull request that never merges and no reason why.

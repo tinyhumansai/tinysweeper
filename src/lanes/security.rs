@@ -42,7 +42,7 @@ use crate::lanes::triage::triage;
 use crate::lanes::{
     Anchoring, Lane, LaneInput, LaneOutcome, aggregate_reviewer_responses, reviewer_responses,
 };
-use crate::ports::model::Model;
+use crate::ports::model::{Model, Spend};
 use crate::scan::types::{Finding as ScanFinding, ScanKind};
 
 /// The scanner findings this lane owns.
@@ -311,12 +311,135 @@ async fn review_group(
         ));
     };
 
+    let mut findings = outcome.findings;
+    let mut spend = outcome.spend;
+
+    // The opt-in coverage pass — see `lanes::coverage` and the identical gate
+    // in `lanes::critique`. Anchored the same way round one is, through
+    // `LaneOutcome::from_response`, rather than critique's quote-and-relocate
+    // `Positioner`: reusing round one's own anchoring here too, not inventing
+    // a third rule. No falsify call follows it, for the same reason round one
+    // has none — see `docs/modules/falsify/README.md`: this lane's model
+    // findings are adjudicating deterministic scanner matches, not proposing
+    // unverified ones the way `critique` does.
+    let mut added_by_coverage = 0usize;
+    if config.review.passes > 1 && changed_lines(group_diffs) >= COVERAGE_PASS_MIN_LINES {
+        let mut confirmed = findings.clone();
+
+        for _ in 1..config.review.passes {
+            let reviewer = &reviewers[0];
+            let confirmed_lines = crate::lanes::coverage::confirmed_lines(&confirmed);
+            let built = prompt::build(&PromptInputs {
+                repo_policy,
+                extracted_rules,
+                prior_findings,
+                new_evidence: &evidence,
+                focus_paths: group_paths,
+                scanner_evidence: &scanner_evidence,
+                retrieved_context,
+                memory_context,
+                confirmed_this_round: &confirmed_lines,
+                coverage_pass: true,
+                ..PromptInputs::new(LaneId::Security, config)
+            });
+
+            let coverage = crate::lanes::coverage::coverage_pass(
+                llm.clone(),
+                LaneId::Security,
+                reviewer,
+                &built,
+                &schema::json_schema(),
+                "tinysweeper_security",
+                asking,
+            )
+            .await?;
+            spend.merge(coverage.spend);
+
+            let Some(response) = coverage.response else {
+                break;
+            };
+
+            let anchored = LaneOutcome::from_response(
+                LaneId::Security,
+                response,
+                group_diffs,
+                Anchoring::Strict,
+                Spend::default(),
+            );
+
+            // Same dedupe as critique's coverage pass: drop anything that
+            // corroborates, or fingerprints identically to, a finding already
+            // confirmed this unit.
+            let new_findings: Vec<Finding> = anchored
+                .findings
+                .into_iter()
+                .filter(|candidate| {
+                    let candidate_fp = candidate.fingerprint(
+                        &crate::findings::anchor::anchor_context(candidate, group_diffs),
+                    );
+                    !confirmed.iter().any(|prior| {
+                        council::agree::corroborates(candidate, prior)
+                            || candidate_fp
+                                == prior.fingerprint(&crate::findings::anchor::anchor_context(
+                                    prior,
+                                    group_diffs,
+                                ))
+                    })
+                })
+                .collect();
+
+            if new_findings.is_empty() {
+                break;
+            }
+
+            added_by_coverage += new_findings.len();
+            confirmed.extend(new_findings.clone());
+            findings.extend(new_findings);
+        }
+    }
+
     Ok(FileReview {
-        summary: outcome.summary,
-        findings: outcome.findings,
+        summary: coverage_note(&outcome.summary, added_by_coverage),
+        findings,
         resolved: outcome.resolved,
-        spend: outcome.spend,
+        spend,
     })
+}
+
+/// Minimum changed lines a group needs before the opt-in coverage pass
+/// (`review.passes > 1`) is worth its extra call — identical threshold and
+/// reasoning to `critique::COVERAGE_PASS_MIN_LINES`, kept as its own constant
+/// per lane rather than shared, so either lane's noise-control knobs can move
+/// independently of the other's.
+const COVERAGE_PASS_MIN_LINES: usize = 40;
+
+/// How many lines this group's diffs changed, summed across every file in it.
+fn changed_lines(group_diffs: &[FileDiff]) -> usize {
+    group_diffs
+        .iter()
+        .map(|diff| diff.changed_lines.len())
+        .sum()
+}
+
+/// Say, in the summary, when the opt-in coverage pass found something round
+/// one had not.
+///
+/// Round one's summary is written before the coverage pass ever runs, so on
+/// its own it can say "nothing to report" for a group that, findings-wise,
+/// no longer means that — a single-group review can fail on a coverage
+/// finding while the summary still declares it clean. Rather than trying to
+/// detect and rewrite round one's own prose, this appends a plain count in
+/// the same parenthetical style `critique::summarise` uses for its own
+/// bookkeeping notes, so the mismatch is visible instead of silent.
+fn coverage_note(summary: &str, added_by_coverage: usize) -> String {
+    if added_by_coverage == 0 {
+        return summary.to_string();
+    }
+    format!(
+        "{} ({added_by_coverage} finding{} added by a second pass)",
+        summary.trim(),
+        if added_by_coverage == 1 { "" } else { "s" }
+    )
 }
 
 /// Say, in the summary, which files were never sent to a model and why.
@@ -489,6 +612,122 @@ mod tests {
             "`permissions: write-all` grants far more than the job needs.",
         )
         .at_line(3)
+    }
+
+    /// A synthetic patch whose group is large enough for a coverage pass to
+    /// run at all — `diffs()` is deliberately two lines.
+    fn large_patch() -> String {
+        let mut patch = String::from("@@ -1,2 +1,42 @@\n fn handler(req: Request) {\n");
+        for i in 0..COVERAGE_PASS_MIN_LINES {
+            patch.push_str(&format!("+    let x{i} = {i};\n"));
+        }
+        patch.push_str(" }\n");
+        patch
+    }
+
+    fn large_diffs() -> Vec<FileDiff> {
+        vec![parse_file_patch("src/large.rs", &large_patch())]
+    }
+
+    fn config_with_passes(passes: u8) -> Config {
+        let mut config = config();
+        config.review.passes = passes;
+        config
+    }
+
+    fn finding_at_line(title: &str, line: u64) -> serde_json::Value {
+        json!({
+            "path": "src/large.rs",
+            "line": line,
+            "rule": "unchecked-index",
+            "title": title,
+            "body": "detail.",
+            "severity": "high",
+            "confidence": 0.9
+        })
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_is_not_run_below_the_line_threshold() {
+        let model = MockModel::new().then(json!({"summary": "Nothing to report.", "findings": []}));
+        let handle = model.clone();
+
+        run_with(model, &config_with_passes(2), &diffs(), &[]).await;
+
+        assert_eq!(handle.calls(), 1, "no coverage call should have been made");
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_runs_once_more_above_the_threshold() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_at_line("Guard the first index", 5)]
+            }))
+            .then(json!({"summary": "…", "findings": []}));
+        let handle = model.clone();
+
+        run_with(model, &config_with_passes(2), &large_diffs(), &[]).await;
+
+        assert_eq!(
+            handle.calls(),
+            2,
+            "round one's review, plus the coverage pass — security runs no falsify"
+        );
+        let coverage_request = handle
+            .requests()
+            .last()
+            .expect("the coverage pass made a request")
+            .messages
+            .iter()
+            .map(|m| m.content.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(coverage_request.contains("## What you already found"));
+        assert!(coverage_request.contains("Guard the first index"));
+    }
+
+    #[tokio::test]
+    async fn a_malformed_coverage_response_keeps_round_ones_findings() {
+        // The coverage pass is an optional extra look, not round one itself:
+        // a reviewer that answers with something that fails the schema (here,
+        // a finding missing every required field) must not discard what round
+        // one already found. `reviewer_responses` treats a schema failure from
+        // a lone reviewer as fatal, which used to propagate straight out of
+        // `coverage_pass` via `?` and fail the whole group.
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_at_line("Guard the first index", 5)]
+            }))
+            .then(json!({"summary": "…", "findings": [{"rule": "x"}]}));
+
+        let outcome = run_with(model, &config_with_passes(2), &large_diffs(), &[]).await;
+
+        assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
+        assert_eq!(outcome.findings[0].title, "Guard the first index");
+    }
+
+    #[tokio::test]
+    async fn a_coverage_finding_updates_a_clean_round_one_summary() {
+        // Round one said "Nothing to report." before the coverage pass ever
+        // ran. If the coverage pass then finds something, the summary must
+        // not keep declaring the group clean while `findings` says otherwise.
+        let model = MockModel::new()
+            .then(json!({"summary": "Nothing to report.", "findings": []}))
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_at_line("Guard the second index", 9)]
+            }));
+
+        let outcome = run_with(model, &config_with_passes(2), &large_diffs(), &[]).await;
+
+        assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
+        assert!(
+            outcome.summary.contains("1 finding added by a second pass"),
+            "{}",
+            outcome.summary
+        );
     }
 
     // --- golden test -------------------------------------------------------

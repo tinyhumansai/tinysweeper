@@ -316,18 +316,154 @@ async fn review_group(
         .await;
     spend.merge(filtered.spend);
 
+    let mut findings = filtered.findings;
+    let mut rejected = filtered.rejected;
+
+    // The opt-in coverage pass. Gated on the group's own size, not the whole
+    // pull request's — a lane fans out per group, so a two-line group must
+    // not build a second prompt just because the change elsewhere is large.
+    let mut added_by_coverage = 0usize;
+    if config.review.passes > 1 && changed_lines(group_diffs) >= COVERAGE_PASS_MIN_LINES {
+        // Fed cumulatively: the second coverage pass (pass 3) is told about
+        // everything round one *and* the first coverage pass found, so it
+        // does not rediscover the first pass's own additions.
+        let mut confirmed = findings.clone();
+
+        for _ in 1..config.review.passes {
+            let reviewer = &reviewers[0];
+            let confirmed_lines = crate::lanes::coverage::confirmed_lines(&confirmed);
+            let built = prompt::build(&PromptInputs {
+                repo_policy: input.repo_policy,
+                extracted_rules: input.extracted_rules,
+                prior_findings: input.prior_findings,
+                new_evidence: &evidence,
+                changed_paths,
+                focus_paths: group_paths,
+                persona: reviewer.persona,
+                retrieved_context: input.retrieved_context,
+                memory_context: input.memory_context,
+                confirmed_this_round: &confirmed_lines,
+                coverage_pass: true,
+                ..PromptInputs::new(LaneId::Critique, config)
+            });
+
+            let coverage = crate::lanes::coverage::coverage_pass(
+                llm.clone(),
+                LaneId::Critique,
+                reviewer,
+                &built,
+                &schema::json_schema(),
+                "tinysweeper_critique",
+                input.asking_about_group(group_diffs),
+            )
+            .await?;
+            spend.merge(coverage.spend);
+            looked_up.push_str(&coverage.looked_up);
+
+            // No answer this round: nothing new to place, and a round that
+            // could not be reached is not evidence a further one would fare
+            // better, so stop rather than pay for another.
+            let Some(response) = coverage.response else {
+                break;
+            };
+
+            // A coverage response that quotes more than `place` can relocate
+            // within its budget fails placement even though parsing already
+            // succeeded, which the malformed-response handling above does not
+            // cover. This pass is optional on top of round one, so a failure
+            // here is no additional coverage result, not a reason to discard
+            // every finding round one already produced and falsified.
+            let asked = match place(llm.clone(), input, group_diffs, &evidence, response).await {
+                Ok(asked) => asked,
+                Err(err) => {
+                    tracing::warn!(%err, "a coverage pass failed to place its findings");
+                    break;
+                }
+            };
+            spend.merge(asked.spend);
+            unanchored += asked.unanchored;
+            discarded += asked.discarded;
+
+            // Drop anything that is really a round-one finding said again.
+            // `corroborates` catches the common paraphrase on the same lines;
+            // the fingerprint catches an exact repeat the reviewer quoted
+            // differently. Both are computed here rather than trusted from
+            // the model, which has no channel to report "this is the same
+            // one" and no reason to be honest about it if it did.
+            let new_findings: Vec<Finding> = asked
+                .findings
+                .into_iter()
+                .filter(|candidate| {
+                    let candidate_fp = candidate.fingerprint(
+                        &crate::findings::anchor::anchor_context(candidate, group_diffs),
+                    );
+                    !confirmed.iter().any(|prior| {
+                        council::agree::corroborates(candidate, prior)
+                            || candidate_fp
+                                == prior.fingerprint(&crate::findings::anchor::anchor_context(
+                                    prior,
+                                    group_diffs,
+                                ))
+                    })
+                })
+                .collect();
+
+            // Nothing new: a further pass over the same evidence would not
+            // find more either, so stop rather than pay for one.
+            if new_findings.is_empty() {
+                break;
+            }
+
+            // Falsify only what this pass added — free when empty, and it
+            // never re-judges what round one's own pass already kept.
+            let new_filtered = Falsifier::new(llm.model().as_ref(), config)
+                .filter_with(LaneId::Critique, new_findings, &evidence, &looked_up)
+                .await;
+            spend.merge(new_filtered.spend);
+            rejected.extend(new_filtered.rejected);
+
+            if new_filtered.findings.is_empty() {
+                break;
+            }
+
+            added_by_coverage += new_filtered.findings.len();
+            confirmed.extend(new_filtered.findings.clone());
+            findings.extend(new_filtered.findings);
+        }
+    }
+
     Ok(FileReview {
         summary: summarise(
             summary.trim(),
             unanchored,
             discarded,
-            &filtered.rejected,
-            filtered.findings.len(),
+            &rejected,
+            findings.len(),
+            added_by_coverage,
         ),
-        findings: filtered.findings,
+        findings,
         resolved,
         spend,
     })
+}
+
+/// Minimum changed lines a group needs before the opt-in coverage pass
+/// (`review.passes > 1`) is worth its extra call.
+///
+/// Not configurable: a repository that wants coverage passes at all is opting
+/// into the per-pass cost already, and a second dial here would only let it
+/// re-enable the noise this threshold exists to avoid on the two-line groups
+/// that make up most pull requests. 40 is comfortably above what a rename or a
+/// one-line fix touches, and comfortably below what a group large enough to
+/// need a second reviewer look would be.
+const COVERAGE_PASS_MIN_LINES: usize = 40;
+
+/// How many lines this group's diffs changed, summed across every file in it.
+fn changed_lines(group_diffs: &[FileDiff]) -> usize {
+    group_diffs
+        .iter()
+        .map(|diff| diff.changed_lines.len())
+        .sum()
 }
 
 /// What one reviewer said about one group.
@@ -517,12 +653,21 @@ fn postable_range(raw: &RawFinding, diff: &FileDiff, resolution: Resolution) -> 
 /// removed, and only the summary still claimed it. A lane that reports nothing
 /// must not narrate something. What replaces it is the rejection reasons,
 /// which say more than the discarded prose did.
+///
+/// `added_by_coverage` covers the opposite mismatch: `summary` is round one's
+/// prose, written before the opt-in coverage pass (`lanes::coverage`) ever
+/// runs, so a group round one called clean and the coverage pass then added a
+/// finding to would otherwise keep declaring itself clean while `kept` says
+/// otherwise. Folded in as a note rather than rewritten, for the same reason
+/// the other counts are — round one's own words stay round one's, and what
+/// changed after it is stated rather than silently absorbed into them.
 fn summarise(
     summary: &str,
     unanchored: usize,
     discarded: usize,
     rejected: &[Rejection],
     kept: usize,
+    added_by_coverage: usize,
 ) -> String {
     if kept == 0 && !rejected.is_empty() {
         let reasons: Vec<String> = rejected
@@ -555,6 +700,12 @@ fn summarise(
         notes.push(format!(
             "{rejected} finding{} dropped as disproved by the diff",
             plural(rejected)
+        ));
+    }
+    if added_by_coverage > 0 {
+        notes.push(format!(
+            "{added_by_coverage} finding{} added by a second pass",
+            plural(added_by_coverage)
         ));
     }
 
@@ -802,6 +953,303 @@ fn helper() {
             outcome.summary.contains("the diff bounds-checks `i` above"),
             "the rejection reason replaces the prose it disproved: {}",
             outcome.summary
+        );
+    }
+
+    /// How many changed lines a group needs to clear [`COVERAGE_PASS_MIN_LINES`].
+    const LARGE_LINES: usize = COVERAGE_PASS_MIN_LINES;
+
+    /// A synthetic patch whose group is large enough for a coverage pass to
+    /// run at all — `diffs()` is deliberately two lines, so every coverage
+    /// pass test needs its own, bigger fixture.
+    fn large_patch() -> String {
+        let mut patch = String::from("@@ -1,2 +1,42 @@\n fn main() {\n");
+        for i in 0..LARGE_LINES {
+            patch.push_str(&format!("+    let x{i} = {i};\n"));
+        }
+        patch.push_str(" }\n");
+        patch
+    }
+
+    fn large_diffs() -> Vec<FileDiff> {
+        vec![parse_file_patch("src/large.rs", &large_patch())]
+    }
+
+    /// A finding quoting one of `large_diffs`'s added lines, named and titled
+    /// by the caller so round one and a coverage pass can be told apart.
+    fn finding_named(title: &str, index: usize) -> serde_json::Value {
+        finding_named_with_rule(title, index, "unchecked-index")
+    }
+
+    /// [`finding_named`], with its own rule id — for a corroboration test that
+    /// must not also match on [`Finding::fingerprint`], which hashes the rule.
+    fn finding_named_with_rule(title: &str, index: usize, rule: &str) -> serde_json::Value {
+        json!({
+            "path": "src/large.rs",
+            "existing_code": format!("let x{index} = {index};"),
+            "rule": rule,
+            "title": title,
+            "body": "detail.",
+            "severity": "high",
+            "confidence": 0.9
+        })
+    }
+
+    fn config_with_passes(passes: u8) -> Config {
+        let mut config = config();
+        config.review.passes = passes;
+        config
+    }
+
+    /// A finding on `large_diffs`'s file whose quote matches nothing there,
+    /// forcing `place` to spend a relocation call on it — the shape a
+    /// coverage response takes when it names findings the relocation budget
+    /// cannot all afford.
+    fn finding_hopeless(title: &str, quote: &str) -> serde_json::Value {
+        json!({
+            "path": "src/large.rs",
+            "existing_code": quote,
+            "rule": "unchecked-index",
+            "title": title,
+            "body": "detail.",
+            "severity": "high",
+            "confidence": 0.9
+        })
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_is_not_run_below_the_line_threshold() {
+        // `diffs()` is two lines, well under the threshold — passes = 2 must
+        // not build a second prompt over it.
+        let model = MockModel::new().then(json!({
+            "summary": "Nothing to report.",
+            "findings": []
+        }));
+        let handle = model.clone();
+
+        run_with(model, &config_with_passes(2), &diffs()).await;
+
+        assert_eq!(handle.calls(), 1, "no coverage call should have been made");
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_runs_once_more_above_the_threshold() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({"summary": "…", "findings": []}));
+        let handle = model.clone();
+
+        run_with(model, &config_with_passes(2), &large_diffs()).await;
+
+        assert_eq!(
+            handle.calls(),
+            3,
+            "round one's review, round one's falsify, and the coverage pass"
+        );
+        let coverage_request = handle
+            .requests()
+            .last()
+            .expect("the coverage pass made a request")
+            .messages
+            .iter()
+            .map(|m| m.content.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(coverage_request.contains("## What you already found"));
+        assert!(coverage_request.contains("Guard the first index"));
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_finding_that_corroborates_round_one_is_dropped() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({
+                "summary": "…",
+                // One line over, a different rule id and a different-sounding
+                // title: neither the fingerprint nor the wording matches, but
+                // the anchored range overlaps within `agree::LINE_TOLERANCE`,
+                // which is what `corroborates` — not the fingerprint check —
+                // has to catch.
+                "findings": [finding_named_with_rule(
+                    "Bounds-check x4 before use",
+                    4,
+                    "missing-bounds-check"
+                )]
+            }));
+
+        let outcome = run_with(model, &config_with_passes(2), &large_diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(outcome.findings[0].title, "Guard the first index");
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_finding_on_a_new_line_survives_and_is_falsified() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the second index", 30)]
+            }))
+            .then(json!({
+                "incorrect": [{"index": 1, "reason": "x30 is never dereferenced"}]
+            }));
+
+        let outcome = run_with(model, &config_with_passes(2), &large_diffs()).await;
+
+        assert_eq!(
+            outcome.findings.len(),
+            1,
+            "the disproved coverage-pass finding must not survive"
+        );
+        assert_eq!(outcome.findings[0].title, "Guard the first index");
+    }
+
+    #[tokio::test]
+    async fn a_coverage_finding_updates_a_clean_round_one_summary() {
+        // Round one's own prose is frozen before the coverage pass ever runs.
+        // If round one found nothing and the coverage pass then adds a
+        // surviving finding, the summary must say so rather than keep
+        // reading "Nothing to report." while `findings` says otherwise.
+        let model = MockModel::new()
+            .then(json!({"summary": "Nothing to report.", "findings": []}))
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the second index", 30)]
+            }))
+            .then(json!({"incorrect": []}));
+
+        let outcome = run_with(model, &config_with_passes(2), &large_diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
+        assert!(
+            outcome.summary.contains("1 finding added by a second pass"),
+            "{}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn passes_1_never_makes_a_second_call() {
+        let model = MockModel::new().then(json!({
+            "summary": "Nothing to report.",
+            "findings": []
+        }));
+        let handle = model.clone();
+
+        // The default config ships `passes = 1`.
+        run_with(model, &config(), &large_diffs()).await;
+
+        assert_eq!(handle.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_with_zero_new_findings_makes_no_extra_falsify_call() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({"summary": "Nothing further.", "findings": []}));
+        let handle = model.clone();
+
+        run_with(model, &config_with_passes(2), &large_diffs()).await;
+
+        assert_eq!(
+            handle.calls(),
+            3,
+            "an empty coverage answer must not falsify anything"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_third_pass_is_skipped_when_the_second_added_nothing() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({"summary": "Nothing further.", "findings": []}));
+        let handle = model.clone();
+
+        run_with(model, &config_with_passes(3), &large_diffs()).await;
+
+        assert_eq!(
+            handle.calls(),
+            3,
+            "the second coverage pass added nothing, so a third must not run"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_coverage_placement_failure_preserves_round_one_findings() {
+        // A coverage response with more unresolvable quotes than the
+        // relocation budget affords must not lose round one's own, already
+        // falsified finding — placement failing on this optional pass is no
+        // additional coverage result, not a reason to fail the whole group.
+        //
+        // Round one's review call and the coverage pass's own review call are
+        // routed through the graph, so they alone count against
+        // `budget_usd_per_pr` (0.02 for both). Relocation calls go straight to
+        // the model port and are bounded only by `place`'s own tally, so the
+        // budget is set just above what round one and the coverage review
+        // spend, and three hopeless quotes are enough to cross it on the
+        // fourth relocation attempt.
+        let mut config = config_with_passes(2);
+        config.models.budget_usd_per_pr = 0.025;
+
+        let model = MockModel::new()
+            .with_usage(crate::ports::model::Usage {
+                cost_usd: 0.01,
+                ..crate::ports::model::Usage::default()
+            })
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({
+                "summary": "…",
+                "findings": [
+                    finding_hopeless("Guard the second index", "a snippet nowhere in the diff"),
+                    finding_hopeless("Guard the third index", "another snippet nowhere in it"),
+                    finding_hopeless("Guard the fourth index", "yet another absent snippet"),
+                    finding_hopeless("Guard the fifth index", "and one more absent snippet"),
+                ]
+            }))
+            .then(json!({"existing_code": "let x0 = 0;"}))
+            .then(json!({"existing_code": "let x1 = 1;"}))
+            .then(json!({"existing_code": "let x2 = 2;"}));
+        let handle = model.clone();
+
+        let outcome = run_with(model, &config, &large_diffs()).await;
+
+        assert_eq!(
+            outcome.findings.len(),
+            1,
+            "round one's finding must survive a coverage placement failure"
+        );
+        assert_eq!(outcome.findings[0].title, "Guard the first index");
+        assert_eq!(
+            handle.calls(),
+            6,
+            "round one's review and falsify, the coverage review, and the \
+             three relocation calls the budget afforded before the fourth \
+             finding tripped it"
         );
     }
 
