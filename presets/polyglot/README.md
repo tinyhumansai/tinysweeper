@@ -49,11 +49,11 @@ from most specific to least, on purpose:
    points back at `rust-library`.
 
 Reorder these at your own risk: move a language entry above the test glob and
-every test file in that language stops seeing the test rules. Entries 1
-through 4 are scoped to `lanes = ["critique", "security"]` — the only two
+every test file in that language stops seeing the test rules. Every entry in
+this table is scoped to `lanes = ["critique", "security"]` — the only two
 lanes that build a prompt for one file at a time (see "Combining with
-`security-strict` habits" below for why an unscoped entry would leak into the
-others.)
+`security-strict` habits" below for why leaving an entry unscoped would leak
+its rules into the others).
 
 ## Combining with `security-strict` habits
 
