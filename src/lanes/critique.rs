@@ -1201,6 +1201,50 @@ fn helper() {
         );
     }
 
+    #[tokio::test]
+    async fn a_coverage_placement_failure_preserves_round_one_findings() {
+        // A coverage response with more unresolvable quotes than the
+        // relocation budget affords must not lose round one's own, already
+        // falsified finding — placement failing on this optional pass is no
+        // additional coverage result, not a reason to fail the whole group.
+        let mut config = config_with_passes(2);
+        config.models.budget_usd_per_pr = 0.0;
+
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({
+                "summary": "…",
+                "findings": [
+                    finding_hopeless("Guard the second index", "a snippet nowhere in the diff"),
+                    finding_hopeless(
+                        "Guard the third index",
+                        "a different snippet nowhere in the diff"
+                    ),
+                ]
+            }))
+            .then(json!({"existing_code": "let x0 = 0;"}));
+        let handle = model.clone();
+
+        let outcome = run_with(model, &config, &large_diffs()).await;
+
+        assert_eq!(
+            outcome.findings.len(),
+            1,
+            "round one's finding must survive a coverage placement failure"
+        );
+        assert_eq!(outcome.findings[0].title, "Guard the first index");
+        assert_eq!(
+            handle.calls(),
+            4,
+            "round one's review and falsify, the coverage review, and the one \
+             relocation call the budget still afforded"
+        );
+    }
+
     /// The bug this lane shipped: a check run whose summary asserted a bug,
     /// reported no findings, concluded success and approved the pull request.
     /// The model's prose is written before falsification runs, so once the
