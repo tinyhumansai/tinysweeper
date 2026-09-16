@@ -523,23 +523,19 @@ impl Ledger {
         let mut rendered = String::new();
         let mut answered = 0usize;
 
-        let mut queues: Vec<(usize, std::collections::VecDeque<String>)> = diffs
+        let mut queues: Vec<std::collections::VecDeque<String>> = diffs
             .iter()
-            .enumerate()
-            .map(|(i, diff)| {
-                (
-                    i,
-                    seed_symbols(diff)
-                        .into_iter()
-                        .take(SEED_SYMBOLS * 2)
-                        .collect(),
-                )
+            .map(|diff| {
+                seed_symbols(diff)
+                    .into_iter()
+                    .take(SEED_SYMBOLS * 2)
+                    .collect()
             })
             .collect();
 
         'rounds: loop {
             let mut made_progress = false;
-            for (i, queue) in &mut queues {
+            for queue in &mut queues {
                 if answered >= SEED_SYMBOLS || self.chars >= policy.max_chars / 2 {
                     break 'rounds;
                 }
