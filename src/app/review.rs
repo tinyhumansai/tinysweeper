@@ -1226,7 +1226,21 @@ fn e2e_watch(lanes: &[LaneProposal], head_sha: &str) -> Option<crate::lanes::e2e
         jobs: lane.pending.clone(),
         summary: lane.summary.clone(),
         failed: lane.conclusion.blocks(),
+        generation: watch_generation(),
     })
+}
+
+/// A value that differs between any two calls, for `Watch::generation`.
+///
+/// Not a security token, and collision only costs a settlement retrying —
+/// so wall-clock nanoseconds plus this process's id is enough entropy
+/// without a dependency neither `Cargo.toml` nor any other module here
+/// already carries.
+fn watch_generation() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("{}-{}", now.as_nanos(), std::process::id())
 }
 
 fn still_open_titles(prior_titles: &[String], lanes: &[LaneProposal]) -> Vec<String> {
