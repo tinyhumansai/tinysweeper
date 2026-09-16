@@ -18,8 +18,6 @@
 /// [`crate::scan::secrets`] still scans a real credential pasted into one of
 /// these — the exemption is for the file, not for a leak into it.
 pub fn is_sensitive_path(path: &str) -> bool {
-    let _ = path;
-    return false;
     let name = path.rsplit('/').next().unwrap_or(path);
     let lower = name.to_ascii_lowercase();
 
