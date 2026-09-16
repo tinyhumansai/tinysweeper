@@ -594,4 +594,62 @@ mod tests {
         );
         assert!(rendered.contains("FEATURE_FLAG="), "{rendered}");
     }
+
+    /// Regression for a Codex finding on #166: evidence a previous review
+    /// cycle persisted can predate this module entirely and carry a
+    /// scanner-shaped credential unmasked. `scrub_rendered` is what
+    /// `crate::app::review` now runs over `reviewed_evidence` before it is
+    /// replayed into a prompt.
+    #[test]
+    fn scrub_rendered_masks_a_recognisable_credential_and_keeps_the_anchor() {
+        let key = token("AKIA", "IOSFODNN7EXAMPLE");
+        let diffs = vec![parse_file_patch(
+            "src/config.rs",
+            &patch(&[&format!("+const KEY: &str = \"{key}\";")]),
+        )];
+        let legacy = replay::render(&diffs);
+        assert!(legacy.contains("IOSFODNN7EXAMPLE"), "{legacy}");
+
+        let scrubbed = scrub_rendered(&legacy);
+
+        assert!(!scrubbed.contains("IOSFODNN7EXAMPLE"), "{scrubbed}");
+        assert!(
+            scrubbed.contains("--- src/config.rs"),
+            "the file header survives untouched: {scrubbed}"
+        );
+        assert!(
+            scrubbed.contains("1 +const KEY"),
+            "the line-number anchor is not touched by masking: {scrubbed}"
+        );
+    }
+
+    /// Regression for the same finding: a private key's body carries no
+    /// rulepack-recognisable shape on its own lines, so `scrub_rendered` has
+    /// to track the armour block the same way `mask` does.
+    #[test]
+    fn scrub_rendered_masks_a_private_key_body_between_its_markers() {
+        let begin = format!("-----BEGIN {}-----", "RSA PRIVATE KEY");
+        let end = format!("-----END {}-----", "RSA PRIVATE KEY");
+        let body = "MIIEowIBAAKCAQEAthisisadeadbeefexamplebodyforatestcase1234567890";
+        let diffs = vec![parse_file_patch(
+            "src/config.rs",
+            &format!("@@ -0,0 +1,3 @@\n+{begin}\n+{body}\n+{end}\n"),
+        )];
+        let legacy = replay::render(&diffs);
+
+        let scrubbed = scrub_rendered(&legacy);
+
+        assert!(!scrubbed.contains(body), "{scrubbed}");
+        assert!(scrubbed.contains(&begin), "{scrubbed}");
+    }
+
+    /// Header lines (`--- path`, `@@ ... @@`) are shorter than the fixed
+    /// 7-byte line-content prefix, or do not carry a marker at that offset;
+    /// `scrub_rendered` must not corrupt them while still running the
+    /// rulepack over their text.
+    #[test]
+    fn scrub_rendered_leaves_header_lines_intact() {
+        let text = "--- src/config.rs\n@@ -1,1 +1,1 @@\n";
+        assert_eq!(scrub_rendered(text), text);
+    }
 }
