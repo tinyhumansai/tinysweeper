@@ -533,7 +533,8 @@ pub async fn review_with_tree(
     // names how many values this diff lost, and a diff that gains or loses a
     // secret between pushes must not perturb the cacheable prefix on that
     // account.
-    let redaction_note = crate::evidence::redact::mask(&mut diffs, &scan_findings).note();
+    let redaction_note =
+        crate::evidence::redact::mask(&mut diffs, &scan_findings, &context.files).note();
 
     // What earlier cycles already said. `review.incremental = false` opts a
     // repository out of the whole mechanism and reviews every push from
