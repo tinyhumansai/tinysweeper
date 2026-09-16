@@ -973,6 +973,49 @@ mod tests {
         );
     }
 
+    /// The shared `SEED_SYMBOLS` cap is round-robin, not first-come: a first
+    /// file whose diff alone offers enough candidates to exhaust the cap must
+    /// not be allowed to do so before a later group member's own call is
+    /// even attempted.
+    #[tokio::test]
+    async fn a_symbol_rich_first_file_does_not_starve_a_later_group_member() {
+        // Six distinct calls in the first file — enough on its own to reach
+        // SEED_SYMBOLS were the budget still spent file-by-file rather than
+        // round-robin.
+        let first = crate::evidence::diff::parse_file_patch(
+            "src/a.rs",
+            "@@ -1,1 +1,7 @@\n fn a() {}\n+call_aaaa();\n+call_bbbb();\n+call_cccc();\n\
+             +call_dddd();\n+call_eeee();\n+call_ffff();\n",
+        );
+        let second = crate::evidence::diff::parse_file_patch(
+            "src/b.rs",
+            "@@ -1,1 +1,2 @@\n fn b() {}\n+call_from_b();\n",
+        );
+        let tree = MockTree::from_files([
+            ("vendor/lib/src/a_defs.rs", "pub fn call_aaaa() {}\n"),
+            ("vendor/lib/src/b_defs.rs", "pub fn call_bbbb() {}\n"),
+            ("vendor/lib/src/c_defs.rs", "pub fn call_cccc() {}\n"),
+            ("vendor/lib/src/d_defs.rs", "pub fn call_dddd() {}\n"),
+            ("vendor/lib/src/e_defs.rs", "pub fn call_eeee() {}\n"),
+            ("vendor/lib/src/f_defs.rs", "pub fn call_ffff() {}\n"),
+            (
+                "vendor/lib/src/from_b.rs",
+                "/// Only the second file's own diff calls this.\npub fn call_from_b() {}\n",
+            ),
+        ]);
+        let mut ledger = Ledger::default();
+        let seeded = ledger
+            .seed(&tree, &[first, second], &LookupPolicy::default())
+            .await;
+
+        assert!(
+            seeded.rendered.contains("call_from_b"),
+            "the second file's own call must get a round before the shared cap is spent \
+             entirely on the first file's six candidates: {}",
+            seeded.rendered
+        );
+    }
+
     #[tokio::test]
     async fn outcomes_are_rendered_for_the_model() {
         let tree = MockTree::from_files([("src/a.rs", "fn read_before() {}\n")]);
