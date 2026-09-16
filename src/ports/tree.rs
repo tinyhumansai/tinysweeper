@@ -592,19 +592,31 @@ pub fn submodule_paths(gitmodules: &str) -> Vec<String> {
         .lines()
         .filter_map(|line| line.trim().strip_prefix("path"))
         .filter_map(|rest| rest.trim().strip_prefix('='))
-        .map(|p| p.trim().trim_end_matches('/').to_string())
-        // `.gitmodules` is contributor-controlled. A path that leaves the
-        // tree or names git's own directory is not a submodule anyone gets
-        // to declare, and lifting the skip list for it would be the point of
-        // declaring it.
-        .filter(|p| {
-            !p.is_empty()
-                && !p.starts_with('/')
-                && !p
-                    .split('/')
-                    .any(|c| c == ".." || c == ".git" || c.is_empty())
-        })
+        .filter_map(|p| canonical_submodule_path(p.trim()))
         .collect()
+}
+
+/// The one spelling of a submodule path, or `None` for one nobody may declare.
+///
+/// Git resolves `./libs/core`, `libs//core` and `libs/./core` to the same
+/// gitlink; the selector, the manifest and the fetch all say `libs/core`.
+/// One canonical form for every reader, or the same directory is several
+/// paths and a policy applied to one of them misses the rest. `.gitmodules`
+/// is contributor-controlled: a path that leaves the tree, is absolute, or
+/// names git's own directory is refused rather than repaired.
+pub fn canonical_submodule_path(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw.starts_with('/') || raw.contains('\\') {
+        return None;
+    }
+    let parts: Vec<&str> = raw
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect();
+    if parts.is_empty() || parts.iter().any(|part| *part == ".." || *part == ".git") {
+        return None;
+    }
+    Some(parts.join("/"))
 }
 
 /// Reject a path that could leave the tree.
