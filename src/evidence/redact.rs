@@ -425,10 +425,14 @@ mod tests {
     /// was flagged as carrying a private key.
     #[test]
     fn a_private_key_body_is_masked_even_without_a_per_line_finding() {
+        // Split so this file's own diff does not carry a literal, contiguous
+        // armour marker — see `token`'s note above and
+        // `scan::secrets::tests::an_encrypted_private_key_armour_is_recognised_too`
+        // for the identical concern applied to the marker text itself.
+        let begin = format!("-----BEGIN {}-----", "RSA PRIVATE KEY");
+        let end = format!("-----END {}-----", "RSA PRIVATE KEY");
         let body = "MIIEowIBAAKCAQEAthisisadeadbeefexamplebodyforatestcase1234567890";
-        let raw = format!(
-            "@@ -0,0 +1,3 @@\n+-----BEGIN RSA PRIVATE KEY-----\n+{body}\n+-----END RSA PRIVATE KEY-----\n"
-        );
+        let raw = format!("@@ -0,0 +1,3 @@\n+{begin}\n+{body}\n+{end}\n");
         let mut diffs = vec![parse_file_patch("src/config.rs", &raw)];
         let findings = scan::secrets::scan_added_lines("src/config.rs", diffs[0].added_lines());
         // The scanner anchors one finding to the marker line; the body line
@@ -440,7 +444,7 @@ mod tests {
 
         assert!(!rendered.contains(body), "{rendered}");
         assert!(
-            rendered.contains("-----BEGIN RSA PRIVATE KEY-----"),
+            rendered.contains(&begin),
             "the armour line itself names no secret: {rendered}"
         );
     }
