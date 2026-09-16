@@ -240,6 +240,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "lanes",
             "council",
             "lookup",
+            "grouping",
             "automerge",
             "threads",
             "overview",
