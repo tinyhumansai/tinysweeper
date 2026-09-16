@@ -417,6 +417,34 @@ mod tests {
         assert!(rendered.contains("request.post"), "{rendered}");
     }
 
+    /// Regression for a Codex finding on #166: `render_candidates` used to
+    /// mask a quoted e2e line with only `scan::redact_line`'s rulepack pass,
+    /// so a scanner-detected `high-entropy-assignment` — a credential with no
+    /// vendor prefix — sitting on the same line as the surface token this
+    /// lane verifies still reached the prompt unmasked.
+    #[test]
+    fn render_candidates_masks_a_high_entropy_assignment_in_the_quoted_line() {
+        let value = format!("{}{}", "f3Kq9zR2", "mW7pL4xN8vB1cY6tH0jD5sG");
+        let evidence = Evidence {
+            candidates: vec![Candidate {
+                path: "e2e/preview.spec.ts".into(),
+                line: 2,
+                text: format!(
+                    "await request.post('/preview/sessions', {{ secret_token: '{value}' }});"
+                ),
+                token: "/preview/sessions".into(),
+                added_at: "src/server/routes.rs:2".into(),
+            }],
+            searched: vec!["e2e/preview.spec.ts".into()],
+            ..Evidence::default()
+        };
+
+        let rendered = evidence.render_candidates();
+
+        assert!(!rendered.contains(&value), "{rendered}");
+        assert!(rendered.contains("request.post"), "{rendered}");
+    }
+
     #[tokio::test]
     async fn gather_reads_the_tree_the_workflows_the_checks_and_the_specs() {
         let mut state = MockState::default();
