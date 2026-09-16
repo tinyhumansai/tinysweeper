@@ -415,6 +415,27 @@ fn changed_lines(group_diffs: &[FileDiff]) -> usize {
         .sum()
 }
 
+/// Say, in the summary, when the opt-in coverage pass found something round
+/// one had not.
+///
+/// Round one's summary is written before the coverage pass ever runs, so on
+/// its own it can say "nothing to report" for a group that, findings-wise,
+/// no longer means that — a single-group review can fail on a coverage
+/// finding while the summary still declares it clean. Rather than trying to
+/// detect and rewrite round one's own prose, this appends a plain count in
+/// the same parenthetical style `critique::summarise` uses for its own
+/// bookkeeping notes, so the mismatch is visible instead of silent.
+fn coverage_note(summary: &str, added_by_coverage: usize) -> String {
+    if added_by_coverage == 0 {
+        return summary.to_string();
+    }
+    format!(
+        "{} ({added_by_coverage} finding{} added by a second pass)",
+        summary.trim(),
+        if added_by_coverage == 1 { "" } else { "s" }
+    )
+}
+
 /// Say, in the summary, which files were never sent to a model and why.
 ///
 /// A review that quietly skipped half the pull request reads exactly like one
