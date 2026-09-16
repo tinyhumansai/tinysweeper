@@ -720,6 +720,9 @@ impl ForgeRead for MockForge {
 
     async fn branch_head(&self, _repo: &RepoId, branch: &str) -> Result<Option<String>> {
         let state = self.state.lock().expect("mock state lock");
+        if state.branches_without_head.contains(branch) {
+            return Ok(None);
+        }
         // A branch nobody registered resolves to itself, so a test that sets a
         // file at `"main"` and never thinks about revisions still works: the
         // sweep then reads at `"main"`, which is exactly where the file is.
