@@ -534,7 +534,7 @@ pub(crate) fn merge_scanner_findings(outcome: &mut LaneOutcome, scanner: &[&Scan
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::types::{Config, Severity};
+    use crate::config::types::{Config, PathInstruction, Severity};
     use crate::evidence::diff::parse_file_patch;
     use crate::forge::types::PullRequest;
     use crate::harness::mock::MockModel;
@@ -660,6 +660,23 @@ mod tests {
 
     #[tokio::test]
     async fn a_coverage_pass_runs_once_more_above_the_threshold() {
+        let mut config = config_with_passes(2);
+        config.path_instructions = vec![
+            PathInstruction {
+                glob: "src/**".into(),
+                instructions: "SOURCE RULES".into(),
+                rules: None,
+                lanes: Vec::new(),
+                merge: false,
+            },
+            PathInstruction {
+                glob: ".github/**".into(),
+                instructions: "WORKFLOW RULES".into(),
+                rules: None,
+                lanes: Vec::new(),
+                merge: false,
+            },
+        ];
         let model = MockModel::new()
             .then(json!({
                 "summary": "…",
@@ -668,7 +685,7 @@ mod tests {
             .then(json!({"summary": "…", "findings": []}));
         let handle = model.clone();
 
-        run_with(model, &config_with_passes(2), &large_diffs(), &[]).await;
+        run_with(model, &config, &large_diffs(), &[]).await;
 
         assert_eq!(
             handle.calls(),
@@ -686,6 +703,8 @@ mod tests {
             .join("\n");
         assert!(coverage_request.contains("## What you already found"));
         assert!(coverage_request.contains("Guard the first index"));
+        assert!(coverage_request.contains("SOURCE RULES"));
+        assert!(!coverage_request.contains("WORKFLOW RULES"));
     }
 
     #[tokio::test]

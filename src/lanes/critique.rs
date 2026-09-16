@@ -1263,6 +1263,11 @@ fn helper() {
             "round one's finding must survive a coverage placement failure"
         );
         assert_eq!(outcome.findings[0].title, "Guard the first index");
+        assert!(
+            (outcome.spend.cost_usd() - 0.06).abs() < f64::EPSILON,
+            "the three successful relocations must remain charged: {:#?}",
+            outcome.spend
+        );
         assert_eq!(
             handle.calls(),
             6,
