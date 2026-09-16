@@ -222,13 +222,13 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
     prefix.push_str(inputs.persona);
     prefix.push_str(SHARED_RULES);
 
-    // Layer 1b — the per-file isolation clause, for lanes that fan out one
-    // conversation per changed file. It sits in the prefix because it is
-    // constant for the whole of that file's conversation, and because it has to
-    // arrive before any evidence: without it, N reviewers each notice the same
-    // cross-file problem and the author gets it N times.
-    if let Some(path) = inputs.focus_path {
-        let _ = write!(prefix, "{ISOLATION_CLAUSE}\nThe file is `{path}`.\n");
+    // Layer 1b — the fan-out isolation clause, for lanes that fan out one
+    // conversation per changed file or per file group. It sits in the prefix
+    // because it is constant for the whole of that conversation, and because
+    // it has to arrive before any evidence: without it, N reviewers each
+    // notice the same cross-file problem and the author gets it N times.
+    if !inputs.focus_paths.is_empty() {
+        prefix.push_str(&isolation_clause(inputs.focus_paths));
     }
 
     // Layer 2 — repository policy.
