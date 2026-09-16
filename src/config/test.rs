@@ -718,9 +718,8 @@ fn e2e_named_in_require_checks_is_rejected() {
     // pending one — while its jobs are still running, and a required
     // check's `Neutral` is read as a pass. Naming it here would let
     // auto-merge proceed before the suite has actually concluded.
-    let config = parse(
-        "version = 1\n[automerge]\nenabled = true\nrequire_checks = [\"tinysweeper/e2e\"]\n",
-    );
+    let config =
+        parse("version = 1\n[automerge]\nenabled = true\nrequire_checks = [\"tinysweeper/e2e\"]\n");
     let problems = validate::validate(&config);
     assert!(
         problems
