@@ -980,6 +980,7 @@ mod tests {
             jobs: vec!["playwright".into()],
             summary: "First pass.".into(),
             failed: false,
+            generation: "gen-1".into(),
         };
         store
             .save_state(
