@@ -910,17 +910,18 @@ mod tests {
 
         let store = MemoryState::new();
         let key = crate::state::key("tinyhumansai/tinysweeper", 7);
+        let original_watch = Watch {
+            head_sha: "abc123".into(),
+            jobs: vec!["playwright".into()],
+            summary: String::new(),
+            failed: false,
+        };
         store
             .save_state(
                 &key,
                 &ReviewedState {
                     head_sha: "abc123".into(),
-                    e2e: Some(Watch {
-                        head_sha: "abc123".into(),
-                        jobs: vec!["playwright".into()],
-                        summary: String::new(),
-                        failed: false,
-                    }),
+                    e2e: Some(original_watch.clone()),
                     ..ReviewedState::default()
                 },
             )
@@ -945,7 +946,7 @@ mod tests {
 
         // `settle_e2e` finishes settling the `abc123` watch it read earlier
         // and tries to clear it.
-        let cleared = store.clear_e2e_watch(&key, "abc123").await.unwrap();
+        let cleared = store.clear_e2e_watch(&key, &original_watch).await.unwrap();
         assert!(
             !cleared,
             "the stored watch is for `newer` now, not `abc123`; nothing should match"
@@ -955,6 +956,66 @@ mod tests {
         assert_eq!(
             after, concurrent,
             "the concurrent review's state must survive intact"
+        );
+    }
+
+    #[tokio::test]
+    async fn clearing_the_watch_does_not_discard_a_same_head_re_review() {
+        // The narrower case `head_sha`-only comparison missed: a manual
+        // re-review of the *same* commit (the `/admin/reviews` route can
+        // trigger one) saves a replacement watch with the same `head_sha`
+        // but different `jobs`/`summary`/`failed`. `clear_e2e_watch` must
+        // compare the whole watch, not just the head it is for.
+        use crate::lanes::e2e::runs::Watch;
+        use crate::state::memory::MemoryState;
+        use crate::state::types::ReviewedState;
+
+        let store = MemoryState::new();
+        let key = crate::state::key("tinyhumansai/tinysweeper", 7);
+        let stale_watch = Watch {
+            head_sha: "abc123".into(),
+            jobs: vec!["playwright".into()],
+            summary: "First pass.".into(),
+            failed: false,
+        };
+        store
+            .save_state(
+                &key,
+                &ReviewedState {
+                    head_sha: "abc123".into(),
+                    e2e: Some(stale_watch.clone()),
+                    ..ReviewedState::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        // A manual re-review of the same head lands a different watch —
+        // same `head_sha`, different `jobs` (a second job was added to the
+        // e2e-required config in the meantime, say) — before the first
+        // settlement's clear runs.
+        let re_reviewed = ReviewedState {
+            head_sha: "abc123".into(),
+            e2e: Some(Watch {
+                head_sha: "abc123".into(),
+                jobs: vec!["playwright".into(), "cypress".into()],
+                summary: "Second pass.".into(),
+                failed: false,
+            }),
+            ..ReviewedState::default()
+        };
+        store.save_state(&key, &re_reviewed).await.unwrap();
+
+        let cleared = store.clear_e2e_watch(&key, &stale_watch).await.unwrap();
+        assert!(
+            !cleared,
+            "the stored watch differs (jobs, summary) even though the head is the same"
+        );
+
+        let after = store.load_state(&key).await.unwrap().expect("still there");
+        assert_eq!(
+            after, re_reviewed,
+            "the re-review's watch must survive intact"
         );
     }
 
