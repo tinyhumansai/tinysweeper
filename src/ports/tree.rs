@@ -621,11 +621,15 @@ pub fn git_config_value(raw: &str) -> String {
     while let Some(c) = chars.next() {
         match (quoted, c) {
             (_, '"') => quoted = !quoted,
-            (true, '\\') => {
-                if let Some(escaped) = chars.next() {
-                    out.push(escaped);
-                }
-            }
+            // Git's escapes: `\n`, `\t`, `\b`, and a backslash before
+            // anything else (`\"`, `\\`) is that character.
+            (true, '\\') => match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('b') => out.push('\u{8}'),
+                Some(escaped) => out.push(escaped),
+                None => {}
+            },
             (false, '#' | ';') => break,
             (_, c) => out.push(c),
         }
@@ -895,6 +899,9 @@ mod tests {
                 "{spelled}"
             );
         }
+        // A decoded escape is a real character in the path: a tab is a tab.
+        assert_eq!(git_config_value("\"vendor\\tcore\""), "vendor\tcore");
+        assert_eq!(git_config_value("\"vendor/x\\\"\""), "vendor/x\"");
         for refused in [
             "../x",
             "vendor/../x",
