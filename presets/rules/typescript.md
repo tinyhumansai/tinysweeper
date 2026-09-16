@@ -18,10 +18,16 @@ Covers `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` and `.cjs`.
   `Object.assign`/spread, without checking against `__proto__`,
   `constructor` or `prototype` — prototype pollution.
 - `innerHTML`, `dangerouslySetInnerHTML`, or a template literal handed to
-  `eval`/`Function`, built from a value that is not a fixed literal.
-- `Promise.all` used where one rejection should not cancel the independent
-  work of the others (silent partial failure), or a sequential `await` in a
-  loop over independent async calls that should run concurrently.
+  `eval`/`Function`, built from a value that is not a fixed literal and has
+  not passed through a sanitizer (`DOMPurify.sanitize` or an equivalent
+  trusted-value guarantee) on the path shown in the diff.
+- `Promise.all` used where the call site needs to observe every input's
+  result or error individually — one rejection short-circuits the others
+  silently, though it does not cancel their execution. Not a finding on its
+  own for independent fire-and-forget work where only the aggregate success
+  matters; use `Promise.allSettled` as the fix, not sequential `await`.
+  Separately, a sequential `await` in a loop over independent async calls
+  that should run concurrently is its own finding.
 - A `.then()` chain or callback missing error handling, where a sibling
   `await` call in the same file does have a `try`/`catch`.
 
