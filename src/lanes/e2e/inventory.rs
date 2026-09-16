@@ -512,6 +512,38 @@ struct OutlineJob {
     steps: Vec<String>,
 }
 
+/// One step's fields, accumulated while `jobs()` walks the flattened list
+/// under `steps:`, so a step's own `if:` is only ever attributed to that
+/// step.
+///
+/// Only a step that itself runs something e2e-shaped (`E2E_STEP_MARKS`) may
+/// set the job's label gate — an unrelated auxiliary step (a label-gated
+/// artifact upload ahead of an unconditional `playwright test`) must not
+/// make the whole job read as gated on a label it does not require. This
+/// deliberately leaves a job-wide `if:` (read directly off the job, not a
+/// step) alone; that one already gates every step including the e2e one.
+#[derive(Default)]
+struct StepBeingRead {
+    gate: Option<String>,
+    is_e2e_step: bool,
+}
+
+impl StepBeingRead {
+    fn note_e2e_mark(&mut self, lower_value: &str) {
+        if E2E_STEP_MARKS.iter().any(|mark| lower_value.contains(mark)) {
+            self.is_e2e_step = true;
+        }
+    }
+
+    /// Apply this step's gate to `label_gate`, if this step earned the right
+    /// to (it ran something e2e-shaped) and nothing earlier already set one.
+    fn commit(&self, label_gate: &mut Option<String>) {
+        if self.is_e2e_step && label_gate.is_none() {
+            *label_gate = self.gate.clone();
+        }
+    }
+}
+
 impl Outline {
     fn parse(text: &str) -> Self {
         let mut nodes = Vec::new();
