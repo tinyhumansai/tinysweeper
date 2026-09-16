@@ -953,6 +953,16 @@ fn unquote(value: &str) -> String {
 /// `contains(github.event.pull_request.labels.*.name, 'run-e2e')` — and only
 /// when it is not negated. Anything else is not a label gate as far as this
 /// lane can tell, and saying nothing is better than a wrong gate.
+/// Whether `expr` mentions a label condition at all, whichever way it comes
+/// out — `label_in` returns `None` both for a recognized-but-negated label
+/// condition and for a condition that has nothing to do with a label, and
+/// those two cases must be told apart by a caller deciding whether to
+/// override an existing gate: an unrelated condition says nothing about a
+/// label, so it must not erase a gate a step already earned.
+fn mentions_label(expr: &str) -> bool {
+    expr.to_ascii_lowercase().contains("labels.*.name")
+}
+
 fn label_in(expr: &str) -> Option<String> {
     let lower = expr.to_ascii_lowercase();
     let at = lower.find("labels.*.name")?;
