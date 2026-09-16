@@ -799,6 +799,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn one_workflow_declaring_both_triggers_keeps_both_whichever_comes_first() {
+        // Same as the previous test, but with `pull_request` listed first
+        // (`trigger()` then classifies `target: false`) — the
+        // `pull_request_target` execution must still be found by the
+        // default-branch pass via `also_plain`, not silently dropped
+        // because the first-seen event happened to be the other one.
+        let mut state = MockState::default();
+        state.set_tree("head", &[".github/workflows/e2e.yml"]);
+        state.set_tree("main", &[".github/workflows/e2e.yml"]);
+        let text = "name: e2e\non: [pull_request, pull_request_target]\njobs:\n  playwright:\n    steps:\n      - run: npx playwright test\n";
+        state.set_file("head", ".github/workflows/e2e.yml", text);
+        state.set_file("main", ".github/workflows/e2e.yml", text);
+        let forge = MockForge::with_state(state);
+
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            &[],
+        )
+        .await;
+
+        let targets: Vec<bool> = evidence
+            .harness
+            .workflows
+            .iter()
+            .map(|w| {
+                matches!(
+                    w.trigger,
+                    inventory::Trigger::PullRequest { target: true, .. }
+                )
+            })
+            .collect();
+        assert_eq!(
+            evidence.harness.workflows.len(),
+            2,
+            "one execution off the head, one off the default branch: {:?}",
+            evidence.harness.workflows
+        );
+        assert!(
+            targets.contains(&true) && targets.contains(&false),
+            "{targets:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn a_truncated_default_branch_tree_degrades_the_evidence() {
         let mut state = MockState::default();
         state.set_tree("head", &[]);
