@@ -83,9 +83,12 @@ rules = "dependencies"
 lanes = ["critique", "security"]
 
 # Test files, across every language, take the test rules before any
-# language's own rules — a `_test.go` or `foo.test.ts` is judged as a test
-# first, not as Go or TypeScript source. Two conventions carry none of those
-# filename substrings: Java's JUnit layout (`UserServiceTest.java`,
+# language's own rules — a `foo_test.go` or `foo.test.ts` is judged as a test
+# first, not as Go or TypeScript source. The shapes are anchored to a
+# filename boundary (prefix, suffix, or a `.test.`/`.spec.` segment) rather
+# than matched as a bare substring, so `contest_service.py` does not trip the
+# `test_` token the way `**/*{...}* ` would. Two conventions carry none of
+# these shapes at all: Java's JUnit layout (`UserServiceTest.java`,
 # `src/test/java/**`) and a directory named for its contents rather than its
 # filenames (`tests/api.py`, `__tests__/Widget.tsx`) — both get their own
 # entries below, still ahead of the general per-extension rule.
