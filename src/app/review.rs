@@ -713,9 +713,14 @@ pub async fn review_with_tree(
     // Walked once, ahead of the lane loop, and reused by `change_map` below:
     // both want the same neighbourhood of the changed files, and a second walk
     // would be a second round trip to the graph store for an answer already in
-    // hand. Only asked for when something wants it — grouping or the change
-    // map — so a deployment with both off costs no query it never needed.
-    let changed_neighbourhood = if config.grouping.enabled || config.overview.enabled {
+    // hand. Only asked for when something wants it — grouping, but only when
+    // an enabled lane actually calls `group`, or the change map — so a
+    // deployment with both off, or a tests-only review with neither `critique`
+    // nor `security` enabled, costs no query it never needed.
+    let enabled_lanes = config.enabled_lanes();
+    let grouping_has_a_consumer = config.grouping.enabled
+        && (enabled_lanes.contains(&LaneId::Critique) || enabled_lanes.contains(&LaneId::Security));
+    let changed_neighbourhood = if grouping_has_a_consumer || config.overview.enabled {
         walk_changed_neighbourhood(config, retrieval, repo, &diffs).await
     } else {
         None
