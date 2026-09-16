@@ -78,7 +78,7 @@ lanes = ["critique", "security"]
 # preset routes, get the dependency rules regardless of which language they
 # declare dependencies for.
 [[path_instructions]]
-glob = "**/{Cargo.toml,Cargo.lock,package.json,package-lock.json,yarn.lock,pnpm-lock.yaml,go.mod,go.sum,requirements*.txt,pyproject.toml,poetry.lock,pom.xml,build.gradle,build.gradle.kts}"
+glob = "**/{Cargo.toml,Cargo.lock,package.json,package-lock.json,yarn.lock,pnpm-lock.yaml,go.mod,go.sum,requirements*.txt,pyproject.toml,poetry.lock,pom.xml,build.gradle,build.gradle.kts,.terraform.lock.hcl}"
 rules = "dependencies"
 lanes = ["critique", "security"]
 
