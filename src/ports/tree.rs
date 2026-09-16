@@ -1141,7 +1141,10 @@ mod tests {
     /// model-facing reason.
     #[tokio::test]
     async fn the_sensitive_path_refusal_never_names_the_path() {
-        assert!(!sensitive_path_refusal().unavailable_reason().contains(".env"));
+        let Found::Unavailable { reason } = sensitive_path_refusal() else {
+            panic!("sensitive_path_refusal always returns Unavailable");
+        };
+        assert!(!reason.contains(".env"), "{reason}");
 
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(".env"), "AWS_SECRET=super-secret-value\n").unwrap();
