@@ -32,3 +32,5 @@
   documentation, not a security control.
 - Build arguments that are not secrets (version numbers, feature flags) left
   without a default.
+- `ADD --checksum=sha256:... <url>` — the digest pins the content Docker will
+  accept, which is the fix the unpinned-`ADD` rule above asks for.
