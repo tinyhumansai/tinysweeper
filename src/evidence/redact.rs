@@ -157,6 +157,18 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
                     continue;
                 }
 
+                // A hunk may begin in the middle of an armour block, with
+                // neither boundary in its context. PEM's fixed-width base64
+                // body is still recognisable on its own, so withhold that
+                // opaque fragment rather than let a partial diff recover a
+                // key that a full-hunk pass would have masked.
+                if scan::is_private_key_body(&line.text) {
+                    spans += 1;
+                    masked_here = true;
+                    line.text = scan::redact(line.text.trim());
+                    continue;
+                }
+
                 // The deterministic rulepack runs over every line kind: a
                 // credential shaped like a known vendor's is just as live in
                 // a removed or context line — code the base revision already
@@ -521,6 +533,18 @@ mod tests {
             rendered.contains(&begin),
             "the armour line itself names no secret: {rendered}"
         );
+    }
+
+    #[test]
+    fn a_body_only_private_key_hunk_is_masked() {
+        let body = "MIIEowIBAAKCAQEAthisisadeadbeefexamplebodyforatestcase1234567890";
+        let raw = format!("@@ -2 +2 @@\n+{body}\n");
+        let mut diffs = vec![parse_file_patch("src/config.rs", &raw)];
+
+        mask(&mut diffs, &[], &[]);
+        let rendered = replay::render(&diffs);
+
+        assert!(!rendered.contains(body), "{rendered}");
     }
 
     /// Regression for a Codex finding on #166: `scan::redact_line`'s rulepack

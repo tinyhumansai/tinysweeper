@@ -393,6 +393,7 @@ mod lane_tests {
                 redaction_note: "",
                 e2e: None,
                 tree: None,
+                graph: None,
             })
             .await
             .expect("lane runs")

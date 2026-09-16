@@ -212,7 +212,26 @@ pub fn redact_stream_line(line: &str, in_key_block: &mut bool) -> String {
             redact(line.trim())
         };
     }
-    redact_line(line)
+    if is_private_key_body(line) {
+        redact(line.trim())
+    } else {
+        redact_line(line)
+    }
+}
+
+/// Whether one unarmoured line has the shape of private-key PEM body data.
+///
+/// Diff hunks and ranged tree reads do not always include an armour boundary.
+/// Standard PEM wraps base64 at 64 characters; accepting a conservative
+/// minimum of 48 catches those body-only fragments while leaving ordinary
+/// source lines readable. A false positive only withholds opaque encoded data
+/// from a model, which is the safe side of this security boundary.
+pub fn is_private_key_body(text: &str) -> bool {
+    let body = text.trim();
+    body.len() >= 48
+        && body
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
 }
 
 /// Variable names that make a high-entropy value on the right-hand side
@@ -372,7 +391,15 @@ pub fn scan_added_lines<'a>(
 /// This is [`redact_line`] under another name — see that function for what it
 /// applies, including the entropy-assignment pass.
 pub fn scrub(text: &str) -> String {
-    redact_line(text)
+    text.split_inclusive('\n')
+        .map(|line| match line.strip_suffix("\r\n") {
+            Some(body) => format!("{}\r\n", redact_line(body)),
+            None => match line.strip_suffix('\n') {
+                Some(body) => format!("{}\n", redact_line(body)),
+                None => redact_line(line),
+            },
+        })
+        .collect()
 }
 
 /// Replace every recognised credential in one line with a redacted hint.
@@ -902,6 +929,20 @@ mod tests {
         let streamed = redact_stream_line(&line, &mut in_key_block);
         assert!(!streamed.contains(&value), "{streamed}");
         assert!(!in_key_block);
+    }
+
+    #[test]
+    fn scrubbing_masks_each_line_of_a_multiline_body() {
+        let value = token("f3Kq9zR2", "mW7pL4xN8vB1cY6tH0jD5sG");
+        let body = format!("secret_token = \"{value}\"\r\nThis line follows it.\n");
+
+        let scrubbed = scrub(&body);
+
+        assert!(!scrubbed.contains(&value), "{scrubbed}");
+        assert_eq!(scrubbed.lines().count(), 2, "{scrubbed}");
+        assert!(scrubbed.contains("This line follows it."), "{scrubbed}");
+        assert!(scrubbed.starts_with("secret_token ="), "{scrubbed}");
+        assert!(scrubbed.contains("\r\n"), "{scrubbed:?}");
     }
 
     #[test]

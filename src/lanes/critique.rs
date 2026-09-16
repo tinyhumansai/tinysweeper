@@ -46,7 +46,8 @@ use crate::flows::panel::Call;
 use crate::flows::runner;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema::{self, RawFinding};
-use crate::lanes::fanout::{FileReview, per_file};
+use crate::lanes::fanout::{FileReview, per_unit};
+use crate::lanes::grouping::{FileGroup, GroupBounds};
 use crate::lanes::mechanical;
 use crate::lanes::{Lane, LaneInput, LaneOutcome, reviewer_responses};
 use crate::ports::model::{Model, Spend};
@@ -119,9 +120,33 @@ impl Lane for Critique {
             .collect();
 
         let changed_paths = input.changed_paths();
+        // No model call: groups related changed files so a bug spanning them
+        // — a caller and its callee, a function and its test — is visible to
+        // one reviewer instead of hidden by the isolation clause each
+        // ungrouped conversation is given. Off, or a component too large to
+        // bet on, falls back to exactly the singleton fan-out this lane ran
+        // before grouping existed — see `lanes::grouping`.
+        let groups: Vec<FileGroup> = if input.config.grouping.enabled {
+            input.group(
+                &paths,
+                &GroupBounds {
+                    max_files: input.config.grouping.max_files,
+                    max_hunk_chars: input.config.grouping.max_hunk_chars,
+                },
+            )
+        } else {
+            paths
+                .iter()
+                .map(|path| FileGroup {
+                    label: path.clone(),
+                    paths: vec![path.clone()],
+                })
+                .collect()
+        };
+
         // One capability for the whole lane, so the pull-request budget is
         // enforced across every file and every reviewer at once. That is what
-        // lets the files run concurrently: this lane reviewed them one at a
+        // lets the groups run concurrently: this lane reviewed them one at a
         // time only because spend is known after a call returns, and there was
         // nowhere else to check it.
         let llm = runner::lane_llm(
@@ -130,19 +155,24 @@ impl Lane for Critique {
             input.config.models.budget_usd_per_pr,
         );
 
-        let outcome = per_file(&paths, |path| {
-            let llm = llm.clone();
-            let input = &input;
-            let changed_paths = &changed_paths;
-            async move {
-                let diff = input
-                    .diffs
-                    .iter()
-                    .find(|d| d.path == path)
-                    .expect("the path came from the diff list");
-                review_file(llm, input, changed_paths, diff).await
-            }
-        })
+        let outcome = per_unit(
+            &groups,
+            |group| group.label.clone(),
+            |group| group.paths.clone(),
+            |group| {
+                let llm = llm.clone();
+                let input = &input;
+                let changed_paths = &changed_paths;
+                async move {
+                    let group_diffs: Vec<FileDiff> = group
+                        .paths
+                        .iter()
+                        .filter_map(|path| input.diffs.iter().find(|d| &d.path == path).cloned())
+                        .collect();
+                    review_group(llm, input, changed_paths, &group.paths, &group_diffs).await
+                }
+            },
+        )
         .await;
 
         // The graph's own calls are tallied inside the capability, which is the
@@ -163,22 +193,31 @@ impl Lane for Critique {
     }
 }
 
-/// Review one file, in a conversation that knows about no other file.
+/// Review one group of related changed files, in a conversation that knows
+/// about no file outside it.
+///
+/// `group_paths` and `group_diffs` are the same files in the same order;
+/// kept apart because a finding is placed against the one `FileDiff` whose
+/// path it names (see [`place`]), while the prompt layer wants the plain
+/// path list. A group of one file is the pre-grouping case, byte-identical to
+/// it: one path, one diff, the same isolation clause text.
 ///
 /// Positioning (step 4) and falsification (step 5) both run here rather than
 /// once over the folded result, because both want *the evidence this
-/// conversation was shown* and that is now one file's diff. Falsification is
-/// also free for the common file: `Falsifier::filter` makes no call when there
-/// is nothing to filter, so the number of falsify calls is the number of files
-/// that actually produced a finding.
-async fn review_file(
+/// conversation was shown* and that is now this group's diffs.
+/// Falsification is also free for the common case of nothing to report:
+/// `Falsifier::filter` makes no call when there is nothing to filter, so the
+/// number of falsify calls is the number of groups that actually produced a
+/// finding.
+async fn review_group(
     llm: std::sync::Arc<crate::flows::caps::ModelCapability>,
     input: &LaneInput<'_>,
     changed_paths: &[String],
-    diff: &FileDiff,
+    group_paths: &[String],
+    group_diffs: &[FileDiff],
 ) -> Result<FileReview> {
     let config: &Config = input.config;
-    let evidence = replay::render(std::slice::from_ref(diff));
+    let evidence = replay::render(group_diffs);
     let reviewers = council::reviewers(config, LaneId::Critique);
 
     // Every reviewer at once, as one graph. `ask_all` returns one answer per
@@ -187,7 +226,7 @@ async fn review_file(
     let calls: Vec<Call> = reviewers
         .iter()
         .map(|reviewer| {
-            let built = build_prompt(input, changed_paths, diff, &evidence, reviewer);
+            let built = build_prompt(input, changed_paths, group_paths, &evidence, reviewer);
             Call {
                 id: reviewer.id.to_string(),
                 model: reviewer.model.to_string(),
@@ -203,7 +242,7 @@ async fn review_file(
         LaneId::Critique,
         &calls,
         &schema::json_schema(),
-        input.asking_about(diff),
+        input.asking_about_group(group_diffs),
     )
     .await?;
 
@@ -223,7 +262,15 @@ async fn review_file(
         spend.note(&response.model);
         looked_up.push_str(&response.looked_up);
 
-        let asked = match place(llm.clone(), input, diff, &evidence, response.response).await {
+        let asked = match place(
+            llm.clone(),
+            input,
+            group_diffs,
+            &evidence,
+            response.response,
+        )
+        .await
+        {
             Ok(asked) => asked,
             Err(err) if reviewers.len() > 1 => {
                 tracing::warn!(agent = response.id, %err, "a council reviewer failed");
@@ -248,7 +295,7 @@ async fn review_file(
     if per_reviewer.is_empty() {
         return Err(crate::error::Error::lane(
             "critique",
-            format!("every reviewer failed on {}", diff.path),
+            format!("every reviewer failed on {}", group_paths.join(" + ")),
         ));
     }
 
@@ -283,7 +330,7 @@ async fn review_file(
     })
 }
 
-/// What one reviewer said about one file.
+/// What one reviewer said about one group.
 struct Asked {
     summary: String,
     resolved: Vec<String>,
@@ -293,7 +340,7 @@ struct Asked {
     discarded: usize,
 }
 
-/// Build one reviewer's prompt for one file.
+/// Build one reviewer's prompt for one group.
 ///
 /// Split from [`place`] so every reviewer's prompt is assembled before any call
 /// is made: the graph asks them all at once, and a builder that ran inside the
@@ -301,7 +348,7 @@ struct Asked {
 fn build_prompt<'a>(
     input: &'a LaneInput<'_>,
     changed_paths: &'a [String],
-    diff: &'a FileDiff,
+    group_paths: &'a [String],
     evidence: &'a str,
     reviewer: &council::Reviewer<'_>,
 ) -> prompt::Prompt {
@@ -312,13 +359,14 @@ fn build_prompt<'a>(
         extracted_rules: input.extracted_rules,
         prior_findings: input.prior_findings,
         new_evidence: evidence,
-        // Every path the pull request touched, not just this one. This selects
-        // which `path_instructions` are injected, and narrowing it to the focus
-        // file would silently drop the rules for every other changed path from
-        // a prefix all N conversations otherwise share — losing the cache as
-        // well as the rules.
+        // Every path the pull request touched, not just this group's.
+        // `path_instructions` always selects repository overrides from
+        // `changed_paths`, never from `focus_paths` below: a path-specific
+        // rule for a file outside this group is still a rule about a file the
+        // pull request touched, and a grouped conversation must see it even
+        // though it may only report findings inside its own group.
         changed_paths,
-        focus_path: Some(&diff.path),
+        focus_paths: group_paths,
         persona: reviewer.persona,
         retrieved_context: input.retrieved_context,
         memory_context: input.memory_context,
@@ -327,11 +375,18 @@ fn build_prompt<'a>(
     })
 }
 
-/// Place what one reviewer said against the file it reviewed.
+/// Place what one reviewer said against the group file it names.
+///
+/// Resolved against the `FileDiff` in `group_diffs` whose path equals the
+/// finding's own `path` — never the first file of the group. A path outside
+/// the group is discarded exactly like a file the pull request never touched:
+/// the isolation clause told this conversation it owns only these files, and
+/// honouring a finding about anything else is what `focus_paths` exists to
+/// prevent (see `harness::prompt::isolation_clause`).
 async fn place(
     llm: std::sync::Arc<crate::flows::caps::ModelCapability>,
     input: &LaneInput<'_>,
-    diff: &FileDiff,
+    group_diffs: &[FileDiff],
     evidence: &str,
     parsed: schema::LaneResponse,
 ) -> Result<Asked> {
@@ -348,16 +403,17 @@ async fn place(
     let mut discarded = 0usize;
 
     for raw in parsed.findings {
-        // Any file but this conversation's own is dropped. That is stricter
-        // than the whole-diff lane's rule — which only required the pull
-        // request to have touched the file — and it has to be: N reviewers
-        // each reporting the same cross-file problem is what `focus_path`
-        // exists to prevent, and honouring an off-file finding here would
-        // undo it.
-        if raw.path != diff.path {
+        // Resolved against the group file whose path it names. A path outside
+        // the group — including one this pull request touched, in a different
+        // conversation — is dropped exactly as a whole-diff lane would drop a
+        // path it never touched. That is stricter than "the pull request
+        // touched this somewhere", and it has to be: N reviewers each
+        // reporting the same cross-file problem is what `focus_paths` exists
+        // to prevent, and honouring an off-group finding here would undo it.
+        let Some(diff) = group_diffs.iter().find(|d| d.path == raw.path) else {
             discarded += 1;
             continue;
-        }
+        };
 
         // Budget check: relocation can make one model call per unresolvable
         // finding, so enforce the limit inside the loop before escalating to
@@ -409,7 +465,7 @@ async fn place(
     }
 
     // Falsification is deliberately *not* here: it runs once over the merged
-    // set in `review_file`, because a reject-only filter given more inputs in
+    // set in `review_group`, because a reject-only filter given more inputs in
     // one pass has identical semantics at a fraction of the calls.
     Ok(Asked {
         summary: parsed.summary,
@@ -589,6 +645,7 @@ fn helper() {
                 redaction_note: "",
                 e2e: None,
                 tree: None,
+                graph: None,
             })
             .await
             .expect("lane runs")
@@ -952,6 +1009,7 @@ fn helper() {
                 redaction_note: "",
                 e2e: None,
                 tree: None,
+                graph: None,
             })
             .await
             .expect("runs");
@@ -1012,6 +1070,7 @@ fn helper() {
                 redaction_note: "",
                 e2e: None,
                 tree: None,
+                graph: None,
             })
             .await
             .expect("runs");
@@ -1071,6 +1130,7 @@ fn helper() {
                 redaction_note: "",
                 e2e: None,
                 tree: None,
+                graph: None,
             })
             .await
             .expect("runs");
@@ -1120,6 +1180,7 @@ fn helper() {
                 redaction_note: "",
                 e2e: None,
                 tree: None,
+                graph: None,
             })
             .await
             .expect("the failure is isolated, not propagated");
@@ -1261,6 +1322,7 @@ fn helper() {
                 redaction_note: "",
                 e2e: None,
                 tree: None,
+                graph: None,
             })
             .await
             .expect("runs");
@@ -1291,5 +1353,122 @@ fn helper() {
             outcome.resolved,
             vec!["Guard the index before dereferencing"]
         );
+    }
+
+    // --- grouping -----------------------------------------------------------
+
+    /// A file and its underscore test sibling: grouped by name alone, with no
+    /// graph, by `lanes::grouping`.
+    fn grouped_diffs() -> Vec<FileDiff> {
+        vec![
+            parse_file_patch(
+                "src/widget.rs",
+                "@@ -1,1 +1,2 @@\n fn widget() {}\n+    let w = items[i];\n",
+            ),
+            parse_file_patch(
+                "src/widget_test.rs",
+                "@@ -1,1 +1,2 @@\n fn widget_test() {}\n+    let t = cases[j];\n",
+            ),
+        ]
+    }
+
+    #[tokio::test]
+    async fn grouping_reduces_call_count_for_a_file_and_its_test() {
+        let model = MockModel::silent();
+        run_with(model.clone(), &config(), &grouped_diffs()).await;
+
+        assert_eq!(
+            model.calls(),
+            1,
+            "one conversation for the file and its test, not two"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_isolation_clause_names_every_file_in_the_group() {
+        let model = MockModel::silent();
+        run_with(model.clone(), &config(), &grouped_diffs()).await;
+
+        let system = &model.requests()[0].messages[0].content;
+        assert!(system.contains("These files only"), "{system}");
+        // Fenced as untrusted data, one path per line, not backtick-wrapped
+        // prose — see `harness::prompt::isolation_clause`'s group arm.
+        assert!(system.contains("src/widget.rs"), "{system}");
+        assert!(system.contains("src/widget_test.rs"), "{system}");
+        assert!(system.contains("untrusted"), "{system}");
+    }
+
+    #[tokio::test]
+    async fn a_grouped_finding_anchors_to_the_file_it_names_not_the_first_file_in_the_group() {
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [{
+                "path": "src/widget_test.rs",
+                "existing_code": "let t = cases[j];",
+                "rule": "unchecked-index",
+                "title": "Guard the index before dereferencing",
+                "body": "`j` is never bounds-checked.",
+                "severity": "high", "confidence": 0.9
+            }]
+        }));
+        let outcome = run_with(model, &config(), &grouped_diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
+        assert_eq!(outcome.findings[0].path, "src/widget_test.rs");
+        assert_eq!(
+            outcome.findings[0].line,
+            Some(2),
+            "anchored against its own file's diff, not the group's first file"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_finding_naming_a_path_outside_the_group_is_discarded_like_an_untouched_file() {
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [{
+                "path": "src/elsewhere.rs",
+                "existing_code": "let w = items[i];",
+                "rule": "r", "title": "t", "body": "b",
+                "severity": "high", "confidence": 0.9
+            }]
+        }));
+        let outcome = run_with(model, &config(), &grouped_diffs()).await;
+
+        assert!(outcome.findings.is_empty());
+        assert!(
+            outcome.summary.contains("did not change"),
+            "{}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn grouping_disabled_falls_back_to_per_file_fanout() {
+        let mut config = config();
+        config.grouping.enabled = false;
+        let model = MockModel::silent();
+        run_with(model.clone(), &config, &grouped_diffs()).await;
+
+        let requests = model.requests();
+        assert_eq!(
+            requests.len(),
+            2,
+            "grouping off is the plain one-conversation-per-file fan-out"
+        );
+
+        // Byte-identical to the pre-grouping single-file prompt: the same
+        // isolation clause text, naming only that file, with no group
+        // language at all — a cassette or a provider's cached prefix from
+        // before grouping existed must still match.
+        for (request, path) in requests.iter().zip(["src/widget.rs", "src/widget_test.rs"]) {
+            let system = &request.messages[0].content;
+            assert!(system.contains("## One file only"), "{system}");
+            assert!(
+                system.contains(&format!("The file is `{path}`.")),
+                "{system}"
+            );
+            assert!(!system.contains("These files only"), "{system}");
+        }
     }
 }

@@ -1,10 +1,9 @@
 version = 1
 
-# For repositories with an end-to-end suite worth holding changes to. Every
-# lane the defaults run, plus `e2e`, which is off everywhere else: it asks
-# whether a behavioural change is reachable by an end-to-end test and whether
-# the repository's own e2e jobs actually ran on the head. See
-# docs/modules/lanes/e2e.md.
+# For repositories with an end-to-end suite worth holding changes to. The
+# `e2e` lane runs by default everywhere; what this preset adds is that a
+# tree with no harness is a finding rather than a skip, and the lane's rule
+# document. See docs/modules/lanes/e2e.md.
 
 [review]
 lanes = ["critique", "security", "tests", "commits", "description", "e2e"]

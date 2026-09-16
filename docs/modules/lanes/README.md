@@ -14,7 +14,7 @@ That boundary is enforced by the type system rather than by discipline.
 | `tests` | `tinysweeper/tests` | Whether changed behaviour is covered | — |
 | `commits` | `tinysweeper/commits` | What entered the history — **no model call** | `secret`, `blob`, `junk` |
 | `description` | `tinysweeper/description` | Title and body against the diff | — |
-| `e2e` | `tinysweeper/e2e` | Whether changed behaviour is reachable end to end, and whether the repository's e2e jobs ran on the head — **opt-in** | — |
+| `e2e` | `tinysweeper/e2e` | Whether changed behaviour is reachable end to end, and whether the repository's e2e jobs ran on the head | — |
 
 The scanner-kind column is a **partition, not an overlap**. Each deterministic
 finding has exactly one owning lane, because two lanes discussing one match
@@ -151,6 +151,52 @@ no model call — which changed files are worth one and in what order:
 `tests`, `commits` and `description` are pull-request-scoped. Their subject is a
 relationship between files, and a reviewer shown one file cannot see it.
 
+## Grouping
+
+Isolation cuts both ways. Telling every conversation to ignore every other file
+stops N reviewers reporting one cross-file problem N times, and it also hides a
+bug that only shows up by reading two files together: a caller changed in `a.rs`
+while its callee changed in `b.rs`, or a function and the test that exercises
+it. Neither ungrouped conversation ever sees both halves.
+
+`lanes::grouping` decides — deterministically, **no model call** — which of a
+lane's changed files travel together in one conversation instead. Two files are
+grouped when:
+
+- the code graph has a `Calls`, `References`, `Tests`, `Imports` or `Extends`
+  edge between a symbol in one and a symbol in the other, read off the same
+  neighbourhood `graph::impact` and `overview` already walk for the changed
+  set — no second query; or
+- a name heuristic matches with no graph at all: a file and its test
+  (`foo.rs`/`foo_test.rs`, `test_foo.py`, `foo.test.ts`, `FooTest.java`), a
+  pair of locale files (`messages.en.json`/`messages.fr.json`, or `i18n/en.json`
+  next to `i18n/fr.json`), or a component and its co-located stylesheet
+  (`Button.tsx`/`Button.module.css`).
+
+A grouped conversation is handed every file's diff and one isolation clause
+naming all of them — see `harness::prompt::isolation_clause` — and its lookup
+seeding (`flows::lookup::Ledger::seed`) reads the definitions every file's
+changed lines call into, not just the first file's, so grouping a file with its
+test does not regress the seeding that found the boundary bug on
+opencompany#2313 (see [`lookup.md`](lookup.md)). A finding is placed against
+whichever file in the group it actually names; one naming a path outside the
+group is discarded exactly like a file the pull request never touched.
+
+**A component over `[grouping].max_files` or `max_hunk_chars` falls back to
+singletons — every one of its files reviewed alone, never a partial group.**
+Grouping is a bet that one conversation reviews a handful of related files
+better than several isolated ones; a bet with too many files or too much diff
+in it is the same failure per-file fan-out exists to prevent in the first
+place — the first few files read closely, the rest an afterthought — so it is
+not made at all. `max_files = 4` and `max_hunk_chars = 20000` are chosen to
+comfortably hold a file and its test, or the few files one rename touches,
+while catching that case well before it does.
+
+`[grouping].enabled = false` disables grouping entirely and returns to the
+plain one-conversation-per-file fan-out, byte-identical to the prompts sent
+before grouping existed, which is what keeps an operator's prompt cache and any
+recorded eval cassette valid across the change.
+
 ## Below the gate, above notice
 
 A finding that misses the posting gate but is at least `medium` and at least
@@ -170,12 +216,13 @@ a specific entry (`src/ports/**`) can keep the broader language document
 is the "do NOT report" list; that half is where the precision comes from. See
 `presets/rules/README.md`.
 
-## The `e2e` lane is opt-in and settles later
+## The `e2e` lane is quiet without a harness, and settles later
 
 It owns end-to-end coverage and whether the repository's own e2e jobs ran on
 the head — the concern the `tests` rule document deliberately excludes. It is
-absent from the default `review.lanes`; `presets/e2e-required/` turns it on.
-Its harness inventory, trigger analysis and job states are decided in code
+on by default and skips, with no model call, on a repository that has no e2e
+harness; `presets/e2e-required/` turns that skip into a finding. Opt out by
+listing `review.lanes` without it. Its harness inventory, trigger analysis and job states are decided in code
 before any model call, and a job still running when the review finishes
 leaves the check `neutral` until the server settles it on the job's
 completion. See [e2e.md](e2e.md).

@@ -491,7 +491,30 @@ impl<'a> RedactingTree<'a> {
 #[async_trait]
 impl TreeReader for RedactingTree<'_> {
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
-        Ok(redact_found(self.inner.lookup(lookup).await?))
+        let found = self.inner.lookup(lookup).await?;
+        // A requested range can begin in the body of an otherwise ordinary
+        // source file's PEM block. Establish the state from the preceding
+        // lines before redacting the returned range, or the body has neither
+        // armour nor an assignment/rulepack shape to trigger a mask of its
+        // own. The probe is deliberately bounded by the reader's normal 200
+        // line cap: private-key PEM bodies are far shorter, and an unbounded
+        // hidden read would let one lookup silently turn into a whole-file
+        // model-adjacent operation.
+        let in_key_block = match (lookup, &found) {
+            (Lookup::Read { path, .. }, Found::Text { start, .. }) if *start > 1 => {
+                let prefix = self
+                    .inner
+                    .lookup(&Lookup::Read {
+                        path: path.clone(),
+                        start: Some(start.saturating_sub(MAX_READ_LINES)),
+                        end: Some(start - 1),
+                    })
+                    .await?;
+                private_key_state(&prefix)
+            }
+            _ => false,
+        };
+        Ok(redact_found(found, in_key_block))
     }
 
     fn describe(&self) -> String {
@@ -513,7 +536,7 @@ impl TreeReader for RedactingTree<'_> {
 /// Each [`Hit`] is one line with no such prefix and no cross-line context, so
 /// a private-key marker on its own is left as-is — a boundary line alone
 /// names no secret, and a hit is never wide enough to carry an armour body.
-fn redact_found(found: Found) -> Found {
+fn redact_found(found: Found, mut in_key_block: bool) -> Found {
     match found {
         Found::Text {
             text,
@@ -521,7 +544,6 @@ fn redact_found(found: Found) -> Found {
             end,
             total,
         } => {
-            let mut in_key_block = false;
             let mut out = String::with_capacity(text.len());
             for (index, line) in text.split('\n').enumerate() {
                 if index > 0 {
@@ -558,6 +580,25 @@ fn redact_found(found: Found) -> Found {
         },
         other => other,
     }
+}
+
+/// Whether the final line of a preceding read leaves us inside a PEM block.
+///
+/// The probe never reaches a model, so walking it through the same stream
+/// redactor is safe and avoids duplicating the marker state machine here.
+fn private_key_state(found: &Found) -> bool {
+    let Found::Text { text, .. } = found else {
+        return false;
+    };
+    let mut in_key_block = false;
+    for line in text.split('\n') {
+        let body = match line.find("| ") {
+            Some(offset) if offset <= 6 => &line[offset + 2..],
+            _ => line,
+        };
+        let _ = crate::scan::redact_stream_line(body, &mut in_key_block);
+    }
+    in_key_block
 }
 
 /// A tree on disk: a checkout, or the working directory `local-review` runs in.
@@ -1238,6 +1279,32 @@ mod tests {
         };
         assert!(!text.contains(body), "{text}");
         assert!(text.contains(&begin), "{text}");
+    }
+
+    #[tokio::test]
+    async fn redacting_tree_masks_a_range_that_starts_inside_a_private_key() {
+        let begin = format!("-----BEGIN {}-----", "RSA PRIVATE KEY");
+        let end = format!("-----END {}-----", "RSA PRIVATE KEY");
+        // Short on purpose: this proves the preceding-range probe establishes
+        // PEM state instead of relying on the body-only base64 classifier.
+        let body = "short-private-key-body";
+        let inner = MockTree::from_files([("src/config.rs", format!("{begin}\n{body}\n{end}\n"))]);
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree
+            .lookup(&Lookup::Read {
+                path: "src/config.rs".into(),
+                start: Some(2),
+                end: Some(2),
+            })
+            .await
+            .unwrap();
+
+        let Found::Text { text, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert!(!text.contains(body), "{text}");
+        assert!(text.contains("<redacted"), "{text}");
     }
 
     /// Regression for the same finding: a `MockTree` recorded outcome

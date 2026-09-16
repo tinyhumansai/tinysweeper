@@ -11,7 +11,7 @@
 version = 1
 
 [review]
-lanes = ["critique", "security", "tests", "commits", "description"]
+lanes = ["critique", "security", "tests", "commits", "description", "e2e"]
 # The one dial most repositories should touch. 1 chill, 2 default, 3 assertive.
 # `severity_gate` and `confidence_min` are deliberately absent: strictness sets
 # them, and setting them here would make the dial inert for everyone who never
@@ -427,6 +427,21 @@ max_chars = 40000
 # read one file at a time through the API and search is unavailable.
 checkout = true
 
+# Cross-file grouping for the `critique` and `security` per-file fan-out. No
+# model call: related changed files (a graph edge, or a name heuristic like a
+# file and its test) travel in one conversation instead of N isolated ones,
+# so a bug spanning them is visible to a reviewer instead of hidden by the
+# isolation clause each fanned-out conversation is given. `max_files = 4` and
+# `max_hunk_chars = 20000` are chosen to comfortably hold a file and its test,
+# or a handful of files one rename touches, while still falling back to
+# singletons well before a group would crowd out the model's attention the
+# same way the 31-file single-conversation review that motivated per-file
+# fan-out in the first place did.
+[grouping]
+enabled = true
+max_files = 4
+max_hunk_chars = 20000
+
 # The knowledge centre. `files` are read from the pull request's head commit
 # through the forge and are untrusted input — they are put through a sandboxed
 # extraction pass rather than injected. Plain filenames only: a name containing
@@ -582,11 +597,13 @@ max_blob_bytes = 1048576
 model = "scan"
 fail_on = "high"
 
-# Not in `review.lanes` by default. Demanding an end-to-end test from a
-# repository with no e2e harness is the noise the `tests` lane's rules were
-# written to avoid; a repository opts in when it has a suite worth holding
-# changes to. `paths` and `workflows` empty means detect; set, they replace
-# the detection rather than extend it.
+# On by default, and quiet where it has nothing to say: with
+# `missing_harness = "skip"` a repository with no e2e test files and no e2e
+# workflow gets a neutral check and no finding, so demanding an end-to-end
+# test from a repository that cannot have one — the noise the `tests` lane's
+# rules were written to avoid — never happens. Opt out by listing
+# `review.lanes` without `e2e`. `paths` and `workflows` empty means detect;
+# set, they replace the detection rather than extend it.
 [lanes.e2e]
 model = "scan"
 fail_on = "high"

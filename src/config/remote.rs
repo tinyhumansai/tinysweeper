@@ -44,7 +44,19 @@
 //!   repository that could set it would have the bot embed pictures from a
 //!   host of its choosing. `preview.enabled` and `preview.max_flows` are
 //!   overridable for the usual reason: they can only make a repository's
-//!   own preview smaller.
+//!   own preview smaller. `[grouping]` sits here too, not in the "how loud"
+//!   bucket above: `max_files` and `max_hunk_chars` are the ceiling one
+//!   conversation's combined diff may reach before falling back to
+//!   singletons, and nothing enforces a smaller one server-side — a
+//!   repository raising either arbitrarily can make one call carry a
+//!   many-file, many-thousand-character prompt no ungrouped review of the
+//!   same files would ever have sent in one request, which is a materially
+//!   different spend shape than "fewer, larger calls over the same files",
+//!   not merely a quieter review. Disabling grouping alone is not the
+//!   concern — that only forgoes the discount consolidation gives and falls
+//!   back to the pre-grouping per-file fan-out every review already paid for
+//!   — but the allow-list has no way to admit the harmless direction while
+//!   refusing the harmful one, so the whole section stays operator-only.
 //! - **Not overridable — anything that puts repository prose into a prompt.**
 //!   `path_instructions` is free text injected straight into a lane's
 //!   instructions, unfenced. Repository prose reaches a prompt through exactly
