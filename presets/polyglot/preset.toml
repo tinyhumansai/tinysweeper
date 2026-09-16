@@ -19,7 +19,11 @@ ignore = [
     "**/node_modules/**",
     "**/vendor/**",
     "**/dist/**",
-    "**/build/**",
+    # Top-level only: unlike `node_modules` or `vendor`, "build" is also a
+    # common source-directory name (a Java package segment, `src/build/`
+    # tooling code). `**/build/**` would drop that source from review
+    # entirely, before any lane or path instruction saw it.
+    "build/**",
     "**/__pycache__/**",
     "**/.terraform/**",
     "target/**",
