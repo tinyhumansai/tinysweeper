@@ -42,7 +42,7 @@ use crate::lanes::triage::triage;
 use crate::lanes::{
     Anchoring, Lane, LaneInput, LaneOutcome, aggregate_reviewer_responses, reviewer_responses,
 };
-use crate::ports::model::Model;
+use crate::ports::model::{Model, Spend};
 use crate::scan::types::{Finding as ScanFinding, ScanKind};
 
 /// The scanner findings this lane owns.
