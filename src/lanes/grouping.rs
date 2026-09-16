@@ -537,6 +537,17 @@ mod tests {
     }
 
     #[test]
+    fn build_variant_qualifiers_are_not_grouped_as_locale_siblings() {
+        let paths = strings(&["dist/bundle.min.js", "dist/bundle.dev.js"]);
+        let diffs = diffs_for(&["dist/bundle.min.js", "dist/bundle.dev.js"]);
+
+        let groups = group(&paths, &diffs, None, &default_bounds());
+
+        assert_eq!(groups.len(), 2, "{groups:?}");
+        assert!(groups.iter().all(|g| g.paths.len() == 1));
+    }
+
+    #[test]
     fn non_locale_shaped_files_under_a_locale_dir_are_not_grouped() {
         let paths = strings(&["locales/schema.json", "locales/config.json"]);
         let diffs = diffs_for(&["locales/schema.json", "locales/config.json"]);
