@@ -236,11 +236,31 @@ pub fn redact_stream_line(line: &str, in_key_block: &mut bool) -> String {
             redact(line.trim())
         };
     }
-    if is_private_key_body(line) {
-        redact(line.trim())
-    } else {
-        redact_line(line)
+    // Outside armour a line is ordinary text, however base64-shaped it looks:
+    // a bare commit hash, a path, a long identifier on its own line all share
+    // the PEM alphabet. Callers that may start mid-key establish the state
+    // first — `evidence::redact` by looking ahead for a closing marker in the
+    // same hunk, `ports::tree` by probing the lines before a ranged read.
+    redact_line(line)
+}
+
+/// Whether a run of lines opens inside a private key: a closing armour line
+/// appears before any opening one.
+///
+/// A diff hunk or a ranged read can begin in the middle of a key, with the
+/// `BEGIN` line in omitted context. The `END` line that follows is specific
+/// enough to prove it; the body's shape alone is not, since ordinary source
+/// is full of base64-alphabet lines.
+pub fn opens_inside_private_key<'a>(lines: impl IntoIterator<Item = &'a str>) -> bool {
+    for line in lines {
+        if is_private_key_begin(line) {
+            return false;
+        }
+        if is_private_key_end(line) {
+            return true;
+        }
     }
+    false
 }
 
 /// Preserve a PEM armour marker while applying normal redaction to text that

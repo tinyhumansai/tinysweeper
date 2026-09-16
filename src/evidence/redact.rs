@@ -140,7 +140,10 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
             // state cannot safely cross their boundary. A closing marker may
             // be in omitted context; carrying this state would hide an
             // unrelated later hunk from every reviewing lane.
-            let mut in_key_block = false;
+            // ...unless the hunk itself proves it opened mid-key: a closing
+            // marker with no opening one before it.
+            let mut in_key_block =
+                scan::opens_inside_private_key(hunk.lines.iter().map(|line| line.text.as_str()));
             for line in &mut hunk.lines {
                 if scan::is_private_key_begin(&line.text) {
                     let masked = scan::redact_stream_line(&line.text, &mut in_key_block);
@@ -168,18 +171,6 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
                         masked_here = true;
                         line.text = scan::redact(line.text.trim());
                     }
-                    continue;
-                }
-
-                // A hunk may begin in the middle of an armour block, with
-                // neither boundary in its context. PEM's fixed-width base64
-                // body is still recognisable on its own, so withhold that
-                // opaque fragment rather than let a partial diff recover a
-                // key that a full-hunk pass would have masked.
-                if scan::is_private_key_body(&line.text) {
-                    spans += 1;
-                    masked_here = true;
-                    line.text = scan::redact(line.text.trim());
                     continue;
                 }
 
