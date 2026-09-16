@@ -550,6 +550,7 @@ impl Ledger {
                 self.seed_symbol(
                     tree,
                     &diffs[*i],
+                    diffs,
                     &symbol,
                     policy,
                     &mut rendered,
