@@ -316,6 +316,7 @@ async fn review_group(
     // has none — see `docs/modules/falsify/README.md`: this lane's model
     // findings are adjudicating deterministic scanner matches, not proposing
     // unverified ones the way `critique` does.
+    let mut added_by_coverage = 0usize;
     if config.review.passes > 1 && changed_lines(group_diffs) >= COVERAGE_PASS_MIN_LINES {
         let mut confirmed = findings.clone();
 
