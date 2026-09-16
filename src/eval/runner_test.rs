@@ -332,6 +332,13 @@ async fn the_config_digest_moves_when_the_prompt_inputs_move() {
     let mut rules_named = with_instruction.clone();
     rules_named.path_instructions[0].rules = Some("rust".into());
     assert_ne!(digest_of(&with_instruction), digest_of(&rules_named));
+    let mut merged = with_instruction.clone();
+    merged.path_instructions[0].merge = true;
+    assert_ne!(
+        digest_of(&with_instruction),
+        digest_of(&merged),
+        "merge decides whether the next matching entry renders too"
+    );
 
     assert_eq!(digest_of(&base), digest_of(&config()));
 }
