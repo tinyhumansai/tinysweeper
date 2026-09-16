@@ -249,6 +249,77 @@ fn mask_assignment_or_whole_line(text: &str) -> String {
     }
 }
 
+/// Re-apply the path-independent halves of [`mask`] to text [`render`] already
+/// produced, for evidence a *previous* review cycle persisted and this cycle
+/// replays byte for byte.
+///
+/// That text predates whichever push first ran this module — a `.env` diff or
+/// a scanner-flagged secret sent before this landed was recorded unmasked,
+/// and `crate::state`'s cache replays it verbatim on the first re-review after
+/// deploy. [`scan::is_sensitive_path`] cannot be recovered from rendered text
+/// alone — the path is one line of the render (`--- {path}`), not a property
+/// attached to each line below it — so only the rulepack match and
+/// private-key-body masking [`mask`] also applies unconditionally run here.
+/// That is exactly the risk worth closing: a value a scanner itself would
+/// have flagged, not a value only a sensitive path's shape would have caught.
+///
+/// [`render`]: crate::evidence::diff::render
+pub fn scrub_rendered(text: &str) -> String {
+    let mut in_key_block = false;
+    let mut out = String::with_capacity(text.len());
+
+    for (index, line) in text.split('\n').enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        let (prefix, body) = split_render_prefix(line);
+
+        if scan::is_private_key_begin(body) {
+            in_key_block = true;
+            out.push_str(line);
+            continue;
+        }
+        if in_key_block {
+            if scan::is_private_key_end(body) {
+                in_key_block = false;
+                out.push_str(line);
+                continue;
+            }
+            out.push_str(prefix);
+            if body.trim().is_empty() {
+                out.push_str(body);
+            } else {
+                out.push_str(&scan::redact(body.trim()));
+            }
+            continue;
+        }
+
+        out.push_str(prefix);
+        out.push_str(&scan::redact_line(body));
+    }
+
+    out
+}
+
+/// Split a line [`render`](crate::evidence::diff::render) produced into its
+/// fixed-width `{line-no} {marker}` prefix and the source text after it, so
+/// [`scrub_rendered`] only ever masks text a scanner could have flagged and
+/// never the line-number anchor a reviewer's comment depends on.
+///
+/// Both of `render`'s line shapes — `{n:>5} {marker}{text}` and
+/// `      {marker}{text}` — are exactly 7 bytes of prefix before the source
+/// text starts. A header line (`--- path`, `@@ ... @@`) is shorter than that
+/// shape implies or does not carry one of `+`, `-`, ` ` at that offset, and is
+/// returned whole as its own body: the rulepack still runs on it, harmlessly,
+/// because neither header shape matches a credential.
+fn split_render_prefix(line: &str) -> (&str, &str) {
+    if line.len() >= 7 && matches!(line.as_bytes()[6], b'+' | b'-' | b' ') {
+        line.split_at(7)
+    } else {
+        ("", line)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
