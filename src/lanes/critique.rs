@@ -1089,6 +1089,30 @@ fn helper() {
     }
 
     #[tokio::test]
+    async fn a_coverage_finding_updates_a_clean_round_one_summary() {
+        // Round one's own prose is frozen before the coverage pass ever runs.
+        // If round one found nothing and the coverage pass then adds a
+        // surviving finding, the summary must say so rather than keep
+        // reading "Nothing to report." while `findings` says otherwise.
+        let model = MockModel::new()
+            .then(json!({"summary": "Nothing to report.", "findings": []}))
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the second index", 30)]
+            }))
+            .then(json!({"incorrect": []}));
+
+        let outcome = run_with(model, &config_with_passes(2), &large_diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
+        assert!(
+            outcome.summary.contains("1 finding added by a second pass"),
+            "{}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
     async fn passes_1_never_makes_a_second_call() {
         let model = MockModel::new().then(json!({
             "summary": "Nothing to report.",
