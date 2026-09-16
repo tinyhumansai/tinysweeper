@@ -134,26 +134,48 @@ fn is_prose(name: &str) -> bool {
 /// corrected.
 pub struct PathTable {
     globs: Vec<GlobMatcher>,
+    /// Whether `lanes.e2e.paths` was configured at all, as opposed to left
+    /// empty. Kept separately from `globs` so an explicit table that failed
+    /// to compile *anything* is distinguishable from no table at all — see
+    /// `matches`.
+    explicit: bool,
+    /// How many configured globs failed to compile and were dropped.
+    invalid: usize,
 }
 
 impl PathTable {
     /// Build from `lanes.e2e.paths`; empty means the default table.
     pub fn new(globs: &[String]) -> Self {
+        let compiled: Vec<GlobMatcher> = globs
+            .iter()
+            .filter_map(|glob| Glob::new(glob).ok())
+            .map(|glob| glob.compile_matcher())
+            .collect();
         Self {
-            globs: globs
-                .iter()
-                .filter_map(|glob| Glob::new(glob).ok())
-                .map(|glob| glob.compile_matcher())
-                .collect(),
+            invalid: globs.len() - compiled.len(),
+            explicit: !globs.is_empty(),
+            globs: compiled,
         }
     }
 
     /// Whether `path` is an end-to-end test under this table.
+    ///
+    /// An explicit `lanes.e2e.paths` *replaces* the default table, even when
+    /// every entry in it failed to compile: silently falling back to the
+    /// default here would re-enable paths the operator's malformed
+    /// configuration never meant to re-enable, and report harness findings
+    /// against them. `invalid_globs` is how the caller learns to surface
+    /// that the configuration itself is broken.
     pub fn matches(&self, path: &str) -> bool {
-        if self.globs.is_empty() {
-            return is_e2e_test_path(path);
+        if self.explicit {
+            return self.globs.iter().any(|glob| glob.is_match(path));
         }
-        self.globs.iter().any(|glob| glob.is_match(path))
+        is_e2e_test_path(path)
+    }
+
+    /// How many configured globs failed to compile and were dropped.
+    pub fn invalid_globs(&self) -> usize {
+        self.invalid
     }
 }
 
