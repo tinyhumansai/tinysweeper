@@ -387,4 +387,107 @@ mod tests {
         assert_eq!(before, after, "masking must never move an anchor");
         assert_eq!(diffs[0].changed_lines, changed_before);
     }
+
+    /// Regression for a Codex finding on #166: an entropy-flagged assignment
+    /// has no rulepack prefix for `scan::redact_line` to match, so it used to
+    /// come through `mask` untouched even though the scanner had already
+    /// flagged the exact line.
+    #[test]
+    fn a_high_entropy_assignment_with_no_rulepack_prefix_is_still_masked() {
+        let value = token("f3Kq9zR2", "mW7pL4xN8vB1cY6tH0jD5sG");
+        let mut diffs = vec![parse_file_patch(
+            "src/config.rs",
+            &patch(&[&format!("+let secret_token = \"{value}\";")]),
+        )];
+        let findings = scan::secrets::scan_added_lines("src/config.rs", diffs[0].added_lines());
+        assert_eq!(findings.len(), 1, "{findings:#?}");
+        assert_eq!(findings[0].rule, "high-entropy-assignment");
+
+        mask(&mut diffs, &findings, &[]);
+        let rendered = replay::render(&diffs);
+
+        assert!(!rendered.contains(&value), "{rendered}");
+        assert!(
+            rendered.contains("let secret_token ="),
+            "surrounding code stays readable: {rendered}"
+        );
+    }
+
+    /// Regression for a Codex finding on #166: the marker line of a private
+    /// key names the key type, not the key — the base64 body after it has no
+    /// prefix or assignment shape for either scanner to anchor a per-line
+    /// finding on, so it used to reach a model unmasked even though the file
+    /// was flagged as carrying a private key.
+    #[test]
+    fn a_private_key_body_is_masked_even_without_a_per_line_finding() {
+        let body = "MIIEowIBAAKCAQEAthisisadeadbeefexamplebodyforatestcase1234567890";
+        let raw = format!(
+            "@@ -0,0 +1,3 @@\n+-----BEGIN RSA PRIVATE KEY-----\n+{body}\n+-----END RSA PRIVATE KEY-----\n"
+        );
+        let mut diffs = vec![parse_file_patch("src/config.rs", &raw)];
+        let findings = scan::secrets::scan_added_lines("src/config.rs", diffs[0].added_lines());
+        // The scanner anchors one finding to the marker line; the body line
+        // gets none, which is exactly the gap this pass has to close.
+        assert_eq!(findings.len(), 1, "{findings:#?}");
+
+        mask(&mut diffs, &findings, &[]);
+        let rendered = replay::render(&diffs);
+
+        assert!(!rendered.contains(body), "{rendered}");
+        assert!(
+            rendered.contains("-----BEGIN RSA PRIVATE KEY-----"),
+            "the armour line itself names no secret: {rendered}"
+        );
+    }
+
+    /// Regression for a Codex finding on #166: `scan::redact_line`'s rulepack
+    /// match now runs on every line kind, not only lines a finding named, so
+    /// a live credential sitting in the base revision (a removed or context
+    /// line) is masked even though the scanner never looks at those lines.
+    #[test]
+    fn a_recognisable_credential_in_a_removed_line_is_masked() {
+        let key = token("AKIA", "IOSFODNN7EXAMPLE");
+        let raw = format!(
+            "@@ -1,2 +1,2 @@\n-const OLD_KEY: &str = \"{key}\";\n+const OLD_KEY: &str = \"rotated\";\n let b = 3;\n"
+        );
+        let mut diffs = vec![parse_file_patch("src/config.rs", &raw)];
+        // Deliberately empty: the scanner only ever scans added lines, so no
+        // finding names the removed line — the rulepack pass has to catch it
+        // on shape alone.
+        let findings: Vec<Finding> = Vec::new();
+
+        mask(&mut diffs, &findings, &[]);
+        let rendered = replay::render(&diffs);
+
+        assert!(!rendered.contains("IOSFODNN7EXAMPLE"), "{rendered}");
+        assert!(rendered.contains("rotated"), "{rendered}");
+    }
+
+    /// Regression for a Codex finding on #166: `FileDiff::path` is only the
+    /// head-revision path, so a rename out of a sensitive path — `.env` to
+    /// `config.txt` — used to disable whole-file masking even though the
+    /// base-revision content is exactly as sensitive.
+    #[test]
+    fn a_rename_out_of_a_sensitive_path_is_still_masked_wholesale() {
+        let mut diffs = vec![parse_file_patch(
+            "config.txt",
+            &patch(&["+FEATURE_FLAG=on"]),
+        )];
+        let files = vec![ChangedFile {
+            path: "config.txt".to_string(),
+            previous_path: Some(".env".to_string()),
+            ..ChangedFile::default()
+        }];
+        let findings = scan::secrets::scan_added_lines("config.txt", diffs[0].added_lines());
+        assert!(findings.is_empty(), "{findings:#?}");
+
+        mask(&mut diffs, &findings, &files);
+        let rendered = replay::render(&diffs);
+
+        assert!(
+            !rendered.contains("FEATURE_FLAG=on"),
+            "a rename out of .env stays masked on the base revision's shape: {rendered}"
+        );
+        assert!(rendered.contains("FEATURE_FLAG="), "{rendered}");
+    }
 }
