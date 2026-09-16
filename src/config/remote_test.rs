@@ -386,6 +386,11 @@ files = ["POLICY.md"]
 [lanes.critique]
 fail_on = "medium"
 
+[lanes.e2e]
+missing_harness = "require"
+paths = ["qa/**"]
+workflows = ["e2e"]
+
 [preview]
 enabled = false
 max_flows = 2
@@ -447,6 +452,17 @@ fn a_wildcard_matches_exactly_one_segment() {
     assert!(!overridable("lanes.fail_on"));
     assert!(!overridable("lanes.a.b.fail_on"));
     assert!(!overridable("review"));
+}
+
+#[test]
+fn e2e_detection_keys_are_overridable() {
+    // docs/modules/lanes/e2e.md and presets/e2e-required/README.md both
+    // document these as repository-settable; without them in
+    // `OVERRIDABLE_KEYS` this filter silently drops the setting a
+    // repository documented as able to make.
+    assert!(overridable("lanes.e2e.paths"));
+    assert!(overridable("lanes.e2e.workflows"));
+    assert!(overridable("lanes.e2e.missing_harness"));
 }
 
 #[tokio::test]
