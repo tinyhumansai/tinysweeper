@@ -391,6 +391,32 @@ mod tests {
         assert!(found[0].text.contains("request.post"));
     }
 
+    /// Regression for a Codex finding on #166: `gather` re-reads a candidate's
+    /// e2e test line from the tree at head, outside `evidence::redact::mask`
+    /// entirely, which only ever masks the diff. A test line that mentions
+    /// both a surface token this lane verifies and a scanner-detected
+    /// credential must not carry the credential into this lane's prompt.
+    #[test]
+    fn render_candidates_masks_a_recognisable_credential_in_the_quoted_line() {
+        let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+        let evidence = Evidence {
+            candidates: vec![Candidate {
+                path: "e2e/preview.spec.ts".into(),
+                line: 2,
+                text: format!("await request.post('/preview/sessions', {{ token: '{key}' }});"),
+                token: "/preview/sessions".into(),
+                added_at: "src/server/routes.rs:2".into(),
+            }],
+            searched: vec!["e2e/preview.spec.ts".into()],
+            ..Evidence::default()
+        };
+
+        let rendered = evidence.render_candidates();
+
+        assert!(!rendered.contains("IOSFODNN7EXAMPLE"), "{rendered}");
+        assert!(rendered.contains("request.post"), "{rendered}");
+    }
+
     #[tokio::test]
     async fn gather_reads_the_tree_the_workflows_the_checks_and_the_specs() {
         let mut state = MockState::default();
