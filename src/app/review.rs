@@ -701,6 +701,18 @@ pub async fn review_with_tree(
         });
     }
 
+    // Walked once, ahead of the lane loop, and reused by `change_map` below:
+    // both want the same neighbourhood of the changed files, and a second walk
+    // would be a second round trip to the graph store for an answer already in
+    // hand. Only asked for when something wants it — grouping or the change
+    // map — so a deployment with both off costs no query it never needed.
+    let changed_neighbourhood = if config.grouping.enabled || config.overview.enabled {
+        walk_changed_neighbourhood(config, retrieval, repo, &diffs).await
+    } else {
+        None
+    };
+    let graph_for_lanes = changed_neighbourhood.as_ref().and_then(|w| w.as_ref().ok());
+
     for lane_id in config.enabled_lanes() {
         let lane: Box<dyn Lane> = match lane_id {
             LaneId::Critique => Box::new(Critique::new(model.clone())),
@@ -725,6 +737,7 @@ pub async fn review_with_tree(
                 retrieved_context: &retrieved_context,
                 memory_context: &memory_text,
                 tree: Some(tree),
+                graph: graph_for_lanes,
             })
             .await?;
 
