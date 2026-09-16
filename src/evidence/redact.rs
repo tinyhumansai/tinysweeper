@@ -8,18 +8,45 @@
 //! *before* the request is built, over the same [`FileDiff`] every lane
 //! renders, so there is nothing left for a model to quote.
 //!
-//! Two independent triggers, because neither alone covers the case the other
+//! Several independent triggers, because none alone covers the case another
 //! catches:
 //!
-//! - A [`crate::scan::ScanKind::Secret`] finding names a `(path, line)`. That
-//!   line's matched span is masked with [`crate::scan::redact_line`] — the
-//!   same matcher and the same token as scrubbing a model's output, so a
-//!   human sees one redaction vocabulary everywhere it appears.
+//! - A [`crate::scan::ScanKind::Secret`] finding names a `(path, line)`. When
+//!   the matched span has a recognisable rulepack shape it is masked with
+//!   [`crate::scan::redact_line`] — the same matcher and the same token as
+//!   scrubbing a model's output, so a human sees one redaction vocabulary
+//!   everywhere it appears. A finding whose value the rulepack cannot see —
+//!   an entropy-flagged assignment, or a private-key marker with nothing to
+//!   split on — still gets its assigned value, or failing that the whole
+//!   line, masked: the scanner already decided this line names a secret, so
+//!   the fallback trusts that decision instead of requiring a second, this
+//!   time content-based, confirmation.
 //! - [`crate::scan::is_sensitive_path`] names a whole file — `.env`, a
 //!   private key — whose *shape*, not its content, is the giveaway. The
 //!   scanner's rulepack and entropy heuristic can both miss a value that
 //!   does not look like the credentials they know; a path on this list is
-//!   masked line by line regardless of what either one flagged.
+//!   masked line by line regardless of what either one flagged. The head
+//!   path is not the only path that counts: a rename out of a sensitive path
+//!   still exposed that content on the base-revision side, so the diff's
+//!   previous path is checked too.
+//! - A private-key PEM marker is looked for on *every* line of *every* diff,
+//!   flagged or not, sensitive path or not: the armour line names a key type,
+//!   not the key, so [`crate::scan::secrets`] only ever anchors a finding to
+//!   it — but the base64 body between it and the matching end marker carries
+//!   no vendor prefix or assignment shape for either scanner to anchor a
+//!   per-line finding on, and is masked wholesale regardless.
+//! - The rulepack matcher itself is run over every line kind of every diff,
+//!   including removed and context lines: a credential shaped like a known
+//!   vendor's is exactly as live sitting in the base revision as it is newly
+//!   added, and the diff renders that line either way. This is safe to do
+//!   unconditionally because the rulepack only ever matches a known shape —
+//!   there is no heuristic here to false-positive on ordinary code. The
+//!   entropy heuristic itself still only ever runs on added lines
+//!   ([`crate::scan::secrets`]'s documented trade-off against noise), so a
+//!   high-entropy value with no recognisable prefix sitting only in a removed
+//!   or context line of an otherwise ordinary file is not caught by this
+//!   pass — narrowing that gap would mean scanning the base revision on every
+//!   push, which is the noise the scanner deliberately declines to make.
 
 use std::collections::BTreeSet;
 
