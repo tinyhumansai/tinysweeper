@@ -1269,16 +1269,21 @@ mod tests {
     /// model-facing reason.
     #[tokio::test]
     async fn the_sensitive_path_refusal_never_names_the_path() {
-        let Found::Unavailable { reason } = sensitive_path_refusal() else {
-            panic!("sensitive_path_refusal always returns Unavailable");
-        };
-        assert!(!reason.contains(".env"), "{reason}");
-
+        // A directory component distinctive enough that it could only appear
+        // in the reason if the path itself were interpolated into it — the
+        // doc's own generic examples ("an `.env` file") mention the shape,
+        // not this specific path, so asserting against `.env` alone would
+        // pass even with the old, path-naming behaviour.
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join(".env"), "AWS_SECRET=super-secret-value\n").unwrap();
+        std::fs::create_dir(dir.path().join("keys-for-prod-9f3a")).unwrap();
+        std::fs::write(
+            dir.path().join("keys-for-prod-9f3a/.env"),
+            "AWS_SECRET=super-secret-value\n",
+        )
+        .unwrap();
         let found = DirTree::new(dir.path())
             .lookup(&Lookup::Read {
-                path: ".env".into(),
+                path: "keys-for-prod-9f3a/.env".into(),
                 start: None,
                 end: None,
             })
@@ -1288,7 +1293,8 @@ mod tests {
         let Found::Unavailable { reason } = found else {
             panic!("a sensitive path must never be read: {found:?}")
         };
-        assert!(!reason.contains(".env"), "{reason}");
+        assert!(!reason.contains("keys-for-prod-9f3a"), "{reason}");
+        assert!(reason.contains("secret"), "{reason}");
     }
 
     #[tokio::test]
