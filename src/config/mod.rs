@@ -273,7 +273,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "max_paths_per_component",
         ]),
         "paths" => Some(&["ignore"]),
-        "path_instructions.*" => Some(&["glob", "instructions", "rules", "lanes"]),
+        "path_instructions.*" => Some(&["glob", "instructions", "rules", "lanes", "merge"]),
         "cache" => Some(&["enabled", "semantic", "max_age_days"]),
         "labels" => Some(&["human_review", "manual_only"]),
         "models" => Some(&[

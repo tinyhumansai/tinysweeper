@@ -221,6 +221,7 @@ async fn a_stale_cassette_fails_the_case_rather_than_scoring_an_old_prompt() {
             instructions: "Flag any index into a slice without a bounds check.".into(),
             rules: None,
             lanes: vec![],
+            merge: false,
         });
 
     let outcome = run(
@@ -322,6 +323,7 @@ async fn the_config_digest_moves_when_the_prompt_inputs_move() {
             instructions: "Flag unchecked index operations.".into(),
             rules: None,
             lanes: vec![],
+            merge: false,
         });
     assert_eq!(digest_of(&with_instruction), digest_of(&with_instruction));
     let mut lanes_gated = with_instruction.clone();
@@ -330,6 +332,13 @@ async fn the_config_digest_moves_when_the_prompt_inputs_move() {
     let mut rules_named = with_instruction.clone();
     rules_named.path_instructions[0].rules = Some("rust".into());
     assert_ne!(digest_of(&with_instruction), digest_of(&rules_named));
+    let mut merged = with_instruction.clone();
+    merged.path_instructions[0].merge = true;
+    assert_ne!(
+        digest_of(&with_instruction),
+        digest_of(&merged),
+        "merge decides whether the next matching entry renders too"
+    );
 
     assert_eq!(digest_of(&base), digest_of(&config()));
 }

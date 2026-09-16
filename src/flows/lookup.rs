@@ -523,23 +523,19 @@ impl Ledger {
         let mut rendered = String::new();
         let mut answered = 0usize;
 
-        let mut queues: Vec<(usize, std::collections::VecDeque<String>)> = diffs
+        let mut queues: Vec<std::collections::VecDeque<String>> = diffs
             .iter()
-            .enumerate()
-            .map(|(i, diff)| {
-                (
-                    i,
-                    seed_symbols(diff)
-                        .into_iter()
-                        .take(SEED_SYMBOLS * 2)
-                        .collect(),
-                )
+            .map(|diff| {
+                seed_symbols(diff)
+                    .into_iter()
+                    .take(SEED_SYMBOLS * 2)
+                    .collect()
             })
             .collect();
 
         'rounds: loop {
             let mut made_progress = false;
-            for (i, queue) in &mut queues {
+            for queue in &mut queues {
                 if answered >= SEED_SYMBOLS || self.chars >= policy.max_chars / 2 {
                     break 'rounds;
                 }
@@ -547,16 +543,8 @@ impl Ledger {
                     continue;
                 };
                 made_progress = true;
-                self.seed_symbol(
-                    tree,
-                    &diffs[*i],
-                    diffs,
-                    &symbol,
-                    policy,
-                    &mut rendered,
-                    &mut answered,
-                )
-                .await;
+                self.seed_symbol(tree, diffs, &symbol, policy, &mut rendered, &mut answered)
+                    .await;
             }
             if !made_progress {
                 break;
@@ -593,7 +581,6 @@ The definitions of what the changed lines call into,                  read from 
     async fn seed_symbol(
         &mut self,
         tree: &dyn TreeReader,
-        diff: &crate::evidence::diff::FileDiff,
         group_diffs: &[crate::evidence::diff::FileDiff],
         symbol: &str,
         policy: &LookupPolicy,
@@ -657,7 +644,7 @@ The definitions of what the changed lines call into,                  read from 
             body.push_str(&hits_text);
             body.push_str(&fence);
             for hit in definitions {
-                let below = if hit.path == diff.path {
+                let below = if group_diffs.iter().any(|d| d.path == hit.path) {
                     SAME_FILE_BELOW
                 } else {
                     DEFINITION_BELOW
@@ -1023,6 +1010,46 @@ mod tests {
             seeded.rendered.is_empty(),
             "a definition the sibling group member's own diff already added must not be \
              rendered as an external lookup: {}",
+            seeded.rendered
+        );
+    }
+
+    /// A definition found in a *sibling* group member's file must still get
+    /// the full same-file read window, not the narrow external-definition
+    /// one: the sibling's file is part of this same conversation's reviewed
+    /// set, exactly as much as the file whose diff supplied the symbol.
+    #[tokio::test]
+    async fn a_definition_in_a_sibling_group_file_gets_the_same_file_window() {
+        let first = crate::evidence::diff::parse_file_patch(
+            "src/a.rs",
+            "@@ -1,1 +1,2 @@\n fn a() {}\n+call_it();\n",
+        );
+        let second = crate::evidence::diff::parse_file_patch(
+            "src/b.rs",
+            "@@ -1,1 +1,2 @@\n fn b() {}\n+fn unrelated() {}\n",
+        );
+        // `call_it` is defined in `src/b.rs`, a group member's own file, well
+        // outside the diff's own hunk (lines 1-2) so it is not mistaken for
+        // code this conversation's diff already shows, with a body long
+        // enough that the narrow `DEFINITION_BELOW` window (8 lines) would
+        // cut it off before the last line, but the wider `SAME_FILE_BELOW`
+        // window would not.
+        let mut body = "// padding\n".repeat(30);
+        body.push_str("pub fn call_it() {\n");
+        for i in 0..15 {
+            body.push_str(&format!("    let step_{i} = {i};\n"));
+        }
+        body.push_str("    let last_line_marker = true;\n}\n");
+        let tree = MockTree::from_files([("src/b.rs", body.as_str())]);
+        let mut ledger = Ledger::default();
+        let seeded = ledger
+            .seed(&tree, &[first, second], &LookupPolicy::default())
+            .await;
+
+        assert!(
+            seeded.rendered.contains("last_line_marker"),
+            "a definition in a sibling group file must use the wide same-file window, not \
+             the narrow external-definition one: {}",
             seeded.rendered
         );
     }

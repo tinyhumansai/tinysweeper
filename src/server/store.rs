@@ -24,6 +24,7 @@ use mongodb::{Collection, IndexModel};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::lanes::e2e::runs::Watch;
 use crate::preview::session::Session as PreviewSession;
 use crate::state::types::ReviewedState;
 
@@ -469,6 +470,62 @@ impl crate::ports::review_state::ReviewStateStore for Store {
             .map_err(|err| Error::Forge(err.to_string()))?;
         Ok(())
     }
+
+    async fn clear_e2e_watch(&self, key: &str, watch: &Watch) -> Result<bool> {
+        // The filter carries the condition, not a read-then-write: Mongo
+        // only matches (and only then applies the `$unset`) a document whose
+        // `e2e` sub-document is still exactly this one, atomically. A
+        // concurrent `save_state` for a new review — a new head, a new
+        // watch or none — either lands entirely before this filter is
+        // evaluated (this then matches nothing, `matched_count == 0`) or
+        // entirely after (this then clears the *old* record a moment before
+        // the new one overwrites it anyway); either way nothing the new
+        // review wrote is lost, which a reload-then-unconditional-
+        // `save_state` cannot promise.
+        //
+        // Every field matched individually by its dotted path, not the
+        // whole `e2e` sub-document matched as one value: a document written
+        // before `generation` existed has no `generation` key in storage at
+        // all, but deserializes to `Watch { generation: String::new(), .. }`
+        // through `#[serde(default)]`. Matching the whole reserialized
+        // document against that stored shape would never succeed — Mongo's
+        // document equality requires the same set of keys, and the legacy
+        // document is missing one — leaving every watch saved before this
+        // migration permanently unclearable, republishing its terminal
+        // check on every later completion event forever. The `generation`
+        // path is therefore matched with `$exists: false` (the legacy
+        // shape) or equals `""`, alongside equals `watch.generation` (the
+        // ordinary case).
+        //
+        // The other fields, not only `head_sha`: a manual re-review of the
+        // same commit (`/admin/reviews`) can save a replacement watch with
+        // the same `head_sha` but different `jobs`/`summary`/`failed`
+        // before this runs, and matching on `head_sha` alone would clear
+        // that newer watch too.
+        let generation_filter = if watch.generation.is_empty() {
+            doc! { "$or": [
+                { "e2e.generation": { "$exists": false } },
+                { "e2e.generation": "" },
+            ] }
+        } else {
+            doc! { "e2e.generation": &watch.generation }
+        };
+        let jobs = bson::to_bson(&watch.jobs).map_err(|err| Error::Forge(err.to_string()))?;
+        let mut filter = doc! {
+            "_id": key,
+            "e2e.head_sha": &watch.head_sha,
+            "e2e.jobs": jobs,
+            "e2e.summary": &watch.summary,
+            "e2e.failed": watch.failed,
+        };
+        filter.extend(generation_filter);
+        let result = self
+            .review_state
+            .update_one(filter, doc! { "$unset": { "e2e": "" } })
+            .await
+            .map_err(|err| Error::Forge(err.to_string()))?;
+        Ok(result.matched_count > 0)
+    }
 }
 
 /// Whether an error is a unique-index violation.
@@ -621,6 +678,108 @@ mod tests {
                 .await
                 .expect("writes");
             assert_eq!(store.installation_count().await.expect("counts"), 1);
+        }
+    );
+
+    store_test!(
+        clear_e2e_watch_matches_and_clears_the_exact_watch,
+        |store| async move {
+            use crate::ports::review_state::ReviewStateStore;
+
+            let key = "tinyhumansai/tinysweeper#7";
+            let watch = Watch {
+                head_sha: "abc123".into(),
+                jobs: vec!["playwright".into()],
+                summary: "Coverage looks complete.".into(),
+                failed: false,
+                generation: "gen-1".into(),
+            };
+            store
+                .save_state(
+                    key,
+                    &ReviewedState {
+                        head_sha: "abc123".into(),
+                        e2e: Some(watch.clone()),
+                        ..ReviewedState::default()
+                    },
+                )
+                .await
+                .expect("saves");
+
+            // A watch with a different generation does not match, even
+            // though every other field is identical.
+            let wrong_generation = Watch {
+                generation: "gen-2".into(),
+                ..watch.clone()
+            };
+            assert!(
+                !store
+                    .clear_e2e_watch(key, &wrong_generation)
+                    .await
+                    .expect("clears"),
+                "a different generation must not match"
+            );
+
+            assert!(
+                store.clear_e2e_watch(key, &watch).await.expect("clears"),
+                "the exact watch must match and clear"
+            );
+            let after = store.load_state(key).await.expect("loads");
+            assert_eq!(after.unwrap().e2e, None);
+        }
+    );
+
+    store_test!(
+        clear_e2e_watch_matches_a_legacy_record_with_no_generation_field,
+        |store| async move {
+            use crate::ports::review_state::ReviewStateStore;
+
+            // Simulates a document written before `generation` existed:
+            // inserted directly, bypassing `save_state` (which would always
+            // stamp a `Watch` built by this binary's own code, never one
+            // missing the field). Mongo document equality on the whole `e2e`
+            // sub-document would never match this shape against a freshly
+            // reserialized `Watch { generation: String::new(), .. }` — the
+            // set of keys differs — which is exactly the bug this test
+            // guards against regressing.
+            let key = "tinyhumansai/tinysweeper#8";
+            let legacy = doc! {
+                "_id": key,
+                "head_sha": "abc123",
+                "evidence": "",
+                "fingerprints": [],
+                "titles": [],
+                "severities": {},
+                "e2e": {
+                    "head_sha": "abc123",
+                    "jobs": ["playwright"],
+                    "summary": "Coverage looks complete.",
+                    "failed": false,
+                },
+            };
+            store
+                .review_state
+                .insert_one(legacy)
+                .await
+                .expect("inserts the legacy document directly");
+
+            // Loaded back, `#[serde(default)]` fills `generation` with an
+            // empty string — the same value a freshly built `Watch` for a
+            // legacy record would carry.
+            let loaded = store.load_state(key).await.expect("loads").unwrap();
+            let legacy_watch = loaded.e2e.expect("has a watch");
+            assert_eq!(legacy_watch.generation, "");
+
+            assert!(
+                store
+                    .clear_e2e_watch(key, &legacy_watch)
+                    .await
+                    .expect("clears"),
+                "a legacy record with no `generation` key must still match \
+                 and clear against a watch whose `generation` is empty"
+            );
+            let after = store.load_state(key).await.expect("loads");
+            assert_eq!(after.unwrap().e2e, None);
         }
     );
 
