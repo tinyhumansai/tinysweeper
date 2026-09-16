@@ -1025,6 +1025,16 @@ jobs:
     }
 
     #[test]
+    fn a_block_scalar_run_command_is_still_read_for_e2e_step_marks() {
+        // `run: |` puts the actual command on the following, more-indented
+        // line rather than inline; a job with no e2e-sounding name and no
+        // service block relies entirely on that line being read.
+        let text = "name: CI\non: pull_request\njobs:\n  verify:\n    steps:\n      - name: Run suite\n        run: |\n          npm ci\n          npm run e2e\n";
+        let workflow = classify_workflow(".github/workflows/ci.yml", text, &[]).unwrap();
+        assert_eq!(workflow.jobs.len(), 1, "the block-scalar body should have named the job e2e");
+    }
+
+    #[test]
     fn a_dispatch_only_workflow_never_triggers() {
         let text = "name: Nightly e2e\non:\n  schedule:\n    - cron: '0 3 * * *'\n  workflow_dispatch:\njobs:\n  run:\n    steps:\n      - run: make e2e\n";
         let workflow = classify_workflow(".github/workflows/nightly.yml", text, &[]).unwrap();
