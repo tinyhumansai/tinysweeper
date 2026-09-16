@@ -144,6 +144,22 @@ pub trait ForgeRead: Send + Sync {
         Ok(None)
     }
 
+    /// The open pull requests a commit belongs to.
+    ///
+    /// Exists for exactly one caller: a `check_run`/`check_suite` completion
+    /// whose own `pull_requests` list came back empty. GitHub always sends
+    /// that empty on a fork pull request's checks — a documented quirk, not
+    /// a "no pull request" answer — so without another way to recover the
+    /// number, a fork contributor's `e2e` check (and every other
+    /// completion-driven settlement) would never be reachable at all. The
+    /// default answers empty, which makes an adapter that has not
+    /// implemented this behave as if the commit belonged to no open pull
+    /// request rather than erroring — a commit that genuinely has none is a
+    /// far commoner case than a caller forgetting to override this.
+    async fn open_pull_requests_for_commit(&self, _repo: &RepoId, _sha: &str) -> Result<Vec<u64>> {
+        Ok(Vec::new())
+    }
+
     /// Fetch an issue.
     async fn issue(&self, repo: &RepoId, number: u64) -> Result<Issue>;
 
