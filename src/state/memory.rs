@@ -56,6 +56,22 @@ impl ReviewStateStore for MemoryState {
             .insert(key.to_string(), state.clone());
         Ok(())
     }
+
+    async fn clear_e2e_watch(&self, key: &str, head_sha: &str) -> Result<bool> {
+        let mut entries = self.entries.lock().expect("memory state lock");
+        // One critical section for the whole read-check-write: the same
+        // guarantee `update_one`'s filter gives the Mongo-backed `Store`,
+        // just held with a mutex instead of an atomic document filter.
+        let Some(state) = entries.get_mut(key) else {
+            return Ok(false);
+        };
+        if state.e2e.as_ref().is_some_and(|watch| watch.head_sha == head_sha) {
+            state.e2e = None;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
 }
 
 #[cfg(test)]
