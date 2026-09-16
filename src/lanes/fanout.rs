@@ -57,9 +57,17 @@ pub struct FileReview {
 ///
 /// `T` is one changed file for `security`, and one [`crate::lanes::grouping::FileGroup`]
 /// for `critique` — either way, one item is one conversation and `label`
-/// names what goes in the failure list and the summary. Failures are
-/// collected rather than propagated: see the module doc.
-pub async fn per_unit<T, F, Fut>(units: &[T], label: impl Fn(&T) -> String, review: F) -> FanOut
+/// names what goes in the failure list and the summary. `member_paths` gives
+/// the individual file paths one unit stands for, so a multi-file group's
+/// success or failure is still counted and named file-by-file downstream
+/// rather than collapsed into one synthetic entry per conversation. Failures
+/// are collected rather than propagated: see the module doc.
+pub async fn per_unit<T, F, Fut>(
+    units: &[T],
+    label: impl Fn(&T) -> String,
+    member_paths: impl Fn(&T) -> Vec<String>,
+    review: F,
+) -> FanOut
 where
     T: Clone + Send + 'static,
     F: Fn(T) -> Fut,
@@ -72,27 +80,29 @@ where
     let tasks = units.iter().cloned().map(|unit| {
         let permits = permits.clone();
         let name = label(&unit);
+        let paths = member_paths(&unit);
         let task = review(unit);
         async move {
             let _permit = permits
                 .acquire_owned()
                 .await
                 .expect("the permit pool is never closed");
-            (name, task.await)
+            (name, paths, task.await)
         }
     });
 
     let mut out = FanOut::default();
-    for (name, result) in futures::future::join_all(tasks).await {
+    for (name, paths, result) in futures::future::join_all(tasks).await {
         match result {
-            Ok(review) => out.reviews.push(review),
-            Err(err) => out.failures.push((name, err)),
+            Ok(review) => out.reviews.push((paths, review)),
+            Err(err) => out.failures.push((name, paths, err)),
         }
     }
     out
 }
 
-/// [`per_unit`] over plain paths, where the label is the path itself.
+/// [`per_unit`] over plain paths, where the label and the sole member path
+/// are both the path itself.
 ///
 /// The common case — `security`, and `critique` before grouping — kept as its
 /// own name so a call site reads as "one file, one conversation" rather than
@@ -102,16 +112,23 @@ where
     F: Fn(String) -> Fut,
     Fut: Future<Output = crate::error::Result<FileReview>>,
 {
-    per_unit(paths, String::clone, review).await
+    per_unit(paths, String::clone, |path| vec![path.clone()], review).await
 }
 
 /// The results of a fan-out, successes and failures kept apart.
+///
+/// Each entry carries the individual file paths its unit stood for, so a
+/// multi-file [`crate::lanes::grouping::FileGroup`] contributes one entry per
+/// member file to the counts and lists `into_outcome` builds, not one per
+/// conversation.
 #[derive(Debug, Default)]
 pub struct FanOut {
-    /// One entry per file that was reviewed.
-    pub reviews: Vec<FileReview>,
-    /// The files whose review failed, with why.
-    pub failures: Vec<(String, Error)>,
+    /// One entry per unit that was reviewed: its member file paths, and the
+    /// review produced for the whole unit.
+    pub reviews: Vec<(Vec<String>, FileReview)>,
+    /// The units whose review failed: the unit's label, its member file
+    /// paths, and why.
+    pub failures: Vec<(String, Vec<String>, Error)>,
 }
 
 impl FanOut {
