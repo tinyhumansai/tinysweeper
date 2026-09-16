@@ -174,6 +174,7 @@ impl Lane for Security {
         let outcome = per_unit(
             &groups,
             |group| group.label.clone(),
+            |group| group.paths.clone(),
             |group| {
                 let llm = llm.clone();
                 let config = input.config;
