@@ -126,7 +126,18 @@ impl Lane for E2e {
             return Ok(LaneOutcome {
                 summary: "This repository has no end-to-end harness, and its policy requires one."
                     .into(),
-                findings: vec![missing_harness_finding(&inventory.source[0])],
+                findings: vec![missing_harness_finding(
+                    // `source` can now be empty when the lane was only kept
+                    // alive by `touches_e2e_surface` (an e2e spec or
+                    // workflow edit with nothing else behavioural in the
+                    // diff); fall back to whatever path did trigger review.
+                    inventory
+                        .source
+                        .first()
+                        .or_else(|| changed_paths.first())
+                        .map(String::as_str)
+                        .unwrap_or_default(),
+                )],
                 ..LaneOutcome::default()
             });
         }
