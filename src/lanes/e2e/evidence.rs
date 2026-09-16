@@ -260,6 +260,19 @@ pub async fn gather(
                 Default::default()
             }
         };
+        if default_listing.truncated {
+            // The same signal `harness.truncated` already carries for the
+            // head tree, now also true when the *default* branch's tree was
+            // cut short: a `pull_request_target` workflow in the omitted
+            // tail is invisible to the pass below, and the lane must say so
+            // rather than publish a clean verdict over an incomplete scan.
+            evidence.harness.truncated = true;
+            evidence.degraded.push(
+                "the default branch's tree listing was truncated, so a `pull_request_target` \
+                 workflow may be missing from the inventory"
+                    .into(),
+            );
+        }
         for path in inventory::workflow_paths(&default_listing.paths) {
             match forge.file_at(repo, &path, &default_sha).await {
                 Ok(Some(text)) => {
