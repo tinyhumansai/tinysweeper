@@ -713,6 +713,19 @@ impl Outline {
                 .collect()
         };
 
+        // Both `pull_request` and `pull_request_target` can be listed on the
+        // same workflow (`on: [pull_request_target, pull_request]`), and
+        // GitHub fires both independently — the jobs are the same list
+        // either way, but one execution reads from the head and the other
+        // from the default branch. A single `Trigger` can only carry one
+        // `target` value; `also_plain` is how the other execution is not
+        // simply dropped when `target` wins the "which comes first" pick
+        // below.
+        let also_plain = events.iter().any(|(event, _)| event == "pull_request")
+            && events
+                .iter()
+                .any(|(event, _)| event == "pull_request_target");
+
         let mut on_names = Vec::new();
         for (event, index) in &events {
             if event == "pull_request" || event == "pull_request_target" {
@@ -739,6 +752,7 @@ impl Outline {
                     paths_ignore,
                     filter_line,
                     target: event == "pull_request_target",
+                    also_plain,
                 };
             }
             on_names.push(event.clone());
