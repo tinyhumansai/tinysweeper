@@ -1153,6 +1153,37 @@ mod tests {
         );
     }
 
+    /// Regression for a Codex finding on #166: `redact_stream_line` used to
+    /// apply only the rulepack, so a scanner-flagged high-entropy assignment
+    /// with no vendor prefix — no `AKIA`, no `ghp_` — reached a tree read
+    /// fresh from the head, even though the identical value in the diff
+    /// itself would have been masked by `evidence::redact::mask`'s
+    /// finding-anchored fallback.
+    #[tokio::test]
+    async fn redacting_tree_masks_a_high_entropy_assignment_in_a_read() {
+        let value = format!("{}{}", "f3Kq9zR2", "mW7pL4xN8vB1cY6tH0jD5sG");
+        let inner = MockTree::from_files([(
+            "src/config.rs",
+            format!("let secret_token = \"{value}\";\nfn main() {{}}\n"),
+        )]);
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree
+            .lookup(&Lookup::Read {
+                path: "src/config.rs".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+
+        let Found::Text { text, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert!(!text.contains(&value), "{text}");
+        assert!(text.contains("let secret_token ="), "{text}");
+    }
+
     /// Regression for the same finding, on the search path: a hit line is
     /// exactly what a model reads back verbatim, so a credential on the same
     /// line as a search match must not survive into it either.
