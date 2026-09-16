@@ -11,6 +11,7 @@ pub mod commits;
 pub mod critique;
 pub mod description;
 pub mod fanout;
+pub mod grouping;
 pub mod mechanical;
 pub mod security;
 pub mod tests;
