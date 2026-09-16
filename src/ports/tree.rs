@@ -665,8 +665,24 @@ pub fn git_config_lines(text: &str) -> Vec<String> {
     let mut lines = Vec::new();
     let mut current = String::new();
     for physical in text.lines() {
+        // A comment ends at the newline whatever it ends with: a `\` inside
+        // one continues nothing. Quotes are tracked across the logical line
+        // so a `#` inside them is not a comment.
+        let mut quoted = current.chars().filter(|c| *c == '"').count() % 2 == 1;
+        let mut in_comment = false;
+        let mut chars = physical.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '"' if !in_comment => quoted = !quoted,
+                '\\' if quoted => {
+                    chars.next();
+                }
+                '#' | ';' if !quoted => in_comment = true,
+                _ => {}
+            }
+        }
         let trailing_backslashes = physical.chars().rev().take_while(|c| *c == '\\').count();
-        if trailing_backslashes % 2 == 1 {
+        if !in_comment && trailing_backslashes % 2 == 1 {
             current.push_str(&physical[..physical.len() - 1]);
             continue;
         }
@@ -954,6 +970,11 @@ mod tests {
             git_config_lines("path = vendor/\\\nx\nurl = u\\\\\n"),
             vec!["path = vendor/x".to_string(), "url = u\\\\".to_string()],
             "a trailing backslash continues the line; an escaped one does not"
+        );
+        assert_eq!(
+            git_config_lines("path = a # note\\\nurl = u\n"),
+            vec!["path = a # note\\".to_string(), "url = u".to_string()],
+            "a comment ends at the newline, backslash or not"
         );
         assert_eq!(git_config_value("\"vendor/x\\\"\""), "vendor/x\"");
         for refused in [
