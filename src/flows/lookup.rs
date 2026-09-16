@@ -657,7 +657,7 @@ The definitions of what the changed lines call into,                  read from 
             body.push_str(&hits_text);
             body.push_str(&fence);
             for hit in definitions {
-                let below = if hit.path == diff.path {
+                let below = if group_diffs.iter().any(|d| d.path == hit.path) {
                     SAME_FILE_BELOW
                 } else {
                     DEFINITION_BELOW
