@@ -413,6 +413,7 @@ async fn review_group(
                 break;
             }
 
+            added_by_coverage += new_filtered.findings.len();
             confirmed.extend(new_filtered.findings.clone());
             findings.extend(new_filtered.findings);
         }
@@ -425,6 +426,7 @@ async fn review_group(
             discarded,
             &rejected,
             findings.len(),
+            added_by_coverage,
         ),
         findings,
         resolved,
