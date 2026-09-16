@@ -182,7 +182,7 @@ impl crate::ports::tree::TreeReader for GitTree {
                     return Ok(Found::NotFound);
                 }
                 if crate::scan::is_sensitive_path(path) {
-                    return Ok(crate::ports::tree::sensitive_path_refusal(path));
+                    return Ok(crate::ports::tree::sensitive_path_refusal());
                 }
                 Ok(match git::file_at(&self.dir, &self.range, path).await? {
                     Some(content) => {

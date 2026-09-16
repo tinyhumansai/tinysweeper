@@ -763,7 +763,7 @@ impl TreeReader for DirTree {
                     return Ok(Found::NotFound);
                 }
                 if crate::scan::is_sensitive_path(path) {
-                    return Ok(sensitive_path_refusal(path));
+                    return Ok(sensitive_path_refusal());
                 }
                 match std::fs::read_to_string(self.root.join(path)) {
                     Ok(content) => {
