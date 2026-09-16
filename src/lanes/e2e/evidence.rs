@@ -282,10 +282,28 @@ pub async fn gather(
                     // until it merges, and the head pass above already
                     // covers `pull_request` semantics for whatever this
                     // pull request itself proposes at this path.
-                    if let Some(workflow) = inventory::classify_workflow(&path, &text, named)
-                        && is_target(&workflow)
-                    {
-                        workflows.push(workflow);
+                    //
+                    // `target()` picks whichever event `trigger()` saw
+                    // first, so `on: [pull_request, pull_request_target]`
+                    // classifies as `target: false` even though the
+                    // `pull_request_target` execution is exactly what this
+                    // pass exists to find — `also_plain` is what says the
+                    // other one is there too, the same signal the head pass
+                    // above reads in the opposite direction.
+                    if let Some(mut workflow) = inventory::classify_workflow(&path, &text, named) {
+                        if is_target(&workflow) {
+                            workflows.push(workflow);
+                        } else if let inventory::Trigger::PullRequest {
+                            also_plain: true, ..
+                        } = &workflow.trigger
+                        {
+                            if let inventory::Trigger::PullRequest { target, .. } =
+                                &mut workflow.trigger
+                            {
+                                *target = true;
+                            }
+                            workflows.push(workflow);
+                        }
                     }
                 }
                 Ok(None) => {}
