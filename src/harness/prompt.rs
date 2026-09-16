@@ -132,7 +132,12 @@ pub struct PromptInputs<'a> {
     /// becomes the fence label, so it is also what tells the model that the
     /// block is data rather than instructions.
     pub evidence_label: &'a str,
-    /// The paths this prompt is about, used to select path rules.
+    /// The full set of paths the pull request touched, used to select
+    /// repository path-instruction overrides — always this set, never
+    /// [`Self::focus_paths`]. A path-specific rule for a file outside the
+    /// current group is still a rule about a file this pull request changed;
+    /// selecting from `focus_paths` instead would silently drop it whenever a
+    /// lane fans out into groups or per-file conversations.
     ///
     /// Empty means "the caller did not say", and the whole rule table is
     /// injected — the pre-selection behaviour, kept so a caller that has no
@@ -143,7 +148,10 @@ pub struct PromptInputs<'a> {
     ///
     /// One path is the plain per-file case; several is a group, related by a
     /// graph edge or a naming convention, reviewed together in one
-    /// conversation. Empty means the lane is not fanning out at all.
+    /// conversation. Empty means the lane is not fanning out at all. Used
+    /// only for the isolation clause that scopes what this conversation may
+    /// report on — never for selecting which repository rules load; see
+    /// [`Self::changed_paths`].
     pub focus_paths: &'a [String],
     /// The reviewing angle this conversation is given, when a council is
     /// running several reviewers over the same evidence.
