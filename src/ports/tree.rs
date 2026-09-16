@@ -641,19 +641,6 @@ fn redact_found(found: Found, mut in_key_block: bool) -> Found {
     }
 }
 
-/// Whether a returned range itself proves it began inside a PEM block — a
-/// closing armour line before any opening one. See
-/// [`crate::scan::opens_inside_private_key`].
-fn opens_inside_private_key(found: &Found) -> bool {
-    let Found::Text { text, .. } = found else {
-        return false;
-    };
-    crate::scan::opens_inside_private_key(text.split('\n').map(|line| match line.find("| ") {
-        Some(offset) if offset <= 6 => &line[offset + 2..],
-        _ => line,
-    }))
-}
-
 /// Whether the final line of a preceding read leaves us inside a PEM block.
 ///
 /// The probe never reaches a model, so walking it through the same stream
