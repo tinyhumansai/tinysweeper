@@ -317,7 +317,7 @@ async fn review_group(
     })
 }
 
-/// What one reviewer said about one file.
+/// What one reviewer said about one group.
 struct Asked {
     summary: String,
     resolved: Vec<String>,
@@ -327,7 +327,7 @@ struct Asked {
     discarded: usize,
 }
 
-/// Build one reviewer's prompt for one file.
+/// Build one reviewer's prompt for one group.
 ///
 /// Split from [`place`] so every reviewer's prompt is assembled before any call
 /// is made: the graph asks them all at once, and a builder that ran inside the
@@ -335,7 +335,7 @@ struct Asked {
 fn build_prompt<'a>(
     input: &'a LaneInput<'_>,
     changed_paths: &'a [String],
-    diff: &'a FileDiff,
+    group_paths: &'a [String],
     evidence: &'a str,
     reviewer: &council::Reviewer<'_>,
 ) -> prompt::Prompt {
@@ -346,13 +346,13 @@ fn build_prompt<'a>(
         extracted_rules: input.extracted_rules,
         prior_findings: input.prior_findings,
         new_evidence: evidence,
-        // Every path the pull request touched, not just this one. This selects
-        // which `path_instructions` are injected, and narrowing it to the focus
-        // file would silently drop the rules for every other changed path from
-        // a prefix all N conversations otherwise share — losing the cache as
-        // well as the rules.
+        // Every path the pull request touched, not just this group's. This
+        // selects which `path_instructions` are injected, and narrowing it to
+        // the group would silently drop the rules for every other changed
+        // path from a prefix all N conversations otherwise share — losing the
+        // cache as well as the rules.
         changed_paths,
-        focus_path: Some(&diff.path),
+        focus_paths: group_paths,
         persona: reviewer.persona,
         retrieved_context: input.retrieved_context,
         memory_context: input.memory_context,
@@ -360,11 +360,18 @@ fn build_prompt<'a>(
     })
 }
 
-/// Place what one reviewer said against the file it reviewed.
+/// Place what one reviewer said against the group file it names.
+///
+/// Resolved against the `FileDiff` in `group_diffs` whose path equals the
+/// finding's own `path` — never the first file of the group. A path outside
+/// the group is discarded exactly like a file the pull request never touched:
+/// the isolation clause told this conversation it owns only these files, and
+/// honouring a finding about anything else is what `focus_paths` exists to
+/// prevent (see `harness::prompt::isolation_clause`).
 async fn place(
     llm: std::sync::Arc<crate::flows::caps::ModelCapability>,
     input: &LaneInput<'_>,
-    diff: &FileDiff,
+    group_diffs: &[FileDiff],
     evidence: &str,
     parsed: schema::LaneResponse,
 ) -> Result<Asked> {
