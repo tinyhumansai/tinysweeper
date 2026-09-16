@@ -910,6 +910,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dir_tree_refuses_to_read_a_dotenv_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "AWS_SECRET=super-secret-value\n").unwrap();
+
+        let tree = DirTree::new(dir.path());
+        let found = tree
+            .lookup(&Lookup::Read {
+                path: ".env".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+
+        let Found::Unavailable { reason } = found else {
+            panic!("a sensitive path must never be read: {found:?}")
+        };
+        assert!(
+            reason.contains("secret"),
+            "the reason should say why: {reason}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dir_tree_search_never_returns_a_hit_inside_a_sensitive_path() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "AWS_SECRET=needle\n").unwrap();
+        std::fs::write(dir.path().join("src.rs"), "let needle = 1;\n").unwrap();
+
+        let tree = DirTree::new(dir.path());
+        let found = tree
+            .lookup(&Lookup::Search {
+                pattern: "needle".into(),
+                glob: None,
+            })
+            .await
+            .unwrap();
+
+        let Found::Hits { hits, .. } = found else {
+            panic!("{found:?}")
+        };
+        let paths: Vec<&str> = hits.iter().map(|h| h.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["src.rs"],
+            "a redacted hit still leaks shape and location, so the sensitive path is \
+             skipped entirely rather than searched: {hits:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn a_symlink_out_of_the_checkout_is_refused_not_followed() {
         let outside = tempfile::tempdir().unwrap();
         std::fs::write(outside.path().join("secret.txt"), "s3cr3t\n").unwrap();
