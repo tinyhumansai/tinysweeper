@@ -727,6 +727,7 @@ impl Outline {
                     paths,
                     paths_ignore,
                     filter_line,
+                    target: event == "pull_request_target",
                 };
             }
             on_names.push(event.clone());
