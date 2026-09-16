@@ -425,6 +425,7 @@ mod tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                e2e: None,
                 tree: None,
             })
             .await
@@ -701,6 +702,7 @@ mod tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                e2e: None,
                 tree: None,
             })
             .await
