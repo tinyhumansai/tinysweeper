@@ -154,15 +154,20 @@ pub async fn apply(
         tracing::warn!(%err, number = proposal.number, "could not withdraw the standing approval");
     }
 
-    // An unvouched-for push is submitted too, as the comment: the lane
-    // checks say "did not review", but a reader of the conversation sees
-    // only that the bot said nothing, which on a clean-looking pull request
-    // reads as an all-clear. A kill-switched one is not — nobody asked.
+    // A push the model never answered is submitted too, as the comment: the
+    // lane checks say "did not review", but a reader of the conversation
+    // sees only that the bot said nothing, which on a clean-looking pull
+    // request reads as an all-clear. A file the forge withheld is not a
+    // reason to comment: it is a property of the pull request, it recurs on
+    // every push, and every lane's check already names it — the dismissal
+    // above is what a standing approval needed. A kill-switched one is
+    // nothing at all: nobody asked.
+    let must_say = !proposal.answered() || proposal.version != PROPOSAL_VERSION;
     if !redundant_approval
         && (!comments.is_empty()
             || event == ReviewEvent::Approve
             || event == ReviewEvent::RequestChanges
-            || unvouched)
+            || must_say)
     {
         write
             .create_review(
