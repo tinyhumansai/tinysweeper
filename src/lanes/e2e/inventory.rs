@@ -387,13 +387,21 @@ pub fn classify_workflow(path: &str, text: &str, named: &[String]) -> Option<Wor
         let job_is_e2e = if explicit {
             counts(&job.key) || counts(&display)
         } else {
+            // A service container is common in ordinary unit/integration CI
+            // (a job running unit tests against Postgres or Redis) and is
+            // not, on its own, evidence of an end-to-end suite. It only
+            // counts alongside something that actually says "end to end":
+            // the workflow's own name, or a step that drives a real e2e
+            // runner. Otherwise it would misclassify plain service-backed
+            // unit-test jobs and manufacture false `e2e-not-triggered`
+            // findings against them.
             names_e2e(&job.key)
                 || names_e2e(&display)
-                || job.has_services
                 || job
                     .steps
                     .iter()
                     .any(|step| E2E_STEP_MARKS.iter().any(|mark| step.contains(mark)))
+                || (job.has_services && workflow_is_e2e)
         };
         if workflow_is_e2e || job_is_e2e {
             jobs.push(Job {
