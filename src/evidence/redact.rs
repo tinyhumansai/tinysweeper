@@ -24,6 +24,7 @@
 use std::collections::BTreeSet;
 
 use crate::evidence::diff::{FileDiff, LineKind};
+use crate::forge::types::ChangedFile;
 use crate::scan::{self, Finding, ScanKind};
 
 /// What one call to [`mask`] actually redacted.
