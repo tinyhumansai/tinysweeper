@@ -273,29 +273,8 @@ pub fn scrub_rendered(text: &str) -> String {
             out.push('\n');
         }
         let (prefix, body) = split_render_prefix(line);
-
-        if scan::is_private_key_begin(body) {
-            in_key_block = true;
-            out.push_str(line);
-            continue;
-        }
-        if in_key_block {
-            if scan::is_private_key_end(body) {
-                in_key_block = false;
-                out.push_str(line);
-                continue;
-            }
-            out.push_str(prefix);
-            if body.trim().is_empty() {
-                out.push_str(body);
-            } else {
-                out.push_str(&scan::redact(body.trim()));
-            }
-            continue;
-        }
-
         out.push_str(prefix);
-        out.push_str(&scan::redact_line(body));
+        out.push_str(&scan::redact_stream_line(body, &mut in_key_block));
     }
 
     out
