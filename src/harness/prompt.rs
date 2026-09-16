@@ -1417,6 +1417,7 @@ mod tests {
                 instructions: "SECURITY ONLY RULES".into(),
                 rules: None,
                 lanes: vec![LaneId::Security],
+                merge: false,
             },
             PathInstruction {
                 glob: "**/*.rs".into(),
