@@ -157,8 +157,53 @@ pub async fn gather(
     for path in inventory::workflow_paths(&listing.paths) {
         match forge.file_at(repo, &path, head_sha).await {
             Ok(Some(text)) => {
-                if let Some(workflow) = inventory::classify_workflow(&path, &text, named) {
+                let Some(workflow) = inventory::classify_workflow(&path, &text, named) else {
+                    continue;
+                };
+                // `pull_request_target` is resolved by GitHub from the base
+                // branch, never the head — the whole point of the event is
+                // that a fork cannot rewrite the workflow that runs with the
+                // base branch's secrets. A workflow classified from the head
+                // copy as `pull_request_target` therefore describes the
+                // wrong definition whenever this pull request touched that
+                // file: reclassify from the base copy, which is the one
+                // GitHub will actually execute.
+                let is_target = matches!(
+                    workflow.trigger,
+                    inventory::Trigger::PullRequest { target: true, .. }
+                );
+                if !is_target || base_sha == head_sha {
                     evidence.harness.workflows.push(workflow);
+                    continue;
+                }
+                match forge.file_at(repo, &path, base_sha).await {
+                    Ok(Some(base_text)) => {
+                        if let Some(base_workflow) =
+                            inventory::classify_workflow(&path, &base_text, named)
+                        {
+                            evidence.harness.workflows.push(base_workflow);
+                        }
+                        // `None` here means the base branch's copy is not
+                        // (or no longer) an e2e workflow at all — nothing to
+                        // add, and reporting the head-classified one would
+                        // be exactly the wrong-definition case this exists
+                        // to avoid.
+                    }
+                    Ok(None) => {
+                        // Added by this pull request, or renamed into
+                        // existence: no base copy to resolve against, so
+                        // there is nothing GitHub would execute as
+                        // `pull_request_target` for this file yet.
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            %err, %path,
+                            "could not read a pull_request_target workflow's base-branch definition for the e2e lane"
+                        );
+                        evidence.degraded.push(format!(
+                            "`{path}` is `pull_request_target`; its base-branch definition could not be read"
+                        ));
+                    }
                 }
             }
             Ok(None) => {}
