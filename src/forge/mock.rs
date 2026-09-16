@@ -603,7 +603,11 @@ impl ForgeRead for MockForge {
 
     async fn file_at(&self, _repo: &RepoId, path: &str, sha: &str) -> Result<Option<String>> {
         let state = self.state.lock().expect("mock state lock");
-        Ok(state.blobs.get(&file_key(sha, path)).cloned())
+        let key = file_key(sha, path);
+        if state.unreadable_files.contains(&key) {
+            return Err(Self::missing("file", 0));
+        }
+        Ok(state.blobs.get(&key).cloned())
     }
 
     async fn tree_paths(&self, _repo: &RepoId, sha: &str) -> Result<TreeListing> {
