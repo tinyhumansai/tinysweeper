@@ -629,13 +629,15 @@ The definitions of what the changed lines call into,                  read from 
             // a sibling group member's own hunk is changed code this same
             // conversation already has, not an external definition.
             let already_in_this_conversations_diff = |h: &crate::ports::tree::Hit| {
-                group_diffs
-                    .iter()
-                    .any(|d| d.path == h.path && d.within_hunk(u64::from(h.line), u64::from(h.line)))
+                group_diffs.iter().any(|d| {
+                    d.path == h.path && d.within_hunk(u64::from(h.line), u64::from(h.line))
+                })
             };
             let definitions: Vec<&crate::ports::tree::Hit> = hits
                 .iter()
-                .filter(|h| looks_like_definition(&h.text) && !already_in_this_conversations_diff(h))
+                .filter(|h| {
+                    looks_like_definition(&h.text) && !already_in_this_conversations_diff(h)
+                })
                 .collect();
             if definitions.is_empty() || definitions.len() > AUTO_FOLLOW {
                 continue;
