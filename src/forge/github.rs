@@ -1678,9 +1678,7 @@ impl ForgeRead for GitHubRead {
             .client
             .repos(&repo.owner, &repo.name)
             .commits()
-            .associated_pull_requests(octocrab::params::repos::commits::PullRequestTarget::Sha(
-                sha.to_string(),
-            ))
+            .associated_pull_requests(octocrab::commits::PullRequestTarget::Sha(sha.to_string()))
             .send()
             .await
             .map_err(api)?;
