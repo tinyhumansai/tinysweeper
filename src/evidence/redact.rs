@@ -240,6 +240,47 @@ mod tests {
     }
 
     #[test]
+    fn mask_reports_how_many_spans_it_redacted_and_which_files() {
+        let key = token("AKIA", "IOSFODNN7EXAMPLE");
+        let mut diffs = vec![
+            parse_file_patch(
+                "src/config.rs",
+                &patch(&[&format!("+const KEY: &str = \"{key}\";")]),
+            ),
+            parse_file_patch(".env", &patch(&["+FEATURE_FLAG=on"])),
+        ];
+        let findings = scan::secrets::scan_added_lines("src/config.rs", diffs[0].added_lines());
+
+        let redactions = mask(&mut diffs, &findings);
+
+        // One span in `src/config.rs` (the scanner-flagged key) and one in
+        // `.env` (masked wholesale, on shape of the path alone).
+        assert_eq!(redactions.spans, 2, "{redactions:?}");
+        assert_eq!(redactions.files, vec!["src/config.rs", ".env"]);
+        assert!(!redactions.is_empty());
+        assert!(redactions.note().contains('2'), "{}", redactions.note());
+        assert!(
+            redactions.note().contains("never ask for or guess"),
+            "{}",
+            redactions.note()
+        );
+    }
+
+    #[test]
+    fn nothing_redacted_reports_an_empty_summary_and_an_empty_note() {
+        let mut diffs = vec![parse_file_patch(
+            "src/config.rs",
+            &patch(&["+let ordinary = 1;"]),
+        )];
+        let findings = scan::secrets::scan_added_lines("src/config.rs", diffs[0].added_lines());
+
+        let redactions = mask(&mut diffs, &findings);
+
+        assert!(redactions.is_empty(), "{redactions:?}");
+        assert_eq!(redactions.note(), "");
+    }
+
+    #[test]
     fn line_numbers_survive_masking() {
         let key = token("AKIA", "IOSFODNN7EXAMPLE");
         let mut diffs = vec![parse_file_patch(
