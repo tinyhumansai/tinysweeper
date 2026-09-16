@@ -336,6 +336,12 @@ impl<'a> Indexer<'a> {
             }
         };
 
+        // The count this run starts from, read before it writes anything.
+        // Both settlements below apply the run's own deltas to it; reading it
+        // afterwards would be the same number — nothing but `release` moves
+        // it — but taking it here makes that not a thing anyone has to know.
+        let before = self.manifest.state(repo_id, &signature).await?.chunks;
+
         let mut report = IndexReport {
             skipped,
             ..IndexReport::default()
@@ -349,32 +355,19 @@ impl<'a> Indexer<'a> {
         // requeued for nothing.
         match outcome {
             Ok(()) => {
-                self.settle(&lease, &signature, repo_id, revision, &report)
-                    .await?;
+                self.settle(&lease, before, revision, &report).await?;
                 Ok(IndexOutcome::Indexed(report))
             }
             Err(err) => {
                 // What the run wrote and deleted before it failed is on disk
                 // whatever the error says; the count on record must say so
                 // too, or the next run inherits a total for chunks that are
-                // not there. Best effort: a manifest that cannot be read here
-                // leaves the count alone rather than masking the real error.
-                let chunks = if report.upserted == 0 && report.deleted == 0 {
-                    None
-                } else {
-                    match self.manifest.state(repo_id, &signature).await {
-                        Ok(state) => Some(
-                            state
-                                .chunks
-                                .saturating_add(report.upserted)
-                                .saturating_sub(report.deleted),
-                        ),
-                        Err(nested) => {
-                            tracing::warn!(error = %nested, "could not read the index count to settle a failed run");
-                            None
-                        }
-                    }
-                };
+                // not there.
+                let chunks = (report.upserted != 0 || report.deleted != 0).then(|| {
+                    before
+                        .saturating_add(report.upserted)
+                        .saturating_sub(report.deleted)
+                });
                 let settled = Settled::Failed {
                     message: err.to_string(),
                     chunks,
@@ -391,16 +384,11 @@ impl<'a> Indexer<'a> {
     async fn settle(
         &self,
         lease: &IndexLease,
-        signature: &EmbedSignature,
-        repo_id: &str,
+        before: u64,
         revision: &str,
         report: &IndexReport,
     ) -> Result<()> {
-        let chunks = self
-            .manifest
-            .state(repo_id, signature)
-            .await?
-            .chunks
+        let chunks = before
             .saturating_add(report.upserted)
             .saturating_sub(report.deleted);
         self.manifest

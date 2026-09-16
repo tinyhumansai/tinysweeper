@@ -232,10 +232,12 @@ impl Checkout {
         // is allow-listed must not turn a revocation into a "keep it for
         // now". And a fetch that succeeded wins over one that failed: the
         // files are on disk, so the checkout is not missing them.
-        unfetched
-            .failed
-            .retain(|path| !unfetched.denied.contains(path) && !fetched.contains(path));
-        unfetched.failed.dedup();
+        let mut seen = std::collections::BTreeSet::new();
+        unfetched.denied.retain(|path| seen.insert(path.clone()));
+        let denied = unfetched.denied.clone();
+        unfetched.failed.retain(|path| {
+            !denied.contains(path) && !fetched.contains(path) && seen.insert(path.clone())
+        });
         Ok(unfetched)
     }
 

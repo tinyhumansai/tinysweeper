@@ -77,14 +77,9 @@ pub fn parse_gitmodules(text: &str, host: &str) -> Vec<Submodule> {
         if let Some(rest) = line.strip_prefix("path")
             && let Some(value) = rest.trim().strip_prefix('=')
         {
-            // Canonical spelling, or the same directory is two paths: the
-            // selector and the manifest say `libs/core/...`, and `./libs/core`
-            // would match neither.
-            let mut spelled = value.trim();
-            while let Some(rest) = spelled.strip_prefix("./") {
-                spelled = rest;
-            }
-            path = Some(spelled.trim_end_matches('/').to_string());
+            // One spelling, shared with the selector; a path nobody may
+            // declare is dropped here rather than carried along unresolved.
+            path = crate::ports::tree::canonical_submodule_path(value);
         } else if let Some(rest) = line.strip_prefix("url")
             && let Some(value) = rest.trim().strip_prefix('=')
         {
@@ -274,9 +269,26 @@ mod tests {
 
         // One spelling per directory: the selector and the manifest say
         // `libs/core/...`, so `./libs/core/` is `libs/core`.
-        let spelled =
-            "[submodule \"c\"]\n\tpath = ./libs/core/\n\turl = https://github.com/acme/c\n";
-        assert_eq!(parse_gitmodules(spelled, "github.com")[0].path, "libs/core");
+        for spelled in [
+            "./libs/core/",
+            "libs//core",
+            "libs/./core",
+            "./libs/./core//",
+        ] {
+            let text = format!(
+                "[submodule \"c\"]\n\tpath = {spelled}\n\turl = https://github.com/acme/c\n"
+            );
+            assert_eq!(
+                parse_gitmodules(&text, "github.com")[0].path,
+                "libs/core",
+                "{spelled}"
+            );
+        }
+        let escaping = "[submodule \"d\"]\n\tpath = ../up\n\turl = https://github.com/acme/d\n";
+        assert!(
+            parse_gitmodules(escaping, "github.com").is_empty(),
+            "a path out of the tree is not a submodule"
+        );
     }
 
     #[tokio::test]
