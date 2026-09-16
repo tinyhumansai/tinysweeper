@@ -1315,6 +1315,7 @@ mod tests {
                 Found::Text {
                     text: "   40| pub fn read_before(t: u64) -> u64 {\n   41|     t.saturating_sub(1)\n   42| }".into(),
                     start: 40,
+                    end: 42,
                     total: 90,
                 },
             )]
@@ -1349,6 +1350,7 @@ mod tests {
                 Found::Text {
                     text: format!("    7| MIIEowIBAAKCAQEAexamplebodyline\n    8| {end}\n    9| let after = 1;"),
                     start: 7,
+                    end: 9,
                     total: 20,
                 },
             )]
