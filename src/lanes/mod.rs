@@ -95,15 +95,23 @@ impl<'a> LaneInput<'a> {
                 .then_some(self.config.models.flash.as_str()),
             tree: self.tree,
             lookup: Some(&self.config.lookup),
-            seed: None,
+            seed: &[],
         }
     }
 
     /// [`Self::asking`], for a conversation about one file: the definitions
     /// its changed lines call into are fetched before the first turn.
     pub fn asking_about(&self, diff: &'a FileDiff) -> Asking<'a> {
+        self.asking_about_group(std::slice::from_ref(diff))
+    }
+
+    /// [`Self::asking`], for a conversation about a group of related files:
+    /// the definitions every file's changed lines call into are fetched
+    /// before the first turn, so grouping a file with its test does not
+    /// regress the single-file seeding win — see `docs/modules/lanes/lookup.md`.
+    pub fn asking_about_group(&self, diffs: &'a [FileDiff]) -> Asking<'a> {
         Asking {
-            seed: Some(diff),
+            seed: diffs,
             ..self.asking()
         }
     }
