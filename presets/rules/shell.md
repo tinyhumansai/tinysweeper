@@ -5,9 +5,12 @@
 - An unquoted expansion — `$var`, `$@`, a command substitution — used where
   the value can contain whitespace, a glob character, or come from user input
   or a filename. Word-splitting and globbing turn one argument into several.
-- `rm -rf "$path"` (or any destructive command) where `$path` can be empty or
-  unset and the script has not checked, so it resolves to `rm -rf /` or the
-  current directory.
+- `rm -rf "$path/"`, `rm -rf "$path"/*`, or any destructive command built the
+  same way, where `$path` can be empty or unset and the script has not
+  checked — the trailing separator turns an empty value into `/` or `/*`.
+  `rm -rf "$path"` alone is not this: a quoted empty `$path` expands to a
+  single empty argument, and `rm -rf ""` reports an error rather than
+  deleting anything.
 - A script that would misbehave on a command failure or an unset variable it
   does not itself check for, and lacks `set -euo pipefail` (or the
   equivalent) to stop it. Judge this by what the script actually does, not by
