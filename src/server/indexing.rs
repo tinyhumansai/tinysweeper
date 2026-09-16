@@ -135,17 +135,14 @@ impl IndexBackend {
         let repo_id = repo.to_string();
         let indexed =
             crate::indexer::types::indexed_revision(revision, &config.retrieval.submodules);
-        let before = self.manifest.state(&repo_id, &self.signature).await?;
-        if before.is_fresh(&indexed) {
+        if self
+            .manifest
+            .state(&repo_id, &self.signature)
+            .await?
+            .is_fresh(&indexed)
+        {
             return Ok(IndexOutcome::AlreadyFresh);
         }
-        // A record with no revision is a run that never completed — cold,
-        // stopped on budget, or missing a submodule — and the graph was not
-        // synced from it, or was synced from a tree that lacked something.
-        // Whatever it holds, the graph is rebuilt whole this time rather than
-        // incrementally from a `changed` list that no longer names what the
-        // incomplete run already confirmed.
-        let rebuild_graph_whole = before.revision.is_none();
 
         // Read-only, and read-only on purpose: this is the same boundary the
         // review runs against. The write token is minted separately, in
@@ -224,7 +221,7 @@ impl IndexBackend {
                      once every submodule is fetched"
                 );
             } else if let Err(err) = self
-                .sync_graph(&repo_id, &checkout, config, report, rebuild_graph_whole)
+                .sync_graph(&repo_id, &checkout, config, report, report.rebuild_graph)
                 .await
             {
                 // A graph failure costs expansion, not retrieval: the chunks are

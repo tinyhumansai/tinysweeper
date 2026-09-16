@@ -286,6 +286,12 @@ pub struct IndexReport {
     /// and the revision is not claimed, so the next delivery tries again.
     #[serde(default)]
     pub unfetched: Vec<String>,
+    /// Whether the code graph must be rebuilt whole after this run rather
+    /// than incrementally from `changed`: the record this run started from
+    /// was one that never completed, and its graph was never synced from —
+    /// or was synced from a tree that lacked something.
+    #[serde(default)]
+    pub rebuild_graph: bool,
 }
 
 impl IndexReport {

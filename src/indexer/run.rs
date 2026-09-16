@@ -236,23 +236,15 @@ impl<'a> Indexer<'a> {
 
         let selection = self.selector.walk(root)?;
         // Anything the manifest knows about that the walk no longer sees has
-        // been deleted or newly ignored, and its chunks have to go.
-        let seen: BTreeSet<&String> = selection.selected.iter().collect();
-        let removed: Vec<String> = self
-            .manifest
-            .paths(repo_id, &signature)
-            .await?
-            .into_iter()
-            .filter(|path| !seen.contains(path))
-            .collect();
-
+        // been deleted or newly ignored, and its chunks have to go. Which
+        // paths the manifest knows is read under the claim — see `Removed`.
         self.guarded(
             repo_id,
             revision,
             root,
             selection.selected,
             selection.skipped,
-            removed,
+            Removed::NotSeenByTheWalk,
         )
         .await
     }
@@ -304,7 +296,7 @@ impl<'a> Indexer<'a> {
             root,
             selection.selected,
             selection.skipped,
-            removed,
+            Removed::These(removed),
         )
         .await
     }
@@ -317,7 +309,7 @@ impl<'a> Indexer<'a> {
         root: &Path,
         selected: Vec<String>,
         skipped: Vec<SkippedFile>,
-        removed: Vec<String>,
+        removed: Removed,
     ) -> Result<IndexOutcome> {
         let signature = self.embedder.signature();
         let lease = match self
@@ -344,22 +336,48 @@ impl<'a> Indexer<'a> {
         // run, is the reading nobody has to think about. A read that fails
         // releases the claim, or every later delivery requeues against a
         // lease nobody holds until its TTL.
-        let before = match self.manifest.state(repo_id, &signature).await {
-            Ok(state) => state.chunks,
-            Err(err) => {
-                let settled = Settled::Failed {
-                    message: err.to_string(),
-                    chunks: None,
-                };
-                if let Err(nested) = self.manifest.release(&lease, &settled).await {
-                    tracing::warn!(error = %nested, "could not release the index claim");
+        let release_failed = |err: Error| async move {
+            let settled = Settled::Failed {
+                message: err.to_string(),
+                chunks: None,
+            };
+            if let Err(nested) = self.manifest.release(&lease, &settled).await {
+                tracing::warn!(error = %nested, "could not release the index claim");
+            }
+            err
+        };
+        let state = match self.manifest.state(repo_id, &signature).await {
+            Ok(state) => state,
+            Err(err) => return Err(release_failed(err).await),
+        };
+        let before = state.chunks;
+        // Read under the claim for the same reason: a worker under the old
+        // policy confirming a submodule's files between a read before the
+        // claim and the claim itself would leave those paths out of the
+        // removal set, and the policy that revoked them settled as fresh.
+        let removed = match removed {
+            Removed::These(paths) => paths,
+            Removed::NotSeenByTheWalk => {
+                let seen: BTreeSet<&String> = selected.iter().collect();
+                match self.manifest.paths(repo_id, &signature).await {
+                    Ok(known) => known
+                        .into_iter()
+                        .filter(|path| !seen.contains(path))
+                        .collect(),
+                    Err(err) => return Err(release_failed(err).await),
                 }
-                return Err(err);
             }
         };
 
         let mut report = IndexReport {
             skipped,
+            // Decided under the claim, from the record this run starts from:
+            // a run that never completed — cold, budget, a missing
+            // submodule, or one that failed part-way — leaves either no
+            // revision or a failed state, and either means the graph is
+            // owed a whole rebuild rather than an incremental one keyed on
+            // a `changed` list that the incomplete run already confirmed.
+            rebuild_graph: state.revision.is_none() || state.state != IndexState::Ready,
             ..IndexReport::default()
         };
         let outcome = self
@@ -524,12 +542,15 @@ impl<'a> Indexer<'a> {
         if paths.is_empty() {
             return Ok(());
         }
+        // Confirmed ids, and the ids a confirmation left pending: the old
+        // rows of a replacement whose delete never ran are still in the
+        // store and still in the count, and go by id like the rest.
         let confirmed: Vec<String> = self
             .manifest
             .indexed(repo_id, signature, paths)
             .await?
             .into_iter()
-            .flat_map(|file| file.chunks)
+            .flat_map(|file| file.chunks.into_iter().chain(file.pending))
             .collect();
         if !confirmed.is_empty() {
             report.deleted += self.index.delete_chunks(repo_id, &confirmed).await?;
@@ -739,6 +760,16 @@ impl<'a> Indexer<'a> {
         self.manifest.record(repo_id, signature, &finalized).await?;
         Ok(())
     }
+}
+
+/// Which paths a run removes.
+///
+/// A changed-path run names them; a full walk asks the manifest, and asks
+/// it under the claim rather than before, so nothing another worker confirms
+/// in between is missed.
+enum Removed {
+    These(Vec<String>),
+    NotSeenByTheWalk,
 }
 
 /// Split `queue` into `[start, end)` batches that respect both ceilings.
