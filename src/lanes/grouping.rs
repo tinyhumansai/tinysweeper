@@ -326,6 +326,16 @@ fn locale_segment(file: &str) -> Option<(&str, &str, &str)> {
     Some((&file[..base_end], locale, ext))
 }
 
+/// Two- and three-letter qualifiers that are common build/environment
+/// markers, not locale codes, even though they pass the shape check below.
+/// `bundle.min.js` and `bundle.dev.js` are unrelated build variants of the
+/// same base name, not translations of each other, and must not be grouped
+/// as locale siblings.
+const ORDINARY_QUALIFIERS: &[&str] = &[
+    "min", "dev", "prod", "src", "lib", "bin", "raw", "tmp", "bak", "old",
+    "new", "esm", "cjs", "umd", "amd", "doc", "api", "mod", "d",
+];
+
 /// Whether `segment` reads as a locale code rather than an ordinary extension
 /// segment (`module`, `d`, `min`).
 fn looks_like_locale(segment: &str) -> bool {
@@ -335,6 +345,9 @@ fn looks_like_locale(segment: &str) -> bool {
         && segment
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && !ORDINARY_QUALIFIERS
+            .iter()
+            .any(|q| q.eq_ignore_ascii_case(core))
 }
 
 /// Same directory, same component name, one a script and the other its
