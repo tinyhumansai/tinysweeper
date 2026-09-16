@@ -589,7 +589,14 @@ mod tests {
         );
         let forge = MockForge::with_state(state);
 
-        let evidence = gather(&forge, &config(), &RepoId::parse("o/r").unwrap(), "head", &[]).await;
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            &[],
+        )
+        .await;
 
         assert_eq!(evidence.harness.workflows.len(), 1);
         assert_eq!(evidence.harness.workflows[0].jobs[0].key, "playwright");
@@ -610,7 +617,14 @@ mod tests {
         );
         let forge = MockForge::with_state(state);
 
-        let evidence = gather(&forge, &config(), &RepoId::parse("o/r").unwrap(), "head", &[]).await;
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            &[],
+        )
+        .await;
 
         assert_eq!(evidence.harness.workflows.len(), 1);
         assert_eq!(evidence.harness.workflows[0].jobs[0].key, "playwright");
@@ -638,7 +652,14 @@ mod tests {
         );
         let forge = MockForge::with_state(state);
 
-        let evidence = gather(&forge, &config(), &RepoId::parse("o/r").unwrap(), "head", &[]).await;
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            &[],
+        )
+        .await;
 
         assert!(
             evidence.harness.workflows.is_empty(),
