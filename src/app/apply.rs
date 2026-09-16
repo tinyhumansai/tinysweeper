@@ -1025,6 +1025,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_byte_identical_re_review_still_gets_its_own_generation() {
+        // The case content alone cannot distinguish: a same-head manual
+        // re-review that changes nothing substantive (same jobs, same
+        // summary, same verdict) still produces a *new* watch. Without
+        // `generation`, that new watch would compare equal to the old one
+        // `settle_e2e` is settling and would be cleared right out from under
+        // it, even though nothing about the content differs to warn anyone.
+        use crate::lanes::e2e::runs::Watch;
+        use crate::state::memory::MemoryState;
+        use crate::state::types::ReviewedState;
+
+        let store = MemoryState::new();
+        let key = crate::state::key("tinyhumansai/tinysweeper", 7);
+        let old_watch = Watch {
+            head_sha: "abc123".into(),
+            jobs: vec!["playwright".into()],
+            summary: "Coverage looks complete.".into(),
+            failed: false,
+            generation: "gen-1".into(),
+        };
+        store
+            .save_state(
+                &key,
+                &ReviewedState {
+                    head_sha: "abc123".into(),
+                    e2e: Some(old_watch.clone()),
+                    ..ReviewedState::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        // The re-review's watch: every field but `generation` is identical.
+        let re_reviewed = ReviewedState {
+            head_sha: "abc123".into(),
+            e2e: Some(Watch {
+                generation: "gen-2".into(),
+                ..old_watch.clone()
+            }),
+            ..ReviewedState::default()
+        };
+        store.save_state(&key, &re_reviewed).await.unwrap();
+
+        let cleared = store.clear_e2e_watch(&key, &old_watch).await.unwrap();
+        assert!(
+            !cleared,
+            "the stored watch is `gen-2`, not the `gen-1` this call was settling, \
+             even though every other field is identical"
+        );
+
+        let after = store.load_state(&key).await.unwrap().expect("still there");
+        assert_eq!(
+            after, re_reviewed,
+            "the re-review's watch must survive intact"
+        );
+    }
+
+    #[tokio::test]
     async fn a_moved_head_leaves_the_watch_for_the_next_review_to_replace() {
         use crate::lanes::e2e::runs::Watch;
         use crate::state::memory::MemoryState;
