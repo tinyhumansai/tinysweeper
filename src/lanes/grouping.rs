@@ -314,8 +314,16 @@ fn looks_like_locale(segment: &str) -> bool {
         && segment.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-/// Same directory, the filename up to its first `.` matches, and the rest of
-/// the filename differs — `Button.tsx` ↔ `Button.module.css`.
+/// Same directory, same component name, one a script and the other its
+/// stylesheet — `Button.tsx` ↔ `Button.module.css`.
+///
+/// Deliberately narrower than "same first-dot stem, different extension":
+/// that rule also matched `docker-compose.yml` ↔
+/// `docker-compose.kernel-bypass.yml`, two independent Compose overlays that
+/// happen to share a prefix, and grouped every `.tinysweeper.toml`-adjacent
+/// override file with its base by the same accident. A component and its
+/// stylesheet is the one shape narrow enough to name outright: a script
+/// extension paired with a style extension, nothing else.
 fn same_stem_different_extension(a: &str, b: &str) -> bool {
     let (dir_a, file_a) = split_dir_file(a);
     let (dir_b, file_b) = split_dir_file(b);
@@ -324,7 +332,27 @@ fn same_stem_different_extension(a: &str, b: &str) -> bool {
     }
     let root_a = file_a.split('.').next().unwrap_or(file_a);
     let root_b = file_b.split('.').next().unwrap_or(file_b);
-    !root_a.is_empty() && root_a == root_b && file_a != root_a && file_b != root_b
+    if root_a.is_empty() || root_a != root_b || file_a == root_a || file_b == root_b {
+        return false;
+    }
+    let rest_a = &file_a[root_a.len() + 1..];
+    let rest_b = &file_b[root_b.len() + 1..];
+    (is_script_extension(rest_a) && is_style_extension(rest_b))
+        || (is_script_extension(rest_b) && is_style_extension(rest_a))
+}
+
+/// Whether `rest` — the filename after its component root — names a
+/// script: `tsx`, or `module.ts` if anyone ever writes one.
+fn is_script_extension(rest: &str) -> bool {
+    matches!(rest, "ts" | "tsx" | "js" | "jsx") || rest.ends_with(".ts") || rest.ends_with(".tsx")
+}
+
+/// Whether `rest` names a stylesheet, plain or CSS-Modules-scoped.
+fn is_style_extension(rest: &str) -> bool {
+    matches!(rest, "css" | "scss" | "less")
+        || rest.ends_with(".css")
+        || rest.ends_with(".scss")
+        || rest.ends_with(".less")
 }
 
 /// A path's directory (empty for a bare filename) and its filename.
