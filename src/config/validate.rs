@@ -612,6 +612,20 @@ fn validate_overview(config: &Config, problems: &mut Vec<String>) {
     }
 }
 
+fn validate_grouping(config: &Config, problems: &mut Vec<String>) {
+    // A component of zero files is not a group at all, and `grouping::group`
+    // would drop every file into its own singleton — indistinguishable from
+    // grouping being off, but paying the union-find and the confusion of a
+    // config that claims to be on.
+    if config.grouping.max_files == 0 {
+        problems.push(
+            "`grouping.max_files = 0` would group nothing; set it to at least 1 or set \
+             `grouping.enabled = false`"
+                .into(),
+        );
+    }
+}
+
 fn validate_lanes(config: &Config, problems: &mut Vec<String>) {
     for (name, lane) in &config.lanes {
         let Some(lane_id) = LaneId::parse(name) else {
