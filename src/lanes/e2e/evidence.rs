@@ -659,4 +659,46 @@ mod tests {
             evidence.harness.workflows
         );
     }
+
+    #[tokio::test]
+    async fn a_trigger_change_on_the_same_path_keeps_both_definitions() {
+        // This pull request proposes changing `.github/workflows/e2e.yml`
+        // from `pull_request_target` to plain `pull_request` — but until it
+        // merges, the default branch's `pull_request_target` job is still
+        // independently live (GitHub still executes it from there) *and*
+        // the head's own `pull_request` job is independently live (GitHub
+        // always reads `pull_request` from the head/merge ref). Both must
+        // be inventoried; overwriting one by path would silently drop the
+        // other, and its later failure with it.
+        let mut state = MockState::default();
+        state.set_tree("head", &[".github/workflows/e2e.yml"]);
+        state.set_tree("main", &[".github/workflows/e2e.yml"]);
+        state.set_file(
+            "head",
+            ".github/workflows/e2e.yml",
+            "name: e2e\non: pull_request\njobs:\n  playwright-pr:\n    steps:\n      - run: npx playwright test\n",
+        );
+        state.set_file(
+            "main",
+            ".github/workflows/e2e.yml",
+            "name: e2e\non: pull_request_target\njobs:\n  playwright-target:\n    steps:\n      - run: npx playwright test\n",
+        );
+        let forge = MockForge::with_state(state);
+
+        let evidence = gather(&forge, &config(), &RepoId::parse("o/r").unwrap(), "head", &[]).await;
+
+        let job_keys: std::collections::BTreeSet<&str> = evidence
+            .harness
+            .workflows
+            .iter()
+            .flat_map(|w| w.jobs.iter().map(|j| j.key.as_str()))
+            .collect();
+        assert_eq!(
+            job_keys,
+            std::collections::BTreeSet::from(["playwright-pr", "playwright-target"]),
+            "both the head's pull_request job and the default branch's \
+             pull_request_target job must survive: {:?}",
+            evidence.harness.workflows
+        );
+    }
 }
