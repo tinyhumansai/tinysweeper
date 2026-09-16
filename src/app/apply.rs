@@ -1384,10 +1384,9 @@ mod tests {
         // call in front of it is one more thing that can fail before the
         // verdict that matters is posted.
         let mut mixed = proposal("abc123", vec![finding()]);
-        if let Some(lane) = mixed.lanes.iter_mut().find(|l| l.lane == LaneId::Tests) {
-            lane.conclusion = CheckConclusion::Neutral;
-            lane.unanswered = vec![lane.lane.check_name()];
-        }
+        // The lane blocks on one file and got no answer on another.
+        mixed.lanes[0].unanswered = vec!["src/other.rs".into()];
+        assert!(!mixed.complete());
         let forge = forge("abc123").with_own_review(7, ReviewEvent::Approve);
         apply(&forge, &forge, &config(), &mixed, None)
             .await
