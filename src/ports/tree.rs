@@ -664,11 +664,14 @@ pub fn git_config_value(raw: &str) -> String {
 pub fn git_config_lines(text: &str) -> Vec<String> {
     let mut lines = Vec::new();
     let mut current = String::new();
+    // Whether the logical line so far ends inside quotes — carried across a
+    // continuation with the escapes already accounted for, rather than
+    // recounted from the text, where `\"` would read as a delimiter.
+    let mut quoted = false;
     for physical in text.lines() {
         // A comment ends at the newline whatever it ends with: a `\` inside
         // one continues nothing. Quotes are tracked across the logical line
         // so a `#` inside them is not a comment.
-        let mut quoted = current.chars().filter(|c| *c == '"').count() % 2 == 1;
         let mut in_comment = false;
         let mut chars = physical.chars();
         while let Some(c) = chars.next() {
@@ -688,6 +691,7 @@ pub fn git_config_lines(text: &str) -> Vec<String> {
         }
         current.push_str(physical);
         lines.push(std::mem::take(&mut current));
+        quoted = false;
     }
     if !current.is_empty() {
         lines.push(current);
@@ -976,6 +980,11 @@ mod tests {
             vec!["path = a # note\\".to_string(), "url = u".to_string()],
             "a comment ends at the newline, backslash or not"
         );
+        // An escaped quote is not a delimiter, across a continuation too:
+        // `"libs/\"one\` + `#two\` + `bar"` is one quoted value.
+        let joined = git_config_lines("path = \"libs/\\\"one\\\n#two\\\nbar\"\n");
+        assert_eq!(joined, vec!["path = \"libs/\\\"one#twobar\"".to_string()]);
+        assert_eq!(git_config_value(&joined[0][7..]), "libs/\"one#twobar");
         assert_eq!(git_config_value("\"vendor/x\\\"\""), "vendor/x\"");
         for refused in [
             "../x",
