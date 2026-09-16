@@ -469,6 +469,28 @@ impl crate::ports::review_state::ReviewStateStore for Store {
             .map_err(|err| Error::Forge(err.to_string()))?;
         Ok(())
     }
+
+    async fn clear_e2e_watch(&self, key: &str, head_sha: &str) -> Result<bool> {
+        // The filter carries the condition, not a read-then-write: Mongo
+        // only matches (and only then applies the `$unset`) a document whose
+        // `e2e.head_sha` is still exactly this one, atomically. A concurrent
+        // `save_state` for a new review — a new head, a new watch or none —
+        // either lands entirely before this filter is evaluated (this then
+        // matches nothing, `matched_count == 0`) or entirely after (this
+        // then clears the *old* record a moment before the new one
+        // overwrites it anyway); either way nothing the new review wrote is
+        // lost, which a reload-then-unconditional-`save_state` cannot
+        // promise.
+        let result = self
+            .review_state
+            .update_one(
+                doc! { "_id": key, "e2e.head_sha": head_sha },
+                doc! { "$unset": { "e2e": "" } },
+            )
+            .await
+            .map_err(|err| Error::Forge(err.to_string()))?;
+        Ok(result.matched_count > 0)
+    }
 }
 
 /// Whether an error is a unique-index violation.
