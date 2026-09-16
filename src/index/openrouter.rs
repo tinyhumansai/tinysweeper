@@ -105,9 +105,18 @@ impl OpenRouterEmbedder {
                 signature.provider
             )));
         }
-        let url = match base_url.trim() {
-            "" => OPENROUTER_EMBEDDINGS_URL.to_string(),
-            given => given.to_string(),
+        let url = match (signature.provider.as_str(), base_url.trim()) {
+            // No default address for the ladder: falling through to
+            // OpenRouter's would send the ladder's key to OpenRouter.
+            ("ladder", "") => {
+                return Err(Error::config(
+                    "`embeddings.provider = \"ladder\"` needs `embeddings.base_url`: the ladder's \
+                     `/v1/embeddings` on this box"
+                        .to_string(),
+                ));
+            }
+            (_, "") => OPENROUTER_EMBEDDINGS_URL.to_string(),
+            (_, given) => given.to_string(),
         };
 
         let client = reqwest::Client::builder()

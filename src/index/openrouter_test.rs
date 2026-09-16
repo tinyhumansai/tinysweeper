@@ -208,9 +208,21 @@ fn the_ladder_is_built_through_the_same_client_at_the_address_it_was_given() {
     );
 
     // And the errors it raises name the provider it is, not OpenRouter.
-    let err = OpenRouterEmbedder::new(ladder, "TINYSWEEPER_ABSENT_KEY_5f3a2b1c", "")
-        .expect_err("refuses");
+    let err = OpenRouterEmbedder::new(
+        ladder.clone(),
+        "TINYSWEEPER_ABSENT_KEY_5f3a2b1c",
+        "http://host.docker.internal:6969/v1/embeddings",
+    )
+    .expect_err("refuses");
     assert!(err.to_string().contains("`ladder`"), "{err}");
+
+    // With no address it is refused at every constructor, not routed to
+    // OpenRouter's default with the ladder's key.
+    let err = OpenRouterEmbedder::with_key(ladder, "unused".to_string(), "").expect_err("refuses");
+    assert!(
+        err.to_string().contains("needs `embeddings.base_url`"),
+        "{err}"
+    );
 }
 
 #[tokio::test]

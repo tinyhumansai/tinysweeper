@@ -429,6 +429,26 @@ fn validate_embeddings(config: &Config, problems: &mut Vec<String>) {
         );
     }
 
+    // The closed set `index::embedder_from_config` and `ProviderEmbedder`
+    // know between them. A name outside it fails at construction anyway,
+    // but that is on the first push; `doctor` is where a typo belongs.
+    const PROVIDERS: [&str; 7] = [
+        "voyage",
+        "openai",
+        "cohere",
+        "ollama",
+        "mock",
+        "openrouter",
+        "ladder",
+    ];
+    let provider = embeddings.provider.trim();
+    if !provider.is_empty() && !PROVIDERS.contains(&provider) {
+        problems.push(format!(
+            "`embeddings.provider = \"{provider}\"` names no provider this build knows; one of {}",
+            PROVIDERS.join(", ")
+        ));
+    }
+
     // The ladder has no default address: it is on this box, wherever the
     // operator put it, and a blank URL would be a connection error on the
     // first push rather than a line in `doctor`.

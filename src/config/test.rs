@@ -140,6 +140,19 @@ fn a_model_routed_twice_is_rejected() {
 }
 
 #[test]
+fn an_unknown_embedding_provider_is_rejected_by_doctor_not_by_the_first_push() {
+    let config = parse(
+        "version = 1\n[embeddings]\nenabled = true\nprovider = \"lader\"\nmodel = \"vectors\"\n\
+         dimensions = 1024\napi_key_env = \"LADDER_API_KEY\"\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(
+        joined.contains("`lader`") && joined.contains("ladder"),
+        "{joined}"
+    );
+}
+
+#[test]
 fn the_ladder_embedding_provider_needs_an_address() {
     let config = parse(
         "version = 1\n[embeddings]\nenabled = true\nprovider = \"ladder\"\nmodel = \"vectors\"\n\
