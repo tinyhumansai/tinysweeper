@@ -1,0 +1,16 @@
+{
+  "key": "b92cf252cc45bafa",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_falsify",
+  "usage": {
+    "input_tokens": 1359,
+    "output_tokens": 34,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000126440762
+  },
+  "value": {
+    "incorrect": []
+  }
+}

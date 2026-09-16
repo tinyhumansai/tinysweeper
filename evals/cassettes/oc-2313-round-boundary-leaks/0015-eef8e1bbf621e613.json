@@ -1,0 +1,38 @@
+{
+  "key": "eef8e1bbf621e613",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 6620,
+    "output_tokens": 1146,
+    "cached_tokens": 5722,
+    "embed_tokens": 0,
+    "cost_usd": 0.00357437988
+  },
+  "value": {
+    "lookups": [
+      {
+        "end": 80,
+        "kind": "read",
+        "path": "crates/opencompany-core/src/hivemind/mod.rs",
+        "start": 1,
+        "why": "Verify that step authorizes a round and the doc claims about next_state, turn isolation, and pinboard match the module documentation."
+      },
+      {
+        "end": 120,
+        "kind": "read",
+        "path": "vendor/tinyhivemind/src/episode/mod.rs",
+        "start": 60,
+        "why": "Check the episode step logic to verify the next_state commit and round-width claims in the doc."
+      },
+      {
+        "end": 260,
+        "kind": "read",
+        "path": "vendor/tinyhivemind/src/episode/mod.rs",
+        "start": 200,
+        "why": "Verify the visibility-based width selection (round_width vs revealed_width) and the next_state handling."
+      }
+    ]
+  }
+}

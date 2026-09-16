@@ -1,0 +1,17 @@
+{
+  "key": "f838d6a578a03e53",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4537,
+    "output_tokens": 265,
+    "cached_tokens": 3931,
+    "embed_tokens": 0,
+    "cost_usd": 0.00139373514
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change corrects three `openhuman_core` paths in `journal.rs` to remove a redundant `::openhuman` segment, matching the vendored crate's module layout (`openhuman_core::security::keyring::...` and `openhuman_core::config::Config`). The looked-up definitions live at the expected vendored paths, so the new references resolve correctly and the change is safe to merge."
+  }
+}

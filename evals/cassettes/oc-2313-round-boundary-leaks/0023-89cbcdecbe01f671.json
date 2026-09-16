@@ -1,0 +1,17 @@
+{
+  "key": "89cbcdecbe01f671",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3739,
+    "output_tokens": 124,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000353272122
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change modifies a test fixture in `moves_test.rs` by replacing a `next_state` field with `watermark` and `round_start` fields. The diff is small, test-only, and introduces no security concerns: no untrusted input reaches a dangerous sink, no authentication or authorization logic is altered, no new network or subprocess calls are made, no deserialization of untrusted data occurs, no path traversal, no secrets movement, no dependency changes, and no CI permission widening. The change is safe to merge."
+  }
+}

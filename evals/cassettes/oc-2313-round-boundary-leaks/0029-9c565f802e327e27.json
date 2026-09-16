@@ -1,0 +1,32 @@
+{
+  "key": "9c565f802e327e27",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4758,
+    "output_tokens": 215,
+    "cached_tokens": 4131,
+    "embed_tokens": 0,
+    "cost_usd": 0.00133011774
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "end": 40,
+        "kind": "read",
+        "path": "vendor/openhuman/crates/openhuman-core/Cargo.toml",
+        "start": 1,
+        "why": "Verify the new dependency path points to a real Cargo package named `openhuman`."
+      },
+      {
+        "glob": "vendor/openhuman/**/Cargo.toml",
+        "kind": "search",
+        "pattern": "package = \"openhuman\"",
+        "why": "Confirm the package name at the new path matches the dependency's `package` key."
+      }
+    ],
+    "summary": "Provisional: the dependency path moves from the vendored `openhuman` root to its `crates/openhuman-core` subdirectory; I am checking that the new path holds a Cargo package named `openhuman` before giving a verdict."
+  }
+}

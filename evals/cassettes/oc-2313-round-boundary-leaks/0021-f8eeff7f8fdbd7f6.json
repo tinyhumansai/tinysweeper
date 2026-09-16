@@ -1,0 +1,29 @@
+{
+  "key": "f8eeff7f8fdbd7f6",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3983,
+    "output_tokens": 2103,
+    "cached_tokens": 3509,
+    "embed_tokens": 0,
+    "cost_usd": 0.00497057526
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "Changing `use openhuman_core::openhuman as oh` to `use openhuman_core as oh` repoints every `oh::` reference from `openhuman_core::openhuman::*` to `openhuman_core::*`. The visible usage on line 37, `oh::mcp::http_client::{...}`, now resolves to `openhuman_core::mcp::http_client` instead of `openhuman_core::openhuman::mcp::http_client`. If `mcp` lives under the `openhuman` submodule rather than at the crate root, or if any other `oh::` references in the file (not shown in the diff) depended on the submodule path, this will fail to compile. I was unable to read the full file or search for the module definition to confirm which path is correct.",
+        "confidence": 0.45,
+        "existing_code": "use openhuman_core as oh;",
+        "path": "crates/opencompany-core/src/company/mcp_oauth.rs",
+        "rule": "import-repoint-breaks-callers",
+        "severity": "high",
+        "suggestion": null,
+        "title": "Verify oh::mcp::http_client resolves under the crate root after repointing the alias"
+      }
+    ],
+    "lookups": [],
+    "summary": "The change repoints the `oh` alias from the `openhuman_core::openhuman` submodule to the `openhuman_core` crate root. This is only safe if every `oh::` reference in the file (at minimum the visible `oh::mcp::http_client` on line 37) resolves identically under the new path. I could not read the full file or verify the module layout, so I cannot confirm the change compiles."
+  }
+}

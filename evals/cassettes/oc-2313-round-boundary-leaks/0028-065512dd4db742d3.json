@@ -1,0 +1,39 @@
+{
+  "key": "065512dd4db742d3",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3690,
+    "output_tokens": 366,
+    "cached_tokens": 2782,
+    "embed_tokens": 0,
+    "cost_usd": 0.00165465828
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "pattern": "struct Round",
+        "why": "Find the struct definition that these fields belong to, to verify the field changes are valid."
+      },
+      {
+        "glob": "crates/opencompany-core/src/hivemind/test.rs",
+        "kind": "search",
+        "pattern": "round_start",
+        "why": "See how round_start is used in the test to check for correctness issues."
+      },
+      {
+        "glob": "crates/opencompany-core/src/hivemind/test.rs",
+        "kind": "search",
+        "pattern": "next_state",
+        "why": "Check if next_state is still referenced elsewhere in this test file."
+      },
+      {
+        "kind": "search",
+        "pattern": "pub struct Sequence",
+        "why": "Understand the Sequence type to check if u64::MAX is a valid value."
+      }
+    ]
+  }
+}

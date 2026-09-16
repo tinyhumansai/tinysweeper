@@ -1,0 +1,17 @@
+{
+  "key": "a74f65a5ec932e19",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4293,
+    "output_tokens": 160,
+    "cached_tokens": 3667,
+    "embed_tokens": 0,
+    "cost_usd": 0.00116302338
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change corrects three module paths after what appears to be a re-export flattening in the vendored openhuman-core crate; the referenced functions exist at the new paths and no behavior changes are introduced. Safe to merge."
+  }
+}
