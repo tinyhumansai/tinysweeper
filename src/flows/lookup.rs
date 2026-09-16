@@ -995,6 +995,35 @@ mod tests {
         );
     }
 
+    /// A definition in the *diff itself* is never looked up — it is already
+    /// in the reviewer's evidence. In a group, "the diff itself" is every
+    /// member's diff, not just the file the candidate symbol was drawn from.
+    #[tokio::test]
+    async fn a_definition_added_by_a_sibling_group_member_is_not_seeded_as_external() {
+        let first = crate::evidence::diff::parse_file_patch(
+            "src/a.rs",
+            "@@ -1,1 +1,2 @@\n fn a() {}\n+helper_call();\n",
+        );
+        let second = crate::evidence::diff::parse_file_patch(
+            "src/b.rs",
+            "@@ -1,1 +1,2 @@\n fn b() {}\n+fn helper_call() {}\n",
+        );
+        // The tree reflects the head commit both diffs were taken from, so
+        // `src/b.rs` already holds the newly added definition.
+        let tree = MockTree::from_files([("src/b.rs", "fn b() {}\nfn helper_call() {}\n")]);
+        let mut ledger = Ledger::default();
+        let seeded = ledger
+            .seed(&tree, &[first, second], &LookupPolicy::default())
+            .await;
+
+        assert!(
+            seeded.rendered.is_empty(),
+            "a definition the sibling group member's own diff already added must not be \
+             rendered as an external lookup: {}",
+            seeded.rendered
+        );
+    }
+
     /// The shared `SEED_SYMBOLS` cap is round-robin, not first-come: a first
     /// file whose diff alone offers enough candidates to exhaust the cap must
     /// not be allowed to do so before a later group member's own call is
