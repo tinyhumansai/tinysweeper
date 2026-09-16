@@ -243,6 +243,43 @@ pub enum Applies {
     NotOnPullRequests(String),
 }
 
+/// Which of `changed` a GitHub `paths:`/`paths-ignore:` pattern list matches.
+///
+/// GitHub evaluates the list in order rather than as a plain union: a
+/// pattern prefixed `!` *removes* its matches from the running set instead of
+/// adding to it, so a later pattern can carve an exception out of an earlier
+/// one (`["**", "!docs/**"]` matches everything except `docs/`). Patterns
+/// also use a literal path separator — GitHub's `*` does not cross `/`, only
+/// `**` does — which globset only enforces when asked to; its default
+/// compilation lets `*` span directories, which would let `src/*` match
+/// `src/server/routes.rs`.
+fn github_path_matches(patterns: &[String], changed: &[String]) -> BTreeSet<String> {
+    let mut matched: BTreeSet<String> = BTreeSet::new();
+    for pattern in patterns {
+        let (negate, glob) = match pattern.strip_prefix('!') {
+            Some(rest) => (true, rest),
+            None => (false, pattern.as_str()),
+        };
+        let Ok(built) = globset::GlobBuilder::new(glob)
+            .literal_separator(true)
+            .build()
+        else {
+            continue;
+        };
+        let matcher = built.compile_matcher();
+        for path in changed {
+            if matcher.is_match(path) {
+                if negate {
+                    matched.remove(path);
+                } else {
+                    matched.insert(path.clone());
+                }
+            }
+        }
+    }
+    matched
+}
+
 impl Workflow {
     /// Whether this workflow triggers for a pull request changing `changed`.
     pub fn applies_to(&self, changed: &[String]) -> Applies {
