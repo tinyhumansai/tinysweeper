@@ -40,6 +40,11 @@ Covers `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` and `.cjs`.
   saying so.
 - Sequential `await` in a loop when each iteration depends on the previous
   result, or the collection is small and fixed at call time.
+- `innerHTML`/`dangerouslySetInnerHTML` fed a value that has already passed
+  through a sanitizer or is a fixed literal.
+- `Promise.all` used purely to run independent work concurrently and wait for
+  all of it, with no code path that needs a partial result after one
+  rejection.
 - `==` vs `===`, `var` vs `let`/`const`, missing semicolons, or anything the
   project's linter and formatter already enforce.
 - Missing null checks on a value the type checker already narrows to
