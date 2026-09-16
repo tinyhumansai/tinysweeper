@@ -188,22 +188,31 @@ impl Lane for Critique {
     }
 }
 
-/// Review one file, in a conversation that knows about no other file.
+/// Review one group of related changed files, in a conversation that knows
+/// about no file outside it.
+///
+/// `group_paths` and `group_diffs` are the same files in the same order;
+/// kept apart because a finding is placed against the one `FileDiff` whose
+/// path it names (see [`place`]), while the prompt layer wants the plain
+/// path list. A group of one file is the pre-grouping case, byte-identical to
+/// it: one path, one diff, the same isolation clause text.
 ///
 /// Positioning (step 4) and falsification (step 5) both run here rather than
 /// once over the folded result, because both want *the evidence this
-/// conversation was shown* and that is now one file's diff. Falsification is
-/// also free for the common file: `Falsifier::filter` makes no call when there
-/// is nothing to filter, so the number of falsify calls is the number of files
-/// that actually produced a finding.
-async fn review_file(
+/// conversation was shown* and that is now this group's diffs.
+/// Falsification is also free for the common case of nothing to report:
+/// `Falsifier::filter` makes no call when there is nothing to filter, so the
+/// number of falsify calls is the number of groups that actually produced a
+/// finding.
+async fn review_group(
     llm: std::sync::Arc<crate::flows::caps::ModelCapability>,
     input: &LaneInput<'_>,
     changed_paths: &[String],
-    diff: &FileDiff,
+    group_paths: &[String],
+    group_diffs: &[FileDiff],
 ) -> Result<FileReview> {
     let config: &Config = input.config;
-    let evidence = replay::render(std::slice::from_ref(diff));
+    let evidence = replay::render(group_diffs);
     let reviewers = council::reviewers(config, LaneId::Critique);
 
     // Every reviewer at once, as one graph. `ask_all` returns one answer per
@@ -212,7 +221,7 @@ async fn review_file(
     let calls: Vec<Call> = reviewers
         .iter()
         .map(|reviewer| {
-            let built = build_prompt(input, changed_paths, diff, &evidence, reviewer);
+            let built = build_prompt(input, changed_paths, group_paths, &evidence, reviewer);
             Call {
                 id: reviewer.id.to_string(),
                 model: reviewer.model.to_string(),
@@ -228,7 +237,7 @@ async fn review_file(
         LaneId::Critique,
         &calls,
         &schema::json_schema(),
-        input.asking_about(diff),
+        input.asking_about_group(group_diffs),
     )
     .await?;
 
