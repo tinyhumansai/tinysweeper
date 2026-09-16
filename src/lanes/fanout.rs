@@ -136,12 +136,16 @@ impl FanOut {
 
         let skipped = (reviewed == 0 && !self.failures.is_empty())
             .then(|| "No files could be reviewed; see the listed provider failures.".to_string());
+        // Every file that got no answer, whether or not others did: a lane that
+        // reviewed two files of three cannot vouch for the third.
+        let unanswered = self.failures.iter().map(|(path, _)| path.clone()).collect();
         LaneOutcome {
             summary,
             findings,
             resolved,
             spend,
             skipped,
+            unanswered,
         }
     }
 }
@@ -193,6 +197,11 @@ mod tests {
             "a partial review must say so: {}",
             outcome.summary
         );
+        assert_eq!(
+            outcome.unanswered,
+            vec!["bad.rs".to_string()],
+            "the file nobody answered for is named, so the verdict cannot vouch for it"
+        );
     }
 
     #[tokio::test]
@@ -203,6 +212,7 @@ mod tests {
             .into_outcome();
 
         assert!(outcome.skipped.is_some());
+        assert_eq!(outcome.unanswered, vec!["bad.rs".to_string()]);
     }
 
     #[tokio::test]

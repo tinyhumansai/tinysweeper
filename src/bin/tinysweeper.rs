@@ -2008,7 +2008,8 @@ mod tests {
         tinysweeper::app::Proposal {
             overview: None,
             unreviewed: vec![],
-            version: 1,
+            skipped: None,
+            version: tinysweeper::app::review::PROPOSAL_VERSION,
             repo: repo.into(),
             number,
             head_sha: "abc123".into(),
