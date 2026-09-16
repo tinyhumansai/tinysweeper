@@ -530,16 +530,14 @@ impl TreeReader for RedactingTree<'_> {
                     .await?;
                 match prefix {
                     Found::Text { .. } => private_key_state(&prefix),
-                    // Without the preceding context a short final PEM-body
-                    // fragment is indistinguishable from ordinary text. Do
-                    // not guess and expose it: tell the model this ranged
-                    // read is unavailable instead of returning unredacted
-                    // source from a backend that cannot establish state.
-                    _ => {
-                        return Ok(Found::Unavailable {
-                            reason: "cannot safely redact this range because its preceding context is unavailable".into(),
-                        });
-                    }
+                    // A backend that cannot answer the probe — a replayed
+                    // recording that never made it, a forge read that failed
+                    // — still has the range itself: a closing marker inside
+                    // it with no opening one proves the read began mid-key,
+                    // the same way a diff hunk proves it. Refusing the read
+                    // instead would blind every ranged lookup on such a
+                    // backend, and the lookups are what find the bugs.
+                    _ => opens_inside_private_key(&found),
                 }
             }
             _ => false,
@@ -568,10 +566,11 @@ impl TreeReader for RedactingTree<'_> {
                             end: Some(hit.line),
                         })
                         .await?;
-                    let Some(state) = private_key_state_before_last_line(&prefix) else {
-                        continue;
-                    };
-                    let mut state = state;
+                    // An unanswerable probe leaves the hit's own line as the
+                    // only evidence, and one line outside armour is ordinary
+                    // text; dropping the hit would hide a search result from
+                    // the reviewer over a backend limitation.
+                    let mut state = private_key_state_before_last_line(&prefix).unwrap_or(false);
                     redacted.push(Hit {
                         text: crate::scan::redact_stream_line(&hit.text, &mut state),
                         ..hit
@@ -636,6 +635,19 @@ fn redact_found(found: Found, mut in_key_block: bool) -> Found {
         Found::Hits { .. } => found,
         other => other,
     }
+}
+
+/// Whether a returned range itself proves it began inside a PEM block — a
+/// closing armour line before any opening one. See
+/// [`crate::scan::opens_inside_private_key`].
+fn opens_inside_private_key(found: &Found) -> bool {
+    let Found::Text { text, .. } = found else {
+        return false;
+    };
+    crate::scan::opens_inside_private_key(text.split('\n').map(|line| match line.find("| ") {
+        Some(offset) if offset <= 6 => &line[offset + 2..],
+        _ => line,
+    }))
 }
 
 /// Whether the final line of a preceding read leaves us inside a PEM block.
