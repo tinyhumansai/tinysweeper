@@ -1383,7 +1383,7 @@ mod tests {
         // A changes request supersedes the approval by itself; a dismissal
         // call in front of it is one more thing that can fail before the
         // verdict that matters is posted.
-        let mut mixed = proposal("abc123", vec![high("src/lib.rs", "Unchecked index")]);
+        let mut mixed = proposal("abc123", vec![finding()]);
         if let Some(lane) = mixed.lanes.iter_mut().find(|l| l.lane == LaneId::Tests) {
             lane.conclusion = CheckConclusion::Neutral;
             lane.unanswered = vec![lane.lane.check_name()];
