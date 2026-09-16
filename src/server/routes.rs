@@ -714,13 +714,12 @@ async fn settle_e2e_inner(
     // possibly publishes, and releases) has had time to finish.
     let lease = format!("{repo}#e2e-settle-{number}");
     let mut acquired = state.store.claim_lease(&lease, "server").await?;
-    for attempt in 0..LEASE_CONTENTION_RETRIES {
+    for _ in 0..LEASE_CONTENTION_RETRIES {
         if acquired {
             break;
         }
         tokio::time::sleep(LEASE_CONTENTION_BACKOFF).await;
         acquired = state.store.claim_lease(&lease, "server").await?;
-        let _ = attempt;
     }
     if !acquired {
         tracing::debug!(%lease, "another worker is still settling this e2e check");
