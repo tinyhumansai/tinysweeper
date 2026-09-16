@@ -320,11 +320,6 @@ impl<'a> Indexer<'a> {
         removed: Vec<String>,
     ) -> Result<IndexOutcome> {
         let signature = self.embedder.signature();
-        // The count this run starts from, read before it writes anything —
-        // and before the claim, so a read that fails leaves no lease behind
-        // for every later delivery to requeue against until its TTL.
-        // Both settlements below apply the run's own deltas to it.
-        let before = self.manifest.state(repo_id, &signature).await?.chunks;
         let lease = match self
             .manifest
             .claim(repo_id, &signature, &self.holder)
@@ -338,6 +333,28 @@ impl<'a> Indexer<'a> {
                     "another worker is indexing this repository; requeueing"
                 );
                 return Ok(IndexOutcome::Requeue { holder });
+            }
+        };
+
+        // The count this run starts from, read under the claim: read before
+        // it, a worker finishing at that moment could settle a newer count
+        // that this run would then overwrite with its stale baseline plus
+        // its own deltas. Read after the writes it would be the same number
+        // — nothing but `release` moves it — but under the claim, before the
+        // run, is the reading nobody has to think about. A read that fails
+        // releases the claim, or every later delivery requeues against a
+        // lease nobody holds until its TTL.
+        let before = match self.manifest.state(repo_id, &signature).await {
+            Ok(state) => state.chunks,
+            Err(err) => {
+                let settled = Settled::Failed {
+                    message: err.to_string(),
+                    chunks: None,
+                };
+                if let Err(nested) = self.manifest.release(&lease, &settled).await {
+                    tracing::warn!(error = %nested, "could not release the index claim");
+                }
+                return Err(err);
             }
         };
 
