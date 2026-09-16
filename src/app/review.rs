@@ -1734,9 +1734,14 @@ mod tests {
     fn grouping_alone_needs_no_walk_when_no_enabled_lane_consumes_it() {
         // A tests-only review — neither `critique` nor `security` on — never
         // calls `grouping::group`, so the default-enabled grouping flag must
-        // not trigger a graph walk nothing downstream reads.
+        // not trigger a graph walk nothing downstream reads. `overview` is
+        // turned off here so this isolates grouping's own contribution;
+        // `the_change_map_alone_needs_the_walk_even_with_grouping_off` and
+        // `neither_grouping_nor_the_change_map_needs_no_walk` cover the rest
+        // of the matrix.
         let mut config = config();
         config.review.lanes = vec!["e2e".into()];
+        config.overview.enabled = false;
         assert!(config.grouping.enabled, "grouping is on by default");
         assert!(!changed_neighbourhood_is_needed(&config));
     }
