@@ -529,7 +529,10 @@ impl Ledger {
             .map(|(i, diff)| {
                 (
                     i,
-                    seed_symbols(diff).into_iter().take(SEED_SYMBOLS * 2).collect(),
+                    seed_symbols(diff)
+                        .into_iter()
+                        .take(SEED_SYMBOLS * 2)
+                        .collect(),
                 )
             })
             .collect();
@@ -544,8 +547,15 @@ impl Ledger {
                     continue;
                 };
                 made_progress = true;
-                self.seed_symbol(tree, &diffs[*i], &symbol, policy, &mut rendered, &mut answered)
-                    .await;
+                self.seed_symbol(
+                    tree,
+                    &diffs[*i],
+                    &symbol,
+                    policy,
+                    &mut rendered,
+                    &mut answered,
+                )
+                .await;
             }
             if !made_progress {
                 break;

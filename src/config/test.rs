@@ -725,9 +725,8 @@ fn a_grouping_cap_of_one_file_is_flagged_as_forming_no_group() {
 
 #[test]
 fn a_zero_hunk_char_budget_is_flagged_as_forming_no_group() {
-    let config = parse(
-        "version = 1\n[grouping]\nenabled = true\nmax_files = 4\nmax_hunk_chars = 0\n",
-    );
+    let config =
+        parse("version = 1\n[grouping]\nenabled = true\nmax_files = 4\nmax_hunk_chars = 0\n");
     let problems = validate::validate(&config);
     assert!(
         problems
