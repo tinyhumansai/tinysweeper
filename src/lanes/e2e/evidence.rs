@@ -153,56 +153,17 @@ pub async fn gather(
     evidence.harness.truncated = listing.truncated;
     evidence.harness.tests = inventory::e2e_tests(&listing.paths, &table);
 
+    // Keyed by path so the `pull_request_target` pass below can override a
+    // head-classified entry, or add one the head tree never had (a
+    // `pull_request_target` workflow this pull request deleted).
+    let mut workflows: std::collections::BTreeMap<String, inventory::Workflow> =
+        std::collections::BTreeMap::new();
+
     for path in inventory::workflow_paths(&listing.paths) {
         match forge.file_at(repo, &path, head_sha).await {
             Ok(Some(text)) => {
-                let Some(workflow) = inventory::classify_workflow(&path, &text, named) else {
-                    continue;
-                };
-                // `pull_request_target` is resolved by GitHub from the base
-                // branch, never the head — the whole point of the event is
-                // that a fork cannot rewrite the workflow that runs with the
-                // base branch's secrets. A workflow classified from the head
-                // copy as `pull_request_target` therefore describes the
-                // wrong definition whenever this pull request touched that
-                // file: reclassify from the base copy, which is the one
-                // GitHub will actually execute.
-                let is_target = matches!(
-                    workflow.trigger,
-                    inventory::Trigger::PullRequest { target: true, .. }
-                );
-                if !is_target || base_sha == head_sha {
-                    evidence.harness.workflows.push(workflow);
-                    continue;
-                }
-                match forge.file_at(repo, &path, base_sha).await {
-                    Ok(Some(base_text)) => {
-                        if let Some(base_workflow) =
-                            inventory::classify_workflow(&path, &base_text, named)
-                        {
-                            evidence.harness.workflows.push(base_workflow);
-                        }
-                        // `None` here means the base branch's copy is not
-                        // (or no longer) an e2e workflow at all — nothing to
-                        // add, and reporting the head-classified one would
-                        // be exactly the wrong-definition case this exists
-                        // to avoid.
-                    }
-                    Ok(None) => {
-                        // Added by this pull request, or renamed into
-                        // existence: no base copy to resolve against, so
-                        // there is nothing GitHub would execute as
-                        // `pull_request_target` for this file yet.
-                    }
-                    Err(err) => {
-                        tracing::warn!(
-                            %err, %path,
-                            "could not read a pull_request_target workflow's base-branch definition for the e2e lane"
-                        );
-                        evidence.degraded.push(format!(
-                            "`{path}` is `pull_request_target`; its base-branch definition could not be read"
-                        ));
-                    }
+                if let Some(workflow) = inventory::classify_workflow(&path, &text, named) {
+                    workflows.insert(path, workflow);
                 }
             }
             Ok(None) => {}
@@ -214,6 +175,111 @@ pub async fn gather(
             }
         }
     }
+
+    // `pull_request_target` is resolved by GitHub from the repository's
+    // *default* branch — not the pull request's base branch, which can be
+    // some other branch entirely, and not the head, which the whole event
+    // exists to keep untrusted. Classifying one from the head copy (the
+    // pass above) can therefore describe the wrong definition, in either
+    // direction: a workflow this pull request just added `pull_request_target`
+    // to isn't really that trigger yet (the default branch has never seen
+    // it), and a workflow this pull request deleted or detargeted is
+    // classified as gone even though the default branch — what actually
+    // executes — still has it. A second, independent pass over the default
+    // branch's own tree catches both; it authoritatively decides
+    // `pull_request_target` identity and overrides or adds to the head pass
+    // above rather than being conditioned on what the head pass found.
+    let default_sha = match forge.default_branch(repo).await {
+        Ok(branch) => match forge.branch_head(repo, &branch).await {
+            Ok(sha) => sha,
+            Err(err) => {
+                tracing::warn!(%err, "could not resolve the default branch's tip for the e2e lane");
+                evidence.degraded.push(
+                    "the default branch's tip could not be read, so a `pull_request_target` \
+                     workflow may be inventoried from the wrong definition"
+                        .into(),
+                );
+                None
+            }
+        },
+        Err(err) => {
+            tracing::warn!(%err, "could not resolve the default branch for the e2e lane");
+            evidence.degraded.push(
+                "the default branch could not be resolved, so a `pull_request_target` workflow \
+                 may be inventoried from the wrong definition"
+                    .into(),
+            );
+            None
+        }
+    };
+    if let Some(default_sha) = default_sha {
+        let default_listing = match forge.tree_paths(repo, &default_sha).await {
+            Ok(listing) => listing,
+            Err(err) => {
+                tracing::warn!(%err, "could not list the default branch's tree for the e2e lane");
+                evidence.degraded.push(
+                    "the default branch's tree could not be listed, so a `pull_request_target` \
+                     workflow may be inventoried from the wrong definition"
+                        .into(),
+                );
+                Default::default()
+            }
+        };
+        for path in inventory::workflow_paths(&default_listing.paths) {
+            match forge.file_at(repo, &path, &default_sha).await {
+                Ok(Some(text)) => {
+                    let is_target = |workflow: &inventory::Workflow| {
+                        matches!(
+                            workflow.trigger,
+                            inventory::Trigger::PullRequest { target: true, .. }
+                        )
+                    };
+                    match inventory::classify_workflow(&path, &text, named) {
+                        Some(workflow) if is_target(&workflow) => {
+                            workflows.insert(path, workflow);
+                        }
+                        _ => {
+                            // Not `pull_request_target` on the default
+                            // branch — the authoritative source for that
+                            // trigger. Anything the head pass classified as
+                            // `pull_request_target` for this same path was
+                            // therefore wrong; drop it rather than publish a
+                            // definition GitHub will not actually execute.
+                            if let Some(existing) = workflows.get(&path)
+                                && is_target(existing)
+                            {
+                                workflows.remove(&path);
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {
+                    // Deleted, or renamed away, on the default branch: if
+                    // the head pass still had a `pull_request_target` entry
+                    // for it, that workflow no longer exists where GitHub
+                    // would execute it from.
+                    if let Some(existing) = workflows.get(&path)
+                        && matches!(
+                            existing.trigger,
+                            inventory::Trigger::PullRequest { target: true, .. }
+                        )
+                    {
+                        workflows.remove(&path);
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        %err, %path,
+                        "could not read a default-branch workflow for the e2e lane"
+                    );
+                    evidence.degraded.push(format!(
+                        "`{path}` could not be read from the default branch"
+                    ));
+                }
+            }
+        }
+    }
+    evidence.harness.workflows = workflows.into_values().collect();
 
     match forge.check_runs(repo, head_sha).await {
         Ok(checks) => evidence.checks = checks,
