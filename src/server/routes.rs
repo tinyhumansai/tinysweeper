@@ -667,6 +667,55 @@ async fn dispatch(state: AppState, action: Action, delivery: String, event: Stri
                 ));
             }
         }
+        Action::SettleByCommit {
+            repo,
+            head_sha,
+            installation,
+        } => {
+            tokio::spawn(handle_settle_by_commit(state, repo, head_sha, installation));
+        }
+    }
+}
+
+/// A check completed on a commit whose pull request GitHub did not name —
+/// the fork-pull-request case `Action::SettleByCommit` exists for. Resolves
+/// the number(s) through the forge, then does the same
+/// settle-then-reconsider-merge work `Action::AutoMerge`'s handler does for
+/// each one.
+async fn handle_settle_by_commit(state: AppState, repo: String, head_sha: String, installation: u64) {
+    let Some(repo_id) = RepoId::parse(&repo) else {
+        tracing::error!(%repo, "not owner/name");
+        return;
+    };
+    let token = state.auth.installation_token(installation).await;
+    let read = match token {
+        Ok(token) => crate::forge::github::GitHubRead::new(&token),
+        Err(err) => {
+            tracing::error!(%err, %repo, "could not mint a token to resolve the commit's pull requests");
+            return;
+        }
+    };
+    let read = match read {
+        Ok(read) => read,
+        Err(err) => {
+            tracing::error!(%err, %repo, "could not build a forge client to resolve the commit's pull requests");
+            return;
+        }
+    };
+    let numbers = match read.open_pull_requests_for_commit(&repo_id, &head_sha).await {
+        Ok(numbers) => numbers,
+        Err(err) => {
+            tracing::error!(%err, %repo, %head_sha, "could not resolve the commit's pull requests");
+            return;
+        }
+    };
+    for number in numbers {
+        tokio::spawn(handle_check_completed(
+            state.clone(),
+            repo.clone(),
+            number,
+            installation,
+        ));
     }
 }
 
