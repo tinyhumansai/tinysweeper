@@ -49,8 +49,9 @@ rules = "terraform"
 glob = "**/.github/workflows/**"
 rules = "workflows"
 
-# Reused verbatim from security-strict: dependency manifests get the
-# dependency rules regardless of which language they declare dependencies for.
+# Dependency manifests and their lockfiles, across every ecosystem this
+# preset routes, get the dependency rules regardless of which language they
+# declare dependencies for.
 [[path_instructions]]
 glob = "**/{Cargo.toml,Cargo.lock,package.json,package-lock.json,yarn.lock,pnpm-lock.yaml,go.mod,go.sum,requirements*.txt,pyproject.toml,poetry.lock,pom.xml,build.gradle,build.gradle.kts}"
 rules = "dependencies"
