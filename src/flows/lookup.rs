@@ -624,14 +624,18 @@ The definitions of what the changed lines call into,                  read from 
             // A definition already in the diff is not looked up; one in
             // the same file but outside every hunk is — it is exactly as
             // invisible to the reviewer as one in another file, and the
-            // unbounded sibling read on opencompany#2313 lived there.
+            // unbounded sibling read on opencompany#2313 lived there. Checked
+            // against every file in the group, not just `diff`: a hit inside
+            // a sibling group member's own hunk is changed code this same
+            // conversation already has, not an external definition.
+            let already_in_this_conversations_diff = |h: &crate::ports::tree::Hit| {
+                group_diffs
+                    .iter()
+                    .any(|d| d.path == h.path && d.within_hunk(u64::from(h.line), u64::from(h.line)))
+            };
             let definitions: Vec<&crate::ports::tree::Hit> = hits
                 .iter()
-                .filter(|h| {
-                    looks_like_definition(&h.text)
-                        && !(h.path == diff.path
-                            && diff.within_hunk(u64::from(h.line), u64::from(h.line)))
-                })
+                .filter(|h| looks_like_definition(&h.text) && !already_in_this_conversations_diff(h))
                 .collect();
             if definitions.is_empty() || definitions.len() > AUTO_FOLLOW {
                 continue;
