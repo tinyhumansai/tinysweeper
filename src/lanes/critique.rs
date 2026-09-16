@@ -1207,8 +1207,16 @@ fn helper() {
         // relocation budget affords must not lose round one's own, already
         // falsified finding — placement failing on this optional pass is no
         // additional coverage result, not a reason to fail the whole group.
+        //
+        // Round one's review call and the coverage pass's own review call are
+        // routed through the graph, so they alone count against
+        // `budget_usd_per_pr` (0.02 for both). Relocation calls go straight to
+        // the model port and are bounded only by `place`'s own tally, so the
+        // budget is set just above what round one and the coverage review
+        // spend, and three hopeless quotes are enough to cross it on the
+        // fourth relocation attempt.
         let mut config = config_with_passes(2);
-        config.models.budget_usd_per_pr = 0.0;
+        config.models.budget_usd_per_pr = 0.025;
 
         let model = MockModel::new()
             .then(json!({
@@ -1220,13 +1228,14 @@ fn helper() {
                 "summary": "…",
                 "findings": [
                     finding_hopeless("Guard the second index", "a snippet nowhere in the diff"),
-                    finding_hopeless(
-                        "Guard the third index",
-                        "a different snippet nowhere in the diff"
-                    ),
+                    finding_hopeless("Guard the third index", "another snippet nowhere in it"),
+                    finding_hopeless("Guard the fourth index", "yet another absent snippet"),
+                    finding_hopeless("Guard the fifth index", "and one more absent snippet"),
                 ]
             }))
-            .then(json!({"existing_code": "let x0 = 0;"}));
+            .then(json!({"existing_code": "let x0 = 0;"}))
+            .then(json!({"existing_code": "let x1 = 1;"}))
+            .then(json!({"existing_code": "let x2 = 2;"}));
         let handle = model.clone();
 
         let outcome = run_with(model, &config, &large_diffs()).await;
@@ -1239,9 +1248,10 @@ fn helper() {
         assert_eq!(outcome.findings[0].title, "Guard the first index");
         assert_eq!(
             handle.calls(),
-            4,
-            "round one's review and falsify, the coverage review, and the one \
-             relocation call the budget still afforded"
+            6,
+            "round one's review and falsify, the coverage review, and the \
+             three relocation calls the budget afforded before the fourth \
+             finding tripped it"
         );
     }
 
