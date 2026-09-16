@@ -125,6 +125,13 @@ fn validate_review(config: &Config, problems: &mut Vec<String>) {
                 .into(),
         );
     }
+
+    if !(1..=3).contains(&review.passes) {
+        problems.push(format!(
+            "`review.passes = {}` is out of range; expected 1 (round one only), 2 or 3",
+            review.passes
+        ));
+    }
 }
 
 fn validate_paths(config: &Config, problems: &mut Vec<String>) {
