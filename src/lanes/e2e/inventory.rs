@@ -626,7 +626,19 @@ impl Outline {
             return Trigger::Never("nothing: no `on:` block".into());
         };
         let node = &self.nodes[index];
-        let events: Vec<(String, Option<usize>)> = if !node.value.is_empty() {
+        let events: Vec<(String, Option<usize>)> = if node.value.starts_with('{') {
+            // `on: {pull_request: {paths: [...]}}` — a flow mapping. Its
+            // nested filters are not walked (that would need real YAML), so
+            // the event is recognised but treated as unfiltered — a
+            // conservative "would trigger" rather than the `Trigger::Never`
+            // that reading the whole mapping as one literal event name used
+            // to produce, which reported an active e2e workflow as one that
+            // never runs on pull requests at all.
+            flow_mapping_keys(&node.value)
+                .into_iter()
+                .map(|event| (event, None))
+                .collect()
+        } else if !node.value.is_empty() {
             // `on: push` or `on: [push, pull_request]`.
             self.list(index)
                 .into_iter()
