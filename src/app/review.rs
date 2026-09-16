@@ -42,10 +42,19 @@ use crate::state::types::ReviewedState;
 /// comment where it is used.
 const REMEMBER_FINDINGS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// The schema version `review` writes.
+///
+/// 2 added `unanswered` on every lane and `skipped` on the proposal. A
+/// version-1 file has neither, and `serde(default)` reads their absence as
+/// "everything answered, nothing skipped" — which for a file written during a
+/// provider outage is exactly wrong. So a version-1 proposal is never
+/// complete: `apply` can still post its findings, but cannot approve on it.
+pub const PROPOSAL_VERSION: u32 = 2;
+
 /// What a review run concluded, ready for `apply` to publish.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Proposal {
-    /// Schema version of this file.
+    /// Schema version of this file. See [`PROPOSAL_VERSION`].
     pub version: u32,
     /// The repository, as `owner/name`.
     pub repo: String,
@@ -235,7 +244,10 @@ impl Proposal {
     /// `Neutral`, and Neutral does not block — so a review that consulted no
     /// model at all read as clean and approved.
     pub fn complete(&self) -> bool {
-        self.skipped.is_none() && self.unreviewed.is_empty() && self.answered()
+        self.version >= PROPOSAL_VERSION
+            && self.skipped.is_none()
+            && self.unreviewed.is_empty()
+            && self.answered()
     }
 
     /// Whether every lane got an answer for everything it asked about.
@@ -448,7 +460,7 @@ pub async fn review_with_tree(
     // does stop the bot rather than merely hiding its output.
     if let Some(label) = kill_switch(config, &context) {
         return Ok(Proposal {
-            version: 1,
+            version: PROPOSAL_VERSION,
             repo: repo.to_string(),
             number,
             head_sha: context.pull_request.head_sha.clone(),
@@ -877,7 +889,7 @@ pub async fn review_with_tree(
     let overview = change_map(config, retrieval, repo, &diffs, &lanes).await;
 
     Ok(Proposal {
-        version: 1,
+        version: PROPOSAL_VERSION,
         repo: repo.to_string(),
         number,
         head_sha: context.pull_request.head_sha.clone(),
