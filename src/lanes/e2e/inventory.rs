@@ -1056,7 +1056,8 @@ jobs:
         // quoted key was rejected outright, so this workflow read as having
         // no `on:` block at all.
         for quoted in ["'on': pull_request", "\"on\": pull_request"] {
-            let text = format!("name: e2e\n{quoted}\njobs:\n  run:\n    steps:\n      - run: make e2e\n");
+            let text =
+                format!("name: e2e\n{quoted}\njobs:\n  run:\n    steps:\n      - run: make e2e\n");
             let workflow = classify_workflow(".github/workflows/e2e.yml", &text, &[])
                 .unwrap_or_else(|| panic!("{quoted} should classify as e2e"));
             assert!(

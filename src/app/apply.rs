@@ -952,7 +952,10 @@ mod tests {
         );
 
         let after = store.load_state(&key).await.unwrap().expect("still there");
-        assert_eq!(after, concurrent, "the concurrent review's state must survive intact");
+        assert_eq!(
+            after, concurrent,
+            "the concurrent review's state must survive intact"
+        );
     }
 
     #[tokio::test]

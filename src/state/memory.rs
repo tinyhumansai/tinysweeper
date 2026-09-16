@@ -65,7 +65,11 @@ impl ReviewStateStore for MemoryState {
         let Some(state) = entries.get_mut(key) else {
             return Ok(false);
         };
-        if state.e2e.as_ref().is_some_and(|watch| watch.head_sha == head_sha) {
+        if state
+            .e2e
+            .as_ref()
+            .is_some_and(|watch| watch.head_sha == head_sha)
+        {
             state.e2e = None;
             Ok(true)
         } else {
