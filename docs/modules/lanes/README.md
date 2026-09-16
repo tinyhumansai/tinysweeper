@@ -79,6 +79,15 @@ does not take it back out.
   the finding, and `apply` renders it in the check-run summary instead of as an
   inline comment.
 
+  This rule governs the *model's* findings; it does not reach `e2e`'s
+  deterministic ones. `e2e-not-triggered` and `e2e-failed`
+  (`src/lanes/e2e/runs.rs`) are built by code, not returned from
+  `LaneResponse`, so they never pass through `LaneOutcome::from_response` and
+  are neither dropped nor demoted — `e2e-not-triggered` anchors on the
+  workflow's `paths:` line when there is one, `e2e-failed` carries no line at
+  all, and both are always rendered in the summary regardless of whether that
+  line changed. See `docs/modules/lanes/e2e.md`.
+
 ## Per-file fan-out
 
 `security` and `critique` run one conversation per changed file
