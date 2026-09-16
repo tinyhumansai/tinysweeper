@@ -129,6 +129,40 @@ fn is_target(workflow: &inventory::Workflow) -> bool {
     )
 }
 
+/// `workflow` if it is (or, via `also_plain`, also covers) the
+/// `want_target` side of a pull-request trigger; `None` otherwise.
+///
+/// `Trigger::PullRequest::target` only ever names whichever event
+/// `Outline::trigger` saw first in the `on:` block — `on: [pull_request,
+/// pull_request_target]` classifies `target: false` even on a pass that
+/// exists specifically to find the `pull_request_target` side. `also_plain`
+/// is how both the head pass (which wants `want_target: false`) and the
+/// default-branch pass (which wants `want_target: true`) recover the side
+/// `target` alone doesn't name — re-flagged to `want_target` rather than
+/// read literally, since both sides run the same job list either way. One
+/// function for both callers on purpose: the same asymmetric-fix mistake
+/// bit each pass once already, in opposite directions, when this logic was
+/// duplicated between them.
+fn matching_execution(
+    mut workflow: inventory::Workflow,
+    want_target: bool,
+) -> Option<inventory::Workflow> {
+    let inventory::Trigger::PullRequest {
+        target, also_plain, ..
+    } = &mut workflow.trigger
+    else {
+        return None;
+    };
+    if *target == want_target {
+        Some(workflow)
+    } else if *also_plain {
+        *target = want_target;
+        Some(workflow)
+    } else {
+        None
+    }
+}
+
 /// Gather the lane's evidence at `head_sha`.
 pub async fn gather(
     forge: &dyn ForgeRead,
