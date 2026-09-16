@@ -8,7 +8,7 @@
 //! still matches. A review of a commit nobody is looking at any more is worse
 //! than no review — it reports on code that has already been replaced.
 
-use crate::app::review::Proposal;
+use crate::app::review::{PROPOSAL_VERSION, Proposal};
 use crate::config::types::{Config, Severity};
 use crate::error::{Error, Result};
 use crate::evidence::diff::{FileDiff, parse_file_patch};
