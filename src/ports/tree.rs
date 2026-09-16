@@ -634,6 +634,13 @@ pub fn git_config_value(raw: &str) -> String {
                 None => {}
             },
             (false, '#' | ';') => break,
+            // Unquoted internal whitespace collapses to one space, as git
+            // reads it; quoted whitespace is kept as written.
+            (false, c) if c.is_whitespace() => {
+                if !matches!(out.last(), Some((' ', false))) {
+                    out.push((' ', false));
+                }
+            }
             (_, c) => out.push((c, quoted)),
         }
     }
