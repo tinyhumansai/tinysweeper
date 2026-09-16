@@ -31,7 +31,7 @@
 use std::collections::BTreeMap;
 
 use crate::evidence::diff::{self, FileDiff};
-use crate::index::types::{EdgeKind, Neighbourhood, NodeKind};
+use crate::index::types::{EdgeKind, Neighbourhood};
 
 /// One group of related changed files, reviewed together in one conversation.
 #[derive(Debug, Clone, PartialEq, Eq)]
