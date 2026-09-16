@@ -37,5 +37,5 @@
   contract) and passing it explicitly would break that contract.
 - Formatting, import grouping, or anything `gofmt` and `go vet` already
   enforce.
-- A `.await`-shaped blocking call inside a benchmark, a `_test.go` file, or a
-  `main` used only to drive a local script.
+- An ignored error, a blocking call, or an unstopped goroutine inside a
+  `_test.go` file or a `main` used only to drive a local script.
