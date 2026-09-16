@@ -1124,6 +1124,26 @@ jobs:
     }
 
     #[test]
+    fn an_unrelated_conditional_step_does_not_gate_the_whole_job() {
+        // A label-gated artifact upload ahead of an unconditional Playwright
+        // step must not make the job read as gated on that label — the
+        // actual e2e step runs unconditionally.
+        let text = "name: e2e\non: pull_request\njobs:\n  run:\n    steps:\n      - name: Upload debug artifact\n        if: contains(github.event.pull_request.labels.*.name, 'debug')\n        uses: actions/upload-artifact@v4\n      - name: Run e2e\n        run: npx playwright test\n";
+        let workflow = classify_workflow(".github/workflows/e2e.yml", text, &[]).unwrap();
+        assert_eq!(
+            workflow.jobs[0].label_gate, None,
+            "the unconditional playwright step should not have inherited the upload step's gate"
+        );
+    }
+
+    #[test]
+    fn a_gate_on_the_e2e_step_itself_is_still_read() {
+        let text = "name: e2e\non: pull_request\njobs:\n  run:\n    steps:\n      - name: Run e2e\n        if: contains(github.event.pull_request.labels.*.name, 'run-e2e')\n        run: npx playwright test\n";
+        let workflow = classify_workflow(".github/workflows/e2e.yml", text, &[]).unwrap();
+        assert_eq!(workflow.jobs[0].label_gate.as_deref(), Some("run-e2e"));
+    }
+
+    #[test]
     fn explicit_workflow_names_are_the_whole_answer() {
         let text = "name: CI\non: pull_request\njobs:\n  unit:\n    steps:\n      - run: cargo test\n  browser:\n    steps:\n      - run: npx cypress run\n";
         let workflow =
