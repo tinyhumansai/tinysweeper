@@ -5,9 +5,10 @@
 - A secret — a credential, API key, or private key — copied into a layer or
   passed as a build `ARG`/`ENV`. It stays in the image history even if a
   later layer deletes the file.
-- `ADD` pulling from a remote URL, which fetches and extracts unauthenticated,
-  unpinned content at build time. Use `curl`/`wget` with a checksum, or a
-  local `COPY`, instead.
+- `ADD` pulling from a remote URL with no `--checksum` (or other immutable
+  content pin), which fetches and extracts unauthenticated, unpinned content
+  at build time. Use `curl`/`wget` with a checksum, a local `COPY`, or
+  `ADD --checksum=sha256:...` instead.
 - A base image tag that floats — `latest`, or no tag at all — where the
   project pins other dependencies. The build is no longer reproducible.
 - A multi-stage build that copies a build-time secret or credential from an
