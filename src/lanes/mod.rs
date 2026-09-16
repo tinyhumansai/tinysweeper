@@ -8,6 +8,7 @@
 
 pub mod anchor;
 pub mod commits;
+pub mod coverage;
 pub mod critique;
 pub mod description;
 pub mod e2e;
