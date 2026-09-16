@@ -294,7 +294,7 @@ mod tests {
             );
         }
         let continued =
-            "[submodule \"k\"]\n\tpath = libs/k\n\turl = https://github.com/\\\n\t\tacme/k.git\n";
+            "[submodule \"k\"]\n\tpath = libs/k\n\turl = https://github.com/\\\nacme/k.git\n";
         assert_eq!(
             parse_gitmodules(continued, "github.com")[0].repo,
             RepoId::parse("acme/k"),
