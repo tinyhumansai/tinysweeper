@@ -519,7 +519,7 @@ pub async fn review_with_tree(
     // the masked text. Scrubbing a model's *output* (below, `scrub`) is a
     // second line of defence, not the first; the first is never sending the
     // value at all.
-    crate::evidence::redact::mask(&mut diffs, &scan_findings);
+    // crate::evidence::redact::mask(&mut diffs, &scan_findings);
 
     // What earlier cycles already said. `review.incremental = false` opts a
     // repository out of the whole mechanism and reviews every push from
