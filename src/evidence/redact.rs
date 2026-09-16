@@ -26,14 +26,59 @@ use std::collections::BTreeSet;
 use crate::evidence::diff::{FileDiff, LineKind};
 use crate::scan::{self, Finding, ScanKind};
 
+/// What one call to [`mask`] actually redacted.
+///
+/// Returned rather than logged so the caller can tell a reviewer about it: a
+/// model handed a diff with a chunk quietly missing from it has no way to
+/// distinguish "nothing was here" from "something was removed", and the two
+/// call for different behaviour — the first is silence, the second is "do not
+/// ask for or guess the value".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Redactions {
+    /// How many locations were masked, across every file.
+    pub spans: usize,
+    /// Which paths had at least one masked location, in the order first seen.
+    pub files: Vec<String>,
+}
+
+impl Redactions {
+    /// Whether anything was masked at all.
+    pub fn is_empty(&self) -> bool {
+        self.spans == 0
+    }
+
+    /// One sentence for the volatile suffix, telling a reviewer what the
+    /// `<redacted, N chars>` markers it is about to read mean.
+    ///
+    /// Empty when nothing was masked, so a caller can push it into the prompt
+    /// unconditionally without an `if` of its own — an empty string renders
+    /// as nothing.
+    pub fn note(&self) -> String {
+        if self.is_empty() {
+            return String::new();
+        }
+        let value = if self.spans == 1 { "value" } else { "values" };
+        format!(
+            "{} credential {value} were removed from this diff before you saw it and appear \
+             as `<redacted, N chars>`; the lines are real, only the values are gone — never \
+             ask for or guess them.",
+            self.spans
+        )
+    }
+}
+
 /// Mask secrets in `diffs` in place, using `findings` from the scanners that
 /// already ran over them.
 ///
 /// Call this immediately after the scanners and before anything that renders
 /// or caches the diff — retrieval, a `LaneInput`, `evidence::replay::split`
 /// — so every downstream consumer, including the cached prefix, only ever
-/// sees the masked text.
-pub fn mask(diffs: &mut [FileDiff], findings: &[Finding]) {
+/// sees the masked text. The [`Redactions`] it returns is what tells that
+/// prompt a value is missing on purpose.
+pub fn mask(diffs: &mut [FileDiff], findings: &[Finding]) -> Redactions {
+    let mut spans = 0usize;
+    let mut files = Vec::new();
+
     for diff in diffs.iter_mut() {
         let flagged: BTreeSet<u64> = findings
             .iter()
@@ -48,6 +93,7 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding]) {
             continue;
         }
 
+        let mut masked_here = false;
         for hunk in &mut diff.hunks {
             for line in &mut hunk.lines {
                 if sensitive && matches!(line.kind, LineKind::Added | LineKind::Removed) {
@@ -55,7 +101,12 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding]) {
                     // rulepack and heuristic look at shape, and a value with
                     // neither — a plain internal hostname, a numeric flag —
                     // is still a secret by convention of living in this file.
-                    line.text = mask_whole_line(&line.text);
+                    let masked = mask_whole_line(&line.text);
+                    if masked != line.text {
+                        spans += 1;
+                        masked_here = true;
+                        line.text = masked;
+                    }
                     continue;
                 }
                 // Context is never masked here: it is unchanged code, already
@@ -64,11 +115,21 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding]) {
                 if let Some(head_line) = line.new_line
                     && flagged.contains(&head_line)
                 {
-                    line.text = scan::redact_line(&line.text);
+                    let masked = scan::redact_line(&line.text);
+                    if masked != line.text {
+                        spans += 1;
+                        masked_here = true;
+                        line.text = masked;
+                    }
                 }
             }
         }
+        if masked_here {
+            files.push(diff.path.clone());
+        }
     }
+
+    Redactions { spans, files }
 }
 
 /// Mask one line of a sensitive-path file.
