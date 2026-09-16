@@ -500,4 +500,39 @@ mod tests {
         assert!(evidence.harness.is_empty());
         assert!(evidence.candidates.is_empty());
     }
+
+    #[tokio::test]
+    async fn a_pull_request_target_workflow_is_classified_from_the_base_branch() {
+        // GitHub resolves a `pull_request_target` workflow's definition from
+        // the base branch, never the head — the fork could rewrite it
+        // otherwise. The head copy here renames the job (so its check-run
+        // name would never match anything GitHub actually reports) and the
+        // base copy is the one that must win.
+        let mut state = MockState::default();
+        state.set_tree("head", &[".github/workflows/e2e.yml"]);
+        state.set_file(
+            "head",
+            ".github/workflows/e2e.yml",
+            "name: e2e\non: pull_request_target\njobs:\n  renamed-on-head:\n    steps:\n      - run: npx playwright test\n",
+        );
+        state.set_file(
+            "base",
+            ".github/workflows/e2e.yml",
+            "name: e2e\non: pull_request_target\njobs:\n  playwright:\n    steps:\n      - run: npx playwright test\n",
+        );
+        let forge = MockForge::with_state(state);
+
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            "base",
+            &[],
+        )
+        .await;
+
+        assert_eq!(evidence.harness.workflows.len(), 1);
+        assert_eq!(evidence.harness.workflows[0].jobs[0].key, "playwright");
+    }
 }
