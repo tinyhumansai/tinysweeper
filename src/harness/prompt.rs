@@ -137,7 +137,24 @@ pub struct PromptInputs<'a> {
     /// from [`Self::prior_findings`] — that layer is what an earlier *push*
     /// found, this one is what the *same* reviewer already said about the
     /// *same* evidence, one call ago in this run.
+    ///
+    /// Whether the "what you already found" layer renders at all is decided
+    /// by [`Self::coverage_pass`], not by whether this list is empty — a
+    /// group whose first pass reported nothing to report still needs the
+    /// second-pass instruction, or the coverage call is byte-identical to
+    /// round one and pays for a duplicate answer instead of a deeper look.
     pub confirmed_this_round: &'a [String],
+    /// Whether this prompt is the opt-in coverage pass's own call, rather
+    /// than round one.
+    ///
+    /// `false` on every call except the one extra call a coverage pass
+    /// makes, which is what keeps every existing prompt byte-identical — see
+    /// `an_empty_confirmed_list_leaves_the_prompt_byte_identical`. Kept
+    /// separate from [`Self::confirmed_this_round`] being empty, because
+    /// "round one found nothing" and "this is not a coverage call at all"
+    /// are different facts: the former still needs the second-pass
+    /// instruction, the latter must not emit it.
+    pub coverage_pass: bool,
     /// The evidence that is new this run.
     pub new_evidence: &'a str,
     /// What kind of thing `new_evidence` is: `diff`, `commits`, and so on. It
