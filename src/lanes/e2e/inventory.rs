@@ -836,7 +836,7 @@ impl Outline {
                             let mut current = StepBeingRead::default();
                             for step in self.children(j) {
                                 if step.item {
-                                    current.commit(&mut job.label_gate, &mut label_gate_decided);
+                                    e2e_step_gates.extend(current.e2e_gate());
                                     current = StepBeingRead::default();
                                 }
                                 if step.key == "uses" || step.key == "run" {
@@ -848,11 +848,12 @@ impl Outline {
                                     current.gate = label_in(&step.value);
                                 }
                             }
-                            current.commit(&mut job.label_gate, &mut label_gate_decided);
+                            e2e_step_gates.extend(current.e2e_gate());
                         }
                         _ => {}
                     }
                 }
+                job.label_gate = combined_step_gate(&e2e_step_gates);
                 if let Some(gate) = job_level_gate {
                     job.label_gate = gate;
                 }
