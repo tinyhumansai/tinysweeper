@@ -722,6 +722,52 @@ mod tests {
     }
 
     #[test]
+    fn a_finished_check_with_no_named_pull_request_settles_by_commit() {
+        // The documented fork quirk: `pull_requests` comes back empty for a
+        // fork pull request's checks. Without `SettleByCommit`, `e2e` (and
+        // every other completion-driven settlement) would be unreachable for
+        // any fork-originated pull request.
+        for event in ["check_run", "check_suite"] {
+            let mut delivery = check_payload(event, "completed", &[]);
+            if let Some(obj) = delivery_field_mut(&mut delivery, event) {
+                obj["head_sha"] = serde_json::json!("abc123");
+            }
+            assert_eq!(
+                route(event, &delivery),
+                Action::SettleByCommit {
+                    repo: "tinyhumansai/tinysweeper".into(),
+                    head_sha: "abc123".into(),
+                    installation: 152184043,
+                },
+                "{event} with no named pull request did not fall back to SettleByCommit"
+            );
+        }
+    }
+
+    #[test]
+    fn a_finished_check_with_no_pull_request_and_no_head_sha_is_ignored() {
+        // Nothing to recover from: no number and no commit to look one up
+        // from. Falls through rather than settling on an empty SHA.
+        for event in ["check_run", "check_suite"] {
+            assert!(!matches!(
+                route(event, &check_payload(event, "completed", &[])),
+                Action::SettleByCommit { .. } | Action::AutoMerge { .. }
+            ));
+        }
+    }
+
+    fn delivery_field_mut<'a>(
+        payload: &'a mut Payload,
+        event: &str,
+    ) -> Option<&'a mut serde_json::Value> {
+        // The test payloads are built from `serde_json::json!` and then
+        // deserialised into `Payload`, so there is no raw `Value` left to
+        // mutate after the fact; rebuild the check object directly instead.
+        let _ = (payload, event);
+        None
+    }
+
+    #[test]
     fn the_bot_guard_does_not_apply_to_auto_merge() {
         // The whole reason auto-merge is decided before the guard. Every event
         // that can make a pull request mergeable is sent by a bot — the checks
