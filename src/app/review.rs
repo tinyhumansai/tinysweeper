@@ -554,10 +554,18 @@ pub async fn review_with_tree(
     // and layer 4 lists what it concluded. Both were passed empty until this
     // landed, which made the entire cache design inert and the re-review
     // contract in `harness::prompt` unreachable.
-    let reviewed_evidence = remembered
-        .as_ref()
-        .map(|s| s.evidence.clone())
-        .unwrap_or_default();
+    // A cycle recorded before this module first ran wrote its evidence
+    // unmasked — the cache predates the guard, not the other way around — so
+    // replaying it byte for byte would resend whatever it carried. Scrub it
+    // the same way a model's own output is scrubbed: the path-independent
+    // half of `mask` is all that can be recovered from rendered text alone,
+    // but it is exactly the half a scanner itself would have flagged.
+    let reviewed_evidence = crate::evidence::redact::scrub_rendered(
+        &remembered
+            .as_ref()
+            .map(|s| s.evidence.clone())
+            .unwrap_or_default(),
+    );
     let prior_titles = merge_titles(&prior, remembered.as_ref());
     let prior_severities = merge_severities(&prior, remembered.as_ref());
     // What the model is shown: the title with the level it was already given.
