@@ -212,32 +212,17 @@ pub async fn gather(
     for path in inventory::workflow_paths(&listing.paths) {
         match forge.file_at(repo, &path, head_sha).await {
             Ok(Some(text)) => {
-                if let Some(mut workflow) = inventory::classify_workflow(&path, &text, named) {
-                    // A head copy that classifies as `pull_request_target`
-                    // is not a real head-side execution at all: GitHub
-                    // never reads head content to decide or run that
-                    // trigger. Only the default-branch pass below can speak
-                    // for `pull_request_target` — *unless* the `on:` block
-                    // also separately lists plain `pull_request`
-                    // (`also_plain`), in which case GitHub fires that one
-                    // too, off this same head content and this same job
-                    // list; re-flagged to `target: false` so it is kept and
-                    // watched as the ordinary `pull_request` execution it
-                    // is, alongside whatever the default-branch pass adds
-                    // for the `pull_request_target` side.
-                    if !is_target(&workflow) {
-                        workflows.push(workflow);
-                    } else if let inventory::Trigger::PullRequest {
-                        also_plain: true, ..
-                    } = &workflow.trigger
-                    {
-                        if let inventory::Trigger::PullRequest { target, .. } =
-                            &mut workflow.trigger
-                        {
-                            *target = false;
-                        }
-                        workflows.push(workflow);
-                    }
+                // A head copy classified as `pull_request_target` is not a
+                // real head-side execution at all: GitHub never reads head
+                // content to decide or run that trigger. Only the
+                // default-branch pass below can speak for
+                // `pull_request_target` — `matching_execution` keeps this
+                // one only when it is (or, via `also_plain`, also covers)
+                // the ordinary `pull_request` side.
+                if let Some(workflow) = inventory::classify_workflow(&path, &text, named)
+                    .and_then(|workflow| matching_execution(workflow, false))
+                {
+                    workflows.push(workflow);
                 }
             }
             Ok(None) => {}
