@@ -21,6 +21,7 @@ use std::fmt::Write as _;
 use crate::config::types::Config;
 use crate::evidence::diff::FileDiff;
 use crate::forge::types::{CheckStatus, RepoId};
+use crate::harness::prompt::push_fenced;
 use crate::lanes::e2e::inventory::{self, Harness, PathTable};
 use crate::ports::forge::ForgeRead;
 
