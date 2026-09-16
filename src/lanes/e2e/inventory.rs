@@ -20,6 +20,7 @@
 //! dependency set where it is. The scanner in `crate::scan::workflows` reads
 //! the same files line by line for the same reason.
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use globset::{Glob, GlobMatcher};
