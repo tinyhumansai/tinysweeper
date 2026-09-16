@@ -1005,6 +1005,7 @@ mod tests {
                 jobs: vec!["playwright".into(), "cypress".into()],
                 summary: "Second pass.".into(),
                 failed: false,
+                generation: "gen-2".into(),
             }),
             ..ReviewedState::default()
         };
