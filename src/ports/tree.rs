@@ -641,6 +641,9 @@ impl TreeReader for DirTree {
                 if !safe_relative(path) || !self.within_root(path) || !self.allowed(path) {
                     return Ok(Found::NotFound);
                 }
+                if crate::scan::is_sensitive_path(path) {
+                    return Ok(sensitive_path_refusal(path));
+                }
                 match std::fs::read_to_string(self.root.join(path)) {
                     Ok(content) => {
                         let (start, end) = Lookup::read_range(*start, *end);
