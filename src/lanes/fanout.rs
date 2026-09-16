@@ -309,7 +309,9 @@ mod tests {
             "a failed two-file group must name both files, not one synthetic label"
         );
         assert!(
-            outcome.summary.contains("2 files could not be reviewed: a.rs, b.rs"),
+            outcome
+                .summary
+                .contains("2 files could not be reviewed: a.rs, b.rs"),
             "{}",
             outcome.summary
         );
