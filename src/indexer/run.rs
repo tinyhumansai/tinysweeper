@@ -482,18 +482,25 @@ impl<'a> Indexer<'a> {
     /// account for itself.
     async fn recount(&self, repo_id: &str, signature: &EmbedSignature) -> Result<u64> {
         let paths = self.manifest.paths(repo_id, signature).await?;
-        let files = self.manifest.indexed(repo_id, signature, &paths).await?;
-        Ok(files
-            .iter()
-            .map(|file| {
-                file.chunks.len() as u64
-                    + if file.pending_is_stale {
-                        file.pending.len() as u64
-                    } else {
-                        0
-                    }
-            })
-            .sum())
+        let mut total = 0_u64;
+        // In batches: a monorepo's path list in one `$in` is a query the
+        // store may refuse outright, and a recount that can never run is a
+        // repository that can never settle.
+        for batch in paths.chunks(RECOUNT_BATCH) {
+            let files = self.manifest.indexed(repo_id, signature, batch).await?;
+            total += files
+                .iter()
+                .map(|file| {
+                    file.chunks.len() as u64
+                        + if file.pending_is_stale {
+                            file.pending.len() as u64
+                        } else {
+                            0
+                        }
+                })
+                .sum::<u64>();
+        }
+        Ok(total)
     }
 
     async fn settle(
@@ -892,6 +899,9 @@ fn dirs_of(dirs: Vec<String>) -> Vec<String> {
     out.dedup();
     out
 }
+
+/// How many paths one recount lookup asks the manifest for at a time.
+const RECOUNT_BATCH: usize = 500;
 
 /// Which paths a run removes.
 ///
