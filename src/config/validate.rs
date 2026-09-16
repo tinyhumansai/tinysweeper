@@ -32,6 +32,7 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_retrieval(config, &mut problems);
     validate_memory(config, &mut problems);
     validate_overview(config, &mut problems);
+    validate_grouping(config, &mut problems);
     validate_lanes(config, &mut problems);
     validate_council(config, &mut problems);
     validate_automerge(config, &mut problems);
