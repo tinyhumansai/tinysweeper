@@ -1118,6 +1118,142 @@ mod tests {
         assert!(reason.contains("secret"), "{reason}");
     }
 
+    /// Regression for a Codex finding on #166: `is_sensitive_path` refuses a
+    /// whole file by *name*, but an ordinary path like `src/config.rs` that
+    /// merely gained a credential in this diff had no guard at all on a
+    /// `read` lookup — the diff view masks it, but a tree read fetches the
+    /// content fresh and would hand it straight back.
+    #[tokio::test]
+    async fn redacting_tree_masks_a_recognisable_credential_in_a_read() {
+        let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+        let inner = MockTree::from_files([(
+            "src/config.rs",
+            format!("const KEY: &str = \"{key}\";\nfn main() {{}}\n"),
+        )]);
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree
+            .lookup(&Lookup::Read {
+                path: "src/config.rs".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+
+        let Found::Text { text, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert!(!text.contains("IOSFODNN7EXAMPLE"), "{text}");
+        assert!(text.contains("const KEY"), "{text}");
+        assert!(text.contains("1|"), "the line-number anchor survives: {text}");
+    }
+
+    /// Regression for the same finding, on the search path: a hit line is
+    /// exactly what a model reads back verbatim, so a credential on the same
+    /// line as a search match must not survive into it either.
+    #[tokio::test]
+    async fn redacting_tree_masks_a_recognisable_credential_in_a_search_hit() {
+        let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+        let inner = MockTree::from_files([(
+            "src/config.rs",
+            format!("const KEY: &str = \"{key}\"; // needle\n"),
+        )]);
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree
+            .lookup(&Lookup::Search {
+                pattern: "needle".into(),
+                glob: None,
+            })
+            .await
+            .unwrap();
+
+        let Found::Hits { hits, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert_eq!(hits.len(), 1, "{hits:#?}");
+        assert!(!hits[0].text.contains("IOSFODNN7EXAMPLE"), "{hits:#?}");
+        assert!(hits[0].text.contains("needle"), "{hits:#?}");
+    }
+
+    /// A private key's body carries no rulepack shape on its own lines;
+    /// `RedactingTree` has to track the armour block across the numbered
+    /// lines `slice_lines` produces, the same as `evidence::redact::mask`
+    /// does across a diff's hunk lines.
+    #[tokio::test]
+    async fn redacting_tree_masks_a_private_key_body_in_a_read() {
+        let begin = format!("-----BEGIN {}-----", "RSA PRIVATE KEY");
+        let end = format!("-----END {}-----", "RSA PRIVATE KEY");
+        let body = "MIIEowIBAAKCAQEAthisisadeadbeefexamplebodyforatestcase1234567890";
+        let inner = MockTree::from_files([("src/config.rs", format!("{begin}\n{body}\n{end}\n"))]);
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree
+            .lookup(&Lookup::Read {
+                path: "src/config.rs".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+
+        let Found::Text { text, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert!(!text.contains(body), "{text}");
+        assert!(text.contains(&begin), "{text}");
+    }
+
+    /// Regression for the same finding: a `MockTree` recorded outcome
+    /// predates whichever push first wrapped its live backend in
+    /// `RedactingTree`, so a cassette can still carry a raw `Found::Text`.
+    /// The wrapper has to redact on replay too, not just a fresh read.
+    #[tokio::test]
+    async fn redacting_tree_masks_a_recorded_outcome_on_replay() {
+        let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+        let lookup = Lookup::Read {
+            path: "src/config.rs".into(),
+            start: None,
+            end: None,
+        };
+        let recorded = Found::Text {
+            text: format!("    1| const KEY: &str = \"{key}\";"),
+            start: 1,
+            end: 1,
+            total: 1,
+        };
+        let inner = MockTree::from_recorded([(lookup.key(), recorded)].into_iter().collect());
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree.lookup(&lookup).await.unwrap();
+
+        let Found::Text { text, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert!(!text.contains("IOSFODNN7EXAMPLE"), "{text}");
+    }
+
+    /// Regression for the same finding: a `RedactingTree` still refuses a
+    /// sensitive path outright — it wraps the inner reader, and does not
+    /// replace the name-based guard with a weaker content-only one.
+    #[tokio::test]
+    async fn redacting_tree_still_refuses_a_sensitive_path() {
+        let inner = MockTree::from_files([(".env", "AWS_SECRET=super-secret-value")]);
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree
+            .lookup(&Lookup::Read {
+                path: ".env".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(matches!(found, Found::Unavailable { .. }), "{found:?}");
+    }
+
     /// Regression for the same finding: a search over `MockTree::from_files`
     /// used to walk every file including a sensitive one, so a `.env` value
     /// could come back as a hit — the path and the line, exactly the shape
