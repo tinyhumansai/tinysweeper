@@ -112,11 +112,7 @@ impl Evidence {
         for candidate in &self.candidates {
             let body = format!(
                 "path: {}\nline: {}\nmentions token: {}\nadded at: {}\ntest line:\n{}",
-                candidate.path,
-                candidate.line,
-                candidate.token,
-                candidate.added_at,
-                candidate.text
+                candidate.path, candidate.line, candidate.token, candidate.added_at, candidate.text
             );
             push_fenced(&mut out, "e2e-candidate", &body);
         }
