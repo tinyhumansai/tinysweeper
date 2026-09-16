@@ -35,7 +35,8 @@ use crate::flows::panel::Call;
 use crate::flows::runner;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
-use crate::lanes::fanout::{FileReview, per_file};
+use crate::lanes::fanout::{FileReview, per_unit};
+use crate::lanes::grouping::{FileGroup, GroupBounds};
 use crate::lanes::mechanical;
 use crate::lanes::triage::triage;
 use crate::lanes::{
