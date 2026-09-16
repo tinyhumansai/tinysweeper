@@ -290,11 +290,12 @@ pub fn scrub_rendered(text: &str) -> String {
         let (prefix, body) = split_render_prefix(line);
         out.push_str(prefix);
         let masked = scan::redact_stream_line(body, &mut in_key_block);
-        out.push_str(if sensitive && !prefix.is_empty() {
-            &mask_assignment_or_whole_line(&masked)
+        let masked = if sensitive && !prefix.is_empty() {
+            mask_assignment_or_whole_line(&masked)
         } else {
-            &masked
-        });
+            masked
+        };
+        out.push_str(&masked);
     }
 
     out
