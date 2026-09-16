@@ -49,9 +49,19 @@ rules = "dependencies"
 
 # Test files, across every language, take the test rules before any
 # language's own rules — a `_test.go` or `foo.test.ts` is judged as a test
-# first, not as Go or TypeScript source.
+# first, not as Go or TypeScript source. Java's JUnit convention carries none
+# of those substrings (`UserServiceTest.java`, `src/test/java/**`), so it gets
+# its own entries below, still ahead of the general `**/*.java` rule.
 [[path_instructions]]
 glob = "**/*{_test,test_,.test,.spec}*"
+rules = "tests"
+
+[[path_instructions]]
+glob = "**/*{Test,Tests,IT}.java"
+rules = "tests"
+
+[[path_instructions]]
+glob = "**/src/test/**/*.java"
 rules = "tests"
 
 [[path_instructions]]
