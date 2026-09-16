@@ -120,6 +120,14 @@ const MAX_CONCURRENT_INDEXES: usize = 2;
 /// period on its own and starve every other review's check behind it.
 const SHUTDOWN_CLEANUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// How many times an `e2e` settlement retries the per-pull-request lease
+/// before giving up, and how long it waits between attempts.
+///
+/// Bounded low: this is only meant to ride out a settlement that is already
+/// nearly done, not to turn a lease into a queue. See `settle_e2e_inner`.
+const LEASE_CONTENTION_RETRIES: u32 = 4;
+const LEASE_CONTENTION_BACKOFF: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// How many pull requests one manual, repository-wide review may queue.
 ///
 /// The button is an escape hatch, not a way to spend an afternoon's budget in
