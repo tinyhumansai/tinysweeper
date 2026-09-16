@@ -549,7 +549,6 @@ impl Ledger {
                 made_progress = true;
                 self.seed_symbol(
                     tree,
-                    &diffs[*i],
                     diffs,
                     &symbol,
                     policy,
