@@ -738,10 +738,24 @@ async fn handle_settle_by_commit(
 /// that actually matters — is anything being watched — lives inside
 /// `settle_e2e_inner`, keyed off the stored review state rather than config.
 async fn handle_check_completed(state: AppState, repo: String, number: u64, installation: u64) {
-    if let Err(err) = settle_e2e_inner(&state, &repo, number, installation).await {
-        // Logged and dropped, like auto-merge: the watch stays in the store,
-        // and the next completion event on the same head retries it.
-        tracing::error!(%err, %repo, number, "could not settle the e2e check run");
+    match settle_e2e_inner(&state, &repo, number, installation).await {
+        Ok(()) => {}
+        Err(err) => {
+            // The watch stays in the store, and the next completion event on
+            // the same head retries it — so this is logged and dropped, like
+            // auto-merge below. But *this* delivery does not go on to
+            // reconsider the merge: a failed settlement attempt (a token
+            // that could not be minted, a check-run read or publish that
+            // failed) means the check-run state auto-merge is about to read
+            // is exactly as stale as it was before this delivery arrived,
+            // possibly still the temporary `Neutral` the review published
+            // while jobs were pending. Evaluating the merge against that is
+            // no safer than not evaluating it, and skipping costs nothing:
+            // the next completion (or the lease-contention retry above)
+            // tries again.
+            tracing::error!(%err, %repo, number, "could not settle the e2e check run");
+            return;
+        }
     }
     handle_automerge(state, repo, number, installation).await;
 }
