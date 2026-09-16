@@ -36,3 +36,5 @@
   explicitly versus left to the database's default.
 - Query performance concerns with no evidence of table size — an unindexed
   scan on a table the schema shows is small and rarely grows.
+- A whole-table `UPDATE` backfilling a column the same migration just added
+  or narrowed.
