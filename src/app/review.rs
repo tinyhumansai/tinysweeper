@@ -903,7 +903,7 @@ pub async fn review_with_tree(
     // makes no model call and cannot fail the review: `change_map` returns
     // `None` for a map nobody asked for and degrades to a graph-less picture
     // for one the store would not answer.
-    let overview = change_map(config, retrieval, repo, &diffs, &lanes).await;
+    let overview = change_map(config, &changed_neighbourhood, &diffs, &lanes);
 
     Ok(Proposal {
         version: PROPOSAL_VERSION,
