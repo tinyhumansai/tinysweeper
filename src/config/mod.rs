@@ -262,6 +262,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "respect_agents_md",
             "request_changes_at",
             "approve_when_clean",
+            "passes",
         ]),
         "threads" => Some(&["resolve_fixed", "ask_model", "comment_on_resolve"]),
         "overview" => Some(&[
