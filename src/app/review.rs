@@ -1019,6 +1019,23 @@ async fn remember_findings_bounded(
 /// pull request that wants both pays for one round trip to the graph store,
 /// not two.
 ///
+/// Whether anything in this review would use a graph walk of the changed
+/// files: the change map when it is on, or grouping when it is on *and* an
+/// enabled lane actually calls [`crate::lanes::grouping::group`] — `critique`
+/// or `security`, the fan-out lanes grouping exists for. `overview.enabled`
+/// with grouping off, or grouping on with only `e2e`/`description` enabled,
+/// must not pay for a walk nothing downstream reads.
+fn changed_neighbourhood_is_needed(config: &Config) -> bool {
+    if config.overview.enabled {
+        return true;
+    }
+    if !config.grouping.enabled {
+        return false;
+    }
+    let enabled_lanes = config.enabled_lanes();
+    enabled_lanes.contains(&LaneId::Critique) || enabled_lanes.contains(&LaneId::Security)
+}
+
 /// `None` when no graph is configured. `Some(Err(()))` when one is configured
 /// but would not answer — logged here, once, rather than at every caller.
 async fn walk_changed_neighbourhood(
