@@ -53,11 +53,14 @@ end-to-end coverage and whether the e2e path was exercised. Neither lane
 speaks about the other's subject, so an author is never told the same thing
 twice.
 
-**It is opt-in.** It is absent from the default `review.lanes`. Demanding an
-e2e test from a repository that has no e2e harness is exactly the noise the
-gates exist to suppress, and the `tests` rule document's exclusion was written
-after seeing it. A repository enables the lane when it has a harness worth
-holding changes to.
+**It is on by default, and opt-out.** Demanding an e2e test from a
+repository that has no e2e harness is exactly the noise the gates exist to
+suppress, and the `tests` rule document's exclusion was written after seeing
+it — so the lane is quiet there by construction: with no e2e test files and
+no e2e workflow in the tree it skips deterministically, with no model call
+and no finding (`missing_harness = "skip"`, the default). Where a harness
+exists, the questions above are worth asking of every change. A repository
+that does not want them lists `review.lanes` without `e2e`.
 
 ## Evidence
 

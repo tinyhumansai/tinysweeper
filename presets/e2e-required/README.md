@@ -2,8 +2,10 @@
 
 For repositories with an end-to-end suite worth holding changes to.
 
-Runs every default lane plus `e2e`, which is off in every other preset. That
-lane asks two questions the `tests` lane deliberately does not:
+The `e2e` lane runs by default in every preset; what this one adds is that a
+tree with **no** harness is a finding rather than a silent skip
+(`missing_harness = "require"`), plus the lane's rule document. The lane asks
+two questions the `tests` lane deliberately does not:
 
 1. Is each behavioural change reachable by an end-to-end test — one that
    drives the running system the way a user, a client or an operator would?

@@ -14,7 +14,7 @@ That boundary is enforced by the type system rather than by discipline.
 | `tests` | `tinysweeper/tests` | Whether changed behaviour is covered | — |
 | `commits` | `tinysweeper/commits` | What entered the history — **no model call** | `secret`, `blob`, `junk` |
 | `description` | `tinysweeper/description` | Title and body against the diff | — |
-| `e2e` | `tinysweeper/e2e` | Whether changed behaviour is reachable end to end, and whether the repository's e2e jobs ran on the head — **opt-in** | — |
+| `e2e` | `tinysweeper/e2e` | Whether changed behaviour is reachable end to end, and whether the repository's e2e jobs ran on the head | — |
 
 The scanner-kind column is a **partition, not an overlap**. Each deterministic
 finding has exactly one owning lane, because two lanes discussing one match
@@ -170,12 +170,13 @@ a specific entry (`src/ports/**`) can keep the broader language document
 is the "do NOT report" list; that half is where the precision comes from. See
 `presets/rules/README.md`.
 
-## The `e2e` lane is opt-in and settles later
+## The `e2e` lane is quiet without a harness, and settles later
 
 It owns end-to-end coverage and whether the repository's own e2e jobs ran on
 the head — the concern the `tests` rule document deliberately excludes. It is
-absent from the default `review.lanes`; `presets/e2e-required/` turns it on.
-Its harness inventory, trigger analysis and job states are decided in code
+on by default and skips, with no model call, on a repository that has no e2e
+harness; `presets/e2e-required/` turns that skip into a finding. Opt out by
+listing `review.lanes` without it. Its harness inventory, trigger analysis and job states are decided in code
 before any model call, and a job still running when the review finishes
 leaves the check `neutral` until the server settles it on the job's
 completion. See [e2e.md](e2e.md).
