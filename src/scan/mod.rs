@@ -11,4 +11,5 @@ pub mod types;
 pub mod workflows;
 
 pub use crate::scan::paths::is_sensitive_path;
+pub use crate::scan::secrets::redact_line;
 pub use crate::scan::types::{Finding, ScanKind, redact};
