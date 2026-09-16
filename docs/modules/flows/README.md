@@ -110,6 +110,14 @@ file *precisely because* spend is only known once a call returns, so there was
 nowhere else to enforce a ceiling. One capability object sees every call in a
 lane, so it can refuse one however many are in flight.
 
+One call here is one changed file **or one file group** — `lanes::grouping`
+decides which, before any of this runs, with no model call of its own. A file
+and its test grouped into one conversation is one call charged against the
+budget instead of two, at the cost of one prompt carrying both diffs; a
+component too large to bet on falls back to the ungrouped count exactly. Either
+way this module counts calls the same way — it has no notion of a "file"
+beneath a `Call`, only the id and the prompt it was given.
+
 ## Files
 
 | file | role |
