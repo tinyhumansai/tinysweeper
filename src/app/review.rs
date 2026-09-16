@@ -976,7 +976,7 @@ async fn walk_changed_neighbourhood(
     retrieval: Option<&Retriever<'_>>,
     repo: &RepoId,
     diffs: &[FileDiff],
-) -> Option<Result<crate::index::types::Neighbourhood, ()>> {
+) -> Option<std::result::Result<crate::index::types::Neighbourhood, ()>> {
     let graph = retrieval.and_then(|retriever| retriever.graph)?;
     let query = crate::graph::NeighbourQuery::new(crate::retrieve::seeds(diffs))
         .hops(config.retrieval.graph_hops)
@@ -997,7 +997,7 @@ async fn walk_changed_neighbourhood(
 /// this ran and does not depend on it.
 fn change_map(
     config: &Config,
-    walk: &Option<Result<crate::index::types::Neighbourhood, ()>>,
+    walk: &Option<std::result::Result<crate::index::types::Neighbourhood, ()>>,
     diffs: &[FileDiff],
     lanes: &[LaneProposal],
 ) -> Option<crate::overview::ChangeMap> {
