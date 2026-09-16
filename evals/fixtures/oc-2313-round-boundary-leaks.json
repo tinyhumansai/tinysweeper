@@ -1092,23 +1092,63 @@
       "end": 93,
       "total": 373
     },
+    "search \"enum CompanyEvent\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"enum EpisodePrompt\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
     "search \"enum HiveStep\"": {
       "outcome": "hits",
       "hits": [
         {
-          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/types.rs",
-          "line": 358,
-          "text": "pub enum HiveStep {"
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1048,
+          "text": "      \"text\": \"  338|     pub watermark: Sequence,\\n  339|     /// The sequence this round was folded at.\\n  340|     ///\\n  341|     /// A peer's row above this was written *concurrently* with this turn, so\\n  342|     /// this turn cannot have read it and [`project_for`] withholds it. At\\n  343|     /// `round_width: 1` nothing is ever above it and the clause is inert,\\n  344|     /// which is what makes a round of one bit-identical rather than merely\\n  345|     /// equivalent.\\n  346|     ///\\n  347|     /// [`project_for`]: crate::episode::project_for\\n  348|     pub round_start: Sequence,\\n  349| }\\n  350| \\n  351| /// The outcome of one episode step.\\n  352| ///\\n  353| /// [`Self::Speak`] carries a **round**: the turns authorized to run\\n  354| /// concurrently, and the one state the episode takes once all of them are\\n  355| /// appended. See `docs/specs/concurrent-rounds.md` and ADR 0014.\\n  356| #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]\\n  357| #[serde(tag = \\\"step\\\", rename_all = \\\"snake_case\\\")]\\n  358| pub enum HiveStep {\\n  359|     /// A round of members takes the floor together.\\n  360|     Speak {\\n  361|         /// The authorized turns: non-empty, in desk order, and bounded by two\\n  362|         /// separate widths depending on the round's [`Visibility`] — never\\n  363|         /// more than `policy.round_width` of them while the round is\\n  364|         /// [`Visibility::Blind`], or `policy.revealed_width` of them once it\\n  365|         /// is [`Visibility::Full`]. The two are never clamped against each\\n  366|         /// other, so a policy naming a wide `revealed_width` alongside a\","
         },
         {
-          "path": "vendor/tinyhivemind/docs/specs/concurrent-rounds.md",
-          "line": 82,
-          "text": "pub enum HiveStep {"
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1062,
+          "text": "      \"text\": \"   62| \\n   63| - **Unbounded fan-out.** The danger charter rule 3 was guarding was N turns with\\n   64|   no approval in sight, not concurrency. A round has a finite width and\\n   65|   [`approval.md`](approval.md) gates crossing it.\\n   66| - **A concurrent commit.** The room records one decision, so `Phase::Commit`\\n   67|   authorizes a round of width one.\\n   68| - **A second journal.** Rows in a round are ordinary rows in the one log.\\n   69| - **Deciding the host's scheduling.** The library says *who may speak now*; the\\n   70|   host decides whether to actually run them in parallel, in series, or at all.\\n   71| - **Speculative or branching episodes.** A round is one set of turns on one\\n   72|   transcript, not a tree.\\n   73| \\n   74| ## Proposed behavior\\n   75| \\n   76| ### A round\\n   77| \\n   78| `step` returns the members authorized to speak **now**, together with the single\\n   79| state the episode takes once every one of them has been appended.\\n   80| \\n   81| ```rust\\n   82| pub enum HiveStep {\\n   83|     /// The members authorized to speak now, and the state after all of them.\\n   84|     Speak {\\n   85|         /// Non-empty, in desk order, at most `policy.round_width` long.\\n   86|         turns: Vec<HiveTurn>,\\n   87|         /// State to commit once every turn is durably appended.\\n   88|         next_state: Box<EpisodeState>,\\n   89|     },\\n   90|     Converged { .. },\","
         },
         {
-          "path": "vendor/tinyhivemind/docs/specs/hive-mind.md",
-          "line": 265,
-          "text": "pub enum HiveStep {"
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1083,
+          "text": "      \"text\": \"  245|     pub weights: SalienceWeights,\\n  246| }\\n  247| \\n  248| pub struct EpisodeState {\\n  249|     pub conversation: Conversation,\\n  250|     pub spent: u32,\\n  251|     pub phase: Phase,\\n  252|     pub thresholds: Vec<AgentThreshold>,\\n  253|     pub watermark: Sequence,\\n  254|     pub commit_boundary: Option<Sequence>,\\n  255| }\\n  256| \\n  257| pub struct HiveTurn {\\n  258|     pub agent_id: String,\\n  259|     pub phase: Phase,\\n  260|     pub visibility: Visibility,\\n  261|     pub reason: BidReason,\\n  262|     pub next_state: EpisodeState,\\n  263| }\\n  264| \\n  265| pub enum HiveStep {\\n  266|     Speak { turn: Box<HiveTurn> },\\n  267|     Converged { topic: TopicId, standing: Box<TopicStanding> },\\n  268|     Deadlocked { topics: Vec<TopicId> },\\n  269|     Exhausted { spent: u32 },\\n  270|     Idle,\\n  271| }\\n  272| \\n  273| pub fn step(state, transcript, roster, desks, policy) -> Result<HiveStep>;\","
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1095,
+          "text": "    \"search \\\"enum HiveStep\\\"\": {"
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1101,
+          "text": "          \"text\": \"pub enum HiveStep {\""
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1106,
+          "text": "          \"text\": \"pub enum HiveStep {\""
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1111,
+          "text": "          \"text\": \"pub enum HiveStep {\""
+        },
+        {
+          "path": "src/flows/lookup.rs",
+          "line": 934,
+          "text": "                \"/// One step.\\npub enum HiveStep { Speak }\\n\","
+        },
+        {
+          "path": "src/flows/lookup.rs",
+          "line": 949,
+          "text": "        assert!(seeded.rendered.contains(\"pub enum HiveStep\"));"
         }
       ],
       "truncated": false
@@ -1117,32 +1157,72 @@
       "outcome": "hits",
       "hits": [
         {
-          "path": "crates/opencompany-core/src/error.rs",
-          "line": 67,
-          "text": "pub enum OpenCompanyError {"
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 657,
+          "text": "      \"text\": \"   47| /// `node_id` and `field` empty — the fallback for every validation string that\\n   48| /// is not enriched with a node/field.\\n   49| impl From<String> for WorkflowProblem {\\n   50|     fn from(message: String) -> Self {\\n   51|         Self {\\n   52|             node_id: None,\\n   53|             field: None,\\n   54|             message,\\n   55|         }\\n   56|     }\\n   57| }\\n   58| \\n   59| impl From<&str> for WorkflowProblem {\\n   60|     fn from(message: &str) -> Self {\\n   61|         Self::from(message.to_string())\\n   62|     }\\n   63| }\\n   64| \\n   65| /// Errors returned by OpenCompany.\\n   66| #[derive(Debug, thiserror::Error)]\\n   67| pub enum OpenCompanyError {\\n   68|     /// An OpenHuman checkout path was expected but not found.\\n   69|     #[error(\\\"openhuman root does not exist: {0}\\\")]\\n   70|     MissingOpenHumanRoot(PathBuf),\\n   71| \\n   72|     /// The OpenHuman process failed to start or wait.\\n   73|     #[error(\\\"openhuman process error: {0}\\\")]\\n   74|     OpenHumanProcess(#[from] std::io::Error),\\n   75| \","
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1116,
+          "text": "    \"search \\\"enum OpenCompanyError\\\"\": {"
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1122,
+          "text": "          \"text\": \"pub enum OpenCompanyError {\""
         }
       ],
+      "truncated": false
+    },
+    "search \"enum Sequence\"": {
+      "outcome": "hits",
+      "hits": [],
       "truncated": false
     },
     "search \"enum Viewer\"": {
       "outcome": "hits",
       "hits": [
         {
-          "path": "crates/opencompany-core/src/server/chat_history.rs",
-          "line": 542,
-          "text": "pub enum Viewer {"
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 874,
+          "text": "      \"text\": \"  522|             aside_audience: audience,\\n  523|             aside_conversation: None,\\n  524|             steps: Vec::new(),\\n  525|             task_id: None,\\n  526|             parent_id: None,\\n  527|             reactions: Vec::new(),\\n  528|             mentions: Vec::new(),\\n  529|             attachments: Vec::new(),\\n  530|             outputs: Vec::new(),\\n  531|         }\\n  532|     }\\n  533| }\\n  534| \\n  535| /// Who is reading a desk history. `mine` is relative to this.\\n  536| ///\\n  537| /// There is no `From<StoredEvent> for MessageView`, and there cannot be:\\n  538| /// `mine` depends on who is asking. With one operator it was safe to hardcode\\n  539| /// `true`; with several users it would mark everyone's messages as everyone\\n  540| /// else's.\\n  541| #[derive(Clone, Debug, PartialEq)]\\n  542| pub enum Viewer {\\n  543|     /// An operator or platform credential. Legacy unattributed messages are\\n  544|     /// theirs, because that is who sent them before users existed.\\n  545|     Operator,\\n  546|     /// A human collaborator, by user id.\\n  547|     User(String),\\n  548| }\\n  549| \\n  550| /// The label a message with no nameable human author carries in an agent's cue.\","
         },
         {
-          "path": "vendor/tinyhivemind/crates/tinyhivemind-core/src/aside/types.rs",
-          "line": 78,
-          "text": "pub enum Viewer {"
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1006,
+          "text": "      \"text\": \"   58|     pub fn admits(&self, viewer: &Viewer, author_id: Option<&str>) -> bool {\\n   59|         let Self::Aside { members } = self else {\\n   60|             return true;\\n   61|         };\\n   62|         match viewer {\\n   63|             Viewer::Operator | Viewer::Person { .. } => true,\\n   64|             Viewer::Agent { id } => {\\n   65|                 Some(id.as_str()) == author_id || members.iter().any(|member| member == id)\\n   66|             }\\n   67|         }\\n   68|     }\\n   69| }\\n   70| \\n   71| /// Who a projection is being assembled for.\\n   72| ///\\n   73| /// A projection that cannot name its reader cannot narrow for it, which is why\\n   74| /// this rides on the query rather than being inferred. The operator and every\\n   75| /// person read every row in full.\\n   76| #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]\\n   77| #[serde(tag = \\\"kind\\\", rename_all = \\\"snake_case\\\")]\\n   78| pub enum Viewer {\\n   79|     /// The local operator, reading everything.\\n   80|     Operator,\\n   81|     /// A human participant, reading everything — audit access, not membership.\\n   82|     Person {\\n   83|         /// The exact person id.\\n   84|         id: String,\\n   85|     },\\n   86|     /// An agent, reading a row only when its audience admits it.\","
         },
         {
-          "path": "vendor/tinyhivemind/docs/specs/private-asides.md",
-          "line": 85,
-          "text": "pub enum Viewer {"
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1090,
+          "text": "      \"text\": \"   65| ### The audience\\n   66| \\n   67| ```rust\\n   68| pub enum Audience {\\n   69|     Desk,\\n   70|     Aside { members: Vec<String> },\\n   71| }\\n   72| ```\\n   73| \\n   74| `Audience::Desk` is what every row written before this spec means, and what a\\n   75| host writes when it means nothing special. `Aside { members }` restricts the row\\n   76| to its author plus the named agent ids.\\n   77| \\n   78| A **closed thread** is the idiom rather than a second mechanism: a thread whose\\n   79| root carries `Aside { .. }`, with every reply carrying the same audience.\\n   80| `AsidePolicy::require_thread` lets a host insist on that shape.\\n   81| \\n   82| ### The viewer\\n   83| \\n   84| ```rust\\n   85| pub enum Viewer {\\n   86|     Operator,\\n   87|     Person { id: String },\\n   88|     Agent { id: String },\\n   89| }\\n   90| ```\\n   91| \\n   92| `SessionQuery` gains one, because a projection that cannot name its reader\\n   93| cannot narrow for it. `Operator` and `Person` read every row in full — read-only\","
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1127,
+          "text": "    \"search \\\"enum Viewer\\\"\": {"
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1133,
+          "text": "          \"text\": \"pub enum Viewer {\""
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1138,
+          "text": "          \"text\": \"pub enum Viewer {\""
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1143,
+          "text": "          \"text\": \"pub enum Viewer {\""
         }
       ],
+      "truncated": false
+    },
+    "search \"fn aside_audience(\"": {
+      "outcome": "hits",
+      "hits": [],
       "truncated": false
     },
     "search \"fn connect(\"": {
@@ -1205,36 +1285,86 @@
       "outcome": "hits",
       "hits": [
         {
-          "path": "crates/opencompany-core/src/hivemind/episode.rs",
-          "line": 978,
-          "text": "    async fn elsewhere_for("
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 818,
+          "text": "      \"text\": \"  958|         // happened, so its aside replaces whatever the first attempt carried.\\n  959|         let (line, rode) = split_reply(&self.runner.speak(agent_id, &corrected).await?);\\n  960|         scratch.aside = rode;\\n  961|         Ok(line)\\n  962|     }\\n  963| \\n  964|     /// The conversations this speaker is part of besides the one deliberating.\\n  965|     ///\\n  966|     /// Read per turn rather than once per episode, for the same reason the\\n  967|     /// pinboard is: a message that lands on this seat's other desk while this\\n  968|     /// room is still open is exactly what the next speaker should be holding.\\n  969|     ///\\n  970|     /// Projected **as the speaker** and never as the operator, so an aside it is\\n  971|     /// not in arrives elided here exactly as it would at home. The episode's\\n  972|     /// `scope` is deliberately not applied either: that boundary is *this* desk's\\n  973|     /// fold, and another conversation's rows are not votes here at all.\\n  974|     ///\\n  975|     /// Best-effort per conversation — one that cannot be read is dropped with a\\n  976|     /// warning rather than failing the turn. A seat reading less than it might is\\n  977|     /// a poorer prompt; a stalled room is a worse outcome.\\n  978|     async fn elsewhere_for(\\n  979|         &self,\\n  980|         agent_id: &str,\\n  981|     ) -> Vec<(String, Vec<tinyhivemind_hive::SessionMessage>)> {\\n  982|         // Unset is the default, and a caller that never named the company's desks\\n  983|         // gets exactly the prompt it got before this existed — including no read\\n  984|         // of the seat's own direct line, which would otherwise be a new query on\\n  985|         // every turn of every episode ever driven.\\n  986|         if self.context_desks.is_empty() {\\n  987|             return Vec::new();\\n  988|         }\\n  989|         let viewer = Viewer::Agent {\\n  990|             id: agent_id.to_string(),\\n  991|         };\\n  992|         // Every other desk this seat sits on, and then its own direct line. A\\n  993|         // DM's `chat_id` *is* the roster agent id, so that id is carried in both\\n  994|         // fields: `in_desk` matches on id or name, and a desk that happened to be\\n  995|         // named like an agent could otherwise widen the match.\\n  996|         //\\n  997|         // The direct line carries TWO targets, not one (Codex P2): a `desk_dm`\\n  998|         // is journaled under the bare agent id ordinarily, but under the\\n  999|         // `dm:<agent-id>` spelling whenever the bare one collides with a desk id\\n 1000|         // (`speech_tools::dm_journal_key`) or names a General spelling (issue\\n 1001|         // #364's grandfather case) — `agent_channels` registers both for exactly\\n 1002|         // this reason, and `EventLogSessionLog::addresses_desk` matches on\\n 1003|         // whichever exact spelling a row was journaled under. Reading only the\\n 1004|         // bare one would silently drop the prefixed rows from this seat's own\\n 1005|         // elsewhere context; both are queried and merged under one label so a\\n 1006|         // hive turn sees its whole direct line regardless of which spelling\\n 1007|         // wrote it.\\n 1008|         let direct_line_label = format!(\\\"Your direct line (@{agent_id})\\\");\\n 1009|         // Codex P2: General is the synthetic company-wide channel, not a\\n 1010|         // declared desk — `agent_channels` grants every agent that channel\\n 1011|         // (`company/chat_history.rs`'s own-line loop), but `context_desks` is\\n 1012|         // built from declared desks and so never includes it. Without a\\n 1013|         // target for it here, a hive member reads its other desks and its DM\\n 1014|         // but never `#general`, even though it can. Skipped only when this\\n 1015|         // episode's own desk somehow *is* General — never true in practice\\n 1016|         // (`desk_episode` refuses to open one there), but defensive against a\\n 1017|         // caller passing an odd `HiveDesk`.\\n 1018|         let general = tinyhivemind_core::chat::GENERAL_DESK.to_string();\\n 1019|         let general_label = format!(\\\"#{general} ({general})\\\");\\n 1020|         // A bare direct-line target is only safe when it cannot also name a\\n 1021|         // declared desk. `addresses_desk` accepts either spelling, so querying\\n 1022|         // the bare id for an unrelated desk with the same id/name leaks that\\n 1023|         // desk's rows into this agent's prompt. DMs written after the collision\\n 1024|         // guard use the prefixed spelling below.\\n 1025|         let bare_direct_line_is_safe = self\\n 1026|             .context_desks\\n 1027|             .iter()\\n 1028|             .all(|desk| desk.id != agent_id && desk.name != agent_id);\\n 1029|         let targets: Vec<(String, String, String)> = self\\n 1030|             .context_desks\\n 1031|             .iter()\\n 1032|             .filter(|desk| {\\n 1033|                 desk.id != self.desk.id && desk.members.iter().any(|member| member == agent_id)\\n 1034|             })\\n 1035|             .map(|desk| {\\n 1036|                 (\\n 1037|                     desk.id.clone(),\\n 1038|                     desk.name.clone(),\\n 1039|                     format!(\\\"#{} ({})\\\", desk.id, desk.name),\\n 1040|                 )\\n 1041|             })\\n 1042|             .chain(\\n 1043|                 (self.desk.id != general)\\n 1044|                     .then(|| (general.clone(), general.clone(), general_label)),\\n 1045|             )\\n 1046|             .chain(bare_direct_line_is_safe.then(|| {\\n 1047|                 (\\n 1048|                     agent_id.to_string(),\\n 1049|                     agent_id.to_string(),\\n 1050|                     direct_line_label.clone(),\\n 1051|                 )\\n 1052|             }))\\n 1053|             .chain(std::iter::once((\\n 1054|                 format!(\\\"{}{agent_id}\\\", crate::runtime::assignee::DM_PREFIX),\\n 1055|                 format!(\\\"{}{agent_id}\\\", crate::runtime::assignee::DM_PREFIX),\\n 1056|                 direct_line_label,\\n 1057|             )))\\n 1058|             .collect();\\n 1059|         let mut elsewhere: Vec<(String, Vec<tinyhivemind_hive::SessionMessage>)> =\\n 1060|             Vec::with_capacity(targets.len());\\n 1061|         for (desk_id, desk_name, label) in targets {\\n 1062|             let log = EventLogSessionLog::new(\\n 1063|                 Arc::clone(&self.events),\\n 1064|                 self.company.clone(),\\n 1065|                 desk_id.clone(),\\n 1066|                 desk_name.clone(),\\n 1067|             );\\n 1068|             match tinyhivemind_hive::project_session(\\n 1069|                 &log,\\n 1070|                 &SessionQuery {\\n 1071|                     conversation: Conversation {\\n 1072|                         desk_id,\\n 1073|                         desk_name,\\n 1074|                         thread_root: None,\\n 1075|                     },\\n 1076|                     viewer: viewer.clone(),\\n 1077|                     before: None,\\n 1078|                     window: SESSION_WINDOW,\\n 1079|                 },\\n 1080|             )\\n 1081|             .await\\n 1082|             {\\n 1083|                 Ok(rows) if !rows.is_empty() => {\\n 1084|                     // The two direct-line targets share one label; merge into\\n 1085|                     // the existing section rather than opening a second one\\n 1086|                     // under the same name.\\n 1087|                     if let Some(existing) = elsewhere\\n 1088|                         .iter_mut()\\n 1089|                         .find(|(existing, _)| *existing == label)\\n 1090|                     {\\n 1091|                         // Codex P2 (fresh evidence): each target's own window\\n 1092|                         // is already chronological, but concatenating two\\n 1093|                         // windows is not — a naive `extend` can leave an\\n 1094|                         // older bare-spelling row after a newer prefixed one,\\n 1095|                         // and the combined length can exceed `SESSION_WINDOW`.\\n 1096|                         // Sorted by sequence, deduplicated (both spellings can\\n 1097|                         // in principle carry the same row), and cut back down\\n 1098|                         // to the newest `SESSION_WINDOW`.\\n 1099|                         existing.1.extend(rows);\\n 1100|                         existing.1.sort_by_key(|message| message.sequence);\\n 1101|                         existing.1.dedup_by_key(|message| message.sequence);\\n 1102|                         if existing.1.len() > SESSION_WINDOW {\\n 1103|                             let overflow = existing.1.len() - SESSION_WINDOW;\\n 1104|                             existing.1.drain(..overflow);\\n 1105|                         }\\n 1106|                     } else {\\n 1107|                         elsewhere.push((label, rows));\\n 1108|                     }\\n 1109|                 }\\n 1110|                 Ok(_) => {}\\n 1111|                 Err(error) => tracing::warn!(\\n 1112|                     company = %self.company,\\n 1113|                     desk = %self.desk.id,\\n 1114|                     agent = %agent_id,\\n 1115|                     error = %error,\\n 1116|                     \\\"[hive] a seat's other conversation could not be read; the turn runs without it\\\"\\n 1117|                 ),\\n 1118|             }\\n 1119|         }\\n 1120|         elsewhere\\n 1121|     }\\n 1122| \\n 1123|     /// What the desk remembers about the operator's task, best-effort.\\n 1124|     async fn recall(&self) -> Vec<HiveMemoryHit> {\\n 1125|         match self.memory.recall(&self.task, RECALL_LIMIT).await {\\n 1126|             Ok(hits) => hits,\\n 1127|             Err(error) => {\\n 1128|                 tracing::warn!(\\n 1129|                     company = %self.company,\\n 1130|                     desk = %self.desk.id,\\n 1131|                     error = %error,\\n 1132|                     \\\"[hive] the desk's memory could not be recalled; the room opens without it\\\"\\n 1133|                 );\\n 1134|                 Vec::new()\\n 1135|             }\\n 1136|         }\\n 1137|     }\\n 1138| \\n 1139|     /// Write the one note this episode leaves for the next similar question.\\n 1140|     ///\\n 1141|     /// A converged episode leaves the thing that would actually shorten the\\n 1142|     /// next one: what carried, who backed it, every fact anybody put on the\\n 1143|     /// record, whatever the room pinned, and the line that recorded the\\n 1144|     /// decision. An episode that did not converge leaves a shorter note naming\\n 1145|     /// the options that competed — knowing a desk has already argued #stage\\n 1146|     /// against #ship without settling it is worth having, and pretending it\\n 1147|     /// concluded something would be worse than saying nothing.\\n 1148|     ///\\n 1149|     /// An [`EpisodeEnding::Idle`] episode writes nothing at all: nobody spoke,\\n 1150|     /// so there is nothing to have learned.\\n 1151|     ///\\n 1152|     /// Best-effort in both directions. A failed write is logged and the episode\\n 1153|     /// finishes: the decision is already durable in the transcript above it.\\n 1154|     async fn remember(&self, outcome: &EpisodeOutcome, lines: &[(EventSeq, String, String)]) {\\n 1155|         let task_line = self\\n 1156|             .task\\n 1157|             .lines()\","
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1204,
+          "text": "    \"search \\\"fn elsewhere_for(\\\"\": {"
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1210,
+          "text": "          \"text\": \"    async fn elsewhere_for(\""
+        },
+        {
+          "path": "src/flows/lookup.rs",
+          "line": 926,
+          "text": "                \"fn read_pinboard() {}\\n\\n\\n\\n\\n\\n\\n\\n\\n/// Unbounded: `before: None`.\\nasync fn elsewhere_for(&self) {}\\n\","
         }
       ],
+      "truncated": false
+    },
+    "search \"fn failure_note(\"": {
+      "outcome": "hits",
+      "hits": [],
       "truncated": false
     },
     "search \"fn init_workspace(\"": {
       "outcome": "hits",
       "hits": [
         {
-          "path": "vendor/openhuman/crates/openhuman-core/src/config/workspace/ops.rs",
-          "line": 70,
-          "text": "pub async fn init_workspace(force: bool) -> Result<serde_json::Value, String> {"
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 950,
+          "text": "      \"text\": \"   50| /// compiled out — the `skills` gate's no-op `init_workflows_dir` being the\\n   51| /// live example — and reporting it as \\\"created\\\" would make `workspace_init`\\n   52| /// claim work it never did.\\n   53| fn classify_workspace_entry(\\n   54|     path: &Path,\\n   55|     existed_before: bool,\\n   56|     created: &mut Vec<String>,\\n   57|     existing: &mut Vec<String>,\\n   58| ) {\\n   59|     if !path.exists() {\\n   60|         return;\\n   61|     }\\n   62|     if existed_before {\\n   63|         existing.push(path.display().to_string());\\n   64|     } else {\\n   65|         created.push(path.display().to_string());\\n   66|     }\\n   67| }\\n   68| \\n   69| /// Create default dirs, copy bundled prompts, and the skills README.\\n   70| pub async fn init_workspace(force: bool) -> Result<serde_json::Value, String> {\\n   71|     let config = config_rpc::load_config_with_timeout().await?;\\n   72|     let workspace_dir = config.workspace_dir.clone();\\n   73| \\n   74|     let mut created_dirs = Vec::new();\\n   75|     let mut existing_dirs = Vec::new();\\n   76|     for rel in [\\\"memory\\\", \\\"sessions\\\", \\\"state\\\", \\\"cron\\\"] {\\n   77|         let dir = workspace_dir.join(rel);\\n   78|         if dir.exists() {\","
         },
         {
-          "path": "vendor/openhuman/crates/openhuman-core/src/security/keyring/store.rs",
-          "line": 37,
-          "text": "pub fn init_workspace(workspace_dir: &Path) {"
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 978,
+          "text": "      \"text\": \"   17| }\\n   18| \\n   19| // ── Global state ─────────────────────────────────────────────────────────────\\n   20| \\n   21| /// The workspace directory provided by the caller at startup.\\n   22| ///\\n   23| /// Used by [`FileBackend`] to locate `dev-keychain.json`.  If not set, falls\\n   24| /// back to the same env-var derivation as the config subsystem.\\n   25| pub(super) static WORKSPACE_DIR: OnceLock<PathBuf> = OnceLock::new();\\n   26| \\n   27| /// The selected backend, initialized on first use.\\n   28| pub(super) static BACKEND: OnceLock<Box<dyn KeyringBackend>> = OnceLock::new();\\n   29| \\n   30| // ── Initialization ────────────────────────────────────────────────────────────\\n   31| \\n   32| /// Register the workspace directory for the `file` backend.\\n   33| ///\\n   34| /// Call this once at application startup (before any keyring operation) so the\\n   35| /// `FileBackend` knows where to write `dev-keychain.json`.  If not called, the\\n   36| /// backend derives a default path from env vars.\\n   37| pub fn init_workspace(workspace_dir: &Path) {\\n   38|     if WORKSPACE_DIR.set(workspace_dir.to_path_buf()).is_err() {\\n   39|         // Already initialized — harmless, but log at debug to aid diagnostics.\\n   40|         log::debug!(\\\"[keyring] init_workspace called after initialization; ignored\\\");\\n   41|     }\\n   42| }\\n   43| \\n   44| /// Returns the selected backend, initializing it on first call.\\n   45| ///\","
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1215,
+          "text": "    \"search \\\"fn init_workspace(\\\"\": {"
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1221,
+          "text": "          \"text\": \"pub async fn init_workspace(force: bool) -> Result<serde_json::Value, String> {\""
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1226,
+          "text": "          \"text\": \"pub fn init_workspace(workspace_dir: &Path) {\""
         }
       ],
+      "truncated": false
+    },
+    "search \"fn line_kind(\"": {
+      "outcome": "hits",
+      "hits": [],
       "truncated": false
     },
     "search \"fn load_or_init(\"": {
       "outcome": "hits",
       "hits": [
         {
-          "path": "vendor/openhuman/crates/openhuman-core/src/config/schema/load/impl_load.rs",
-          "line": 261,
-          "text": "    pub async fn load_or_init() -> Result<Self> {"
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 943,
+          "text": "      \"text\": \"  241|     let (euid, egid) = unsafe { (libc::geteuid(), libc::getegid()) };\\n  242|     let mismatch = if meta.uid() == euid {\\n  243|         String::new()\\n  244|     } else {\\n  245|         format!(\\\"{CONFIG_OWNER_MISMATCH_MARKER} \\\")\\n  246|     };\\n  247|     format!(\\n  248|         \\\" {mismatch}(file uid={} gid={} mode={:04o}; process euid={euid} egid={egid})\\\",\\n  249|         meta.uid(),\\n  250|         meta.gid(),\\n  251|         meta.permissions().mode() & 0o777,\\n  252|     )\\n  253| }\\n  254| \\n  255| #[cfg(not(unix))]\\n  256| async fn describe_config_ownership(_path: &Path) -> String {\\n  257|     String::new()\\n  258| }\\n  259| \\n  260| impl Config {\\n  261|     pub async fn load_or_init() -> Result<Self> {\\n  262|         let (default_openhuman_dir, default_workspace_dir) = default_config_and_workspace_dirs()?;\\n  263|         Self::load_or_init_with_env_lookup(\\n  264|             &default_openhuman_dir,\\n  265|             &default_workspace_dir,\\n  266|             &ProcessEnv,\\n  267|         )\\n  268|         .await\\n  269|         .inspect(super::active_workspace::publish_loaded_workspace)\","
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1231,
+          "text": "    \"search \\\"fn load_or_init(\\\"\": {"
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1237,
+          "text": "          \"text\": \"    pub async fn load_or_init() -> Result<Self> {\""
         }
       ],
       "truncated": false
@@ -1457,9 +1587,19 @@
       "outcome": "hits",
       "hits": [
         {
-          "path": "vendor/tinyhivemind/crates/tinyhivemind-hive/src/episode/mod.rs",
-          "line": 477,
-          "text": "pub fn project_for(turn: &HiveTurn, messages: &[SessionMessage]) -> Vec<SessionMessage> {"
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1034,
+          "text": "      \"text\": \"  457| /// **Visibility**, by time. Under [`Visibility::Full`] every message passes.\\n  458| /// Under [`Visibility::Blind`] the messages of *peer agents authored within\\n  459| /// this episode* are withheld, while operator, person and system messages, the\\n  460| /// turn-holder's own, and anything at or below the episode's watermark\\n  461| /// remain — the participant still sees the task, its own work, and the\\n  462| /// conversation that led into the episode, just not the positions its peers\\n  463| /// have taken since the room opened. A message withheld this way is **dropped**:\\n  464| /// the round ends, and it arrives on the next turn.\\n  465| ///\\n  466| /// **Audience**, by addressee. A row addressed to an aside the turn-holder is\\n  467| /// not part of is **elided rather than dropped**, and a run of them from one\\n  468| /// aside collapses into a single stub. It keeps its sequence, its author and\\n  469| /// its audience, and loses only its content, so a citation still resolves and\\n  470| /// the turn-holder can tell that a peer knows something it does not.\\n  471| ///\\n  472| /// `transcript` is expected to be the true medium — projected for an operator,\\n  473| /// or otherwise unelided. Narrowing it beforehand would not make this function\\n  474| /// wrong, but it would mean [`step`] had folded a transcript that is nobody's\\n  475| /// room, which is the one thing the episode may not do.\\n  476| #[must_use]\\n  477| pub fn project_for(turn: &HiveTurn, messages: &[SessionMessage]) -> Vec<SessionMessage> {\\n  478|     let viewer = Viewer::Agent {\\n  479|         id: turn.agent_id.clone(),\\n  480|     };\\n  481|     let visible: Vec<SessionMessage> = messages\\n  482|         .iter()\\n  483|         .filter(|message| readable(turn, message))\\n  484|         .cloned()\\n  485|         .collect();\","
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1456,
+          "text": "    \"search \\\"fn project_for(\\\"\": {"
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1462,
+          "text": "          \"text\": \"pub fn project_for(turn: &HiveTurn, messages: &[SessionMessage]) -> Vec<SessionMessage> {\""
         }
       ],
       "truncated": false
@@ -1468,9 +1608,34 @@
       "outcome": "hits",
       "hits": [
         {
-          "path": "vendor/tinyhivemind/crates/tinyhivemind/src/pins/mod.rs",
-          "line": 235,
-          "text": "pub async fn read_pinboard("
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1055,
+          "text": "      \"text\": \"  215|     pins.into_iter().map(|(pin, _)| pin).collect()\\n  216| }\\n  217| \\n  218| /// Read one conversation's board from the host log.\\n  219| ///\\n  220| /// A desk-scoped read folds the desk's whole interior, thread replies\\n  221| /// included: a pin exists to lift one message out of the depth it is buried\\n  222| /// at, so refusing to look inside threads would defeat it. A thread-scoped\\n  223| /// read folds that thread alone.\\n  224| ///\\n  225| /// `before` is the same exclusive bound a caller passes as\\n  226| /// [`crate::SessionQuery::before`]. Passing it through keeps the board and the\\n  227| /// projected history reading the same snapshot, so a delayed or replayed turn\\n  228| /// cannot see a pin — or an unpin — authored after its triggering message.\\n  229| ///\\n  230| /// # Errors\\n  231| ///\\n  232| /// Returns [`crate::Error::Read`] for a host read failure or a typed\\n  233| /// page-validation error when a host violates ordering, uniqueness, size, or\\n  234| /// cursor contracts.\\n  235| pub async fn read_pinboard(\\n  236|     log: &(dyn SessionLog + '_),\\n  237|     conversation: &Conversation,\\n  238|     viewer: &Viewer,\\n  239|     limit: usize,\\n  240|     before: Option<Sequence>,\\n  241| ) -> Result<Vec<Pin>> {\\n  242|     if limit == 0 {\\n  243|         return Ok(Vec::new());\","
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1467,
+          "text": "    \"search \\\"fn read_pinboard(\\\"\": {"
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1473,
+          "text": "          \"text\": \"pub async fn read_pinboard(\""
+        },
+        {
+          "path": "src/flows/lookup.rs",
+          "line": 926,
+          "text": "                \"fn read_pinboard() {}\\n\\n\\n\\n\\n\\n\\n\\n\\n/// Unbounded: `before: None`.\\nasync fn elsewhere_for(&self) {}\\n\","
+        },
+        {
+          "path": "src/flows/lookup.rs",
+          "line": 930,
+          "text": "                \"/// `before` is an exclusive bound.\\npub async fn read_pinboard(log: &Log) {}\\n\","
+        },
+        {
+          "path": "src/flows/lookup.rs",
+          "line": 974,
+          "text": "            \"/// `before` is an exclusive bound.\\npub async fn read_pinboard(log: &Log) {}\\n\","
         }
       ],
       "truncated": false
@@ -1762,14 +1927,29 @@
       "outcome": "hits",
       "hits": [
         {
-          "path": "vendor/openhuman/crates/openhuman-core/src/security/keyring/store.rs",
-          "line": 189,
-          "text": "pub fn workspace_dir_for_file_backend() -> PathBuf {"
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 971,
+          "text": "      \"text\": \"  169| \\n  170| fn backend_kind_from_env_value(value: &str) -> Option<BackendKind> {\\n  171|     match value.trim().to_ascii_lowercase().as_str() {\\n  172|         \\\"os\\\" => Some(BackendKind::Os),\\n  173|         \\\"file\\\" => Some(BackendKind::File),\\n  174|         \\\"encrypted_file\\\" => Some(BackendKind::EncryptedFile),\\n  175|         _ => None,\\n  176|     }\\n  177| }\\n  178| \\n  179| fn is_staging_or_production_value(app_env: Option<&str>) -> bool {\\n  180|     matches!(app_env.map(str::trim), Some(\\\"staging\\\") | Some(\\\"production\\\"))\\n  181| }\\n  182| \\n  183| /// Derive the directory for keyring files (`secrets.enc`, `dev-keychain.json`).\\n  184| ///\\n  185| /// Uses the registered value from [`init_workspace`] if set; otherwise falls\\n  186| /// back to the same env-var / home-dir logic as the config subsystem.\\n  187| /// Always resolves to a stable absolute path — never CWD.\\n  188| #[cfg(not(test))]\\n  189| pub fn workspace_dir_for_file_backend() -> PathBuf {\\n  190|     resolve_workspace_dir_from_process_state()\\n  191| }\\n  192| \\n  193| /// Test builds resolve the keyring directory from a **thread-scoped** override\\n  194| /// instead of process-global state.\\n  195| ///\\n  196| /// `WORKSPACE_DIR` (a `OnceLock`) and `OPENHUMAN_WORKSPACE` (a process-wide env\\n  197| /// var that several tests mutate behind an RAII guard) are both shared by every\","
         },
         {
-          "path": "vendor/openhuman/crates/openhuman-core/src/security/keyring/store.rs",
-          "line": 210,
-          "text": "pub fn workspace_dir_for_file_backend() -> PathBuf {"
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 985,
+          "text": "      \"text\": \"  190|     resolve_workspace_dir_from_process_state()\\n  191| }\\n  192| \\n  193| /// Test builds resolve the keyring directory from a **thread-scoped** override\\n  194| /// instead of process-global state.\\n  195| ///\\n  196| /// `WORKSPACE_DIR` (a `OnceLock`) and `OPENHUMAN_WORKSPACE` (a process-wide env\\n  197| /// var that several tests mutate behind an RAII guard) are both shared by every\\n  198| /// concurrently-running test in the binary. Consulting them here meant a test's\\n  199| /// keyring writes and its later reads could resolve to *different* directories\\n  200| /// depending on which unrelated test happened to be mid-guard — and that a\\n  201| /// `TempDir` could become the whole binary's credential store and then be\\n  202| /// deleted. Test builds therefore ignore both and use\\n  203| /// [`test_scope::current_workspace`], which defaults to a stable per-process\\n  204| /// directory under the system temp dir and never touches the developer's real\\n  205| /// `~/.openhuman/dev-keychain.json`.\\n  206| ///\\n  207| /// A test that needs its own private store binds one with\\n  208| /// [`test_scope::ScopedWorkspace`].\\n  209| #[cfg(test)]\\n  210| pub fn workspace_dir_for_file_backend() -> PathBuf {\\n  211|     test_scope::current_workspace()\\n  212| }\\n  213| \\n  214| /// The production resolution rule, kept compiled in test builds so it stays\\n  215| /// directly testable (see `store_tests.rs`).\\n  216| fn resolve_workspace_dir_from_process_state() -> PathBuf {\\n  217|     resolve_workspace_dir(WORKSPACE_DIR.get())\\n  218| }\","
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1761,
+          "text": "    \"search \\\"fn workspace_dir_for_file_backend(\\\"\": {"
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1767,
+          "text": "          \"text\": \"pub fn workspace_dir_for_file_backend() -> PathBuf {\""
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 1772,
+          "text": "          \"text\": \"pub fn workspace_dir_for_file_backend() -> PathBuf {\""
         }
       ],
       "truncated": false
@@ -4457,6 +4637,11 @@
       "hits": [],
       "truncated": false
     },
+    "search \"struct CompanyEvent\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
     "search \"struct Conversation\"": {
       "outcome": "hits",
       "hits": [
@@ -4543,6 +4728,11 @@
       ],
       "truncated": false
     },
+    "search \"struct EpisodePrompt\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
     "search \"struct EpisodeState\"": {
       "outcome": "hits",
       "hits": [
@@ -4572,36 +4762,83 @@
     },
     "search \"struct HiveStep\"": {
       "outcome": "hits",
-      "hits": [],
+      "hits": [
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 4573,
+          "text": "    \"search \\\"struct HiveStep\\\"\": {"
+        }
+      ],
       "truncated": false
     },
     "search \"struct OpenCompanyError\"": {
       "outcome": "hits",
-      "hits": [],
+      "hits": [
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 4578,
+          "text": "    \"search \\\"struct OpenCompanyError\\\"\": {"
+        }
+      ],
       "truncated": false
     },
     "search \"struct Sequence\"": {
       "outcome": "hits",
       "hits": [
         {
-          "path": "crates/opencompany-core/src/harness/roster_build.rs",
-          "line": 837,
-          "text": "    struct SequencedModel {"
+          "path": "evals/cassettes/oc-2313-round-boundary-leaks/0006-096cad30f4255150.json",
+          "line": 24,
+          "text": "        \"pattern\": \"struct Sequence\","
         },
         {
-          "path": "vendor/openhuman/crates/openhuman-core/src/agent/harness/session/turn_tests.rs",
-          "line": 47,
-          "text": "struct SequenceProvider {"
+          "path": "evals/cassettes/oc-2313-round-boundary-leaks/0007-f26c42b52b01408c.json",
+          "line": 17,
+          "text": "        \"pattern\": \"struct Sequence\","
         },
         {
-          "path": "vendor/openhuman/tests/config_auth_app_state_connectivity_e2e.rs",
-          "line": 216,
-          "text": "struct SequenceAuthBackendState {"
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 783,
+          "text": "      \"text\": \"  817|     fn the_system_prompt_states_the_real_bounds() {\\n  818|         let prompt = system_prompt();\\n  819|         assert!(prompt.contains(&MIN_AGENTS.to_string()), \\\"{prompt}\\\");\\n  820|         assert!(prompt.contains(&MAX_AGENTS.to_string()), \\\"{prompt}\\\");\\n  821|         assert!(prompt.contains(&MAX_DESCRIPTION.to_string()), \\\"{prompt}\\\");\\n  822|     }\\n  823| \\n  824|     // ---------------------------------------------------------------------\\n  825|     // Coverage: the host checks the claim against its own list\\n  826|     // ---------------------------------------------------------------------\\n  827| \\n  828|     use std::sync::Mutex as StdMutex;\\n  829|     use std::sync::atomic::{AtomicUsize, Ordering};\\n  830| \\n  831|     use async_trait::async_trait;\\n  832|     use tinyinference::Result as TaResult;\\n  833|     use tinyinference::model::ChatModel;\\n  834| \\n  835|     /// A model that answers from a script, one reply per call, and remembers the\\n  836|     /// prompts it was sent.\\n  837|     struct SequencedModel {\\n  838|         replies: StdMutex<Vec<String>>,\\n  839|         prompts: StdMutex<Vec<String>>,\\n  840|         calls: AtomicUsize,\\n  841|     }\\n  842| \\n  843|     impl SequencedModel {\\n  844|         fn new(replies: &[&str]) -> Arc<Self> {\\n  845|             Arc::new(Self {\","
         },
         {
-          "path": "vendor/tinyhivemind/crates/tinyhivemind/src/session/types.rs",
-          "line": 10,
-          "text": "pub struct Sequence(pub u64);"
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 915,
+          "text": "      \"text\": \"   27| \\n   28| struct DummyProvider;\\n   29| \\n   30| #[async_trait]\\n   31| impl ChatModel<()> for DummyProvider {\\n   32|     fn profile(&self) -> Option<&ModelProfile> {\\n   33|         static PROFILE: std::sync::LazyLock<ModelProfile> =\\n   34|             std::sync::LazyLock::new(ModelProfile::default);\\n   35|         Some(&PROFILE)\\n   36|     }\\n   37| \\n   38|     async fn invoke(\\n   39|         &self,\\n   40|         _state: &(),\\n   41|         _request: ModelRequest,\\n   42|     ) -> tinyinference::Result<ModelResponse> {\\n   43|         Ok(ModelResponse::assistant(\\\"unused\\\"))\\n   44|     }\\n   45| }\\n   46| \\n   47| struct SequenceProvider {\\n   48|     responses: AsyncMutex<Vec<anyhow::Result<ChatResponse>>>,\\n   49|     requests: AsyncMutex<Vec<Vec<ChatMessage>>>,\\n   50|     /// Number of tool declarations the provider was offered on each call, in\\n   51|     /// call order. Lets a test assert per-turn tool suppression (#1725): a\\n   52|     /// chat/small-talk turn must send an empty tool schema.\\n   53|     tool_counts: AsyncMutex<Vec<usize>>,\\n   54| }\\n   55| \","
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 999,
+          "text": "      \"text\": \"  196|             post(mock_client_key),\\n  197|         )\\n  198|         .route(\\n  199|             \\\"/auth/integrations/{integration_id}\\\",\\n  200|             delete(mock_revoke_integration),\\n  201|         )\\n  202|         .route(\\n  203|             \\\"/api/auth/integrations/{integration_id}\\\",\\n  204|             delete(mock_revoke_integration),\\n  205|         )\\n  206|         .with_state(state.clone());\\n  207|     let listener = tokio::net::TcpListener::bind(\\\"127.0.0.1:0\\\")\\n  208|         .await\\n  209|         .expect(\\\"bind mock backend\\\");\\n  210|     let addr = listener.local_addr().expect(\\\"mock backend addr\\\");\\n  211|     let join = tokio::spawn(async move { axum::serve(listener, app).await });\\n  212|     (format!(\\\"http://{addr}\\\"), state, join)\\n  213| }\\n  214| \\n  215| #[derive(Clone, Default)]\\n  216| struct SequenceAuthBackendState {\\n  217|     auth_me_hits: Arc<AtomicUsize>,\\n  218| }\\n  219| \\n  220| #[derive(Clone, Default)]\\n  221| struct NullAuthBackendState {\\n  222|     auth_me_hits: Arc<AtomicUsize>,\\n  223| }\\n  224| \","
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 4583,
+          "text": "    \"search \\\"struct Sequence\\\"\": {"
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 4589,
+          "text": "          \"text\": \"    struct SequencedModel {\""
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 4594,
+          "text": "          \"text\": \"struct SequenceProvider {\""
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 4599,
+          "text": "          \"text\": \"struct SequenceAuthBackendState {\""
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 4604,
+          "text": "          \"text\": \"pub struct Sequence(pub u64);\""
+        },
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 4609,
+          "text": "    \"search \\\"struct Sequence\\\" in crates/opencompany-core/src/hivemind/**/*.rs\": {"
         }
       ],
       "truncated": false
@@ -4624,7 +4861,13 @@
     },
     "search \"struct Viewer\"": {
       "outcome": "hits",
-      "hits": [],
+      "hits": [
+        {
+          "path": "evals/fixtures/oc-2313-round-boundary-leaks.json",
+          "line": 4625,
+          "text": "    \"search \\\"struct Viewer\\\"\": {"
+        }
+      ],
       "truncated": false
     },
     "search \"struct.*ExpectedTransition\"": {
@@ -4676,6 +4919,66 @@
           "text": "            let decision = tinyhivemind_hive::step(&state, &self.journal, &members, &desks, policy)"
         }
       ],
+      "truncated": false
+    },
+    "search \"trait CompanyEvent\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"trait EpisodePrompt\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"trait HiveStep\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"trait OpenCompanyError\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"trait Sequence\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"trait Viewer\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"type CompanyEvent\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"type EpisodePrompt\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"type HiveStep\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"type OpenCompanyError\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"type Sequence\"": {
+      "outcome": "hits",
+      "hits": [],
+      "truncated": false
+    },
+    "search \"type Viewer\"": {
+      "outcome": "hits",
+      "hits": [],
       "truncated": false
     },
     "search \"use openhuman_core as oh;\"": {
