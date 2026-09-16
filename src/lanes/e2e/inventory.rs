@@ -1232,6 +1232,16 @@ jobs:
     }
 
     #[test]
+    fn an_unrelated_job_condition_does_not_erase_a_steps_label_gate() {
+        // The job-level `if:` here is about the repository, not a label —
+        // it must not be read as "no gate", which would erase the label
+        // gate the e2e step itself earned.
+        let text = "name: e2e\non: pull_request\njobs:\n  run:\n    if: github.repository_owner == 'acme'\n    steps:\n      - name: Run e2e\n        if: contains(github.event.pull_request.labels.*.name, 'run-e2e')\n        run: npx playwright test\n";
+        let workflow = classify_workflow(".github/workflows/e2e.yml", text, &[]).unwrap();
+        assert_eq!(workflow.jobs[0].label_gate.as_deref(), Some("run-e2e"));
+    }
+
+    #[test]
     fn explicit_workflow_names_are_the_whole_answer() {
         let text = "name: CI\non: pull_request\njobs:\n  unit:\n    steps:\n      - run: cargo test\n  browser:\n    steps:\n      - run: npx cypress run\n";
         let workflow =
