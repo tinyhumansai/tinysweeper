@@ -141,6 +141,52 @@ no model call — which changed files are worth one and in what order:
 `tests`, `commits` and `description` are pull-request-scoped. Their subject is a
 relationship between files, and a reviewer shown one file cannot see it.
 
+## Grouping
+
+Isolation cuts both ways. Telling every conversation to ignore every other file
+stops N reviewers reporting one cross-file problem N times, and it also hides a
+bug that only shows up by reading two files together: a caller changed in `a.rs`
+while its callee changed in `b.rs`, or a function and the test that exercises
+it. Neither ungrouped conversation ever sees both halves.
+
+`lanes::grouping` decides — deterministically, **no model call** — which of a
+lane's changed files travel together in one conversation instead. Two files are
+grouped when:
+
+- the code graph has a `Calls`, `References`, `Tests`, `Imports` or `Extends`
+  edge between a symbol in one and a symbol in the other, read off the same
+  neighbourhood `graph::impact` and `overview` already walk for the changed
+  set — no second query; or
+- a name heuristic matches with no graph at all: a file and its test
+  (`foo.rs`/`foo_test.rs`, `test_foo.py`, `foo.test.ts`, `FooTest.java`), a
+  pair of locale files (`messages.en.json`/`messages.fr.json`, or `i18n/en.json`
+  next to `i18n/fr.json`), or a component and its co-located stylesheet
+  (`Button.tsx`/`Button.module.css`).
+
+A grouped conversation is handed every file's diff and one isolation clause
+naming all of them — see `harness::prompt::isolation_clause` — and its lookup
+seeding (`flows::lookup::Ledger::seed`) reads the definitions every file's
+changed lines call into, not just the first file's, so grouping a file with its
+test does not regress the seeding that found the boundary bug on
+opencompany#2313 (see [`lookup.md`](lookup.md)). A finding is placed against
+whichever file in the group it actually names; one naming a path outside the
+group is discarded exactly like a file the pull request never touched.
+
+**A component over `[grouping].max_files` or `max_hunk_chars` falls back to
+singletons — every one of its files reviewed alone, never a partial group.**
+Grouping is a bet that one conversation reviews a handful of related files
+better than several isolated ones; a bet with too many files or too much diff
+in it is the same failure per-file fan-out exists to prevent in the first
+place — the first few files read closely, the rest an afterthought — so it is
+not made at all. `max_files = 4` and `max_hunk_chars = 20000` are chosen to
+comfortably hold a file and its test, or the few files one rename touches,
+while catching that case well before it does.
+
+`[grouping].enabled = false` disables grouping entirely and returns to the
+plain one-conversation-per-file fan-out, byte-identical to the prompts sent
+before grouping existed, which is what keeps an operator's prompt cache and any
+recorded eval cassette valid across the change.
+
 ## Below the gate, above notice
 
 A finding that misses the posting gate but is at least `medium` and at least
