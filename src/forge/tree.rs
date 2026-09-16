@@ -213,7 +213,7 @@ impl TreeReader for ForgeTree<'_> {
                     return Ok(Found::NotFound);
                 }
                 if crate::scan::is_sensitive_path(path) {
-                    return Ok(sensitive_path_refusal(path));
+                    return Ok(sensitive_path_refusal());
                 }
                 Ok(match self.read(path).await? {
                     Read::Content(content) => {
