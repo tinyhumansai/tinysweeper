@@ -205,6 +205,7 @@ impl<'a> PromptInputs<'a> {
             extracted_rules: &[],
             reviewed_evidence: "",
             prior_findings: &[],
+            confirmed_this_round: &[],
             new_evidence: "",
             evidence_label: "diff",
             changed_paths: &[],
