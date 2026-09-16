@@ -221,14 +221,20 @@ fn suggested_body(pr: &PullRequest, files: usize) -> String {
 ///
 /// Both fields are attacker-controlled; `prompt::build` fences and labels this
 /// block, which is why it is handed over as one string rather than spliced into
-/// the instructions.
+/// the instructions. `evidence::redact::mask` only ever sees the diff, not
+/// this text, so a credential an author pastes into the title or body while
+/// explaining what leaked — the scanner already found it in the diff — is
+/// scrubbed here too, with the same deterministic rulepack a model's own
+/// output gets: the entropy heuristic is for a *diff*'s assignments, and
+/// running it on prose would mangle a sentence that legitimately needs to
+/// quote a hash or an identifier.
 fn render_pull_request(pr: &PullRequest) -> String {
     format!(
         "title: {}\nbase: {}\nhead: {}\n\nbody:\n{}",
-        pr.title.trim(),
+        scan::scrub(pr.title.trim()),
         pr.base_ref,
         pr.head_ref,
-        pr.body.trim()
+        scan::scrub(pr.body.trim())
     )
 }
 
