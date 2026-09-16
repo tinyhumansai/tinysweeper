@@ -246,12 +246,17 @@ pub fn search_lines(path: &str, content: &str, pattern: &str, hits: &mut Vec<Hit
 /// [`Lookup::Search`] skips the path before it is ever scanned — a redacted
 /// hit would still name the path and the line, which is exactly the shape a
 /// secret's location must not reach a model.
-pub fn sensitive_path_refusal(path: &str) -> Found {
+///
+/// Deliberately takes no path: the whole point of the guard is that the model
+/// never learns *which* sensitive file exists here, and an attacker-controlled
+/// filename has no way to inject text into a refusal reason that never quotes
+/// it.
+pub fn sensitive_path_refusal() -> Found {
     Found::Unavailable {
-        reason: format!(
-            "`{path}` is treated as a secret by its path — an `.env` file, a private key, or \
-             similar — and is never read into a review regardless of what it contains"
-        ),
+        reason: "this path is treated as a secret by its shape — an `.env` file, a private \
+                 key, or similar — and is never read into a review regardless of what it \
+                 contains"
+            .into(),
     }
 }
 
