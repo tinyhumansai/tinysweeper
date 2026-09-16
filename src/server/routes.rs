@@ -664,14 +664,16 @@ async fn dispatch(state: AppState, action: Action, delivery: String, event: Stri
 
 /// A check completed on a pull request: settle the `e2e` lane if it was
 /// waiting on that check, then reconsider the merge.
+///
+/// Not gated on the *deployment's* `enabled_lanes()`: `review.lanes` is a
+/// repository override (`crate::config::remote::overlay`), so a repository
+/// can run `e2e` while the deployment default does not. Gating on the
+/// deployment list here would skip settlement for exactly that repository
+/// and leave its `tinysweeper/e2e` check `Neutral` forever. The cheap guard
+/// that actually matters — is anything being watched — lives inside
+/// `settle_e2e_inner`, keyed off the stored review state rather than config.
 async fn handle_check_completed(state: AppState, repo: String, number: u64, installation: u64) {
-    if state
-        .config
-        .config
-        .enabled_lanes()
-        .contains(&crate::config::types::LaneId::E2e)
-        && let Err(err) = settle_e2e_inner(&state, &repo, number, installation).await
-    {
+    if let Err(err) = settle_e2e_inner(&state, &repo, number, installation).await {
         // Logged and dropped, like auto-merge: the watch stays in the store,
         // and the next completion event on the same head retries it.
         tracing::error!(%err, %repo, number, "could not settle the e2e check run");
