@@ -710,6 +710,22 @@ impl<'a> Indexer<'a> {
             None => true,
         };
 
+        // Orphans first — rows an earlier intent may have written and never
+        // confirmed, now superseded. Deleted before the confirmation is
+        // recorded, because the confirmation does not carry them: a delete
+        // that fails here leaves the intent on record, where they are still
+        // listed, and the next run finds them again. Never counted, never
+        // subtracted.
+        let orphans: Vec<String> = work
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| finished(*index))
+            .flat_map(|(_, file)| file.orphans.clone())
+            .collect();
+        if !orphans.is_empty() {
+            self.index.delete_chunks(repo_id, &orphans).await?;
+        }
+
         // Step 4: confirm only the files whose every chunk actually landed. A
         // file cut off by the budget keeps its old confirmed set, so the next
         // run embeds what this one did not.
@@ -763,16 +779,6 @@ impl<'a> Indexer<'a> {
             .collect();
         if !stale.is_empty() {
             report.deleted += self.index.delete_chunks(repo_id, &stale).await?;
-        }
-        // Orphans go too, uncounted: they were never added.
-        let orphans: Vec<String> = work
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| finished(*index))
-            .flat_map(|(_, file)| file.orphans.clone())
-            .collect();
-        if !orphans.is_empty() {
-            self.index.delete_chunks(repo_id, &orphans).await?;
         }
         // Delete succeeded, so stale IDs no longer need crash-recovery
         // protection in the manifest.
@@ -870,8 +876,18 @@ struct FileWork {
 
 impl FileWork {
     fn new(path: String, chunks: Vec<Chunk>, previous: Option<&IndexedFile>) -> Self {
+        // Every counted row on record: the confirmed set, and a
+        // confirmation's pending set (old rows of a replacement whose delete
+        // never ran — in the index, in the count). An intent's pending set is
+        // not here: those rows were never counted.
         let confirmed: BTreeSet<String> = previous
-            .map(|file| file.chunks.iter().cloned().collect())
+            .map(|file| {
+                let mut ids: BTreeSet<String> = file.chunks.iter().cloned().collect();
+                if file.pending_is_stale {
+                    ids.extend(file.pending.iter().cloned());
+                }
+                ids
+            })
             .unwrap_or_default();
         let by_hash: std::collections::BTreeMap<String, String> = confirmed
             .iter()
@@ -906,14 +922,14 @@ impl FileWork {
         // delete never ran). An intent's pending set is the other thing —
         // rows that may have been written and were never counted — and goes
         // in `orphans`, to be deleted without being subtracted.
-        let (counted, uncounted): (Vec<String>, Vec<String>) = match previous {
-            Some(file) if file.pending_is_stale => (file.every_id(), Vec::new()),
-            Some(file) => (file.chunks.clone(), file.pending.clone()),
-            None => (Vec::new(), Vec::new()),
+        let uncounted: Vec<String> = match previous {
+            Some(file) if !file.pending_is_stale => file.pending.clone(),
+            _ => Vec::new(),
         };
-        let stale: Vec<String> = counted
-            .into_iter()
+        let stale: Vec<String> = confirmed
+            .iter()
             .filter(|id| !fresh.contains(id))
+            .cloned()
             .collect();
         let orphans: Vec<String> = uncounted
             .into_iter()
@@ -958,9 +974,9 @@ impl FileWork {
     }
 
     /// The record after the writes landed: the new ids confirmed, the old
-    /// counted ids pending their delete. Orphans are not carried — they are
-    /// deleted in the same step and were never counted, and carrying them
-    /// as stale would have a later removal subtract rows it never added.
+    /// counted ids pending their delete. Orphans are not carried — they were
+    /// deleted before this record was written, and carrying them as stale
+    /// would have a later removal subtract rows it never added.
     fn confirmation(&self) -> IndexedFile {
         IndexedFile {
             path: self.path.clone(),

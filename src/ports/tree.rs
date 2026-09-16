@@ -601,6 +601,17 @@ pub fn submodule_paths(gitmodules: &str) -> Vec<String> {
         .collect()
 }
 
+/// A git-config value as git reads it: `"quoted"` up to the closing quote,
+/// ignoring what follows; unquoted up to a `#` or `;` comment; trimmed.
+pub fn git_config_value(raw: &str) -> &str {
+    let raw = raw.trim();
+    match raw.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or_default(),
+        None => raw.split(['#', ';']).next().unwrap_or_default(),
+    }
+    .trim()
+}
+
 /// The one spelling of a submodule path, or `None` for one nobody may declare.
 ///
 /// Git resolves `./libs/core`, `libs//core` and `libs/./core` to the same
@@ -610,15 +621,7 @@ pub fn submodule_paths(gitmodules: &str) -> Vec<String> {
 /// is contributor-controlled: a path that leaves the tree, is absolute, or
 /// names git's own directory is refused rather than repaired.
 pub fn canonical_submodule_path(raw: &str) -> Option<String> {
-    let raw = raw.trim();
-    // Git accepts `path = "libs/core"`; the quotes are not part of the path.
-    // Unquoted, git reads `path = libs/core # note` up to the comment;
-    // quoted, it reads up to the closing quote and ignores what follows.
-    let raw = match raw.strip_prefix('"') {
-        Some(rest) => rest.split('"').next().unwrap_or_default(),
-        None => raw.split(['#', ';']).next().unwrap_or_default(),
-    }
-    .trim();
+    let raw = git_config_value(raw);
     if raw.is_empty() || raw.starts_with('/') || raw.contains('\\') {
         return None;
     }

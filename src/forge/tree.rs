@@ -91,7 +91,8 @@ pub fn parse_gitmodules(text: &str, host: &str) -> Vec<Submodule> {
         } else if let Some(rest) = strip_key(line, "url")
             && let Some(value) = rest.trim().strip_prefix('=')
         {
-            url = Some(value.trim().to_string());
+            // Quoted and commented the same way a path may be.
+            url = Some(crate::ports::tree::git_config_value(value).to_string());
         }
     }
     flush(&mut path, &mut url, &mut out);
@@ -292,6 +293,12 @@ mod tests {
                 "{spelled}"
             );
         }
+        let quoted_url = "[submodule \"q\"]\n\tpath = libs/q\n\turl = \"https://github.com/acme/q.git\" # note\n";
+        assert_eq!(
+            parse_gitmodules(quoted_url, "github.com")[0].repo,
+            RepoId::parse("acme/q"),
+            "a quoted, commented url resolves like a bare one"
+        );
         let shouted = "[submodule \"e\"]\n\tPATH = libs/e\n\tURL = https://github.com/acme/e\n";
         let subs = parse_gitmodules(shouted, "github.com");
         assert_eq!(
