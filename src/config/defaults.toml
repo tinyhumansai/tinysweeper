@@ -26,6 +26,11 @@ note_confidence = 0.65
 incremental = true
 draft_prs = false
 respect_agents_md = true
+# How many times a group's council is asked over the same evidence. 1 is
+# round one alone; each pass above it is another model call per unit that
+# clears the coverage pass's own line threshold, on top of what the lanes
+# above already spend — raise it only for repositories worth the extra bill.
+passes = 1
 
 # Block the merge button at this severity; "off" never blocks. A blocking review
 # has to be cleared by a human if it turns out to be wrong, so the floor sits at
