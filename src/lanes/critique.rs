@@ -937,10 +937,16 @@ fn helper() {
     /// A finding quoting one of `large_diffs`'s added lines, named and titled
     /// by the caller so round one and a coverage pass can be told apart.
     fn finding_named(title: &str, index: usize) -> serde_json::Value {
+        finding_named_with_rule(title, index, "unchecked-index")
+    }
+
+    /// [`finding_named`], with its own rule id — for a corroboration test that
+    /// must not also match on [`Finding::fingerprint`], which hashes the rule.
+    fn finding_named_with_rule(title: &str, index: usize, rule: &str) -> serde_json::Value {
         json!({
             "path": "src/large.rs",
             "existing_code": format!("let x{index} = {index};"),
-            "rule": "unchecked-index",
+            "rule": rule,
             "title": title,
             "body": "detail.",
             "severity": "high",
