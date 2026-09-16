@@ -179,7 +179,15 @@ pub fn is_private_key_begin(text: &str) -> bool {
 /// Whether `text` closes a private-key PEM block opened by
 /// [`is_private_key_begin`].
 pub fn is_private_key_end(text: &str) -> bool {
-    text.contains("-----END") && text.contains("PRIVATE KEY")
+    // Do not let prose such as `-----END not a PRIVATE KEY-----` terminate
+    // armour.  Only the PEM delimiter itself changes the stream state.
+    text.contains("-----END RSA PRIVATE KEY-----")
+        || text.contains("-----END DSA PRIVATE KEY-----")
+        || text.contains("-----END EC PRIVATE KEY-----")
+        || text.contains("-----END OPENSSH PRIVATE KEY-----")
+        || text.contains("-----END PGP PRIVATE KEY BLOCK-----")
+        || text.contains("-----END ENCRYPTED PRIVATE KEY-----")
+        || text.contains("-----END PRIVATE KEY-----")
 }
 
 /// Redact one line of a stream that must be walked line by line while

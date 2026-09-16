@@ -572,7 +572,10 @@ impl TreeReader for RedactingTree<'_> {
                         .inner
                         .lookup(&Lookup::Read {
                             path: hit.path.clone(),
-                            start: Some(hit.line.saturating_sub(MAX_READ_LINES)),
+                        // Keep the hit inside the 200-line probe.  `Read`
+                        // caps a range at 200 lines, so starting 200 lines
+                        // earlier silently excluded this final line.
+                        start: Some(hit.line.saturating_sub(MAX_READ_LINES - 1)),
                             end: Some(hit.line),
                         })
                         .await?;

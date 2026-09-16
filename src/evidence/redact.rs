@@ -142,9 +142,18 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
             // unrelated later hunk from every reviewing lane.
             // ...unless the hunk itself proves it opened mid-key: a closing
             // marker with no opening one before it.
-            let mut in_key_block =
+            let mut old_in_key_block =
                 scan::opens_inside_private_key(hunk.lines.iter().map(|line| line.text.as_str()));
+            let mut head_in_key_block = old_in_key_block;
             for line in &mut hunk.lines {
+                // Removed and added lines are different revisions.  A marker
+                // in one must never change the armour state used to redact the
+                // other; context is shared by both revisions.
+                let in_key_block = match line.kind {
+                    LineKind::Added => &mut head_in_key_block,
+                    LineKind::Removed => &mut old_in_key_block,
+                    LineKind::Context => &mut head_in_key_block,
+                };
                 if scan::is_private_key_begin(&line.text) {
                     let masked = scan::redact_stream_line(&line.text, &mut in_key_block);
                     if masked != line.text {
@@ -153,6 +162,9 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
                         line.text = masked;
                     }
                     continue;
+                }
+                if line.kind == LineKind::Context {
+                    old_in_key_block = head_in_key_block;
                 }
                 if in_key_block {
                     if scan::is_private_key_end(&line.text) {
