@@ -23,7 +23,6 @@ ignore = [
     "**/__pycache__/**",
     "**/.terraform/**",
     "target/**",
-    "**/*.lock",
     "**/generated/**",
 ]
 
