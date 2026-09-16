@@ -198,7 +198,7 @@ impl<'a> PromptInputs<'a> {
             new_evidence: "",
             evidence_label: "diff",
             changed_paths: &[],
-            focus_path: None,
+            focus_paths: &[],
             // No council: the lane's own instructions, unmodified.
             persona: crate::council::persona::NONE,
             scanner_evidence: "",
