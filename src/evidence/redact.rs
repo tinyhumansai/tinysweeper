@@ -150,8 +150,8 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
                     // case the marker branch must not bypass ordinary value
                     // masking before it starts tracking the following lines.
                     let trimmed = line.text.trim();
-                    let marker_only = trimmed.starts_with("-----BEGIN ")
-                        && trimmed.ends_with("-----");
+                    let marker_only =
+                        trimmed.starts_with("-----BEGIN ") && trimmed.ends_with("-----");
                     if !marker_only {
                         spans += 1;
                         masked_here = true;
