@@ -320,6 +320,11 @@ impl<'a> Indexer<'a> {
         removed: Vec<String>,
     ) -> Result<IndexOutcome> {
         let signature = self.embedder.signature();
+        // The count this run starts from, read before it writes anything —
+        // and before the claim, so a read that fails leaves no lease behind
+        // for every later delivery to requeue against until its TTL.
+        // Both settlements below apply the run's own deltas to it.
+        let before = self.manifest.state(repo_id, &signature).await?.chunks;
         let lease = match self
             .manifest
             .claim(repo_id, &signature, &self.holder)
@@ -335,12 +340,6 @@ impl<'a> Indexer<'a> {
                 return Ok(IndexOutcome::Requeue { holder });
             }
         };
-
-        // The count this run starts from, read before it writes anything.
-        // Both settlements below apply the run's own deltas to it; reading it
-        // afterwards would be the same number — nothing but `release` moves
-        // it — but taking it here makes that not a thing anyone has to know.
-        let before = self.manifest.state(repo_id, &signature).await?.chunks;
 
         let mut report = IndexReport {
             skipped,

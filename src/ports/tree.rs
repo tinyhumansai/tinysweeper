@@ -606,6 +606,12 @@ pub fn submodule_paths(gitmodules: &str) -> Vec<String> {
 /// names git's own directory is refused rather than repaired.
 pub fn canonical_submodule_path(raw: &str) -> Option<String> {
     let raw = raw.trim();
+    // Git accepts `path = "libs/core"`; the quotes are not part of the path.
+    let raw = raw
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or(raw)
+        .trim();
     if raw.is_empty() || raw.starts_with('/') || raw.contains('\\') {
         return None;
     }
@@ -835,7 +841,14 @@ mod tests {
         let text = "[submodule \"x\"]\n\tpath = vendor/x\n\turl = https://e/x.git\n[submodule \"y\"]\n path=vendor/y/\n";
         assert_eq!(submodule_paths(text), vec!["vendor/x", "vendor/y"]);
         // Every spelling git resolves to one gitlink is one path here too.
-        for spelled in ["./vendor/x", "vendor//x", "vendor/./x/", "./vendor/./x//"] {
+        for spelled in [
+            "./vendor/x",
+            "vendor//x",
+            "vendor/./x/",
+            "./vendor/./x//",
+            "\"vendor/x\"",
+            "\"./vendor/x/\"",
+        ] {
             assert_eq!(
                 canonical_submodule_path(spelled).as_deref(),
                 Some("vendor/x"),
