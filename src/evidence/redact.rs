@@ -108,9 +108,8 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
         // file — because the marker text is specific enough to carry no
         // false-positive risk, and a key pasted into an ordinary source file
         // is exactly the case a per-file allowlist cannot cover.
-        let mut in_key_block = false;
         for hunk in &mut diff.hunks {
-            in_key_block = false;
+            let mut in_key_block = false;
             for line in &mut hunk.lines {
                 if scan::is_private_key_begin(&line.text) {
                     in_key_block = true;
