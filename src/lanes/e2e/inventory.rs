@@ -548,10 +548,21 @@ impl StepBeingRead {
     }
 
     /// Apply this step's gate to `label_gate`, if this step earned the right
-    /// to (it ran something e2e-shaped) and nothing earlier already set one.
-    fn commit(&self, label_gate: &mut Option<String>) {
-        if self.is_e2e_step && label_gate.is_none() {
+    /// to (it ran something e2e-shaped) and no earlier e2e step already
+    /// decided one.
+    ///
+    /// `decided` is tracked separately from `label_gate.is_none()`: an
+    /// earlier, *unconditional* e2e step deciding "no gate" also leaves
+    /// `label_gate` at `None`, which is indistinguishable from "no e2e step
+    /// has spoken yet" if that were the only signal. Without `decided`, a
+    /// later e2e step that happens to be label-gated would overwrite the
+    /// earlier unconditional step's `None` with its own gate — reporting
+    /// the whole job as gated on a label when it already runs an
+    /// unconditional e2e step regardless.
+    fn commit(&self, label_gate: &mut Option<String>, decided: &mut bool) {
+        if self.is_e2e_step && !*decided {
             *label_gate = self.gate.clone();
+            *decided = true;
         }
     }
 }
