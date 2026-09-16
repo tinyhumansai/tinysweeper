@@ -340,7 +340,12 @@ pub fn settle(watch: &Watch, checks: &[CheckStatus], fail_on: Severity) -> Optio
             .collect();
         if let Some(conclusion) = conclusions.iter().find(|c| c.blocks()) {
             failed.push((job.clone(), *conclusion));
-        } else if conclusions.contains(&CheckConclusion::Skipped) {
+        } else if conclusions
+            .iter()
+            .any(|c| matches!(c, CheckConclusion::Skipped | CheckConclusion::Neutral))
+        {
+            // Same reasoning as `state_of`: neutral is not an affirmative
+            // pass, so it is settled the same way a skip is.
             skipped.push(job.clone());
         } else {
             passed.push(job.clone());
