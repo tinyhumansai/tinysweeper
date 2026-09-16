@@ -1383,8 +1383,11 @@ fn helper() {
 
         let system = &model.requests()[0].messages[0].content;
         assert!(system.contains("These files only"), "{system}");
-        assert!(system.contains("`src/widget.rs`"), "{system}");
-        assert!(system.contains("`src/widget_test.rs`"), "{system}");
+        // Fenced as untrusted data, one path per line, not backtick-wrapped
+        // prose — see `harness::prompt::isolation_clause`'s group arm.
+        assert!(system.contains("src/widget.rs"), "{system}");
+        assert!(system.contains("src/widget_test.rs"), "{system}");
+        assert!(system.contains("untrusted"), "{system}");
     }
 
     #[tokio::test]
