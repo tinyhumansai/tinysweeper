@@ -513,6 +513,13 @@ pub async fn review_with_tree(
     }
 
     let scan_findings = run_scanners(config, &diffs, &context);
+    // Before retrieval, the knowledge pass, `LaneInput`, and
+    // `replay::split`/`render`: everything downstream — including the
+    // cached prefix a re-review replays byte for byte — must only ever see
+    // the masked text. Scrubbing a model's *output* (below, `scrub`) is a
+    // second line of defence, not the first; the first is never sending the
+    // value at all.
+    crate::evidence::redact::mask(&mut diffs, &scan_findings);
 
     // What earlier cycles already said. `review.incremental = false` opts a
     // repository out of the whole mechanism and reviews every push from
