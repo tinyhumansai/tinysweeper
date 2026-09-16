@@ -753,7 +753,14 @@ mod tests {
         state.set_file("main", ".github/workflows/e2e.yml", text);
         let forge = MockForge::with_state(state);
 
-        let evidence = gather(&forge, &config(), &RepoId::parse("o/r").unwrap(), "head", &[]).await;
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            &[],
+        )
+        .await;
 
         let targets: Vec<bool> = evidence
             .harness
@@ -772,7 +779,10 @@ mod tests {
             "one execution off the head, one off the default branch: {:?}",
             evidence.harness.workflows
         );
-        assert!(targets.contains(&true) && targets.contains(&false), "{targets:?}");
+        assert!(
+            targets.contains(&true) && targets.contains(&false),
+            "{targets:?}"
+        );
     }
 
     #[tokio::test]
@@ -788,7 +798,14 @@ mod tests {
         );
         let forge = MockForge::with_state(state);
 
-        let evidence = gather(&forge, &config(), &RepoId::parse("o/r").unwrap(), "head", &[]).await;
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            &[],
+        )
+        .await;
 
         assert!(evidence.harness.truncated, "{:?}", evidence.degraded);
         assert!(
