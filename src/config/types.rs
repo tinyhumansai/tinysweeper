@@ -240,6 +240,8 @@ pub struct Config {
     pub council: Council,
     /// What a reviewer may look up in the tree before it answers.
     pub lookup: LookupPolicy,
+    /// Deterministic cross-file grouping for the per-file fan-out.
+    pub grouping: Grouping,
     /// Auto-merge policy.
     pub automerge: AutoMerge,
     /// Review-thread resolution.
