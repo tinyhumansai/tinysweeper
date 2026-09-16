@@ -583,10 +583,17 @@ The definitions of what the changed lines call into,                  read from 
     /// across a whole group rather than per file. The caller decides which
     /// file's symbol to try next — round-robin across a group, or simply the
     /// next one when there is only one file.
+    ///
+    /// `diff` is the file whose changed lines named `symbol`; `group_diffs`
+    /// is every file in its conversation (one entry, `diff` itself, when
+    /// there is no group) — a hit inside any of their hunks is changed code
+    /// already visible in this same conversation's evidence, not an external
+    /// definition, whichever member's diff it happens to land in.
     async fn seed_symbol(
         &mut self,
         tree: &dyn TreeReader,
         diff: &crate::evidence::diff::FileDiff,
+        group_diffs: &[crate::evidence::diff::FileDiff],
         symbol: &str,
         policy: &LookupPolicy,
         rendered: &mut String,
