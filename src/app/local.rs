@@ -181,6 +181,9 @@ impl crate::ports::tree::TreeReader for GitTree {
                 if path.contains("..") || path.starts_with('/') {
                     return Ok(Found::NotFound);
                 }
+                if crate::scan::is_sensitive_path(path) {
+                    return Ok(crate::ports::tree::sensitive_path_refusal(path));
+                }
                 Ok(match git::file_at(&self.dir, &self.range, path).await? {
                     Some(content) => {
                         let (start, end) = Lookup::read_range(*start, *end);
