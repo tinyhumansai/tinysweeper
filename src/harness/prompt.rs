@@ -334,24 +334,34 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
     }
 
     // Layer 5a — what this same reviewer already found in this unit, for the
-    // opt-in coverage pass (`lanes::coverage`). Empty on every call except
+    // opt-in coverage pass (`lanes::coverage`). Gated on `coverage_pass`
+    // itself, not on whether the confirmed list is empty: a group whose
+    // first pass found nothing to report is exactly the common case this
+    // pass exists for, and it still needs telling that this is a second
+    // look, not a repeat of the first question. `false` on every call except
     // the one extra call a coverage pass makes, which is what keeps every
     // other prompt in this crate byte-identical to before this layer
     // existed — see `an_empty_confirmed_list_leaves_the_prompt_byte_identical`.
-    if !inputs.confirmed_this_round.is_empty() {
+    if inputs.coverage_pass {
         suffix.push_str(
             "\n## What you already found\n\n\
-             You already reported these in this unit. Do not repeat them — look for what a \
-             first pass misses. This is a second pass over the same evidence, not a fresh \
-             review.\n\n",
+             This is a second pass over the same evidence, not a fresh review. Look for what a \
+             first pass misses.\n\n",
         );
-        let rendered = inputs
-            .confirmed_this_round
-            .iter()
-            .map(|line| format!("- {line}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        push_fenced(&mut suffix, "confirmed-findings", &rendered);
+        if inputs.confirmed_this_round.is_empty() {
+            suffix.push_str(
+                "Nothing survived the first pass for this unit. Look again with fresh eyes.\n",
+            );
+        } else {
+            suffix.push_str("Do not repeat what you already reported here:\n\n");
+            let rendered = inputs
+                .confirmed_this_round
+                .iter()
+                .map(|line| format!("- {line}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            push_fenced(&mut suffix, "confirmed-findings", &rendered);
+        }
     }
 
     // Layer 5b — the pull request's own words. Volatile, and the single most
