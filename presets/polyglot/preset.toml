@@ -27,12 +27,13 @@ ignore = [
 ]
 
 # Ordered, first match wins: the most specific glob has to come first, or the
-# broader entry below it never fires. See presets/rules/README.md. The
-# infrastructure entries below are scoped to lanes = ["critique", "security"]
-# for the same reason the language entries further down are: `tests`,
-# `commits` and `description` build one prompt over every changed path with
-# no `focus_path`, so an unscoped entry's rules leak into lanes that never
-# review that file on its own.
+# broader entry below it never fires. See presets/rules/README.md. Every
+# entry in this table is scoped to lanes = ["critique", "security"] — the
+# only two that build a prompt for one file at a time. `tests`, `commits`
+# and `description` build one prompt over every changed path with no
+# `focus_path`, so an unscoped entry's rules would leak into lanes that never
+# review that file on its own — a Go file in the diff putting the Go
+# checklist in front of the description reviewer, say.
 [[path_instructions]]
 glob = "**/Dockerfile*"
 rules = "dockerfile"
