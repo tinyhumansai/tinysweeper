@@ -373,13 +373,7 @@ async fn review_group(
             // cover. This pass is optional on top of round one, so a failure
             // here is no additional coverage result, not a reason to discard
             // every finding round one already produced and falsified.
-            let asked = match place(llm.clone(), input, group_diffs, &evidence, response).await {
-                Ok(asked) => asked,
-                Err(err) => {
-                    tracing::warn!(%err, "a coverage pass failed to place its findings");
-                    break;
-                }
-            };
+            let asked = place(llm.clone(), input, group_diffs, &evidence, response).await?;
             spend.merge(asked.spend);
             unanchored += asked.unanchored;
             discarded += asked.discarded;
