@@ -139,6 +139,7 @@ pub async fn apply(
     // dismissal that fails is logged, and the comment saying this is not an
     // approval still goes out, rather than nothing at all.
     let unvouched = !proposal.complete() && proposal.skipped.is_none();
+    let mut withdrawal_failed = None;
     if unvouched
         && event == ReviewEvent::Comment
         && (previous == Some(ReviewEvent::Approve) || !previous_known)
@@ -151,7 +152,12 @@ pub async fn apply(
             )
             .await
     {
+        // Remembered, not swallowed: the comment below still goes out, so a
+        // reader sees why, and then the run fails — an approval that may
+        // still stand over a push nobody reviewed is not a success, and the
+        // failure lands on the pull request as a blocking check.
         tracing::warn!(%err, number = proposal.number, "could not withdraw the standing approval");
+        withdrawal_failed = Some(err);
     }
 
     // A push the model never answered is submitted too, as the comment: the
@@ -361,6 +367,24 @@ async fn own_review_state(
     }
 }
 
+/// `text` as a Markdown code span that `text` cannot break out of.
+///
+/// Paths here are the contributor's: a filename with a backtick would close
+/// the span and write Markdown into a review the bot signs. The span is
+/// fenced with one more backtick than the longest run inside, which is how
+/// CommonMark spells a literal backtick, and control characters — a newline
+/// ends a span — are dropped.
+fn code_span(text: &str) -> String {
+    let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+    let longest = clean
+        .split(|c| c != '`')
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    let fence = "`".repeat(longest + 1);
+    format!("{fence} {clean} {fence}")
+}
+
 fn title_for(findings: usize, summary: &str) -> String {
     match findings {
         0 => summary.chars().take(80).collect(),
@@ -492,7 +516,7 @@ fn review_body(
                  is not an approval: {}{}.",
                 shown
                     .iter()
-                    .map(|name| format!("`{name}`"))
+                    .map(|name| code_span(name))
                     .collect::<Vec<_>>()
                     .join(", "),
                 if more > 0 {
