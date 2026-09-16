@@ -282,7 +282,7 @@ async fn review_group(
     if per_reviewer.is_empty() {
         return Err(crate::error::Error::lane(
             "critique",
-            format!("every reviewer failed on {}", diff.path),
+            format!("every reviewer failed on {}", group_paths.join(" + ")),
         ));
     }
 
