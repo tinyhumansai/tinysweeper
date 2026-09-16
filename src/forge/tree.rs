@@ -322,6 +322,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn forge_tree_refuses_to_read_a_dotenv_file() {
+        let mut state = MockState::default();
+        state.set_file("head", ".env", "AWS_SECRET=super-secret-value\n");
+        let forge = MockForge::with_state(state);
+        let tree = ForgeTree::new(&forge, repo(), "head", "github.com");
+
+        let found = tree
+            .lookup(&Lookup::Read {
+                path: ".env".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(&found, Found::Unavailable { reason } if reason.contains("secret")),
+            "a sensitive path must never be read: {found:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn a_same_host_different_owner_submodule_is_not_followed() {
         // `.gitmodules` is contributor-controlled; pointing it at a same-host
         // repository owned by someone else must not pull that repository in
