@@ -215,8 +215,8 @@ fn test_siblings(a: &str, b: &str) -> bool {
 
     let (rust_a, rust_b) = (strip_suffix(file_a, ".rs"), strip_suffix(file_b, ".rs"));
     if let (Some(stem_a), Some(stem_b)) = (rust_a, rust_b)
-        && rust_test_stem(stem_a).is_some_and(|base| base == stem_b)
-            || rust_test_stem(stem_b).is_some_and(|base| base == stem_a)
+        && (rust_test_stem(stem_a).is_some_and(|base| base == stem_b)
+            || rust_test_stem(stem_b).is_some_and(|base| base == stem_a))
     {
         return true;
     }
