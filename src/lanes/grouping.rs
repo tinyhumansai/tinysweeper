@@ -373,7 +373,10 @@ fn same_stem_different_extension(a: &str, b: &str) -> bool {
 /// module — `user.model.ts` and `user.profile.css` share a root but are not
 /// a component and its stylesheet.
 fn is_script_extension(rest: &str) -> bool {
-    matches!(rest, "ts" | "tsx" | "js" | "jsx" | "module.ts" | "module.tsx")
+    matches!(
+        rest,
+        "ts" | "tsx" | "js" | "jsx" | "module.ts" | "module.tsx"
+    )
 }
 
 /// Whether `rest` names a stylesheet, plain or CSS-Modules-scoped.
