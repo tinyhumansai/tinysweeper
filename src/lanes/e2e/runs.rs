@@ -128,6 +128,10 @@ pub fn job_runs(
             job: job.name.clone(),
             filter_line: filter_line(workflow),
             state: state_of(workflow, job, checks, changed, labels),
+            target: matches!(
+                workflow.trigger,
+                crate::lanes::e2e::inventory::Trigger::PullRequest { target: true, .. }
+            ),
         })
         .collect()
 }
