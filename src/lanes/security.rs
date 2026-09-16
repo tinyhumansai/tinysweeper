@@ -228,14 +228,15 @@ impl Lane for Security {
     }
 }
 
-/// Review one file, in a conversation that knows about no other file.
+/// Review one group of related changed files, in a conversation that knows
+/// about no file outside it.
 ///
 // Every argument is one prompt layer, and they are passed individually rather
 // than as a context struct because each has a different trust level — see
 // `harness::prompt`. Bundling them would make it easy to route the untrusted
 // ones to the wrong half of the prompt.
 #[allow(clippy::too_many_arguments)]
-async fn review_file(
+async fn review_group(
     llm: std::sync::Arc<crate::flows::caps::ModelCapability>,
     config: &crate::config::types::Config,
     repo_policy: Option<&str>,
@@ -244,18 +245,19 @@ async fn review_file(
     retrieved_context: &str,
     memory_context: &str,
     asking: runner::Asking<'_>,
-    diff: &FileDiff,
+    group_paths: &[String],
+    group_diffs: &[FileDiff],
     scanner: &[&ScanFinding],
 ) -> Result<FileReview> {
-    let evidence = render_diffs(std::slice::from_ref(diff));
-    let scanner_evidence = render_scanner(scanner, Some(&diff.path));
+    let evidence = render_diffs(group_diffs);
+    let scanner_evidence = render_scanner(scanner, group_paths);
 
     let built = prompt::build(&PromptInputs {
         repo_policy,
         extracted_rules,
         prior_findings,
         new_evidence: &evidence,
-        focus_paths: std::slice::from_ref(&diff.path),
+        focus_paths: group_paths,
         scanner_evidence: &scanner_evidence,
         retrieved_context,
         memory_context,
