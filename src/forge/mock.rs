@@ -167,6 +167,8 @@ pub struct MockState {
     pub own_reviews: BTreeMap<u64, ReviewEvent>,
     /// Whether reading our own review history fails, as a forge mid-outage.
     pub own_review_state_fails: bool,
+    /// Whether withdrawing our own approval fails.
+    pub dismissals_fail: bool,
     /// Check runs, keyed by the commit they report on and then by check name.
     pub checks: BTreeMap<String, BTreeMap<String, CheckStatus>>,
     /// Reviews, oldest first, keyed by pull request number.
@@ -376,6 +378,15 @@ impl MockForge {
     }
 
     /// Pretend tinysweeper already left a review of this state.
+    /// Make `dismiss_own_approval` fail.
+    pub fn failing_dismissals(self) -> Self {
+        {
+            let mut state = self.state.lock().expect("mock state lock");
+            state.dismissals_fail = true;
+        }
+        self
+    }
+
     /// Make `own_review_state` fail, as a forge mid-outage would.
     pub fn failing_own_review_state(self) -> Self {
         {
@@ -840,6 +851,9 @@ impl ForgeWrite for MockForge {
     async fn dismiss_own_approval(&self, _repo: &RepoId, number: u64, message: &str) -> Result<()> {
         let standing = {
             let mut state = self.state.lock().expect("mock state lock");
+            if state.dismissals_fail {
+                return Err(Error::Forge("dismissal refused".into()));
+            }
             let standing = state.own_reviews.get(&number) == Some(&ReviewEvent::Approve);
             // Recorded either way; the state only moves when the mock is
             // allowed to write, like every other write here.

@@ -223,7 +223,12 @@ pub async fn apply(
         tracing::info!(number = proposal.number, ?added, "triaged");
     }
 
-    Ok(())
+    // Everything that could be published was; now the one thing that could
+    // not be undone is reported as the failure it is.
+    match withdrawal_failed {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
 }
 
 /// Post or update the change-map comment.
@@ -376,11 +381,7 @@ async fn own_review_state(
 /// ends a span — are dropped.
 fn code_span(text: &str) -> String {
     let clean: String = text.chars().filter(|c| !c.is_control()).collect();
-    let longest = clean
-        .split(|c| c != '`')
-        .map(str::len)
-        .max()
-        .unwrap_or(0);
+    let longest = clean.split(|c| c != '`').map(str::len).max().unwrap_or(0);
     let fence = "`".repeat(longest + 1);
     format!("{fence} {clean} {fence}")
 }
@@ -1451,6 +1452,36 @@ mod tests {
         if let Some((body, event)) = review_of(&forge) {
             assert_ne!(event, ReviewEvent::Approve, "{body}");
         }
+    }
+
+    #[test]
+    fn a_contributor_path_cannot_break_out_of_its_code_span() {
+        assert_eq!(code_span("src/lib.rs"), "` src/lib.rs `");
+        let hostile = "x`.rs` **bold**\n# heading";
+        let rendered = code_span(hostile);
+        assert!(rendered.starts_with("`` "), "{rendered}");
+        assert!(!rendered.contains('\n'), "{rendered}");
+        assert!(rendered.ends_with(" ``"), "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn a_withdrawal_that_fails_still_posts_the_reason_and_then_fails_the_run() {
+        let mut unanswered = proposal("abc123", vec![]);
+        for lane in &mut unanswered.lanes {
+            lane.conclusion = CheckConclusion::Neutral;
+            lane.unanswered = vec!["src/lib.rs".into()];
+        }
+        let forge = forge("abc123")
+            .with_own_review(7, ReviewEvent::Approve)
+            .failing_dismissals();
+        let outcome = apply(&forge, &forge, &config(), &unanswered, None).await;
+        let (body, event) = review_of(&forge).expect("the reason is still posted");
+        assert_ne!(event, ReviewEvent::Approve, "{body}");
+        assert!(body.contains("not an approval"), "{body}");
+        assert!(
+            outcome.is_err(),
+            "an approval that may still stand over an unreviewed push is not a success"
+        );
     }
 
     #[tokio::test]
