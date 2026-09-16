@@ -306,6 +306,21 @@ pub struct Watch {
     /// Whether the review's own findings already failed the lane. A failed
     /// static half stays failed whatever the jobs say.
     pub failed: bool,
+    /// Distinguishes this watch from any other, even one that is otherwise
+    /// byte-identical (same head, same jobs, same summary, same verdict).
+    ///
+    /// A same-head manual re-review (the `/admin/reviews` route can trigger
+    /// one at any time) can save a new watch that happens to match the old
+    /// one on every other field. `ReviewStateStore::clear_e2e_watch`
+    /// compares the whole `Watch` so a settlement in flight for the old one
+    /// cannot clear the new one out from under it — without a field that
+    /// changes on every save regardless of content, "otherwise identical"
+    /// would still compare equal and defeat that guard. `#[serde(default)]`
+    /// so a record written before this field existed deserializes to an
+    /// empty generation, which — correctly — never matches a freshly
+    /// created watch's generation, rather than being read as a match.
+    #[serde(default)]
+    pub generation: String,
 }
 
 /// The settled verdict, once every watched job has concluded.
