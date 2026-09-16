@@ -121,11 +121,12 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
                         in_key_block = false;
                         continue;
                     }
-                    let masked = scan::redact(line.text.trim());
-                    if masked != line.text.trim() || !line.text.trim().is_empty() {
+                    // Blank lines inside the armour are formatting, not key
+                    // material; masking them would just be noise.
+                    if !line.text.trim().is_empty() {
                         spans += 1;
                         masked_here = true;
-                        line.text = masked;
+                        line.text = scan::redact(line.text.trim());
                     }
                     continue;
                 }
