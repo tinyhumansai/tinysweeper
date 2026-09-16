@@ -1016,9 +1016,16 @@ fn helper() {
             .then(json!({"incorrect": []}))
             .then(json!({
                 "summary": "…",
-                // Same line, a different-sounding title: still the same
-                // observation by two calls, not two findings.
-                "findings": [finding_named("Bounds-check x3 before use", 3)]
+                // One line over, a different rule id and a different-sounding
+                // title: neither the fingerprint nor the wording matches, but
+                // the anchored range overlaps within `agree::LINE_TOLERANCE`,
+                // which is what `corroborates` — not the fingerprint check —
+                // has to catch.
+                "findings": [finding_named_with_rule(
+                    "Bounds-check x4 before use",
+                    4,
+                    "missing-bounds-check"
+                )]
             }));
 
         let outcome = run_with(model, &config_with_passes(2), &large_diffs()).await;
