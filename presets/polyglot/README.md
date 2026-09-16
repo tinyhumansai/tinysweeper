@@ -19,19 +19,23 @@ Dockerfile, some shell scripts — all reviewed by the same bot.
 glob it matches — see `presets/rules/README.md`. This preset orders entries
 from most specific to least, on purpose:
 
-1. `Dockerfile*` and `*.tf` — a handful of infrastructure files that would
-   otherwise fall through to a language glob (a `Dockerfile` has no
-   extension; a `main.tf` would match nothing else) or, worse, get treated as
-   plain text.
+1. `Dockerfile*`, `*.tf`, and `*.tfstate`/`*.tfstate.backup` — a handful of
+   infrastructure files that would otherwise fall through to a language glob
+   (a `Dockerfile` has no extension; a `main.tf` would match nothing else) or,
+   worse, get treated as plain text. State files get their own entries
+   because `*.tf` does not match them.
 2. `.github/workflows/**` — the deterministic scanner already checked
    permissions and pinning; the workflow rules adjudicate what it found.
 3. Dependency manifests (`Cargo.toml`, `package.json`, `go.mod`,
    `requirements*.txt`) — reused verbatim from `security-strict`, because a
    manifest is a manifest regardless of which language it declares
    dependencies for.
-4. Test files, by filename shape (`_test`, `test_`, `.test`, `.spec`) —
-   ahead of every language extension, so a `handler_test.go` is judged as a
-   test first and a Go file never.
+4. Test files, by filename shape (`_test`, `test_`, `.test`, `.spec`), plus
+   two Java-specific entries (`*Test.java`/`*Tests.java`/`*IT.java` and
+   `src/test/**/*.java`) — ahead of every language extension, so a
+   `handler_test.go` is judged as a test first and a Go file never, and a
+   conventionally-named JUnit file is judged as a test even with none of
+   those substrings in its name.
 5. One entry per language extension, ending in Rust — this repository's own
    dogfood case, and the reason the ordering comment in every preset here
    points back at `rust-library`.
