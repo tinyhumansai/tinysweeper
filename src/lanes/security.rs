@@ -223,7 +223,7 @@ async fn review_file(
         extracted_rules,
         prior_findings,
         new_evidence: &evidence,
-        focus_path: Some(&diff.path),
+        focus_paths: std::slice::from_ref(&diff.path),
         scanner_evidence: &scanner_evidence,
         retrieved_context,
         memory_context,
