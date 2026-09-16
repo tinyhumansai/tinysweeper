@@ -1731,6 +1731,41 @@ mod tests {
     }
 
     #[test]
+    fn grouping_alone_needs_no_walk_when_no_enabled_lane_consumes_it() {
+        // A tests-only review — neither `critique` nor `security` on — never
+        // calls `grouping::group`, so the default-enabled grouping flag must
+        // not trigger a graph walk nothing downstream reads.
+        let mut config = config();
+        config.review.lanes = vec!["e2e".into()];
+        assert!(config.grouping.enabled, "grouping is on by default");
+        assert!(!changed_neighbourhood_is_needed(&config));
+    }
+
+    #[test]
+    fn grouping_with_critique_enabled_needs_the_walk() {
+        let config = critique_config();
+        assert!(changed_neighbourhood_is_needed(&config));
+    }
+
+    #[test]
+    fn the_change_map_alone_needs_the_walk_even_with_grouping_off() {
+        let mut config = config();
+        config.review.lanes = vec!["e2e".into()];
+        config.grouping.enabled = false;
+        config.overview.enabled = true;
+        assert!(changed_neighbourhood_is_needed(&config));
+    }
+
+    #[test]
+    fn neither_grouping_nor_the_change_map_needs_no_walk() {
+        let mut config = config();
+        config.review.lanes = vec!["e2e".into()];
+        config.grouping.enabled = false;
+        config.overview.enabled = false;
+        assert!(!changed_neighbourhood_is_needed(&config));
+    }
+
+    #[test]
     fn max_comments_caps_findings_across_lanes_not_per_lane() {
         fn finding(title: &str, severity: Severity) -> Finding {
             Finding {
