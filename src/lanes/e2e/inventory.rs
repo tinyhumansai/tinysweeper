@@ -778,7 +778,20 @@ impl Outline {
                 for (j, field) in self.direct(i) {
                     match field.key.as_str() {
                         "name" => job.name = Some(unquote(&field.value)),
-                        "if" => job_level_gate = Some(label_in(&field.value)),
+                        "if" => {
+                            // Only when the job-level condition actually
+                            // mentions a label at all — positively
+                            // (`Some(label)`) or negated (`None`, "a
+                            // negated gate is not a gate") — does it decide
+                            // anything here. An unrelated condition
+                            // (`github.repository_owner == 'acme'`) says
+                            // nothing about a label gate one way or the
+                            // other, and must not erase what a step already
+                            // inferred.
+                            if mentions_label(&field.value) {
+                                job_level_gate = Some(label_in(&field.value));
+                            }
+                        }
                         "services" => job.has_services = true,
                         "steps" => {
                             // `self.children(j)` is every field of every step,
