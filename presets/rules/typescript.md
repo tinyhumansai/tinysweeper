@@ -43,6 +43,9 @@ Covers `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` and `.cjs`.
 - A floating promise on a call whose only effect is fire-and-forget logging or
   telemetry, and whose rejection is deliberately ignored with a comment
   saying so.
+- A shallow object-literal spread (`{...a, ...b}`) of untrusted data with no
+  later unsafe deep-merge of the result — spread cannot itself repoint a
+  prototype.
 - Sequential `await` in a loop when each iteration depends on the previous
   result, or the collection is small and fixed at call time.
 - `innerHTML`/`dangerouslySetInnerHTML` fed a value that has already passed
