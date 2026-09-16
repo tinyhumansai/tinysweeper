@@ -721,6 +721,7 @@ pub async fn review_with_tree(
                 config,
                 repo,
                 &context.pull_request.head_sha,
+                &context.pull_request.base_sha,
                 &diffs,
             )
             .await,
