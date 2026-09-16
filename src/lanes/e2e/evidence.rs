@@ -153,17 +153,31 @@ pub async fn gather(
     evidence.harness.truncated = listing.truncated;
     evidence.harness.tests = inventory::e2e_tests(&listing.paths, &table);
 
-    // Keyed by path so the `pull_request_target` pass below can override a
-    // head-classified entry, or add one the head tree never had (a
-    // `pull_request_target` workflow this pull request deleted).
-    let mut workflows: std::collections::BTreeMap<String, inventory::Workflow> =
-        std::collections::BTreeMap::new();
+    // Two independent lists, not one merged by path — a `pull_request` and
+    // a `pull_request_target` workflow that happen to share a file path are
+    // two independent executions with independent job lists (GitHub reads
+    // one from the head/merge ref and the other from the default branch's
+    // current tip, entirely regardless of each other), and this pull
+    // request can genuinely trigger both at once: it can propose changing a
+    // file from `pull_request_target` to `pull_request` while the default
+    // branch — what GitHub actually still executes as the target trigger,
+    // until this merges — has not seen that change yet. Overwriting one
+    // list entry with the other by path would silently drop whichever
+    // wasn't kept, and its later job failures with it.
+    let mut workflows: Vec<inventory::Workflow> = Vec::new();
 
     for path in inventory::workflow_paths(&listing.paths) {
         match forge.file_at(repo, &path, head_sha).await {
             Ok(Some(text)) => {
                 if let Some(workflow) = inventory::classify_workflow(&path, &text, named) {
-                    workflows.insert(path, workflow);
+                    // A head copy that classifies as `pull_request_target`
+                    // is not a real head-side execution at all: GitHub
+                    // never reads head content to decide or run that
+                    // trigger. Only the default-branch pass below can speak
+                    // for `pull_request_target`.
+                    if !is_target(&workflow) {
+                        workflows.push(workflow);
+                    }
                 }
             }
             Ok(None) => {}
@@ -179,16 +193,11 @@ pub async fn gather(
     // `pull_request_target` is resolved by GitHub from the repository's
     // *default* branch — not the pull request's base branch, which can be
     // some other branch entirely, and not the head, which the whole event
-    // exists to keep untrusted. Classifying one from the head copy (the
-    // pass above) can therefore describe the wrong definition, in either
-    // direction: a workflow this pull request just added `pull_request_target`
-    // to isn't really that trigger yet (the default branch has never seen
-    // it), and a workflow this pull request deleted or detargeted is
-    // classified as gone even though the default branch — what actually
-    // executes — still has it. A second, independent pass over the default
-    // branch's own tree catches both; it authoritatively decides
-    // `pull_request_target` identity and overrides or adds to the head pass
-    // above rather than being conditioned on what the head pass found.
+    // exists to keep untrusted. A second, independent pass over the default
+    // branch's own tree is the only source that can speak for it: it finds
+    // a `pull_request_target` workflow this pull request's head never had
+    // (deleted, renamed, or detargeted on head) just as well as one both
+    // copies agree on.
     let default_sha = match forge.default_branch(repo).await {
         Ok(branch) => match forge.branch_head(repo, &branch).await {
             Ok(sha) => sha,
