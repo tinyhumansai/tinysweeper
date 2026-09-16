@@ -593,7 +593,6 @@ The definitions of what the changed lines call into,                  read from 
     async fn seed_symbol(
         &mut self,
         tree: &dyn TreeReader,
-        diff: &crate::evidence::diff::FileDiff,
         group_diffs: &[crate::evidence::diff::FileDiff],
         symbol: &str,
         policy: &LookupPolicy,
