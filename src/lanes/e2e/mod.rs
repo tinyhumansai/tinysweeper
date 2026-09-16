@@ -641,6 +641,44 @@ mod lane_tests {
         );
     }
 
+    /// Regression for a Codex finding on #166: the production `PromptInputs`
+    /// literal here used `..PromptInputs::new(...)` for every field it did not
+    /// name explicitly, which defaulted `redaction_note` to empty instead of
+    /// forwarding `input.redaction_note` — a masked diff reached this lane's
+    /// prompt with `<redacted, N chars>` markers and no explanation of what
+    /// they meant.
+    #[tokio::test]
+    async fn the_redaction_note_reaches_the_e2e_prompt() {
+        let model = MockModel::silent();
+        let config = config();
+        let pr = pull_request();
+        let evidence = evidence("src/server/**", vec![]);
+        E2e::new(Arc::new(model.clone()))
+            .run(LaneInput {
+                config: &config,
+                pull_request: &pr,
+                diffs: &[route_diff()],
+                file_contents: &BTreeMap::new(),
+                scan_findings: &[],
+                commits: &[],
+                repo_policy: None,
+                extracted_rules: &[],
+                reviewed_evidence: "",
+                prior_findings: &[],
+                retrieved_context: "",
+                memory_context: "",
+                redaction_note: "1 credential value was removed from this diff before you saw \
+                                  it and appears as `<redacted, N chars>`.",
+                e2e: Some(&evidence),
+                tree: None,
+            })
+            .await
+            .expect("lane runs");
+
+        let prompt = model.last_prompt().expect("recorded");
+        assert!(prompt.contains("<redacted, N chars>"), "{prompt}");
+    }
+
     #[tokio::test]
     async fn the_lane_never_executes_anything() {
         // The invariant is structural — this lane holds a `Model` and reads
