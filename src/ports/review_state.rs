@@ -23,4 +23,17 @@ pub trait ReviewStateStore: Send + Sync {
 
     /// Record what has now been reviewed under `key`.
     async fn save_state(&self, key: &str, state: &ReviewedState) -> Result<()>;
+
+    /// Clear the `e2e` watch under `key`, but only if it is still exactly
+    /// the one recorded for `head_sha`.
+    ///
+    /// The compare-and-clear `settle_e2e` needs and `load_state` +
+    /// `save_state` cannot give it: a plain reload-then-save still has a
+    /// window between the two calls in which a new review can overwrite the
+    /// whole record (a new head, new fingerprints, a new watch of its own),
+    /// and an unconditional write back would discard all of that. Returns
+    /// whether anything was cleared — `false` when there was no record, no
+    /// watch, or the watch is for a different head, all of which mean
+    /// nothing here needed clearing.
+    async fn clear_e2e_watch(&self, key: &str, head_sha: &str) -> Result<bool>;
 }
