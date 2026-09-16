@@ -340,7 +340,31 @@ impl<'a> Indexer<'a> {
         // claim and the claim itself would leave those paths out of the
         // removal set, and the policy that revoked them settled as fresh.
         let removed = match removed {
-            Removed::These(paths) => paths,
+            // A changed-path list names what a push touched, which is not
+            // where a revocation lives: a revoked submodule's rows are under
+            // paths no push mentions. With a revocation in force the
+            // manifest is asked for them as well.
+            Removed::These(mut paths) => {
+                if !self.revoked.is_empty() {
+                    let known = match self.manifest.paths(repo_id, &signature).await {
+                        Ok(known) => known,
+                        Err(err) => return Err(self.release_failed(&lease, err).await),
+                    };
+                    let seen: BTreeSet<&String> = selected.iter().collect();
+                    for path in known {
+                        if !seen.contains(&path)
+                            && !paths.contains(&path)
+                            && self
+                                .revoked
+                                .iter()
+                                .any(|dir| path.starts_with(dir.as_str()))
+                        {
+                            paths.push(path);
+                        }
+                    }
+                }
+                paths
+            }
             Removed::NotSeenByTheWalk => {
                 let seen: BTreeSet<&String> = selected.iter().collect();
                 match self.manifest.paths(repo_id, &signature).await {
@@ -366,11 +390,14 @@ impl<'a> Indexer<'a> {
             // still carries that run's message (a completed run clears it).
             rebuild_graph: state.revision.is_none() || state.message.is_some(),
             // A previous run that could not account for what it confirmed
-            // said so; this run settles from a recount, not from deltas.
-            recount: state
-                .message
-                .as_deref()
-                .is_some_and(|message| message.contains(crate::indexer::types::COUNT_UNCERTAIN)),
+            // said so; this run settles from a recount, not from deltas. So
+            // does the first run to complete after any that did not: what an
+            // incomplete run confirmed is reused, not re-counted, and a
+            // running total that started from nothing would stay at nothing.
+            recount: state.revision.is_none()
+                || state.message.as_deref().is_some_and(|message| {
+                    message.contains(crate::indexer::types::COUNT_UNCERTAIN)
+                }),
             ..IndexReport::default()
         };
         let outcome = self

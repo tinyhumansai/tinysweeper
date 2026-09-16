@@ -156,7 +156,8 @@ fn gateway_cost(raw: Option<&serde_json::Value>) -> Option<f64> {
 /// No ceiling, no budget to consume half of: a routed model with
 /// `max_tokens = 0` would otherwise be warned about on every call.
 fn reasoning_crowds_the_answer(cap: u32, reasoning_tokens: u64) -> bool {
-    cap != 0 && reasoning_tokens * 2 > u64::from(cap)
+    // Divided rather than doubled: the count is the provider's and unbounded.
+    cap != 0 && reasoning_tokens > u64::from(cap) / 2
 }
 
 /// The model the gateway says answered, when it says so.
@@ -1075,6 +1076,10 @@ mod tests {
         assert!(
             !reasoning_crowds_the_answer(0, 50_000),
             "no ceiling, no half of it"
+        );
+        assert!(
+            reasoning_crowds_the_answer(16_000, u64::MAX),
+            "and no overflow"
         );
     }
 
