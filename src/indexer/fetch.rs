@@ -283,6 +283,12 @@ async fn git_stdout(root: &Path, token: &str, args: &[&str]) -> Result<String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        // Dropping `command.output()` — GIT_TIMEOUT firing below, or the
+        // caller's own deadline cancelling this future first, `review_inner`'s
+        // `run.deadline` among them — must not leave `git` running unsupervised.
+        // Without this, a `Future` dropped mid-fetch orphans the child: tokio
+        // does not kill a spawned process on drop unless told to.
+        .kill_on_drop(true)
         // Nothing inherited. A `GIT_CONFIG_COUNT` already in the environment
         // would silently renumber the pairs set below, and the ambient
         // `~/.gitconfig` of whoever runs the server is not policy this program

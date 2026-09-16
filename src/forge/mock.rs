@@ -55,6 +55,13 @@ pub enum Write {
         /// Whether it blocks the merge button.
         event: ReviewEvent,
     },
+    /// tinysweeper's own approval was withdrawn.
+    DismissApproval {
+        /// The pull request.
+        number: u64,
+        /// The reason shown on the dismissal.
+        message: String,
+    },
     /// Labels were added.
     Labels {
         /// The item.
@@ -158,6 +165,10 @@ pub struct MockState {
     pub issue_types: Vec<String>,
     /// tinysweeper's own last review state, keyed by pull request number.
     pub own_reviews: BTreeMap<u64, ReviewEvent>,
+    /// Whether reading our own review history fails, as a forge mid-outage.
+    pub own_review_state_fails: bool,
+    /// Whether withdrawing our own approval fails.
+    pub dismissals_fail: bool,
     /// Check runs, keyed by the commit they report on and then by check name.
     pub checks: BTreeMap<String, BTreeMap<String, CheckStatus>>,
     /// Reviews, oldest first, keyed by pull request number.
@@ -367,6 +378,24 @@ impl MockForge {
     }
 
     /// Pretend tinysweeper already left a review of this state.
+    /// Make `dismiss_own_approval` fail.
+    pub fn failing_dismissals(self) -> Self {
+        {
+            let mut state = self.state.lock().expect("mock state lock");
+            state.dismissals_fail = true;
+        }
+        self
+    }
+
+    /// Make `own_review_state` fail, as a forge mid-outage would.
+    pub fn failing_own_review_state(self) -> Self {
+        {
+            let mut state = self.state.lock().expect("mock state lock");
+            state.own_review_state_fails = true;
+        }
+        self
+    }
+
     pub fn with_own_review(self, number: u64, event: ReviewEvent) -> Self {
         {
             let mut state = self.state.lock().expect("mock state lock");
@@ -535,6 +564,9 @@ impl ForgeRead for MockForge {
 
     async fn own_review_state(&self, _repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
         let state = self.state.lock().expect("mock state lock");
+        if state.own_review_state_fails {
+            return Err(Error::Forge("review history unavailable".into()));
+        }
         Ok(state.own_reviews.get(&number).copied())
     }
 
@@ -794,7 +826,18 @@ impl ForgeWrite for MockForge {
                     comment.author = "tinysweeper[bot]".into();
                     comment
                 }));
-            state.own_reviews.insert(number, event);
+            // GitHub's semantics, so multi-push tests see what production
+            // sees: a comment leaves a standing verdict in force, and only a
+            // verdict replaces a verdict.
+            match (event, state.own_reviews.get(&number)) {
+                (
+                    ReviewEvent::Comment,
+                    Some(ReviewEvent::Approve | ReviewEvent::RequestChanges),
+                ) => {}
+                _ => {
+                    state.own_reviews.insert(number, event);
+                }
+            }
         }
         self.record(Write::Review {
             number,
@@ -802,6 +845,29 @@ impl ForgeWrite for MockForge {
             comments,
             event,
         });
+        Ok(())
+    }
+
+    async fn dismiss_own_approval(&self, _repo: &RepoId, number: u64, message: &str) -> Result<()> {
+        let standing = {
+            let mut state = self.state.lock().expect("mock state lock");
+            if state.dismissals_fail {
+                return Err(Error::Forge("dismissal refused".into()));
+            }
+            let standing = state.own_reviews.get(&number) == Some(&ReviewEvent::Approve);
+            // Recorded either way; the state only moves when the mock is
+            // allowed to write, like every other write here.
+            if standing && !self.read_only {
+                state.own_reviews.remove(&number);
+            }
+            standing
+        };
+        if standing {
+            self.record(Write::DismissApproval {
+                number,
+                message: message.to_string(),
+            });
+        }
         Ok(())
     }
 

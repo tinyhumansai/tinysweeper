@@ -43,6 +43,14 @@ pub struct OpenRouterEmbedder {
     url: String,
     api_key: String,
     signature: EmbedSignature,
+    /// The least time between two requests, from `requests_per_minute`.
+    ///
+    /// The harness's process-global limiter governs tinyagents' models, not
+    /// this client, so the ceiling `[embeddings]` promises is kept here: a
+    /// cold index otherwise sends batches as fast as answers come back and
+    /// walks into the gateway's 429 path.
+    interval: Option<Duration>,
+    last_sent: tokio::sync::Mutex<Option<std::time::Instant>>,
 }
 
 // Hand-written so the key cannot reach a log through a derived `Debug`. The
@@ -70,7 +78,8 @@ impl OpenRouterEmbedder {
             .ok_or_else(|| {
                 Error::config(format!(
                     "{api_key_env} is not set; it holds the API key for the \
-                     `openrouter` embedding provider"
+                     `{}` embedding provider",
+                    signature.provider
                 ))
             })?;
         Self::with_key(signature, api_key, base_url)
@@ -85,9 +94,29 @@ impl OpenRouterEmbedder {
     /// unrelated test read a key that was never configured for it, which is a
     /// flake that presents as a security test failing at random.
     pub fn with_key(signature: EmbedSignature, api_key: String, base_url: &str) -> Result<Self> {
-        let url = match base_url.trim() {
-            "" => OPENROUTER_EMBEDDINGS_URL.to_string(),
-            given => given.to_string(),
+        // The two gateways this client speaks to. `embedder_from_config` only
+        // ever builds it for these; the check is here so that stays true of
+        // every constructor, and a signature for some other provider cannot
+        // be sent to an OpenAI-shaped endpoint it was not written for.
+        if !matches!(signature.provider.as_str(), "openrouter" | "ladder") {
+            return Err(Error::config(format!(
+                "`{}` is not a gateway this client serves; it speaks to `openrouter` and \
+                 `ladder`",
+                signature.provider
+            )));
+        }
+        let url = match (signature.provider.as_str(), base_url.trim()) {
+            // No default address for the ladder: falling through to
+            // OpenRouter's would send the ladder's key to OpenRouter.
+            ("ladder", "") => {
+                return Err(Error::config(
+                    "`embeddings.provider = \"ladder\"` needs `embeddings.base_url`: the ladder's \
+                     `/v1/embeddings` on this box"
+                        .to_string(),
+                ));
+            }
+            (_, "") => OPENROUTER_EMBEDDINGS_URL.to_string(),
+            (_, given) => given.to_string(),
         };
 
         let client = reqwest::Client::builder()
@@ -100,12 +129,36 @@ impl OpenRouterEmbedder {
             url,
             api_key,
             signature,
+            interval: None,
+            last_sent: tokio::sync::Mutex::new(None),
         })
+    }
+
+    /// Cap the request rate. Zero means no cap.
+    pub fn with_requests_per_minute(mut self, per_minute: u32) -> Self {
+        self.interval = (per_minute > 0).then(|| Duration::from_secs(60) / per_minute);
+        self
+    }
+
+    /// Wait until the next request is allowed, then mark it sent.
+    async fn pace(&self) {
+        let Some(interval) = self.interval else {
+            return;
+        };
+        let mut last = self.last_sent.lock().await;
+        if let Some(at) = *last {
+            let since = at.elapsed();
+            if since < interval {
+                tokio::time::sleep(interval - since).await;
+            }
+        }
+        *last = Some(std::time::Instant::now());
     }
 
     /// One request. Split from [`Embedder::embed`] so the batching and the
     /// wire format can be tested apart from each other.
     async fn post(&self, texts: &[String]) -> Result<EmbeddingsResponse> {
+        self.pace().await;
         let body = serde_json::json!({
             "model": self.signature.model,
             "input": texts,
@@ -118,13 +171,14 @@ impl OpenRouterEmbedder {
             .json(&body)
             .send()
             .await
-            .map_err(|err| Error::Model(format!("openrouter embeddings: {err}")))?;
+            .map_err(|err| {
+                Error::Model(format!("{} embeddings: {err}", self.signature.provider))
+            })?;
 
         let status = response.status();
-        let text = response
-            .text()
-            .await
-            .map_err(|err| Error::Model(format!("openrouter embeddings: {err}")))?;
+        let text = response.text().await.map_err(|err| {
+            Error::Model(format!("{} embeddings: {err}", self.signature.provider))
+        })?;
 
         if !status.is_success() {
             // The body is the provider's error message, which names the model
@@ -132,11 +186,12 @@ impl OpenRouterEmbedder {
             // is not worth a screenful, and never logged with the key.
             let detail: String = text.chars().take(400).collect();
             return Err(Error::Model(format!(
-                "openrouter embeddings returned {status}: {detail}"
+                "{} embeddings returned {status}: {detail}",
+                self.signature.provider
             )));
         }
 
-        parse(&text)
+        parse(&text).map_err(|err| relabel(err, &self.signature.provider))
     }
 }
 
@@ -152,14 +207,16 @@ impl Embedder for OpenRouterEmbedder {
         }
 
         let response = self.post(texts).await?;
-        let vectors = response.vectors(texts.len(), self.signature.dims)?;
+        let vectors = response
+            .vectors(texts.len(), self.signature.dims)
+            .map_err(|err| relabel(err, &self.signature.provider))?;
 
         Ok(match response.usage.as_ref() {
             // Both numbers from the gateway: the tokens it counted and the cost
             // it charged.
-            Some(usage) if usage.cost.is_some() => Embedded::charged(
+            Some(usage) if usage.charged().is_some() => Embedded::charged(
                 usage.prompt_tokens.max(usage.total_tokens),
-                usage.cost.unwrap_or_default(),
+                usage.charged().unwrap_or_default(),
             ),
             // Tokens but no price. Real count, local table.
             Some(usage) => Embedded::metered(
@@ -171,6 +228,23 @@ impl Embedder for OpenRouterEmbedder {
             None => Embedded::billed(&self.signature, texts, vectors.clone()),
         }
         .with_vectors(vectors))
+    }
+}
+
+/// Name the gateway an error came from.
+///
+/// The parsing and shape checks below are written once, against the wire
+/// format both gateways share, and say `openrouter`; a ladder deployment
+/// reading "openrouter embeddings returned 402" would go looking at the
+/// wrong service. The client knows which one it spoke to, so it relabels.
+fn relabel(err: Error, provider: &str) -> Error {
+    match err {
+        Error::Model(text) if provider != "openrouter" => Error::Model(text.replacen(
+            "openrouter embeddings",
+            &format!("{provider} embeddings"),
+            1,
+        )),
+        other => other,
     }
 }
 
@@ -254,6 +328,25 @@ struct UsageWire {
     total_tokens: u64,
     #[serde(default)]
     cost: Option<f64>,
+    /// Surplus's spelling, in micro-dollars, relayed verbatim by the ladder.
+    #[serde(default)]
+    buyer_cost_micro: Option<f64>,
+}
+
+impl UsageWire {
+    /// What the gateway says it charged, in dollars, when it says so.
+    ///
+    /// Surplus first, for the reason `harness::openrouter::gateway_cost`
+    /// gives: a seller there can relay an OpenRouter-shaped `cost: 0` beside
+    /// the `buyer_cost_micro` Surplus actually bills. A negative or
+    /// non-finite figure is disbelieved rather than credited to the budget.
+    fn charged(&self) -> Option<f64> {
+        let cost = match self.buyer_cost_micro {
+            Some(micro) => micro / 1_000_000.0,
+            None => self.cost?,
+        };
+        (cost.is_finite() && cost >= 0.0).then_some(cost)
+    }
 }
 
 #[cfg(test)]

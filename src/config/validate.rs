@@ -438,15 +438,63 @@ fn validate_embeddings(config: &Config, problems: &mut Vec<String>) {
         );
     }
 
+    // The closed set `index::embedder_from_config` and `ProviderEmbedder`
+    // know between them. A name outside it fails at construction anyway,
+    // but that is on the first push; `doctor` is where a typo belongs.
+    const PROVIDERS: [&str; 7] = [
+        "voyage",
+        "openai",
+        "cohere",
+        "ollama",
+        "mock",
+        "openrouter",
+        "ladder",
+    ];
+    let provider = embeddings.provider.trim();
+    if !provider.is_empty() && !PROVIDERS.contains(&provider) {
+        // The value is not echoed; this text reaches a check-run summary.
+        problems.push(format!(
+            "`embeddings.provider` names no provider this build knows; one of {}",
+            PROVIDERS.join(", ")
+        ));
+    }
+
+    // The ladder has no default address: it is on this box, wherever the
+    // operator put it, and a blank URL would be a connection error on the
+    // first push rather than a line in `doctor`.
+    if embeddings.provider.trim() == "ladder" && embeddings.base_url.trim().is_empty() {
+        problems.push(
+            "`embeddings.provider = \"ladder\"` needs `embeddings.base_url`: the ladder's \
+             `/v1/embeddings` on this box, e.g. `http://host.docker.internal:6969/v1/embeddings`"
+                .into(),
+        );
+    }
+
+    if embeddings.provider.trim() == "ladder"
+        && !embeddings.base_url.trim().is_empty()
+        && !url::Url::parse(embeddings.base_url.trim()).is_ok_and(|url| url.host_str().is_some())
+    {
+        // The value is not echoed: a malformed URL is where a pasted
+        // credential ends up, and this text reaches a check-run summary.
+        problems.push(
+            "`embeddings.base_url` is not a URL with a host; the ladder's `/v1/embeddings` on \
+             this box looks like `http://host.docker.internal:6969/v1/embeddings`"
+                .into(),
+        );
+    }
+
     if !embeddings.base_url.trim().is_empty()
         && !embeddings.base_url.starts_with("http://")
         && !embeddings.base_url.starts_with("https://")
     {
-        problems.push(format!(
-            "`embeddings.base_url = \"{}\"` is not an http(s) URL; leave it empty for the \
-             provider's own default",
-            embeddings.base_url
-        ));
+        // Not echoed, for the same reason as the ladder check above: this
+        // text reaches a check-run summary, and a malformed URL is where a
+        // pasted credential ends up.
+        problems.push(
+            "`embeddings.base_url` is not an http(s) URL; leave it empty for the provider's \
+             own default"
+                .into(),
+        );
     }
 
     if embeddings.batch == 0 {

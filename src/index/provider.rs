@@ -97,12 +97,12 @@ impl ProviderEmbedder {
         let Some(signature) = config.signature() else {
             return Ok(None);
         };
-        if signature.provider == "openrouter" {
-            return Err(Error::config(
-                "the `openrouter` embedding provider is served by `OpenRouterEmbedder`, \
-                 not this adapter; build it with `crate::index::embedder_from_config`"
-                    .to_string(),
-            ));
+        if signature.provider == "openrouter" || signature.provider == "ladder" {
+            return Err(Error::config(format!(
+                "the `{}` embedding provider is served by `OpenRouterEmbedder`, \
+                 not this adapter; build it with `crate::index::embedder_from_config`",
+                signature.provider
+            )));
         }
 
         // Process-global, and set before the first call rather than after: the
@@ -199,7 +199,7 @@ fn build_model(config: &Embeddings, signature: &EmbedSignature) -> Result<Arc<dy
         other => {
             return Err(Error::config(format!(
                 "`embeddings.provider = \"{other}\"` names no provider this build knows. \
-                 Supported: voyage, openai, cohere, ollama, mock."
+                 Supported: voyage, openai, cohere, ollama, mock, openrouter, ladder."
             )));
         }
     };

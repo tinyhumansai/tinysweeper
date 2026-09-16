@@ -259,6 +259,11 @@ const EMBED_PRICES: &[(&str, f64)] = &[
     ("openrouter/qwen/qwen3-embedding-4b", 0.02),
     ("openrouter/baai/bge-m3", 0.01),
     ("openrouter/google/gemini-embedding-001", 0.15),
+    // The box's LLM ladder. `vectors` is a ladder, not a model: every rung in
+    // it is a 1024-wide BGE-M3 (Venice's `text-embedding-bge-m3` today), so
+    // one rate covers whatever answered. A fallback like the OpenRouter rows
+    // above — a body that reports its cost is billed at that instead.
+    ("ladder/vectors", 0.01),
 ];
 
 /// The price of `model`, when it is known.
@@ -413,6 +418,19 @@ mod tests {
     fn unpriced_names_only_the_models_missing_from_the_table() {
         let missing = unpriced(["moonshotai/kimi-k3", "someone/unreleased"]);
         assert_eq!(missing, vec!["someone/unreleased".to_string()]);
+    }
+
+    #[test]
+    fn the_ladders_vectors_are_priced_rather_than_billed_at_the_ceiling() {
+        let ladder = embedding_cost("ladder/vectors", 1_000_000);
+        let worst = EMBED_PRICES
+            .iter()
+            .fold(0.0_f64, |worst, (_, price)| worst.max(*price));
+        assert!(ladder > 0.0);
+        assert!(
+            ladder < worst,
+            "a known rung must not fall through to the ceiling"
+        );
     }
 
     #[test]
