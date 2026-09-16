@@ -503,9 +503,10 @@ impl TreeReader for RedactingTree<'_> {
     }
 }
 
-/// Apply the deterministic rulepack and private-key-body masking to a
-/// [`Found`], the same two path-independent passes
-/// [`crate::evidence::redact::mask`] applies to a fresh diff.
+/// Apply the deterministic rulepack, entropy-assignment and private-key-body
+/// masking to a [`Found`] — the same path-independent passes
+/// [`crate::evidence::redact::mask`] applies to a fresh diff, via
+/// [`crate::scan::redact_stream_line`].
 ///
 /// [`Found::Text`]'s lines are numbered `{n:>5}| {text}` by [`slice_lines`];
 /// the anchor is split off so masking only ever touches the source text.
