@@ -236,7 +236,21 @@ pub async fn gather(
     // copies agree on.
     let default_sha = match forge.default_branch(repo).await {
         Ok(branch) => match forge.branch_head(repo, &branch).await {
-            Ok(sha) => sha,
+            Ok(Some(sha)) => Some(sha),
+            Ok(None) => {
+                // A named default branch with no resolvable head — a
+                // branch-renaming race, or a forge quirk — reads as success
+                // if left unhandled here, and the whole default-branch pass
+                // below is then silently skipped: a clean-looking result
+                // that has actually omitted every `pull_request_target`
+                // workflow.
+                tracing::warn!(%branch, "the default branch has no resolvable head for the e2e lane");
+                evidence.degraded.push(format!(
+                    "the default branch `{branch}` has no resolvable head, so a \
+                     `pull_request_target` workflow may be inventoried from the wrong definition"
+                ));
+                None
+            }
             Err(err) => {
                 tracing::warn!(%err, "could not resolve the default branch's tip for the e2e lane");
                 evidence.degraded.push(
