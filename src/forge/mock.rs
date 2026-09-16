@@ -233,6 +233,16 @@ impl MockState {
             .insert(file_key(sha, path), (url.to_string(), commit.to_string()));
     }
 
+    /// Make `branch_head(branch)` answer `Ok(None)` instead of resolving it.
+    pub fn set_branch_without_head(&mut self, branch: &str) {
+        self.branches_without_head.insert(branch.to_string());
+    }
+
+    /// Make `file_at(sha, path)` answer `Err` instead of its usual result.
+    pub fn set_unreadable_file(&mut self, sha: &str, path: &str) {
+        self.unreadable_files.insert(file_key(sha, path));
+    }
+
     /// Report `name` on `sha`. `conclusion: None` means still running.
     pub fn set_check(&mut self, sha: &str, name: &str, conclusion: Option<CheckConclusion>) {
         self.checks.entry(sha.to_string()).or_default().insert(
