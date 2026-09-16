@@ -14,9 +14,14 @@ Covers `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` and `.cjs`.
 - `any` at a module boundary — an exported function's parameter or return
   type, a public API's payload — that erases a caller's type safety past this
   file.
-- User input assigned into an object via a computed key, or merged with
-  `Object.assign`/spread, without checking against `__proto__`,
-  `constructor` or `prototype` — prototype pollution.
+- User input assigned into an object via a computed key (`obj[key] = value`),
+  or merged onto an existing object with `Object.assign`, without checking
+  against `__proto__`, `constructor` or `prototype` — both go through
+  `[[Set]]` and can reach the prototype-chain accessor. A fresh object
+  literal's own spread (`{...a, ...b}`) is not this: spread uses
+  `CreateDataProperty`, which never invokes that setter, so `{...untrusted}`
+  cannot repoint the result's prototype on its own — only report it where the
+  spread result is later deep-merged into another object unsafely.
 - `innerHTML`, `dangerouslySetInnerHTML`, or a template literal handed to
   `eval`/`Function`, built from a value that is not a fixed literal and has
   not passed through a sanitizer (`DOMPurify.sanitize` or an equivalent
