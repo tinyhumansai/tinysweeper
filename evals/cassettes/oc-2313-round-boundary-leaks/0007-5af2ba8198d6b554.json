@@ -1,5 +1,5 @@
 {
-  "key": "f26c42b52b01408c",
+  "key": "5af2ba8198d6b554",
   "model_requested": "deepseek/deepseek-v4-flash",
   "model_answered": "z-ai/glm-5.2",
   "schema_name": "tinysweeper_critique",
