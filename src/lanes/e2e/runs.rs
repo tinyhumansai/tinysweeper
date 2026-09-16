@@ -151,7 +151,12 @@ fn state_of(
             match check.conclusion {
                 None => return State::Pending,
                 Some(conclusion) if conclusion.blocks() => worst = Some(conclusion),
-                Some(CheckConclusion::Skipped) => skipped = true,
+                // Neutral is not a pass: it is the forge's own "this job
+                // formed no verdict", the same as a skip from the lane's
+                // point of view. Falling through to the catch-all below
+                // would let a job that never actually tested anything read
+                // as `Passed`.
+                Some(CheckConclusion::Skipped | CheckConclusion::Neutral) => skipped = true,
                 Some(_) => {}
             }
         }
