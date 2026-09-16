@@ -284,10 +284,17 @@ only the "wait for it to conclude, then settle" half is skipped.
 
 ## Configuration
 
+The lane is in the default `review.lanes`. To opt out, list the lanes
+without it:
+
 ```toml
 [review]
-lanes = ["critique", "security", "tests", "commits", "description", "e2e"]
+lanes = ["critique", "security", "tests", "commits", "description"]
+```
 
+Its own settings, with their defaults:
+
+```toml
 [lanes.e2e]
 model = "scan"
 fail_on = "high"

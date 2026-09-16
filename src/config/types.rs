@@ -1782,6 +1782,23 @@ mod tests {
     }
 
     #[test]
+    fn the_e2e_lane_is_on_by_default_and_opts_out_by_omission() {
+        // On by default because it is quiet without a harness; a repository
+        // that does not want it lists `review.lanes` without it, and nothing
+        // else has to be set.
+        let defaults: Config = crate::config::DEFAULTS
+            .parse::<toml::Table>()
+            .unwrap()
+            .try_into()
+            .unwrap();
+        assert!(defaults.enabled_lanes().contains(&LaneId::E2e));
+
+        let mut opted_out = defaults.clone();
+        opted_out.review.lanes.retain(|lane| lane != "e2e");
+        assert!(!opted_out.enabled_lanes().contains(&LaneId::E2e));
+    }
+
+    #[test]
     fn fail_on_defaults_to_high() {
         let config = Config::default();
         assert_eq!(config.fail_on(LaneId::Security), Severity::High);
