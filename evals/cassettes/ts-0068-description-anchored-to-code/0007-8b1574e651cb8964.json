@@ -1,0 +1,17 @@
+{
+  "key": "8b1574e651cb8964",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 6095,
+    "output_tokens": 1322,
+    "cached_tokens": 4675,
+    "embed_tokens": 0,
+    "cost_usd": 0.0041403177
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a configurable `reasoning_effort` field to `GatewayModel`, replaces the hard-disabled reasoning with a `reasoning_options` helper that disables reasoning on `\"off\"`/empty and passes any other effort through, and wires it from config with tests. The logic is correct and safe to merge."
+  }
+}

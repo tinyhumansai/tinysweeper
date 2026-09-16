@@ -1,0 +1,27 @@
+{
+  "key": "19df32310a437098",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 5128,
+    "output_tokens": 233,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000495661964
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The diff calls `completion_cost` and `unpriced` but neither function is defined in the file or imported. The diff assumes these are present in the surrounding module, but I could not verify this by searching the repository. If they are missing or have different signatures than assumed, the tests will not compile or will test the wrong thing.",
+        "confidence": 0.4,
+        "existing_code": "let cost = completion_cost(\"z-ai/glm-5.2\", 82_914, 0, 842);",
+        "path": "src/harness/pricing.rs",
+        "rule": "missing-dependency",
+        "severity": "high",
+        "title": "Verify completion_cost and unpriced are defined"
+      }
+    ],
+    "summary": "Adds new model price entries and test coverage for cost calculations. The code looks sound, but I could not verify the existence or correct signature of `completion_cost` and `unpriced` functions, which are essential for correctness."
+  }
+}

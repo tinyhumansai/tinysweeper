@@ -1,0 +1,17 @@
+{
+  "key": "3463f8020f61b288",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4154,
+    "output_tokens": 64,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000379410892
+  },
+  "value": {
+    "findings": [],
+    "summary": "Adds `reasoning_effort: String` field and documentation for `max_tokens` in `ModelConfig`. No observable bug introduced; field type and doc match conventions, and no callers or serialization are visible to break."
+  }
+}

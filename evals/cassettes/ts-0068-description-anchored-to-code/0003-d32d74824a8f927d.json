@@ -1,0 +1,40 @@
+{
+  "key": "d32d74824a8f927d",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4469,
+    "output_tokens": 325,
+    "cached_tokens": 3208,
+    "embed_tokens": 0,
+    "cost_usd": 0.00184953132
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "pattern": "reasoning_effort",
+        "why": "Check how reasoning_effort config field is consumed and whether \"high\" is a valid value"
+      },
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "fallback",
+        "why": "Verify fallback list parsing and usage, confirm ordering/exhaustion behaviour"
+      },
+      {
+        "glob": "src/config/**/*.rs",
+        "kind": "search",
+        "pattern": "scan",
+        "why": "Check how scan/deep model fields are consumed"
+      },
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "reasoning",
+        "why": "Understand reasoning effort handling and valid values"
+      }
+    ]
+  }
+}

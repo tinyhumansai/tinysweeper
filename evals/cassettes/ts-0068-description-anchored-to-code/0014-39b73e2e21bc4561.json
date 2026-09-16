@@ -1,0 +1,17 @@
+{
+  "key": "39b73e2e21bc4561",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3802,
+    "output_tokens": 102,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000354955636
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a `reasoning_effort` field described as a `String`, but the documentation lists fixed enum-like values (`off`, `low`, `medium`, `high`); this should be a proper enum or at least be validated to prevent silent misconfiguration. However, I cannot determine whether validation or an enum type exists elsewhere in the crate without reading more context, so I have no actionable finding with high confidence."
+  }
+}

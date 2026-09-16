@@ -1,0 +1,17 @@
+{
+  "key": "63bc9d46babe7bac",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4241,
+    "output_tokens": 51,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000384815858
+  },
+  "value": {
+    "findings": [],
+    "summary": "Configuration-only change updating model names, fallback order, and adding a reasoning effort parameter. No user input, code execution, credentials, or network calls introduced. The change looks safe to merge."
+  }
+}

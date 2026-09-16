@@ -1,0 +1,17 @@
+{
+  "key": "92d4ff0de7e67e1d",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_description",
+  "usage": {
+    "input_tokens": 8651,
+    "output_tokens": 59,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000776986014
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change moves both tiers to GLM 5.2, re-enables configurable reasoning effort, and updates the fallback chain and pricing table. The implementation is thorough and well-tested; no defects introduced."
+  }
+}

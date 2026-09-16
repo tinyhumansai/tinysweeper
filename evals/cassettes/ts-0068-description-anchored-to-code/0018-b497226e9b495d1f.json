@@ -1,0 +1,19 @@
+{
+  "key": "b497226e9b495d1f",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 8155,
+    "output_tokens": 113,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000742606886
+  },
+  "value": {
+    "findings": [],
+    "lookups": [],
+    "resolved": [],
+    "summary": "This pull request switches model tiers from minimax/moonshot to GLM-5.2 and deepseek models, makes reasoning configurable, and adds pricing entries and tests for the new models. The behavioural changes are covered by new tests that would fail if behaviour regressed, and the existing test suite has been extended appropriately. Changes to defaults.toml and comments contain no testable behaviour.  Looks sound to merge."
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "key": "f5b16fc06c0339e1",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 5343,
+    "output_tokens": 506,
+    "cached_tokens": 3890,
+    "embed_tokens": 0,
+    "cost_usd": 0.002419848
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "src/harness/pricing.rs",
+        "pattern": "fn completion_cost",
+        "why": "Verify the argument order (input, cached, output) matches what the new tests assume"
+      },
+      {
+        "kind": "search",
+        "path": "src/harness/pricing.rs",
+        "pattern": "fn unpriced",
+        "why": "Verify the helper function signature the new test calls"
+      },
+      {
+        "kind": "search",
+        "pattern": "struct Config",
+        "why": "Verify the field paths config.models.scan/deep/fallback used in the new test exist"
+      },
+      {
+        "kind": "search",
+        "pattern": "const DEFAULTS",
+        "why": "Verify crate::config::DEFAULTS exists and is a string constant the test can parse"
+      }
+    ]
+  }
+}
