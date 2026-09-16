@@ -410,10 +410,10 @@ pub async fn settle_e2e(
     use crate::config::types::LaneId;
 
     let key = crate::state::key(&repo.to_string(), number);
-    let Some(mut state) = store.load_state(&key).await? else {
+    let Some(state) = store.load_state(&key).await? else {
         return Ok(E2eSettlement::NothingWatched);
     };
-    let Some(watch) = state.e2e.clone() else {
+    let Some(watch) = state.e2e else {
         return Ok(E2eSettlement::NothingWatched);
     };
 
