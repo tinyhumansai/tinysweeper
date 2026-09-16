@@ -262,6 +262,25 @@ A job that fails later fails the `tinysweeper/e2e` check run — which is what
 branch protection reads — but does not retroactively convert an approval
 into a changes-requested verdict.
 
+**Do not add `tinysweeper/e2e` to `automerge.require_checks`.** Phase 1
+above publishes a *concluded* `Neutral` while jobs are still pending — GitHub
+status `completed`, not `in_progress` — because a genuinely inapplicable
+lane (`commits` on a range with no secrets in it) also concludes `Neutral`,
+and `automerge::policy::check_refusal` reads a required check's `Neutral` the
+same way it reads `Success`: as a pass, not an absence (see that function's
+own doc comment). Naming `tinysweeper/e2e` there would let auto-merge treat
+"still waiting on jobs" as "required check satisfied" for exactly as long as
+phase 1's `Neutral` stands, before `settle_e2e` replaces it. `routes.rs`
+mitigates the same-delivery version of this (skipping the merge
+reconsideration entirely when a settlement attempt itself errors, and
+retrying lease contention before giving up), but neither closes the general
+case: any other automerge trigger — an approval, a label — arriving while a
+watch is still open reads the same stale `Neutral`. Closing that needs either
+phase 1 publishing `None` (in-progress) instead of `Neutral` while pending,
+or `check_refusal` learning to tell an e2e watch's `Neutral` apart from a
+genuine one — both real design changes, not something to decide silently in
+passing here.
+
 ## Configuration
 
 ```toml
