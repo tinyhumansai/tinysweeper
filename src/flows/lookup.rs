@@ -897,7 +897,9 @@ mod tests {
             ),
         ]);
         let mut ledger = Ledger::default();
-        let seeded = ledger.seed(&tree, &diff, &LookupPolicy::default()).await;
+        let seeded = ledger
+            .seed(&tree, std::slice::from_ref(&diff), &LookupPolicy::default())
+            .await;
         assert_eq!(seeded.answered, 3, "{}", seeded.rendered);
         assert!(
             seeded.rendered.contains("Unbounded: `before: None`"),
