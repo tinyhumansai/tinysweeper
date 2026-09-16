@@ -238,6 +238,23 @@ pub fn search_lines(path: &str, content: &str, pattern: &str, hits: &mut Vec<Hit
     false
 }
 
+/// The refusal every [`TreeReader`] backend gives for a path
+/// [`crate::scan::is_sensitive_path`] names.
+///
+/// Shared so a `.env` file or a private key reads the same whichever backend
+/// answers it. [`Lookup::Read`] returns this instead of the content;
+/// [`Lookup::Search`] skips the path before it is ever scanned — a redacted
+/// hit would still name the path and the line, which is exactly the shape a
+/// secret's location must not reach a model.
+pub fn sensitive_path_refusal(path: &str) -> Found {
+    Found::Unavailable {
+        reason: format!(
+            "`{path}` is treated as a secret by its path — an `.env` file, a private key, or \
+             similar — and is never read into a review regardless of what it contains"
+        ),
+    }
+}
+
 /// Whether `path` matches `glob`, or there is no glob.
 pub fn glob_matches(glob: Option<&str>, path: &str) -> bool {
     match glob {
