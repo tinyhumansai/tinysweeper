@@ -808,6 +808,9 @@ impl Outline {
                         _ => {}
                     }
                 }
+                if let Some(gate) = job_level_gate {
+                    job.label_gate = gate;
+                }
                 job
             })
             .collect()
