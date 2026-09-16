@@ -232,8 +232,8 @@ fn test_siblings(a: &str, b: &str) -> bool {
     for ext in [".ts", ".tsx", ".js", ".jsx"] {
         let (ja, jb) = (strip_suffix(file_a, ext), strip_suffix(file_b, ext));
         if let (Some(stem_a), Some(stem_b)) = (ja, jb)
-            && js_test_stem(stem_a).is_some_and(|base| base == stem_b)
-                || js_test_stem(stem_b).is_some_and(|base| base == stem_a)
+            && (js_test_stem(stem_a).is_some_and(|base| base == stem_b)
+                || js_test_stem(stem_b).is_some_and(|base| base == stem_a))
         {
             return true;
         }
