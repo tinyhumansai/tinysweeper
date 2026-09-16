@@ -714,16 +714,29 @@ impl Outline {
                         "if" => job.label_gate = label_in(&field.value),
                         "services" => job.has_services = true,
                         "steps" => {
+                            // `self.children(j)` is every field of every step,
+                            // flattened — a step boundary is only visible as
+                            // `item: true` on the field that opened it (`- name:
+                            // ...`, `- run: ...`). Grouped by hand here so an
+                            // `if:` is only ever attributed to the step it
+                            // actually sits on, not to whichever step happens to
+                            // come next.
+                            let mut current = StepBeingRead::default();
                             for step in self.children(j) {
-                                if step.key == "uses" || step.key == "run" {
-                                    job.steps.push(step.value.to_ascii_lowercase());
+                                if step.item {
+                                    current.commit(&mut job.label_gate);
+                                    current = StepBeingRead::default();
                                 }
-                                // A step's `if:` gating on a label gates the
-                                // whole job's usefulness just as well.
-                                if step.key == "if" && job.label_gate.is_none() {
-                                    job.label_gate = label_in(&step.value);
+                                if step.key == "uses" || step.key == "run" {
+                                    let text = step.value.to_ascii_lowercase();
+                                    current.note_e2e_mark(&text);
+                                    job.steps.push(text);
+                                }
+                                if step.key == "if" {
+                                    current.gate = label_in(&step.value);
                                 }
                             }
+                            current.commit(&mut job.label_gate);
                         }
                         _ => {}
                     }
