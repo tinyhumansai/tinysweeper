@@ -579,6 +579,79 @@ mod tests {
         .at_line(3)
     }
 
+    /// A synthetic patch whose group is large enough for a coverage pass to
+    /// run at all — `diffs()` is deliberately two lines.
+    fn large_patch() -> String {
+        let mut patch = String::from("@@ -1,2 +1,42 @@\n fn handler(req: Request) {\n");
+        for i in 0..COVERAGE_PASS_MIN_LINES {
+            patch.push_str(&format!("+    let x{i} = {i};\n"));
+        }
+        patch.push_str(" }\n");
+        patch
+    }
+
+    fn large_diffs() -> Vec<FileDiff> {
+        vec![parse_file_patch("src/large.rs", &large_patch())]
+    }
+
+    fn config_with_passes(passes: u8) -> Config {
+        let mut config = config();
+        config.review.passes = passes;
+        config
+    }
+
+    fn finding_at_line(title: &str, line: u64) -> serde_json::Value {
+        json!({
+            "path": "src/large.rs",
+            "line": line,
+            "rule": "unchecked-index",
+            "title": title,
+            "body": "detail.",
+            "severity": "high",
+            "confidence": 0.9
+        })
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_is_not_run_below_the_line_threshold() {
+        let model = MockModel::new().then(json!({"summary": "Nothing to report.", "findings": []}));
+        let handle = model.clone();
+
+        run_with(model, &config_with_passes(2), &diffs(), &[]).await;
+
+        assert_eq!(handle.calls(), 1, "no coverage call should have been made");
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_runs_once_more_above_the_threshold() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_at_line("Guard the first index", 5)]
+            }))
+            .then(json!({"summary": "…", "findings": []}));
+        let handle = model.clone();
+
+        run_with(model, &config_with_passes(2), &large_diffs(), &[]).await;
+
+        assert_eq!(
+            handle.calls(),
+            2,
+            "round one's review, plus the coverage pass — security runs no falsify"
+        );
+        let coverage_request = handle
+            .requests()
+            .last()
+            .expect("the coverage pass made a request")
+            .messages
+            .iter()
+            .map(|m| m.content.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(coverage_request.contains("## What you already found"));
+        assert!(coverage_request.contains("Guard the first index"));
+    }
+
     // --- golden test -------------------------------------------------------
 
     #[tokio::test]
