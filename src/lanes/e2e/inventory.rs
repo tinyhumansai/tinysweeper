@@ -211,6 +211,17 @@ pub enum Trigger {
         /// workflow GitHub will never run in that shape. See
         /// `evidence::gather`'s `pull_request_target` re-read.
         target: bool,
+        /// Whether the `on:` block *also* separately lists the other
+        /// pull-request-family event (`on: [pull_request_target,
+        /// pull_request]`).
+        ///
+        /// GitHub fires both independently when both are listed — same job
+        /// list, two separate executions, one off the head and one off the
+        /// default branch. `target` can only record which one this
+        /// particular `Trigger` is (the first-listed wins, in `trigger()`);
+        /// `also_plain` is how `evidence::gather` knows not to simply drop
+        /// the other execution when this one says `target: true`.
+        also_plain: bool,
     },
     /// Never runs on a pull request; the string names what it runs on.
     Never(String),
