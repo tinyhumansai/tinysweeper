@@ -45,6 +45,12 @@ built over a read handle. The model still holds no tool: it fills a `lookups`
 field in its JSON answer, the host answers it, and the host decides what the
 field is worth.
 
+A path `scan::is_sensitive_path` names — `.env`, a private key, `.netrc` — is
+never read: `read` answers `Unavailable` and says why, and `search` skips the
+path before it is ever scanned, because a redacted hit would still name the
+path and the line. This is the lookup loop's share of the same invariant that
+masks the diff before it is rendered; see `docs/modules/scan/README.md`.
+
 ## The loop
 
 ```text
