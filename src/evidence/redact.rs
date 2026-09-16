@@ -176,10 +176,12 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
                 // because it only ever matches a known shape; there is no
                 // heuristic here to false-positive on ordinary code.
                 let rulepack_masked = scan::redact_line(&line.text);
+                let mut line_masked = false;
                 if rulepack_masked != line.text {
                     spans += 1;
                     masked_here = true;
                     line.text = rulepack_masked;
+                    line_masked = true;
                 }
 
                 if sensitive {
@@ -194,7 +196,9 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
                     // hands over every other line in the hunk around it.
                     let masked = mask_assignment_or_whole_line(&line.text);
                     if masked != line.text {
-                        spans += 1;
+                        if !line_masked {
+                            spans += 1;
+                        }
                         masked_here = true;
                         line.text = masked;
                     }
@@ -209,7 +213,8 @@ pub fn mask(diffs: &mut [FileDiff], findings: &[Finding], files: &[ChangedFile])
                 // masking a sensitive path gets, but only for a line the
                 // scanner specifically flagged, so an ordinary assignment
                 // elsewhere in the same file is left readable.
-                if let Some(head_line) = line.new_line
+                if !line_masked
+                    && let Some(head_line) = line.new_line
                     && flagged.contains(&head_line)
                 {
                     let masked = mask_assignment_or_whole_line(&line.text);

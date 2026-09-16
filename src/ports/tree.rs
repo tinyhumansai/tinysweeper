@@ -510,7 +510,20 @@ impl TreeReader for RedactingTree<'_> {
                         end: Some(start - 1),
                     })
                     .await?;
-                private_key_state(&prefix)
+                match prefix {
+                    Found::Text { .. } => private_key_state(&prefix),
+                    // Without the preceding context a short final PEM-body
+                    // fragment is indistinguishable from ordinary text. Do
+                    // not guess and expose it: tell the model this ranged
+                    // read is unavailable instead of returning unredacted
+                    // source from a backend that cannot establish state.
+                    Found::Unavailable { .. } => {
+                        return Ok(Found::Unavailable {
+                            reason: "cannot safely redact this range because its preceding context is unavailable".into(),
+                        });
+                    }
+                    _ => false,
+                }
             }
             _ => false,
         };
