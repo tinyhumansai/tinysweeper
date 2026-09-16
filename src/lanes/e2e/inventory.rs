@@ -795,11 +795,12 @@ impl Outline {
                     has_services: false,
                     steps: Vec::new(),
                 };
-                // Whether a label gate has already been decided by an e2e
-                // step — tracked separately from `job.label_gate.is_none()`
-                // because "decided, and the decision was no gate" and "not
-                // decided yet" both leave `label_gate` at `None`.
-                let mut label_gate_decided = false;
+                // Every e2e-shaped step's own gate (`Some(label)`
+                // conditional, `None` unconditional), reduced to the job's
+                // aggregate gate by `combined_step_gate` once every step has
+                // been read — see that function for why this can't just be
+                // "the first e2e step decides".
+                let mut e2e_step_gates: Vec<Option<String>> = Vec::new();
                 // The job-level `if:`, applied after every field is read
                 // rather than in document order: nothing here requires
                 // `if:` to appear before `steps:` in the file, and a
