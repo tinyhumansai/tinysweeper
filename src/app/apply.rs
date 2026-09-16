@@ -1112,6 +1112,7 @@ mod tests {
                         jobs: vec!["playwright".into()],
                         summary: String::new(),
                         failed: false,
+                        generation: "gen-1".into(),
                     }),
                     ..ReviewedState::default()
                 },
