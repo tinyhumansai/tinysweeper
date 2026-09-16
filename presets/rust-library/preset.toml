@@ -18,12 +18,17 @@ ignore = [
     "**/generated/**",
 ]
 
+# `merge = true`: a port is still a .rs file, and it should keep the Rust
+# rules underneath this one rather than lose them to first-match-wins. See
+# "Merge a specific entry with the language document beneath it" in
+# presets/rules/README.md.
 [[path_instructions]]
 glob = "src/ports/**"
 instructions = """
 One trait per file. Flag any port whose signature leaks a concrete backend type,
 and any port added without a matching offline mock.
 """
+merge = true
 
 [[path_instructions]]
 glob = "Cargo.toml"
@@ -36,9 +41,13 @@ rules = "dependencies"
 # Ordered, first match wins. Test files take the test rules; everything else
 # under src/ takes the Rust rules. Reversing these two entries would mean no
 # test file ever sees the test rules. See presets/rules/README.md.
+#
+# `merge = true`: every test file this preset's glob can match is still a .rs
+# file, so it should keep the Rust rules too, not lose them to first-match-wins.
 [[path_instructions]]
 glob = "**/*{_test,test_,.test,.spec}*"
 rules = "tests"
+merge = true
 
 [[path_instructions]]
 glob = "src/**/*.rs"
