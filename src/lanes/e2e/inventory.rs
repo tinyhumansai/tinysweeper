@@ -764,23 +764,21 @@ impl Outline {
                     has_services: false,
                     steps: Vec::new(),
                 };
-                // Whether a label gate has already been decided for this
-                // job, from a job-level `if:` or from an earlier e2e step —
-                // tracked separately from `job.label_gate.is_none()` because
-                // "decided, and the decision was no gate" and "not decided
-                // yet" both leave `label_gate` at `None`. A job-level `if:`
-                // decides it outright, before any step is read, on the same
-                // reasoning `StepBeingRead::commit` uses for one step: once
-                // decided, nothing later — job-level or step-level — should
-                // overwrite it.
+                // Whether a label gate has already been decided by an e2e
+                // step — tracked separately from `job.label_gate.is_none()`
+                // because "decided, and the decision was no gate" and "not
+                // decided yet" both leave `label_gate` at `None`.
                 let mut label_gate_decided = false;
+                // The job-level `if:`, applied after every field is read
+                // rather than in document order: nothing here requires
+                // `if:` to appear before `steps:` in the file, and a
+                // job-level condition always outranks a step-level guess
+                // however the two are ordered.
+                let mut job_level_gate: Option<Option<String>> = None;
                 for (j, field) in self.direct(i) {
                     match field.key.as_str() {
                         "name" => job.name = Some(unquote(&field.value)),
-                        "if" => {
-                            job.label_gate = label_in(&field.value);
-                            label_gate_decided = true;
-                        }
+                        "if" => job_level_gate = Some(label_in(&field.value)),
                         "services" => job.has_services = true,
                         "steps" => {
                             // `self.children(j)` is every field of every step,
