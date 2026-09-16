@@ -512,6 +512,17 @@ mod tests {
     }
 
     #[test]
+    fn non_locale_shaped_files_under_a_locale_dir_are_not_grouped() {
+        let paths = strings(&["locales/schema.json", "locales/config.json"]);
+        let diffs = diffs_for(&["locales/schema.json", "locales/config.json"]);
+
+        let groups = group(&paths, &diffs, None, &default_bounds());
+
+        assert_eq!(groups.len(), 2, "{groups:?}");
+        assert!(groups.iter().all(|g| g.paths.len() == 1));
+    }
+
+    #[test]
     fn a_component_and_its_stylesheet_are_grouped() {
         let paths = strings(&["ui/Button.tsx", "ui/Button.module.css"]);
         let diffs = diffs_for(&["ui/Button.tsx", "ui/Button.module.css"]);
