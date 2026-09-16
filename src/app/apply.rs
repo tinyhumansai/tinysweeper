@@ -125,37 +125,44 @@ pub async fn apply(
         && previous == Some(ReviewEvent::Approve)
         && comments.is_empty();
 
-    // A review the model never answered is submitted too, as a comment: the
-    // lane checks say "did not review", but a reader of the conversation sees
-    // only that the bot said nothing, which on a clean-looking pull request
-    // reads as an all-clear. A file the *forge* withheld is not in this list
-    // — that is a property of the pull request, it recurs on every push, and
-    // the check runs already carry it.
-    // A push the model never answered cannot be vouched for, and neither can
-    // the approval that stands from before it: a comment does not withdraw
-    // one, and a repository that does not dismiss stale approvals would
-    // merge this push on the strength of what was said about the last. The
-    // dismissal names the reason; the comment below repeats it.
+    // A push this review could not vouch for — a model that never answered,
+    // a file the forge withheld — cannot leave an earlier approval standing
+    // over it: a comment does not withdraw one, and a repository that does
+    // not dismiss stale approvals would merge this push on the strength of
+    // what was said about the last. So the standing approval is withdrawn,
+    // with the reason, and the comment below repeats it.
     //
-    // Attempted whenever the lookup could not say there is nothing standing:
-    // a failed read of our own history must not become the approval's
-    // shield. The dismissal is a no-op when nothing stands.
-    if !proposal.answered() && (previous == Some(ReviewEvent::Approve) || !previous_known) {
-        write
+    // Only when the verdict is a comment. A changes request supersedes the
+    // approval on its own, and an approval is a fresh one. Attempted also
+    // when the lookup could not say what stands — a failed read of our own
+    // history must not become the approval's shield — and best effort: a
+    // dismissal that fails is logged, and the comment saying this is not an
+    // approval still goes out, rather than nothing at all.
+    let unvouched = !proposal.complete() && proposal.skipped.is_none();
+    if unvouched
+        && event == ReviewEvent::Comment
+        && (previous == Some(ReviewEvent::Approve) || !previous_known)
+        && let Err(err) = write
             .dismiss_own_approval(
                 &repo,
                 proposal.number,
                 "tinysweeper could not review the latest push, so its earlier approval no \
                  longer speaks for this pull request.",
             )
-            .await?;
+            .await
+    {
+        tracing::warn!(%err, number = proposal.number, "could not withdraw the standing approval");
     }
 
+    // An unvouched-for push is submitted too, as the comment: the lane
+    // checks say "did not review", but a reader of the conversation sees
+    // only that the bot said nothing, which on a clean-looking pull request
+    // reads as an all-clear. A kill-switched one is not — nobody asked.
     if !redundant_approval
         && (!comments.is_empty()
             || event == ReviewEvent::Approve
             || event == ReviewEvent::RequestChanges
-            || !proposal.answered())
+            || unvouched)
     {
         write
             .create_review(
@@ -312,13 +319,13 @@ fn review_event(
     // the same as refusing to *unblock* one, and conflating them would strand
     // every draft that was ever blocked.
     //
-    // Gated on the model having answered, though. "Clean now" is only a
-    // finding when somebody looked: a push during a provider outage comes
-    // back with every lane unanswered and nothing blocking, and clearing the
-    // block on that would let an outage approve what a review had objected
-    // to. Files the forge withheld are not the same case — the lanes did
-    // review what they were shown, and the objection was on those files.
-    if previous == Some(ReviewEvent::RequestChanges) && proposal.answered() {
+    // Gated on the review being complete, though. "Clean now" is only a
+    // finding when somebody looked at everything: a push during a provider
+    // outage comes back with every lane unanswered and nothing blocking, and
+    // a push whose largest file the forge withheld may be hiding the very
+    // thing objected to. Clearing the block on either would let a gap in
+    // the review approve what a review had objected to.
+    if previous == Some(ReviewEvent::RequestChanges) && proposal.complete() {
         return ReviewEvent::Approve;
     }
 
@@ -1342,6 +1349,56 @@ mod tests {
                 .iter()
                 .any(|w| matches!(w, Write::DismissApproval { .. })),
             "the dismissal is attempted when the history is unreadable"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_kill_switched_pull_request_is_neither_approved_nor_commented_on() {
+        // Every lane skipped, nothing unreviewed, nothing unanswered: clean
+        // by every other measure, and the one review nobody asked for.
+        let mut skipped = proposal("abc123", vec![]);
+        for lane in &mut skipped.lanes {
+            lane.conclusion = CheckConclusion::Neutral;
+            lane.summary = "Skipped: `do-not-review` is applied.".into();
+        }
+        skipped.skipped = Some("`do-not-review` is applied".into());
+        assert!(!skipped.complete());
+
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::Approve);
+        apply(&forge, &forge, &config(), &skipped, None)
+            .await
+            .expect("applies");
+        assert!(review_of(&forge).is_none(), "nobody asked for a verdict");
+        assert!(
+            !forge
+                .writes()
+                .iter()
+                .any(|w| matches!(w, Write::DismissApproval { .. })),
+            "and nothing is withdrawn for it either"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_blocking_verdict_is_posted_without_a_dismissal_first() {
+        // A changes request supersedes the approval by itself; a dismissal
+        // call in front of it is one more thing that can fail before the
+        // verdict that matters is posted.
+        let mut mixed = proposal("abc123", vec![high("src/lib.rs", "Unchecked index")]);
+        if let Some(lane) = mixed.lanes.iter_mut().find(|l| l.lane == LaneId::Tests) {
+            lane.conclusion = CheckConclusion::Neutral;
+            lane.unanswered = vec![lane.lane.check_name()];
+        }
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::Approve);
+        apply(&forge, &forge, &config(), &mixed, None)
+            .await
+            .expect("applies");
+        let (_, event) = review_of(&forge).expect("the block is posted");
+        assert_eq!(event, ReviewEvent::RequestChanges);
+        assert!(
+            !forge
+                .writes()
+                .iter()
+                .any(|w| matches!(w, Write::DismissApproval { .. }))
         );
     }
 
