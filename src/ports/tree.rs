@@ -1134,6 +1134,32 @@ mod tests {
         );
     }
 
+    /// Regression for a tinysweeper finding on #166: the refusal used to
+    /// interpolate the path it was refusing, disclosing the sensitive file's
+    /// location to the model the guard exists to keep it from — and handing
+    /// an attacker-controlled filename a way to inject text into a
+    /// model-facing reason.
+    #[tokio::test]
+    async fn the_sensitive_path_refusal_never_names_the_path() {
+        assert!(!sensitive_path_refusal().unavailable_reason().contains(".env"));
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "AWS_SECRET=super-secret-value\n").unwrap();
+        let found = DirTree::new(dir.path())
+            .lookup(&Lookup::Read {
+                path: ".env".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+
+        let Found::Unavailable { reason } = found else {
+            panic!("a sensitive path must never be read: {found:?}")
+        };
+        assert!(!reason.contains(".env"), "{reason}");
+    }
+
     #[tokio::test]
     async fn dir_tree_search_never_returns_a_hit_inside_a_sensitive_path() {
         let dir = tempfile::tempdir().unwrap();
