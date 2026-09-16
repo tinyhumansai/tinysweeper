@@ -22,10 +22,15 @@ it reported. See `docs/modules/lanes/e2e.md` for the design.
 
 ## What it assumes
 
-- The tree has an e2e harness: test files under `e2e/`, `tests/e2e/`,
-  `cypress/`, `playwright/`, `integration/`, `acceptance/`, `smoke/`, or named
-  `*.e2e.*` / `*.feature`, and a workflow named for it or with a step that
-  runs Playwright, Cypress, `docker compose up`, testcontainers or k6. With
+- The tree has an e2e harness: test files under a directory named `e2e/`,
+  `end-to-end/`, `end_to_end/`, `integration/`, `integration-tests/`,
+  `integration_tests/`, `acceptance/`, `smoke/`, `cypress/` or `playwright/`
+  — at any depth, so `tests/e2e/` and `test/integration/` count as well as a
+  top-level one — or named `*.e2e.*`, `*_e2e.*`, `*-e2e.*`, `*.integration.*`,
+  `*.acceptance.*` or `*.feature`, and a workflow named for it or with a step
+  that runs Playwright, Cypress, `docker compose up`, testcontainers or k6.
+  `lanes.e2e.paths` replaces this whole table rather than adding to it, for a
+  repository whose suite lives somewhere else entirely. With
   `missing_harness = "require"`, a tree with neither gets one finding asking
   for one.
 - Jobs are named as their check runs are. GitHub names a job's check run after
