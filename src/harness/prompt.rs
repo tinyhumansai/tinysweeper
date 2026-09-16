@@ -444,7 +444,7 @@ fn path_instructions(inputs: &PromptInputs<'_>) -> String {
         .filter(|rule| rule.lanes.is_empty() || rule.lanes.contains(&inputs.lane))
         .collect();
 
-    let paths: Vec<&str> = if !inputs.changed_paths.is_empty() {
+    let paths: Vec<&str> = if inputs.focus_paths.is_empty() {
         inputs.changed_paths.iter().map(String::as_str).collect()
     } else {
         inputs.focus_paths.iter().map(String::as_str).collect()
