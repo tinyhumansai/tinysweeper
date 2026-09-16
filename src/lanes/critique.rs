@@ -359,11 +359,18 @@ fn build_prompt<'a>(
         extracted_rules: input.extracted_rules,
         prior_findings: input.prior_findings,
         new_evidence: evidence,
-        // Every path the pull request touched, not just this group's. This
-        // selects which `path_instructions` are injected, and narrowing it to
-        // the group would silently drop the rules for every other changed
-        // path from a prefix all N conversations otherwise share — losing the
-        // cache as well as the rules.
+        // Every path the pull request touched, not just this group's — kept
+        // for parity with the ungrouped, single-file call this replaced, and
+        // because `path_instructions` falls back to it whenever a caller
+        // passes no `focus_paths` at all. `path_instructions` still prefers
+        // `focus_paths` over this whenever the caller has one, so today this
+        // has no effect while `focus_paths` is set below: each grouped
+        // conversation is shown only the rules that match its own group's
+        // paths, same as a lone file only ever saw its own rules before
+        // grouping existed. Widening that to the whole pull request for a
+        // group specifically is a real design question — cache sharing
+        // across N conversations versus each seeing only its own rules — and
+        // belongs in its own change with its own tests, not silently here.
         changed_paths,
         focus_paths: group_paths,
         persona: reviewer.persona,
