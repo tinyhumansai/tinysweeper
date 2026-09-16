@@ -897,6 +897,7 @@ mod tests {
             instructions: "One trait per file.".into(),
             rules: None,
             lanes: Vec::new(),
+            merge: false,
         }];
         let prompt = build(&inputs(&config, "", "@@ -1 +1 @@\n+a\n"));
 
@@ -969,6 +970,7 @@ mod tests {
             instructions: "Trace tainted input to its sink.".into(),
             rules: None,
             lanes: vec![LaneId::Security],
+            merge: false,
         }];
 
         let security = build(&PromptInputs {
@@ -998,12 +1000,14 @@ mod tests {
                 instructions: "Security only.".into(),
                 rules: None,
                 lanes: vec![LaneId::Security],
+                merge: false,
             },
             PathInstruction {
                 glob: "**/*.rs".into(),
                 instructions: "Everyone.".into(),
                 rules: None,
                 lanes: Vec::new(),
+                merge: false,
             },
         ];
 
@@ -1276,18 +1280,21 @@ mod tests {
                 instructions: "RUST RULES".into(),
                 rules: None,
                 lanes: Vec::new(),
+                merge: false,
             },
             PathInstruction {
                 glob: "src/**".into(),
                 instructions: "BROADER RULES".into(),
                 rules: None,
                 lanes: Vec::new(),
+                merge: false,
             },
             PathInstruction {
                 glob: ".github/workflows/**".into(),
                 instructions: "WORKFLOW RULES".into(),
                 rules: None,
                 lanes: Vec::new(),
+                merge: false,
             },
         ];
         let paths = ["src/main.rs".to_string()];
@@ -1309,12 +1316,14 @@ mod tests {
                 instructions: "RUST RULES".into(),
                 rules: None,
                 lanes: Vec::new(),
+                merge: false,
             },
             PathInstruction {
                 glob: ".github/workflows/**".into(),
                 instructions: "WORKFLOW RULES".into(),
                 rules: None,
                 lanes: Vec::new(),
+                merge: false,
             },
         ];
         let paths = ["src/main.rs".to_string(), ".github/workflows/ci.yml".into()];
