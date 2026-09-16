@@ -531,7 +531,6 @@ mod tests {
             &config(),
             &RepoId::parse("o/r").unwrap(),
             "head",
-            "head",
             &[route_diff()],
         )
         .await;
@@ -557,7 +556,6 @@ mod tests {
             &forge,
             &config(),
             &RepoId::parse("o/r").unwrap(),
-            "nowhere",
             "nowhere",
             &[route_diff()],
         )
