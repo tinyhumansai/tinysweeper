@@ -193,6 +193,13 @@ pub struct MockState {
     pub trees: BTreeMap<String, TreeListing>,
     /// Submodule gitlinks, keyed by [`file_key`], as `(url, commit)`.
     pub submodules: BTreeMap<String, (String, String)>,
+    /// Branch names `branch_head` answers `Ok(None)` for, instead of the
+    /// usual name-resolves-to-itself fallback — a branch that exists but
+    /// currently has no resolvable head (a rename race, say).
+    pub branches_without_head: std::collections::BTreeSet<String>,
+    /// File keys (see [`file_key`]) `file_at` answers `Err` for, instead of
+    /// its usual `Ok(Some(_))`/`Ok(None)`.
+    pub unreadable_files: std::collections::BTreeSet<String>,
 }
 
 /// The key a file's contents are stored under.
@@ -224,6 +231,16 @@ impl MockState {
     pub fn set_submodule(&mut self, sha: &str, path: &str, url: &str, commit: &str) {
         self.submodules
             .insert(file_key(sha, path), (url.to_string(), commit.to_string()));
+    }
+
+    /// Make `branch_head(branch)` answer `Ok(None)` instead of resolving it.
+    pub fn set_branch_without_head(&mut self, branch: &str) {
+        self.branches_without_head.insert(branch.to_string());
+    }
+
+    /// Make `file_at(sha, path)` answer `Err` instead of its usual result.
+    pub fn set_unreadable_file(&mut self, sha: &str, path: &str) {
+        self.unreadable_files.insert(file_key(sha, path));
     }
 
     /// Report `name` on `sha`. `conclusion: None` means still running.
@@ -586,7 +603,11 @@ impl ForgeRead for MockForge {
 
     async fn file_at(&self, _repo: &RepoId, path: &str, sha: &str) -> Result<Option<String>> {
         let state = self.state.lock().expect("mock state lock");
-        Ok(state.blobs.get(&file_key(sha, path)).cloned())
+        let key = file_key(sha, path);
+        if state.unreadable_files.contains(&key) {
+            return Err(Self::missing("file", 0));
+        }
+        Ok(state.blobs.get(&key).cloned())
     }
 
     async fn tree_paths(&self, _repo: &RepoId, sha: &str) -> Result<TreeListing> {
@@ -699,6 +720,9 @@ impl ForgeRead for MockForge {
 
     async fn branch_head(&self, _repo: &RepoId, branch: &str) -> Result<Option<String>> {
         let state = self.state.lock().expect("mock state lock");
+        if state.branches_without_head.contains(branch) {
+            return Ok(None);
+        }
         // A branch nobody registered resolves to itself, so a test that sets a
         // file at `"main"` and never thinks about revisions still works: the
         // sweep then reads at `"main"`, which is exactly where the file is.

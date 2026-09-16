@@ -236,7 +236,21 @@ pub async fn gather(
     // copies agree on.
     let default_sha = match forge.default_branch(repo).await {
         Ok(branch) => match forge.branch_head(repo, &branch).await {
-            Ok(sha) => sha,
+            Ok(Some(sha)) => Some(sha),
+            Ok(None) => {
+                // A named default branch with no resolvable head — a
+                // branch-renaming race, or a forge quirk — reads as success
+                // if left unhandled here, and the whole default-branch pass
+                // below is then silently skipped: a clean-looking result
+                // that has actually omitted every `pull_request_target`
+                // workflow.
+                tracing::warn!(%branch, "the default branch has no resolvable head for the e2e lane");
+                evidence.degraded.push(format!(
+                    "the default branch `{branch}` has no resolvable head, so a \
+                     `pull_request_target` workflow may be inventoried from the wrong definition"
+                ));
+                None
+            }
             Err(err) => {
                 tracing::warn!(%err, "could not resolve the default branch's tip for the e2e lane");
                 evidence.degraded.push(
@@ -597,6 +611,64 @@ mod tests {
         .await;
         assert!(evidence.harness.is_empty());
         assert!(evidence.candidates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_default_branch_with_no_resolvable_head_degrades_the_evidence() {
+        // `branch_head` answering `Ok(None)` — a branch that exists but has
+        // no head right now (a rename race) — must not read as a quiet
+        // success: the whole default-branch pass would then be silently
+        // skipped, and every `pull_request_target` workflow with it.
+        let mut state = MockState::default();
+        state.set_tree("head", &[]);
+        state.set_branch_without_head("main");
+        let forge = MockForge::with_state(state);
+
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            &[],
+        )
+        .await;
+
+        assert!(
+            evidence
+                .degraded
+                .iter()
+                .any(|d| d.contains("no resolvable head")),
+            "{:?}",
+            evidence.degraded
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_default_branch_workflow_degrades_the_evidence() {
+        let mut state = MockState::default();
+        state.set_tree("head", &[]);
+        state.set_tree("main", &[".github/workflows/e2e.yml"]);
+        state.set_unreadable_file("main", ".github/workflows/e2e.yml");
+        let forge = MockForge::with_state(state);
+
+        let evidence = gather(
+            &forge,
+            &config(),
+            &RepoId::parse("o/r").unwrap(),
+            "head",
+            &[],
+        )
+        .await;
+
+        assert!(evidence.harness.workflows.is_empty());
+        assert!(
+            evidence
+                .degraded
+                .iter()
+                .any(|d| d.contains(".github/workflows/e2e.yml") && d.contains("default branch")),
+            "{:?}",
+            evidence.degraded
+        );
     }
 
     #[tokio::test]
