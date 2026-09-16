@@ -322,6 +322,7 @@ async fn review_group(
     // The opt-in coverage pass. Gated on the group's own size, not the whole
     // pull request's — a lane fans out per group, so a two-line group must
     // not build a second prompt just because the change elsewhere is large.
+    let mut added_by_coverage = 0usize;
     if config.review.passes > 1 && changed_lines(group_diffs) >= COVERAGE_PASS_MIN_LINES {
         // Fed cumulatively: the second coverage pass (pass 3) is told about
         // everything round one *and* the first coverage pass found, so it
