@@ -356,7 +356,17 @@ fn build_prompt<'a>(
     // Critique prompts see only this group's rendered diffs.  Derive the
     // note from that rendered evidence so a clean group is never told about
     // a credential removed from a different group's file.
-    let redacted = evidence.matches("<redacted, ").count();
+    // Only markers with the complete format emitted by `scan::redact` count.
+    // Diff text is untrusted and may contain the prefix literally.
+    let redacted = evidence
+        .split("<redacted, ")
+        .skip(1)
+        .filter(|suffix| {
+            suffix
+                .split_once(" chars>")
+                .is_some_and(|(count, _)| !count.is_empty() && count.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .count();
     let redaction_note = if redacted == 0 {
         "".to_string()
     } else {

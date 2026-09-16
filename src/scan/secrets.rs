@@ -203,13 +203,9 @@ pub fn redact_stream_line(line: &str, in_key_block: &mut bool) -> String {
         .find(|marker| line.contains(marker))
     {
         *in_key_block = true;
-        // A marker embedded in an assignment can carry the complete key on
-        // one physical line.  Keeping the prefix would retain that value.
-        return if line.trim().starts_with(marker) && line.trim().ends_with("-----") {
-            redact_pem_marker_suffix(line, marker)
-        } else {
-            redact(line)
-        };
+        // Armour is metadata, but either side of it can contain key material
+        // when malformed input packs a key onto the marker's physical line.
+        return redact_pem_marker_line(line, marker);
     }
     if *in_key_block {
         if is_private_key_end(line) {
@@ -225,7 +221,7 @@ pub fn redact_stream_line(line: &str, in_key_block: &mut bool) -> String {
                 })
                 .map_or_else(
                     || redact_line(line),
-                    |end| redact_pem_marker_suffix(line, &line[..end]),
+                    |end| redact_pem_marker_line(line, &line[..end]),
                 );
         }
         return if line.trim().is_empty() {
@@ -243,12 +239,12 @@ pub fn redact_stream_line(line: &str, in_key_block: &mut bool) -> String {
 
 /// Preserve a PEM armour marker while applying normal redaction to text that
 /// follows it on the same line.
-fn redact_pem_marker_suffix(line: &str, marker: &str) -> String {
+fn redact_pem_marker_line(line: &str, marker: &str) -> String {
     let Some(start) = line.find(marker) else {
         return redact_line(line);
     };
     let end = start + marker.len();
-    format!("{}{}", &line[..end], redact_line(&line[end..]))
+    format!("{}{}{}", redact(&line[..start]), marker, redact(&line[end..]))
 }
 
 /// Whether one unarmoured line has the shape of private-key PEM body data.
@@ -260,7 +256,7 @@ fn redact_pem_marker_suffix(line: &str, marker: &str) -> String {
 /// from a model, which is the safe side of this security boundary.
 pub fn is_private_key_body(text: &str) -> bool {
     let body = text.trim();
-    body.len() >= 48
+    body.len() >= 16
         && body
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))

@@ -503,10 +503,12 @@ impl<'a> RedactingTree<'a> {
 #[async_trait]
 impl TreeReader for RedactingTree<'_> {
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
-        if let Lookup::Read { path, .. } = lookup
-            && self.refused_paths.iter().any(|refused| refused == path)
-        {
-            return Ok(sensitive_path_refusal());
+        if let Lookup::Read { path, .. } = lookup {
+            if crate::scan::is_sensitive_path(path)
+                || self.refused_paths.iter().any(|refused| refused == path)
+            {
+                return Ok(sensitive_path_refusal());
+            }
         }
         let found = self.inner.lookup(lookup).await?;
         // A requested range can begin in the body of an otherwise ordinary
@@ -544,7 +546,31 @@ impl TreeReader for RedactingTree<'_> {
             }
             _ => false,
         };
-        Ok(redact_found(found, in_key_block))
+        match found {
+            Found::Hits { hits, truncated, skipped } => {
+                let mut redacted = Vec::with_capacity(hits.len());
+                for hit in hits {
+                    if crate::scan::is_sensitive_path(&hit.path)
+                        || self.refused_paths.iter().any(|refused| refused == &hit.path)
+                    {
+                        continue;
+                    }
+                    let prefix = self.inner.lookup(&Lookup::Read {
+                        path: hit.path.clone(),
+                        start: Some(hit.line.saturating_sub(MAX_READ_LINES)),
+                        end: Some(hit.line),
+                    }).await?;
+                    let state = private_key_state_before_last_line(&prefix);
+                    let mut state = state;
+                    redacted.push(Hit {
+                        text: crate::scan::redact_stream_line(&hit.text, &mut state),
+                        ..hit
+                    });
+                }
+                Ok(Found::Hits { hits: redacted, truncated, skipped })
+            }
+            found => Ok(redact_found(found, in_key_block)),
+        }
     }
 
     fn describe(&self) -> String {
@@ -593,21 +619,7 @@ fn redact_found(found: Found, mut in_key_block: bool) -> Found {
                 total,
             }
         }
-        Found::Hits {
-            hits,
-            truncated,
-            skipped,
-        } => Found::Hits {
-            hits: hits
-                .into_iter()
-                .map(|hit| Hit {
-                    text: crate::scan::redact_stream_line(&hit.text, &mut false),
-                    ..hit
-                })
-                .collect(),
-            truncated,
-            skipped,
-        },
+        Found::Hits { .. } => found,
         other => other,
     }
 }
@@ -629,6 +641,23 @@ fn private_key_state(found: &Found) -> bool {
         let _ = crate::scan::redact_stream_line(body, &mut in_key_block);
     }
     in_key_block
+}
+
+/// Establish PEM state immediately before a search hit, whose own text is the
+/// final line of the bounded probe.
+fn private_key_state_before_last_line(found: &Found) -> bool {
+    let Found::Text { text, .. } = found else { return false; };
+    let mut state = false;
+    let mut lines = text.split('\n').peekable();
+    while let Some(line) = lines.next() {
+        if lines.peek().is_none() { break; }
+        let body = match line.find("| ") {
+            Some(offset) if offset <= 6 => &line[offset + 2..],
+            _ => line,
+        };
+        let _ = crate::scan::redact_stream_line(body, &mut state);
+    }
+    state
 }
 
 /// A tree on disk: a checkout, or the working directory `local-review` runs in.
