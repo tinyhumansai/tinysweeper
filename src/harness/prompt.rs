@@ -313,6 +313,27 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
         suffix.push_str(CONTINUITY_CONTRACT);
     }
 
+    // Layer 5a — what this same reviewer already found in this unit, for the
+    // opt-in coverage pass (`lanes::coverage`). Empty on every call except
+    // the one extra call a coverage pass makes, which is what keeps every
+    // other prompt in this crate byte-identical to before this layer
+    // existed — see `an_empty_confirmed_list_leaves_the_prompt_byte_identical`.
+    if !inputs.confirmed_this_round.is_empty() {
+        suffix.push_str(
+            "\n## What you already found\n\n\
+             You already reported these in this unit. Do not repeat them — look for what a \
+             first pass misses. This is a second pass over the same evidence, not a fresh \
+             review.\n\n",
+        );
+        let rendered = inputs
+            .confirmed_this_round
+            .iter()
+            .map(|line| format!("- {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        push_fenced(&mut suffix, "confirmed-findings", &rendered);
+    }
+
     // Layer 5b — the pull request's own words. Volatile, and the single most
     // attacker-controlled thing in the prompt.
     if !inputs.pull_request_text.trim().is_empty() {
