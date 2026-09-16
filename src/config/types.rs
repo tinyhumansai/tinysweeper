@@ -301,6 +301,14 @@ pub struct Review {
     pub draft_prs: bool,
     /// Treat each changed path's ancestor `AGENTS.md` files as review policy.
     pub respect_agents_md: bool,
+    /// How many times a group's council gets asked, cumulatively, over the
+    /// same evidence: `1` is round one alone, `2` adds one coverage pass
+    /// (`lanes::coverage`), `3` adds a second fed the cumulative confirmed
+    /// list from both. Not in [`crate::config::remote::OVERRIDABLE_KEYS`] —
+    /// each pass above one is another model call per unit over the line
+    /// threshold, and that is the operator's money to spend, not a reviewed
+    /// repository's.
+    pub passes: u8,
     /// Block the merge button when a finding reaches this severity.
     ///
     /// `"off"` never blocks. Anything else names the severity floor. Blocking
