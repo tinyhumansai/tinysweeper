@@ -120,7 +120,6 @@ impl Evidence {
     }
 }
 
-/// Gather the lane's evidence at `head_sha`.
 /// Whether `workflow`'s trigger is `pull_request_target`, not plain
 /// `pull_request`.
 fn is_target(workflow: &inventory::Workflow) -> bool {
@@ -130,6 +129,7 @@ fn is_target(workflow: &inventory::Workflow) -> bool {
     )
 }
 
+/// Gather the lane's evidence at `head_sha`.
 pub async fn gather(
     forge: &dyn ForgeRead,
     config: &Config,
