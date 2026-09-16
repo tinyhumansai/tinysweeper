@@ -736,21 +736,42 @@ impl Outline {
 
 /// Split `key: value`, refusing lines that are not a mapping entry.
 fn split_key(body: &str) -> Option<(String, String)> {
-    let (key, value) = body.split_once(':')?;
-    let key = key.trim();
+    let (raw_key, value) = body.split_once(':')?;
+    let key = unquote_key(raw_key.trim())?;
     // `http://…` inside a value is not a key, and neither is `${{ a:b }}`.
-    if key.is_empty()
-        || key.contains(' ')
-        || key.contains('{')
-        || key.starts_with('"')
-        || key.starts_with('\'')
-    {
+    if key.is_empty() || key.contains(' ') || key.contains('{') {
         return None;
     }
     if !(value.is_empty() || value.starts_with(' ')) {
         return None;
     }
-    Some((key.to_string(), value.trim().to_string()))
+    Some((key, value.trim().to_string()))
+}
+
+/// A mapping key, plain or quoted — `on:`, `'on':` and `"on":` are all the
+/// same key.
+///
+/// GitHub accepts `'on':`/`"on":` (quoting is how a YAML 1.1 author avoids
+/// `on` being read as the boolean `true`), and rejecting every quoted key
+/// outright — the previous rule — misread `'on': pull_request` as a workflow
+/// with no `on:` block at all, which `Outline::trigger` reads as
+/// `Trigger::Never`. Only a *fully* quoted key is accepted; anything that
+/// merely starts with a quote (a plain scalar value that happens to contain
+/// a colon, `- "http://example.com: see docs"`) still falls through to
+/// `None`, exactly as it did before.
+fn unquote_key(raw: &str) -> Option<String> {
+    for quote in ['\'', '"'] {
+        if let Some(inner) = raw
+            .strip_prefix(quote)
+            .and_then(|rest| rest.strip_suffix(quote))
+        {
+            return (!inner.is_empty() && !inner.contains(quote)).then(|| inner.to_string());
+        }
+    }
+    if raw.starts_with('"') || raw.starts_with('\'') {
+        return None;
+    }
+    Some(raw.to_string())
 }
 
 fn strip_comment(line: &str) -> &str {
