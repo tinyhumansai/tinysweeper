@@ -2013,6 +2013,14 @@ fn own_review_state_of<'a>(
         match review["state"].as_str() {
             Some("CHANGES_REQUESTED") => last_verdict = Some(ReviewEvent::RequestChanges),
             Some("APPROVED") => last_verdict = Some(ReviewEvent::Approve),
+            // A dismissed review — by a human, or by us withdrawing an
+            // approval for a push nobody answered — is no longer a verdict,
+            // and reading it as one would stop the next clean push from
+            // approving: `apply` skips an approval it believes already stands.
+            Some("DISMISSED") => {
+                last_verdict = None;
+                commented = true;
+            }
             Some("COMMENTED") => commented = true,
             _ => {}
         }
@@ -2401,6 +2409,14 @@ mod tests {
         let only_comments = [own("COMMENTED")];
         assert_eq!(
             own_review_state_of(only_comments.iter()),
+            Some(ReviewEvent::Comment)
+        );
+
+        // Our approval, withdrawn: not a verdict any more, so the next clean
+        // push approves rather than believing an approval stands.
+        let withdrawn = [own("APPROVED"), own("DISMISSED"), own("COMMENTED")];
+        assert_eq!(
+            own_review_state_of(withdrawn.iter()),
             Some(ReviewEvent::Comment)
         );
 
