@@ -241,6 +241,25 @@ pub enum Action {
         /// The installation that can act on it.
         installation: u64,
     },
+    /// A check completed on a commit whose pull request GitHub did not name.
+    ///
+    /// The fork quirk `CheckRef::pull_requests` documents: a `check_run`/
+    /// `check_suite` completion for a fork pull request's checks always
+    /// carries an empty `pull_requests` list, so [`automerge_trigger`] never
+    /// fires for one and a fork contributor's `e2e` check (and every other
+    /// completion-driven settlement) would otherwise be unreachable. This
+    /// carries the head SHA instead of a number; the caller resolves the
+    /// number through `ForgeRead::open_pull_requests_for_commit` and, for
+    /// each one found, does the same settle-then-reconsider-merge work
+    /// [`Action::AutoMerge`] does.
+    SettleByCommit {
+        /// `owner/name`.
+        repo: String,
+        /// The commit the completed check ran on.
+        head_sha: String,
+        /// The installation that can act on it.
+        installation: u64,
+    },
     /// Nothing to do, with a reason for the log.
     Ignore(&'static str),
 }
