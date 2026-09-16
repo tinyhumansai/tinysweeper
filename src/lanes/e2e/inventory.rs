@@ -764,10 +764,23 @@ impl Outline {
                     has_services: false,
                     steps: Vec::new(),
                 };
+                // Whether a label gate has already been decided for this
+                // job, from a job-level `if:` or from an earlier e2e step —
+                // tracked separately from `job.label_gate.is_none()` because
+                // "decided, and the decision was no gate" and "not decided
+                // yet" both leave `label_gate` at `None`. A job-level `if:`
+                // decides it outright, before any step is read, on the same
+                // reasoning `StepBeingRead::commit` uses for one step: once
+                // decided, nothing later — job-level or step-level — should
+                // overwrite it.
+                let mut label_gate_decided = false;
                 for (j, field) in self.direct(i) {
                     match field.key.as_str() {
                         "name" => job.name = Some(unquote(&field.value)),
-                        "if" => job.label_gate = label_in(&field.value),
+                        "if" => {
+                            job.label_gate = label_in(&field.value);
+                            label_gate_decided = true;
+                        }
                         "services" => job.has_services = true,
                         "steps" => {
                             // `self.children(j)` is every field of every step,
@@ -780,7 +793,7 @@ impl Outline {
                             let mut current = StepBeingRead::default();
                             for step in self.children(j) {
                                 if step.item {
-                                    current.commit(&mut job.label_gate);
+                                    current.commit(&mut job.label_gate, &mut label_gate_decided);
                                     current = StepBeingRead::default();
                                 }
                                 if step.key == "uses" || step.key == "run" {
@@ -792,7 +805,7 @@ impl Outline {
                                     current.gate = label_in(&step.value);
                                 }
                             }
-                            current.commit(&mut job.label_gate);
+                            current.commit(&mut job.label_gate, &mut label_gate_decided);
                         }
                         _ => {}
                     }
