@@ -489,10 +489,15 @@ pub async fn review_with_tree(
     let renamed_sensitive_paths = context
         .files
         .iter()
-        .filter(|file| file.previous_path.as_deref().is_some_and(scan::is_sensitive_path))
+        .filter(|file| {
+            file.previous_path
+                .as_deref()
+                .is_some_and(scan::is_sensitive_path)
+        })
         .map(|file| file.path.clone())
         .collect();
-    let redacting = crate::ports::tree::RedactingTree::refusing_paths(composed, renamed_sensitive_paths);
+    let redacting =
+        crate::ports::tree::RedactingTree::refusing_paths(composed, renamed_sensitive_paths);
     let tree: &dyn TreeReader = &redacting;
 
     // Kill switches are checked before anything expensive, so a label really

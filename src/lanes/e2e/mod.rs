@@ -123,12 +123,18 @@ impl Lane for E2e {
             });
         }
 
-        let runs = runs::job_runs(
+        let mut runs = runs::job_runs(
             &evidence.harness,
             &evidence.checks,
             &changed_paths,
             &input.pull_request.labels,
         );
+        // These names are copied into deterministic findings as well as the
+        // model prompt, so scrub the shared metadata before either consumer.
+        for run in &mut runs {
+            run.workflow = crate::scan::scrub(&run.workflow);
+            run.job = crate::scan::scrub(&run.job);
+        }
         let deterministic = runs::findings(&runs);
         let pending = runs::pending(&runs);
 

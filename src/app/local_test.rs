@@ -295,7 +295,10 @@ async fn a_secret_in_the_working_tree_never_reaches_a_model_request() {
         .expect("reviews");
 
     let requests = recorder.requests();
-    assert!(!requests.is_empty(), "local review must build a model request");
+    assert!(
+        !requests.is_empty(),
+        "local review must build a model request"
+    );
     for request in requests {
         for message in &request.messages {
             assert!(

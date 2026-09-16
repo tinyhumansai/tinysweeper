@@ -419,7 +419,7 @@ pub fn outcome_items(
             let _ = write!(
                 body,
                 "Maintainer's reply: {}",
-                crate::memory::excerpt(&reply.body, MAX_REPLY_CHARS)
+                crate::scan::scrub(&crate::memory::excerpt(&reply.body, MAX_REPLY_CHARS))
             );
         }
 

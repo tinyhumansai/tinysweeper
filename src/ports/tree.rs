@@ -485,12 +485,18 @@ pub struct RedactingTree<'a> {
 impl<'a> RedactingTree<'a> {
     /// Redact everything `inner` answers.
     pub fn new(inner: &'a dyn TreeReader) -> Self {
-        Self { inner, refused_paths: Vec::new() }
+        Self {
+            inner,
+            refused_paths: Vec::new(),
+        }
     }
 
     /// Also refuse head paths whose previous name was sensitive.
     pub fn refusing_paths(inner: &'a dyn TreeReader, refused_paths: Vec<String>) -> Self {
-        Self { inner, refused_paths }
+        Self {
+            inner,
+            refused_paths,
+        }
     }
 }
 
