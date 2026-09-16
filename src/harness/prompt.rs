@@ -1405,7 +1405,11 @@ mod tests {
     }
 
     #[test]
-    fn a_focused_prompt_selects_rules_for_its_own_file_only() {
+    fn a_focused_prompt_still_selects_rules_for_every_changed_file() {
+        // `focus_paths` scopes what a fanned-out conversation may report
+        // findings on; it must not also narrow which repository overrides
+        // load. A rule for a changed file outside this conversation's focus
+        // is still a rule about a file the pull request touched.
         let mut config = config();
         config.path_instructions = vec![
             PathInstruction {
@@ -1429,7 +1433,7 @@ mod tests {
         let prefix = build(&i).prefix().to_string();
 
         assert!(prefix.contains("WORKFLOW RULES"));
-        assert!(!prefix.contains("RUST RULES"));
+        assert!(prefix.contains("RUST RULES"));
     }
 
     #[test]
