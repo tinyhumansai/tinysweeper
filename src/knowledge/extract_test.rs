@@ -320,6 +320,25 @@ async fn a_file_is_truncated_to_the_byte_limit_before_it_is_sent() {
     assert!(longest_run > 0, "the file must still be sent");
 }
 
+/// Regression for a Codex finding on #166: `evidence::redact::mask` only ever
+/// sees the diff, and `fetch` re-reads the instruction file whole at head —
+/// bypassing that masking entirely, and the earlier-recorded content-hash
+/// cache alike. A credential committed to `AGENTS.md` must not reach the
+/// extraction model request.
+#[tokio::test]
+async fn a_credential_in_an_instruction_file_never_reaches_the_extraction_prompt() {
+    let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+    let forge = forge_with(
+        "AGENTS.md",
+        &format!("# Project rules\n\nRotate this key: {key}\n\n- Use four spaces.\n"),
+    );
+    let model = answering("- Use four spaces.");
+    extract_with(&forge, &model, &["AGENTS.md"]).await;
+
+    let prompt = model.last_prompt().expect("recorded");
+    assert!(!prompt.contains("IOSFODNN7EXAMPLE"), "{prompt}");
+}
+
 /// This repository's own `AGENTS.md`, read from the source tree.
 ///
 /// The real file rather than a paraphrase of it: issue #48 was a live failure
