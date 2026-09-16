@@ -93,6 +93,7 @@ impl Lane for Tests {
             changed_paths: &changed_paths,
             retrieved_context: input.retrieved_context,
             memory_context: input.memory_context,
+            redaction_note: input.redaction_note,
             ..PromptInputs::new(LaneId::Tests, input.config)
         });
 

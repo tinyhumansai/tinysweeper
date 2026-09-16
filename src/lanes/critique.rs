@@ -322,6 +322,7 @@ fn build_prompt<'a>(
         persona: reviewer.persona,
         retrieved_context: input.retrieved_context,
         memory_context: input.memory_context,
+        redaction_note: input.redaction_note,
         ..PromptInputs::new(LaneId::Critique, config)
     })
 }
