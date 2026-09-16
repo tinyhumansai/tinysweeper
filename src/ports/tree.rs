@@ -503,10 +503,10 @@ impl<'a> RedactingTree<'a> {
 #[async_trait]
 impl TreeReader for RedactingTree<'_> {
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
-        if let Lookup::Read { path, .. } = lookup {
-            if self.refused_paths.iter().any(|refused| refused == path) {
-                return Ok(sensitive_path_refusal());
-            }
+        if let Lookup::Read { path, .. } = lookup
+            && self.refused_paths.iter().any(|refused| refused == path)
+        {
+            return Ok(sensitive_path_refusal());
         }
         let found = self.inner.lookup(lookup).await?;
         // A requested range can begin in the body of an otherwise ordinary
