@@ -466,6 +466,99 @@ impl TreeReader for RecordingTree<'_> {
     }
 }
 
+/// Masks scanner-detected credentials out of whatever `inner` answers.
+///
+/// [`sensitive_path_refusal`] refuses a whole file by *name* — `.env`, a
+/// private key — but an ordinary path like `src/config.rs` that merely
+/// gained a credential in this diff has no such guard: a `read` or `search`
+/// lookup fetches its content fresh, outside `evidence::redact::mask`
+/// entirely, and would otherwise hand back exactly the value the diff view
+/// already masked. This is the one place every backend's answer passes
+/// through before a lane sees it — wrap the final composed tree once, in
+/// `crate::app::review`, rather than teach `DirTree`, `GitTree`, `ForgeTree`
+/// and `MockTree` to each redact their own content.
+pub struct RedactingTree<'a> {
+    inner: &'a dyn TreeReader,
+}
+
+impl<'a> RedactingTree<'a> {
+    /// Redact everything `inner` answers.
+    pub fn new(inner: &'a dyn TreeReader) -> Self {
+        Self { inner }
+    }
+}
+
+#[async_trait]
+impl TreeReader for RedactingTree<'_> {
+    async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
+        Ok(redact_found(self.inner.lookup(lookup).await?))
+    }
+
+    fn describe(&self) -> String {
+        self.inner.describe()
+    }
+
+    fn revision(&self) -> Option<String> {
+        self.inner.revision()
+    }
+}
+
+/// Apply the deterministic rulepack and private-key-body masking to a
+/// [`Found`], the same two path-independent passes
+/// [`crate::evidence::redact::mask`] applies to a fresh diff.
+///
+/// [`Found::Text`]'s lines are numbered `{n:>5}| {text}` by [`slice_lines`];
+/// the anchor is split off so masking only ever touches the source text.
+/// Each [`Hit`] is one line with no such prefix and no cross-line context, so
+/// a private-key marker on its own is left as-is — a boundary line alone
+/// names no secret, and a hit is never wide enough to carry an armour body.
+fn redact_found(found: Found) -> Found {
+    match found {
+        Found::Text {
+            text,
+            start,
+            end,
+            total,
+        } => {
+            let mut in_key_block = false;
+            let mut out = String::with_capacity(text.len());
+            for (index, line) in text.split('\n').enumerate() {
+                if index > 0 {
+                    out.push('\n');
+                }
+                let (prefix, body) = match line.find("| ") {
+                    Some(offset) if offset <= 6 => line.split_at(offset + 2),
+                    _ => ("", line),
+                };
+                out.push_str(prefix);
+                out.push_str(&crate::scan::redact_stream_line(body, &mut in_key_block));
+            }
+            Found::Text {
+                text: out,
+                start,
+                end,
+                total,
+            }
+        }
+        Found::Hits {
+            hits,
+            truncated,
+            skipped,
+        } => Found::Hits {
+            hits: hits
+                .into_iter()
+                .map(|hit| Hit {
+                    text: crate::scan::redact_stream_line(&hit.text, &mut false),
+                    ..hit
+                })
+                .collect(),
+            truncated,
+            skipped,
+        },
+        other => other,
+    }
+}
+
 /// A tree on disk: a checkout, or the working directory `local-review` runs in.
 ///
 /// Reads go through `std::fs`; search walks the tree in-process. Nothing is
