@@ -1,0 +1,35 @@
+version = 1
+
+# For repositories with an end-to-end suite worth holding changes to. Every
+# lane the defaults run, plus `e2e`, which is off everywhere else: it asks
+# whether a behavioural change is reachable by an end-to-end test and whether
+# the repository's own e2e jobs actually ran on the head. See
+# docs/modules/lanes/e2e.md.
+
+[review]
+lanes = ["critique", "security", "tests", "commits", "description", "e2e"]
+strictness = 2
+severity_gate = "medium"
+confidence_min = 0.6
+max_comments = 20
+incremental = true
+draft_prs = false
+respect_agents_md = true
+
+# Scoped to the e2e lane: its rule document is precision there and one more
+# subject every other reviewer could form an opinion about anywhere else.
+[[path_instructions]]
+glob = "**/*"
+rules = "e2e"
+lanes = ["e2e"]
+
+[lanes.e2e]
+model = "scan"
+fail_on = "high"
+# A repository on this preset has said it has a harness. If the tree at head
+# has none, that is worth one finding rather than a silent skip.
+missing_harness = "require"
+# Empty means detect e2e tests and jobs from paths, names and steps. Set them
+# when the detection guesses wrong; each replaces the detection it overrides.
+paths = []
+workflows = []

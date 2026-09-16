@@ -18,9 +18,9 @@
 - An IAM policy or resource policy granting a wildcard action (`"Action":
   "*"`) or wildcard resource (`"Resource": "*"`) where a scoped set would
   cover the actual usage shown in the diff.
-- Removing or weakening a `lifecycle { prevent_destroy = true }` (or
-  `ignore_changes`) guard on a stateful resource — database, persistent
-  volume, KMS key — with no explanation in the diff.
+- Removing or weakening a `lifecycle { prevent_destroy = true }` guard on a
+  stateful resource — database, persistent volume, KMS key — with no
+  explanation in the diff.
 - A `.tfstate` or `.tfstate.backup` file included in the diff. State can
   contain every attribute of every resource, secrets included, in plaintext.
 
@@ -28,6 +28,10 @@
 
 - A deliberately wide version constraint (`~>`, an explicit range) that
   matches the pattern of sibling entries in the same file.
+- Removing `ignore_changes` from a `lifecycle` block. That resumes Terraform
+  planning updates for the attributes it named — restoring drift correction,
+  not weakening destruction protection — unless the diff or its description
+  says the drift was intentional.
 - A resource with no `lifecycle` block where nothing else in the diff or the
   file's sibling resources of the same kind has one either — consistency is
   the finding, not the absence on its own.

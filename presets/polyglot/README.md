@@ -19,35 +19,56 @@ Dockerfile, some shell scripts — all reviewed by the same bot.
 glob it matches — see `presets/rules/README.md`. This preset orders entries
 from most specific to least, on purpose:
 
-1. `Dockerfile*` and `*.tf` — a handful of infrastructure files that would
+1. `Dockerfile*`, `*.tf`, and Terraform's other native file forms
+   (`*.tfvars`, `*.tfvars.json`, `*.tf.json`, `*.tfstate`,
+   `*.tfstate.backup`) — a handful of infrastructure files that would
    otherwise fall through to a language glob (a `Dockerfile` has no
    extension; a `main.tf` would match nothing else) or, worse, get treated as
-   plain text.
+   plain text. Each of these gets its own entry because `*.tf` does not match
+   any of them.
 2. `.github/workflows/**` — the deterministic scanner already checked
    permissions and pinning; the workflow rules adjudicate what it found.
-3. Dependency manifests (`Cargo.toml`, `package.json`, `go.mod`,
-   `requirements*.txt`) — reused verbatim from `security-strict`, because a
-   manifest is a manifest regardless of which language it declares
+3. Dependency manifests and lockfiles for every ecosystem this preset routes
+   (`Cargo.toml`/`Cargo.lock`, `package.json`/`package-lock.json`/`yarn.lock`/
+   `pnpm-lock.yaml`, `go.mod`/`go.sum`, `requirements*.txt`/`pyproject.toml`/
+   `poetry.lock`, `pom.xml`/`build.gradle`/`build.gradle.kts`) — a manifest or
+   its lockfile is a manifest regardless of which language it declares
    dependencies for.
-4. Test files, by filename shape (`_test`, `test_`, `.test`, `.spec`) —
-   ahead of every language extension, so a `handler_test.go` is judged as a
-   test first and a Go file never.
+4. Test files, by filename shape (`_test`, `test_`, `.test`, `.spec`), plus
+   two Java-specific entries (`*Test.java`/`*Tests.java`/`*IT.java` and
+   `src/test/**/*.java`) and one for a test *directory* rather than a test
+   *filename* (`test/`, `tests/`, or `__tests__/` anywhere in the path, for
+   the extensions that use that convention) — ahead of every language
+   extension, so a `handler_test.go` is judged as a test first and a Go file
+   never, a conventionally-named JUnit file is judged as a test even with
+   none of those substrings in its name, and `tests/api.py` or
+   `__tests__/Widget.tsx` is judged as a test even though nothing in its own
+   filename says so.
 5. One entry per language extension, ending in Rust — this repository's own
    dogfood case, and the reason the ordering comment in every preset here
    points back at `rust-library`.
 
 Reorder these at your own risk: move a language entry above the test glob and
-every test file in that language stops seeing the test rules.
+every test file in that language stops seeing the test rules. Every entry in
+this table is scoped to `lanes = ["critique", "security"]` — the only two
+lanes that build a prompt for one file at a time (see "Combining with
+`security-strict` habits" below for why leaving an entry unscoped would leak
+its rules into the others).
 
 ## Combining with `security-strict` habits
 
 This preset does not turn the `security` lane's taxonomy on — that document
 is broad enough to cover every language already and duplicating it per
 language would just be the same list eight times. If the repository also
-wants that taxonomy, copy `security-strict`'s last `[[path_instructions]]`
-entry (`rules = "security"`, `lanes = ["security"]`) into this table, **after**
-the language-specific entries so it only catches what nothing more specific
-did, and raise `severity_gate`/`confidence_min` to taste.
+wants that taxonomy, copy `security-strict`'s `[[path_instructions]]` entry
+(`rules = "security"`, `lanes = ["security"]`) into this table, **before**
+the language-specific entries. Lane scoping is applied before first-match
+selection (see `presets/rules/README.md`), so the language and infrastructure
+entries above — scoped to `["critique", "security"]` — are still visible to
+the security lane's own table; putting the catch-all after them means every
+file that also matches one of them never reaches it, and the taxonomy never
+fires. Every other lane filters both the catch-all and this table's other
+entries out entirely, so moving it first costs those lanes nothing.
 
 ## When not to use it
 

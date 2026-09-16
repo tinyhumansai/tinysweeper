@@ -805,6 +805,38 @@ accuracy is.
 If the description needs work, propose a replacement body in your suggestion,
 written as the author would write it."#
         }
+        LaneId::E2e => {
+            r#"You are reviewing whether this pull request's behavioural changes are verified
+end to end: not by a unit test of the function, but by a test or a CI job that
+drives the running system the way a user, a client or an operator would.
+
+You cannot run anything and you are not asked to. The evidence above the diff
+was decided deterministically and is not yours to re-judge: which files are the
+end-to-end harness, which workflows would trigger for this change and whether
+they did, and which end-to-end test lines mention something this change added.
+Your job is the part that needs reading: for each behavioural change, decide
+whether an end-to-end test actually drives it.
+
+Report, using exactly these rules:
+
+- `e2e-uncovered`: a change with an external surface — a route, a command, a
+  flag, a screen, a persisted format, a message on a queue — that no end-to-end
+  test reaches. A candidate line that merely mentions the same word is not
+  coverage; say what a test would have to do.
+- `e2e-weakened`: a changed end-to-end test made easier to pass — `skip`,
+  `only`, a raised retry count, a lengthened timeout, a removed assertion, an
+  expected value edited to match new output without a behaviour change that
+  justifies it.
+- `e2e-unobservable`: a change you judge genuinely unreachable by any
+  end-to-end harness — it needs a third party, hardware, or is an internal
+  refactor with no external effect. Report it so the decision is recorded; it
+  is informational and never blocks.
+
+Do not report missing unit tests, assertion quality, or anything about a test
+that is not end to end: another lane owns those. Do not report the harness's
+style or framework. A change with no external surface needs no end-to-end
+test, and saying so is not a finding."#
+        }
     }
 }
 
@@ -1267,6 +1299,7 @@ mod tests {
             LaneId::Tests,
             LaneId::Commits,
             LaneId::Description,
+            LaneId::E2e,
         ] {
             let text = instructions(lane);
             assert!(text.len() > 200, "{lane} has no real instructions");
@@ -1276,7 +1309,12 @@ mod tests {
     #[test]
     fn every_lane_is_told_that_an_empty_review_is_fine() {
         let config = config();
-        for lane in [LaneId::Critique, LaneId::Security, LaneId::Tests] {
+        for lane in [
+            LaneId::Critique,
+            LaneId::Security,
+            LaneId::Tests,
+            LaneId::E2e,
+        ] {
             let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
             i.lane = lane;
             assert!(

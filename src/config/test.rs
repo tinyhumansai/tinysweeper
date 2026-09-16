@@ -140,6 +140,18 @@ fn a_model_routed_twice_is_rejected() {
 }
 
 #[test]
+fn a_route_selector_with_stray_whitespace_is_rejected() {
+    let config = parse(
+        "version = 1\n[[models.routes]]\nmodel = \"deep \"\n[[models.routes]]\nmodel = \" deep\"\n\
+         [[models.routes]]\nmodel = \"\"\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("entry `deep ` must name"), "{joined}");
+    assert!(joined.contains("entry ` deep` must name"), "{joined}");
+    assert!(joined.contains("entry `` must name"), "{joined}");
+}
+
+#[test]
 fn an_unknown_embedding_provider_is_rejected_by_doctor_not_by_the_first_push() {
     let config = parse(
         "version = 1\n[embeddings]\nenabled = true\nprovider = \"lader\"\nmodel = \"vectors\"\n\
@@ -1096,7 +1108,12 @@ fn the_shipped_presets_load_and_validate() {
     // The presets in this repository are user-facing documentation as much as
     // configuration; a broken one is a broken example.
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    for name in ["rust-library", "security-strict", "polyglot"] {
+    for name in [
+        "rust-library",
+        "security-strict",
+        "e2e-required",
+        "polyglot",
+    ] {
         let dir = repo(
             Some(&format!("version = 1\npreset = \"{name}\"\n")),
             &[(

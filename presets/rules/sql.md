@@ -15,8 +15,10 @@
   which makes every join and every cascade a table scan.
 - A column changed from nullable to `NOT NULL`, or a type narrowed, with no
   migration step backfilling or validating existing rows first.
-- A `DELETE` or `UPDATE` with no `WHERE` clause on a table that is not being
-  fully replaced.
+- A `DELETE` or `UPDATE` with no `WHERE` clause where nothing in the diff
+  explains why every row is the intended target — not a migration that adds a
+  column (or narrows one) and then backfills every existing row in the same
+  change, which is the correct way to prepare for the constraint that follows.
 
 ### Do NOT report
 
@@ -34,3 +36,5 @@
   explicitly versus left to the database's default.
 - Query performance concerns with no evidence of table size — an unindexed
   scan on a table the schema shows is small and rarely grows.
+- A whole-table `UPDATE` backfilling a column the same migration just added
+  or narrowed.

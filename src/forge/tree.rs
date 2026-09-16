@@ -68,20 +68,20 @@ pub fn parse_gitmodules(text: &str, host: &str) -> Vec<Submodule> {
         }
         *url = None;
     };
-    for line in text.lines() {
+    for line in crate::ports::tree::git_config_lines(text) {
         let line = line.trim();
         if line.starts_with('[') {
             flush(&mut path, &mut url, &mut out);
             continue;
         }
-        if let Some(rest) = line.strip_prefix("path")
-            && let Some(value) = rest.trim().strip_prefix('=')
-        {
-            path = Some(value.trim().trim_end_matches('/').to_string());
-        } else if let Some(rest) = line.strip_prefix("url")
-            && let Some(value) = rest.trim().strip_prefix('=')
-        {
-            url = Some(value.trim().to_string());
+        // Git-config keys are case-insensitive: `PATH = x` is `path = x`.
+        if let Some(value) = crate::ports::tree::git_config_key(line, "path") {
+            // One spelling, shared with the selector; a path nobody may
+            // declare is dropped here rather than carried along unresolved.
+            path = crate::ports::tree::canonical_submodule_path(value);
+        } else if let Some(value) = crate::ports::tree::git_config_key(line, "url") {
+            // Quoted and commented the same way a path may be.
+            url = Some(crate::ports::tree::git_config_value(value));
         }
     }
     flush(&mut path, &mut url, &mut out);
@@ -263,6 +263,49 @@ mod tests {
         assert_eq!(
             repo_from_url("https://github.com/acme/x.git/", "github.com"),
             RepoId::parse("acme/x")
+        );
+
+        // One spelling per directory: the selector and the manifest say
+        // `libs/core/...`, so `./libs/core/` is `libs/core`.
+        for spelled in [
+            "./libs/core/",
+            "libs//core",
+            "libs/./core",
+            "./libs/./core//",
+        ] {
+            let text = format!(
+                "[submodule \"c\"]\n\tpath = {spelled}\n\turl = https://github.com/acme/c\n"
+            );
+            assert_eq!(
+                parse_gitmodules(&text, "github.com")[0].path,
+                "libs/core",
+                "{spelled}"
+            );
+        }
+        let continued =
+            "[submodule \"k\"]\n\tpath = libs/k\n\turl = https://github.com/\\\nacme/k.git\n";
+        assert_eq!(
+            parse_gitmodules(continued, "github.com")[0].repo,
+            RepoId::parse("acme/k"),
+            "a continuation line is joined before the value is read"
+        );
+        let quoted_url = "[submodule \"q\"]\n\tpath = libs/q\n\turl = \"https://github.com/acme/q.git\" # note\n";
+        assert_eq!(
+            parse_gitmodules(quoted_url, "github.com")[0].repo,
+            RepoId::parse("acme/q"),
+            "a quoted, commented url resolves like a bare one"
+        );
+        let shouted = "[submodule \"e\"]\n\tPATH = libs/e\n\tURL = https://github.com/acme/e\n";
+        let subs = parse_gitmodules(shouted, "github.com");
+        assert_eq!(
+            subs[0].path, "libs/e",
+            "git-config keys are case-insensitive"
+        );
+        assert_eq!(subs[0].repo, RepoId::parse("acme/e"));
+        let escaping = "[submodule \"d\"]\n\tpath = ../up\n\turl = https://github.com/acme/d\n";
+        assert!(
+            parse_gitmodules(escaping, "github.com").is_empty(),
+            "a path out of the tree is not a submodule"
         );
     }
 
