@@ -981,14 +981,18 @@ mod tests {
     #[test]
     fn confirmed_findings_land_in_the_volatile_suffix() {
         let config = config();
-        let lines = ["Guard the index (src/main.rs:2): unchecked access".to_string()];
+        // A distinctive title, for the same reason
+        // `prior_findings_are_volatile_and_carry_the_continuity_contract` picks
+        // one: the static instructions use "Guard the index before
+        // dereferencing" as their own example.
+        let lines = ["Close the socket on the error path (src/main.rs:2): leaked fd".to_string()];
         let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
         i.confirmed_this_round = &lines;
         let prompt = build(&i);
 
         assert!(prompt.suffix().contains("## What you already found"));
-        assert!(prompt.suffix().contains("Guard the index (src/main.rs:2)"));
-        assert!(!prompt.prefix().contains("Guard the index"));
+        assert!(prompt.suffix().contains("Close the socket on the error path"));
+        assert!(!prompt.prefix().contains("Close the socket"));
     }
 
     #[test]
