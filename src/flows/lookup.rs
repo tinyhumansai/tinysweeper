@@ -495,7 +495,7 @@ pub fn seed_symbols(diff: &crate::evidence::diff::FileDiff) -> Vec<String> {
 
 impl Ledger {
     /// Look up, before the reviewer's first turn, the definitions of what the
-    /// changed lines of every file in `diffs` call into.
+    /// changed lines call into.
     ///
     /// The reviewer that asked for exactly these by name was the one that
     /// found the bug; the one that did not ask was the one that did not.
@@ -503,55 +503,111 @@ impl Ledger {
     /// nothing or find a name so common it has many definitions are dropped
     /// rather than rendered: a block of "no line contains that text" is
     /// noise the reviewer has to read past.
-    ///
-    /// `diffs` is one file for an ungrouped conversation and several for a
-    /// grouped one — the budget below is shared across all of them rather
-    /// than reset per file, because it is the same `[lookup].max_chars`
-    /// ceiling either way. A single-file slice produces byte-identical output
-    /// to the pre-grouping single-file `seed`.
-    ///
-    /// Shared does not mean first-come: candidates are drawn round-robin, one
-    /// per file per round, so a file whose first candidate exhausts several
-    /// [`AUTO_FOLLOW`]-sized hits cannot starve every other member of the
-    /// group of a single lookup before they are even considered.
     pub async fn seed(
         &mut self,
         tree: &dyn TreeReader,
-        diffs: &[crate::evidence::diff::FileDiff],
+        diff: &crate::evidence::diff::FileDiff,
         policy: &LookupPolicy,
     ) -> Gathered {
         let mut rendered = String::new();
         let mut answered = 0usize;
-
-        let mut queues: Vec<(usize, std::collections::VecDeque<String>)> = diffs
-            .iter()
-            .enumerate()
-            .map(|(i, diff)| {
-                (
-                    i,
-                    seed_symbols(diff).into_iter().take(SEED_SYMBOLS * 2).collect(),
-                )
-            })
-            .collect();
-
-        'rounds: loop {
-            let mut made_progress = false;
-            for (i, queue) in &mut queues {
-                if answered >= SEED_SYMBOLS || self.chars >= policy.max_chars / 2 {
-                    break 'rounds;
+        for symbol in seed_symbols(diff).into_iter().take(SEED_SYMBOLS * 2) {
+            if answered >= SEED_SYMBOLS || self.chars >= policy.max_chars / 2 {
+                break;
+            }
+            let capitalised = symbol.chars().next().is_some_and(char::is_uppercase);
+            let patterns: Vec<String> = if capitalised {
+                vec![
+                    format!("struct {symbol}"),
+                    format!("enum {symbol}"),
+                    format!("type {symbol}"),
+                    format!("trait {symbol}"),
+                ]
+            } else {
+                vec![format!("fn {symbol}(")]
+            };
+            for pattern in patterns {
+                let lookup = Lookup::Search {
+                    pattern: pattern.clone(),
+                    glob: None,
+                };
+                if self.seen.contains(&lookup.key()) {
+                    continue;
                 }
-                let Some(symbol) = queue.pop_front() else {
+                let Ok(Found::Hits { hits, .. }) = tree.lookup(&lookup).await else {
                     continue;
                 };
-                made_progress = true;
-                self.seed_symbol(tree, &diffs[*i], &symbol, policy, &mut rendered, &mut answered)
-                    .await;
-            }
-            if !made_progress {
+                // A definition already in the diff is not looked up; one in
+                // the same file but outside every hunk is — it is exactly as
+                // invisible to the reviewer as one in another file, and the
+                // unbounded sibling read on opencompany#2313 lived there.
+                let definitions: Vec<&crate::ports::tree::Hit> = hits
+                    .iter()
+                    .filter(|h| {
+                        looks_like_definition(&h.text)
+                            && !(h.path == diff.path
+                                && diff.within_hunk(u64::from(h.line), u64::from(h.line)))
+                    })
+                    .collect();
+                if definitions.is_empty() || definitions.len() > AUTO_FOLLOW {
+                    continue;
+                }
+                self.seen.insert(lookup.key());
+                let mut hits_text = String::new();
+                for hit in &definitions {
+                    hits_text.push_str(&format!("{}:{}: {}\n", hit.path, hit.line, hit.text));
+                }
+                // The fence has to outrun any backtick run in a hit line — a
+                // contributor-controlled source line containing ```` would
+                // otherwise close it early and the rest of this turn's
+                // evidence would read as instructions.
+                let fence = crate::harness::prompt::fence_for(&hits_text);
+                let mut body = format!("{fence}\n");
+                body.push_str(&hits_text);
+                body.push_str(&fence);
+                for hit in definitions {
+                    let below = if hit.path == diff.path {
+                        SAME_FILE_BELOW
+                    } else {
+                        DEFINITION_BELOW
+                    };
+                    let read = Lookup::Read {
+                        path: hit.path.clone(),
+                        start: Some(hit.line.saturating_sub(DEFINITION_ABOVE).max(1)),
+                        end: Some(hit.line.saturating_add(below)),
+                    };
+                    if !self.seen.insert(read.key()) {
+                        continue;
+                    }
+                    if let Ok(context) = tree.lookup(&read).await {
+                        body.push_str(&format!(
+                            "
+
+#### {}:{} — the definition and what is written above it
+
+{}",
+                            hit.path,
+                            hit.line,
+                            render_found(&context)
+                        ));
+                    }
+                }
+                if self.chars + body.len() > policy.max_chars {
+                    break;
+                }
+                self.chars += body.len();
+                answered += 1;
+                rendered.push_str(&format!(
+                    "
+### {}
+
+{body}
+",
+                    lookup.key()
+                ));
                 break;
             }
         }
-
         if rendered.is_empty() {
             return Gathered::default();
         }
@@ -564,114 +620,6 @@ The definitions of what the changed lines call into,                  read from 
                  {rendered}"
             ),
             answered,
-        }
-    }
-
-    /// [`Ledger::seed`]'s body for one candidate symbol from one file,
-    /// sharing the caller's budget and accumulators so the ceiling binds
-    /// across a whole group rather than per file. The caller decides which
-    /// file's symbol to try next — round-robin across a group, or simply the
-    /// next one when there is only one file.
-    async fn seed_symbol(
-        &mut self,
-        tree: &dyn TreeReader,
-        diff: &crate::evidence::diff::FileDiff,
-        symbol: &str,
-        policy: &LookupPolicy,
-        rendered: &mut String,
-        answered: &mut usize,
-    ) {
-        let capitalised = symbol.chars().next().is_some_and(char::is_uppercase);
-        let patterns: Vec<String> = if capitalised {
-            vec![
-                format!("struct {symbol}"),
-                format!("enum {symbol}"),
-                format!("type {symbol}"),
-                format!("trait {symbol}"),
-            ]
-        } else {
-            vec![format!("fn {symbol}(")]
-        };
-        for pattern in patterns {
-            let lookup = Lookup::Search {
-                pattern: pattern.clone(),
-                glob: None,
-            };
-            if self.seen.contains(&lookup.key()) {
-                continue;
-            }
-            let Ok(Found::Hits { hits, .. }) = tree.lookup(&lookup).await else {
-                continue;
-            };
-            // A definition already in the diff is not looked up; one in
-            // the same file but outside every hunk is — it is exactly as
-            // invisible to the reviewer as one in another file, and the
-            // unbounded sibling read on opencompany#2313 lived there.
-            let definitions: Vec<&crate::ports::tree::Hit> = hits
-                .iter()
-                .filter(|h| {
-                    looks_like_definition(&h.text)
-                        && !(h.path == diff.path
-                            && diff.within_hunk(u64::from(h.line), u64::from(h.line)))
-                })
-                .collect();
-            if definitions.is_empty() || definitions.len() > AUTO_FOLLOW {
-                continue;
-            }
-            self.seen.insert(lookup.key());
-            let mut hits_text = String::new();
-            for hit in &definitions {
-                hits_text.push_str(&format!("{}:{}: {}\n", hit.path, hit.line, hit.text));
-            }
-            // The fence has to outrun any backtick run in a hit line — a
-            // contributor-controlled source line containing ```` would
-            // otherwise close it early and the rest of this turn's
-            // evidence would read as instructions.
-            let fence = crate::harness::prompt::fence_for(&hits_text);
-            let mut body = format!("{fence}\n");
-            body.push_str(&hits_text);
-            body.push_str(&fence);
-            for hit in definitions {
-                let below = if hit.path == diff.path {
-                    SAME_FILE_BELOW
-                } else {
-                    DEFINITION_BELOW
-                };
-                let read = Lookup::Read {
-                    path: hit.path.clone(),
-                    start: Some(hit.line.saturating_sub(DEFINITION_ABOVE).max(1)),
-                    end: Some(hit.line.saturating_add(below)),
-                };
-                if !self.seen.insert(read.key()) {
-                    continue;
-                }
-                if let Ok(context) = tree.lookup(&read).await {
-                    body.push_str(&format!(
-                        "
-
-#### {}:{} — the definition and what is written above it
-
-{}",
-                        hit.path,
-                        hit.line,
-                        render_found(&context)
-                    ));
-                }
-            }
-            if self.chars + body.len() > policy.max_chars {
-                break;
-            }
-            self.chars += body.len();
-            *answered += 1;
-            rendered.push_str(&format!(
-                "
-### {}
-
-{body}
-",
-                lookup.key()
-            ));
-            break;
         }
     }
 }
@@ -923,9 +871,7 @@ mod tests {
             ),
         ]);
         let mut ledger = Ledger::default();
-        let seeded = ledger
-            .seed(&tree, std::slice::from_ref(&diff), &LookupPolicy::default())
-            .await;
+        let seeded = ledger.seed(&tree, &diff, &LookupPolicy::default()).await;
         assert_eq!(seeded.answered, 3, "{}", seeded.rendered);
         assert!(
             seeded.rendered.contains("Unbounded: `before: None`"),
@@ -944,35 +890,35 @@ mod tests {
         );
     }
 
-    /// Grouping's whole point for lookups: a reviewer given a group's files
-    /// together must not lose the seeding that made #2313's finding possible
-    /// just because the calling line sits in the *second* file of the group.
     #[tokio::test]
-    async fn seeding_a_group_reads_a_definition_called_only_from_the_second_file() {
-        let first = crate::evidence::diff::parse_file_patch(
-            "src/a.rs",
-            "@@ -1,1 +1,2 @@\n fn a() {}\n+let x = 1;\n",
-        );
-        let second = crate::evidence::diff::parse_file_patch(
-            "src/b.rs",
-            "@@ -1,1 +1,2 @@\n fn b() {}\n+let pins = read_pinboard(&log);\n",
-        );
-        let tree = MockTree::from_files([(
-            "vendor/lib/src/pins.rs",
-            "/// `before` is an exclusive bound.\npub async fn read_pinboard(log: &Log) {}\n",
-        )]);
+    async fn outcomes_are_rendered_for_the_model() {
+        let tree = MockTree::from_files([("src/a.rs", "fn read_before() {}\n")]);
         let mut ledger = Ledger::default();
-        let seeded = ledger
-            .seed(&tree, &[first, second], &LookupPolicy::default())
+        let gathered = ledger
+            .gather(
+                &tree,
+                &[
+                    Lookup::Search {
+                        pattern: "read_before".into(),
+                        glob: None,
+                    },
+                    Lookup::Read {
+                        path: "nope.rs".into(),
+                        start: None,
+                        end: None,
+                    },
+                ],
+                &LookupPolicy::default(),
+            )
             .await;
-
         assert!(
-            seeded.rendered.contains("`before` is an exclusive bound"),
-            "the second file's own call must still be seeded: {}",
-            seeded.rendered
+            gathered
+                .rendered
+                .contains("src/a.rs:1: fn read_before() {}")
         );
+        assert!(gathered.rendered.contains("No such file"));
+        assert!(gathered.rendered.contains("Untrusted data"));
     }
-
     /// The shared `SEED_SYMBOLS` cap is round-robin, not first-come: a first
     /// file whose diff alone offers enough candidates to exhaust the cap must
     /// not be allowed to do so before a later group member's own call is
@@ -1016,33 +962,4 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn outcomes_are_rendered_for_the_model() {
-        let tree = MockTree::from_files([("src/a.rs", "fn read_before() {}\n")]);
-        let mut ledger = Ledger::default();
-        let gathered = ledger
-            .gather(
-                &tree,
-                &[
-                    Lookup::Search {
-                        pattern: "read_before".into(),
-                        glob: None,
-                    },
-                    Lookup::Read {
-                        path: "nope.rs".into(),
-                        start: None,
-                        end: None,
-                    },
-                ],
-                &LookupPolicy::default(),
-            )
-            .await;
-        assert!(
-            gathered
-                .rendered
-                .contains("src/a.rs:1: fn read_before() {}")
-        );
-        assert!(gathered.rendered.contains("No such file"));
-        assert!(gathered.rendered.contains("Untrusted data"));
-    }
 }
