@@ -465,11 +465,8 @@ fn path_instructions(inputs: &PromptInputs<'_>) -> String {
             })
             .collect();
 
-        let is_match = |index: usize, path: &str| {
-            matchers[index]
-                .as_ref()
-                .is_some_and(|m| m.is_match(path))
-        };
+        let is_match =
+            |index: usize, path: &str| matchers[index].as_ref().is_some_and(|m| m.is_match(path));
 
         let mut selected = Vec::new();
         for path in paths {
