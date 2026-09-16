@@ -339,13 +339,18 @@ fn skip_note(skipped: &[(String, &'static str)]) -> String {
 
 /// Render scanner findings for adjudication, by type and location only.
 ///
+/// `paths` restricts the findings shown to those files — a group's own paths,
+/// so a conversation is not shown a scanner match for a file another
+/// conversation owns. Empty renders every finding, which is what a
+/// whole-pull-request caller with no group of its own wants.
+///
 /// `redacted_hint` is the only thing from the match itself that is ever shown,
 /// and the scanner already guaranteed it carries no entropy. The value has no
 /// route into this string because [`ScanFinding`] has nowhere to keep it.
-pub(crate) fn render_scanner(findings: &[&ScanFinding], path: Option<&str>) -> String {
+pub(crate) fn render_scanner(findings: &[&ScanFinding], paths: &[String]) -> String {
     let mut out = String::new();
     for finding in findings {
-        if path.is_some_and(|p| p != finding.path) {
+        if !paths.is_empty() && !paths.iter().any(|p| p == &finding.path) {
             continue;
         }
         let location = match finding.line {
