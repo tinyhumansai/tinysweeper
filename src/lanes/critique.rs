@@ -388,16 +388,17 @@ async fn place(
     let mut discarded = 0usize;
 
     for raw in parsed.findings {
-        // Any file but this conversation's own is dropped. That is stricter
-        // than the whole-diff lane's rule — which only required the pull
-        // request to have touched the file — and it has to be: N reviewers
-        // each reporting the same cross-file problem is what `focus_path`
-        // exists to prevent, and honouring an off-file finding here would
-        // undo it.
-        if raw.path != diff.path {
+        // Resolved against the group file whose path it names. A path outside
+        // the group — including one this pull request touched, in a different
+        // conversation — is dropped exactly as a whole-diff lane would drop a
+        // path it never touched. That is stricter than "the pull request
+        // touched this somewhere", and it has to be: N reviewers each
+        // reporting the same cross-file problem is what `focus_paths` exists
+        // to prevent, and honouring an off-group finding here would undo it.
+        let Some(diff) = group_diffs.iter().find(|d| d.path == raw.path) else {
             discarded += 1;
             continue;
-        }
+        };
 
         // Budget check: relocation can make one model call per unresolvable
         // finding, so enforce the limit inside the loop before escalating to
@@ -449,7 +450,7 @@ async fn place(
     }
 
     // Falsification is deliberately *not* here: it runs once over the merged
-    // set in `review_file`, because a reject-only filter given more inputs in
+    // set in `review_group`, because a reject-only filter given more inputs in
     // one pass has identical semantics at a fraction of the calls.
     Ok(Asked {
         summary: parsed.summary,
