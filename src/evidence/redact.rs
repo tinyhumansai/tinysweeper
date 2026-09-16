@@ -574,8 +574,8 @@ mod tests {
     fn a_private_key_serialized_on_its_marker_line_is_masked() {
         let begin = format!("-----BEGIN {}-----", "RSA PRIVATE KEY");
         let body = "MIIEowIBAAKCAQEAthisisadeadbeefexamplebodyforatestcase1234567890";
-        let value = format!("{begin}\\\\n{body}\\\\n-----END RSA PRIVATE KEY-----");
-        let raw = format!("@@ -0,0 +1 @@\\n+KEY=\\\"{value}\\\"\\n");
+        let value = format!("{begin}\\n{body}\\n-----END RSA PRIVATE KEY-----");
+        let raw = format!("@@ -0,0 +1 @@\n+KEY=\"{value}\"\n");
         let mut diffs = vec![parse_file_patch("src/config.rs", &raw)];
 
         mask(&mut diffs, &[], &[]);
@@ -594,7 +594,7 @@ mod tests {
         let begin = format!("-----BEGIN {}-----", "RSA PRIVATE KEY");
         let body = "MIIEowIBAAKCAQEAthisisadeadbeefexamplebodyforatestcase1234567890";
         let raw = format!(
-            "@@ -0,0 +1,2 @@\\n+{begin}\\n+{body}\\n@@ -10,0 +12 @@\\n+let ordinary = true;\\n"
+            "@@ -0,0 +1,2 @@\n+{begin}\n+{body}\n@@ -10,0 +12 @@\n+let ordinary = true;\n"
         );
         let mut diffs = vec![parse_file_patch("src/config.rs", &raw)];
 
