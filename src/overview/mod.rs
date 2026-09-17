@@ -36,6 +36,7 @@ use crate::evidence::diff::FileDiff;
 use crate::findings::types::Finding;
 use crate::index::types::{EdgeKind, Neighbourhood};
 
+pub use crate::overview::mermaid::flowchart;
 pub use crate::overview::render::{MARKER, comment};
 pub use crate::overview::types::{ChangeMap, Component, FlowRelation, GraphStatus, Link, Role};
 

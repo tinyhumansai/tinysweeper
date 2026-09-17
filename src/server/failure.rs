@@ -125,6 +125,7 @@ fn title_for(err: &Error) -> &'static str {
         Error::Forge(_) => "The review could not read the pull request",
         Error::Budget { .. } => "The review ran out of budget",
         Error::Timeout { .. } => "The review ran out of time",
+        Error::ReviewLimit { .. } => "The pull request is too large to review safely",
         Error::Config(_) | Error::ConfigNotFound(_) => "The review is misconfigured",
         _ => "The review could not run",
     }
@@ -156,6 +157,12 @@ fn summary_for(err: &Error) -> String {
              lanes, or both. That is usually a model gateway answering very slowly, a large \
              checkout, or an unusually large diff — check the gateway's latency before \
              re-running, or narrow what this pull request changes."
+        }
+        Error::ReviewLimit { .. } => {
+            "The pull request exceeds the deployment's changed-file or changed-line safety \
+             ceiling. Split it into smaller pull requests, or ask the tinysweeper operator to \
+             raise `review.max_changed_files` or `review.max_changed_lines` if this change is \
+             intentionally reviewable as one unit."
         }
         _ => "Re-run the review once the underlying problem is fixed.",
     };
@@ -278,6 +285,12 @@ mod tests {
             limit: 4.0
         }));
         assert!(!is_transient(&Error::Config("bad preset".into())));
+        assert!(!is_transient(&Error::ReviewLimit {
+            changed_files: 501,
+            max_files: 500,
+            changed_lines: 1,
+            max_lines: 50_000,
+        }));
         assert!(!is_transient(&Error::lane("critique", "no verdict")));
     }
 
@@ -303,5 +316,17 @@ mod tests {
             title_for(&Error::Model("x".into())),
             title_for(&Error::Forge("y".into()))
         );
+
+        let too_large = Error::ReviewLimit {
+            changed_files: 501,
+            max_files: 500,
+            changed_lines: 50_001,
+            max_lines: 50_000,
+        };
+        assert_eq!(
+            title_for(&too_large),
+            "The pull request is too large to review safely"
+        );
+        assert!(summary_for(&too_large).contains("review.max_changed_lines"));
     }
 }
