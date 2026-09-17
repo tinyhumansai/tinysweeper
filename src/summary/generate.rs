@@ -71,6 +71,7 @@ pub async fn generate(
         "pull_request": {"title": pull_request.title, "head": pull_request.head_sha},
         "changed_paths": paths,
         "changed_symbols": symbols,
+        "scrubbed_diff": crate::evidence::diff::render(diffs),
         "lanes": lanes.iter().map(|lane| json!({
             "lane": lane.lane.as_str(), "summary": lane.summary,
             "findings": lane.findings.iter().map(|finding| json!({
@@ -143,12 +144,31 @@ pub async fn generate(
     };
 
     let supported = |citations: &[String]| citations_supported(citations, &paths, &symbols_by_path);
-    generated
+    generated.features = generated
         .features
-        .retain(|feature| supported(&feature.citations));
-    generated
+        .into_iter()
+        .filter_map(|mut feature| {
+            if !supported(&feature.citations) {
+                return None;
+            }
+            feature.name = validated_narrative(&feature.name)?;
+            feature.impact = validated_narrative(&feature.impact)?;
+            Some(feature)
+        })
+        .collect();
+    generated.tests = generated
         .tests
-        .retain(|test| supported(&test.citations) && !claims_execution(&test.assessment));
+        .into_iter()
+        .filter_map(|mut test| {
+            if !supported(&test.citations) {
+                return None;
+            }
+            test.kind = validated_narrative(&test.kind)?;
+            test.behavior = validated_narrative(&test.behavior)?;
+            test.assessment = validated_narrative(&test.assessment)?;
+            Some(test)
+        })
+        .collect();
     summary.omitted_features = generated
         .features
         .len()
@@ -358,8 +378,13 @@ mod tests {
         let model = MockModel::new().then(json!({
             "executive_summary": "A supported summary.",
             "changes": "The review hub is updated in place.",
-            "features": [],
-            "tests": [],
+            "features": [
+                {"kind": "addition", "name": "Hub", "impact": "Tests passed", "citations": ["src/lib.rs"]},
+                {"kind": "addition", "name": "Hub", "impact": "Keeps one durable report.", "citations": ["src/lib.rs"]}
+            ],
+            "tests": [
+                {"kind": "unit", "behavior": "Hub", "assessment": "Tests passed", "citations": ["src/lib.rs"]}
+            ],
             "positive_observations": {
                 "critique": [
                     {"observation": "Tests passed", "citations": ["src/lib.rs"]},
@@ -387,10 +412,10 @@ mod tests {
             head_sha: "new".into(),
             ..PullRequest::default()
         };
-        let diffs = [FileDiff {
-            path: "src/lib.rs".into(),
-            ..FileDiff::default()
-        }];
+        let diffs = [crate::evidence::diff::parse_file_patch(
+            "src/lib.rs",
+            "@@ -1,1 +1,1 @@ fn hub\n-old\n+new durable hub",
+        )];
 
         let (summary, _, transcript) = generate(
             &model,
@@ -406,6 +431,14 @@ mod tests {
         assert_eq!(
             summary.positive_observations[&LaneId::Critique],
             ["The update path is explicit."]
+        );
+        assert_eq!(summary.features.len(), 1);
+        assert!(summary.tests.is_empty());
+        assert!(
+            model
+                .last_prompt()
+                .expect("summary request")
+                .contains("new durable hub")
         );
         assert_eq!(
             summary

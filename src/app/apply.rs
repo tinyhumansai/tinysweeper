@@ -247,7 +247,7 @@ async fn publish_review_hub(
     proposal: &Proposal,
     store: Option<&dyn ReviewStateStore>,
 ) -> Result<()> {
-    if !config.summary.enabled {
+    if !config.summary.enabled || proposal.skipped.is_some() {
         return Ok(());
     }
     let body = crate::summary::render(config, proposal);

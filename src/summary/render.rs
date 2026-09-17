@@ -291,6 +291,18 @@ fn findings(out: &mut String, proposal: &Proposal) {
 fn before_merge(out: &mut String, proposal: &Proposal) {
     out.push_str("\n## Before merge\n\n");
     let mut any = false;
+    let current_titles: std::collections::BTreeSet<&str> = proposal
+        .findings()
+        .map(|finding| finding.title.as_str())
+        .collect();
+    for title in proposal
+        .prior_findings
+        .iter()
+        .filter(|title| !current_titles.contains(title.as_str()))
+    {
+        any = true;
+        let _ = writeln!(out, "- [ ] Address carried finding **{}**.", md(title));
+    }
     for lane in &proposal.lanes {
         for finding in &lane.findings {
             if finding.severity >= Severity::High {
@@ -597,5 +609,18 @@ mod tests {
         assert!(rendered.contains("Earlier active finding"));
         assert!(!rendered.contains("No active actionable findings"));
         assert!(!rendered.contains("## Tests"));
+    }
+
+    #[test]
+    fn carried_findings_are_merge_work_even_without_a_repeat() {
+        let mut config = Config::default();
+        config.summary.sections = vec![SummarySection::BeforeMerge];
+        let rendered = render(
+            &config,
+            &proposal(ReviewSummary::default(), &["Earlier active finding"]),
+        );
+
+        assert!(rendered.contains("Address carried finding"));
+        assert!(!rendered.contains("## Before merge\n\nNone."));
     }
 }

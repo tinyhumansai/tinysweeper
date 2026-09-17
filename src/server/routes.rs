@@ -19,7 +19,7 @@ use tokio::sync::Semaphore;
 use crate::automerge::types::Outcome;
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::forge::RepoId;
+use crate::forge::{PullRequest, RepoId};
 use crate::index::mongo::MongoIndex;
 use crate::ports::forge::ForgeRead as _;
 use crate::ports::knowledge::KnowledgeStore;
@@ -2262,17 +2262,19 @@ async fn review_inner(
 
         // The lease is owned and repository policy is known. Publish the hub
         // now, before any model call, so it stays an early timeline reference.
-        open_review_hub(
-            state,
-            &run.slot,
-            &forge,
-            &overlay.config,
-            &repo_id,
-            number,
-            &pull_request.head_sha,
-            installation,
-        )
-        .await;
+        if !review_is_kill_switched(&overlay.config, &pull_request) {
+            open_review_hub(
+                state,
+                &run.slot,
+                &forge,
+                &overlay.config,
+                &repo_id,
+                number,
+                &pull_request.head_sha,
+                installation,
+            )
+            .await;
+        }
 
         // Memory is fed from the *base* tip, not the head: what the
         // repository has committed to, not what this pull request proposes.
@@ -2427,6 +2429,12 @@ async fn review_inner(
     ));
 
     Ok(Some(findings))
+}
+
+fn review_is_kill_switched(config: &Config, pull_request: &PullRequest) -> bool {
+    [&config.labels.human_review, &config.labels.manual_only]
+        .into_iter()
+        .any(|label| !label.is_empty() && pull_request.labels.contains(label))
 }
 
 /// Run the checkout and the lanes under the deadline, and hand back what they
@@ -3073,5 +3081,18 @@ mod tests {
             incremental.review.incremental,
             "the webhook path must be untouched"
         );
+    }
+
+    #[test]
+    fn kill_switch_labels_prevent_the_early_hub_write() {
+        let mut config = Config::default();
+        config.labels.human_review = "human-review".into();
+        let pull_request = PullRequest {
+            labels: vec![config.labels.human_review.clone()],
+            ..PullRequest::default()
+        };
+
+        assert!(review_is_kill_switched(&config, &pull_request));
+        assert!(!review_is_kill_switched(&config, &PullRequest::default()));
     }
 }
