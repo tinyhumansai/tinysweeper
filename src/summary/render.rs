@@ -31,7 +31,7 @@ pub fn failed(head_sha: &str, message: &str, previous: Option<&str>) -> String {
     let mut body = format!(
         "{MARKER}\n\n# Tiny Sweeper review\n\n> ⚠️ **Review failed for `{}`.** {}\n",
         short(head_sha),
-        crate::scan::scrub(message)
+        md(&crate::scan::scrub(message))
     );
     if let Some(previous) = previous.and_then(trustworthy_report) {
         body.push_str("\n<details open>\n<summary>Last completed report</summary>\n\n");
@@ -51,7 +51,7 @@ pub fn render(config: &Config, proposal: &Proposal) -> String {
     } else {
         summary.executive_summary.trim()
     };
-    let _ = writeln!(body, "{executive}\n");
+    let _ = writeln!(body, "{}\n", md(executive));
     let _ = writeln!(body, "**State:** {}  ", state(proposal));
     let _ = writeln!(body, "**Priority:** {}  ", priority(proposal));
     let _ = writeln!(body, "**Reviewed head:** `{}`", short(&proposal.head_sha));
@@ -125,11 +125,11 @@ fn snapshot(out: &mut String, proposal: &Proposal, summary: &ReviewSummary) {
 
 fn changes(out: &mut String, summary: &ReviewSummary) {
     out.push_str("\n## What changed\n\n");
-    out.push_str(if summary.changes.trim().is_empty() {
-        "No supported behavioral explanation was produced."
+    if summary.changes.trim().is_empty() {
+        out.push_str("No supported behavioral explanation was produced.");
     } else {
-        summary.changes.trim()
-    });
+        out.push_str(&md(summary.changes.trim()));
+    }
     out.push('\n');
 }
 
@@ -144,9 +144,9 @@ fn features(out: &mut String, summary: &ReviewSummary) {
             out,
             "- **{} — {}:** {} _({})_",
             feature.kind.label(),
-            feature.name,
-            feature.impact,
-            feature.citations.join(", ")
+            md(&feature.name),
+            md(&feature.impact),
+            md(&feature.citations.join(", "))
         );
     }
     if summary.omitted_features > 0 {
@@ -169,10 +169,10 @@ fn tests(out: &mut String, proposal: &Proposal, summary: &ReviewSummary) {
         let _ = writeln!(
             out,
             "- **{} — {}:** {} _({})_",
-            test.kind,
-            test.behavior,
-            test.assessment,
-            test.citations.join(", ")
+            md(&test.kind),
+            md(&test.behavior),
+            md(&test.assessment),
+            md(&test.citations.join(", "))
         );
     }
     if summary.omitted_tests > 0 {
@@ -184,9 +184,12 @@ fn tests(out: &mut String, proposal: &Proposal, summary: &ReviewSummary) {
     }
     for lane in &proposal.lanes {
         if lane.lane == crate::config::types::LaneId::Tests && !lane.unanswered.is_empty() {
-            let _ = writeln!(out, "- **Unreviewed:** {}", lane.unanswered.join(", "));
+            let _ = writeln!(out, "- **Unreviewed:** {}", md(&lane.unanswered.join(", ")));
         }
     }
+}
+
+fn carried_findings(out: &mut String, proposal: &Proposal) {
     let current_titles: std::collections::BTreeSet<&str> = proposal
         .findings()
         .map(|finding| finding.title.as_str())
@@ -199,7 +202,7 @@ fn tests(out: &mut String, proposal: &Proposal, summary: &ReviewSummary) {
     if !carried.is_empty() {
         out.push_str("\n**Previously reported and still active**\n");
         for title in carried {
-            let _ = writeln!(out, "- {title}");
+            let _ = writeln!(out, "- {}", md(title));
         }
     }
 }
@@ -216,9 +219,9 @@ fn findings(out: &mut String, proposal: &Proposal) {
                 "- **{} · {} · {}** — {} (`{}`{})",
                 severity(finding.severity),
                 lane.lane,
-                finding.title,
-                concise(&finding.body),
-                finding.path,
+                md(&finding.title),
+                md(&concise(&finding.body)),
+                md(&finding.path),
                 finding
                     .line
                     .map(|line| format!(":{line}"))
@@ -226,6 +229,7 @@ fn findings(out: &mut String, proposal: &Proposal) {
             );
         }
     }
+    carried_findings(out, proposal);
     let noted: Vec<_> = proposal
         .lanes
         .iter()
@@ -239,8 +243,8 @@ fn findings(out: &mut String, proposal: &Proposal) {
                 "- {} · {} — {} (`{}`)",
                 severity(finding.severity),
                 finding.lane,
-                finding.title,
-                finding.path
+                md(&finding.title),
+                md(&finding.path)
             );
         }
     }
@@ -252,7 +256,7 @@ fn findings(out: &mut String, proposal: &Proposal) {
     if !resolved.is_empty() {
         out.push_str("\n**Resolved this pass**\n");
         for title in resolved {
-            let _ = writeln!(out, "- {title}");
+            let _ = writeln!(out, "- {}", md(title));
         }
     }
     let pending: Vec<_> = proposal
@@ -264,14 +268,14 @@ fn findings(out: &mut String, proposal: &Proposal) {
         let _ = writeln!(
             out,
             "\n**Pending checks:** {}",
-            pending.into_iter().cloned().collect::<Vec<_>>().join(", ")
+            md(&pending.into_iter().cloned().collect::<Vec<_>>().join(", "))
         );
     }
     if !proposal.unanswered().is_empty() {
         let _ = writeln!(
             out,
             "\n**Could not review:** {}",
-            proposal.unanswered().join(", ")
+            md(&proposal.unanswered().join(", "))
         );
     }
 }
@@ -286,13 +290,14 @@ fn before_merge(out: &mut String, proposal: &Proposal) {
                 let _ = writeln!(
                     out,
                     "- [ ] Address **{}** (`{}`).",
-                    finding.title, finding.path
+                    md(&finding.title),
+                    md(&finding.path)
                 );
             }
         }
         if !lane.pending.is_empty() {
             any = true;
-            let _ = writeln!(out, "- [ ] Wait for {}.", lane.pending.join(", "));
+            let _ = writeln!(out, "- [ ] Wait for {}.", md(&lane.pending.join(", ")));
         }
         if !lane.unanswered.is_empty() {
             any = true;
@@ -300,7 +305,7 @@ fn before_merge(out: &mut String, proposal: &Proposal) {
                 out,
                 "- [ ] Complete the {} review for {}.",
                 lane.lane,
-                lane.unanswered.join(", ")
+                md(&lane.unanswered.join(", "))
             );
         }
     }
@@ -309,7 +314,7 @@ fn before_merge(out: &mut String, proposal: &Proposal) {
         let _ = writeln!(
             out,
             "- [ ] Review unavailable diffs: {}.",
-            proposal.unreviewed.join(", ")
+            md(&proposal.unreviewed.join(", "))
         );
     }
     if !any {
@@ -340,27 +345,31 @@ fn agent_details(out: &mut String, proposal: &Proposal, summary: &ReviewSummary)
             if lane.unanswered.is_empty() {
                 "all assigned evidence".into()
             } else {
-                format!("incomplete; unanswered: {}", lane.unanswered.join(", "))
+                format!(
+                    "incomplete; unanswered: {}",
+                    md(&lane.unanswered.join(", "))
+                )
             }
         );
         if let Some(observations) = summary.positive_observations.get(&lane.lane) {
             for observation in observations {
-                let _ = writeln!(out, "- **Positive:** {observation}");
+                let _ = writeln!(out, "- **Positive:** {}", md(observation));
             }
         }
-        let _ = writeln!(out, "- **Lane summary:** {}", lane.summary);
+        let _ = writeln!(out, "- **Lane summary:** {}", md(&lane.summary));
         if !lane.pending.is_empty() {
             let _ = writeln!(
                 out,
                 "- **Unresolved questions/checks:** {}",
-                lane.pending.join(", ")
+                md(&lane.pending.join(", "))
             );
         }
         for finding in &lane.findings {
             let _ = writeln!(
                 out,
                 "- **Evidence:** `{}` — {}",
-                finding.path, finding.title
+                md(&finding.path),
+                md(&finding.title)
             );
         }
         out.push('\n');
@@ -376,7 +385,7 @@ fn run_details(out: &mut String, proposal: &Proposal, summary: &ReviewSummary) {
         if proposal.models.is_empty() {
             "None".into()
         } else {
-            proposal.models.join(", ")
+            md(&proposal.models.join(", "))
         }
     );
     let _ = writeln!(out, "- **Spend:** ${:.6}", proposal.cost_usd);
@@ -398,8 +407,8 @@ fn run_details(out: &mut String, proposal: &Proposal, summary: &ReviewSummary) {
                 out,
                 "| `{}` | {} | {} (at {}) |",
                 short(&pass.head_sha),
-                pass.state,
-                pass.summary,
+                md(&pass.state),
+                md(&pass.summary),
                 pass.reviewed_at_epoch,
             );
         }
@@ -475,6 +484,25 @@ fn concise(body: &str) -> String {
         .take(180)
         .collect()
 }
+fn md(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '@' => escaped.push_str("&#64;"),
+            '`' => escaped.push_str("&#96;"),
+            '\\' | '*' | '_' | '[' | ']' | '(' | ')' | '#' | '!' | '|' | '{' | '}' | '+' | '-'
+            | '.' => {
+                escaped.push('\\');
+                escaped.push(character);
+            }
+            _ => escaped.push(character),
+        }
+    }
+    escaped
+}
 fn trustworthy_report(body: &str) -> Option<&str> {
     if body.contains(MARKER)
         && body.contains("**Reviewed head:**")
@@ -489,6 +517,22 @@ fn trustworthy_report(body: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn proposal(summary: ReviewSummary, prior_findings: &[&str]) -> Proposal {
+        serde_json::from_value(json!({
+            "version": crate::app::review::PROPOSAL_VERSION,
+            "repo": "acme/widget",
+            "number": 1,
+            "head_sha": "abcdef1234567890",
+            "lanes": [],
+            "summary": summary,
+            "prior_findings": prior_findings,
+            "cost_usd": 0.0,
+            "cached_tokens": 0
+        }))
+        .expect("proposal")
+    }
 
     #[test]
     fn progress_retains_only_a_completed_bot_report() {
@@ -497,5 +541,42 @@ mod tests {
         assert!(
             !in_progress("def", Some("contributor text")).contains("Previous completed report")
         );
+    }
+
+    #[test]
+    fn render_escapes_model_and_contributor_controlled_markdown() {
+        let proposal = proposal(
+            ReviewSummary {
+                executive_summary: "[click](https://evil.example) @maintainer <img src=x> # forged"
+                    .into(),
+                changes: "**trusted**".into(),
+                ..ReviewSummary::default()
+            },
+            &[],
+        );
+
+        let rendered = render(&Config::default(), &proposal);
+
+        assert!(!rendered.contains("[click](https://evil.example)"));
+        assert!(!rendered.contains("@maintainer"));
+        assert!(!rendered.contains("<img src=x>"));
+        assert!(rendered.contains("\\[click\\]\\(https://evil\\.example\\)"));
+        assert!(rendered.contains("&#64;maintainer"));
+        assert!(rendered.contains("&lt;img src=x&gt;"));
+    }
+
+    #[test]
+    fn findings_section_owns_carried_findings_when_tests_are_hidden() {
+        let mut config = Config::default();
+        config.summary.sections = vec![SummarySection::Findings];
+        let rendered = render(
+            &config,
+            &proposal(ReviewSummary::default(), &["Earlier active finding"]),
+        );
+
+        assert!(rendered.contains("## Findings"));
+        assert!(rendered.contains("Previously reported and still active"));
+        assert!(rendered.contains("Earlier active finding"));
+        assert!(!rendered.contains("## Tests"));
     }
 }

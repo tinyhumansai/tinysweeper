@@ -1751,25 +1751,40 @@ async fn close_status(state: &AppState, slot: &StatusSlot, conclusion: Conclusio
         )),
     };
 
-    let written = async {
-        use crate::ports::forge::ForgeWrite;
-        let token = state.auth.installation_token(open.installation).await?;
-        let write = crate::forge::github::GitHubWrite::new(&token)?;
-        write.update_check(&open.repo, open.check_id, check).await?;
-        if let (Some(comment_id), Some(body)) = (open.hub_comment_id, hub_body) {
-            write.update_comment(&open.repo, comment_id, &body).await?;
+    use crate::ports::forge::ForgeWrite;
+    let write = match state
+        .auth
+        .installation_token(open.installation)
+        .await
+        .and_then(|token| crate::forge::github::GitHubWrite::new(&token))
+    {
+        Ok(write) => write,
+        Err(err) => {
+            tracing::error!(
+                %err, repo = %open.repo, check_id = open.check_id,
+                "could not authenticate to conclude the in-progress check"
+            );
+            return;
         }
-        Ok::<(), Error>(())
-    }
-    .await;
+    };
 
-    if let Err(err) = written {
+    if let Err(err) = write.update_check(&open.repo, open.check_id, check).await {
         // Worth an error rather than a warning: the check is now stuck
         // in-progress, and a pending check refuses auto-merge on this commit
         // until somebody pushes again.
         tracing::error!(
             %err, repo = %open.repo, check_id = open.check_id,
             "could not conclude the in-progress check; it will block auto-merge until the next push"
+        );
+    }
+    if let (Some(comment_id), Some(body)) = (open.hub_comment_id, hub_body)
+        && let Err(err) = write.update_comment(&open.repo, comment_id, &body).await
+    {
+        // The check conclusion is already durable. A comment retry must not
+        // turn that successful terminal write into a failed review attempt.
+        tracing::warn!(
+            %err, repo = %open.repo, comment_id,
+            "could not conclude the review hub; the check conclusion was preserved"
         );
     }
 }
@@ -1785,13 +1800,7 @@ async fn open_review_hub(
     head_sha: &str,
     installation: u64,
 ) {
-    if !config.summary.enabled
-        || slot
-            .lock()
-            .expect("status slot")
-            .as_ref()
-            .is_some_and(|open| open.hub_comment_id.is_some())
-    {
+    if !config.summary.enabled || !hub_slot_is_open(slot, head_sha) {
         return;
     }
     let existing =
@@ -1818,20 +1827,53 @@ async fn open_review_hub(
         use crate::ports::forge::ForgeWrite;
         let token = state.auth.installation_token(installation).await?;
         let write = crate::forge::github::GitHubWrite::new(&token)?;
+        // Discovery and authentication both await. Shutdown may have removed
+        // the slot while either was running, so do not start a comment write
+        // for a review that has already concluded.
+        if !hub_slot_is_open(slot, head_sha) {
+            return Ok(None);
+        }
         match existing.and_then(|comment| comment.id) {
             Some(id) => {
                 write.update_comment(repo, id, &body).await?;
-                Ok(id)
+                Ok(Some(id))
             }
-            None => write.create_comment(repo, number, &body).await,
+            None => write.create_comment(repo, number, &body).await.map(Some),
         }
     }
     .await;
     match written {
-        Ok(id) => {
-            if let Some(open) = slot.lock().expect("status slot").as_mut() {
+        Ok(Some(id)) => {
+            let attached = if let Some(open) = slot.lock().expect("status slot").as_mut()
+                && open.head_sha == head_sha
+            {
                 open.hub_comment_id = Some(id);
-                open.prior_hub_body = prior;
+                open.prior_hub_body = prior.clone();
+                true
+            } else {
+                false
+            };
+            if !attached {
+                // The network write and shutdown raced. The conclusion could
+                // not see this ID, so settle the comment here instead of
+                // leaving a permanent "Reviewing" report behind.
+                let terminal = crate::summary::failed(
+                    head_sha,
+                    "This pass ended while the review hub was being published.",
+                    prior.as_deref(),
+                );
+                let reconciled = async {
+                    use crate::ports::forge::ForgeWrite;
+                    let token = state.auth.installation_token(installation).await?;
+                    crate::forge::github::GitHubWrite::new(&token)?
+                        .update_comment(repo, id, &terminal)
+                        .await
+                }
+                .await;
+                if let Err(err) = reconciled {
+                    tracing::warn!(%err, comment_id = id, "could not reconcile a review hub published during shutdown");
+                }
+                return;
             }
             let key = crate::state::key(&repo.to_string(), number);
             if let Ok(current) =
@@ -1850,8 +1892,16 @@ async fn open_review_hub(
                 }
             }
         }
+        Ok(None) => {}
         Err(err) => tracing::warn!(%err, "could not publish the in-progress review hub"),
     }
+}
+
+fn hub_slot_is_open(slot: &StatusSlot, head_sha: &str) -> bool {
+    slot.lock()
+        .expect("status slot")
+        .as_ref()
+        .is_some_and(|open| open.head_sha == head_sha && open.hub_comment_id.is_none())
 }
 
 /// How a review ended, for the umbrella check.
