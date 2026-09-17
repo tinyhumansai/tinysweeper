@@ -62,6 +62,26 @@ max_impacted = 6
 max_links = 24
 max_paths_per_component = 12
 
+# One early pull-request comment, edited in place from review start through
+# completion. Repositories may make it shorter or turn it off, but cannot
+# raise these operator-owned presentation ceilings.
+[summary]
+enabled = true
+sections = [
+  "snapshot",
+  "changes",
+  "features",
+  "tests",
+  "findings",
+  "before_merge",
+  "flow",
+  "agent_details",
+  "run_details",
+]
+max_features = 8
+max_tests = 8
+history_entries = 5
+
 [paths]
 ignore = [
     "**/*.lock",

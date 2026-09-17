@@ -273,6 +273,10 @@ async fn review_case(
 fn prepare(config: &Config) -> Config {
     let mut config = config.clone();
     config.review.incremental = false;
+    // The committed corpus measures review lanes. Summary generation has its
+    // own schema and cassettes; including it here would make every historical
+    // lane cassette require an unrelated trailing response.
+    config.summary.enabled = false;
     config
 }
 

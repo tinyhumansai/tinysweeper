@@ -97,7 +97,7 @@ use crate::ports::forge::ForgeRead;
 /// is safe. See the module documentation for the split; changing this list is a
 /// change to the security boundary in `AGENTS.md` and needs saying so in the
 /// pull request.
-pub const OVERRIDABLE_KEYS: [&str; 20] = [
+pub const OVERRIDABLE_KEYS: [&str; 25] = [
     "knowledge.extract",
     "knowledge.files",
     "labels.human_review",
@@ -125,6 +125,11 @@ pub const OVERRIDABLE_KEYS: [&str; 20] = [
     "review.respect_agents_md",
     "review.severity_gate",
     "review.strictness",
+    "summary.enabled",
+    "summary.history_entries",
+    "summary.max_features",
+    "summary.max_tests",
+    "summary.sections",
 ];
 
 /// Whether `key` is one a reviewed repository may set.
@@ -236,6 +241,13 @@ pub fn apply(base: &Config, document: &str) -> Result<(Config, Vec<String>)> {
     // after the merge rather than trusting the repository's own value.
     config.preview.enabled &= base.preview.enabled;
     config.preview.max_flows = config.preview.max_flows.min(base.preview.max_flows);
+    config.summary.enabled &= base.summary.enabled;
+    config.summary.max_features = config.summary.max_features.min(base.summary.max_features);
+    config.summary.max_tests = config.summary.max_tests.min(base.summary.max_tests);
+    config.summary.history_entries = config
+        .summary
+        .history_entries
+        .min(base.summary.history_entries);
 
     let problems = validate::validate(&config);
     if !problems.is_empty() {

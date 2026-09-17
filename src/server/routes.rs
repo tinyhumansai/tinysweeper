@@ -19,7 +19,7 @@ use tokio::sync::Semaphore;
 use crate::automerge::types::Outcome;
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::forge::RepoId;
+use crate::forge::{PullRequest, RepoId};
 use crate::index::mongo::MongoIndex;
 use crate::ports::forge::ForgeRead as _;
 use crate::ports::knowledge::KnowledgeStore;
@@ -1527,6 +1527,10 @@ struct ReviewStatus {
     check_id: u64,
     head_sha: String,
     installation: u64,
+    /// Durable review-hub comment opened alongside the status check.
+    hub_comment_id: Option<u64>,
+    /// Last completed body, retained if this pass fails.
+    prior_hub_body: Option<String>,
 }
 
 /// Where a review's in-progress check lives between opening and concluding.
@@ -1683,6 +1687,8 @@ async fn open_status(
                 check_id,
                 head_sha: head_sha.to_string(),
                 installation,
+                hub_comment_id: None,
+                prior_hub_body: None,
             });
 
             // `conclude_in_flight`'s snapshot only concludes slots it can see
@@ -1731,16 +1737,38 @@ async fn close_status(state: &AppState, slot: &StatusSlot, conclusion: Conclusio
         Conclusion::Failed(err) => failure::check_run(&open.head_sha, err),
     };
 
-    let written = async {
-        use crate::ports::forge::ForgeWrite;
-        let token = state.auth.installation_token(open.installation).await?;
-        crate::forge::github::GitHubWrite::new(&token)?
-            .update_check(&open.repo, open.check_id, check)
-            .await
-    }
-    .await;
+    let hub_body = match conclusion {
+        Conclusion::Reviewed(_) => None,
+        Conclusion::NotReviewed => Some(crate::summary::failed(
+            &open.head_sha,
+            "This pass stopped before a review could be completed.",
+            open.prior_hub_body.as_deref(),
+        )),
+        Conclusion::Failed(err) => Some(crate::summary::failed(
+            &open.head_sha,
+            &err.to_string(),
+            open.prior_hub_body.as_deref(),
+        )),
+    };
 
-    if let Err(err) = written {
+    use crate::ports::forge::ForgeWrite;
+    let write = match state
+        .auth
+        .installation_token(open.installation)
+        .await
+        .and_then(|token| crate::forge::github::GitHubWrite::new(&token))
+    {
+        Ok(write) => write,
+        Err(err) => {
+            tracing::error!(
+                %err, repo = %open.repo, check_id = open.check_id,
+                "could not authenticate to conclude the in-progress check"
+            );
+            return;
+        }
+    };
+
+    if let Err(err) = write.update_check(&open.repo, open.check_id, check).await {
         // Worth an error rather than a warning: the check is now stuck
         // in-progress, and a pending check refuses auto-merge on this commit
         // until somebody pushes again.
@@ -1749,6 +1777,139 @@ async fn close_status(state: &AppState, slot: &StatusSlot, conclusion: Conclusio
             "could not conclude the in-progress check; it will block auto-merge until the next push"
         );
     }
+    if let (Some(comment_id), Some(body)) = (open.hub_comment_id, hub_body)
+        && let Err(err) = write.update_comment(&open.repo, comment_id, &body).await
+    {
+        // The check conclusion is already durable. A comment retry must not
+        // turn that successful terminal write into a failed review attempt.
+        tracing::warn!(
+            %err, repo = %open.repo, comment_id,
+            "could not conclude the review hub; the check conclusion was preserved"
+        );
+    }
+}
+
+/// Create or migrate the durable hub before the first model call.
+async fn open_review_hub(
+    state: &AppState,
+    slot: &StatusSlot,
+    read: &dyn crate::ports::forge::ForgeRead,
+    config: &Config,
+    repo: &RepoId,
+    number: u64,
+    head_sha: &str,
+    installation: u64,
+) {
+    if !config.summary.enabled || !hub_slot_is_open(slot, head_sha) {
+        return;
+    }
+    let existing =
+        match crate::findings::prior::own_comment(read, repo, number, crate::summary::MARKER).await
+        {
+            Ok(Some(comment)) => Some(comment),
+            Ok(None) => match crate::findings::prior::own_comment(
+                read,
+                repo,
+                number,
+                crate::summary::LEGACY_MARKER,
+            )
+            .await
+            {
+                Ok(comment) => comment,
+                Err(err) => {
+                    tracing::warn!(%err, "could not discover the legacy review hub");
+                    return;
+                }
+            },
+            Err(err) => {
+                tracing::warn!(%err, "could not discover the review hub");
+                // Unknown is not absence. Creating after a transient list
+                // failure would orphan the durable hub and duplicate it on
+                // every similarly affected pass.
+                return;
+            }
+        };
+    let prior = existing.as_ref().map(|comment| comment.body.clone());
+    let body = crate::summary::in_progress(head_sha, prior.as_deref());
+    let written = async {
+        use crate::ports::forge::ForgeWrite;
+        let token = state.auth.installation_token(installation).await?;
+        let write = crate::forge::github::GitHubWrite::new(&token)?;
+        // Discovery and authentication both await. Shutdown may have removed
+        // the slot while either was running, so do not start a comment write
+        // for a review that has already concluded.
+        if !hub_slot_is_open(slot, head_sha) {
+            return Ok(None);
+        }
+        match existing.and_then(|comment| comment.id) {
+            Some(id) => {
+                write.update_comment(repo, id, &body).await?;
+                Ok(Some(id))
+            }
+            None => write.create_comment(repo, number, &body).await.map(Some),
+        }
+    }
+    .await;
+    match written {
+        Ok(Some(id)) => {
+            let attached = if let Some(open) = slot.lock().expect("status slot").as_mut()
+                && open.head_sha == head_sha
+            {
+                open.hub_comment_id = Some(id);
+                open.prior_hub_body = prior.clone();
+                true
+            } else {
+                false
+            };
+            if !attached {
+                // The network write and shutdown raced. The conclusion could
+                // not see this ID, so settle the comment here instead of
+                // leaving a permanent "Reviewing" report behind.
+                let terminal = crate::summary::failed(
+                    head_sha,
+                    "This pass ended while the review hub was being published.",
+                    prior.as_deref(),
+                );
+                let reconciled = async {
+                    use crate::ports::forge::ForgeWrite;
+                    let token = state.auth.installation_token(installation).await?;
+                    crate::forge::github::GitHubWrite::new(&token)?
+                        .update_comment(repo, id, &terminal)
+                        .await
+                }
+                .await;
+                if let Err(err) = reconciled {
+                    tracing::warn!(%err, comment_id = id, "could not reconcile a review hub published during shutdown");
+                }
+                return;
+            }
+            let key = crate::state::key(&repo.to_string(), number);
+            if let Ok(current) =
+                crate::ports::review_state::ReviewStateStore::load_state(&state.store, &key).await
+            {
+                let mut current = current.unwrap_or_default();
+                current.hub_comment_id = Some(id);
+                if let Err(err) = crate::ports::review_state::ReviewStateStore::save_state(
+                    &state.store,
+                    &key,
+                    &current,
+                )
+                .await
+                {
+                    tracing::warn!(%err, "could not persist the review-hub comment id");
+                }
+            }
+        }
+        Ok(None) => {}
+        Err(err) => tracing::warn!(%err, "could not publish the in-progress review hub"),
+    }
+}
+
+fn hub_slot_is_open(slot: &StatusSlot, head_sha: &str) -> bool {
+    slot.lock()
+        .expect("status slot")
+        .as_ref()
+        .is_some_and(|open| open.head_sha == head_sha && open.hub_comment_id.is_none())
 }
 
 /// How a review ended, for the umbrella check.
@@ -2099,6 +2260,22 @@ async fn review_inner(
             tracing::info!(%repo, source, "reviewing under the repository's own configuration");
         }
 
+        // The lease is owned and repository policy is known. Publish the hub
+        // now, before any model call, so it stays an early timeline reference.
+        if !review_is_kill_switched(&overlay.config, &pull_request) {
+            open_review_hub(
+                state,
+                &run.slot,
+                &forge,
+                &overlay.config,
+                &repo_id,
+                number,
+                &pull_request.head_sha,
+                installation,
+            )
+            .await;
+        }
+
         // Memory is fed from the *base* tip, not the head: what the
         // repository has committed to, not what this pull request proposes.
         // See `server::memory`. Spawned only now, under `overlay.config`
@@ -2252,6 +2429,12 @@ async fn review_inner(
     ));
 
     Ok(Some(findings))
+}
+
+fn review_is_kill_switched(config: &Config, pull_request: &PullRequest) -> bool {
+    [&config.labels.human_review, &config.labels.manual_only]
+        .into_iter()
+        .any(|label| !label.is_empty() && pull_request.labels.contains(label))
 }
 
 /// Run the checkout and the lanes under the deadline, and hand back what they
@@ -2898,5 +3081,18 @@ mod tests {
             incremental.review.incremental,
             "the webhook path must be untouched"
         );
+    }
+
+    #[test]
+    fn kill_switch_labels_prevent_the_early_hub_write() {
+        let mut config = Config::default();
+        config.labels.human_review = "human-review".into();
+        let pull_request = PullRequest {
+            labels: vec![config.labels.human_review.clone()],
+            ..PullRequest::default()
+        };
+
+        assert!(review_is_kill_switched(&config, &pull_request));
+        assert!(!review_is_kill_switched(&config, &PullRequest::default()));
     }
 }

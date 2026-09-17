@@ -28,6 +28,7 @@ pub use crate::config::merge::{Layer, Provenance};
 pub use crate::config::types::{
     AutoMerge, Automation, Cache, Config, IssueClose, Issues, Labeler, Labels, Lane, LaneId,
     MergeMethod, ModelRef, Models, PathInstruction, Paths, Review, Sentry, Severity, Stale,
+    Summary, SummarySection,
 };
 
 /// The built-in defaults, compiled in so a repository with no config at all
@@ -244,6 +245,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "automerge",
             "threads",
             "overview",
+            "summary",
             "issues",
             "pr_triage",
             "automation",
@@ -273,6 +275,13 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "max_impacted",
             "max_links",
             "max_paths_per_component",
+        ]),
+        "summary" => Some(&[
+            "enabled",
+            "sections",
+            "max_features",
+            "max_tests",
+            "history_entries",
         ]),
         "paths" => Some(&["ignore"]),
         "path_instructions.*" => Some(&["glob", "instructions", "rules", "lanes", "merge"]),

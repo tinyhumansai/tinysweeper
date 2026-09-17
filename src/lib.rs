@@ -40,6 +40,7 @@ pub mod sentry;
 #[cfg(feature = "serve")]
 pub mod server;
 pub mod state;
+pub mod summary;
 pub mod threads;
 
 pub use crate::error::{Error, Result};

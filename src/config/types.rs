@@ -253,6 +253,8 @@ pub struct Config {
     pub threads: Threads,
     /// The change-map comment.
     pub overview: Overview,
+    /// The durable pull-request review hub.
+    pub summary: Summary,
     /// Issue triage.
     pub issues: Issues,
     /// Pull request triage: the duplicate and superseded sweep.
@@ -393,6 +395,68 @@ pub struct Overview {
     pub max_links: usize,
     /// Retained for configuration compatibility; change flows list no paths.
     pub max_paths_per_component: usize,
+}
+
+/// Sections available in the durable review hub.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SummarySection {
+    /// Compact change and finding counts.
+    Snapshot,
+    /// Behavioral explanation of the change.
+    Changes,
+    /// Named user- or system-visible behaviors.
+    Features,
+    /// Tests mapped to behavior.
+    Tests,
+    /// Active, noted, resolved, and pending findings.
+    Findings,
+    /// Deterministic work remaining before merge.
+    BeforeMerge,
+    /// The optional Mermaid behavior flow.
+    Flow,
+    /// Per-lane reasoning and evidence.
+    AgentDetails,
+    /// Usage, models, changed surface, and pass history.
+    RunDetails,
+}
+
+/// Presentation policy for the durable review hub.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Summary {
+    /// Whether the durable hub is created and maintained.
+    pub enabled: bool,
+    /// Optional sections, in render order.
+    pub sections: Vec<SummarySection>,
+    /// Maximum generated feature entries displayed.
+    pub max_features: usize,
+    /// Maximum generated test entries displayed.
+    pub max_tests: usize,
+    /// Maximum completed review passes retained in the comment.
+    pub history_entries: usize,
+}
+
+impl Default for Summary {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            sections: vec![
+                SummarySection::Snapshot,
+                SummarySection::Changes,
+                SummarySection::Features,
+                SummarySection::Tests,
+                SummarySection::Findings,
+                SummarySection::BeforeMerge,
+                SummarySection::Flow,
+                SummarySection::AgentDetails,
+                SummarySection::RunDetails,
+            ],
+            max_features: 8,
+            max_tests: 8,
+            history_entries: 5,
+        }
+    }
 }
 
 /// Which paths are reviewed at all.
@@ -1066,6 +1130,8 @@ pub enum Workload {
     KnowledgeExtraction,
     /// Judging whether a reply settled a review thread (`src/threads`).
     ThreadReview,
+    /// Producing the narrative fields of the durable review hub.
+    Summary,
     /// Planning and driving a UI preview session (`src/preview`).
     ///
     /// Cheap on purpose: a driving turn reads an accessibility snapshot and
@@ -1701,6 +1767,7 @@ impl Config {
             | Workload::Falsify
             | Workload::KnowledgeExtraction
             | Workload::ThreadReview
+            | Workload::Summary
             | Workload::Preview => &self.models.scan,
         }
     }

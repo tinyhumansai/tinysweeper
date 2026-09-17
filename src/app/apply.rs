@@ -208,8 +208,8 @@ pub async fn apply(
     // Best effort, and last-but-one on purpose. It is the only thing published
     // here that nobody is gated on, so a failure to draw it must not cost the
     // verdict that was already posted above.
-    if let Err(err) = publish_overview(read, write, config, proposal).await {
-        tracing::warn!(%err, "could not publish the change map");
+    if let Err(err) = publish_review_hub(read, write, config, proposal, store).await {
+        tracing::warn!(%err, "could not publish the durable review hub");
     }
 
     // Triage last, and against `live` rather than a second fetch: the labels
@@ -240,21 +240,17 @@ pub async fn apply(
 /// Writes nothing at all when the map has no relationship worth explaining:
 /// disconnected names are not a flow, and a comment containing only those
 /// names is noise with a picture in it.
-async fn publish_overview(
+async fn publish_review_hub(
     read: &dyn ForgeRead,
     write: &dyn ForgeWrite,
     config: &Config,
     proposal: &Proposal,
+    store: Option<&dyn ReviewStateStore>,
 ) -> Result<()> {
-    if !config.overview.enabled {
+    if !config.summary.enabled || proposal.skipped.is_some() {
         return Ok(());
     }
-    let Some(map) = &proposal.overview else {
-        return Ok(());
-    };
-    let Some(body) = crate::overview::comment(map) else {
-        return Ok(());
-    };
+    let body = crate::summary::render(config, proposal);
 
     let repo = RepoId::parse(&proposal.repo)
         .ok_or_else(|| Error::Forge(format!("`{}` is not owner/name", proposal.repo)))?;
@@ -263,17 +259,66 @@ async fn publish_overview(
     // new one. That is the harmless direction to be wrong in: a duplicate
     // comment is noise, whereas editing the wrong comment destroys someone's
     // words.
-    let existing =
-        crate::findings::prior::own_comment(read, &repo, proposal.number, crate::overview::MARKER)
-            .await?
-            .and_then(|comment| comment.id);
-
-    match existing {
-        Some(id) => write.update_comment(&repo, id, &body).await,
-        None => write
-            .create_comment(&repo, proposal.number, &body)
+    let state_key = crate::state::key(&proposal.repo, proposal.number);
+    let remembered_id = match store {
+        Some(store) => store
+            .load_state(&state_key)
             .await
-            .map(|_| ()),
+            .ok()
+            .flatten()
+            .and_then(|state| state.hub_comment_id),
+        None => None,
+    };
+    let existing = match remembered_id {
+        Some(id) => Some(id),
+        None => discover_review_hub(read, &repo, proposal.number).await?,
+    };
+
+    let id = match existing {
+        Some(id) => match write.update_comment(&repo, id, &body).await {
+            Ok(()) => id,
+            Err(err) if remembered_id == Some(id) => {
+                tracing::warn!(%err, comment_id = id, "stored review-hub comment disappeared; discovering it again");
+                match discover_review_hub(read, &repo, proposal.number).await? {
+                    Some(discovered) => {
+                        write.update_comment(&repo, discovered, &body).await?;
+                        discovered
+                    }
+                    None => write.create_comment(&repo, proposal.number, &body).await?,
+                }
+            }
+            Err(err) => return Err(err),
+        },
+        None => write.create_comment(&repo, proposal.number, &body).await?,
+    };
+    if let Some(store) = store
+        && let Ok(Some(mut state)) = store.load_state(&state_key).await
+    {
+        state.hub_comment_id = Some(id);
+        if let Err(err) = store.save_state(&state_key, &state).await {
+            tracing::warn!(%err, "could not persist the review-hub comment id");
+        }
+    }
+    Ok(())
+}
+
+async fn discover_review_hub(
+    read: &dyn ForgeRead,
+    repo: &RepoId,
+    number: u64,
+) -> Result<Option<u64>> {
+    let current =
+        crate::findings::prior::own_comment(read, repo, number, crate::summary::MARKER).await?;
+    match current.and_then(|comment| comment.id) {
+        Some(id) => Ok(Some(id)),
+        None => Ok(crate::findings::prior::own_comment(
+            read,
+            repo,
+            number,
+            crate::summary::LEGACY_MARKER,
+        )
+        .await?
+        .and_then(|comment| comment.id)),
     }
 }
 
@@ -780,6 +825,8 @@ mod tests {
     fn proposal(head: &str, findings: Vec<Finding>) -> Proposal {
         let highest_severity = findings.iter().map(|finding| finding.severity).max();
         Proposal {
+            summary: None,
+            prior_findings: vec![],
             overview: None,
             unreviewed: vec![],
             skipped: None,
@@ -2074,7 +2121,7 @@ mod tests {
             .into_iter()
             .filter(|write| match write {
                 Write::Comment { body, .. } | Write::CommentUpdate { body, .. } => {
-                    body.contains(crate::overview::MARKER)
+                    body.contains(crate::summary::MARKER)
                 }
                 _ => false,
             })
@@ -2176,10 +2223,10 @@ mod tests {
             .await
             .expect("applies");
 
+        let comments = overview_comments(&forge);
+        assert_eq!(comments.len(), 1, "{:#?}", forge.writes());
         assert!(
-            overview_comments(&forge).is_empty(),
-            "{:#?}",
-            forge.writes()
+            matches!(&comments[0], Write::Comment { body, .. } if !body.contains("```mermaid"))
         );
     }
 
@@ -2212,7 +2259,11 @@ mod tests {
             .await
             .expect("applies");
 
-        assert!(overview_comments(&forge).is_empty());
+        assert_eq!(
+            overview_comments(&forge).len(),
+            1,
+            "the hub exists without a flow"
+        );
         assert!(!forge.checks().is_empty(), "the verdict still went out");
     }
 

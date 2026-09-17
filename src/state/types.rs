@@ -49,6 +49,15 @@ pub struct ReviewedState {
     /// ignored rather than applied to the wrong review.
     #[serde(default)]
     pub e2e: Option<crate::lanes::e2e::runs::Watch>,
+    /// The durable review comment, avoiding a discovery read on later passes.
+    #[serde(default)]
+    pub hub_comment_id: Option<u64>,
+    /// Last trustworthy structured summary, used for continuity and history.
+    #[serde(default)]
+    pub summary: Option<crate::summary::ReviewSummary>,
+    /// Exact serialized assistant turns retained as a byte-stable cache prefix.
+    #[serde(default)]
+    pub summary_transcript: Vec<crate::summary::SummaryTranscriptTurn>,
 }
 
 /// The key a pull request's state is stored under.
@@ -77,6 +86,9 @@ mod tests {
             titles: vec!["Guard the index".into()],
             severities: BTreeMap::from([("Guard the index".to_string(), Severity::High)]),
             e2e: None,
+            hub_comment_id: Some(42),
+            summary: None,
+            summary_transcript: vec![],
         };
         let encoded = serde_json::to_string(&state).expect("serialises");
         let decoded: ReviewedState = serde_json::from_str(&encoded).expect("deserialises");

@@ -461,6 +461,13 @@ workflows = ["e2e"]
 [preview]
 enabled = false
 max_flows = 2
+
+[summary]
+enabled = false
+sections = ["snapshot", "findings"]
+max_features = 4
+max_tests = 4
+history_entries = 3
 "#;
 
 #[test]
