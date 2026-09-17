@@ -110,25 +110,8 @@ pub async fn generate(
         max_tokens: config.models.max_tokens.min(4_000),
     };
 
-    let mut summary = ReviewSummary {
-        executive_summary: fallback_executive(lanes),
-        changes: "The review could not produce a supported behavioral summary; inspect the cited changed surface and lane details below.".into(),
-        surface: classify(diffs),
-        cache_chain_restarted: restarted,
-        updated_at_epoch: now_epoch(),
-        ..ReviewSummary::default()
-    };
-    summary.history = prior.map(|prior| prior.history.clone()).unwrap_or_default();
-    summary.history.push(ReviewPass {
-        head_sha: pull_request.head_sha.clone(),
-        state: state(lanes).into(),
-        summary: history_summary(lanes),
-        reviewed_at_epoch: summary.updated_at_epoch,
-    });
-    if summary.history.len() > config.summary.history_entries {
-        let drain = summary.history.len() - config.summary.history_entries;
-        summary.history.drain(..drain);
-    }
+    let mut summary = deterministic(config, pull_request, diffs, lanes, prior);
+    summary.cache_chain_restarted = restarted;
     let response = match model.complete(request).await {
         Ok(response) => response,
         Err(err) => {
@@ -199,12 +182,55 @@ pub async fn generate(
             (!observations.is_empty()).then_some((lane, observations))
         })
         .collect();
-    transcript.push(SummaryTranscriptTurn {
-        head_sha: pull_request.head_sha.clone(),
-        evidence: current_evidence,
-        assistant,
-    });
+    let turn_bytes = current_evidence.len() + assistant.len();
+    let prior_bytes: usize = transcript
+        .iter()
+        .map(|turn| turn.evidence.len() + turn.assistant.len())
+        .sum();
+    if turn_bytes > TRANSCRIPT_CEILING {
+        transcript.clear();
+        summary.cache_chain_restarted = true;
+    } else {
+        if prior_bytes + turn_bytes > TRANSCRIPT_CEILING {
+            transcript.clear();
+            summary.cache_chain_restarted = true;
+        }
+        transcript.push(SummaryTranscriptTurn {
+            head_sha: pull_request.head_sha.clone(),
+            evidence: current_evidence,
+            assistant,
+        });
+    }
     (summary, spend, transcript)
+}
+
+/// Build the deterministic half of a summary without invoking a model.
+pub fn deterministic(
+    config: &Config,
+    pull_request: &PullRequest,
+    diffs: &[FileDiff],
+    lanes: &[LaneProposal],
+    prior: Option<&ReviewSummary>,
+) -> ReviewSummary {
+    let mut summary = prior.cloned().unwrap_or_else(|| ReviewSummary {
+        executive_summary: fallback_executive(lanes),
+        changes: "The review could not produce a supported behavioral summary; inspect the cited changed surface and lane details below.".into(),
+        ..ReviewSummary::default()
+    });
+    summary.surface = classify(diffs);
+    summary.cache_chain_restarted = false;
+    summary.updated_at_epoch = now_epoch();
+    summary.history.push(ReviewPass {
+        head_sha: pull_request.head_sha.clone(),
+        state: state(lanes).into(),
+        summary: history_summary(lanes),
+        reviewed_at_epoch: summary.updated_at_epoch,
+    });
+    if summary.history.len() > config.summary.history_entries {
+        let drain = summary.history.len() - config.summary.history_entries;
+        summary.history.drain(..drain);
+    }
+    summary
 }
 
 fn classify(diffs: &[FileDiff]) -> ChangeSurface {
@@ -257,16 +283,34 @@ fn history_summary(lanes: &[LaneProposal]) -> String {
 
 fn claims_execution(text: &str) -> bool {
     let text = text.to_ascii_lowercase();
-    [
-        "tests passed",
-        "test passed",
-        "tests ran",
-        "test ran",
-        "% coverage",
-        "coverage is",
+    let words: BTreeSet<&str> = text
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    if words.contains("coverage") {
+        return true;
+    }
+    let execution_subject = ["test", "tests", "suite", "check", "checks", "ci", "build"]
+        .iter()
+        .any(|word| words.contains(word));
+    let execution_result = [
+        "pass",
+        "passed",
+        "passing",
+        "ran",
+        "run",
+        "running",
+        "green",
+        "complete",
+        "completed",
+        "success",
+        "successful",
+        "succeeded",
+        "executed",
     ]
     .iter()
-    .any(|claim| text.contains(claim))
+    .any(|word| words.contains(word));
+    execution_subject && execution_result
 }
 
 fn citations_supported(
@@ -366,6 +410,10 @@ mod tests {
     #[test]
     fn execution_claims_are_rejected_from_every_narrative_field() {
         assert!(claims_execution("The tests passed on CI"));
+        assert!(claims_execution("CI was green"));
+        assert!(claims_execution("All checks passed"));
+        assert!(claims_execution("The suite completed successfully"));
+        assert!(claims_execution("Coverage reached 80%"));
         assert!(validated_narrative("Tests passed").is_none());
         assert_eq!(
             validated_narrative("The parser handles empty input").as_deref(),
@@ -455,6 +503,7 @@ mod tests {
     async fn model_failure_uses_the_deterministic_fallback() {
         let model = MockModel::new().then_error("offline");
         let prior = ReviewSummary {
+            executive_summary: "Last trustworthy narrative.".into(),
             history: vec![ReviewPass {
                 head_sha: "old".into(),
                 ..ReviewPass::default()
@@ -478,10 +527,57 @@ mod tests {
         )
         .await;
 
-        assert!(summary.executive_summary.contains("0 active actionable"));
+        assert_eq!(summary.executive_summary, "Last trustworthy narrative.");
         assert_eq!(summary.history.len(), 2);
         assert_eq!(summary.history[0].head_sha, "old");
         assert_eq!(spend, Spend::default());
         assert_eq!(transcript, prior_transcript);
+    }
+
+    #[tokio::test]
+    async fn an_oversized_complete_turn_is_not_persisted() {
+        let model = MockModel::new().then(json!({
+            "executive_summary": "x".repeat(TRANSCRIPT_CEILING),
+            "changes": "A change.",
+            "features": [],
+            "tests": [],
+            "positive_observations": {}
+        }));
+        let diffs = [FileDiff {
+            path: "src/lib.rs".into(),
+            ..FileDiff::default()
+        }];
+
+        let (summary, _, transcript) = generate(
+            &model,
+            &Config::default(),
+            &PullRequest::default(),
+            &diffs,
+            &[],
+            None,
+            &[],
+        )
+        .await;
+
+        assert!(transcript.is_empty());
+        assert!(summary.cache_chain_restarted);
+    }
+
+    #[test]
+    fn deterministic_summary_records_an_empty_diff_pass() {
+        let summary = deterministic(
+            &Config::default(),
+            &PullRequest {
+                head_sha: "empty-head".into(),
+                ..PullRequest::default()
+            },
+            &[],
+            &[],
+            None,
+        );
+
+        assert!(summary.updated_at_epoch > 0);
+        assert_eq!(summary.history[0].head_sha, "empty-head");
+        assert_eq!(summary.surface, ChangeSurface::default());
     }
 }
