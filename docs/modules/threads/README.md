@@ -107,8 +107,10 @@ unnoticed.
 
 ## Trigger
 
-A code push runs reconciliation as part of the next review. Human replies to
-review threads are remembered, but do not launch a model review against the
-same SHA: doing so lets each conversation turn discover and post a differently
-worded concern on unchanged code. An explicit `@tinysweeper review` command is
-still available when a maintainer deliberately wants another review.
+A code push (`pull_request: synchronize`) runs reconciliation as part of the
+next review. Created and edited review-thread replies are remembered, including
+replies from other bots, but no `pull_request_review_comment` action launches a
+model review against the same SHA: doing so lets each conversation turn
+discover and post a differently worded concern on unchanged code. An explicit
+`@tinysweeper review` issue comment is still available when a maintainer
+deliberately wants another review.

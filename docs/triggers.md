@@ -23,7 +23,11 @@ never be told about, and how it handles the difference.
 
 `issue_comment` fires for issues *and* pull requests; the payload distinguishes
 them only by `issue.pull_request` being present. `webhook::route` filters on
-exactly that.
+exactly that. Inline review comments are different: their `created`, `edited`,
+and `deleted` deliveries never start a model review. Supported comment changes
+are still re-read into memory, so a later `pull_request: synchronize` review can
+reconcile the conversation against changed code. A maintainer can deliberately
+request an unchanged-code rerun with an `@tinysweeper` issue comment.
 
 ### What memory listens to
 
@@ -70,7 +74,6 @@ event does not exist:
   only readable by querying `isResolved` on review threads through the GraphQL
   API.
 - **Adding a reaction** (👍 / 👎) to a comment. No event.
-- **Editing a review comment's body.** No event for the edit.
 
 This matters because two designed behaviours depend on that state: suppressing a
 finding the author resolved, and learning from a 👎. Both are therefore
@@ -80,8 +83,8 @@ works on any architecture, which is why this was never an argument for or
 against a server.
 
 The practical consequence: resolving a thread does not immediately re-run
-anything. The suppression takes effect on the next run, which the next push or
-comment triggers anyway.
+anything. The suppression takes effect on the next code push, or on an
+explicit `@tinysweeper` review command.
 
 ## Fork pull requests
 

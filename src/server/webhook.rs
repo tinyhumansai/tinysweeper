@@ -1031,18 +1031,22 @@ mod tests {
     fn a_bots_reply_on_a_review_thread_never_queues_a_run() {
         // Two bots replying to each other is a loop bounded only by the rate
         // limiter, and it would resolve threads on each other's say-so.
-        let mut delivery = review_comment_payload("created", true);
-        delivery["sender"] = serde_json::json!({"login": "dependabot[bot]", "type": "Bot"});
-        delivery["comment"]["user"] =
-            serde_json::json!({"login": "dependabot[bot]", "type": "Bot"});
-        assert!(matches!(
-            route("pull_request_review_comment", &payload(delivery.clone())),
-            Action::Ignore(_)
-        ));
-        assert!(
-            remember_trigger("pull_request_review_comment", &payload(delivery)).is_some(),
-            "another bot's reply remains available to conversation memory"
-        );
+        for action in ["created", "edited", "deleted"] {
+            let mut delivery = review_comment_payload(action, true);
+            delivery["sender"] = serde_json::json!({"login": "dependabot[bot]", "type": "Bot"});
+            delivery["comment"]["user"] =
+                serde_json::json!({"login": "dependabot[bot]", "type": "Bot"});
+            let delivery = payload(delivery);
+            assert_eq!(
+                route("pull_request_review_comment", &delivery),
+                Action::Ignore("sender is a bot")
+            );
+            assert_eq!(
+                remember_trigger("pull_request_review_comment", &delivery).is_some(),
+                action != "deleted",
+                "memory action filtering changed for another bot's {action} reply"
+            );
+        }
     }
 
     #[test]
