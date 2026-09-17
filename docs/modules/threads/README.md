@@ -1,7 +1,7 @@
 # `src/threads` — closing our own review conversations
 
-Every thread tinysweeper opens has to be resolved by hand today. This module
-closes the ones that are demonstrably settled, and refuses everything else.
+Tinysweeper closes its own review conversations when the evidence says they
+are settled, and refuses everything else.
 
 ## The deterministic rule
 
@@ -27,14 +27,14 @@ code verifies ownership and the outdated state before the write side acts.
 
 When the code did **not** change (step 4 fails), the new diff cannot settle the
 thread — the only evidence is a **human** reply. That case, and only that case,
-reaches `threads::advise::ask`, behind `threads.ask_model`, which **defaults to
-off**. Bot-only replies never reach the model. Its answer is advisory in the
-literal sense the security boundary requires: it can only add an entry to a
-plan, the plan only ever names threads tinysweeper itself opened, and the
-mutation is performed by `apply_plan` from `src/app/apply.rs` after every model
-call has returned.
+reaches `threads::advise::ask`; `threads.ask_model` defaults to on. Bot-only
+replies never reach the model. Its answer is advisory in the literal sense the
+security boundary requires: it can only add an entry to a plan, the plan only
+ever names threads tinysweeper itself opened, and the mutation is performed by
+`apply_plan` from `src/app/apply.rs` after every model call has returned.
 
-With the flag off, such a thread is simply left for a human.
+Set `threads.ask_model = false` to leave unchanged-code conversations for a
+human instead.
 
 ## Where the volatile content sits
 

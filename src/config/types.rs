@@ -343,11 +343,11 @@ pub struct Threads {
     pub resolve_fixed: bool,
     /// Ask a model whether a reply settled a finding the code did not change.
     ///
-    /// **Off by default, and deliberately.** This is the one case no
-    /// fingerprint can decide, so the only evidence is a comment somebody wrote
-    /// — and a comment is untrusted input. The verdict stays advisory even when
-    /// this is on: it feeds a plan that deterministic code executes, and it can
-    /// only ever close a thread tinysweeper itself opened.
+    /// On by default. This is the one case no fingerprint can decide, so the
+    /// only evidence is a comment somebody wrote — and that comment is
+    /// untrusted input. The verdict stays advisory: it feeds a plan that
+    /// deterministic code executes, and it can only ever close a thread
+    /// tinysweeper itself opened.
     pub ask_model: bool,
     /// Say why, in the thread, before resolving it.
     ///

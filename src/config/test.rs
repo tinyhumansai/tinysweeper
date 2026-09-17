@@ -481,6 +481,16 @@ fn stale_handling_defaults_to_marking_never_closing() {
 }
 
 #[test]
+fn thread_replies_are_advised_on_by_default() {
+    let dir = repo(None, &[]);
+    let threads = load(dir.path(), None).expect("loads").config.threads;
+
+    assert!(threads.resolve_fixed);
+    assert!(threads.ask_model);
+    assert!(threads.comment_on_resolve);
+}
+
+#[test]
 fn a_repository_setting_overrides_a_default_and_is_attributed() {
     let dir = repo(Some("version = 1\n[review]\nstrictness = 3\n"), &[]);
     let loaded = load(dir.path(), None).expect("loads");
