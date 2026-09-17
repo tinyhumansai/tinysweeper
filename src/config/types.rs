@@ -285,6 +285,18 @@ pub struct Review {
     pub confidence_min: Option<f64>,
     /// Hard cap on posted comments per pull request.
     pub max_comments: usize,
+    /// Most files one pull request may change before review is refused.
+    ///
+    /// This is an operator-side resource guard, not a prompt-shaping hint. It
+    /// is checked before commit patches or model context are fetched, and a
+    /// reviewed repository cannot override it through remote configuration.
+    pub max_changed_files: usize,
+    /// Most added plus deleted lines one pull request may contain.
+    ///
+    /// Counting both sides keeps a deletion-only rewrite bounded too. Like
+    /// [`Self::max_changed_files`], this is enforced before expensive review
+    /// work and remains under the deployment operator's control.
+    pub max_changed_lines: u64,
     /// Keep a finding that misses the posting gate visible in the check-run
     /// summary when it is at least `medium` and the model is at least this
     /// sure of it.

@@ -659,6 +659,15 @@ fn review_passes_out_of_range_is_rejected() {
 }
 
 #[test]
+fn review_size_limits_must_be_positive() {
+    let config = parse("version = 1\n[review]\nmax_changed_files = 0\nmax_changed_lines = 0\n");
+    let joined = validate::validate(&config).join("\n");
+
+    assert!(joined.contains("review.max_changed_files = 0"), "{joined}");
+    assert!(joined.contains("review.max_changed_lines = 0"), "{joined}");
+}
+
+#[test]
 fn an_unreadable_auto_merge_glob_is_caught_before_it_can_refuse_everything() {
     // The policy fails closed on a malformed glob, which is safe but silent:
     // the operator sees a pull request that never merges and no reason why.

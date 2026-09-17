@@ -87,6 +87,25 @@ pub enum Error {
         limit: f64,
     },
 
+    /// A pull request is larger than the review's deterministic input limits.
+    ///
+    /// Its own variant keeps this refusal non-transient and lets the server
+    /// explain the remedy without treating an intentional guard as a forge or
+    /// model outage.
+    #[error(
+        "pull request exceeds review limits: {changed_files} changed files (limit {max_files}), {changed_lines} changed lines (limit {max_lines})"
+    )]
+    ReviewLimit {
+        /// Files reported by the forge.
+        changed_files: usize,
+        /// Configured file ceiling.
+        max_files: usize,
+        /// Added plus deleted lines reported by the forge.
+        changed_lines: u64,
+        /// Configured changed-line ceiling.
+        max_lines: u64,
+    },
+
     /// A feature required for this code path was not compiled in.
     #[error("{0} requires the `{1}` feature; rebuild with --features {1}")]
     FeatureDisabled(&'static str, &'static str),

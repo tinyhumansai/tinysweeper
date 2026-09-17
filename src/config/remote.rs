@@ -57,6 +57,9 @@
 //!   back to the pre-grouping per-file fan-out every review already paid for
 //!   — but the allow-list has no way to admit the harmless direction while
 //!   refusing the harmful one, so the whole section stays operator-only.
+//!   `review.max_changed_files` and `review.max_changed_lines` stay
+//!   operator-only for the same reason: raising either weakens the guard, and
+//!   the allow-list cannot admit only a repository's lower value.
 //! - **Not overridable — anything that puts repository prose into a prompt.**
 //!   `path_instructions` is free text injected straight into a lane's
 //!   instructions, unfenced. Repository prose reaches a prompt through exactly

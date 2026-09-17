@@ -429,7 +429,14 @@ pub async fn review_with_tree(
     memory: Option<&Recaller<'_>>,
     tree: Option<&dyn TreeReader>,
 ) -> Result<Proposal> {
-    let mut context = forge.pull_request_context(repo, number).await?;
+    let mut context = forge
+        .pull_request_context_bounded(
+            repo,
+            number,
+            config.review.max_changed_files,
+            config.review.max_changed_lines,
+        )
+        .await?;
     // Scrubbed once, here, rather than at each of its several consumers: the
     // description lane's own prompt, `Retriever::retrieve`'s query, and
     // `Recaller::recall`'s query all read `context.pull_request.title` (two
@@ -1951,6 +1958,77 @@ mod tests {
             patch: Some("@@ -1,2 +1,3 @@\n fn main() {\n+    let x = items[i];\n }\n".into()),
             ..ChangedFile::default()
         }
+    }
+
+    #[tokio::test]
+    async fn too_many_changed_files_are_refused_before_any_model_call() {
+        let files = (0..3)
+            .map(|index| ChangedFile {
+                path: format!("src/{index}.rs"),
+                additions: 1,
+                patch: Some(format!("@@ -0,0 +1 @@\n+fn file_{index}() {{}}\n")),
+                ..ChangedFile::default()
+            })
+            .collect();
+        let forge = forge_with(files, vec![]);
+        let model = MockModel::always(json!({"summary": "Fine.", "findings": []}));
+        let mut config = critique_config();
+        config.review.max_changed_files = 2;
+
+        let err = review(&forge, Arc::new(model.clone()), &config, &repo(), 7)
+            .await
+            .expect_err("the file ceiling refuses the review");
+
+        assert!(matches!(
+            err,
+            Error::ReviewLimit {
+                changed_files: 3,
+                max_files: 2,
+                changed_lines: 3,
+                ..
+            }
+        ));
+        assert_eq!(
+            model.calls(),
+            0,
+            "the guard runs before model context exists"
+        );
+    }
+
+    #[tokio::test]
+    async fn added_and_deleted_lines_both_count_towards_the_review_limit() {
+        let forge = forge_with(
+            vec![ChangedFile {
+                path: "src/rewrite.rs".into(),
+                additions: 6,
+                deletions: 5,
+                patch: Some("@@ -1 +1 @@\n-old\n+new\n".into()),
+                ..ChangedFile::default()
+            }],
+            vec![],
+        );
+        let model = MockModel::always(json!({"summary": "Fine.", "findings": []}));
+        let mut config = critique_config();
+        config.review.max_changed_lines = 10;
+
+        let err = review(&forge, Arc::new(model.clone()), &config, &repo(), 7)
+            .await
+            .expect_err("the line ceiling refuses the review");
+
+        assert!(matches!(
+            err,
+            Error::ReviewLimit {
+                changed_files: 1,
+                changed_lines: 11,
+                max_lines: 10,
+                ..
+            }
+        ));
+        assert_eq!(
+            model.calls(),
+            0,
+            "the guard runs before model context exists"
+        );
     }
 
     /// The payload the extraction pass exists to contain.
