@@ -328,9 +328,9 @@ async fn every_refusal_leaves_the_forge_untouched() {
 }
 
 #[tokio::test]
-async fn the_advisory_path_is_off_by_default_and_costs_nothing() {
-    // The model is *available* and would say "resolve"; the flag is off, so it
-    // is never asked and the thread is left for a human.
+async fn turning_off_the_advisory_path_costs_nothing() {
+    // The model is *available* and would say "resolve"; this repository turned
+    // the feature off, so it is never asked and the thread is left for a human.
     let mut thread = ours();
     thread.is_outdated = false;
     let forge = forge_with(vec![thread]);

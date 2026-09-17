@@ -14,8 +14,8 @@ never be told about, and how it handles the difference.
 | A draft is marked ready | `pull_request: ready_for_review` | Yes, this starts its first review workflow |
 | The title or body is edited | `pull_request: edited` | Yes |
 | A label is added or removed | `pull_request: labeled`, `unlabeled` | Yes |
-| Someone comments on the pull request | `issue_comment: created` | Yes |
-| Someone comments on a line of the diff | `pull_request_review_comment: created` | Yes |
+| Someone comments on the pull request | `issue_comment: created` | Yes, for every new non-bot comment |
+| Someone comments on a line of the diff | `pull_request_review_comment: created` | Yes, for new threads and replies |
 | A review is submitted | `pull_request_review: submitted` | Yes |
 | A check run finishes | `check_suite: completed` | Yes |
 | A repository's `ui-preview` job hands over its manifest | `POST /preview/sessions/{id}/finish` — not a webhook | Yes; see [modules/preview](modules/preview/README.md) |

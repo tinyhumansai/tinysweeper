@@ -116,9 +116,9 @@ pub async fn plan(
             }),
             Decision::Leave(_) => {}
             Decision::Ask => {
-                // Advisory, and off unless an operator turned it on. With the
-                // flag off the thread is left for a human, which is exactly the
-                // behaviour that existed before this module.
+                // Advisory and enabled by default. An operator can turn it off
+                // to leave unchanged-code conversations for a human; either
+                // way, deterministic policy still owns the eventual write.
                 let (Some(model), true) = (model, config.threads.ask_model) else {
                     continue;
                 };

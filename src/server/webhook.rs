@@ -153,17 +153,8 @@ pub struct IssueRef {
 /// A comment reference.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CommentRef {
-    /// Its body.
-    #[serde(default)]
-    pub body: String,
     /// Its author.
     pub user: UserRef,
-    /// The comment this one replies to, on an inline review comment.
-    ///
-    /// Present only on a reply, which is how a reply to one of tinysweeper's
-    /// findings is told from somebody starting a thread of their own.
-    #[serde(default)]
-    pub in_reply_to_id: Option<u64>,
 }
 
 /// A user reference.
@@ -427,9 +418,8 @@ pub fn route(event: &str, payload: &Payload) -> Action {
         "issue_comment" => {
             // GitHub delivers `issue_comment` for `created`, `edited`, and
             // `deleted`, unlike the `pull_request` branch above which already
-            // whitelists actions. Without this, editing a comment to add
-            // `@tinysweeper` after the fact — or any edit to a comment that
-            // already mentioned it — queues another paid review every time.
+            // whitelists actions. Without this, every saved edit queues another
+            // paid review even though no new conversation was added.
             if payload.action != "created" {
                 return Action::Ignore("comment action is not `created`");
             }
@@ -439,28 +429,20 @@ pub fn route(event: &str, payload: &Payload) -> Action {
             if issue.pull_request.is_none() {
                 return Action::Ignore("comment is on an issue, not a pull request");
             }
-            let asked = payload
-                .comment
-                .as_ref()
-                .map(|c| c.body.trim_start().starts_with("@tinysweeper"))
-                .unwrap_or(false);
-            if !asked {
-                return Action::Ignore("comment is not addressed to tinysweeper");
-            }
-            // Attributed to whoever asked, not to whoever opened the pull
-            // request. The contributor record is a measure of the work someone
-            // caused; billing a maintainer's `@tinysweeper review` to the
-            // author would quietly distort every trust signal built on it.
-            let asker = payload
-                .comment
-                .as_ref()
-                .map(|c| c.user.login.clone())
-                .unwrap_or_else(|| issue.user.login.clone());
+            let Some(comment) = &payload.comment else {
+                return Action::Ignore("no comment");
+            };
+            // Every new human comment can change whether an earlier finding is
+            // settled, even when it does not mention tinysweeper explicitly.
+            // Attribute the resulting review to the commenter, not to whoever
+            // opened the pull request: the contributor record measures the
+            // work somebody caused.
+            let commenter = comment.user.login.clone();
 
             Action::Review {
                 repo: repository.full_name.clone(),
                 number: issue.number,
-                author: asker,
+                author: commenter,
                 installation: installation.id,
             }
         }
@@ -504,16 +486,10 @@ pub fn route(event: &str, payload: &Payload) -> Action {
             let Some(comment) = &payload.comment else {
                 return Action::Ignore("no comment");
             };
-            // A reply, not a new thread. A fresh inline comment starts somebody
-            // else's conversation, which thread resolution never touches, and
-            // reacting to one would mean a run per commented line.
-            if comment.in_reply_to_id.is_none() {
-                return Action::Ignore("review comment is not a reply to a thread");
-            }
-
-            // Attributed to whoever replied: the same reasoning as a commanded
-            // review, which is that the contributor record measures the work
-            // somebody caused.
+            // A new inline thread can carry evidence about an earlier finding
+            // just like a reply can. Thread policy still limits mutations to
+            // conversations tinysweeper opened; this trigger only asks the
+            // review to reconcile the pull request's current state.
             Action::Review {
                 repo: repository.full_name.clone(),
                 number: pr.number,
@@ -919,7 +895,7 @@ mod tests {
     }
 
     #[test]
-    fn only_comments_addressed_to_tinysweeper_trigger_a_review() {
+    fn every_new_pull_request_comment_triggers_a_review() {
         let base = serde_json::json!({
             "action": "created",
             "repository": {"full_name": "tinyhumansai/tinysweeper"},
@@ -930,7 +906,7 @@ mod tests {
         });
         assert!(matches!(
             route("issue_comment", &payload(base.clone())),
-            Action::Ignore(_)
+            Action::Review { number: 7, .. }
         ));
 
         let mut addressed = base;
@@ -942,10 +918,9 @@ mod tests {
     }
 
     #[test]
-    fn a_commanded_review_is_attributed_to_the_commenter() {
-        // Billing a maintainer's `@tinysweeper review` to the pull request
-        // author would distort every trust signal built on the contributor
-        // record.
+    fn a_comment_triggered_review_is_attributed_to_the_commenter() {
+        // Billing a maintainer's comment to the pull request author would
+        // distort every trust signal built on the contributor record.
         let p = payload(serde_json::json!({
             "action": "created",
             "repository": {"full_name": "tinyhumansai/tinysweeper"},
@@ -1028,16 +1003,16 @@ mod tests {
     }
 
     #[test]
-    fn a_review_comment_that_is_not_a_reply_is_ignored() {
-        // A brand-new inline comment starts a thread of somebody else's, which
-        // this path never touches — and reacting to it would queue a paid run
-        // for every line a reviewer comments on.
+    fn a_new_inline_review_thread_also_queues_a_run() {
+        // Thread policy still refuses to mutate somebody else's conversation,
+        // but the comment can change the PR's review state and should wake the
+        // reconciliation run.
         assert!(matches!(
             route(
                 "pull_request_review_comment",
                 &payload(review_comment_payload("created", false))
             ),
-            Action::Ignore(_)
+            Action::Review { number: 7, .. }
         ));
     }
 
