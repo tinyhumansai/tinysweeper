@@ -32,6 +32,7 @@
 //! is deliberately still one conversation.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 
@@ -50,7 +51,7 @@ use crate::lanes::fanout::{FileReview, per_unit};
 use crate::lanes::grouping::{FileGroup, GroupBounds};
 use crate::lanes::mechanical;
 use crate::lanes::{Lane, LaneInput, LaneOutcome, reviewer_responses};
-use crate::ports::model::{Model, Spend};
+use crate::ports::model::{Model, Spend, Usage};
 use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
 
 /// The correctness lane.
@@ -237,7 +238,7 @@ async fn review_group(
         })
         .collect();
 
-    let answers = runner::ask_all(
+    let round_one = runner::ask_all_accounted(
         llm.clone(),
         LaneId::Critique,
         &calls,
@@ -245,6 +246,9 @@ async fn review_group(
         input.asking_about_group(group_diffs),
     )
     .await?;
+    let round_one_usage = round_one.usage;
+    let round_one_elapsed = round_one.elapsed;
+    let answers = round_one.answers;
 
     let responses = reviewer_responses(LaneId::Critique, &reviewers, &answers)?;
     let mut spend = Spend::default();
@@ -319,7 +323,7 @@ async fn review_group(
     let mut findings = filtered.findings;
     let mut rejected = filtered.rejected;
 
-    // The opt-in coverage pass. Gated on the group's own size, not the whole
+    // Adaptive coverage passes. Gated on the group's own size, not the whole
     // pull request's — a lane fans out per group, so a two-line group must
     // not build a second prompt just because the change elsewhere is large.
     let mut added_by_coverage = 0usize;
@@ -328,8 +332,13 @@ async fn review_group(
         // everything round one *and* the first coverage pass found, so it
         // does not rediscover the first pass's own additions.
         let mut confirmed = findings.clone();
+        let mut metrics = crate::lanes::coverage::Metrics::start(
+            round_one_usage,
+            round_one_elapsed,
+            findings.len(),
+        );
 
-        for _ in 1..config.review.passes {
+        for pass_index in 1..config.review.passes {
             let reviewer = &reviewers[0];
             let confirmed_lines = crate::lanes::coverage::confirmed_lines(&confirmed);
             let built = prompt::build(&PromptInputs {
@@ -347,7 +356,7 @@ async fn review_group(
                 ..PromptInputs::new(LaneId::Critique, config)
             });
 
-            let coverage = crate::lanes::coverage::coverage_pass(
+            let coverage = match crate::lanes::coverage::coverage_pass(
                 llm.clone(),
                 LaneId::Critique,
                 reviewer,
@@ -356,7 +365,21 @@ async fn review_group(
                 "tinysweeper_critique",
                 input.asking_about_group(group_diffs),
             )
-            .await?;
+            .await
+            {
+                Ok(coverage) => coverage,
+                Err(err) => {
+                    tracing::warn!(%err, "an adaptive review pass failed");
+                    // No per-call usage is observable when the graph itself
+                    // fails to return an outcome; count the attempt without
+                    // attributing concurrent groups' shared lane spend to it.
+                    metrics.record(Usage::default(), Duration::ZERO, 0);
+                    metrics.stop(crate::lanes::coverage::StopReason::Failed);
+                    break;
+                }
+            };
+            let coverage_usage = coverage.usage;
+            let coverage_elapsed = coverage.elapsed;
             spend.merge(coverage.spend);
             looked_up.push_str(&coverage.looked_up);
 
@@ -364,6 +387,8 @@ async fn review_group(
             // could not be reached is not evidence a further one would fare
             // better, so stop rather than pay for another.
             let Some(response) = coverage.response else {
+                metrics.record(coverage_usage, coverage_elapsed, 0);
+                metrics.stop(crate::lanes::coverage::StopReason::Failed);
                 break;
             };
 
@@ -377,6 +402,8 @@ async fn review_group(
                 Ok(asked) => asked,
                 Err(err) => {
                     tracing::warn!(%err, "a coverage pass failed to place its findings");
+                    metrics.record(coverage_usage, coverage_elapsed, 0);
+                    metrics.stop(crate::lanes::coverage::StopReason::PlacementFailure);
                     break;
                 }
             };
@@ -390,6 +417,7 @@ async fn review_group(
             // differently. Both are computed here rather than trusted from
             // the model, which has no channel to report "this is the same
             // one" and no reason to be honest about it if it did.
+            let had_proposals = !asked.findings.is_empty();
             let new_findings: Vec<Finding> = asked
                 .findings
                 .into_iter()
@@ -411,25 +439,42 @@ async fn review_group(
             // Nothing new: a further pass over the same evidence would not
             // find more either, so stop rather than pay for one.
             if new_findings.is_empty() {
+                metrics.record(coverage_usage, coverage_elapsed, 0);
+                metrics.stop(if had_proposals {
+                    crate::lanes::coverage::StopReason::Duplicate
+                } else {
+                    crate::lanes::coverage::StopReason::Empty
+                });
                 break;
             }
 
             // Falsify only what this pass added — free when empty, and it
             // never re-judges what round one's own pass already kept.
-            let new_filtered = Falsifier::new(llm.model().as_ref(), config)
+            let mut new_filtered = Falsifier::new(llm.model().as_ref(), config)
                 .filter_with(LaneId::Critique, new_findings, &evidence, &looked_up)
                 .await;
+            for finding in &mut new_filtered.findings {
+                finding.review_pass = pass_index + 1;
+            }
             spend.merge(new_filtered.spend);
             rejected.extend(new_filtered.rejected);
 
             if new_filtered.findings.is_empty() {
+                metrics.record(coverage_usage, coverage_elapsed, 0);
+                metrics.stop(crate::lanes::coverage::StopReason::NonSurviving);
                 break;
             }
 
+            metrics.record(
+                coverage_usage,
+                coverage_elapsed,
+                new_filtered.findings.len(),
+            );
             added_by_coverage += new_filtered.findings.len();
             confirmed.extend(new_filtered.findings.clone());
             findings.extend(new_filtered.findings);
         }
+        metrics.emit(LaneId::Critique, group_paths);
     }
 
     Ok(FileReview {
@@ -447,7 +492,7 @@ async fn review_group(
     })
 }
 
-/// Minimum changed lines a group needs before the opt-in coverage pass
+/// Minimum changed lines a group needs before adaptive coverage passes
 /// (`review.passes > 1`) is worth its extra call.
 ///
 /// Not configurable: a repository that wants coverage passes at all is opting
@@ -678,7 +723,7 @@ fn postable_range(raw: &RawFinding, diff: &FileDiff, resolution: Resolution) -> 
 /// which say more than the discarded prose did.
 ///
 /// `added_by_coverage` covers the opposite mismatch: `summary` is round one's
-/// prose, written before the opt-in coverage pass (`lanes::coverage`) ever
+/// prose, written before adaptive coverage (`lanes::coverage`) ever
 /// runs, so a group round one called clean and the coverage pass then added a
 /// finding to would otherwise keep declaring itself clean while `kept` says
 /// otherwise. Folded in as a note rather than rewritten, for the same reason
@@ -754,11 +799,15 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn config() -> Config {
-        crate::config::DEFAULTS
+        let mut config: Config = crate::config::DEFAULTS
             .parse::<toml::Table>()
             .unwrap()
             .try_into()
-            .unwrap()
+            .unwrap();
+        // Most tests exercise one review turn. Adaptive-pass tests opt in
+        // explicitly through `config_with_passes`.
+        config.review.passes = 1;
+        config
     }
 
     const PATCH: &str =
@@ -1173,7 +1222,8 @@ fn helper() {
         }));
         let handle = model.clone();
 
-        // The default config ships `passes = 1`.
+        // Exercise the operator's explicit one-pass setting; production ships
+        // with a maximum adaptive depth of three.
         run_with(model, &config(), &large_diffs()).await;
 
         assert_eq!(handle.calls(), 1);
@@ -1217,6 +1267,87 @@ fn helper() {
             3,
             "the second coverage pass added nothing, so a third must not run"
         );
+    }
+
+    #[tokio::test]
+    async fn a_new_second_pass_finding_unlocks_the_third_pass() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the second index", 20)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({"summary": "Nothing further.", "findings": []}));
+        let handle = model.clone();
+
+        let outcome = run_with(model, &config_with_passes(3), &large_diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 2, "{:#?}", outcome.findings);
+        assert_eq!(
+            outcome
+                .findings
+                .iter()
+                .map(|finding| finding.review_pass)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(
+            handle.calls(),
+            5,
+            "review/falsify, second-pass review/falsify, then pass three"
+        );
+        let requests = handle.requests();
+        let third_request = requests.last().unwrap();
+        let prompt = third_request
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(prompt.contains("Guard the first index"), "{prompt}");
+        assert!(prompt.contains("Guard the second index"), "{prompt}");
+    }
+
+    #[tokio::test]
+    async fn a_malformed_third_pass_keeps_findings_from_both_earlier_passes() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the second index", 20)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({"summary": "…", "findings": [{"rule": "broken"}]}));
+
+        let outcome = run_with(model, &config_with_passes(3), &large_diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 2, "{:#?}", outcome.findings);
+    }
+
+    #[tokio::test]
+    async fn a_failed_coverage_pass_keeps_round_ones_findings() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then_error("provider unavailable");
+        let handle = model.clone();
+
+        let outcome = run_with(model, &config_with_passes(3), &large_diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
+        assert_eq!(handle.calls(), 3, "failure must stop before pass three");
     }
 
     #[tokio::test]

@@ -491,35 +491,13 @@ pub fn route(event: &str, payload: &Payload) -> Action {
         }
 
         "pull_request_review_comment" => {
-            // Only `created`, for the same reason `issue_comment` filters:
-            // GitHub delivers `edited` and `deleted` here too, and reacting to
-            // them would queue a paid run every time somebody fixed a typo in
-            // their own reply.
-            if payload.action != "created" {
-                return Action::Ignore("review comment action is not `created`");
-            }
-            let Some(pr) = &payload.pull_request else {
-                return Action::Ignore("no pull request");
-            };
-            let Some(comment) = &payload.comment else {
-                return Action::Ignore("no comment");
-            };
-            // A reply, not a new thread. A fresh inline comment starts somebody
-            // else's conversation, which thread resolution never touches, and
-            // reacting to one would mean a run per commented line.
-            if comment.in_reply_to_id.is_none() {
-                return Action::Ignore("review comment is not a reply to a thread");
-            }
-
-            // Attributed to whoever replied: the same reasoning as a commanded
-            // review, which is that the contributor record measures the work
-            // somebody caused.
-            Action::Review {
-                repo: repository.full_name.clone(),
-                number: pr.number,
-                author: comment.user.login.clone(),
-                installation: installation.id,
-            }
+            // Replies are remembered by `remember_trigger`, but unchanged code
+            // is not reviewed again. A model rerun on every conversation turn
+            // found new, differently-worded objections on the same SHA and
+            // turned discussion into paid comment churn. The next code push
+            // receives the remembered reply and performs reconciliation while
+            // reviewing evidence that actually changed.
+            Action::Ignore("review comments wait for the next code push")
         }
         _ => Action::Ignore("uninteresting event"),
     }
@@ -1009,22 +987,17 @@ mod tests {
     }
 
     #[test]
-    fn a_human_reply_on_a_review_thread_queues_a_run() {
-        // The trigger for thread resolution: somebody answered one of our
-        // review comments, so the threads on this pull request are worth
-        // re-evaluating.
-        assert_eq!(
+    fn a_human_reply_on_a_review_thread_waits_for_a_code_push() {
+        // The reply is still captured by `remember_trigger`; routing it into a
+        // review would repeatedly search unchanged code and post newly-worded
+        // objections on every turn of the conversation.
+        assert!(matches!(
             route(
                 "pull_request_review_comment",
                 &payload(review_comment_payload("created", true))
             ),
-            Action::Review {
-                repo: "tinyhumansai/tinysweeper".into(),
-                number: 7,
-                author: "author".into(),
-                installation: 1,
-            }
-        );
+            Action::Ignore(_)
+        ));
     }
 
     #[test]

@@ -24,7 +24,7 @@ use crate::flows::caps::{ChildGraphs, ModelCapability};
 use crate::flows::lookup;
 use crate::flows::panel::{self, Call};
 use crate::flows::subagent::{self, Answered};
-use crate::ports::model::Model;
+use crate::ports::model::{Model, Usage};
 use crate::ports::tree::{Lookup, TreeReader};
 
 /// What one reviewer said, or why it said nothing.
@@ -45,6 +45,8 @@ pub struct Answer {
     /// review — the falsifier above all — judge the finding against the same
     /// evidence the reviewer had, rather than against the diff alone.
     pub looked_up: String,
+    /// Usage reported for the model call that produced this answer.
+    usage: Usage,
 }
 
 impl Answer {
@@ -56,8 +58,19 @@ impl Answer {
             model: String::new(),
             error: Some(error.into()),
             looked_up: String::new(),
+            usage: Usage::default(),
         }
     }
+}
+
+/// Answers and accounting isolated to one invocation of [`ask_all_accounted`].
+pub struct AskOutcome {
+    /// One answer per requested reviewer, in request order.
+    pub answers: Vec<Answer>,
+    /// Usage from every successful model call made during this invocation.
+    pub usage: Usage,
+    /// Wall time for the complete invocation, including follow-up turns.
+    pub elapsed: std::time::Duration,
 }
 
 /// The capability a whole lane shares.
@@ -84,7 +97,7 @@ pub fn lane_llm(
 /// stopping one hop early yields `{json, model}`, which deserializes into an
 /// *empty* lane response rather than failing. That reads exactly like a
 /// reviewer that found nothing.
-fn node_answer(output: &Value, node_id: &str) -> Option<(Value, String)> {
+fn node_answer(output: &Value, node_id: &str) -> Option<(Value, String, Usage)> {
     let envelope = output.get("nodes")?.get(node_id)?.get("items")?.get(0)?;
     let payload = envelope.get("json")?.get("json")?;
 
@@ -95,6 +108,11 @@ fn node_answer(output: &Value, node_id: &str) -> Option<(Value, String)> {
             .and_then(Value::as_str)
             .unwrap_or("unknown")
             .to_string(),
+        payload
+            .get("usage")
+            .cloned()
+            .and_then(|usage| serde_json::from_value(usage).ok())
+            .unwrap_or_default(),
     ))
 }
 
@@ -134,12 +152,13 @@ async fn one_round(
             let node = panel::node_id(&call.id);
 
             match node_answer(&outcome.output, &node) {
-                Some((value, model)) => Answer {
+                Some((value, model, usage)) => Answer {
                     id: call.id.clone(),
                     value: Some(value),
                     model,
                     error: None,
                     looked_up: String::new(),
+                    usage,
                 },
                 None => Answer::failed(
                     &call.id,
@@ -183,21 +202,23 @@ async fn answer_questions(
     model: &str,
     questions: &[String],
     evidence: &str,
-) -> Vec<Answered> {
+) -> (Vec<Answered>, Usage) {
     let graph = subagent::answers_graph(model, questions, evidence);
 
     let Ok(compiled) = tinyflows::compiler::compile(&graph) else {
-        return Vec::new();
+        return (Vec::new(), Usage::default());
     };
     let Ok(outcome) = engine::run(&compiled, json!({}), capabilities).await else {
-        return Vec::new();
+        return (Vec::new(), Usage::default());
     };
 
-    questions
+    let mut usage = Usage::default();
+    let answered = questions
         .iter()
         .enumerate()
         .filter_map(|(index, question)| {
-            let (value, _) = node_answer(&outcome.output, &subagent::node_id(index))?;
+            let (value, _, call_usage) = node_answer(&outcome.output, &subagent::node_id(index))?;
+            usage.add(call_usage);
 
             Some(Answered {
                 question: question.clone(),
@@ -212,7 +233,8 @@ async fn answer_questions(
                     .unwrap_or(false),
             })
         })
-        .collect()
+        .collect();
+    (answered, usage)
 }
 
 /// How a lane wants its reviewers asked, beyond the one call.
@@ -263,15 +285,20 @@ impl<'a> Asking<'a> {
 /// Never returns `Err` for a single reviewer's failure — that is an [`Answer`]
 /// carrying an `error`. `Err` is reserved for the graph itself not running,
 /// which means no reviewer was asked at all.
-pub async fn ask_all(
+pub async fn ask_all_accounted(
     llm: Arc<ModelCapability>,
     lane: LaneId,
     calls: &[Call],
     schema: &Value,
     asking: Asking<'_>,
-) -> Result<Vec<Answer>> {
+) -> Result<AskOutcome> {
+    let started = std::time::Instant::now();
     if calls.is_empty() {
-        return Ok(Vec::new());
+        return Ok(AskOutcome {
+            answers: Vec::new(),
+            usage: Usage::default(),
+            elapsed: started.elapsed(),
+        });
     }
 
     let capabilities = crate::flows::caps::with_llm(llm, ChildGraphs::none());
@@ -350,6 +377,10 @@ pub async fn ask_all(
         &schema_for(max_rounds > 0, subagent_model.is_some()),
     )
     .await?;
+    let mut usage = Usage::default();
+    for answer in &answers {
+        usage.add(answer.usage);
+    }
 
     // The lookup rounds. Each reviewer that asked gets its results appended
     // and is asked again; one that did not ask is settled and left alone. The
@@ -399,14 +430,19 @@ pub async fn ask_all(
                 )
                 .await
                 {
-                    Ok(again) => match again.into_iter().next() {
-                        Some(settled) if settled.value.is_some() => settled,
-                        Some(failed) => failed,
-                        None => Answer::failed(
-                            &prompts[index].id,
-                            "the reviewer produced no answer after looking things up",
-                        ),
-                    },
+                    Ok(again) => {
+                        for answer in &again {
+                            usage.add(answer.usage);
+                        }
+                        match again.into_iter().next() {
+                            Some(settled) if settled.value.is_some() => settled,
+                            Some(failed) => failed,
+                            None => Answer::failed(
+                                &prompts[index].id,
+                                "the reviewer produced no answer after looking things up",
+                            ),
+                        }
+                    }
                     Err(err) => Answer::failed(
                         &prompts[index].id,
                         format!("the follow-up turn after a lookup did not run: {err}"),
@@ -431,7 +467,11 @@ pub async fn ask_all(
     }
 
     let Some(model) = subagent_model else {
-        return Ok(answers);
+        return Ok(AskOutcome {
+            answers,
+            usage,
+            elapsed: started.elapsed(),
+        });
     };
 
     // Which reviewers asked something, and what.
@@ -449,7 +489,9 @@ pub async fn ask_all(
         // looked up. A sub-agent handed only the diff was answering "from the
         // repository" in name alone.
         let evidence = &prompts[index].prompt;
-        let answered = answer_questions(&capabilities, model, &questions, evidence).await;
+        let (answered, subagent_usage) =
+            answer_questions(&capabilities, model, &questions, evidence).await;
+        usage.add(subagent_usage);
 
         // Nothing came back, so a second turn would be the same turn with the
         // same evidence — one more call that cannot say anything new.
@@ -466,16 +508,38 @@ pub async fn ask_all(
 
         if let Ok(round_two) =
             one_round(&capabilities, lane, std::slice::from_ref(&again), schema).await
-            && let Some(mut settled) = round_two.into_iter().next()
-            && settled.value.is_some()
         {
-            // The evidence the reviewer read travels with its final answer.
-            settled.looked_up = answers[index].looked_up.clone();
-            answers[index] = settled;
+            for answer in &round_two {
+                usage.add(answer.usage);
+            }
+            if let Some(mut settled) = round_two.into_iter().next()
+                && settled.value.is_some()
+            {
+                // The evidence the reviewer read travels with its final answer.
+                settled.looked_up = answers[index].looked_up.clone();
+                answers[index] = settled;
+            }
         }
     }
 
-    Ok(answers)
+    Ok(AskOutcome {
+        answers,
+        usage,
+        elapsed: started.elapsed(),
+    })
+}
+
+/// Ask every reviewer, preserving the original answers-only API.
+pub async fn ask_all(
+    llm: Arc<ModelCapability>,
+    lane: LaneId,
+    calls: &[Call],
+    schema: &Value,
+    asking: Asking<'_>,
+) -> Result<Vec<Answer>> {
+    Ok(ask_all_accounted(llm, lane, calls, schema, asking)
+        .await?
+        .answers)
 }
 
 #[cfg(test)]

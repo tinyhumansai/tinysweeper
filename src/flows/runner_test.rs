@@ -125,6 +125,107 @@ async fn no_reviewers_is_no_calls() {
 }
 
 #[tokio::test]
+async fn accounted_runs_report_only_their_own_usage() {
+    let usage = Usage {
+        input_tokens: 100,
+        output_tokens: 10,
+        cached_tokens: 80,
+        embed_tokens: 0,
+        cost_usd: 0.01,
+    };
+    let model = MockModel::always(json!({ "summary": "s", "findings": [] })).with_usage(usage);
+    let llm = lane_llm(Arc::new(model), &config(), 100.0);
+
+    let first = ask_all_accounted(
+        llm.clone(),
+        LaneId::Critique,
+        &[call("first")],
+        &schema(),
+        Asking::default(),
+    )
+    .await
+    .expect("first run succeeds");
+    let second = ask_all_accounted(
+        llm,
+        LaneId::Critique,
+        &[call("second")],
+        &schema(),
+        Asking::default(),
+    )
+    .await
+    .expect("second run succeeds");
+
+    assert_eq!(first.usage, usage);
+    assert_eq!(second.usage, usage);
+}
+
+#[tokio::test]
+async fn concurrent_accounted_runs_do_not_claim_each_others_usage() {
+    struct Together {
+        barrier: Arc<tokio::sync::Barrier>,
+        usage: Usage,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::ports::model::Model for Together {
+        async fn complete(
+            &self,
+            _request: crate::ports::model::ModelRequest,
+        ) -> crate::error::Result<crate::ports::model::ModelResponse> {
+            // Both calls must be in flight before either returns:
+            // differencing the shared capability tally would then attribute
+            // one call to both group outcomes.
+            self.barrier.wait().await;
+            Ok(crate::ports::model::ModelResponse {
+                value: json!({ "summary": "s", "findings": [] }),
+                model: "vendor/flash".into(),
+                usage: self.usage,
+            })
+        }
+    }
+
+    let usage = Usage {
+        input_tokens: 100,
+        output_tokens: 10,
+        cached_tokens: 80,
+        embed_tokens: 0,
+        cost_usd: 0.01,
+    };
+    let llm = lane_llm(
+        Arc::new(Together {
+            barrier: Arc::new(tokio::sync::Barrier::new(2)),
+            usage,
+        }),
+        &config(),
+        100.0,
+    );
+    let first_call = [call("first")];
+    let second_call = [call("second")];
+    let first_schema = schema();
+    let second_schema = schema();
+
+    let (first, second) = tokio::join!(
+        ask_all_accounted(
+            llm.clone(),
+            LaneId::Critique,
+            &first_call,
+            &first_schema,
+            Asking::default(),
+        ),
+        ask_all_accounted(
+            llm,
+            LaneId::Critique,
+            &second_call,
+            &second_schema,
+            Asking::default(),
+        )
+    );
+
+    assert_eq!(first.expect("first run succeeds").usage, usage);
+    assert_eq!(second.expect("second run succeeds").usage, usage);
+}
+
+#[tokio::test]
 async fn each_reviewer_is_asked_with_its_own_prompt() {
     let model = MockModel::always(json!({ "summary": "s", "findings": [] }));
     let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);

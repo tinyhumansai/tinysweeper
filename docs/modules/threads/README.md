@@ -107,7 +107,8 @@ unnoticed.
 
 ## Trigger
 
-`pull_request_review_comment` with action `created`, from a non-bot sender, on a
-comment that is a **reply** (`in_reply_to_id` present). Any other action would
-queue a paid run on every edit; a non-reply comment starts somebody else's
-thread, which this module never touches.
+A code push runs reconciliation as part of the next review. Human replies to
+review threads are remembered, but do not launch a model review against the
+same SHA: doing so lets each conversation turn discover and post a differently
+worded concern on unchanged code. An explicit `@tinysweeper review` command is
+still available when a maintainer deliberately wants another review.

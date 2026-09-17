@@ -128,7 +128,7 @@ fn validate_review(config: &Config, problems: &mut Vec<String>) {
 
     if !(1..=3).contains(&review.passes) {
         problems.push(format!(
-            "`review.passes = {}` is out of range; expected 1 (round one only), 2 or 3",
+            "`review.passes = {}` is out of range; expected a maximum adaptive depth from 1 through 3",
             review.passes
         ));
     }

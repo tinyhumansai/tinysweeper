@@ -220,11 +220,14 @@ fn a_repository_cannot_decide_whether_the_review_blocks_or_approves() {
 }
 
 #[test]
-fn a_repository_cannot_raise_review_passes() {
+fn a_repository_cannot_override_review_passes() {
     // Each pass above one is another model call per unit that clears the
     // coverage pass's line threshold — the operator's money, exactly like the
     // per-pull-request budget in `[models]`.
-    let (config, ignored) = applied("[review]\npasses = 3\n");
+    // Use a value different from the shipped ceiling so equality with the
+    // base config proves the repository value was ignored rather than merely
+    // happening to request the default.
+    let (config, ignored) = applied("[review]\npasses = 1\n");
 
     assert_eq!(config.review.passes, base().review.passes);
     assert_eq!(ignored, vec!["review.passes".to_string()]);

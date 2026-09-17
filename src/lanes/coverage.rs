@@ -1,12 +1,13 @@
-//! The opt-in second look: one reviewer, once more, told what it already
-//! found.
+//! Adaptive extra looks: one reviewer, told cumulatively what it already found.
 //!
-//! `review.passes = 1` ships as the default and costs nothing beyond round
-//! one. Above one, a lane that already placed and falsified round one's
+//! `review.passes = 3` ships as the maximum adaptive depth. Small groups still
+//! cost nothing beyond round one. Above one, a lane that already placed and
+//! falsified round one's
 //! findings for a group may ask the group's first council reviewer — index
 //! `0`, deterministically, never the whole council again — to look at the
 //! *same* evidence once more, this time told plainly what it already
-//! reported and asked to find what a first pass misses.
+//! reported and asked to find what earlier passes missed. The sequence stops
+//! as soon as a pass contributes nothing distinct and surviving.
 //!
 //! This is not a second opinion. `src/falsify` already exists for "is this
 //! correct", and asking a fresh reviewer "did you miss anything" is the
@@ -26,6 +27,7 @@
 //! unplaced, and stops.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -39,7 +41,92 @@ use crate::flows::runner::{self, Asking};
 use crate::harness::prompt::Prompt;
 use crate::harness::schema::LaneResponse;
 use crate::lanes::reviewer_responses;
-use crate::ports::model::Spend;
+use crate::ports::model::{Spend, Usage};
+
+/// Why an adaptive sequence did not ask for another pass.
+#[derive(Debug, Clone, Copy)]
+pub enum StopReason {
+    /// The configured maximum adaptive depth was reached.
+    Ceiling,
+    /// The reviewer returned no findings.
+    Empty,
+    /// The call failed or its structured response was malformed.
+    Failed,
+    /// The lane could not place the pass's findings against the diff.
+    PlacementFailure,
+    /// Every proposed finding repeated one already confirmed.
+    Duplicate,
+    /// Every distinct proposal was removed by the lane's noise filter.
+    NonSurviving,
+}
+
+impl StopReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ceiling => "ceiling",
+            Self::Empty => "empty",
+            Self::Failed => "failed",
+            Self::PlacementFailure => "placement_failure",
+            Self::Duplicate => "duplicate",
+            Self::NonSurviving => "non_surviving",
+        }
+    }
+}
+
+/// Per-group adaptive-pass telemetry, emitted once after the sequence stops.
+pub struct Metrics {
+    started: Instant,
+    attempted: usize,
+    new_findings: Vec<usize>,
+    usage: Usage,
+    elapsed: Duration,
+    stop_reason: StopReason,
+}
+
+impl Metrics {
+    /// Start accounting with round one's already-completed review.
+    pub fn start(usage: Usage, elapsed: Duration, new_findings: usize) -> Self {
+        Self {
+            started: Instant::now(),
+            attempted: 1,
+            new_findings: vec![new_findings],
+            usage,
+            elapsed,
+            stop_reason: StopReason::Ceiling,
+        }
+    }
+
+    /// Record one attempted extra pass and what survived it.
+    pub fn record(&mut self, usage: Usage, elapsed: Duration, new_findings: usize) {
+        self.attempted += 1;
+        self.new_findings.push(new_findings);
+        self.usage.add(usage);
+        self.elapsed += elapsed;
+    }
+
+    /// Record why the adaptive sequence stopped early.
+    pub fn stop(&mut self, reason: StopReason) {
+        self.stop_reason = reason;
+    }
+
+    /// Emit one structured event for this qualifying group.
+    pub fn emit(self, lane: LaneId, paths: &[String]) {
+        tracing::info!(
+            lane = lane.as_str(),
+            group = %paths.join(" + "),
+            passes_attempted = self.attempted,
+            stop_reason = self.stop_reason.as_str(),
+            new_findings_per_pass = ?self.new_findings,
+            input_tokens = self.usage.input_tokens,
+            output_tokens = self.usage.output_tokens,
+            cached_tokens = self.usage.cached_tokens,
+            cost_usd = self.usage.cost_usd,
+            model_elapsed_ms = self.elapsed.as_millis() as u64,
+            elapsed_ms = self.started.elapsed().as_millis() as u64,
+            "adaptive review passes"
+        );
+    }
+}
 
 /// What the extra reviewer said, before any lane-specific anchoring runs.
 #[derive(Debug, Default)]
@@ -57,6 +144,10 @@ pub struct CoverageOutcome {
     /// What the reviewer looked up this round, if lookups are enabled.
     /// Empty when nothing was looked up.
     pub looked_up: String,
+    /// Tokens and cost attributable to this call.
+    pub usage: Usage,
+    /// Wall-clock time spent awaiting this call.
+    pub elapsed: Duration,
 }
 
 /// Ask `reviewer` once more over the evidence `prompt` already carries.
@@ -85,9 +176,23 @@ pub async fn coverage_pass(
         schema_name: schema_name.to_string(),
     };
 
-    let answers = runner::ask_all(llm, lane, std::slice::from_ref(&call), schema, asking).await?;
+    let asked = runner::ask_all_accounted(
+        llm.clone(),
+        lane,
+        std::slice::from_ref(&call),
+        schema,
+        asking,
+    )
+    .await?;
+    let usage = asked.usage;
+    let elapsed = asked.elapsed;
+    let answers = asked.answers;
     let Some(answer) = answers.into_iter().next() else {
-        return Ok(CoverageOutcome::default());
+        return Ok(CoverageOutcome {
+            usage,
+            elapsed,
+            ..CoverageOutcome::default()
+        });
     };
 
     let mut spend = Spend::default();
@@ -119,6 +224,8 @@ pub async fn coverage_pass(
         response,
         spend,
         looked_up,
+        usage,
+        elapsed,
     })
 }
 
@@ -164,6 +271,9 @@ mod tests {
             applicable: None,
             late: false,
             identity: None,
+            aliases: vec![],
+            grouped: false,
+            review_pass: 1,
             corroboration: 1,
         }
     }
@@ -187,5 +297,35 @@ mod tests {
     fn an_unanchored_finding_renders_a_question_mark_line() {
         let lines = confirmed_lines(&[finding("Something", "src/main.rs", None, "detail")]);
         assert_eq!(lines, vec!["Something (src/main.rs:?): detail".to_string()]);
+    }
+
+    #[test]
+    fn metrics_begin_with_round_one_and_append_each_adaptive_attempt() {
+        let round_one = Usage {
+            input_tokens: 100,
+            output_tokens: 10,
+            cached_tokens: 80,
+            embed_tokens: 0,
+            cost_usd: 0.01,
+        };
+        let round_two = Usage {
+            input_tokens: 50,
+            output_tokens: 5,
+            cached_tokens: 40,
+            embed_tokens: 0,
+            cost_usd: 0.005,
+        };
+        let mut metrics = Metrics::start(round_one, Duration::from_millis(20), 2);
+
+        metrics.record(round_two, Duration::from_millis(10), 1);
+        metrics.record(Usage::default(), Duration::from_millis(5), 0);
+
+        assert_eq!(metrics.attempted, 3);
+        assert_eq!(metrics.new_findings, vec![2, 1, 0]);
+        assert_eq!(metrics.usage.input_tokens, 150);
+        assert_eq!(metrics.usage.output_tokens, 15);
+        assert_eq!(metrics.usage.cached_tokens, 120);
+        assert!((metrics.usage.cost_usd - 0.015).abs() < f64::EPSILON);
+        assert_eq!(metrics.elapsed, Duration::from_millis(35));
     }
 }

@@ -86,7 +86,7 @@ pub async fn apply(
     let comments = inline_comments(proposal, &files);
     let posted: std::collections::BTreeSet<String> = comments
         .iter()
-        .filter_map(|comment| fingerprint(&comment.body))
+        .flat_map(|comment| fingerprints(&comment.body))
         .collect();
     let unanchored: Vec<&crate::findings::types::Finding> = proposal
         .findings()
@@ -105,7 +105,7 @@ pub async fn apply(
     // suppress a later one.
     let newly_posted: Vec<String> = comments
         .iter()
-        .filter_map(|comment| fingerprint(&comment.body))
+        .flat_map(|comment| fingerprints(&comment.body))
         .collect();
 
     // Submit a review if:
@@ -567,12 +567,30 @@ fn identity(finding: &crate::findings::types::Finding) -> String {
 /// The marker is the durable representation written to GitHub, so using it
 /// here keeps state recording tied to the exact comments that survived the
 /// final diff-anchor validation.
-fn fingerprint(body: &str) -> Option<String> {
-    let marker = format!("<!-- {MARKER_PREFIX}fp=");
-    body.split_once(&marker)
-        .and_then(|(_, rest)| rest.split_once(" -->"))
-        .map(|(value, _)| value.to_string())
-        .filter(|value| !value.is_empty())
+fn fingerprints(body: &str) -> Vec<String> {
+    crate::findings::prior::fingerprints_in(body)
+}
+
+/// Alias identities immediately precede the authoritative final fingerprint.
+/// Keeping the markers adjacent lets the reader reject marker-shaped text a
+/// model may have placed in the finding body.
+fn alias_marker(finding: &crate::findings::types::Finding) -> String {
+    let aliases: Vec<&str> = finding
+        .aliases
+        .iter()
+        .map(String::as_str)
+        .filter(|alias| {
+            alias.len() == 16
+                && alias
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+        .collect();
+    if aliases.is_empty() {
+        String::new()
+    } else {
+        format!("<!-- {MARKER_PREFIX}fps={} -->", aliases.join(","))
+    }
 }
 
 fn review_body(
@@ -680,19 +698,13 @@ fn inline_comments(proposal: &Proposal, files: &[ChangedFile]) -> Vec<ReviewComm
     proposal
         .findings()
         .filter_map(|finding| {
-            let line = finding.line?;
             // A suggestion block replaces exactly the lines the comment is
             // anchored to, so carrying one *changes the anchor*: it widens to
             // the span the replacement covers. Without a suggestion the comment
             // stays a single-line pin, which is what a reader wants — a
             // multi-line highlight for a one-sentence remark is noise.
-            let (start_line, line) = match &finding.applicable {
-                Some(suggestion) if suggestion.start_line < suggestion.end_line => {
-                    (Some(suggestion.start_line), suggestion.end_line)
-                }
-                Some(suggestion) => (None, suggestion.end_line),
-                None => (None, line),
-            };
+            let (start, line) = finding.published_range()?;
+            let start_line = (start < line).then_some(start);
             let start = start_line.unwrap_or(line);
             if !diffs
                 .get(finding.path.as_str())
@@ -709,7 +721,14 @@ fn inline_comments(proposal: &Proposal, files: &[ChangedFile]) -> Vec<ReviewComm
             let suggestion = finding
                 .applicable
                 .as_ref()
-                .map(|s| format!("\n\n```suggestion\n{}\n```", s.replacement))
+                .map(|s| {
+                    let label = if finding.aliases.is_empty() {
+                        ""
+                    } else {
+                        "\n\n**Suggested change for the opening observation**"
+                    };
+                    format!("{label}\n\n```suggestion\n{}\n```", s.replacement)
+                })
                 .unwrap_or_default();
             Some(ReviewComment {
                 path: finding.path.clone(),
@@ -738,16 +757,17 @@ fn inline_comments(proposal: &Proposal, files: &[ChangedFile]) -> Vec<ReviewComm
                 // a reader has to have been told why before being offered the
                 // button.
                 body: format!(
-                    "{}  {}\n\n**{}**\n\n{}{}\n\n{} · <!-- {MARKER_PREFIX}fp={} -->",
+                    "{}  {}\n\n**{}**\n\n{}{}\n\n{} · {}<!-- {MARKER_PREFIX}fp={} -->",
                     crate::findings::render::priority_badge(finding.severity),
                     crate::findings::render::lane_confidence_badge(
                         finding.lane,
                         finding.confidence
                     ),
-                    finding.title,
+                    crate::findings::render::escape_emphasis(&finding.title),
                     finding.body,
                     suggestion,
                     crate::findings::render::rule_line(&finding.rule),
+                    alias_marker(finding),
                     // The identity review stamped, over the code this finding
                     // anchors to. Recomputing it here from the title — as this
                     // once did — makes the marker depend on the model's
@@ -758,6 +778,18 @@ fn inline_comments(proposal: &Proposal, files: &[ChangedFile]) -> Vec<ReviewComm
             })
         })
         .collect()
+}
+
+/// Render inline comments for review-flow tests in the read-only half.
+///
+/// Keeping the test on the production renderer is what proves aliases survive
+/// the complete render/load boundary rather than two isolated helper tests.
+#[cfg(test)]
+pub(crate) fn test_inline_comments(
+    proposal: &Proposal,
+    files: &[ChangedFile],
+) -> Vec<ReviewComment> {
+    inline_comments(proposal, files)
 }
 
 #[cfg(test)]
@@ -1149,6 +1181,9 @@ mod tests {
             applicable: None,
             late: false,
             identity: None,
+            aliases: vec![],
+            grouped: false,
+            review_pass: 1,
             corroboration: 1,
         }
     }
@@ -1268,6 +1303,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_grouped_comment_publishes_and_records_every_identity() {
+        let forge = forge("abc123");
+        let store = crate::state::memory::MemoryState::default();
+        let key = crate::state::key("tinyhumansai/tinysweeper", 7);
+        store
+            .save_state(
+                &key,
+                &crate::state::types::ReviewedState {
+                    head_sha: "abc123".into(),
+                    ..crate::state::types::ReviewedState::default()
+                },
+            )
+            .await
+            .unwrap();
+        let mut grouped = finding();
+        grouped.identity = Some("0123456789abcdef".into());
+        grouped.aliases = vec!["1111111111111111".into(), "2222222222222222".into()];
+
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![grouped]),
+            Some(&store),
+        )
+        .await
+        .expect("applies");
+
+        let body = forge
+            .writes()
+            .into_iter()
+            .find_map(|write| match write {
+                Write::Review { comments, .. } => comments.into_iter().next().map(|c| c.body),
+                _ => None,
+            })
+            .expect("an inline comment");
+        assert_eq!(
+            fingerprints(&body),
+            vec!["0123456789abcdef", "1111111111111111", "2222222222222222"]
+        );
+        let recorded = store.load_state(&key).await.unwrap().unwrap();
+        for identity in fingerprints(&body) {
+            assert!(
+                recorded.fingerprints.contains(&identity),
+                "missing {identity}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn an_out_of_diff_anchor_is_kept_in_the_review_body_but_not_posted_inline() {
         let forge = forge("abc123");
         let mut invalid = finding();
@@ -1347,6 +1432,7 @@ mod tests {
     #[tokio::test]
     async fn an_applicable_suggestion_becomes_a_commit_button_over_its_own_span() {
         let mut f = finding();
+        f.aliases.push("1111111111111111".into());
         f.applicable = Some(crate::findings::types::Suggestion {
             start_line: 2,
             end_line: 4,
@@ -1380,6 +1466,13 @@ mod tests {
                 .body
                 .contains("```suggestion\n    if let Some(x) = items.get(i) {"),
             "{}",
+            comment.body
+        );
+        assert!(
+            comment
+                .body
+                .contains("Suggested change for the opening observation"),
+            "a shared thread must say which rationale its commit button addresses: {}",
             comment.body
         );
         // Before the footer, so the reader has the reason before the button.
