@@ -253,6 +253,13 @@ fn the_built_in_defaults_are_valid() {
 }
 
 #[test]
+fn review_passes_defaults_to_three_adaptive_attempts() {
+    let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
+
+    assert_eq!(config.review.passes, 3);
+}
+
+#[test]
 fn recorded_eval_cassettes_are_ignored_by_default() {
     let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
 
@@ -654,8 +661,13 @@ fn review_passes_out_of_range_is_rejected() {
     let joined = validate::validate(&config).join("\n");
     assert!(joined.contains("review.passes = 0"), "{joined}");
 
-    let config = parse("version = 1\n[review]\npasses = 2\n");
-    assert!(validate::validate(&config).is_empty());
+    for passes in 1..=3 {
+        let config = parse(&format!("version = 1\n[review]\npasses = {passes}\n"));
+        assert!(
+            validate::validate(&config).is_empty(),
+            "passes = {passes} should be valid"
+        );
+    }
 }
 
 #[test]

@@ -153,6 +153,9 @@ pub struct IssueRef {
 /// A comment reference.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CommentRef {
+    /// Its text, used only to recognize an explicit `@tinysweeper` command.
+    #[serde(default)]
+    pub body: String,
     /// Its author.
     pub user: UserRef,
 }
@@ -418,8 +421,9 @@ pub fn route(event: &str, payload: &Payload) -> Action {
         "issue_comment" => {
             // GitHub delivers `issue_comment` for `created`, `edited`, and
             // `deleted`, unlike the `pull_request` branch above which already
-            // whitelists actions. Without this, every saved edit queues another
-            // paid review even though no new conversation was added.
+            // whitelists actions. Without this, editing a comment to add
+            // `@tinysweeper` after the fact -- or any edit to a comment that
+            // already mentioned it -- queues another paid review every time.
             if payload.action != "created" {
                 return Action::Ignore("comment action is not `created`");
             }
@@ -429,20 +433,26 @@ pub fn route(event: &str, payload: &Payload) -> Action {
             if issue.pull_request.is_none() {
                 return Action::Ignore("comment is on an issue, not a pull request");
             }
-            let Some(comment) = &payload.comment else {
-                return Action::Ignore("no comment");
-            };
-            // Every new human comment can change whether an earlier finding is
-            // settled, even when it does not mention tinysweeper explicitly.
-            // Attribute the resulting review to the commenter, not to whoever
-            // opened the pull request: the contributor record measures the
-            // work somebody caused.
-            let commenter = comment.user.login.clone();
+            let asked = payload
+                .comment
+                .as_ref()
+                .map(|comment| comment.body.trim_start().starts_with("@tinysweeper"))
+                .unwrap_or(false);
+            if !asked {
+                return Action::Ignore("comment is not addressed to tinysweeper");
+            }
+            // Attribute the review to whoever explicitly asked for it, not to
+            // the pull request author.
+            let asker = payload
+                .comment
+                .as_ref()
+                .map(|comment| comment.user.login.clone())
+                .unwrap_or_else(|| issue.user.login.clone());
 
             Action::Review {
                 repo: repository.full_name.clone(),
                 number: issue.number,
-                author: commenter,
+                author: asker,
                 installation: installation.id,
             }
         }
@@ -473,29 +483,13 @@ pub fn route(event: &str, payload: &Payload) -> Action {
         }
 
         "pull_request_review_comment" => {
-            // Only `created`, for the same reason `issue_comment` filters:
-            // GitHub delivers `edited` and `deleted` here too, and reacting to
-            // them would queue a paid run every time somebody fixed a typo in
-            // their own reply.
-            if payload.action != "created" {
-                return Action::Ignore("review comment action is not `created`");
-            }
-            let Some(pr) = &payload.pull_request else {
-                return Action::Ignore("no pull request");
-            };
-            let Some(comment) = &payload.comment else {
-                return Action::Ignore("no comment");
-            };
-            // A new inline thread can carry evidence about an earlier finding
-            // just like a reply can. Thread policy still limits mutations to
-            // conversations tinysweeper opened; this trigger only asks the
-            // review to reconcile the pull request's current state.
-            Action::Review {
-                repo: repository.full_name.clone(),
-                number: pr.number,
-                author: comment.user.login.clone(),
-                installation: installation.id,
-            }
+            // Replies are remembered by `remember_trigger`, but unchanged code
+            // is not reviewed again. A model rerun on every conversation turn
+            // found new, differently-worded objections on the same SHA and
+            // turned discussion into paid comment churn. The next code push
+            // receives the remembered reply and performs reconciliation while
+            // reviewing evidence that actually changed.
+            Action::Ignore("review comments wait for the next code push")
         }
         _ => Action::Ignore("uninteresting event"),
     }
@@ -895,7 +889,7 @@ mod tests {
     }
 
     #[test]
-    fn every_new_pull_request_comment_triggers_a_review() {
+    fn only_an_explicit_pull_request_command_triggers_a_review() {
         let base = serde_json::json!({
             "action": "created",
             "repository": {"full_name": "tinyhumansai/tinysweeper"},
@@ -906,7 +900,7 @@ mod tests {
         });
         assert!(matches!(
             route("issue_comment", &payload(base.clone())),
-            Action::Review { number: 7, .. }
+            Action::Ignore(_)
         ));
 
         let mut addressed = base;
@@ -984,68 +978,75 @@ mod tests {
     }
 
     #[test]
-    fn a_human_reply_on_a_review_thread_queues_a_run() {
-        // The trigger for thread resolution: somebody answered one of our
-        // review comments, so the threads on this pull request are worth
-        // re-evaluating.
-        assert_eq!(
-            route(
-                "pull_request_review_comment",
-                &payload(review_comment_payload("created", true))
-            ),
-            Action::Review {
-                repo: "tinyhumansai/tinysweeper".into(),
-                number: 7,
-                author: "author".into(),
-                installation: 1,
-            }
-        );
+    fn a_human_reply_is_remembered_but_waits_for_a_code_push() {
+        // Routing the reply into a review would repeatedly search unchanged
+        // code and post newly-worded objections on every conversation turn.
+        // Memory is independent of routing so the next push still sees it.
+        for action in ["created", "edited"] {
+            let delivery = payload(review_comment_payload(action, true));
+            assert_eq!(
+                route("pull_request_review_comment", &delivery),
+                Action::Ignore("review comments wait for the next code push")
+            );
+            assert_eq!(
+                remember_trigger("pull_request_review_comment", &delivery),
+                Some(Conversation {
+                    repo: "tinyhumansai/tinysweeper".into(),
+                    number: 7,
+                    pull_request: true,
+                    installation: 1,
+                }),
+                "{action} reply was not retained for the next review"
+            );
+        }
     }
 
     #[test]
-    fn a_new_inline_review_thread_also_queues_a_run() {
-        // Thread policy still refuses to mutate somebody else's conversation,
-        // but the comment can change the PR's review state and should wake the
-        // reconciliation run.
+    fn a_new_inline_review_thread_also_waits_for_a_code_push() {
+        // New inline conversations are remembered like replies, but unchanged
+        // code does not justify another broad model search.
         assert!(matches!(
             route(
                 "pull_request_review_comment",
                 &payload(review_comment_payload("created", false))
             ),
-            Action::Review { number: 7, .. }
+            Action::Ignore(_)
         ));
     }
 
     #[test]
-    fn an_edited_or_deleted_review_comment_does_not_queue_a_run() {
-        // Same reasoning as `issue_comment`: reacting to the wrong action
-        // queues a paid run on every save.
-        for action in ["edited", "deleted"] {
-            assert!(
-                matches!(
-                    route(
-                        "pull_request_review_comment",
-                        &payload(review_comment_payload(action, true))
-                    ),
-                    Action::Ignore(_)
-                ),
-                "action `{action}` must not queue a run"
-            );
-        }
+    fn deleting_a_review_reply_is_neither_remembered_nor_reviewed() {
+        let delivery = payload(review_comment_payload("deleted", true));
+        assert_eq!(
+            route("pull_request_review_comment", &delivery),
+            Action::Ignore("review comments wait for the next code push")
+        );
+        assert_eq!(
+            remember_trigger("pull_request_review_comment", &delivery),
+            None
+        );
     }
 
     #[test]
     fn a_bots_reply_on_a_review_thread_never_queues_a_run() {
         // Two bots replying to each other is a loop bounded only by the rate
         // limiter, and it would resolve threads on each other's say-so.
-        let mut delivery = review_comment_payload("created", true);
-        delivery["sender"] = serde_json::json!({"login": "dependabot[bot]", "type": "Bot"});
-        delivery["comment"]["user"] =
-            serde_json::json!({"login": "dependabot[bot]", "type": "Bot"});
-        assert!(matches!(
-            route("pull_request_review_comment", &payload(delivery)),
-            Action::Ignore(_)
-        ));
+        for action in ["created", "edited", "deleted"] {
+            let mut delivery = review_comment_payload(action, true);
+            delivery["sender"] = serde_json::json!({"login": "dependabot[bot]", "type": "Bot"});
+            delivery["comment"]["user"] =
+                serde_json::json!({"login": "dependabot[bot]", "type": "Bot"});
+            let delivery = payload(delivery);
+            assert_eq!(
+                route("pull_request_review_comment", &delivery),
+                Action::Ignore("sender is a bot")
+            );
+            assert_eq!(
+                remember_trigger("pull_request_review_comment", &delivery).is_some(),
+                action != "deleted",
+                "memory action filtering changed for another bot's {action} reply"
+            );
+        }
     }
 
     #[test]

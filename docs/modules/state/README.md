@@ -144,6 +144,16 @@ comment. Three things stop that suppressing a real finding:
    characters. Nothing else in a body is ever read as one.
 3. Suppression only removes a duplicate comment, per the section above.
 
+When independent lanes, or separate adaptive passes of one lane, anchor
+observations to overlapping ranges, publication puts every rationale in one
+inline conversation. The opener carries an adjacent `tinysweeper:fps=` marker
+with all secondary identities immediately before its ordinary `fp=` marker.
+Reload accepts every valid identity from that renderer-owned pair, so any
+wording already present in the shared thread is suppressed on a later push.
+Unplaced findings receive this treatment only when their non-empty rule ids
+match after case-folding and whitespace normalization; locationless findings
+with unrelated or empty rules stay separate.
+
 Getting the bot login wrong fails in the noisy direction — nothing is recognised
 as our own, so nothing is deduped — rather than in the direction that lets a
 stranger silence a review.

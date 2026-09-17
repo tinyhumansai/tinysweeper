@@ -118,9 +118,10 @@ component too large to bet on falls back to the ungrouped count exactly. Either
 way this module counts calls the same way — it has no notion of a "file"
 beneath a `Call`, only the id and the prompt it was given.
 
-`review.passes` above one adds up to two more calls per qualifying group — the
-opt-in coverage pass (`lanes::coverage`), asking one reviewer once more rather
-than the whole council — and each goes through the same `ModelCapability`, so
+The default maximum `review.passes = 3` adds up to two more calls per qualifying
+group — adaptive coverage passes (`lanes::coverage`) that ask one reviewer
+rather than the whole council and stop when a pass adds nothing distinct — and
+each goes through the same `ModelCapability`, so
 it counts against the same budget as everything else here. See "Coverage
 pass" in `docs/modules/lanes/README.md`.
 

@@ -86,6 +86,31 @@ pub struct Finding {
     /// publishes.
     #[serde(default)]
     pub identity: Option<String>,
+    /// Other finding identities published in this finding's inline thread.
+    ///
+    /// Review lanes form their verdicts independently, so two lanes can
+    /// describe the same changed lines from different angles. The review
+    /// keeps both observations in their lane summaries, but publishes them as
+    /// one conversation and carries every identity here so a later review can
+    /// suppress any of the already-published variants.
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    /// Whether this observation is published inside another finding's thread.
+    ///
+    /// It remains in its lane for the check-run evidence and conclusion, but
+    /// [`crate::app::review::Proposal::findings`] omits it from the inline
+    /// comment stream. Old proposals default to `false` and retain their
+    /// original one-finding-per-comment behaviour.
+    #[serde(default)]
+    pub grouped: bool,
+    /// One-based internal review pass that produced this observation.
+    ///
+    /// Old proposals and every non-adaptive lane deserialize as pass one.
+    /// Keeping this provenance lets publication combine observations from two
+    /// passes of the same lane without combining independent findings from a
+    /// single pass merely because they share an anchor.
+    #[serde(default = "one")]
+    pub review_pass: u8,
     /// How many reviewers independently raised this.
     ///
     /// One for everything a single reviewer produced, which is why the default
@@ -157,6 +182,20 @@ impl Finding {
         let start = self.line?;
         Some((start, self.end_line.unwrap_or(start)))
     }
+
+    /// The exact head-revision range an inline comment publishes on GitHub.
+    ///
+    /// An applicable suggestion must span the lines it replaces. Every other
+    /// finding is deliberately a single-line pin, even when the model supplied
+    /// an `end_line`; [`crate::app::apply`] uses the same rule when constructing
+    /// the review comment.
+    pub fn published_range(&self) -> Option<(u64, u64)> {
+        let line = self.line?;
+        Some(match &self.applicable {
+            Some(suggestion) => (suggestion.start_line, suggestion.end_line),
+            None => (line, line),
+        })
+    }
 }
 
 /// Collapse whitespace so reformatting does not change a fingerprint.
@@ -200,6 +239,9 @@ impl From<ScanFinding> for Finding {
             applicable: None,
             late: false,
             identity: None,
+            aliases: Vec::new(),
+            grouped: false,
+            review_pass: 1,
             corroboration: 1,
         }
     }
@@ -225,6 +267,9 @@ mod tests {
             applicable: None,
             late: false,
             identity: None,
+            aliases: Vec::new(),
+            grouped: false,
+            review_pass: 1,
             corroboration: 1,
         }
     }
@@ -237,6 +282,21 @@ mod tests {
         let mut after = finding();
         after.line = Some(45);
         assert_eq!(before, after.fingerprint("let x = items[i];"));
+    }
+
+    #[test]
+    fn old_serialized_findings_default_to_one_ungrouped_observation() {
+        let mut value = serde_json::to_value(finding()).expect("serializes");
+        let object = value.as_object_mut().expect("finding is an object");
+        object.remove("aliases");
+        object.remove("grouped");
+        object.remove("review_pass");
+
+        let loaded: Finding = serde_json::from_value(value).expect("old proposal loads");
+
+        assert!(loaded.aliases.is_empty());
+        assert!(!loaded.grouped);
+        assert_eq!(loaded.review_pass, 1);
     }
 
     #[test]

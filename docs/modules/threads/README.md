@@ -107,9 +107,10 @@ unnoticed.
 
 ## Trigger
 
-Every `issue_comment` or `pull_request_review_comment` with action `created`
-from a non-bot sender queues a reconciliation review, as does every new head
-commit through `pull_request: synchronize`. Edited and deleted comments do not
-queue another run. A new inline thread can wake the review, but the ownership
-rule above still prevents this module from resolving a thread somebody else
-opened.
+A code push (`pull_request: synchronize`) runs reconciliation as part of the
+next review. Created and edited review-thread replies are remembered, including
+replies from other bots, but no `pull_request_review_comment` action launches a
+model review against the same SHA: doing so lets each conversation turn
+discover and post a differently worded concern on unchanged code. An explicit
+`@tinysweeper review` issue comment is still available when a maintainer
+deliberately wants another review.

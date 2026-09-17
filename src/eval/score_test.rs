@@ -66,6 +66,9 @@ fn finding(path: &str, line: u64, title: &str, body: &str) -> Finding {
         applicable: None,
         late: false,
         identity: Some("abcd1234".into()),
+        aliases: vec![],
+        grouped: false,
+        review_pass: 1,
         corroboration: 1,
     }
 }

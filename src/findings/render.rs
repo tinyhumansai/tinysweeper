@@ -219,12 +219,60 @@ pub fn rule_line(rule: &str) -> String {
         Some((head, rest)) if !head.trim().is_empty() && !rest.trim().is_empty() => {
             format!(
                 "**[RULE] {}**: {}",
-                escape_cell(head.trim()),
+                escape_emphasis(head.trim()),
                 escape_cell(rest.trim())
             )
         }
-        _ => format!("**[RULE] {}**", escape_cell(rule)),
+        _ => format!("**[RULE] {}**", escape_emphasis(rule)),
     }
+}
+
+/// Escape model-authored text placed inside a Markdown emphasis run.
+pub fn escape_emphasis(text: &str) -> String {
+    escape_html(text)
+        .replace('\\', "\\\\")
+        .replace('*', "\\*")
+        .replace('_', "\\_")
+}
+
+/// Render one non-primary observation inside a co-located inline thread.
+///
+/// The title and rule receive the same escaping as check summaries. The body
+/// intentionally remains Markdown, as every finding body does. A secondary
+/// suggestion is rendered as reference-only code: only the opening
+/// observation may own GitHub's one-click suggestion for the shared anchor.
+pub(crate) fn grouped_observation(finding: &Finding) -> String {
+    let mut out = format!(
+        "\n\n---\n\n### Additional `{}` observation\n\n{}  {}\n\n**{}**\n\n{}\n\n{}",
+        finding.lane,
+        priority_badge(finding.severity),
+        confidence_badge(finding.confidence),
+        escape_emphasis(&finding.title),
+        rule_line(&finding.rule),
+        finding.body.trim(),
+    );
+
+    if let Some(replacement) = finding
+        .applicable
+        .as_ref()
+        .map(|suggestion| suggestion.replacement.as_str())
+        .or(finding.suggestion.as_deref())
+    {
+        out.push_str("\n\n**Suggested change for this observation (reference only)**\n\n");
+        out.push_str(&code_fence(replacement));
+    }
+    out
+}
+
+/// Fence arbitrary model text without allowing an embedded fence to close it.
+fn code_fence(text: &str) -> String {
+    let longest = text
+        .split(|character| character != '`')
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    let fence = "`".repeat(longest.saturating_add(1).max(3));
+    format!("{fence}\n{}\n{fence}", text.trim())
 }
 
 /// A `<summary>` renders as HTML, so a stray tag in a title would break out of
@@ -418,6 +466,9 @@ mod tests {
             applicable: None,
             late: false,
             identity: None,
+            aliases: vec![],
+            grouped: false,
+            review_pass: 1,
             corroboration: 1,
         }
     }
@@ -437,6 +488,36 @@ mod tests {
         // Colour alone excludes anyone who cannot distinguish red from amber.
         assert!(badge(Severity::Critical).contains("critical"));
         assert!(badge(Severity::Low).contains("low"));
+    }
+
+    #[test]
+    fn a_grouped_observation_labels_and_preserves_its_rationale_safely() {
+        let mut finding = finding(Severity::High, "Close <details> | **now**");
+        finding.lane = LaneId::Security;
+        finding.rule = "Trigger <script>: require an explicit command".into();
+        finding.body = "The default launches paid work.".into();
+        finding.suggestion = Some("```\nsafer_default()".into());
+
+        let rendered = grouped_observation(&finding);
+
+        assert!(
+            rendered.contains("Additional `security` observation"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("Close &lt;details&gt; | \\*\\*now\\*\\*"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("Trigger &lt;script&gt;"), "{rendered}");
+        assert!(
+            rendered.contains("The default launches paid work."),
+            "{rendered}"
+        );
+        assert!(rendered.contains("reference only"), "{rendered}");
+        assert!(
+            rendered.contains("````\n```\nsafer_default()\n````"),
+            "{rendered}"
+        );
     }
 
     #[test]
@@ -761,11 +842,12 @@ mod cost_table_tests {
         // The rule used to sit inside backticks, which neutralised any markup
         // in it. Emphasising the head means it is rendered, so a stray tag
         // would escape into the page and mangle everything after it.
-        let rendered = rule_line("<script>x</script>: and <b>more</b>");
+        let rendered = rule_line("<script>**x**</script>: and <b>more</b>");
 
         assert!(!rendered.contains("<script>"), "{rendered}");
         assert!(!rendered.contains("<b>"), "{rendered}");
         assert!(rendered.contains("&lt;script&gt;"), "{rendered}");
+        assert!(rendered.contains("\\*\\*x\\*\\*"), "{rendered}");
     }
 
     #[test]

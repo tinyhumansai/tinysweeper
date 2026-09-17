@@ -207,10 +207,10 @@ it was also the reason a correct `medium/0.61` boundary bug reached nobody.
 
 ## Coverage pass
 
-`review.passes = 1` ships as the default, and every existing prompt is
-byte-identical whether it is set or not. Above one, `critique` and `security`
+`review.passes = 3` ships as the maximum adaptive depth. Small groups still
+take exactly one pass. For qualifying groups, `critique` and `security`
 each ask their group's first council reviewer — index `0`, never the whole
-council again — one more time after round one's own findings are placed
+council again — up to two more times after round one's own findings are placed
 (and, for `critique`, falsified), told plainly what it already found and
 asked to look for what a first pass misses. `lanes::coverage` builds that
 call; see its module doc for why anchoring the answer is left to the caller
@@ -234,9 +234,16 @@ Two things keep it from being a second council for every unit:
   anything else runs against it — `critique`'s falsify call included, which
   is why that call is free when a coverage pass finds nothing new.
 
-`review.passes = 3` runs two coverage passes, the second told about
-everything the first found in addition to round one's own list, and a pass
-that adds nothing new stops the loop rather than paying for the next one.
+At the default ceiling, the second coverage pass is told about everything the
+first found in addition to round one's own list. An empty, failed, malformed,
+entirely duplicate, unplaceable, or fully filtered pass stops the loop rather
+than paying for the next one.
+
+Each qualifying group emits one structured telemetry event after it stops.
+`passes_attempted` and `new_findings_per_pass` both begin with round one, then
+list every adaptive attempt. Token and cost fields are summed from the model
+responses made by that group rather than inferred from the lane-wide spend
+tally, which is shared by concurrently reviewed groups.
 `review.passes` is not in `config::remote::OVERRIDABLE_KEYS`: each pass above
 one is another model call per qualifying unit, and that is the operator's
 money, exactly like the per-pull-request budget in `[models]`.

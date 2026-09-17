@@ -184,6 +184,11 @@ impl LlmProvider for ModelCapability {
         Ok(json!({
             "json": response.value,
             "model": response.model,
+            // The cumulative tally above enforces the shared lane budget.
+            // Carrying this call's usage alongside its answer lets a single
+            // graph run report its own cost without differencing that shared
+            // tally while other file groups are running concurrently.
+            "usage": response.usage,
         }))
     }
 }

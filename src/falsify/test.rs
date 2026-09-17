@@ -34,6 +34,9 @@ fn finding(title: &str) -> Finding {
         applicable: None,
         late: false,
         identity: None,
+        aliases: vec![],
+        grouped: false,
+        review_pass: 1,
         corroboration: 1,
     }
 }
@@ -207,6 +210,9 @@ async fn a_finding_about_code_not_in_the_diff_survives() {
         applicable: None,
         late: false,
         identity: None,
+        aliases: vec![],
+        grouped: false,
+        review_pass: 1,
         corroboration: 1,
     };
 

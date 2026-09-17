@@ -88,6 +88,9 @@ mod tests {
             applicable: None,
             late: false,
             identity: None,
+            aliases: vec![],
+            grouped: false,
+            review_pass: 1,
             corroboration: 1,
         }
     }
