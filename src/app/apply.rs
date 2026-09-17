@@ -269,26 +269,28 @@ async fn publish_review_hub(
             .and_then(|state| state.hub_comment_id),
         None => None,
     };
+    // State is a lookup hint, not authority to edit an arbitrary comment.
+    // Re-discovery authenticates both the bot author and marker before any
+    // update; a stale or corrupted stored id can therefore never redirect the
+    // write onto somebody else's comment.
+    let discovered = discover_review_hub(read, &repo, proposal.number).await?;
     let existing = match remembered_id {
-        Some(id) => Some(id),
-        None => discover_review_hub(read, &repo, proposal.number).await?,
+        Some(id) if discovered == Some(id) => Some(id),
+        Some(id) => {
+            tracing::warn!(
+                comment_id = id,
+                "stored review-hub id was not authenticated; using discovery"
+            );
+            discovered
+        }
+        None => discovered,
     };
 
     let id = match existing {
-        Some(id) => match write.update_comment(&repo, id, &body).await {
-            Ok(()) => id,
-            Err(err) if remembered_id == Some(id) => {
-                tracing::warn!(%err, comment_id = id, "stored review-hub comment disappeared; discovering it again");
-                match discover_review_hub(read, &repo, proposal.number).await? {
-                    Some(discovered) => {
-                        write.update_comment(&repo, discovered, &body).await?;
-                        discovered
-                    }
-                    None => write.create_comment(&repo, proposal.number, &body).await?,
-                }
-            }
-            Err(err) => return Err(err),
-        },
+        Some(id) => {
+            write.update_comment(&repo, id, &body).await?;
+            id
+        }
         None => write.create_comment(&repo, proposal.number, &body).await?,
     };
     if let Some(store) = store
