@@ -221,7 +221,7 @@ This is recall, not verification — the opposite direction from
 the first one did. Asking the *same* reviewer to look again, told what it
 already said, is cheap enough to offer at all because it reuses round one's
 own prompt prefix, evidence and `flows::runner::ask_all` entry point for
-exactly one more call.
+each extra call.
 
 Two things keep it from being a second council for every unit:
 
@@ -241,9 +241,13 @@ than paying for the next one.
 
 Each qualifying group emits one structured telemetry event after it stops.
 `passes_attempted` and `new_findings_per_pass` both begin with round one, then
-list every adaptive attempt. Token and cost fields are summed from the model
-responses made by that group rather than inferred from the lane-wide spend
-tally, which is shared by concurrently reviewed groups.
+list every adaptive attempt; `stop_reason` distinguishes reaching the ceiling
+from an empty, failed, unplaceable, duplicate, or filtered response.
+`input_tokens`, `output_tokens`, `cached_tokens`, and `cost_usd` are summed from
+the model responses made by that group rather than inferred from the lane-wide
+spend tally, which is shared by concurrently reviewed groups.
+`model_elapsed_ms` is the accumulated model wait while `elapsed_ms` measures
+the whole adaptive sequence.
 `review.passes` is not in `config::remote::OVERRIDABLE_KEYS`: each pass above
 one is another model call per qualifying unit, and that is the operator's
 money, exactly like the per-pull-request budget in `[models]`.

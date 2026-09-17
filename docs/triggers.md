@@ -28,6 +28,9 @@ and `deleted` deliveries never start a model review. Supported comment changes
 are still re-read into memory, so a later `pull_request: synchronize` review can
 reconcile the conversation against changed code. A maintainer can deliberately
 request an unchanged-code rerun with an `@tinysweeper` issue comment.
+Operators can also deliberately queue a full review through
+`POST /admin/reviews/{owner}/{name}`; deferring inline replies does not change
+that route.
 
 ### What memory listens to
 

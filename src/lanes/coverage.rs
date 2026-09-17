@@ -2,21 +2,20 @@
 //!
 //! `review.passes = 3` ships as the maximum adaptive depth. Small groups still
 //! cost nothing beyond round one. Above one, a lane that already placed and
-//! falsified round one's
-//! findings for a group may ask the group's first council reviewer — index
-//! `0`, deterministically, never the whole council again — to look at the
-//! *same* evidence once more, this time told plainly what it already
-//! reported and asked to find what earlier passes missed. The sequence stops
-//! as soon as a pass contributes nothing distinct and surviving.
+//! filtered round one's findings for a group may repeatedly ask the group's
+//! first council reviewer — index `0`, deterministically, never the whole
+//! council again — to look at the *same* evidence, each time told plainly what
+//! earlier passes reported and asked to find what they missed. The sequence
+//! stops as soon as a pass contributes nothing distinct and surviving.
 //!
 //! This is not a second opinion. `src/falsify` already exists for "is this
 //! correct", and asking a fresh reviewer "did you miss anything" is the
 //! opposite direction: recall, not verification. What makes it cheap enough
 //! to offer at all is that it reuses everything round one already paid for —
 //! the same prompt prefix, the same evidence, the same [`runner::ask_all`]
-//! entry point a whole council would use — for exactly one more call, gated
-//! behind a per-group line count so a two-line diff never builds the second
-//! prompt.
+//! entry point a whole council would use — for one call per adaptive pass,
+//! gated behind a per-group line count so a two-line diff never builds the
+//! second prompt.
 //!
 //! Anchoring the findings this pass returns is deliberately left to the
 //! caller. `critique` resolves a quoted snippet through `Positioner`,
@@ -229,13 +228,13 @@ pub async fn coverage_pass(
     })
 }
 
-/// Render round one's surviving findings as the "already found" list this
-/// pass's prompt shows: title first, so a reviewer skimming the block can
-/// tell at a glance what not to repeat.
+/// Render all earlier surviving findings as the "already found" list this
+/// pass's prompt shows: title first, so a reviewer skimming the block can tell
+/// at a glance what not to repeat.
 ///
 /// One line per finding, deliberately terse — this is a reminder, not the
-/// finding restated in full. `line` reads `?` for a finding round one could
-/// not anchor, which is still worth naming so the second pass does not
+/// finding restated in full. `line` reads `?` for a finding an earlier pass
+/// could not anchor, which is still worth naming so the next pass does not
 /// rediscover it and get credit for a "new" finding that is the same one.
 pub fn confirmed_lines(findings: &[Finding]) -> Vec<String> {
     findings
