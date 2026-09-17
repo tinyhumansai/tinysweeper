@@ -220,6 +220,7 @@ async fn review_group(
     let config: &Config = input.config;
     let evidence = replay::render(group_diffs);
     let reviewers = council::reviewers(config, LaneId::Critique);
+    let redaction_note = redaction_note(&evidence);
 
     // Every reviewer at once, as one graph. `ask_all` returns one answer per
     // reviewer in the order asked, and reports a reviewer it could not reach
@@ -227,7 +228,15 @@ async fn review_group(
     let calls: Vec<Call> = reviewers
         .iter()
         .map(|reviewer| {
-            let built = build_prompt(input, changed_paths, group_paths, &evidence, reviewer);
+            let inputs = prompt_inputs(
+                input,
+                changed_paths,
+                group_paths,
+                &evidence,
+                reviewer,
+                &redaction_note,
+            );
+            let built = prompt::build(&inputs);
             Call {
                 id: reviewer.id.to_string(),
                 model: reviewer.model.to_string(),
@@ -341,19 +350,18 @@ async fn review_group(
         for pass_index in 1..config.review.passes {
             let reviewer = &reviewers[0];
             let confirmed_lines = crate::lanes::coverage::confirmed_lines(&confirmed);
-            let built = prompt::build(&PromptInputs {
-                repo_policy: input.repo_policy,
-                extracted_rules: input.extracted_rules,
-                prior_findings: input.prior_findings,
-                new_evidence: &evidence,
+            let base_inputs = prompt_inputs(
+                input,
                 changed_paths,
-                focus_paths: group_paths,
-                persona: reviewer.persona,
-                retrieved_context: input.retrieved_context,
-                memory_context: input.memory_context,
+                group_paths,
+                &evidence,
+                reviewer,
+                &redaction_note,
+            );
+            let built = prompt::build(&PromptInputs {
                 confirmed_this_round: &confirmed_lines,
                 coverage_pass: true,
-                ..PromptInputs::new(LaneId::Critique, config)
+                ..base_inputs
             });
 
             let coverage = match crate::lanes::coverage::coverage_pass(
@@ -493,7 +501,7 @@ async fn review_group(
 }
 
 /// Minimum changed lines a group needs before adaptive coverage passes
-/// (`review.passes > 1`) is worth its extra call.
+/// (`review.passes > 1`) are worth their extra calls.
 ///
 /// Not configurable: a repository that wants coverage passes at all is opting
 /// into the per-pass cost already, and a second dial here would only let it
@@ -521,43 +529,22 @@ struct Asked {
     discarded: usize,
 }
 
-/// Build one reviewer's prompt for one group.
+/// Build one reviewer's prompt inputs for one group.
 ///
-/// Split from [`place`] so every reviewer's prompt is assembled before any call
-/// is made: the graph asks them all at once, and a builder that ran inside the
-/// call would serialise them again.
-fn build_prompt<'a>(
+/// Round one and adaptive passes both start from this complete context, then
+/// adaptive review changes only its coverage-specific fields. Keeping the
+/// shared layers here prevents later passes from silently losing policy or
+/// evidence when a new prompt input is added.
+fn prompt_inputs<'a>(
     input: &'a LaneInput<'_>,
     changed_paths: &'a [String],
     group_paths: &'a [String],
     evidence: &'a str,
     reviewer: &council::Reviewer<'_>,
-) -> prompt::Prompt {
+    redaction_note: &'a str,
+) -> PromptInputs<'a> {
     let config: &Config = input.config;
-    // Critique prompts see only this group's rendered diffs.  Derive the
-    // note from that rendered evidence so a clean group is never told about
-    // a credential removed from a different group's file.
-    // Only markers with the complete format emitted by `scan::redact` count.
-    // Diff text is untrusted and may contain the prefix literally.
-    let redacted = evidence
-        .split("<redacted, ")
-        .skip(1)
-        .filter(|suffix| {
-            suffix.split_once(" chars>").is_some_and(|(count, _)| {
-                !count.is_empty() && count.bytes().all(|b| b.is_ascii_digit())
-            })
-        })
-        .count();
-    let redaction_note = if redacted == 0 {
-        "".to_string()
-    } else {
-        let value = if redacted == 1 { "value" } else { "values" };
-        format!(
-            "{redacted} credential {value} were removed from this diff before you saw it and appear as `<redacted, N chars>`; the lines are real, only the values are gone — never ask for or guess them."
-        )
-    };
-
-    prompt::build(&PromptInputs {
+    PromptInputs {
         repo_policy: input.repo_policy,
         extracted_rules: input.extracted_rules,
         prior_findings: input.prior_findings,
@@ -573,9 +560,34 @@ fn build_prompt<'a>(
         persona: reviewer.persona,
         retrieved_context: input.retrieved_context,
         memory_context: input.memory_context,
-        redaction_note: &redaction_note,
+        redaction_note,
         ..PromptInputs::new(LaneId::Critique, config)
-    })
+    }
+}
+
+/// Explain the redaction markers present in one group's rendered evidence.
+fn redaction_note(evidence: &str) -> String {
+    // Critique prompts see only this group's rendered diffs. Derive the note
+    // from that evidence so a clean group is never told about a credential
+    // removed from a different group's file. Only complete markers emitted by
+    // `scan::redact` count; diff text may contain the prefix literally.
+    let redacted = evidence
+        .split("<redacted, ")
+        .skip(1)
+        .filter(|suffix| {
+            suffix.split_once(" chars>").is_some_and(|(count, _)| {
+                !count.is_empty() && count.bytes().all(|b| b.is_ascii_digit())
+            })
+        })
+        .count();
+    if redacted == 0 {
+        "".to_string()
+    } else {
+        let value = if redacted == 1 { "value" } else { "values" };
+        format!(
+            "{redacted} credential {value} were removed from this diff before you saw it and appear as `<redacted, N chars>`; the lines are real, only the values are gone — never ask for or guess them."
+        )
+    }
 }
 
 /// Place what one reviewer said against the group file it names.
@@ -790,7 +802,7 @@ fn plural(count: usize) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::types::{Config, Severity};
+    use crate::config::types::{Config, PathInstruction, Severity};
     use crate::evidence::diff::parse_file_patch;
     use crate::forge::types::CheckConclusion;
     use crate::forge::types::PullRequest;
@@ -1134,6 +1146,58 @@ fn helper() {
             .join("\n");
         assert!(coverage_request.contains("## What you already found"));
         assert!(coverage_request.contains("Guard the first index"));
+    }
+
+    #[tokio::test]
+    async fn adaptive_requests_keep_path_rules_and_redaction_guidance() {
+        let mut config = config_with_passes(2);
+        config.path_instructions = vec![
+            PathInstruction {
+                glob: "src/large.rs".into(),
+                instructions: "Check every index against the collection length.".into(),
+                rules: None,
+                lanes: vec![LaneId::Critique],
+                merge: false,
+            },
+            PathInstruction {
+                glob: "docs/**".into(),
+                instructions: "This unrelated rule must stay out of the request.".into(),
+                rules: None,
+                lanes: vec![LaneId::Critique],
+                merge: false,
+            },
+        ];
+        let patch = large_patch().replace(
+            "+    let x0 = 0;",
+            "+    let x0 = \"<redacted, 12 chars>\";",
+        );
+        let diffs = vec![parse_file_patch("src/large.rs", &patch)];
+        let model = MockModel::new()
+            .then(json!({"summary": "Nothing to report.", "findings": []}))
+            .then(json!({"summary": "Nothing further.", "findings": []}));
+        let handle = model.clone();
+
+        run_with(model, &config, &diffs).await;
+
+        let requests = handle.requests();
+        assert_eq!(requests.len(), 2);
+        for request in &requests {
+            let prompt = request
+                .messages
+                .iter()
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                prompt.contains("Check every index against the collection length."),
+                "{prompt}"
+            );
+            assert!(
+                !prompt.contains("This unrelated rule must stay out of the request."),
+                "{prompt}"
+            );
+            assert!(prompt.contains("never ask for or guess them"), "{prompt}");
+        }
     }
 
     #[tokio::test]

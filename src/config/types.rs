@@ -285,7 +285,11 @@ pub struct Review {
     /// Drop findings the model is less sure about than this. Overrides what
     /// `strictness` would choose.
     pub confidence_min: Option<f64>,
-    /// Hard cap on posted comments per pull request.
+    /// Hard cap on published finding threads per pull request.
+    ///
+    /// Co-located observations share one thread and therefore count once;
+    /// grouping preserves every observation inside that thread before this
+    /// cap is applied.
     pub max_comments: usize,
     /// Most files one pull request may change before review is refused.
     ///

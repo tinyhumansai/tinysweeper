@@ -128,15 +128,14 @@ pub struct PromptInputs<'a> {
     pub reviewed_evidence: &'a str,
     /// Titles of findings raised on earlier cycles.
     pub prior_findings: &'a [String],
-    /// This unit's own surviving findings from round one, for the opt-in
+    /// This unit's own surviving findings from earlier passes, for an adaptive
     /// coverage pass (`lanes::coverage`).
     ///
-    /// **Volatile**, and empty on every call except the one extra call a
-    /// coverage pass makes: a lane that never runs one leaves this `&[]`,
-    /// which is what keeps every existing prompt byte-identical. Distinct
+    /// **Volatile**, and empty on round one: a lane that never runs an adaptive
+    /// pass leaves this `&[]`, which keeps its prompt byte-identical. Distinct
     /// from [`Self::prior_findings`] — that layer is what an earlier *push*
-    /// found, this one is what the *same* reviewer already said about the
-    /// *same* evidence, one call ago in this run.
+    /// found, this one is the cumulative list the *same* reviewer already said
+    /// about the *same* evidence during this run.
     ///
     /// Whether the "what you already found" layer renders at all is decided
     /// by [`Self::coverage_pass`], not by whether this list is empty — a
@@ -144,11 +143,10 @@ pub struct PromptInputs<'a> {
     /// second-pass instruction, or the coverage call is byte-identical to
     /// round one and pays for a duplicate answer instead of a deeper look.
     pub confirmed_this_round: &'a [String],
-    /// Whether this prompt is the opt-in coverage pass's own call, rather
-    /// than round one.
+    /// Whether this prompt is an adaptive coverage call rather than round one.
     ///
-    /// `false` on every call except the one extra call a coverage pass
-    /// makes, which is what keeps every existing prompt byte-identical — see
+    /// `false` on round one and on lanes without adaptive passes, which is what
+    /// keeps every existing prompt byte-identical — see
     /// `an_empty_confirmed_list_leaves_the_prompt_byte_identical`. Kept
     /// separate from [`Self::confirmed_this_round`] being empty, because
     /// "round one found nothing" and "this is not a coverage call at all"
@@ -352,14 +350,14 @@ pub fn build(inputs: &PromptInputs<'_>) -> Prompt {
     }
 
     // Layer 5a — what this same reviewer already found in this unit, for the
-    // opt-in coverage pass (`lanes::coverage`). Gated on `coverage_pass`
+    // adaptive coverage passes (`lanes::coverage`). Gated on `coverage_pass`
     // itself, not on whether the confirmed list is empty: a group whose
     // first pass found nothing to report is exactly the common case this
     // pass exists for, and it still needs telling that this is a second
-    // look, not a repeat of the first question. `false` on every call except
-    // the one extra call a coverage pass makes, which is what keeps every
-    // other prompt in this crate byte-identical to before this layer
-    // existed — see `an_empty_confirmed_list_leaves_the_prompt_byte_identical`.
+    // look, not a repeat of the first question. `false` on round one and every
+    // non-adaptive call, which keeps those prompts byte-identical to before
+    // this layer existed — see
+    // `an_empty_confirmed_list_leaves_the_prompt_byte_identical`.
     if inputs.coverage_pass {
         suffix.push_str(
             "\n## What you already found\n\n\

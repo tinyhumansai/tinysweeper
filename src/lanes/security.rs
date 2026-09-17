@@ -262,7 +262,7 @@ async fn review_group(
     let evidence = render_diffs(group_diffs);
     let scanner_evidence = render_scanner(scanner, group_paths);
 
-    let built = prompt::build(&PromptInputs {
+    let base_inputs = PromptInputs {
         repo_policy,
         extracted_rules,
         prior_findings,
@@ -274,7 +274,8 @@ async fn review_group(
         memory_context,
         redaction_note,
         ..PromptInputs::new(LaneId::Security, config)
-    });
+    };
+    let built = prompt::build(&base_inputs);
 
     // Every reviewer at once, as one graph. With no council configured this is
     // the single default reviewer on the lane's own model, so a solo run and a
@@ -343,17 +344,9 @@ async fn review_group(
             let reviewer = &reviewers[0];
             let confirmed_lines = crate::lanes::coverage::confirmed_lines(&confirmed);
             let built = prompt::build(&PromptInputs {
-                repo_policy,
-                extracted_rules,
-                prior_findings,
-                new_evidence: &evidence,
-                focus_paths: group_paths,
-                scanner_evidence: &scanner_evidence,
-                retrieved_context,
-                memory_context,
                 confirmed_this_round: &confirmed_lines,
                 coverage_pass: true,
-                ..PromptInputs::new(LaneId::Security, config)
+                ..base_inputs.clone()
             });
 
             let coverage = match crate::lanes::coverage::coverage_pass(
@@ -577,7 +570,7 @@ pub(crate) fn merge_scanner_findings(outcome: &mut LaneOutcome, scanner: &[&Scan
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::types::{Config, Severity};
+    use crate::config::types::{Config, PathInstruction, Severity};
     use crate::evidence::diff::parse_file_patch;
     use crate::forge::types::PullRequest;
     use crate::harness::mock::MockModel;
@@ -625,6 +618,17 @@ mod tests {
         scan_findings: &[ScanFinding],
         reviewed_evidence: &str,
     ) -> LaneOutcome {
+        run_with_context(model, config, diffs, scan_findings, reviewed_evidence, "").await
+    }
+
+    async fn run_with_context(
+        model: MockModel,
+        config: &Config,
+        diffs: &[FileDiff],
+        scan_findings: &[ScanFinding],
+        reviewed_evidence: &str,
+        redaction_note: &str,
+    ) -> LaneOutcome {
         let pr = pull_request();
         Security::new(Arc::new(model))
             .run(LaneInput {
@@ -640,7 +644,7 @@ mod tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
-                redaction_note: "",
+                redaction_note,
                 e2e: None,
                 tree: None,
                 graph: None,
@@ -732,6 +736,54 @@ mod tests {
             .join("\n");
         assert!(coverage_request.contains("## What you already found"));
         assert!(coverage_request.contains("Guard the first index"));
+    }
+
+    #[tokio::test]
+    async fn adaptive_requests_keep_path_rules_and_redaction_guidance() {
+        let mut config = config_with_passes(2);
+        config.path_instructions = vec![
+            PathInstruction {
+                glob: "src/large.rs".into(),
+                instructions: "Treat request-derived shell arguments as tainted.".into(),
+                rules: None,
+                lanes: vec![LaneId::Security],
+                merge: false,
+            },
+            PathInstruction {
+                glob: "docs/**".into(),
+                instructions: "This unrelated rule must stay out of the request.".into(),
+                rules: None,
+                lanes: vec![LaneId::Security],
+                merge: false,
+            },
+        ];
+        let model = MockModel::new()
+            .then(json!({"summary": "Nothing to report.", "findings": []}))
+            .then(json!({"summary": "Nothing further.", "findings": []}));
+        let handle = model.clone();
+        let redaction_note = "1 credential value was removed; never ask for or guess it.";
+
+        run_with_context(model, &config, &large_diffs(), &[], "", redaction_note).await;
+
+        let requests = handle.requests();
+        assert_eq!(requests.len(), 2);
+        for request in &requests {
+            let prompt = request
+                .messages
+                .iter()
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                prompt.contains("Treat request-derived shell arguments as tainted."),
+                "{prompt}"
+            );
+            assert!(
+                !prompt.contains("This unrelated rule must stay out of the request."),
+                "{prompt}"
+            );
+            assert!(prompt.contains(redaction_note), "{prompt}");
+        }
     }
 
     #[tokio::test]

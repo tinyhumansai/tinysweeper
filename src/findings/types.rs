@@ -147,7 +147,7 @@ impl Finding {
     /// for one defect and the comment is posted twice. Cross-push dedupe
     /// therefore treats a fingerprint match as *sufficient* but not necessary,
     /// and falls back to where the last comment was —
-    /// [`PriorReview::covers`](crate::findings::prior::PriorReview::covers).
+    /// [`PriorReview::covers_anchor`](crate::findings::prior::PriorReview::covers_anchor).
     /// The field stays in the hash because removing it would collapse two
     /// genuinely different findings on one line into one identity, which the
     /// anchor check already handles more cheaply.
