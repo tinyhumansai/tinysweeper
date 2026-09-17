@@ -26,7 +26,13 @@ struct Generated {
     #[serde(default)]
     tests: Vec<TestCoverage>,
     #[serde(default)]
-    positive_observations: BTreeMap<LaneId, Vec<String>>,
+    positive_observations: BTreeMap<LaneId, Vec<GeneratedObservation>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeneratedObservation {
+    observation: String,
+    citations: Vec<String>,
 }
 
 /// Generate only narrative fields; all verdict-bearing fields are rendered from the proposal.
@@ -53,8 +59,13 @@ pub async fn generate(
         })
         .collect();
     let symbols: BTreeSet<String> = symbols_by_path
-        .values()
-        .flat_map(|symbols| symbols.iter().cloned())
+        .iter()
+        .flat_map(|(path, symbols)| {
+            symbols
+                .iter()
+                .map(|symbol| format!("{path}#{symbol}"))
+                .collect::<Vec<_>>()
+        })
         .collect();
     let evidence = json!({
         "pull_request": {"title": pull_request.title, "head": pull_request.head_sha},
@@ -131,8 +142,7 @@ pub async fn generate(
         return (summary, spend, transcript);
     };
 
-    let supported =
-        |citations: &[String]| citations_supported(citations, &paths, &symbols, &symbols_by_path);
+    let supported = |citations: &[String]| citations_supported(citations, &paths, &symbols_by_path);
     generated
         .features
         .retain(|feature| supported(&feature.citations));
@@ -163,7 +173,8 @@ pub async fn generate(
         .filter_map(|(lane, observations)| {
             let observations: Vec<_> = observations
                 .into_iter()
-                .filter_map(|observation| validated_narrative(&observation))
+                .filter(|observation| supported(&observation.citations))
+                .filter_map(|observation| validated_narrative(&observation.observation))
                 .collect();
             (!observations.is_empty()).then_some((lane, observations))
         })
@@ -241,12 +252,11 @@ fn claims_execution(text: &str) -> bool {
 fn citations_supported(
     citations: &[String],
     paths: &BTreeSet<String>,
-    symbols: &BTreeSet<String>,
     symbols_by_path: &BTreeMap<String, BTreeSet<String>>,
 ) -> bool {
     !citations.is_empty()
         && citations.iter().all(|citation| {
-            if paths.contains(citation) || symbols.contains(citation) {
+            if paths.contains(citation) {
                 return true;
             }
             let Some((path, symbol)) = citation.split_once('#') else {
@@ -292,7 +302,11 @@ fn schema() -> serde_json::Value {
             "kind":{"type":"string"},"behavior":{"type":"string"},"assessment":{"type":"string"},
             "citations":{"type":"array","items":{"type":"string"}}
           }}},
-        "positive_observations":{"type":"object","additionalProperties":{"type":"array","items":{"type":"string"}}}
+        "positive_observations":{"type":"object","additionalProperties":{"type":"array","items":{
+          "type":"object","additionalProperties":false,"required":["observation","citations"],"properties":{
+            "observation":{"type":"string"},"citations":{"type":"array","items":{"type":"string"}}
+          }
+        }}}
       }
     })
 }
@@ -307,7 +321,6 @@ mod tests {
     #[test]
     fn citations_require_an_exact_path_symbol_pair() {
         let paths = BTreeSet::from(["src/lib.rs".to_string()]);
-        let symbols = BTreeSet::from(["pub fn review()".to_string()]);
         let by_path = BTreeMap::from([(
             "src/lib.rs".to_string(),
             BTreeSet::from(["pub fn review()".to_string()]),
@@ -316,13 +329,16 @@ mod tests {
         assert!(citations_supported(
             &["src/lib.rs#pub fn review()".into()],
             &paths,
-            &symbols,
             &by_path
         ));
         assert!(!citations_supported(
             &["src/lib.rs#nonexistent".into()],
             &paths,
-            &symbols,
+            &by_path
+        ));
+        assert!(!citations_supported(
+            &["pub fn review()".into()],
+            &paths,
             &by_path
         ));
     }
@@ -345,7 +361,11 @@ mod tests {
             "features": [],
             "tests": [],
             "positive_observations": {
-                "critique": ["Tests passed", "The update path is explicit."]
+                "critique": [
+                    {"observation": "Tests passed", "citations": ["src/lib.rs"]},
+                    {"observation": "The update path is explicit.", "citations": ["src/lib.rs"]},
+                    {"observation": "Unsupported.", "citations": ["missing.rs"]}
+                ]
             }
         }));
         let mut config = Config::default();
@@ -367,9 +387,21 @@ mod tests {
             head_sha: "new".into(),
             ..PullRequest::default()
         };
+        let diffs = [FileDiff {
+            path: "src/lib.rs".into(),
+            ..FileDiff::default()
+        }];
 
-        let (summary, _, transcript) =
-            generate(&model, &config, &pull_request, &[], &[], Some(&prior), &[]).await;
+        let (summary, _, transcript) = generate(
+            &model,
+            &config,
+            &pull_request,
+            &diffs,
+            &[],
+            Some(&prior),
+            &[],
+        )
+        .await;
 
         assert_eq!(
             summary.positive_observations[&LaneId::Critique],
