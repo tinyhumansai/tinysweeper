@@ -1527,6 +1527,10 @@ struct ReviewStatus {
     check_id: u64,
     head_sha: String,
     installation: u64,
+    /// Durable review-hub comment opened alongside the status check.
+    hub_comment_id: Option<u64>,
+    /// Last completed body, retained if this pass fails.
+    prior_hub_body: Option<String>,
 }
 
 /// Where a review's in-progress check lives between opening and concluding.
@@ -1683,6 +1687,8 @@ async fn open_status(
                 check_id,
                 head_sha: head_sha.to_string(),
                 installation,
+                hub_comment_id: None,
+                prior_hub_body: None,
             });
 
             // `conclude_in_flight`'s snapshot only concludes slots it can see
@@ -1731,12 +1737,29 @@ async fn close_status(state: &AppState, slot: &StatusSlot, conclusion: Conclusio
         Conclusion::Failed(err) => failure::check_run(&open.head_sha, err),
     };
 
+    let hub_body = match conclusion {
+        Conclusion::Reviewed(_) => None,
+        Conclusion::NotReviewed => Some(crate::summary::failed(
+            &open.head_sha,
+            "This pass stopped before a review could be completed.",
+            open.prior_hub_body.as_deref(),
+        )),
+        Conclusion::Failed(err) => Some(crate::summary::failed(
+            &open.head_sha,
+            &err.to_string(),
+            open.prior_hub_body.as_deref(),
+        )),
+    };
+
     let written = async {
         use crate::ports::forge::ForgeWrite;
         let token = state.auth.installation_token(open.installation).await?;
-        crate::forge::github::GitHubWrite::new(&token)?
-            .update_check(&open.repo, open.check_id, check)
-            .await
+        let write = crate::forge::github::GitHubWrite::new(&token)?;
+        write.update_check(&open.repo, open.check_id, check).await?;
+        if let (Some(comment_id), Some(body)) = (open.hub_comment_id, hub_body) {
+            write.update_comment(&open.repo, comment_id, &body).await?;
+        }
+        Ok::<(), Error>(())
     }
     .await;
 
@@ -1748,6 +1771,86 @@ async fn close_status(state: &AppState, slot: &StatusSlot, conclusion: Conclusio
             %err, repo = %open.repo, check_id = open.check_id,
             "could not conclude the in-progress check; it will block auto-merge until the next push"
         );
+    }
+}
+
+/// Create or migrate the durable hub before the first model call.
+async fn open_review_hub(
+    state: &AppState,
+    slot: &StatusSlot,
+    read: &dyn crate::ports::forge::ForgeRead,
+    config: &Config,
+    repo: &RepoId,
+    number: u64,
+    head_sha: &str,
+    installation: u64,
+) {
+    if !config.summary.enabled
+        || slot
+            .lock()
+            .expect("status slot")
+            .as_ref()
+            .is_some_and(|open| open.hub_comment_id.is_some())
+    {
+        return;
+    }
+    let existing =
+        match crate::findings::prior::own_comment(read, repo, number, crate::summary::MARKER).await
+        {
+            Ok(Some(comment)) => Some(comment),
+            Ok(None) => crate::findings::prior::own_comment(
+                read,
+                repo,
+                number,
+                crate::summary::LEGACY_MARKER,
+            )
+            .await
+            .ok()
+            .flatten(),
+            Err(err) => {
+                tracing::warn!(%err, "could not discover the review hub");
+                None
+            }
+        };
+    let prior = existing.as_ref().map(|comment| comment.body.clone());
+    let body = crate::summary::in_progress(head_sha, prior.as_deref());
+    let written = async {
+        use crate::ports::forge::ForgeWrite;
+        let token = state.auth.installation_token(installation).await?;
+        let write = crate::forge::github::GitHubWrite::new(&token)?;
+        match existing.and_then(|comment| comment.id) {
+            Some(id) => {
+                write.update_comment(repo, id, &body).await?;
+                Ok(id)
+            }
+            None => write.create_comment(repo, number, &body).await,
+        }
+    }
+    .await;
+    match written {
+        Ok(id) => {
+            if let Some(open) = slot.lock().expect("status slot").as_mut() {
+                open.hub_comment_id = Some(id);
+                open.prior_hub_body = prior;
+            }
+            let key = crate::state::key(&repo.to_string(), number);
+            if let Ok(current) =
+                crate::ports::review_state::ReviewStateStore::load_state(&state.store, &key).await
+            {
+                let mut current = current.unwrap_or_default();
+                current.hub_comment_id = Some(id);
+                if let Err(err) = crate::ports::review_state::ReviewStateStore::save_state(
+                    &state.store,
+                    &key,
+                    &current,
+                )
+                .await
+                {
+                    tracing::warn!(%err, "could not persist the review-hub comment id");
+                }
+            }
+        }
+        Err(err) => tracing::warn!(%err, "could not publish the in-progress review hub"),
     }
 }
 
@@ -2098,6 +2201,20 @@ async fn review_inner(
         if let Some(source) = &overlay.source {
             tracing::info!(%repo, source, "reviewing under the repository's own configuration");
         }
+
+        // The lease is owned and repository policy is known. Publish the hub
+        // now, before any model call, so it stays an early timeline reference.
+        open_review_hub(
+            state,
+            &run.slot,
+            &forge,
+            &overlay.config,
+            &repo_id,
+            number,
+            &pull_request.head_sha,
+            installation,
+        )
+        .await;
 
         // Memory is fed from the *base* tip, not the head: what the
         // repository has committed to, not what this pull request proposes.

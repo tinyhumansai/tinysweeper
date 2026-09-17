@@ -156,6 +156,8 @@ mod tests {
 
     fn proposal(highest: Option<Severity>) -> Proposal {
         Proposal {
+            summary: None,
+            prior_findings: vec![],
             overview: None,
             threads: Default::default(),
             version: 1,

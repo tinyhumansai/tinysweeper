@@ -2006,6 +2006,8 @@ mod tests {
     #[cfg(feature = "github")]
     fn proposal_for(repo: &str, number: u64) -> tinysweeper::app::Proposal {
         tinysweeper::app::Proposal {
+            summary: None,
+            prior_findings: vec![],
             overview: None,
             unreviewed: vec![],
             skipped: None,
