@@ -14,7 +14,7 @@
 use async_trait::async_trait;
 
 use crate::automerge::policy::MergeApproved;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::forge::types::{
     ChangedFile, CheckRun, CheckStatus, Commit, Issue, IssueComment, PullRequest,
     PullRequestContext, Remark, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict,
@@ -240,6 +240,39 @@ pub trait ForgeRead: Send + Sync {
     /// Default-implemented in terms of the calls above so an adapter only has
     /// to override it when the forge offers something cheaper.
     async fn pull_request_context(&self, repo: &RepoId, number: u64) -> Result<PullRequestContext> {
+        self.pull_request_context_bounded(repo, number, usize::MAX, u64::MAX)
+            .await
+    }
+
+    /// Fetch a pull request context only when its changed-file input is within
+    /// both review resource ceilings.
+    ///
+    /// The pull request and its file summaries are deliberately fetched
+    /// first. A refusal therefore happens before the per-commit patch calls,
+    /// comments, repository tree reads, or any model-facing work that the
+    /// application performs after this boundary.
+    async fn pull_request_context_bounded(
+        &self,
+        repo: &RepoId,
+        number: u64,
+        max_files: usize,
+        max_lines: u64,
+    ) -> Result<PullRequestContext> {
+        let pull_request = self.pull_request(repo, number).await?;
+        let files = self.changed_files(repo, number).await?;
+        let changed_lines = files.iter().fold(0_u64, |total, file| {
+            total.saturating_add(file.additions.saturating_add(file.deletions))
+        });
+
+        if files.len() > max_files || changed_lines > max_lines {
+            return Err(Error::ReviewLimit {
+                changed_files: files.len(),
+                max_files,
+                changed_lines,
+                max_lines,
+            });
+        }
+
         let mut commits = self.commits(repo, number).await?;
 
         // One request per commit, so the count is capped rather than left to
@@ -251,8 +284,8 @@ pub trait ForgeRead: Send + Sync {
         }
 
         Ok(PullRequestContext {
-            pull_request: self.pull_request(repo, number).await?,
-            files: self.changed_files(repo, number).await?,
+            pull_request,
+            files,
             commits,
             comments: self.comments(repo, number).await?,
             checks: Default::default(),

@@ -18,6 +18,12 @@ lanes = ["critique", "security", "tests", "commits", "description", "e2e"]
 # overrode them — which is exactly the bug this replaced.
 strictness = 2
 max_comments = 20
+# Resource ceilings, checked before commit patches or model calls. These are
+# intentionally generous: ordinary large pull requests still run, while a
+# generated-code dump or repository-scale rewrite cannot consume an unbounded
+# context window. Changed lines means additions plus deletions.
+max_changed_files = 500
+max_changed_lines = 50000
 # A finding below the posting gate but at least `medium` and at least this
 # confident is still named in the check-run summary — no comment, no block.
 # Silence is the wrong shape for a boundary bug the model was two-thirds sure

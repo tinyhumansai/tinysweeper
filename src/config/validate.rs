@@ -126,6 +126,20 @@ fn validate_review(config: &Config, problems: &mut Vec<String>) {
         );
     }
 
+    if review.max_changed_files == 0 {
+        problems.push(
+            "`review.max_changed_files = 0` would refuse every non-empty pull request; set it above zero"
+                .into(),
+        );
+    }
+
+    if review.max_changed_lines == 0 {
+        problems.push(
+            "`review.max_changed_lines = 0` would refuse every pull request that changes code; set it above zero"
+                .into(),
+        );
+    }
+
     if !(1..=3).contains(&review.passes) {
         problems.push(format!(
             "`review.passes = {}` is out of range; expected 1 (round one only), 2 or 3",
