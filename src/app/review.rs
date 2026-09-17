@@ -583,11 +583,9 @@ pub async fn review_with_tree(
     // scratch, which is the setting for anyone who would rather have duplicate
     // comments than a suppressed one.
     let state_key = crate::state::key(&repo.to_string(), number);
+    let stored = load_remembered(store, &state_key).await;
     let (prior, remembered) = if config.review.incremental {
-        (
-            load_prior(forge, repo, number).await,
-            load_remembered(store, &state_key).await,
-        )
+        (load_prior(forge, repo, number).await, stored.clone())
     } else {
         (PriorReview::default(), None)
     };
@@ -936,8 +934,8 @@ pub async fn review_with_tree(
                 &context.pull_request,
                 &diffs,
                 &lanes,
-                remembered.as_ref().and_then(|state| state.summary.as_ref()),
-                remembered
+                stored.as_ref().and_then(|state| state.summary.as_ref()),
+                stored
                     .as_ref()
                     .map(|state| state.summary_transcript.as_slice())
                     .unwrap_or_default(),
@@ -984,7 +982,7 @@ pub async fn review_with_tree(
                 titles: next_titles,
                 e2e,
                 summary: summary.clone(),
-                hub_comment_id: remembered.as_ref().and_then(|state| state.hub_comment_id),
+                hub_comment_id: stored.as_ref().and_then(|state| state.hub_comment_id),
                 summary_transcript: summary_transcript.clone(),
             };
             if let Err(err) = store.save_state(&state_key, &next).await {
@@ -1002,7 +1000,7 @@ pub async fn review_with_tree(
                 head_sha: context.pull_request.head_sha.clone(),
                 e2e,
                 summary: summary.clone(),
-                hub_comment_id: remembered.as_ref().and_then(|state| state.hub_comment_id),
+                hub_comment_id: stored.as_ref().and_then(|state| state.hub_comment_id),
                 summary_transcript: summary_transcript.clone(),
                 ..ReviewedState::default()
             };

@@ -1807,18 +1807,26 @@ async fn open_review_hub(
         match crate::findings::prior::own_comment(read, repo, number, crate::summary::MARKER).await
         {
             Ok(Some(comment)) => Some(comment),
-            Ok(None) => crate::findings::prior::own_comment(
+            Ok(None) => match crate::findings::prior::own_comment(
                 read,
                 repo,
                 number,
                 crate::summary::LEGACY_MARKER,
             )
             .await
-            .ok()
-            .flatten(),
+            {
+                Ok(comment) => comment,
+                Err(err) => {
+                    tracing::warn!(%err, "could not discover the legacy review hub");
+                    return;
+                }
+            },
             Err(err) => {
                 tracing::warn!(%err, "could not discover the review hub");
-                None
+                // Unknown is not absence. Creating after a transient list
+                // failure would orphan the durable hub and duplicate it on
+                // every similarly affected pass.
+                return;
             }
         };
     let prior = existing.as_ref().map(|comment| comment.body.clone());

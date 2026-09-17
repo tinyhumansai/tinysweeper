@@ -209,7 +209,15 @@ fn carried_findings(out: &mut String, proposal: &Proposal) {
 
 fn findings(out: &mut String, proposal: &Proposal) {
     out.push_str("\n## Findings\n\n");
-    if proposal.findings().next().is_none() {
+    let current_titles: std::collections::BTreeSet<&str> = proposal
+        .findings()
+        .map(|finding| finding.title.as_str())
+        .collect();
+    let has_carried = proposal
+        .prior_findings
+        .iter()
+        .any(|title| !current_titles.contains(title.as_str()));
+    if proposal.findings().next().is_none() && !has_carried {
         out.push_str("No active actionable findings.\n");
     }
     for lane in &proposal.lanes {
@@ -507,6 +515,7 @@ fn trustworthy_report(body: &str) -> Option<&str> {
     if body.contains(MARKER)
         && body.contains("**Reviewed head:**")
         && !body.contains("**Reviewing `")
+        && !body.contains("**Review failed for `")
     {
         Some(body)
     } else {
@@ -544,6 +553,15 @@ mod tests {
     }
 
     #[test]
+    fn progress_does_not_recursively_retain_a_failure_wrapper() {
+        let completed = format!("{MARKER}\n\n**Reviewed head:** `abc`");
+        let failure = failed("def", "network error", Some(&completed));
+
+        assert!(failure.contains("Last completed report"));
+        assert!(!in_progress("ghi", Some(&failure)).contains("Previous completed report"));
+    }
+
+    #[test]
     fn render_escapes_model_and_contributor_controlled_markdown() {
         let proposal = proposal(
             ReviewSummary {
@@ -577,6 +595,7 @@ mod tests {
         assert!(rendered.contains("## Findings"));
         assert!(rendered.contains("Previously reported and still active"));
         assert!(rendered.contains("Earlier active finding"));
+        assert!(!rendered.contains("No active actionable findings"));
         assert!(!rendered.contains("## Tests"));
     }
 }

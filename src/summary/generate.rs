@@ -106,6 +106,17 @@ pub async fn generate(
         updated_at_epoch: now_epoch(),
         ..ReviewSummary::default()
     };
+    summary.history = prior.map(|prior| prior.history.clone()).unwrap_or_default();
+    summary.history.push(ReviewPass {
+        head_sha: pull_request.head_sha.clone(),
+        state: state(lanes).into(),
+        summary: history_summary(lanes),
+        reviewed_at_epoch: summary.updated_at_epoch,
+    });
+    if summary.history.len() > config.summary.history_entries {
+        let drain = summary.history.len() - config.summary.history_entries;
+        summary.history.drain(..drain);
+    }
     let response = match model.complete(request).await {
         Ok(response) => response,
         Err(err) => {
@@ -157,17 +168,6 @@ pub async fn generate(
             (!observations.is_empty()).then_some((lane, observations))
         })
         .collect();
-    summary.history = prior.map(|prior| prior.history.clone()).unwrap_or_default();
-    summary.history.push(ReviewPass {
-        head_sha: pull_request.head_sha.clone(),
-        state: state(lanes).into(),
-        summary: history_summary(lanes),
-        reviewed_at_epoch: summary.updated_at_epoch,
-    });
-    if summary.history.len() > config.summary.history_entries {
-        let drain = summary.history.len() - config.summary.history_entries;
-        summary.history.drain(..drain);
-    }
     transcript.push(SummaryTranscriptTurn {
         head_sha: pull_request.head_sha.clone(),
         evidence: current_evidence,
@@ -389,6 +389,13 @@ mod tests {
     #[tokio::test]
     async fn model_failure_uses_the_deterministic_fallback() {
         let model = MockModel::new().then_error("offline");
+        let prior = ReviewSummary {
+            history: vec![ReviewPass {
+                head_sha: "old".into(),
+                ..ReviewPass::default()
+            }],
+            ..ReviewSummary::default()
+        };
         let prior_transcript = vec![SummaryTranscriptTurn {
             head_sha: "old".into(),
             evidence: "evidence".into(),
@@ -401,12 +408,14 @@ mod tests {
             &PullRequest::default(),
             &[],
             &[],
-            None,
+            Some(&prior),
             &prior_transcript,
         )
         .await;
 
         assert!(summary.executive_summary.contains("0 active actionable"));
+        assert_eq!(summary.history.len(), 2);
+        assert_eq!(summary.history[0].head_sha, "old");
         assert_eq!(spend, Spend::default());
         assert_eq!(transcript, prior_transcript);
     }
