@@ -71,7 +71,7 @@ pub fn parse_as(file: &SourceFile, language: Language) -> Result<ParsedFile> {
         let mut name_node: Option<Node> = None;
         let mut decl: Option<(Node, &str)> = None;
 
-        for capture in m.captures {
+        for capture in m.captures() {
             let capture_name = &query.capture_names()[capture.index as usize];
             match *capture_name {
                 lang::CAP_NAME => name_node = Some(capture.node),
