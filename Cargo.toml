@@ -71,7 +71,7 @@ tinyinference = { git = "https://github.com/tinyhumansai/tinyagents.git", rev = 
 # the offline default build. Every outside-world call it makes goes through a
 # capability trait this crate implements in `src/flows/caps.rs`, so the model
 # still reaches the network through exactly one adapter.
-tinyflows = { git = "https://github.com/tinyhumansai/tinyflows.git", rev = "9dfc7bef09625f149a73642fd8c6b9a2c2ecc62c", default-features = false }
+tinyflows = { git = "https://github.com/tinyhumansai/tinyflows.git", rev = "3276dd10bf0367b30223abf726e3e878d44036fb", default-features = false }
 
 # --- optional: the webhook server ---
 # Reversed an earlier decision to go Actions-only. The arguments that changed
