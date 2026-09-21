@@ -604,6 +604,13 @@ ask = "Which earlier review findings about {paths} did the maintainers reject, d
 section = "discussions"
 ask = "What was decided or explained in earlier issues and pull requests about {paths} or about {title}: problems reported, reasons given, approaches rejected? Name the issue or pull request each comes from."
 
+# Agent-facing repository questions and issue creation. The endpoint is absent
+# until enabled and its bearer is read only from `token_env`.
+[mcp]
+enabled = false
+token_env = "TINYSWEEPER_MCP_TOKEN"
+allowed_org = "tinyhumansai"
+
 [lanes.critique]
 model = "deep"
 fail_on = "high"

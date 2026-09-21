@@ -31,6 +31,7 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_embeddings(config, &mut problems);
     validate_retrieval(config, &mut problems);
     validate_memory(config, &mut problems);
+    validate_mcp(config, &mut problems);
     validate_overview(config, &mut problems);
     validate_summary(config, &mut problems);
     validate_grouping(config, &mut problems);
@@ -44,6 +45,44 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_preview(config, &mut problems);
 
     problems
+}
+
+fn validate_mcp(config: &Config, problems: &mut Vec<String>) {
+    if !config.mcp.enabled {
+        return;
+    }
+    if config.mcp.token_env.trim().is_empty() {
+        problems.push(
+            "`mcp.token_env` is empty; it must name the environment variable holding the MCP bearer"
+                .into(),
+        );
+    } else if !config.mcp.token_env.starts_with("TINYSWEEPER_")
+        || !config.mcp.token_env.ends_with("_TOKEN")
+        || !config
+            .mcp
+            .token_env
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    {
+        problems.push(
+            "`mcp.token_env` must be an uppercase `TINYSWEEPER_*_TOKEN` environment variable name; never put the bearer in the config file"
+                .into(),
+        );
+    }
+    let org = &config.mcp.allowed_org;
+    if !valid_github_login(org) {
+        problems.push("`mcp.allowed_org` must be one plausible GitHub organisation login".into());
+    }
+}
+
+fn valid_github_login(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 39
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
 fn validate_version(config: &Config, problems: &mut Vec<String>) {

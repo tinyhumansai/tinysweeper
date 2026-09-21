@@ -92,7 +92,7 @@ discussion in the pull request:
   them as data in prompts. A model verdict is advisory — GitHub is only ever
   mutated by deterministic policy, and only from a module whose whole job is
   that write: `src/app/apply.rs`, `src/automerge/`, `src/issues/apply.rs`,
-  `src/pr_triage/apply.rs`, `src/threads/`, `src/sentry/promote.rs` and
+  `src/pr_triage/apply.rs`, `src/threads/`, `src/sentry/promote.rs`,
   `src/preview/apply.rs`. Adding to that list is a decision to argue for in a
   pull request, and the bar is the same each time: the module holds a `ForgeWrite` and *only* executes a plan
   some other module already decided on.

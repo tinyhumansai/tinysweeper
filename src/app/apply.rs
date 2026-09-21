@@ -17,6 +17,57 @@ use crate::ports::forge::{ForgeRead, ForgeWrite};
 use crate::ports::review_state::ReviewStateStore;
 use crate::{MARKER_PREFIX, VERSION};
 
+/// A fully decided MCP issue creation.
+#[cfg(feature = "serve")]
+pub struct McpIssuePlan {
+    /// Repository already canonicalised and authorised by the planner.
+    pub repo: RepoId,
+    /// GitHub App installation covering the repository.
+    pub installation: u64,
+    /// Final issue title.
+    pub title: String,
+    /// Final template-aware, enriched body.
+    pub body: String,
+    /// Labels requested by the authenticated caller.
+    pub labels: Vec<String>,
+}
+
+/// Which side of the GitHub create request an MCP apply failure occurred on.
+#[cfg(feature = "serve")]
+#[derive(Debug, thiserror::Error)]
+pub enum McpIssueApplyError {
+    /// No create request was sent, so the caller may safely release its claim.
+    #[error("{0}")]
+    BeforeWrite(Error),
+    /// A create request was attempted and may have succeeded despite the error.
+    #[error("{0}")]
+    Ambiguous(Error),
+}
+
+/// Mint the write credential and execute one previously decided MCP issue plan.
+#[cfg(feature = "serve")]
+pub async fn apply_mcp_issue(
+    auth: &crate::server::auth::AppAuth,
+    plan: &McpIssuePlan,
+) -> std::result::Result<u64, McpIssueApplyError> {
+    let token = auth
+        .installation_token(plan.installation)
+        .await
+        .map_err(McpIssueApplyError::BeforeWrite)?;
+    let write =
+        crate::forge::github::GitHubWrite::new(&token).map_err(McpIssueApplyError::BeforeWrite)?;
+    execute_mcp_issue(&write, plan)
+        .await
+        .map_err(McpIssueApplyError::Ambiguous)
+}
+
+#[cfg(feature = "serve")]
+async fn execute_mcp_issue(write: &dyn ForgeWrite, plan: &McpIssuePlan) -> Result<u64> {
+    write
+        .create_issue(&plan.repo, &plan.title, &plan.body, &plan.labels)
+        .await
+}
+
 /// Publish a proposal.
 ///
 /// If a store is provided, extends the stored fingerprints with the identities
@@ -847,6 +898,31 @@ mod tests {
     use crate::findings::types::Finding;
     use crate::forge::types::{ChangedFile, CheckConclusion, IssueComment, PullRequest};
     use crate::forge::{MockForge, MockState, Write};
+
+    #[cfg(feature = "serve")]
+    #[tokio::test]
+    async fn applying_an_mcp_issue_plan_performs_exactly_its_write() {
+        let forge = MockForge::new();
+        let plan = McpIssuePlan {
+            repo: RepoId::parse("acme/widget").unwrap(),
+            installation: 7,
+            title: "Parser can loop".into(),
+            body: "Reproduction and code context.".into(),
+            labels: vec!["bug".into()],
+        };
+
+        let number = execute_mcp_issue(&forge, &plan).await.expect("applies");
+
+        assert_eq!(number, 1);
+        assert_eq!(
+            forge.writes(),
+            vec![Write::IssueCreated {
+                title: plan.title,
+                body: plan.body,
+                labels: plan.labels,
+            }]
+        );
+    }
 
     fn config() -> Config {
         crate::config::DEFAULTS

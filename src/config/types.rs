@@ -239,6 +239,8 @@ pub struct Config {
     /// The long-lived memory engine: what the reviewer remembers about a
     /// repository between pull requests.
     pub memory: Memory,
+    /// Model Context Protocol access for repository-aware agents.
+    pub mcp: Mcp,
     /// Per-lane overrides, keyed by lane id.
     pub lanes: BTreeMap<String, Lane>,
     /// Several reviewers on one lane's evidence.
@@ -265,6 +267,22 @@ pub struct Config {
     pub sentry: Sentry,
     /// UI previews: flows, annotated screenshots and clips on a pull request.
     pub preview: Preview,
+}
+
+/// The public, agent-facing MCP surface.
+///
+/// The bearer itself deliberately stays in the environment. Repository config
+/// can enable a service, but must never become a place a contributor can put a
+/// credential the server will honour.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Mcp {
+    /// Mount the authenticated MCP endpoint.
+    pub enabled: bool,
+    /// Environment variable containing its bearer token.
+    pub token_env: String,
+    /// Organisation whose installed repositories this endpoint may access.
+    pub allowed_org: String,
 }
 
 /// Review behaviour and the gates that keep it quiet.

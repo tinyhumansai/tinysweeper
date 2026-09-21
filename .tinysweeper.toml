@@ -131,6 +131,13 @@ allow_private_http = true
 # same questions, cited, in seconds.
 answer_model = "flash"
 
+# Agent-facing repository research and issue creation. The bearer is supplied
+# only by the deployment environment; this switch merely mounts the route.
+[mcp]
+enabled = true
+token_env = "TINYSWEEPER_MCP_TOKEN"
+allowed_org = "tinyhumansai"
+
 # Issue triage, turned on for this repository so the job is exercised on real
 # issues. Closing stays off: the labels and the duplicate cross-links are the
 # useful half, and closing someone else's issue is the expensive mistake.
