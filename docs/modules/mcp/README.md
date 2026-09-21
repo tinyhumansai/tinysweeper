@@ -30,12 +30,17 @@ Authorization: Bearer $TINYSWEEPER_MCP_TOKEN
 Content-Type: application/json
 ```
 
-The server exposes three tools:
+The server exposes four tools:
 
 - `search_code(repo, query, limit?)` performs the existing hybrid dense and
   lexical search over the repository's vector index. Results quote paths,
   symbols, line ranges, scores, and source text. It reports a useful error when
   embeddings have not been configured or the repository is not indexed.
+- `search_issues(repo, query, limit?)` searches open and closed issues in the
+  repository, excluding pull requests. Results include state, labels, comment
+  count, URL, and a bounded body excerpt. The default limit is 10 and the
+  maximum is 20. Queries are capped at 96 bytes and cannot override the
+  repository, organisation, or user scope.
 - `read_docs(repo, path?)` reads Markdown, `docs/`, and issue templates from
   the default-branch commit. Supplying `path` reads exactly one file. Agents
   should call this before proposing an issue so repository conventions and

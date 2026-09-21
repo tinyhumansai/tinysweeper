@@ -29,6 +29,7 @@ const MAX_HITS: usize = 20;
 const MAX_DOCS: usize = 20;
 const MAX_HTTP_BODY: usize = 128 * 1024;
 const MAX_QUERY_BYTES: usize = 4 * 1024;
+const MAX_ISSUE_QUERY_BYTES: usize = 96;
 const MAX_TITLE_BYTES: usize = 256;
 const MAX_ISSUE_BODY_BYTES: usize = 64 * 1024;
 const MAX_PATH_BYTES: usize = 1024;
@@ -88,6 +89,8 @@ struct McpState {
     auth: Arc<AppAuth>,
     index: Option<Arc<IndexBackend>>,
     store: Option<Store>,
+    #[cfg(test)]
+    forge: Option<Arc<dyn ForgeRead>>,
 }
 
 /// Build an MCP router, or no router when the MCP bearer is unset.
@@ -118,6 +121,8 @@ fn build_router(
                 auth,
                 index,
                 store,
+                #[cfg(test)]
+                forge: None,
             })
             .route_layer(axum::middleware::from_fn_with_state(authz, guard)),
     )
@@ -169,6 +174,7 @@ fn is_notification(request: &Value) -> bool {
 fn tools() -> Value {
     json!({"tools":[
      {"name":"search_code","description":"Hybrid vector and lexical search of one indexed repository.","inputSchema":{"type":"object","required":["repo","query"],"properties":{"repo":{"type":"string"},"query":{"type":"string","maxLength":4096},"limit":{"type":"integer"}}}},
+     {"name":"search_issues","description":"Search one repository's open and closed issues (pull requests excluded). Read-only.","inputSchema":{"type":"object","required":["repo","query"],"properties":{"repo":{"type":"string"},"query":{"type":"string","maxLength":96},"limit":{"type":"integer"}}}},
      {"name":"read_docs","description":"Read repository documentation and issue templates from the default branch.","inputSchema":{"type":"object","required":["repo"],"properties":{"repo":{"type":"string"},"path":{"type":"string","maxLength":1024}}}},
      {"name":"create_issue","description":"Create a title-deduplicated GitHub issue enriched with vector-derived code locations and a repository Markdown issue template. Returns likely duplicates instead of writing unless force is true.","inputSchema":{"type":"object","required":["repo","title","body"],"properties":{"repo":{"type":"string"},"title":{"type":"string","maxLength":256},"body":{"type":"string","maxLength":65536},"template":{"type":"string","maxLength":1024,"description":"Optional repo-relative Markdown issue template path."},"labels":{"type":"array","maxItems":20,"items":{"type":"string","maxLength":50}},"force":{"type":"boolean"}}}}
     ]})
@@ -189,6 +195,14 @@ async fn call(state: &McpState, params: &Value) -> Result<Value, String> {
             .and_then(Value::as_str)
             .ok_or("repo is required")?,
     )?;
+    #[cfg(test)]
+    if let Some(forge) = &state.forge
+        && name == "search_issues"
+    {
+        return search_issues_with(forge.as_ref(), &requested_repo, &args)
+            .await
+            .map(content);
+    }
     let token = read_token(state, &requested_repo).await?;
     let forge = crate::forge::github::GitHubRead::new(&token).map_err(|err| err.to_string())?;
     let repo = forge
@@ -198,6 +212,7 @@ async fn call(state: &McpState, params: &Value) -> Result<Value, String> {
     checked_repo(&state.allowed_org, &repo.to_string())?;
     match name {
         "search_code" => search_code(state, &repo, &args).await,
+        "search_issues" => search_issues(state, &repo, &args).await,
         "read_docs" => read_docs(state, &repo, &args).await,
         "create_issue" => create_issue(state, &repo, &args).await,
         _ => Err(format!("unknown tool `{name}`")),
@@ -257,6 +272,69 @@ async fn search_code(state: &McpState, repo: &RepoId, args: &Value) -> Result<Va
     Ok(
         json!({"repo":repo.to_string(),"hits":hits.into_iter().map(|hit| json!({"path":hit.chunk.path,"start_line":hit.chunk.start_line,"end_line":hit.chunk.end_line,"symbol":hit.chunk.symbol,"score":hit.score,"text":hit.chunk.text})).collect::<Vec<_>>() }),
     )
+}
+
+async fn search_issues(state: &McpState, repo: &RepoId, args: &Value) -> Result<Value, String> {
+    let token = read_token(state, repo).await?;
+    let forge = crate::forge::github::GitHubRead::new(&token).map_err(|error| error.to_string())?;
+    search_issues_with(&forge, repo, args).await
+}
+
+async fn search_issues_with(
+    forge: &dyn ForgeRead,
+    repo: &RepoId,
+    args: &Value,
+) -> Result<Value, String> {
+    let query = bounded_required(args, "query", MAX_ISSUE_QUERY_BYTES)?;
+    reject_scope_qualifiers(query)?;
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(10)
+        .min(MAX_HITS as u64) as usize;
+    search_issue_hits(forge, repo, query, limit).await
+}
+
+fn reject_scope_qualifiers(query: &str) -> Result<(), String> {
+    if query.split_whitespace().any(|word| {
+        let word = word.to_ascii_lowercase();
+        word.starts_with("repo:") || word.starts_with("org:") || word.starts_with("user:")
+    }) {
+        return Err(
+            "query cannot contain repository, organisation, or user scope qualifiers".into(),
+        );
+    }
+    Ok(())
+}
+
+async fn search_issue_hits(
+    forge: &dyn ForgeRead,
+    repo: &RepoId,
+    query: &str,
+    limit: usize,
+) -> Result<Value, String> {
+    let issues = forge
+        .search_issues(repo, query)
+        .await
+        .map_err(|error| error.to_string())?;
+    let hits = issues
+        .into_iter()
+        .filter(|issue| !issue.pull_request)
+        .take(limit.min(MAX_HITS))
+        .map(|issue| {
+            let excerpt: String = issue.body.chars().take(400).collect();
+            json!({
+                "number": issue.number,
+                "title": issue.title,
+                "open": issue.open,
+                "labels": issue.labels,
+                "comments": issue.comments,
+                "url": format!("https://github.com/{}/{}/issues/{}", repo.owner, repo.name, issue.number),
+                "excerpt": excerpt,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({"repo": repo.to_string(), "hits": hits}))
 }
 
 async fn read_docs(state: &McpState, repo: &RepoId, args: &Value) -> Result<Value, String> {
@@ -580,15 +658,23 @@ mod tests {
     const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
     fn protocol_router() -> Router {
+        protocol_router_with_forge(None)
+    }
+
+    fn protocol_router_with_forge(forge: Option<Arc<dyn ForgeRead>>) -> Router {
         let auth = AppAuth::from_der("1", &crate::server::test_key::test_key_der()).unwrap();
-        build_router(
-            McpAuth::new(TOKEN, "TINYSWEEPER_MCP_TOKEN").unwrap(),
-            "tinyhumansai".into(),
-            Arc::new(auth),
-            None,
-            None,
-        )
-        .unwrap()
+        let authz = Arc::new(McpAuth::new(TOKEN, "TINYSWEEPER_MCP_TOKEN").unwrap());
+        Router::new()
+            .route("/mcp", post(handle))
+            .layer(DefaultBodyLimit::max(MAX_HTTP_BODY))
+            .with_state(McpState {
+                allowed_org: Arc::from("tinyhumansai"),
+                auth: Arc::new(auth),
+                index: None,
+                store: None,
+                forge,
+            })
+            .route_layer(axum::middleware::from_fn_with_state(authz, guard))
     }
 
     #[tokio::test]
@@ -626,7 +712,9 @@ mod tests {
         let response = protocol_router().oneshot(request).await.unwrap();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["result"]["tools"].as_array().unwrap().len(), 3);
+        let tools = value["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 4);
+        assert!(tools.iter().any(|tool| tool["name"] == "search_issues"));
 
         let request = Request::post("/mcp")
             .header("content-type", "application/json")
@@ -709,6 +797,116 @@ mod tests {
         assert_eq!(
             bounded_required(&args, "query", MAX_QUERY_BYTES).unwrap(),
             "where is parsing handled?"
+        );
+    }
+
+    #[tokio::test]
+    async fn issue_search_returns_issues_only_and_clamps_the_limit() {
+        use crate::forge::{Issue, MockForge};
+
+        let mut forge = MockForge::new().with_issue(Issue {
+            number: 1,
+            title: "Parser bug".into(),
+            body: "é".repeat(450),
+            labels: vec!["bug".into()],
+            open: true,
+            comments: 3,
+            ..Issue::default()
+        });
+        for number in 2..=25 {
+            forge = forge.with_issue(Issue {
+                number,
+                title: format!("Parser bug {number}"),
+                ..Issue::default()
+            });
+        }
+        forge = forge.with_issue(Issue {
+            number: 99,
+            title: "Parser pull request".into(),
+            body: "Not an issue".into(),
+            pull_request: true,
+            ..Issue::default()
+        });
+        let repo = RepoId::parse("tinyhumansai/teeny").unwrap();
+
+        let result = search_issue_hits(&forge, &repo, "parser", usize::MAX)
+            .await
+            .unwrap();
+        let hits = result["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), MAX_HITS);
+        assert!(!hits.iter().any(|hit| hit["number"] == 99));
+        assert_eq!(hits[0]["number"], 1);
+        assert_eq!(hits[0]["comments"], 3);
+        assert_eq!(
+            hits[0]["url"],
+            "https://github.com/tinyhumansai/teeny/issues/1"
+        );
+        assert_eq!(hits[0]["excerpt"].as_str().unwrap().chars().count(), 400);
+        assert_eq!(hits[1]["open"], false);
+    }
+
+    #[tokio::test]
+    async fn issue_search_honours_a_smaller_limit() {
+        use crate::forge::{Issue, MockForge};
+
+        let forge = MockForge::new()
+            .with_issue(Issue {
+                number: 1,
+                title: "bug one".into(),
+                ..Issue::default()
+            })
+            .with_issue(Issue {
+                number: 2,
+                title: "bug two".into(),
+                ..Issue::default()
+            });
+        let repo = RepoId::parse("tinyhumansai/teeny").unwrap();
+        let result = search_issue_hits(&forge, &repo, "bug", 1).await.unwrap();
+        assert_eq!(result["hits"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn issue_search_rejects_scope_widening_qualifiers() {
+        for query in [
+            "bug repo:somewhere/else",
+            "ORG:somewhere bug",
+            "user:somebody bug",
+        ] {
+            assert!(reject_scope_qualifiers(query).is_err(), "accepted {query}");
+        }
+        assert!(reject_scope_qualifiers("parser bug in repository lookup").is_ok());
+    }
+
+    #[tokio::test]
+    async fn authenticated_issue_search_dispatches_through_the_http_route() {
+        use crate::forge::{Issue, MockForge};
+
+        let forge = MockForge::new().with_issue(Issue {
+            number: 7,
+            title: "Parser bug".into(),
+            body: "Reproduction".into(),
+            open: false,
+            ..Issue::default()
+        });
+        let request = Request::post("/mcp")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::from(
+                r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_issues","arguments":{"repo":"tinyhumansai/teeny","query":"parser","limit":10}}}"#,
+            ))
+            .unwrap();
+
+        let response = protocol_router_with_forge(Some(Arc::new(forge)))
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["result"]["structuredContent"]["hits"][0]["number"], 7);
+        assert_eq!(
+            value["result"]["structuredContent"]["hits"][0]["open"],
+            false
         );
     }
 

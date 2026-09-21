@@ -1741,10 +1741,20 @@ impl ForgeRead for GitHubRead {
     }
 
     async fn search_issues(&self, repo: &RepoId, query: &str) -> Result<Vec<Issue>> {
-        // `repo:` is prepended here rather than trusted from the caller, so a
-        // query can only ever narrow the search inside one repository and
-        // never widen it into somebody else's.
-        let scoped = format!("repo:{}/{} {}", repo.owner, repo.name, query.trim());
+        // Callers exposing GitHub's query language to untrusted input must
+        // reject scope qualifiers first. The MCP tool does so before reaching
+        // this shared adapter; internal callers retain the full search syntax.
+        let scoped = format!(
+            "repo:{}/{} is:issue {}",
+            repo.owner,
+            repo.name,
+            query.trim()
+        );
+        if scoped.len() > 256 {
+            return Err(Error::Forge(
+                "issue search exceeds GitHub's 256-byte query limit".into(),
+            ));
+        }
 
         let page = self
             .client
