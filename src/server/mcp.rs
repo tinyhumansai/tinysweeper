@@ -28,6 +28,7 @@ mod apply;
 
 const MAX_HITS: usize = 20;
 const MAX_DOCS: usize = 20;
+const PROTOCOL_VERSION: &str = "2025-03-26";
 
 #[derive(Clone)]
 struct McpState {
@@ -83,7 +84,7 @@ async fn handle(State(state): State<McpState>, Json(request): Json<Value>) -> im
     let params = request.get("params").cloned().unwrap_or_else(|| json!({}));
     let result = match method {
         "initialize" => Ok(
-            json!({"protocolVersion":"2024-11-05","serverInfo":{"name":"tinysweeper","version":env!("CARGO_PKG_VERSION")},"capabilities":{"tools":{}}}),
+            json!({"protocolVersion":PROTOCOL_VERSION,"serverInfo":{"name":"tinysweeper","version":env!("CARGO_PKG_VERSION")},"capabilities":{"tools":{}}}),
         ),
         "tools/list" => Ok(tools()),
         "tools/call" => call(&state, &params).await,
@@ -131,6 +132,7 @@ async fn call(state: &McpState, params: &Value) -> Result<Value, String> {
         .canonical_repo(&requested_repo)
         .await
         .map_err(|err| err.to_string())?;
+    checked_repo(&state.allowed_org, &repo.to_string())?;
     match name {
         "search_code" => search_code(state, &repo, &args).await,
         "read_docs" => read_docs(state, &repo, &args).await,
@@ -257,50 +259,14 @@ async fn create_issue(state: &McpState, repo: &RepoId, args: &Value) -> Result<V
         .filter(|s| !s.trim().is_empty())
         .ok_or("body is required")?;
 
-    // This claim is the authoritative retry/concurrency memory. GitHub issue
-    // search below catches old duplicates, but its index is eventually
-    // consistent and cannot make a check-then-create sequence atomic.
     let force = args.get("force").and_then(Value::as_bool).unwrap_or(false);
-    let request_key = issue_request_key(repo, title, force);
-    if !state
-        .store
-        .claim_delivery(&request_key, "mcp-create-issue")
-        .await
-        .map_err(|err| err.to_string())?
-    {
-        return Ok(json!({
-            "created": false,
-            "reason": "an identical issue request was already accepted recently"
-        }));
-    }
-
-    let outcome = create_claimed_issue(state, repo, args, title, body).await;
-    if outcome.is_err() {
-        // A failed attempt is retryable. Successful claims deliberately remain
-        // until the store's TTL expires, covering GitHub's search-index lag.
-        state
-            .store
-            .release_delivery(&request_key)
-            .await
-            .map_err(|err| err.to_string())?;
-    }
-    outcome
-}
-
-async fn create_claimed_issue(
-    state: &McpState,
-    repo: &RepoId,
-    args: &Value,
-    title: &str,
-    body: &str,
-) -> Result<Value, String> {
     let token = read_token(state, repo).await?;
     let read = crate::forge::github::GitHubRead::new(&token).map_err(|e| e.to_string())?;
     let duplicates = read
         .search_issues(repo, title)
         .await
         .map_err(|e| e.to_string())?;
-    if !duplicates.is_empty() && !args.get("force").and_then(Value::as_bool).unwrap_or(false) {
+    if !duplicates.is_empty() && !force {
         return Ok(
             json!({"created":false,"reason":"possible duplicates","duplicates":duplicates.into_iter().map(|i| json!({"number":i.number,"title":i.title,"open":i.open})).collect::<Vec<_>>() }),
         );
@@ -350,6 +316,23 @@ async fn create_claimed_issue(
         body: issue_body,
         labels,
     };
+
+    // Planning is deliberately complete before claiming. The claim makes the
+    // eventual-consistency gap between GitHub search and creation atomic, and
+    // remains after apply starts even when the response is ambiguous: a
+    // timeout may mean GitHub accepted the issue but its response was lost.
+    let request_key = issue_request_key(repo, title, force);
+    if !state
+        .store
+        .claim_delivery(&request_key, "mcp-create-issue")
+        .await
+        .map_err(|err| err.to_string())?
+    {
+        return Ok(json!({
+            "created": false,
+            "reason": "an identical issue request was already accepted recently"
+        }));
+    }
     let number = apply::apply(state.auth.as_ref(), &plan)
         .await
         .map_err(|e| e.to_string())?;
@@ -464,6 +447,11 @@ mod tests {
     fn repository_scope_is_case_insensitive_and_closed() {
         assert!(checked_repo("tinyhumansai", "TinyHumansAI/teeny").is_ok());
         assert!(checked_repo("tinyhumansai", "somebody/teeny").is_err());
+    }
+
+    #[test]
+    fn streamable_http_protocol_version_is_advertised() {
+        assert_eq!(PROTOCOL_VERSION, "2025-03-26");
     }
 
     #[test]
