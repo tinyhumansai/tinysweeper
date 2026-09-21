@@ -610,6 +610,7 @@ ask = "What was decided or explained in earlier issues and pull requests about {
 enabled = false
 token_env = "TINYSWEEPER_MCP_TOKEN"
 allowed_org = "tinyhumansai"
+allowed_repos = []
 
 [lanes.critique]
 model = "deep"

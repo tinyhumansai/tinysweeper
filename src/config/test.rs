@@ -447,10 +447,12 @@ fn an_enabled_mcp_needs_a_token_variable_and_an_organisation() {
     config.mcp.enabled = true;
     config.mcp.token_env.clear();
     config.mcp.allowed_org.clear();
+    config.mcp.allowed_repos.clear();
 
     let problems = validate::validate(&config).join("\n");
     assert!(problems.contains("mcp.token_env"));
     assert!(problems.contains("mcp.allowed_org"));
+    assert!(problems.contains("mcp.allowed_repos"));
 }
 
 #[test]
@@ -487,6 +489,35 @@ fn the_mcp_organisation_must_be_an_exact_github_login() {
             .join("\n")
             .contains("mcp.allowed_org")
     );
+}
+
+#[test]
+fn the_mcp_repository_allowlist_is_exact_scoped_and_unique() {
+    let mut config = parse("version = 1\n");
+    config.mcp.enabled = true;
+    config.mcp.allowed_org = "tinyhumansai".into();
+    config.mcp.allowed_repos = vec!["tinyhumansai/tinysweeper".into()];
+    assert!(
+        !validate::validate(&config)
+            .join("\n")
+            .contains("mcp.allowed_repos")
+    );
+
+    for entries in [
+        vec!["tinysweeper".into()],
+        vec!["somebody/private".into()],
+        vec![
+            "tinyhumansai/tinysweeper".into(),
+            "TinyHumansAI/TinySweeper".into(),
+        ],
+    ] {
+        config.mcp.allowed_repos = entries;
+        assert!(
+            validate::validate(&config)
+                .join("\n")
+                .contains("mcp.allowed_repos")
+        );
+    }
 }
 
 #[test]

@@ -11,13 +11,16 @@ Enable it in the deployment configuration:
 enabled = true
 token_env = "TINYSWEEPER_MCP_TOKEN"
 allowed_org = "tinyhumansai"
+allowed_repos = ["tinyhumansai/tinysweeper"]
 ```
 
 Set `TINYSWEEPER_MCP_TOKEN` to a random value of at least 32 characters in the
 server's secret environment. When the value is absent, `/mcp` is not mounted.
 The server compares its SHA-256 digest in constant time before parsing a
-request. `allowed_org` is enforced on every tool call, and the GitHub App must
-also be installed on the target repository.
+request. `allowed_repos` is a fail-closed, exact `owner/name` allowlist enforced
+on every tool call before any GitHub token is minted. Entries must belong to
+`allowed_org`, and the GitHub App must also be installed on each target
+repository. App installation alone never exposes a repository through MCP.
 
 ## Agent integration
 
@@ -59,8 +62,9 @@ to review and can be backfilled through the established admin route.
 ## Security model
 
 MCP never accepts a repository URL, arbitrary checkout path, or GitHub token.
-Repositories are parsed as `owner/name`, checked against the configured
-organisation, and resolved through the installed GitHub App. Code and docs are
+Repositories are parsed as `owner/name`, checked against the exact repository
+allowlist and configured organisation, and resolved through the installed
+GitHub App. Code and docs are
 read from an immutable default-branch commit. The only write is issue creation.
 The planner produces an immutable issue plan after every read and policy
 decision; the existing `src/app/apply.rs` write boundary alone mints the
