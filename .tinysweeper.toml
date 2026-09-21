@@ -133,11 +133,19 @@ answer_model = "flash"
 
 # Agent-facing repository research and issue creation. The bearer is supplied
 # only by the deployment environment; this switch merely mounts the route.
+# The two product repositories are here for Teeny, the Discord bot, which
+# answers members' questions from their docs and files their bug reports;
+# both are public. Keep private repositories off this list — the bearer is
+# shared with a service that talks to the whole server.
 [mcp]
 enabled = true
 token_env = "TINYSWEEPER_MCP_TOKEN"
 allowed_org = "tinyhumansai"
-allowed_repos = ["tinyhumansai/tinysweeper"]
+allowed_repos = [
+  "tinyhumansai/tinysweeper",
+  "tinyhumansai/openhuman",
+  "tinyhumansai/opencompany",
+]
 
 # Issue triage, turned on for this repository so the job is exercised on real
 # issues. Closing stays off: the labels and the duplicate cross-links are the
