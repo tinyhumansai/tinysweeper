@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Request, State};
+use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
@@ -27,6 +27,13 @@ use crate::server::store::Store;
 
 const MAX_HITS: usize = 20;
 const MAX_DOCS: usize = 20;
+const MAX_HTTP_BODY: usize = 128 * 1024;
+const MAX_QUERY_BYTES: usize = 4 * 1024;
+const MAX_TITLE_BYTES: usize = 256;
+const MAX_ISSUE_BODY_BYTES: usize = 64 * 1024;
+const MAX_PATH_BYTES: usize = 1024;
+const MAX_LABELS: usize = 20;
+const MAX_LABEL_BYTES: usize = 50;
 const PROTOCOL_VERSION: &str = "2025-03-26";
 const MIN_TOKEN_LEN: usize = 32;
 
@@ -105,6 +112,7 @@ fn build_router(
     Some(
         Router::new()
             .route("/mcp", post(handle))
+            .layer(DefaultBodyLimit::max(MAX_HTTP_BODY))
             .with_state(McpState {
                 allowed_org: Arc::from(allowed_org),
                 auth,
@@ -160,9 +168,9 @@ fn is_notification(request: &Value) -> bool {
 
 fn tools() -> Value {
     json!({"tools":[
-     {"name":"search_code","description":"Hybrid vector and lexical search of one indexed repository.","inputSchema":{"type":"object","required":["repo","query"],"properties":{"repo":{"type":"string"},"query":{"type":"string"},"limit":{"type":"integer"}}}},
-     {"name":"read_docs","description":"Read repository documentation and issue templates from the default branch.","inputSchema":{"type":"object","required":["repo"],"properties":{"repo":{"type":"string"},"path":{"type":"string"}}}},
-     {"name":"create_issue","description":"Create a deduplicated GitHub issue enriched with vector-derived code locations and a repository Markdown issue template. Returns likely duplicates instead of writing unless force is true.","inputSchema":{"type":"object","required":["repo","title","body"],"properties":{"repo":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"template":{"type":"string","description":"Optional repo-relative Markdown issue template path."},"labels":{"type":"array","items":{"type":"string"}},"force":{"type":"boolean"}}}}
+     {"name":"search_code","description":"Hybrid vector and lexical search of one indexed repository.","inputSchema":{"type":"object","required":["repo","query"],"properties":{"repo":{"type":"string"},"query":{"type":"string","maxLength":4096},"limit":{"type":"integer"}}}},
+     {"name":"read_docs","description":"Read repository documentation and issue templates from the default branch.","inputSchema":{"type":"object","required":["repo"],"properties":{"repo":{"type":"string"},"path":{"type":"string","maxLength":1024}}}},
+     {"name":"create_issue","description":"Create a title-deduplicated GitHub issue enriched with vector-derived code locations and a repository Markdown issue template. Returns likely duplicates instead of writing unless force is true.","inputSchema":{"type":"object","required":["repo","title","body"],"properties":{"repo":{"type":"string"},"title":{"type":"string","maxLength":256},"body":{"type":"string","maxLength":65536},"template":{"type":"string","maxLength":1024,"description":"Optional repo-relative Markdown issue template path."},"labels":{"type":"array","maxItems":20,"items":{"type":"string","maxLength":50}},"force":{"type":"boolean"}}}}
     ]})
 }
 
@@ -223,11 +231,7 @@ async fn search_code(state: &McpState, repo: &RepoId, args: &Value) -> Result<Va
         .index
         .as_ref()
         .ok_or("vector search is not configured")?;
-    let text = args
-        .get("query")
-        .and_then(Value::as_str)
-        .filter(|s| !s.trim().is_empty())
-        .ok_or("query is required")?;
+    let text = bounded_required(args, "query", MAX_QUERY_BYTES)?;
     let limit = args
         .get("limit")
         .and_then(Value::as_u64)
@@ -267,20 +271,31 @@ async fn read_docs(state: &McpState, repo: &RepoId, args: &Value) -> Result<Valu
         .await
         .map_err(|e| e.to_string())?
         .ok_or("default branch has no head")?;
-    let paths = forge
+    let requested = args.get("path").and_then(Value::as_str);
+    if let Some(path) = requested {
+        if path.len() > MAX_PATH_BYTES || !is_doc_path(path) {
+            return Err(
+                "path must name supported repository documentation or an issue template".into(),
+            );
+        }
+        let file = forge
+            .file_at(repo, path, &sha)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("documentation path `{path}` does not exist"))?;
+        return Ok(json!({
+            "repo": repo.to_string(),
+            "revision": sha,
+            "files": [{"path": path, "text": file}]
+        }));
+    }
+    let docs: Vec<_> = forge
         .tree_paths(repo, &sha)
         .await
         .map_err(|e| e.to_string())?
-        .paths;
-    let requested = args.get("path").and_then(Value::as_str);
-    if let Some(path) = requested
-        && !is_doc_path(path)
-    {
-        return Err("path must name Markdown documentation or an issue template".into());
-    }
-    let docs: Vec<_> = paths
+        .paths
         .into_iter()
-        .filter(|path| requested.map_or_else(|| is_doc_path(path), |wanted| path == wanted))
+        .filter(|path| is_doc_path(path))
         .take(MAX_DOCS)
         .collect();
     let mut files = Vec::new();
@@ -297,22 +312,45 @@ async fn read_docs(state: &McpState, repo: &RepoId, args: &Value) -> Result<Valu
 }
 
 fn is_doc_path(path: &str) -> bool {
-    path.to_ascii_lowercase().ends_with(".md")
-        || path.starts_with("docs/")
-        || path.starts_with(".github/ISSUE_TEMPLATE/")
+    let lower = path.to_ascii_lowercase();
+    if lower.starts_with(".github/issue_template/") {
+        return lower.ends_with(".md") || lower.ends_with(".yml") || lower.ends_with(".yaml");
+    }
+    let filename = lower.rsplit('/').next().unwrap_or(&lower);
+    let documentation_extension = [".md", ".mdx", ".rst", ".adoc", ".txt"]
+        .iter()
+        .any(|extension| lower.ends_with(extension));
+    let conventional = [
+        "readme",
+        "contributing",
+        "changelog",
+        "security",
+        "code_of_conduct",
+        "agents",
+    ]
+    .iter()
+    .any(|stem| {
+        filename == *stem || (filename.starts_with(&format!("{stem}.")) && documentation_extension)
+    });
+    let under_docs = lower.starts_with("docs/") || lower.contains("/docs/");
+    conventional || (under_docs && documentation_extension)
+}
+
+fn bounded_required<'a>(args: &'a Value, field: &str, max: usize) -> Result<&'a str, String> {
+    let value = args
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("{field} is required"))?;
+    if value.len() > max {
+        return Err(format!("{field} must be at most {max} bytes"));
+    }
+    Ok(value)
 }
 
 async fn create_issue(state: &McpState, repo: &RepoId, args: &Value) -> Result<Value, String> {
-    let title = args
-        .get("title")
-        .and_then(Value::as_str)
-        .filter(|s| !s.trim().is_empty())
-        .ok_or("title is required")?;
-    let body = args
-        .get("body")
-        .and_then(Value::as_str)
-        .filter(|s| !s.trim().is_empty())
-        .ok_or("body is required")?;
+    let title = bounded_required(args, "title", MAX_TITLE_BYTES)?;
+    let body = bounded_required(args, "body", MAX_ISSUE_BODY_BYTES)?;
 
     let force = args.get("force").and_then(Value::as_bool).unwrap_or(false);
     let token = read_token(state, repo).await?;
@@ -333,17 +371,28 @@ async fn create_issue(state: &McpState, repo: &RepoId, args: &Value) -> Result<V
         .await
         .map_err(|e| e.to_string())?
         .ok_or("default branch has no head")?;
-    let paths = read
+    let listing = read
         .tree_paths(repo, &sha)
         .await
-        .map_err(|e| e.to_string())?
-        .paths;
-    let template_path = choose_template(&paths, args.get("template").and_then(Value::as_str))?;
+        .map_err(|e| e.to_string())?;
+    let requested_template = args.get("template").and_then(Value::as_str);
+    if let Some(path) = requested_template
+        && (path.len() > MAX_PATH_BYTES || !is_issue_template_path(path))
+    {
+        return Err("template must name a Markdown file under .github/ISSUE_TEMPLATE/".into());
+    }
+    let template_path = match requested_template {
+        Some(path) => Some(path.to_string()),
+        None if listing.truncated => None,
+        None => choose_template(&listing.paths),
+    };
     let template = match &template_path {
-        Some(path) => read
-            .file_at(repo, path, &sha)
-            .await
-            .map_err(|e| e.to_string())?,
+        Some(path) => Some(
+            read.file_at(repo, path, &sha)
+                .await
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("issue template `{path}` does not exist"))?,
+        ),
         None => None,
     };
     let evidence = issue_evidence(state, repo, title).await;
@@ -364,6 +413,11 @@ async fn create_issue(state: &McpState, repo: &RepoId, args: &Value) -> Result<V
                 .collect::<Vec<String>>()
         })
         .unwrap_or_default();
+    if labels.len() > MAX_LABELS || labels.iter().any(|label| label.len() > MAX_LABEL_BYTES) {
+        return Err(format!(
+            "labels are limited to {MAX_LABELS} entries of {MAX_LABEL_BYTES} bytes each"
+        ));
+    }
     let plan = crate::app::apply::McpIssuePlan {
         repo: repo.clone(),
         installation,
@@ -374,8 +428,9 @@ async fn create_issue(state: &McpState, repo: &RepoId, args: &Value) -> Result<V
 
     // Planning is deliberately complete before claiming. The claim makes the
     // eventual-consistency gap between GitHub search and creation atomic, and
-    // remains after apply starts even when the response is ambiguous: a
-    // timeout may mean GitHub accepted the issue but its response was lost.
+    // remains after a create request when the response is ambiguous: a timeout
+    // may mean GitHub accepted the issue but its response was lost. Failures
+    // known to precede that request release the claim below and remain retryable.
     let request_key = issue_request_key(repo, title);
     if !state
         .store
@@ -387,12 +442,25 @@ async fn create_issue(state: &McpState, repo: &RepoId, args: &Value) -> Result<V
     {
         return Ok(json!({
             "created": false,
-            "reason": "an identical issue request was already accepted recently"
+            "reason": "an issue request with this repository and title was already accepted recently"
         }));
     }
-    let number = crate::app::apply::apply_mcp_issue(state.auth.as_ref(), &plan)
-        .await
-        .map_err(|e| e.to_string())?;
+    let number = match crate::app::apply::apply_mcp_issue(state.auth.as_ref(), &plan).await {
+        Ok(number) => number,
+        Err(crate::app::apply::McpIssueApplyError::BeforeWrite(error)) => {
+            state
+                .store
+                .as_ref()
+                .expect("the claim required a store")
+                .release_delivery(&request_key)
+                .await
+                .map_err(|release| release.to_string())?;
+            return Err(error.to_string());
+        }
+        Err(crate::app::apply::McpIssueApplyError::Ambiguous(error)) => {
+            return Err(error.to_string());
+        }
+    };
     Ok(json!({"created":true,"number":number,"template":template_path,"code_locations":evidence}))
 }
 
@@ -414,23 +482,16 @@ fn issue_request_key(repo: &RepoId, title: &str) -> String {
     key
 }
 
-fn choose_template(paths: &[String], requested: Option<&str>) -> Result<Option<String>, String> {
+fn is_issue_template_path(path: &str) -> bool {
+    path.starts_with(".github/ISSUE_TEMPLATE/") && path.to_ascii_lowercase().ends_with(".md")
+}
+
+fn choose_template(paths: &[String]) -> Option<String> {
     let templates = paths
         .iter()
-        .filter(|path| {
-            path.starts_with(".github/ISSUE_TEMPLATE/")
-                && path.to_ascii_lowercase().ends_with(".md")
-        })
+        .filter(|path| is_issue_template_path(path))
         .collect::<Vec<_>>();
-    if let Some(requested) = requested {
-        return templates
-            .into_iter()
-            .find(|path| path.as_str() == requested)
-            .cloned()
-            .map(Some)
-            .ok_or_else(|| format!("issue template `{requested}` does not exist"));
-    }
-    Ok((templates.len() == 1).then(|| templates[0].clone()))
+    (templates.len() == 1).then(|| templates[0].clone())
 }
 
 async fn issue_evidence(state: &McpState, repo: &RepoId, query: &str) -> Vec<Value> {
@@ -470,7 +531,7 @@ async fn issue_evidence(state: &McpState, repo: &RepoId, query: &str) -> Vec<Val
 fn enriched_issue_body(template: Option<&str>, body: &str, evidence: &[Value]) -> String {
     let mut out = String::new();
     if let Some(template) = template {
-        out.push_str(template.trim_end());
+        out.push_str(strip_template_front_matter(template).trim_end());
         out.push_str("\n\n## Teeny-provided details\n\n");
     }
     out.push_str(body.trim());
@@ -489,6 +550,20 @@ fn enriched_issue_body(template: Option<&str>, body: &str, evidence: &[Value]) -
     }
     out.push_str("\n<!-- tinysweeper:mcp -->\n");
     out
+}
+
+fn strip_template_front_matter(template: &str) -> &str {
+    if let Some(rest) = template.strip_prefix("---\n")
+        && let Some(end) = rest.find("\n---\n")
+    {
+        return &rest[end + 5..];
+    }
+    if let Some(rest) = template.strip_prefix("---\r\n")
+        && let Some(end) = rest.find("\r\n---\r\n")
+    {
+        return &rest[end + 8..];
+    }
+    template
 }
 
 fn content(value: Value) -> Value {
@@ -597,7 +672,7 @@ mod tests {
             ".github/ISSUE_TEMPLATE/bug.md".into(),
         ];
         assert_eq!(
-            choose_template(&paths, None).unwrap().as_deref(),
+            choose_template(&paths).as_deref(),
             Some(".github/ISSUE_TEMPLATE/bug.md")
         );
     }
@@ -620,8 +695,30 @@ mod tests {
         assert!(is_doc_path("README.md"));
         assert!(is_doc_path("docs/setup.txt"));
         assert!(is_doc_path(".github/ISSUE_TEMPLATE/bug.yml"));
+        assert!(!is_doc_path("docs/config.json"));
+        assert!(!is_doc_path("src/secrets.md"));
         assert!(!is_doc_path(".env"));
         assert!(!is_doc_path("src/lib.rs"));
+    }
+
+    #[test]
+    fn issue_inputs_are_bounded_before_processing() {
+        let args = json!({"title":"x".repeat(MAX_TITLE_BYTES + 1)});
+        assert!(bounded_required(&args, "title", MAX_TITLE_BYTES).is_err());
+        let args = json!({"query":"where is parsing handled?"});
+        assert_eq!(
+            bounded_required(&args, "query", MAX_QUERY_BYTES).unwrap(),
+            "where is parsing handled?"
+        );
+    }
+
+    #[test]
+    fn github_template_front_matter_is_not_copied_into_the_issue() {
+        let template = "---\nname: Bug\nlabels: bug\n---\n## Reproduction\n";
+        let body = enriched_issue_body(Some(template), "It loops.", &[]);
+        assert!(!body.contains("name: Bug"));
+        assert!(body.starts_with("## Reproduction"));
+        assert!(body.contains("It loops."));
     }
 
     #[test]

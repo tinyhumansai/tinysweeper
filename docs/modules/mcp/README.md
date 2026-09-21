@@ -41,9 +41,10 @@ The server exposes three tools:
   should call this before proposing an issue so repository conventions and
   templates are part of their reasoning.
 - `create_issue(repo, title, body, labels?, force?)` takes an atomic seven-day
-  idempotency claim and searches the repository's issue history. It returns
-  likely open or closed duplicates without a write unless `force` is explicitly
-  true. The agent supplies the final body.
+  repository-and-title claim and searches the repository's issue history. It
+  returns likely open or closed duplicates without a write unless `force` is
+  explicitly true. The agent supplies the final body. Titles are capped at 256
+  bytes and bodies at 64 KiB before any provider or GitHub request.
 
 The idempotency claims, index and issue history are persistent across MCP
 requests. The claim closes the concurrency and GitHub search-index delay;

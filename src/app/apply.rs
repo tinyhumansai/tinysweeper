@@ -32,15 +32,33 @@ pub struct McpIssuePlan {
     pub labels: Vec<String>,
 }
 
+/// Which side of the GitHub create request an MCP apply failure occurred on.
+#[cfg(feature = "serve")]
+#[derive(Debug, thiserror::Error)]
+pub enum McpIssueApplyError {
+    /// No create request was sent, so the caller may safely release its claim.
+    #[error("{0}")]
+    BeforeWrite(Error),
+    /// A create request was attempted and may have succeeded despite the error.
+    #[error("{0}")]
+    Ambiguous(Error),
+}
+
 /// Mint the write credential and execute one previously decided MCP issue plan.
 #[cfg(feature = "serve")]
 pub async fn apply_mcp_issue(
     auth: &crate::server::auth::AppAuth,
     plan: &McpIssuePlan,
-) -> Result<u64> {
-    let token = auth.installation_token(plan.installation).await?;
-    let write = crate::forge::github::GitHubWrite::new(&token)?;
-    execute_mcp_issue(&write, plan).await
+) -> std::result::Result<u64, McpIssueApplyError> {
+    let token = auth
+        .installation_token(plan.installation)
+        .await
+        .map_err(McpIssueApplyError::BeforeWrite)?;
+    let write =
+        crate::forge::github::GitHubWrite::new(&token).map_err(McpIssueApplyError::BeforeWrite)?;
+    execute_mcp_issue(&write, plan)
+        .await
+        .map_err(McpIssueApplyError::Ambiguous)
 }
 
 #[cfg(feature = "serve")]
