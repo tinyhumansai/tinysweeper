@@ -67,15 +67,16 @@ rule id is stable for one class of problem across runs. That premise was wrong.
 So a finding is a repeat when **either** its fingerprint was already posted
 **or** a comment of ours already sits on the lines it points at, within the same
 few lines of slack the council allows between two reviewers
-(`PriorReview::covers`). The anchor comes from the comment's own `path` and
+(`PriorReview::covers_anchor`). The anchor comes from the comment's own `path` and
 `line` as GitHub reports them, so it needs no new marker and works on every
 thread already open.
 
-Two deliberate differences from `corroborates`:
+Two important constraints on that fallback:
 
-- **The lane is ignored.** Two lanes reporting one defect on one line is a
-  duplicate to the author reading the thread, whatever it is to the pipeline
-  that produced it. `#1295` posted that pair too.
+- **The lane must match for the positional fallback.** Cross-lane observations
+  are co-located before publication and their distinct fingerprints travel in
+  the shared thread's alias marker; position alone cannot later suppress an
+  unrelated lane's concern.
 - **A comment GitHub no longer places contributes no anchor.** Outdated and
   rebased-away comments still suppress by fingerprint; they simply cannot say
   where they were.
@@ -143,6 +144,26 @@ comment. Three things stop that suppressing a real finding:
 2. A marker must be a well-formed fingerprint: exactly sixteen lowercase hex
    characters. Nothing else in a body is ever read as one.
 3. Suppression only removes a duplicate comment, per the section above.
+
+When independent lanes, or separate adaptive passes of one lane, anchor
+observations to overlapping ranges, publication puts every rationale in one
+inline conversation. The highest-severity, then highest-confidence observation
+opens the thread; every other concern remains as a lane-labelled observation,
+and each lane keeps its independently computed check conclusion. The opener
+carries an adjacent `tinysweeper:fps=` marker with all secondary identities
+immediately before its ordinary `fp=` marker.
+Reload accepts every valid identity from that renderer-owned pair, so any
+wording already present in the shared thread is suppressed on a later push.
+Unplaced findings receive this treatment only when their non-empty rule ids
+match after case-folding and whitespace normalization; locationless findings
+with unrelated or empty rules stay separate.
+
+The `review.max_comments` cap counts these published conversations, not their
+observations: every observation inside a retained thread remains intact without
+consuming another slot. Before the cap runs, one structured event records
+`observations`, `grouped_observations`, `published_threads`, `lane_count`, and
+`max_review_pass`, making the reduction in comment churn visible without
+conflating it with finding loss.
 
 Getting the bot login wrong fails in the noisy direction — nothing is recognised
 as our own, so nothing is deduped — rather than in the direction that lets a

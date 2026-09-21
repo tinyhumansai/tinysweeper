@@ -57,8 +57,10 @@ shows.
 
 `app::review` builds the flow after findings have been filtered, so changed
 nodes can carry the findings the review will actually publish. The flow rides
-on `Proposal::overview`; `app::apply` posts it as one durable comment and edits
-that same comment after later pushes.
+on `Proposal::overview`; the durable review hub renders it as the optional
+“How this fits together” section. Existing bot-authored standalone change-map
+comments are migrated into that hub in place. See
+[`summary`](../summary/README.md).
 
 The walk is bounded by `retrieval.graph_hops` and
 `retrieval.max_graph_nodes`. Diagram legibility uses the existing overview

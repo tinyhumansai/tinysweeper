@@ -31,6 +31,9 @@ fn finding(line: Option<u64>, end_line: Option<u64>, suggestion: Option<&str>) -
         applicable: None,
         late: false,
         identity: None,
+        aliases: vec![],
+        grouped: false,
+        review_pass: 1,
         corroboration: 1,
     }
 }

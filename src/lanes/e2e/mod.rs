@@ -335,6 +335,9 @@ fn missing_harness_finding(path: &str) -> Finding {
         applicable: None,
         late: false,
         identity: None,
+        aliases: vec![],
+        grouped: false,
+        review_pass: 1,
         corroboration: 1,
     }
 }

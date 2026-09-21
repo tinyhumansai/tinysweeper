@@ -23,6 +23,7 @@
 
 use std::fmt::Write as _;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 
@@ -42,7 +43,7 @@ use crate::lanes::triage::triage;
 use crate::lanes::{
     Anchoring, Lane, LaneInput, LaneOutcome, aggregate_reviewer_responses, reviewer_responses,
 };
-use crate::ports::model::{Model, Spend};
+use crate::ports::model::{Model, Spend, Usage};
 use crate::scan::types::{Finding as ScanFinding, ScanKind};
 
 /// The scanner findings this lane owns.
@@ -261,7 +262,7 @@ async fn review_group(
     let evidence = render_diffs(group_diffs);
     let scanner_evidence = render_scanner(scanner, group_paths);
 
-    let built = prompt::build(&PromptInputs {
+    let base_inputs = PromptInputs {
         repo_policy,
         extracted_rules,
         prior_findings,
@@ -273,7 +274,8 @@ async fn review_group(
         memory_context,
         redaction_note,
         ..PromptInputs::new(LaneId::Security, config)
-    });
+    };
+    let built = prompt::build(&base_inputs);
 
     // Every reviewer at once, as one graph. With no council configured this is
     // the single default reviewer on the lane's own model, so a solo run and a
@@ -290,7 +292,7 @@ async fn review_group(
         })
         .collect();
 
-    let answers = runner::ask_all(
+    let round_one = runner::ask_all_accounted(
         llm.clone(),
         LaneId::Security,
         &calls,
@@ -298,6 +300,9 @@ async fn review_group(
         asking,
     )
     .await?;
+    let round_one_usage = round_one.usage;
+    let round_one_elapsed = round_one.elapsed;
+    let answers = round_one.answers;
 
     // A group whose every reviewer failed is a group nobody read. Failing here
     // is what puts it in the fan-out's failure list, where the summary names
@@ -318,7 +323,7 @@ async fn review_group(
     let mut findings = outcome.findings;
     let mut spend = outcome.spend;
 
-    // The opt-in coverage pass — see `lanes::coverage` and the identical gate
+    // Adaptive coverage passes — see `lanes::coverage` and the identical gate
     // in `lanes::critique`. Anchored the same way round one is, through
     // `LaneOutcome::from_response`, rather than critique's quote-and-relocate
     // `Positioner`: reusing round one's own anchoring here too, not inventing
@@ -329,25 +334,22 @@ async fn review_group(
     let mut added_by_coverage = 0usize;
     if config.review.passes > 1 && changed_lines(group_diffs) >= COVERAGE_PASS_MIN_LINES {
         let mut confirmed = findings.clone();
+        let mut metrics = crate::lanes::coverage::Metrics::start(
+            round_one_usage,
+            round_one_elapsed,
+            findings.len(),
+        );
 
-        for _ in 1..config.review.passes {
+        for pass_index in 1..config.review.passes {
             let reviewer = &reviewers[0];
             let confirmed_lines = crate::lanes::coverage::confirmed_lines(&confirmed);
             let built = prompt::build(&PromptInputs {
-                repo_policy,
-                extracted_rules,
-                prior_findings,
-                new_evidence: &evidence,
-                focus_paths: group_paths,
-                scanner_evidence: &scanner_evidence,
-                retrieved_context,
-                memory_context,
                 confirmed_this_round: &confirmed_lines,
                 coverage_pass: true,
-                ..PromptInputs::new(LaneId::Security, config)
+                ..base_inputs.clone()
             });
 
-            let coverage = crate::lanes::coverage::coverage_pass(
+            let coverage = match crate::lanes::coverage::coverage_pass(
                 llm.clone(),
                 LaneId::Security,
                 reviewer,
@@ -356,12 +358,29 @@ async fn review_group(
                 "tinysweeper_security",
                 asking,
             )
-            .await?;
+            .await
+            {
+                Ok(coverage) => coverage,
+                Err(err) => {
+                    tracing::warn!(%err, "an adaptive review pass failed");
+                    // The graph returned no scoped accounting. Count the
+                    // attempt, but do not borrow usage from the lane-wide
+                    // cumulative tally shared by concurrent groups.
+                    metrics.record(Usage::default(), Duration::ZERO, 0);
+                    metrics.stop(crate::lanes::coverage::StopReason::Failed);
+                    break;
+                }
+            };
+            let coverage_usage = coverage.usage;
+            let coverage_elapsed = coverage.elapsed;
             spend.merge(coverage.spend);
 
             let Some(response) = coverage.response else {
+                metrics.record(coverage_usage, coverage_elapsed, 0);
+                metrics.stop(crate::lanes::coverage::StopReason::Failed);
                 break;
             };
+            let had_raw_proposals = !response.findings.is_empty();
 
             let anchored = LaneOutcome::from_response(
                 LaneId::Security,
@@ -374,7 +393,8 @@ async fn review_group(
             // Same dedupe as critique's coverage pass: drop anything that
             // corroborates, or fingerprints identically to, a finding already
             // confirmed this unit.
-            let new_findings: Vec<Finding> = anchored
+            let had_proposals = !anchored.findings.is_empty();
+            let mut new_findings: Vec<Finding> = anchored
                 .findings
                 .into_iter()
                 .filter(|candidate| {
@@ -391,15 +411,28 @@ async fn review_group(
                     })
                 })
                 .collect();
+            for finding in &mut new_findings {
+                finding.review_pass = pass_index + 1;
+            }
 
             if new_findings.is_empty() {
+                metrics.record(coverage_usage, coverage_elapsed, 0);
+                metrics.stop(if !had_proposals && had_raw_proposals {
+                    crate::lanes::coverage::StopReason::PlacementFailure
+                } else if had_proposals {
+                    crate::lanes::coverage::StopReason::Duplicate
+                } else {
+                    crate::lanes::coverage::StopReason::Empty
+                });
                 break;
             }
 
+            metrics.record(coverage_usage, coverage_elapsed, new_findings.len());
             added_by_coverage += new_findings.len();
             confirmed.extend(new_findings.clone());
             findings.extend(new_findings);
         }
+        metrics.emit(LaneId::Security, group_paths);
     }
 
     Ok(FileReview {
@@ -410,7 +443,7 @@ async fn review_group(
     })
 }
 
-/// Minimum changed lines a group needs before the opt-in coverage pass
+/// Minimum changed lines a group needs before adaptive coverage passes
 /// (`review.passes > 1`) is worth its extra call — identical threshold and
 /// reasoning to `critique::COVERAGE_PASS_MIN_LINES`, kept as its own constant
 /// per lane rather than shared, so either lane's noise-control knobs can move
@@ -425,7 +458,7 @@ fn changed_lines(group_diffs: &[FileDiff]) -> usize {
         .sum()
 }
 
-/// Say, in the summary, when the opt-in coverage pass found something round
+/// Say, in the summary, when adaptive coverage found something round
 /// one had not.
 ///
 /// Round one's summary is written before the coverage pass ever runs, so on
@@ -537,7 +570,7 @@ pub(crate) fn merge_scanner_findings(outcome: &mut LaneOutcome, scanner: &[&Scan
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::types::{Config, Severity};
+    use crate::config::types::{Config, PathInstruction, Severity};
     use crate::evidence::diff::parse_file_patch;
     use crate::forge::types::PullRequest;
     use crate::harness::mock::MockModel;
@@ -545,11 +578,13 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn config() -> Config {
-        crate::config::DEFAULTS
+        let mut config: Config = crate::config::DEFAULTS
             .parse::<toml::Table>()
             .unwrap()
             .try_into()
-            .unwrap()
+            .unwrap();
+        config.review.passes = 1;
+        config
     }
 
     const PATCH: &str = "@@ -1,3 +1,5 @@\n fn handler(req: Request) {\n+    let cmd = req.query(\"cmd\");\n+    Command::new(\"sh\").arg(\"-c\").arg(cmd).spawn();\n }\n";
@@ -583,6 +618,17 @@ mod tests {
         scan_findings: &[ScanFinding],
         reviewed_evidence: &str,
     ) -> LaneOutcome {
+        run_with_context(model, config, diffs, scan_findings, reviewed_evidence, "").await
+    }
+
+    async fn run_with_context(
+        model: MockModel,
+        config: &Config,
+        diffs: &[FileDiff],
+        scan_findings: &[ScanFinding],
+        reviewed_evidence: &str,
+        redaction_note: &str,
+    ) -> LaneOutcome {
         let pr = pull_request();
         Security::new(Arc::new(model))
             .run(LaneInput {
@@ -598,7 +644,7 @@ mod tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
-                redaction_note: "",
+                redaction_note,
                 e2e: None,
                 tree: None,
                 graph: None,
@@ -693,6 +739,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn adaptive_requests_keep_path_rules_and_redaction_guidance() {
+        let mut config = config_with_passes(2);
+        config.path_instructions = vec![
+            PathInstruction {
+                glob: "src/large.rs".into(),
+                instructions: "Treat request-derived shell arguments as tainted.".into(),
+                rules: None,
+                lanes: vec![LaneId::Security],
+                merge: false,
+            },
+            PathInstruction {
+                glob: "docs/**".into(),
+                instructions: "This unrelated rule must stay out of the request.".into(),
+                rules: None,
+                lanes: vec![LaneId::Security],
+                merge: false,
+            },
+        ];
+        let model = MockModel::new()
+            .then(json!({"summary": "Nothing to report.", "findings": []}))
+            .then(json!({"summary": "Nothing further.", "findings": []}));
+        let handle = model.clone();
+        let redaction_note = "1 credential value was removed; never ask for or guess it.";
+
+        run_with_context(model, &config, &large_diffs(), &[], "", redaction_note).await;
+
+        let requests = handle.requests();
+        assert_eq!(requests.len(), 2);
+        for request in &requests {
+            let prompt = request
+                .messages
+                .iter()
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                prompt.contains("Treat request-derived shell arguments as tainted."),
+                "{prompt}"
+            );
+            assert!(
+                !prompt.contains("This unrelated rule must stay out of the request."),
+                "{prompt}"
+            );
+            assert!(prompt.contains(redaction_note), "{prompt}");
+        }
+    }
+
+    #[tokio::test]
     async fn a_malformed_coverage_response_keeps_round_ones_findings() {
         // The coverage pass is an optional extra look, not round one itself:
         // a reviewer that answers with something that fails the schema (here,
@@ -711,6 +805,79 @@ mod tests {
 
         assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
         assert_eq!(outcome.findings[0].title, "Guard the first index");
+    }
+
+    #[tokio::test]
+    async fn a_new_second_pass_finding_unlocks_the_third_pass() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_at_line("Guard the first index", 5)]
+            }))
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_at_line("Guard the second index", 20)]
+            }))
+            .then(json!({"summary": "Nothing further.", "findings": []}));
+        let handle = model.clone();
+
+        let outcome = run_with(model, &config_with_passes(3), &large_diffs(), &[]).await;
+
+        assert_eq!(outcome.findings.len(), 2, "{:#?}", outcome.findings);
+        assert_eq!(
+            outcome
+                .findings
+                .iter()
+                .map(|finding| finding.review_pass)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(handle.calls(), 3);
+        let prompt = handle
+            .requests()
+            .last()
+            .unwrap()
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(prompt.contains("Guard the first index"), "{prompt}");
+        assert!(prompt.contains("Guard the second index"), "{prompt}");
+    }
+
+    #[tokio::test]
+    async fn a_malformed_third_pass_keeps_findings_from_both_earlier_passes() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_at_line("Guard the first index", 5)]
+            }))
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_at_line("Guard the second index", 20)]
+            }))
+            .then(json!({"summary": "…", "findings": [{"rule": "broken"}]}));
+
+        let outcome = run_with(model, &config_with_passes(3), &large_diffs(), &[]).await;
+
+        assert_eq!(outcome.findings.len(), 2, "{:#?}", outcome.findings);
+    }
+
+    #[tokio::test]
+    async fn a_failed_coverage_pass_keeps_round_ones_findings() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_at_line("Guard the first index", 5)]
+            }))
+            .then_error("provider unavailable");
+        let handle = model.clone();
+
+        let outcome = run_with(model, &config_with_passes(3), &large_diffs(), &[]).await;
+
+        assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
+        assert_eq!(handle.calls(), 2, "failure must stop before pass three");
     }
 
     #[tokio::test]

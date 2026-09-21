@@ -220,14 +220,41 @@ fn a_repository_cannot_decide_whether_the_review_blocks_or_approves() {
 }
 
 #[test]
-fn a_repository_cannot_raise_review_passes() {
+fn a_repository_cannot_override_review_passes() {
     // Each pass above one is another model call per unit that clears the
     // coverage pass's line threshold — the operator's money, exactly like the
     // per-pull-request budget in `[models]`.
-    let (config, ignored) = applied("[review]\npasses = 3\n");
+    // Use a value different from the shipped ceiling so equality with the
+    // base config proves the repository value was ignored rather than merely
+    // happening to request the default.
+    let (config, ignored) = applied("[review]\npasses = 1\n");
 
     assert_eq!(config.review.passes, base().review.passes);
     assert_eq!(ignored, vec!["review.passes".to_string()]);
+}
+
+#[test]
+fn a_repository_cannot_raise_the_review_size_limits() {
+    // The remote allow-list cannot express lower-only overrides, so both
+    // resource ceilings remain wholly under operator control.
+    let (config, ignored) =
+        applied("[review]\nmax_changed_files = 50000\nmax_changed_lines = 5000000\n");
+
+    assert_eq!(
+        config.review.max_changed_files,
+        base().review.max_changed_files
+    );
+    assert_eq!(
+        config.review.max_changed_lines,
+        base().review.max_changed_lines
+    );
+    assert_eq!(
+        ignored,
+        vec![
+            "review.max_changed_files".to_string(),
+            "review.max_changed_lines".to_string(),
+        ]
+    );
 }
 
 #[test]
@@ -437,6 +464,13 @@ workflows = ["e2e"]
 [preview]
 enabled = false
 max_flows = 2
+
+[summary]
+enabled = false
+sections = ["snapshot", "findings"]
+max_features = 4
+max_tests = 4
+history_entries = 3
 "#;
 
 #[test]

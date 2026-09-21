@@ -253,6 +253,13 @@ fn the_built_in_defaults_are_valid() {
 }
 
 #[test]
+fn review_passes_defaults_to_three_adaptive_attempts() {
+    let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
+
+    assert_eq!(config.review.passes, 3);
+}
+
+#[test]
 fn recorded_eval_cassettes_are_ignored_by_default() {
     let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
 
@@ -487,6 +494,16 @@ fn stale_handling_defaults_to_marking_never_closing() {
 }
 
 #[test]
+fn thread_replies_are_advised_on_by_default() {
+    let dir = repo(None, &[]);
+    let threads = load(dir.path(), None).expect("loads").config.threads;
+
+    assert!(threads.resolve_fixed);
+    assert!(threads.ask_model);
+    assert!(threads.comment_on_resolve);
+}
+
+#[test]
 fn a_repository_setting_overrides_a_default_and_is_attributed() {
     let dir = repo(Some("version = 1\n[review]\nstrictness = 3\n"), &[]);
     let loaded = load(dir.path(), None).expect("loads");
@@ -657,8 +674,22 @@ fn review_passes_out_of_range_is_rejected() {
     let joined = validate::validate(&config).join("\n");
     assert!(joined.contains("review.passes = 0"), "{joined}");
 
-    let config = parse("version = 1\n[review]\npasses = 2\n");
-    assert!(validate::validate(&config).is_empty());
+    for passes in 1..=3 {
+        let config = parse(&format!("version = 1\n[review]\npasses = {passes}\n"));
+        assert!(
+            validate::validate(&config).is_empty(),
+            "passes = {passes} should be valid"
+        );
+    }
+}
+
+#[test]
+fn review_size_limits_must_be_positive() {
+    let config = parse("version = 1\n[review]\nmax_changed_files = 0\nmax_changed_lines = 0\n");
+    let joined = validate::validate(&config).join("\n");
+
+    assert!(joined.contains("review.max_changed_files = 0"), "{joined}");
+    assert!(joined.contains("review.max_changed_lines = 0"), "{joined}");
 }
 
 #[test]

@@ -34,6 +34,8 @@ use crate::ports::forge::ForgeRead;
 
 /// The marker key carrying a finding's fingerprint.
 const FINGERPRINT_KEY: &str = "fp=";
+/// Renderer-owned aliases immediately before the authoritative fingerprint.
+const FINGERPRINTS_KEY: &str = "fps=";
 
 /// The marker key carrying the last reviewed head SHA.
 const STATE_KEY: &str = "state v=1 sha=";
@@ -246,7 +248,8 @@ pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<Pr
         if !is_own_login(&comment.author) {
             continue;
         }
-        if let Some(fingerprint) = fingerprint_in(&comment.body) {
+        let fingerprints = fingerprints_in(&comment.body);
+        if let Some(fingerprint) = fingerprints.first() {
             // Recorded for every one of our comments, including the repeats: a
             // fingerprint we have seen before still tells us that this line is
             // spoken for, which is the whole reason the anchor is kept.
@@ -260,9 +263,9 @@ pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<Pr
 
             // A repeated fingerprint is normal — the same finding across two
             // reviews — so the title is only recorded the first time.
-            if prior.posted.insert(fingerprint)
-                && let Some(title) = title_in(&comment.body)
-            {
+            let first_seen = prior.posted.insert(fingerprint.clone());
+            prior.posted.extend(fingerprints.into_iter().skip(1));
+            if first_seen && let Some(title) = title_in(&comment.body) {
                 if let Some(severity) = severity_in(&comment.body) {
                     // First writer wins. Two comments for one title means the
                     // level already drifted; the earliest is the one the author
@@ -299,6 +302,47 @@ pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<Pr
 pub fn fingerprint_in(body: &str) -> Option<String> {
     let value = marker_value(body, FINGERPRINT_KEY)?;
     is_fingerprint(value).then(|| value.to_string())
+}
+
+/// Every identity deliberately published in one renderer-owned comment.
+///
+/// The primary fingerprint remains the final marker for backward compatibility
+/// and thread resolution. Aliases are accepted only when their marker is
+/// immediately adjacent to that final marker, so marker-shaped text in a
+/// model-authored body cannot suppress another finding.
+pub fn fingerprints_in(body: &str) -> Vec<String> {
+    let Some(primary) = fingerprint_in(body) else {
+        return Vec::new();
+    };
+    let primary_marker = format!(
+        "<!-- {}{FINGERPRINT_KEY}{primary} -->",
+        crate::MARKER_PREFIX
+    );
+    let Some(before_primary) = body.strip_suffix(&primary_marker) else {
+        return vec![primary];
+    };
+    let alias_opener = format!("<!-- {}{FINGERPRINTS_KEY}", crate::MARKER_PREFIX);
+    let Some(start) = before_primary.rfind(&alias_opener) else {
+        return vec![primary];
+    };
+    let alias_marker = &before_primary[start..];
+    let Some(values) = alias_marker
+        .strip_prefix(&alias_opener)
+        .and_then(|rest| rest.strip_suffix(" -->"))
+    else {
+        return vec![primary];
+    };
+
+    let mut fingerprints = vec![primary.clone()];
+    for value in values.split(',').map(str::trim) {
+        if is_fingerprint(value)
+            && value != primary
+            && !fingerprints.iter().any(|seen| seen == value)
+        {
+            fingerprints.push(value.to_string());
+        }
+    }
+    fingerprints
 }
 
 /// The value of the final `<!-- tinysweeper:<key><value> -->` marker in `body`.
@@ -416,6 +460,26 @@ mod tests {
         let prior = load_from(vec![ours("0123456789abcdef", "Guard the index")]).await;
         assert!(prior.already_posted("0123456789abcdef"));
         assert_eq!(prior.titles, vec!["Guard the index"]);
+    }
+
+    #[tokio::test]
+    async fn every_renderer_owned_group_identity_is_read_back() {
+        let mut comment = ours("0123456789abcdef", "Guard the index");
+        comment.body = "![high](x) **Guard the index**\n\nbody\n\n<!-- tinysweeper:fps=1111111111111111,2222222222222222 --><!-- tinysweeper:fp=0123456789abcdef -->".into();
+
+        let prior = load_from(vec![comment]).await;
+
+        for identity in ["0123456789abcdef", "1111111111111111", "2222222222222222"] {
+            assert!(prior.already_posted(identity), "missing {identity}");
+        }
+        assert_eq!(prior.titles, vec!["Guard the index"]);
+    }
+
+    #[test]
+    fn a_non_adjacent_alias_marker_is_untrusted_body_text() {
+        let body = "<!-- tinysweeper:fps=1111111111111111 -->\nmodel prose\n<!-- tinysweeper:fp=0123456789abcdef -->";
+
+        assert_eq!(fingerprints_in(body), vec!["0123456789abcdef"]);
     }
 
     #[tokio::test]
@@ -737,6 +801,9 @@ mod tests {
             applicable: None,
             late: false,
             identity: None,
+            aliases: vec![],
+            grouped: false,
+            review_pass: 1,
             corroboration: 1,
         }
     }

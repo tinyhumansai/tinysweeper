@@ -117,7 +117,7 @@ is dropped and logged.
 | Not overridable | `[automerge]`, `[issues]`, `[automation]`, `[sentry]` | Write actions against the operator's installation. A repository that could enable auto-merge from a branch could merge that branch. |
 | Not overridable | `[lookup]`, `retrieval.submodules` | Every lookup round is a model call the operator pays for, and a checkout or a submodule fetch is a network request with the operator's read token on it. |
 | Not overridable | `[memory]` | Names the engine the operator's reviewer talks to and the variable its key lives in. A repository that could point memory elsewhere could feed the reviewer a memory of its choosing. |
-| Not overridable | `review.request_changes_at`, `review.approve_when_clean` | The verdict controls: whether a finding blocks the merge button, and whether the bot's approval can satisfy a branch protection rule. |
+| Not overridable | `review.request_changes_at`, `review.approve_when_clean`, `review.max_changed_files`, `review.max_changed_lines` | The verdict controls decide whether the bot blocks or approves. The size ceilings bound operator resources before model work; a reviewed repository may lower neither today, because the remote allow-list cannot express lower-only overrides safely. |
 | Not overridable | `path_instructions` | Free text injected unfenced into a lane's instructions. Repository prose reaches a prompt through exactly one door — the sandboxed extraction in `crate::knowledge` — and this must not become a second. |
 | Not overridable | `preset`, `version` | A preset is read from the *server's* filesystem and may set any key at all, so honouring one named by the reviewed repository would make every exclusion above reachable in one line. |
 

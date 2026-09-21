@@ -33,6 +33,7 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_memory(config, &mut problems);
     validate_mcp(config, &mut problems);
     validate_overview(config, &mut problems);
+    validate_summary(config, &mut problems);
     validate_grouping(config, &mut problems);
     validate_lanes(config, &mut problems);
     validate_council(config, &mut problems);
@@ -148,9 +149,23 @@ fn validate_review(config: &Config, problems: &mut Vec<String>) {
         );
     }
 
+    if review.max_changed_files == 0 {
+        problems.push(
+            "`review.max_changed_files = 0` would refuse every non-empty pull request; set it above zero"
+                .into(),
+        );
+    }
+
+    if review.max_changed_lines == 0 {
+        problems.push(
+            "`review.max_changed_lines = 0` would refuse every pull request that changes code; set it above zero"
+                .into(),
+        );
+    }
+
     if !(1..=3).contains(&review.passes) {
         problems.push(format!(
-            "`review.passes = {}` is out of range; expected 1 (round one only), 2 or 3",
+            "`review.passes = {}` is out of range; expected a maximum adaptive depth from 1 through 3",
             review.passes
         ));
     }
@@ -645,6 +660,22 @@ fn validate_overview(config: &Config, problems: &mut Vec<String>) {
             problems.push(format!(
                 "`overview.{name} = 0` with `overview.enabled = true` would post an empty \
                  diagram; set it above zero or set `overview.enabled = false`"
+            ));
+        }
+    }
+}
+
+fn validate_summary(config: &Config, problems: &mut Vec<String>) {
+    let summary = &config.summary;
+    if !summary.enabled {
+        return;
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for section in &summary.sections {
+        let name = format!("{section:?}");
+        if !seen.insert(name.clone()) {
+            problems.push(format!(
+                "`summary.sections` contains `{name}` more than once"
             ));
         }
     }
