@@ -283,6 +283,8 @@ pub struct Mcp {
     pub token_env: String,
     /// Organisation whose installed repositories this endpoint may access.
     pub allowed_org: String,
+    /// Exact `owner/name` repositories exposed through the endpoint.
+    pub allowed_repos: Vec<String>,
 }
 
 /// Review behaviour and the gates that keep it quiet.

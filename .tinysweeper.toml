@@ -137,6 +137,7 @@ answer_model = "flash"
 enabled = true
 token_env = "TINYSWEEPER_MCP_TOKEN"
 allowed_org = "tinyhumansai"
+allowed_repos = ["tinyhumansai/tinysweeper"]
 
 # Issue triage, turned on for this repository so the job is exercised on real
 # issues. Closing stays off: the labels and the duplicate cross-links are the

@@ -367,6 +367,7 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
         if let Some(routes) = mcp::router(
             mcp_auth,
             state.config.config.mcp.allowed_org.clone(),
+            state.config.config.mcp.allowed_repos.clone(),
             state.auth.clone(),
             state.index.clone(),
             state.store.clone(),

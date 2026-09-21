@@ -73,6 +73,32 @@ fn validate_mcp(config: &Config, problems: &mut Vec<String>) {
     if !valid_github_login(org) {
         problems.push("`mcp.allowed_org` must be one plausible GitHub organisation login".into());
     }
+    if config.mcp.allowed_repos.is_empty() {
+        problems.push(
+            "`mcp.allowed_repos` is empty; list every owner/name repository the MCP endpoint may expose"
+                .into(),
+        );
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for raw in &config.mcp.allowed_repos {
+        let Some(repo) = RepoId::parse(raw) else {
+            problems.push(format!(
+                "`mcp.allowed_repos` contains invalid repository `{raw}`; expected owner/name"
+            ));
+            continue;
+        };
+        if !repo.owner.eq_ignore_ascii_case(org) {
+            problems.push(format!(
+                "`mcp.allowed_repos` entry `{raw}` is outside `mcp.allowed_org`"
+            ));
+        }
+        let normalized = raw.to_ascii_lowercase();
+        if !seen.insert(normalized) {
+            problems.push(format!(
+                "`mcp.allowed_repos` contains duplicate repository `{raw}`"
+            ));
+        }
+    }
 }
 
 fn valid_github_login(value: &str) -> bool {

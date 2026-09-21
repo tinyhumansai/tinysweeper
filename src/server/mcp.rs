@@ -86,6 +86,7 @@ impl McpAuth {
 #[derive(Clone)]
 struct McpState {
     allowed_org: Arc<str>,
+    allowed_repos: Arc<[String]>,
     auth: Arc<AppAuth>,
     index: Option<Arc<IndexBackend>>,
     store: Option<Store>,
@@ -97,16 +98,18 @@ struct McpState {
 pub fn router(
     authz: Option<McpAuth>,
     allowed_org: String,
+    allowed_repos: Vec<String>,
     auth: Arc<AppAuth>,
     index: Option<Arc<IndexBackend>>,
     store: Store,
 ) -> Option<Router> {
-    build_router(authz?, allowed_org, auth, index, Some(store))
+    build_router(authz?, allowed_org, allowed_repos, auth, index, Some(store))
 }
 
 fn build_router(
     authz: McpAuth,
     allowed_org: String,
+    allowed_repos: Vec<String>,
     auth: Arc<AppAuth>,
     index: Option<Arc<IndexBackend>>,
     store: Option<Store>,
@@ -118,6 +121,7 @@ fn build_router(
             .layer(DefaultBodyLimit::max(MAX_HTTP_BODY))
             .with_state(McpState {
                 allowed_org: Arc::from(allowed_org),
+                allowed_repos: Arc::from(allowed_repos),
                 auth,
                 index,
                 store,
@@ -191,6 +195,7 @@ async fn call(state: &McpState, params: &Value) -> Result<Value, String> {
         .unwrap_or_else(|| json!({}));
     let requested_repo = checked_repo(
         &state.allowed_org,
+        &state.allowed_repos,
         args.get("repo")
             .and_then(Value::as_str)
             .ok_or("repo is required")?,
@@ -209,7 +214,7 @@ async fn call(state: &McpState, params: &Value) -> Result<Value, String> {
         .canonical_repo(&requested_repo)
         .await
         .map_err(|err| err.to_string())?;
-    checked_repo(&state.allowed_org, &repo.to_string())?;
+    checked_repo(&state.allowed_org, &state.allowed_repos, &repo.to_string())?;
     match name {
         "search_code" => search_code(state, &repo, &args).await,
         "search_issues" => search_issues(state, &repo, &args).await,
@@ -220,10 +225,17 @@ async fn call(state: &McpState, params: &Value) -> Result<Value, String> {
     .map(content)
 }
 
-fn checked_repo(allowed_org: &str, raw: &str) -> Result<RepoId, String> {
+fn checked_repo(allowed_org: &str, allowed_repos: &[String], raw: &str) -> Result<RepoId, String> {
     let repo = RepoId::parse(raw).ok_or("repo must be owner/name")?;
-    if !repo.owner.eq_ignore_ascii_case(allowed_org) {
-        return Err("repository is outside this MCP server's allowed organisation".into());
+    let allowed = repo.owner.eq_ignore_ascii_case(allowed_org)
+        && allowed_repos.iter().any(|candidate| {
+            RepoId::parse(candidate).is_some_and(|candidate| {
+                candidate.owner.eq_ignore_ascii_case(&repo.owner)
+                    && candidate.name.eq_ignore_ascii_case(&repo.name)
+            })
+        });
+    if !allowed {
+        return Err("repository is not in this MCP server's allowlist".into());
     }
     Ok(repo)
 }
@@ -669,6 +681,7 @@ mod tests {
             .layer(DefaultBodyLimit::max(MAX_HTTP_BODY))
             .with_state(McpState {
                 allowed_org: Arc::from("tinyhumansai"),
+                allowed_repos: Arc::from(vec!["tinyhumansai/tinysweeper".into()]),
                 auth: Arc::new(auth),
                 index: None,
                 store: None,
@@ -744,8 +757,10 @@ mod tests {
 
     #[test]
     fn repository_scope_is_case_insensitive_and_closed() {
-        assert!(checked_repo("tinyhumansai", "TinyHumansAI/teeny").is_ok());
-        assert!(checked_repo("tinyhumansai", "somebody/teeny").is_err());
+        let allowed = vec!["tinyhumansai/tinysweeper".into()];
+        assert!(checked_repo("tinyhumansai", &allowed, "TinyHumansAI/TinySweeper").is_ok());
+        assert!(checked_repo("tinyhumansai", &allowed, "tinyhumansai/private").is_err());
+        assert!(checked_repo("tinyhumansai", &allowed, "somebody/tinysweeper").is_err());
     }
 
     #[test]
@@ -892,7 +907,7 @@ mod tests {
             .header("content-type", "application/json")
             .header("authorization", format!("Bearer {TOKEN}"))
             .body(Body::from(
-                r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_issues","arguments":{"repo":"tinyhumansai/teeny","query":"parser","limit":10}}}"#,
+                r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_issues","arguments":{"repo":"tinyhumansai/tinysweeper","query":"parser","limit":10}}}"#,
             ))
             .unwrap();
 
@@ -908,6 +923,31 @@ mod tests {
             value["result"]["structuredContent"]["hits"][0]["open"],
             false
         );
+    }
+
+    #[tokio::test]
+    async fn authenticated_tool_calls_reject_repositories_outside_the_allowlist() {
+        use crate::forge::MockForge;
+
+        let request = Request::post("/mcp")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::from(
+                r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_issues","arguments":{"repo":"tinyhumansai/private","query":"parser"}}}"#,
+            ))
+            .unwrap();
+
+        let response = protocol_router_with_forge(Some(Arc::new(MockForge::new())))
+            .oneshot(request)
+            .await
+            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            value["error"]["message"],
+            "repository is not in this MCP server's allowlist"
+        );
+        assert!(value.get("result").is_none());
     }
 
     #[test]
