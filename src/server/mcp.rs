@@ -169,6 +169,7 @@ fn is_notification(request: &Value) -> bool {
 fn tools() -> Value {
     json!({"tools":[
      {"name":"search_code","description":"Hybrid vector and lexical search of one indexed repository.","inputSchema":{"type":"object","required":["repo","query"],"properties":{"repo":{"type":"string"},"query":{"type":"string","maxLength":4096},"limit":{"type":"integer"}}}},
+     {"name":"search_issues","description":"Search one repository's open and closed issues (pull requests excluded). Read-only.","inputSchema":{"type":"object","required":["repo","query"],"properties":{"repo":{"type":"string"},"query":{"type":"string","maxLength":4096},"limit":{"type":"integer"}}}},
      {"name":"read_docs","description":"Read repository documentation and issue templates from the default branch.","inputSchema":{"type":"object","required":["repo"],"properties":{"repo":{"type":"string"},"path":{"type":"string","maxLength":1024}}}},
      {"name":"create_issue","description":"Create a title-deduplicated GitHub issue enriched with vector-derived code locations and a repository Markdown issue template. Returns likely duplicates instead of writing unless force is true.","inputSchema":{"type":"object","required":["repo","title","body"],"properties":{"repo":{"type":"string"},"title":{"type":"string","maxLength":256},"body":{"type":"string","maxLength":65536},"template":{"type":"string","maxLength":1024,"description":"Optional repo-relative Markdown issue template path."},"labels":{"type":"array","maxItems":20,"items":{"type":"string","maxLength":50}},"force":{"type":"boolean"}}}}
     ]})
@@ -198,6 +199,7 @@ async fn call(state: &McpState, params: &Value) -> Result<Value, String> {
     checked_repo(&state.allowed_org, &repo.to_string())?;
     match name {
         "search_code" => search_code(state, &repo, &args).await,
+        "search_issues" => search_issues(state, &repo, &args).await,
         "read_docs" => read_docs(state, &repo, &args).await,
         "create_issue" => create_issue(state, &repo, &args).await,
         _ => Err(format!("unknown tool `{name}`")),
@@ -257,6 +259,48 @@ async fn search_code(state: &McpState, repo: &RepoId, args: &Value) -> Result<Va
     Ok(
         json!({"repo":repo.to_string(),"hits":hits.into_iter().map(|hit| json!({"path":hit.chunk.path,"start_line":hit.chunk.start_line,"end_line":hit.chunk.end_line,"symbol":hit.chunk.symbol,"score":hit.score,"text":hit.chunk.text})).collect::<Vec<_>>() }),
     )
+}
+
+async fn search_issues(state: &McpState, repo: &RepoId, args: &Value) -> Result<Value, String> {
+    let query = bounded_required(args, "query", MAX_QUERY_BYTES)?;
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(10)
+        .min(MAX_HITS as u64) as usize;
+    let token = read_token(state, repo).await?;
+    let forge = crate::forge::github::GitHubRead::new(&token).map_err(|error| error.to_string())?;
+    search_issue_hits(&forge, repo, query, limit).await
+}
+
+async fn search_issue_hits(
+    forge: &dyn ForgeRead,
+    repo: &RepoId,
+    query: &str,
+    limit: usize,
+) -> Result<Value, String> {
+    let issues = forge
+        .search_issues(repo, query)
+        .await
+        .map_err(|error| error.to_string())?;
+    let hits = issues
+        .into_iter()
+        .filter(|issue| !issue.pull_request)
+        .take(limit.min(MAX_HITS))
+        .map(|issue| {
+            let excerpt: String = issue.body.chars().take(400).collect();
+            json!({
+                "number": issue.number,
+                "title": issue.title,
+                "open": issue.open,
+                "labels": issue.labels,
+                "comments": issue.comments,
+                "url": format!("https://github.com/{}/{}/issues/{}", repo.owner, repo.name, issue.number),
+                "excerpt": excerpt,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({"repo": repo.to_string(), "hits": hits}))
 }
 
 async fn read_docs(state: &McpState, repo: &RepoId, args: &Value) -> Result<Value, String> {
@@ -626,7 +670,9 @@ mod tests {
         let response = protocol_router().oneshot(request).await.unwrap();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["result"]["tools"].as_array().unwrap().len(), 3);
+        let tools = value["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 4);
+        assert!(tools.iter().any(|tool| tool["name"] == "search_issues"));
 
         let request = Request::post("/mcp")
             .header("content-type", "application/json")
@@ -710,6 +756,70 @@ mod tests {
             bounded_required(&args, "query", MAX_QUERY_BYTES).unwrap(),
             "where is parsing handled?"
         );
+    }
+
+    #[tokio::test]
+    async fn issue_search_returns_issues_only_and_clamps_the_limit() {
+        use crate::forge::{Issue, MockForge};
+
+        let mut forge = MockForge::new().with_issue(Issue {
+            number: 1,
+            title: "Parser bug".into(),
+            body: "é".repeat(450),
+            labels: vec!["bug".into()],
+            open: true,
+            comments: 3,
+            ..Issue::default()
+        });
+        for number in 2..=25 {
+            forge = forge.with_issue(Issue {
+                number,
+                title: format!("Parser bug {number}"),
+                ..Issue::default()
+            });
+        }
+        forge = forge.with_issue(Issue {
+            number: 99,
+            title: "Parser pull request".into(),
+            body: "Not an issue".into(),
+            pull_request: true,
+            ..Issue::default()
+        });
+        let repo = RepoId::parse("tinyhumansai/teeny").unwrap();
+
+        let result = search_issue_hits(&forge, &repo, "parser", usize::MAX)
+            .await
+            .unwrap();
+        let hits = result["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), MAX_HITS);
+        assert!(!hits.iter().any(|hit| hit["number"] == 99));
+        assert_eq!(hits[0]["number"], 1);
+        assert_eq!(hits[0]["comments"], 3);
+        assert_eq!(
+            hits[0]["url"],
+            "https://github.com/tinyhumansai/teeny/issues/1"
+        );
+        assert_eq!(hits[0]["excerpt"].as_str().unwrap().chars().count(), 400);
+    }
+
+    #[tokio::test]
+    async fn issue_search_honours_a_smaller_limit() {
+        use crate::forge::{Issue, MockForge};
+
+        let forge = MockForge::new()
+            .with_issue(Issue {
+                number: 1,
+                title: "bug one".into(),
+                ..Issue::default()
+            })
+            .with_issue(Issue {
+                number: 2,
+                title: "bug two".into(),
+                ..Issue::default()
+            });
+        let repo = RepoId::parse("tinyhumansai/teeny").unwrap();
+        let result = search_issue_hits(&forge, &repo, "bug", 1).await.unwrap();
+        assert_eq!(result["hits"].as_array().unwrap().len(), 1);
     }
 
     #[test]
