@@ -454,6 +454,19 @@ fn an_enabled_mcp_needs_a_token_variable_and_an_organisation() {
 }
 
 #[test]
+fn the_mcp_token_setting_only_accepts_a_tinysweeper_token_variable_name() {
+    let mut config = parse("version = 1\n");
+    config.mcp.enabled = true;
+    config.mcp.token_env = "NOT_A_SECRET_VALUE".into();
+
+    assert!(
+        validate::validate(&config)
+            .join("\n")
+            .contains("TINYSWEEPER_*_TOKEN")
+    );
+}
+
+#[test]
 fn auto_merge_ships_with_every_deterministic_threshold_set() {
     // Every threshold has to have a shipped value. A missing one deserialises
     // to `0`, and a zero cap refuses everything — safe, but it would make the

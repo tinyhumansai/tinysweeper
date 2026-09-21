@@ -40,22 +40,22 @@ The server exposes three tools:
   the default-branch commit. Supplying `path` reads exactly one file. Agents
   should call this before proposing an issue so repository conventions and
   templates are part of their reasoning.
-- `create_issue(repo, title, body, labels?, force?)` searches the repository's
-  issue history first. It returns likely open or closed duplicates without a
-  write unless `force` is explicitly true. The agent supplies the final body;
-  the server only mints the installation write token after the read and dedupe
-  decision have completed.
+- `create_issue(repo, title, body, labels?, force?)` takes an atomic seven-day
+  idempotency claim and searches the repository's issue history. It returns
+  likely open or closed duplicates without a write unless `force` is explicitly
+  true. The agent supplies the final body.
 
-The index and issue history are persistent across MCP requests. The latter is
-the duplicate memory for issue creation; the existing Cortex memory remains
-available to review and can be backfilled through the established admin route.
+The idempotency claims, index and issue history are persistent across MCP
+requests. The claim closes the concurrency and GitHub search-index delay;
+history catches older duplicates. The existing Cortex memory remains available
+to review and can be backfilled through the established admin route.
 
 ## Security model
 
 MCP never accepts a repository URL, arbitrary checkout path, or GitHub token.
 Repositories are parsed as `owner/name`, checked against the configured
 organisation, and resolved through the installed GitHub App. Code and docs are
-read from an immutable default-branch commit. The only write is issue creation,
-which uses a fresh installation token after duplicate detection. This preserves
-the service-wide boundary that no model or external agent receives a write
-credential.
+read from an immutable default-branch commit. The only write is issue creation.
+The planner produces an immutable issue plan after every read and policy
+decision; `src/server/mcp/apply.rs` alone mints the write credential and
+executes that plan. No model or external agent receives a write credential.

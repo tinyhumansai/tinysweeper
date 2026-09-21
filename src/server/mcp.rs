@@ -8,19 +8,23 @@
 
 use std::sync::Arc;
 
-use axum::extract::State;
-use axum::response::IntoResponse;
+use axum::extract::{Request, State};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use serde_json::{Value, json};
 
 use crate::forge::RepoId;
 use crate::index::types::HybridQuery;
-use crate::ports::forge::{ForgeRead, ForgeWrite};
+use crate::ports::forge::ForgeRead;
 use crate::ports::index::ChunkIndex;
 use crate::server::admin::AdminAuth;
 use crate::server::auth::AppAuth;
 use crate::server::indexing::IndexBackend;
+use crate::server::store::Store;
+
+mod apply;
 
 const MAX_HITS: usize = 20;
 const MAX_DOCS: usize = 20;
@@ -30,6 +34,7 @@ struct McpState {
     allowed_org: Arc<str>,
     auth: Arc<AppAuth>,
     index: Option<Arc<IndexBackend>>,
+    store: Store,
 }
 
 /// Build an MCP router, or no router when the MCP bearer is unset.
@@ -38,6 +43,7 @@ pub fn router(
     allowed_org: String,
     auth: Arc<AppAuth>,
     index: Option<Arc<IndexBackend>>,
+    store: Store,
 ) -> Option<Router> {
     let authz = Arc::new(authz?);
     Some(
@@ -47,15 +53,28 @@ pub fn router(
                 allowed_org: Arc::from(allowed_org),
                 auth,
                 index,
+                store,
             })
-            .route_layer(axum::middleware::from_fn_with_state(
-                authz,
-                crate::server::admin::guard,
-            )),
+            .route_layer(axum::middleware::from_fn_with_state(authz, guard)),
     )
 }
 
+async fn guard(State(auth): State<Arc<AdminAuth>>, request: Request, next: Next) -> Response {
+    let offered = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok());
+    if auth.permits(offered) {
+        next.run(request).await
+    } else {
+        axum::http::StatusCode::UNAUTHORIZED.into_response()
+    }
+}
+
 async fn handle(State(state): State<McpState>, Json(request): Json<Value>) -> impl IntoResponse {
+    if is_notification(&request) {
+        return axum::http::StatusCode::ACCEPTED.into_response();
+    }
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let method = request
         .get("method")
@@ -66,7 +85,6 @@ async fn handle(State(state): State<McpState>, Json(request): Json<Value>) -> im
         "initialize" => Ok(
             json!({"protocolVersion":"2024-11-05","serverInfo":{"name":"tinysweeper","version":env!("CARGO_PKG_VERSION")},"capabilities":{"tools":{}}}),
         ),
-        "notifications/initialized" => Ok(json!({})),
         "tools/list" => Ok(tools()),
         "tools/call" => call(&state, &params).await,
         _ => Err(format!("unsupported MCP method `{method}`")),
@@ -78,6 +96,10 @@ async fn handle(State(state): State<McpState>, Json(request): Json<Value>) -> im
                 .into_response()
         }
     }
+}
+
+fn is_notification(request: &Value) -> bool {
+    request.get("id").is_none()
 }
 
 fn tools() -> Value {
@@ -97,12 +119,18 @@ async fn call(state: &McpState, params: &Value) -> Result<Value, String> {
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let repo = checked_repo(
-        state,
+    let requested_repo = checked_repo(
+        &state.allowed_org,
         args.get("repo")
             .and_then(Value::as_str)
             .ok_or("repo is required")?,
     )?;
+    let token = read_token(state, &requested_repo).await?;
+    let forge = crate::forge::github::GitHubRead::new(&token).map_err(|err| err.to_string())?;
+    let repo = forge
+        .canonical_repo(&requested_repo)
+        .await
+        .map_err(|err| err.to_string())?;
     match name {
         "search_code" => search_code(state, &repo, &args).await,
         "read_docs" => read_docs(state, &repo, &args).await,
@@ -112,9 +140,9 @@ async fn call(state: &McpState, params: &Value) -> Result<Value, String> {
     .map(content)
 }
 
-fn checked_repo(state: &McpState, raw: &str) -> Result<RepoId, String> {
+fn checked_repo(allowed_org: &str, raw: &str) -> Result<RepoId, String> {
     let repo = RepoId::parse(raw).ok_or("repo must be owner/name")?;
-    if !repo.owner.eq_ignore_ascii_case(&state.allowed_org) {
+    if !repo.owner.eq_ignore_ascii_case(allowed_org) {
         return Err("repository is outside this MCP server's allowed organisation".into());
     }
     Ok(repo)
@@ -188,19 +216,14 @@ async fn read_docs(state: &McpState, repo: &RepoId, args: &Value) -> Result<Valu
         .map_err(|e| e.to_string())?
         .paths;
     let requested = args.get("path").and_then(Value::as_str);
+    if let Some(path) = requested
+        && !is_doc_path(path)
+    {
+        return Err("path must name Markdown documentation or an issue template".into());
+    }
     let docs: Vec<_> = paths
         .into_iter()
-        .filter(|path| {
-            requested.map_or_else(
-                || {
-                    path == "README.md"
-                        || path.ends_with(".md")
-                        || path.starts_with("docs/")
-                        || path.starts_with(".github/ISSUE_TEMPLATE/")
-                },
-                |wanted| path == wanted,
-            )
-        })
+        .filter(|path| requested.map_or_else(|| is_doc_path(path), |wanted| path == wanted))
         .take(MAX_DOCS)
         .collect();
     let mut files = Vec::new();
@@ -216,6 +239,12 @@ async fn read_docs(state: &McpState, repo: &RepoId, args: &Value) -> Result<Valu
     Ok(json!({"repo":repo.to_string(),"revision":sha,"files":files}))
 }
 
+fn is_doc_path(path: &str) -> bool {
+    path.to_ascii_lowercase().ends_with(".md")
+        || path.starts_with("docs/")
+        || path.starts_with(".github/ISSUE_TEMPLATE/")
+}
+
 async fn create_issue(state: &McpState, repo: &RepoId, args: &Value) -> Result<Value, String> {
     let title = args
         .get("title")
@@ -227,6 +256,44 @@ async fn create_issue(state: &McpState, repo: &RepoId, args: &Value) -> Result<V
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty())
         .ok_or("body is required")?;
+
+    // This claim is the authoritative retry/concurrency memory. GitHub issue
+    // search below catches old duplicates, but its index is eventually
+    // consistent and cannot make a check-then-create sequence atomic.
+    let force = args.get("force").and_then(Value::as_bool).unwrap_or(false);
+    let request_key = issue_request_key(repo, title, force);
+    if !state
+        .store
+        .claim_delivery(&request_key, "mcp-create-issue")
+        .await
+        .map_err(|err| err.to_string())?
+    {
+        return Ok(json!({
+            "created": false,
+            "reason": "an identical issue request was already accepted recently"
+        }));
+    }
+
+    let outcome = create_claimed_issue(state, repo, args, title, body).await;
+    if outcome.is_err() {
+        // A failed attempt is retryable. Successful claims deliberately remain
+        // until the store's TTL expires, covering GitHub's search-index lag.
+        state
+            .store
+            .release_delivery(&request_key)
+            .await
+            .map_err(|err| err.to_string())?;
+    }
+    outcome
+}
+
+async fn create_claimed_issue(
+    state: &McpState,
+    repo: &RepoId,
+    args: &Value,
+    title: &str,
+    body: &str,
+) -> Result<Value, String> {
     let token = read_token(state, repo).await?;
     let read = crate::forge::github::GitHubRead::new(&token).map_err(|e| e.to_string())?;
     let duplicates = read
@@ -266,11 +333,6 @@ async fn create_issue(state: &McpState, repo: &RepoId, args: &Value) -> Result<V
         .installation_for_repo(&repo.owner, &repo.name)
         .await
         .map_err(|e| e.to_string())?;
-    let write_token = state
-        .auth
-        .installation_token(installation)
-        .await
-        .map_err(|e| e.to_string())?;
     let labels: Vec<String> = args
         .get("labels")
         .and_then(Value::as_array)
@@ -281,12 +343,36 @@ async fn create_issue(state: &McpState, repo: &RepoId, args: &Value) -> Result<V
                 .collect::<Vec<String>>()
         })
         .unwrap_or_default();
-    let number = crate::forge::github::GitHubWrite::new(&write_token)
-        .map_err(|e| e.to_string())?
-        .create_issue(repo, title, &issue_body, &labels)
+    let plan = apply::IssuePlan {
+        repo: repo.clone(),
+        installation,
+        title: title.to_string(),
+        body: issue_body,
+        labels,
+    };
+    let number = apply::apply(state.auth.as_ref(), &plan)
         .await
         .map_err(|e| e.to_string())?;
     Ok(json!({"created":true,"number":number,"template":template_path,"code_locations":evidence}))
+}
+
+fn issue_request_key(repo: &RepoId, title: &str, force: bool) -> String {
+    use sha2::{Digest, Sha256};
+    let normalized = format!(
+        "{}\n{}\n{force}",
+        repo.to_string().to_ascii_lowercase(),
+        title
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase()
+    );
+    use std::fmt::Write as _;
+    let mut key = String::from("mcp-issue:");
+    for byte in Sha256::digest(normalized.as_bytes()) {
+        let _ = write!(key, "{byte:02x}");
+    }
+    key
 }
 
 fn choose_template(paths: &[String], requested: Option<&str>) -> Result<Option<String>, String> {
@@ -376,15 +462,8 @@ mod tests {
 
     #[test]
     fn repository_scope_is_case_insensitive_and_closed() {
-        let state = McpState {
-            allowed_org: Arc::from("tinyhumansai"),
-            auth: Arc::new(
-                AppAuth::from_der("1", &crate::server::test_key::test_key_der()).unwrap(),
-            ),
-            index: None,
-        };
-        assert!(checked_repo(&state, "TinyHumansAI/teeny").is_ok());
-        assert!(checked_repo(&state, "somebody/teeny").is_err());
+        assert!(checked_repo("tinyhumansai", "TinyHumansAI/teeny").is_ok());
+        assert!(checked_repo("tinyhumansai", "somebody/teeny").is_err());
     }
 
     #[test]
@@ -410,5 +489,38 @@ mod tests {
         assert!(body.contains("Teeny-provided details"));
         assert!(body.contains("`src/lib.rs:4-9` — `run`"));
         assert!(body.ends_with("<!-- tinysweeper:mcp -->\n"));
+    }
+
+    #[test]
+    fn requested_paths_are_limited_to_documentation() {
+        assert!(is_doc_path("README.md"));
+        assert!(is_doc_path("docs/setup.txt"));
+        assert!(is_doc_path(".github/ISSUE_TEMPLATE/bug.yml"));
+        assert!(!is_doc_path(".env"));
+        assert!(!is_doc_path("src/lib.rs"));
+    }
+
+    #[test]
+    fn issue_request_keys_normalize_case_and_whitespace() {
+        let first = RepoId::parse("TinyHumansAI/Teeny").unwrap();
+        let second = RepoId::parse("tinyhumansai/teeny").unwrap();
+        assert_eq!(
+            issue_request_key(&first, "Bug  in parser", false),
+            issue_request_key(&second, "  bug in PARSER ", false)
+        );
+        assert_ne!(
+            issue_request_key(&first, "Bug in parser", false),
+            issue_request_key(&first, "Bug in parser", true)
+        );
+    }
+
+    #[test]
+    fn requests_without_an_id_are_notifications() {
+        assert!(is_notification(
+            &json!({"jsonrpc":"2.0","method":"notifications/initialized"})
+        ));
+        assert!(!is_notification(
+            &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})
+        ));
     }
 }

@@ -793,6 +793,19 @@ pub struct GitHubRead {
 }
 
 impl GitHubRead {
+    /// Resolve GitHub's canonical spelling for a repository.
+    ///
+    /// GitHub routes ignore case while the code-index partition key does not,
+    /// so agent-facing repository ids are canonicalised before any search.
+    pub async fn canonical_repo(&self, repo: &RepoId) -> Result<RepoId> {
+        let route = format!("/repos/{}/{}", repo.owner, repo.name);
+        let raw: serde_json::Value = self.client.get(route, None::<&()>).await.map_err(api)?;
+        raw["full_name"]
+            .as_str()
+            .and_then(RepoId::parse)
+            .ok_or_else(|| Error::Forge("repository lookup returned no usable full_name".into()))
+    }
+
     /// Turn a forge error into [`Error::RateLimited`] when that is what it
     /// is, asking `/rate_limit` — which GitHub does not count against the
     /// budget — when the primary limit resets. Any other error is returned

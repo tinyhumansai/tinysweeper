@@ -369,6 +369,7 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
             state.config.config.mcp.allowed_org.clone(),
             state.auth.clone(),
             state.index.clone(),
+            state.store.clone(),
         ) {
             app = app.merge(routes);
             tracing::info!("authenticated MCP is mounted at /mcp");

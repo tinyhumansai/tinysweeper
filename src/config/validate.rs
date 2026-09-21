@@ -56,9 +56,16 @@ fn validate_mcp(config: &Config, problems: &mut Vec<String>) {
             "`mcp.token_env` is empty; it must name the environment variable holding the MCP bearer"
                 .into(),
         );
-    } else if config.mcp.token_env.chars().any(|c| c.is_ascii_lowercase()) {
+    } else if !config.mcp.token_env.starts_with("TINYSWEEPER_")
+        || !config.mcp.token_env.ends_with("_TOKEN")
+        || !config
+            .mcp
+            .token_env
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    {
         problems.push(
-            "`mcp.token_env` looks like a value, not an environment variable name; never put the bearer in the config file"
+            "`mcp.token_env` must be an uppercase `TINYSWEEPER_*_TOKEN` environment variable name; never put the bearer in the config file"
                 .into(),
         );
     }
