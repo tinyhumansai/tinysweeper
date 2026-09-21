@@ -1741,10 +1741,28 @@ impl ForgeRead for GitHubRead {
     }
 
     async fn search_issues(&self, repo: &RepoId, query: &str) -> Result<Vec<Issue>> {
+        if query.split_whitespace().any(|word| {
+            let word = word.to_ascii_lowercase();
+            word.starts_with("repo:") || word.starts_with("org:") || word.starts_with("user:")
+        }) {
+            return Err(Error::Forge(
+                "issue search cannot contain repository, organisation, or user qualifiers".into(),
+            ));
+        }
         // `repo:` is prepended here rather than trusted from the caller, so a
         // query can only ever narrow the search inside one repository and
         // never widen it into somebody else's.
-        let scoped = format!("repo:{}/{} {}", repo.owner, repo.name, query.trim());
+        let scoped = format!(
+            "repo:{}/{} is:issue {}",
+            repo.owner,
+            repo.name,
+            query.trim()
+        );
+        if scoped.len() > 256 {
+            return Err(Error::Forge(
+                "issue search exceeds GitHub's 256-byte query limit".into(),
+            ));
+        }
 
         let page = self
             .client

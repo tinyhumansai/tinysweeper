@@ -39,7 +39,8 @@ The server exposes four tools:
 - `search_issues(repo, query, limit?)` searches open and closed issues in the
   repository, excluding pull requests. Results include state, labels, comment
   count, URL, and a bounded body excerpt. The default limit is 10 and the
-  maximum is 20.
+  maximum is 20. Queries are capped at 96 bytes and cannot override the
+  repository, organisation, or user scope.
 - `read_docs(repo, path?)` reads Markdown, `docs/`, and issue templates from
   the default-branch commit. Supplying `path` reads exactly one file. Agents
   should call this before proposing an issue so repository conventions and
