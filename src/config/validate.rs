@@ -31,6 +31,7 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_embeddings(config, &mut problems);
     validate_retrieval(config, &mut problems);
     validate_memory(config, &mut problems);
+    validate_mcp(config, &mut problems);
     validate_overview(config, &mut problems);
     validate_grouping(config, &mut problems);
     validate_lanes(config, &mut problems);
@@ -43,6 +44,27 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_preview(config, &mut problems);
 
     problems
+}
+
+fn validate_mcp(config: &Config, problems: &mut Vec<String>) {
+    if !config.mcp.enabled {
+        return;
+    }
+    if config.mcp.token_env.trim().is_empty() {
+        problems.push(
+            "`mcp.token_env` is empty; it must name the environment variable holding the MCP bearer"
+                .into(),
+        );
+    } else if config.mcp.token_env.chars().any(|c| c.is_ascii_lowercase()) {
+        problems.push(
+            "`mcp.token_env` looks like a value, not an environment variable name; never put the bearer in the config file"
+                .into(),
+        );
+    }
+    let org = config.mcp.allowed_org.trim();
+    if org.is_empty() || RepoId::parse(&format!("{org}/repository")).is_none() {
+        problems.push("`mcp.allowed_org` must be one plausible GitHub organisation login".into());
+    }
 }
 
 fn validate_version(config: &Config, problems: &mut Vec<String>) {

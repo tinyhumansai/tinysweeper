@@ -26,7 +26,7 @@ use crate::error::{Error, Result};
 
 pub use crate::config::merge::{Layer, Provenance};
 pub use crate::config::types::{
-    AutoMerge, Automation, Cache, Config, IssueClose, Issues, Labeler, Labels, Lane, LaneId,
+    AutoMerge, Automation, Cache, Config, IssueClose, Issues, Labeler, Labels, Lane, LaneId, Mcp,
     MergeMethod, ModelRef, Models, PathInstruction, Paths, Review, Sentry, Severity, Stale,
 };
 
@@ -237,6 +237,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "embeddings",
             "retrieval",
             "memory",
+            "mcp",
             "lanes",
             "council",
             "lookup",
@@ -349,6 +350,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "answer_model",
             "query_terms",
         ]),
+        "mcp" => Some(&["enabled", "token_env", "allowed_org"]),
         "memory.questions.*" => Some(&["section", "ask"]),
         "lanes" => Some(&[]),
         "lanes.*" => Some(&[

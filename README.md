@@ -238,6 +238,7 @@ MiniMax are all the same code path.
 - [AGENTS.md](AGENTS.md) — conventions for humans and agents working in this repo
 - [docs/triggers.md](docs/triggers.md) — what wakes tinysweeper up, and what emits no event at all
 - [docs/modules/server/README.md](docs/modules/server/README.md) — the server, its security boundary, and the admin API
+- [docs/modules/mcp/README.md](docs/modules/mcp/README.md) — authenticated MCP tools for repository-aware agents
 - [docs/modules/overview/README.md](docs/modules/overview/README.md) — the change map: what gets drawn, and why nothing in it comes from a model
 - [docs/modules/preview/README.md](docs/modules/preview/README.md) — the UI preview: the brain in the server, the hands in the repository's CI, and what crosses between them
 - [docs/modules/memory/README.md](docs/modules/memory/README.md) — the memory engine: what is remembered, what is asked, and what a rejected finding means

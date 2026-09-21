@@ -29,6 +29,7 @@ use crate::server::auth::AppAuth;
 use crate::server::failure;
 use crate::server::indexing::{IndexBackend, index_in_background};
 use crate::server::manual::{self, FullReviews, MergeReport, Merges, Remembers, Triages};
+use crate::server::mcp;
 use crate::server::memory::{
     BackfillStart, BackfillStatus, MemoryBackend, ingest_in_background, remember_in_background,
 };
@@ -278,7 +279,7 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
     let mut app = Router::new()
         .route("/healthz", get(healthz))
         .route("/webhook", post(receive))
-        .with_state(state);
+        .with_state(state.clone());
 
     // Mounted only when a token is configured. An admin router without a
     // credential would be an unauthenticated write endpoint on the public
@@ -356,6 +357,24 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
             "{} is not set; the UI preview routes are not mounted",
             preview::TOKEN_ENV
         ),
+    }
+
+    // MCP is a separate, least-privilege door. It is never implicitly covered
+    // by the admin token: agent clients get only the credential intended for
+    // their tools, and a missing token leaves no endpoint to probe.
+    if state.config.config.mcp.enabled {
+        let mcp_auth = AdminAuth::from_named_env(&state.config.config.mcp.token_env)?;
+        if let Some(routes) = mcp::router(
+            mcp_auth,
+            state.config.config.mcp.allowed_org.clone(),
+            state.auth.clone(),
+            state.index.clone(),
+        ) {
+            app = app.merge(routes);
+            tracing::info!("authenticated MCP is mounted at /mcp");
+        } else {
+            tracing::warn!("MCP is enabled but its token is unset; endpoint is not mounted");
+        }
     }
 
     let listener = tokio::net::TcpListener::bind(&bind)

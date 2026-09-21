@@ -431,6 +431,19 @@ fn every_scaffolded_capability_is_off_by_default() {
     assert!(!config.sentry.enabled);
     assert!(!config.automerge.enabled);
     assert!(!config.preview.enabled);
+    assert!(!config.mcp.enabled);
+}
+
+#[test]
+fn an_enabled_mcp_needs_a_token_variable_and_an_organisation() {
+    let mut config = parse("version = 1\n");
+    config.mcp.enabled = true;
+    config.mcp.token_env.clear();
+    config.mcp.allowed_org.clear();
+
+    let problems = validate::validate(&config).join("\n");
+    assert!(problems.contains("mcp.token_env"));
+    assert!(problems.contains("mcp.allowed_org"));
 }
 
 #[test]
