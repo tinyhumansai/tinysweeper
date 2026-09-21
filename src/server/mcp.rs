@@ -14,39 +14,94 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 use crate::forge::RepoId;
 use crate::index::types::HybridQuery;
 use crate::ports::forge::ForgeRead;
 use crate::ports::index::ChunkIndex;
-use crate::server::admin::AdminAuth;
 use crate::server::auth::AppAuth;
 use crate::server::indexing::IndexBackend;
 use crate::server::store::Store;
 
-mod apply;
-
 const MAX_HITS: usize = 20;
 const MAX_DOCS: usize = 20;
 const PROTOCOL_VERSION: &str = "2025-03-26";
+const MIN_TOKEN_LEN: usize = 32;
+
+/// The credential guarding only the MCP endpoint.
+#[derive(Clone)]
+pub struct McpAuth {
+    digest: [u8; 32],
+}
+
+impl std::fmt::Debug for McpAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpAuth")
+            .field("token", &"<redacted>")
+            .finish()
+    }
+}
+
+impl McpAuth {
+    /// Build from the dedicated bearer, rejecting weak public-endpoint tokens.
+    pub fn new(token: &str, var: &str) -> crate::Result<Self> {
+        if token.len() < MIN_TOKEN_LEN {
+            return Err(crate::Error::config(format!(
+                "{var} must be at least {MIN_TOKEN_LEN} characters"
+            )));
+        }
+        Ok(Self {
+            digest: Sha256::digest(token.as_bytes()).into(),
+        })
+    }
+
+    /// Read the dedicated bearer from its configured environment variable.
+    pub fn from_env(var: &str) -> crate::Result<Option<Self>> {
+        match std::env::var(var) {
+            Ok(token) if token.trim().is_empty() => Ok(None),
+            Ok(token) => Self::new(&token, var).map(Some),
+            Err(_) => Ok(None),
+        }
+    }
+
+    fn permits(&self, header: Option<&str>) -> bool {
+        let Some(offered) = header.and_then(|value| value.strip_prefix("Bearer ")) else {
+            return false;
+        };
+        let offered: [u8; 32] = Sha256::digest(offered.as_bytes()).into();
+        offered.ct_eq(&self.digest).into()
+    }
+}
 
 #[derive(Clone)]
 struct McpState {
     allowed_org: Arc<str>,
     auth: Arc<AppAuth>,
     index: Option<Arc<IndexBackend>>,
-    store: Store,
+    store: Option<Store>,
 }
 
 /// Build an MCP router, or no router when the MCP bearer is unset.
 pub fn router(
-    authz: Option<AdminAuth>,
+    authz: Option<McpAuth>,
     allowed_org: String,
     auth: Arc<AppAuth>,
     index: Option<Arc<IndexBackend>>,
     store: Store,
 ) -> Option<Router> {
-    let authz = Arc::new(authz?);
+    build_router(authz?, allowed_org, auth, index, Some(store))
+}
+
+fn build_router(
+    authz: McpAuth,
+    allowed_org: String,
+    auth: Arc<AppAuth>,
+    index: Option<Arc<IndexBackend>>,
+    store: Option<Store>,
+) -> Option<Router> {
+    let authz = Arc::new(authz);
     Some(
         Router::new()
             .route("/mcp", post(handle))
@@ -60,7 +115,7 @@ pub fn router(
     )
 }
 
-async fn guard(State(auth): State<Arc<AdminAuth>>, request: Request, next: Next) -> Response {
+async fn guard(State(auth): State<Arc<McpAuth>>, request: Request, next: Next) -> Response {
     let offered = request
         .headers()
         .get(axum::http::header::AUTHORIZATION)
@@ -309,7 +364,7 @@ async fn create_issue(state: &McpState, repo: &RepoId, args: &Value) -> Result<V
                 .collect::<Vec<String>>()
         })
         .unwrap_or_default();
-    let plan = apply::IssuePlan {
+    let plan = crate::app::apply::McpIssuePlan {
         repo: repo.clone(),
         installation,
         title: title.to_string(),
@@ -321,9 +376,11 @@ async fn create_issue(state: &McpState, repo: &RepoId, args: &Value) -> Result<V
     // eventual-consistency gap between GitHub search and creation atomic, and
     // remains after apply starts even when the response is ambiguous: a
     // timeout may mean GitHub accepted the issue but its response was lost.
-    let request_key = issue_request_key(repo, title, force);
+    let request_key = issue_request_key(repo, title);
     if !state
         .store
+        .as_ref()
+        .ok_or("issue memory is unavailable")?
         .claim_delivery(&request_key, "mcp-create-issue")
         .await
         .map_err(|err| err.to_string())?
@@ -333,16 +390,15 @@ async fn create_issue(state: &McpState, repo: &RepoId, args: &Value) -> Result<V
             "reason": "an identical issue request was already accepted recently"
         }));
     }
-    let number = apply::apply(state.auth.as_ref(), &plan)
+    let number = crate::app::apply::apply_mcp_issue(state.auth.as_ref(), &plan)
         .await
         .map_err(|e| e.to_string())?;
     Ok(json!({"created":true,"number":number,"template":template_path,"code_locations":evidence}))
 }
 
-fn issue_request_key(repo: &RepoId, title: &str, force: bool) -> String {
-    use sha2::{Digest, Sha256};
+fn issue_request_key(repo: &RepoId, title: &str) -> String {
     let normalized = format!(
-        "{}\n{}\n{force}",
+        "{}\n{}",
         repo.to_string().to_ascii_lowercase(),
         title
             .split_whitespace()
@@ -442,6 +498,86 @@ fn content(value: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::{Body, to_bytes};
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    const TOKEN: &str = "0123456789abcdef0123456789abcdef";
+
+    fn protocol_router() -> Router {
+        let auth = AppAuth::from_der("1", &crate::server::test_key::test_key_der()).unwrap();
+        build_router(
+            McpAuth::new(TOKEN, "TINYSWEEPER_MCP_TOKEN").unwrap(),
+            "tinyhumansai".into(),
+            Arc::new(auth),
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_http_route_requires_its_own_bearer_and_initializes() {
+        let request = Request::post("/mcp")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+            ))
+            .unwrap();
+        let denied = protocol_router().oneshot(request).await.unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+
+        let request = Request::post("/mcp")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::from(
+                r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+            ))
+            .unwrap();
+        let response = protocol_router().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["result"]["protocolVersion"], PROTOCOL_VERSION);
+        assert_eq!(value["result"]["serverInfo"]["name"], "tinysweeper");
+
+        let request = Request::post("/mcp")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::from(
+                r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+            ))
+            .unwrap();
+        let response = protocol_router().oneshot(request).await.unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["result"]["tools"].as_array().unwrap().len(), 3);
+
+        let request = Request::post("/mcp")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::from(
+                r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            ))
+            .unwrap();
+        let response = protocol_router().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert!(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_mcp_credential_is_strong_redacted_and_exact() {
+        assert!(McpAuth::new("short", "TINYSWEEPER_MCP_TOKEN").is_err());
+        let auth = McpAuth::new(TOKEN, "TINYSWEEPER_MCP_TOKEN").unwrap();
+        assert!(auth.permits(Some(&format!("Bearer {TOKEN}"))));
+        assert!(!auth.permits(Some(&format!("Bearer {TOKEN}x"))));
+        assert!(!format!("{auth:?}").contains(TOKEN));
+    }
 
     #[test]
     fn repository_scope_is_case_insensitive_and_closed() {
@@ -493,12 +629,8 @@ mod tests {
         let first = RepoId::parse("TinyHumansAI/Teeny").unwrap();
         let second = RepoId::parse("tinyhumansai/teeny").unwrap();
         assert_eq!(
-            issue_request_key(&first, "Bug  in parser", false),
-            issue_request_key(&second, "  bug in PARSER ", false)
-        );
-        assert_ne!(
-            issue_request_key(&first, "Bug in parser", false),
-            issue_request_key(&first, "Bug in parser", true)
+            issue_request_key(&first, "Bug  in parser"),
+            issue_request_key(&second, "  bug in PARSER ")
         );
     }
 

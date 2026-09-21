@@ -93,7 +93,7 @@ discussion in the pull request:
   mutated by deterministic policy, and only from a module whose whole job is
   that write: `src/app/apply.rs`, `src/automerge/`, `src/issues/apply.rs`,
   `src/pr_triage/apply.rs`, `src/threads/`, `src/sentry/promote.rs`,
-  `src/preview/apply.rs` and `src/server/mcp/apply.rs`. Adding to that list is a decision to argue for in a
+  `src/preview/apply.rs`. Adding to that list is a decision to argue for in a
   pull request, and the bar is the same each time: the module holds a `ForgeWrite` and *only* executes a plan
   some other module already decided on.
 - Secrets found by the scanners are reported by type and location only. The

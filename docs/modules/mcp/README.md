@@ -57,5 +57,6 @@ Repositories are parsed as `owner/name`, checked against the configured
 organisation, and resolved through the installed GitHub App. Code and docs are
 read from an immutable default-branch commit. The only write is issue creation.
 The planner produces an immutable issue plan after every read and policy
-decision; `src/server/mcp/apply.rs` alone mints the write credential and
-executes that plan. No model or external agent receives a write credential.
+decision; the existing `src/app/apply.rs` write boundary alone mints the
+credential and executes that plan. No model or external agent receives a write
+credential.

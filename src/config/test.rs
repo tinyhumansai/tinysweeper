@@ -467,6 +467,29 @@ fn the_mcp_token_setting_only_accepts_a_tinysweeper_token_variable_name() {
 }
 
 #[test]
+fn the_mcp_organisation_must_be_an_exact_github_login() {
+    let mut config = parse("version = 1\n");
+    config.mcp.enabled = true;
+
+    for invalid in ["acme ", "two words", "-acme", "acme-", "acme/org"] {
+        config.mcp.allowed_org = invalid.into();
+        assert!(
+            validate::validate(&config)
+                .join("\n")
+                .contains("mcp.allowed_org"),
+            "accepted {invalid:?}"
+        );
+    }
+
+    config.mcp.allowed_org = "tinyhumansai".into();
+    assert!(
+        !validate::validate(&config)
+            .join("\n")
+            .contains("mcp.allowed_org")
+    );
+}
+
+#[test]
 fn auto_merge_ships_with_every_deterministic_threshold_set() {
     // Every threshold has to have a shipped value. A missing one deserialises
     // to `0`, and a zero cap refuses everything — safe, but it would make the

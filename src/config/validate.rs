@@ -69,10 +69,20 @@ fn validate_mcp(config: &Config, problems: &mut Vec<String>) {
                 .into(),
         );
     }
-    let org = config.mcp.allowed_org.trim();
-    if org.is_empty() || RepoId::parse(&format!("{org}/repository")).is_none() {
+    let org = &config.mcp.allowed_org;
+    if !valid_github_login(org) {
         problems.push("`mcp.allowed_org` must be one plausible GitHub organisation login".into());
     }
+}
+
+fn valid_github_login(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 39
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
 fn validate_version(config: &Config, problems: &mut Vec<String>) {

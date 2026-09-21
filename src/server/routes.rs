@@ -363,7 +363,7 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
     // by the admin token: agent clients get only the credential intended for
     // their tools, and a missing token leaves no endpoint to probe.
     if state.config.config.mcp.enabled {
-        let mcp_auth = AdminAuth::from_named_env(&state.config.config.mcp.token_env)?;
+        let mcp_auth = mcp::McpAuth::from_env(&state.config.config.mcp.token_env)?;
         if let Some(routes) = mcp::router(
             mcp_auth,
             state.config.config.mcp.allowed_org.clone(),
