@@ -2009,6 +2009,7 @@ mod tests {
             summary: None,
             prior_findings: vec![],
             overview: None,
+            wireframe: None,
             unreviewed: vec![],
             skipped: None,
             version: tinysweeper::app::review::PROPOSAL_VERSION,

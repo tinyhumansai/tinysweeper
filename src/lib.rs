@@ -42,6 +42,7 @@ pub mod server;
 pub mod state;
 pub mod summary;
 pub mod threads;
+pub mod wireframe;
 
 pub use crate::error::{Error, Result};
 

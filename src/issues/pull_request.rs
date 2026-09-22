@@ -159,6 +159,7 @@ mod tests {
             summary: None,
             prior_findings: vec![],
             overview: None,
+            wireframe: None,
             threads: Default::default(),
             version: 1,
             repo: "tinyhumansai/tinysweeper".into(),

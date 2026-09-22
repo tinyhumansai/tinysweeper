@@ -105,6 +105,7 @@ fn proposal(findings: Vec<Finding>) -> Proposal {
         embed_tokens: 0,
         models: vec!["z-ai/glm-5.2".into()],
         overview: None,
+        wireframe: None,
         threads: Default::default(),
     }
 }

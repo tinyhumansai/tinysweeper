@@ -44,7 +44,11 @@
 //!   repository that could set it would have the bot embed pictures from a
 //!   host of its choosing. `preview.enabled` and `preview.max_flows` are
 //!   overridable for the usual reason: they can only make a repository's
-//!   own preview smaller. `[grouping]` sits here too, not in the "how loud"
+//!   own preview smaller. `wireframe.enabled` and `wireframe.max_screens`
+//!   are overridable for the same reason: a repository may turn its own
+//!   gallery off or shrink it, never raise it past the operator's ceiling
+//!   or re-enable it once the operator switched it off. `[grouping]` sits
+//!   here too, not in the "how loud"
 //!   bucket above: `max_files` and `max_hunk_chars` are the ceiling one
 //!   conversation's combined diff may reach before falling back to
 //!   singletons, and nothing enforces a smaller one server-side — a
@@ -97,7 +101,7 @@ use crate::ports::forge::ForgeRead;
 /// is safe. See the module documentation for the split; changing this list is a
 /// change to the security boundary in `AGENTS.md` and needs saying so in the
 /// pull request.
-pub const OVERRIDABLE_KEYS: [&str; 25] = [
+pub const OVERRIDABLE_KEYS: [&str; 27] = [
     "knowledge.extract",
     "knowledge.files",
     "labels.human_review",
@@ -130,6 +134,8 @@ pub const OVERRIDABLE_KEYS: [&str; 25] = [
     "summary.max_features",
     "summary.max_tests",
     "summary.sections",
+    "wireframe.enabled",
+    "wireframe.max_screens",
 ];
 
 /// Whether `key` is one a reviewed repository may set.
@@ -248,6 +254,8 @@ pub fn apply(base: &Config, document: &str) -> Result<(Config, Vec<String>)> {
         .summary
         .history_entries
         .min(base.summary.history_entries);
+    config.wireframe.enabled &= base.wireframe.enabled;
+    config.wireframe.max_screens = config.wireframe.max_screens.min(base.wireframe.max_screens);
 
     let problems = validate::validate(&config);
     if !problems.is_empty() {
