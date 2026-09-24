@@ -263,6 +263,14 @@ pub async fn apply(
         tracing::warn!(%err, "could not publish the durable review hub");
     }
 
+    // The wireframe gallery: its own comment, for the same reason it is not
+    // folded into the review hub — a screen-by-screen ASCII gallery can be
+    // the bulkiest thing this bot posts, and burying it in the narrative
+    // summary is how nobody scrolls to it. Best effort, same as the hub.
+    if let Err(err) = publish_wireframe(read, write, proposal).await {
+        tracing::warn!(%err, "could not publish the UI wireframe gallery");
+    }
+
     // Triage last, and against `live` rather than a second fetch: the labels
     // restate a verdict whose evidence is now on the pull request, so they can
     // never point at a review that failed to publish. Add-only, so a
@@ -373,6 +381,45 @@ async fn discover_review_hub(
         .await?
         .and_then(|comment| comment.id)),
     }
+}
+
+/// Post or update the wireframe gallery comment.
+///
+/// One comment per pull request, found by its marker and edited in place —
+/// the same discipline as [`publish_review_hub`], and for the same reason: a
+/// fresh gallery per push turns the pull request into a scroll of wireframes
+/// that stopped being the current ones several pushes ago.
+///
+/// `Ok(())` with nothing written when the proposal carries no set (the
+/// feature was off, or predates the field), or when the set has no screens.
+async fn publish_wireframe(
+    read: &dyn ForgeRead,
+    write: &dyn ForgeWrite,
+    proposal: &Proposal,
+) -> Result<()> {
+    let Some(set) = &proposal.wireframe else {
+        return Ok(());
+    };
+    let Some(body) = crate::wireframe::render::comment(set) else {
+        return Ok(());
+    };
+    let repo = RepoId::parse(&proposal.repo)
+        .ok_or_else(|| Error::Forge(format!("`{}` is not owner/name", proposal.repo)))?;
+    let existing = crate::findings::prior::own_comment(
+        read,
+        &repo,
+        proposal.number,
+        crate::wireframe::render::MARKER,
+    )
+    .await?
+    .and_then(|comment| comment.id);
+    match existing {
+        Some(id) => write.update_comment(&repo, id, &body).await?,
+        None => {
+            write.create_comment(&repo, proposal.number, &body).await?;
+        }
+    }
+    Ok(())
 }
 
 /// Decide how to submit the review.
@@ -938,6 +985,7 @@ mod tests {
             summary: None,
             prior_findings: vec![],
             overview: None,
+            wireframe: None,
             unreviewed: vec![],
             skipped: None,
             version: crate::app::review::PROPOSAL_VERSION,

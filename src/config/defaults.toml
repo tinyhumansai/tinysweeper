@@ -875,6 +875,16 @@ max_steps = 25
 budget_usd = 0.50
 caption = true
 
+# ASCII wireframes of the UI screens and modals a pull request touches, read
+# from the diff alone. Independent of `[preview]`: no repository opt-in, no
+# browser, no target-repo CI. On by default, unlike `[preview]`, because it
+# costs one cheap model call and needs nothing an operator has to set up.
+[wireframe]
+enabled = true
+max_screens = 6
+max_width = 60
+max_height = 20
+
 [threads]
 # Close a conversation the review agent confirms the new code fixed.
 # The agent sees the prior finding and current diff; apply still requires an

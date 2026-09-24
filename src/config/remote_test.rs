@@ -328,6 +328,37 @@ fn a_repository_may_switch_its_preview_off_but_not_point_it_elsewhere() {
 }
 
 #[test]
+fn a_repository_may_shrink_its_wireframe_gallery_but_not_widen_it() {
+    // `enabled` and `max_screens` only ever make a repository's own gallery
+    // quieter or absent. `max_width` and `max_height` are not here: nothing
+    // enforces a smaller wireframe server-side, so a repository raising
+    // either arbitrarily could make one call carry a far larger prompt than
+    // any review of the same files would otherwise send — operator-only for
+    // the same reason `[grouping]`'s ceilings are.
+    let (config, ignored) = applied(
+        r#"
+        [wireframe]
+        enabled = false
+        max_screens = 1
+        max_width = 500
+        max_height = 500
+        "#,
+    );
+
+    assert!(!config.wireframe.enabled);
+    assert_eq!(config.wireframe.max_screens, 1);
+    assert_eq!(config.wireframe.max_width, base().wireframe.max_width);
+    assert_eq!(config.wireframe.max_height, base().wireframe.max_height);
+    assert_eq!(
+        ignored,
+        vec![
+            "wireframe.max_height".to_string(),
+            "wireframe.max_width".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn an_unknown_key_is_ignored_rather_than_fatal() {
     // One typo in a repository's config must not cost it the whole review.
     let (config, ignored) = applied("[review]\nstrictness = 3\nnot_a_key = 1\n");
@@ -464,6 +495,10 @@ workflows = ["e2e"]
 [preview]
 enabled = false
 max_flows = 2
+
+[wireframe]
+enabled = false
+max_screens = 2
 
 [summary]
 enabled = false

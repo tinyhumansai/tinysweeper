@@ -267,6 +267,8 @@ pub struct Config {
     pub sentry: Sentry,
     /// UI previews: flows, annotated screenshots and clips on a pull request.
     pub preview: Preview,
+    /// ASCII wireframes of the UI screens and modals a pull request touches.
+    pub wireframe: Wireframe,
 }
 
 /// The public, agent-facing MCP surface.
@@ -1162,6 +1164,9 @@ pub enum Workload {
     /// Cheap on purpose: a driving turn reads an accessibility snapshot and
     /// picks a click, and there may be a hundred of them per pull request.
     Preview,
+    /// Drawing ASCII wireframes of the UI screens a diff touches
+    /// (`src/wireframe`).
+    Wireframe,
 }
 
 /// Several reviewers on one lane's evidence.
@@ -1596,6 +1601,24 @@ pub struct Preview {
     pub caption: bool,
 }
 
+/// ASCII wireframes of the UI screens and modals a pull request touches.
+///
+/// One model call over the diff, independent end to end of [`Preview`]: no
+/// browser, no target-repo CI, no dependency on whether a repository has
+/// opted into `actions/ui-preview`. See `docs/modules/wireframe/README.md`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Wireframe {
+    /// Whether the gallery comment is published at all.
+    pub enabled: bool,
+    /// How many screens one pull request gets, at most.
+    pub max_screens: usize,
+    /// How wide one wireframe may be, in characters.
+    pub max_width: usize,
+    /// How tall one wireframe may be, in lines.
+    pub max_height: usize,
+}
+
 /// Sentry issue promotion: unresolved Sentry issues become GitHub issues,
 /// deduplicated, PII-scrubbed, and linked back.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1793,7 +1816,8 @@ impl Config {
             | Workload::KnowledgeExtraction
             | Workload::ThreadReview
             | Workload::Summary
-            | Workload::Preview => &self.models.scan,
+            | Workload::Preview
+            | Workload::Wireframe => &self.models.scan,
         }
     }
 

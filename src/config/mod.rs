@@ -252,6 +252,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "automation",
             "sentry",
             "preview",
+            "wireframe",
         ]),
         "review" => Some(&[
             "lanes",
@@ -479,6 +480,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "budget_usd",
             "caption",
         ]),
+        "wireframe" => Some(&["enabled", "max_screens", "max_width", "max_height"]),
         _ => Some(&[]),
     }
 }
