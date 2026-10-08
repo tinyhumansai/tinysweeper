@@ -36,7 +36,7 @@
 /// model.
 pub const MAX_CONCURRENT_FILES: usize = 8;
 
-/// One model call the graph should make.
+/// One model call a reviewer makes.
 ///
 /// Assembled by the lane, because prompt layering is the lane's business and
 /// which half of it is cacheable is `harness::prompt`'s — see its module docs
