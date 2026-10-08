@@ -441,13 +441,9 @@ async fn run(forge: &MockForge) -> ApplyReport {
 }
 
 /// The note as it was posted before it carried a marker.
-fn legacy_note() -> String {
-    format!(
-        "**Resolved** — the review agent found this finding fixed in the new code, \
-         as of `abc1234`.\n\n<sub>If this is wrong, reopen the conversation and say so; \
-         the finding will be re-raised on the next push if it still reproduces.</sub>"
-    )
-}
+const LEGACY_NOTE: &str = "**Resolved** — the review agent found this finding fixed in the new \
+     code, as of `abc1234`.\n\n<sub>If this is wrong, reopen the conversation and say so; \
+     the finding will be re-raised on the next push if it still reproduces.</sub>";
 
 fn with_reply(mut thread: ReviewThread, author: &str, body: &str) -> ReviewThread {
     thread.comments.push(ThreadComment {
@@ -511,7 +507,7 @@ fn a_thread_carrying_our_marked_note_is_never_planned_again() {
 #[test]
 fn a_thread_carrying_a_note_from_before_the_marker_is_never_planned_again() {
     // 196 of these sit on one pull request; none may gain a sibling.
-    let thread = with_reply(ours(), "tinysweeper[bot]", &legacy_note());
+    let thread = with_reply(ours(), "tinysweeper[bot]", LEGACY_NOTE);
     assert!(matches!(
         decide(&thread, &resolved_titles(&[TITLE])),
         Decision::Leave("already carries our resolution note")
@@ -526,7 +522,7 @@ fn a_note_somebody_else_wrote_does_not_stop_a_resolve() {
     for (author, body) in [
         ("author", marked.as_str()),
         ("tinysweeper-evil", marked.as_str()),
-        ("author", legacy_note().as_str()),
+        ("author", LEGACY_NOTE),
     ] {
         let thread = with_reply(ours(), author, body);
         assert!(
