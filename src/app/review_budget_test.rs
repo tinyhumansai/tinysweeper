@@ -154,11 +154,12 @@ async fn thirty_findings_over_three_passes_post_the_budget_and_list_the_rest() {
     assert!(proposal.blocked(), "the cap hides comments, not the verdict");
 
     // The overflow is named in the hub, by title and location.
-    let hub = crate::summary::render::render(&config, &proposal);
+    let hub = crate::summary::render(&config, &proposal);
     for finding in &overflow {
-        assert!(hub.contains(&finding.title.replace(' ', " ")), "{hub}");
         let line = finding.line.expect("placed");
-        assert!(hub.contains(&format!("src/large.rs:{line}")) || hub.contains(&format!("src/large\\.rs:{line}")), "{hub}");
+        // Rendered through the hub's Markdown escaping, hence `\.`.
+        let entry = format!("{} (`src/large\\.rs:{line}`)", finding.title);
+        assert!(hub.contains(&entry), "missing {entry}:\n{hub}");
     }
 
     crate::app::apply::apply(&forge, &forge, &config, &proposal, None)
