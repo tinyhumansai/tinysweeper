@@ -163,7 +163,10 @@ required-features = ["cortex"]
 # `vendor/openhuman/`. Cargo ignores a dependency's `[patch]` sections, so
 # without these the core would resolve its tinyinference/tinyflows crates
 # from different sources than OpenHuman builds and tests against. Keep them
-# in step with `vendor/openhuman/Cargo.toml` on every pin bump.
+# in step with `vendor/openhuman/Cargo.toml` on every pin bump. Its
+# `tinyflows` and `tinychannels` crates-io patches are left out: they serve
+# only the core's `flows` and `channels` features, which this crate does not
+# enable, and an unused patch is a cargo warning on every build.
 [patch."https://github.com/tinyhumansai/openhuman"]
 openhuman-embed = { path = "vendor/openhuman/crates/openhuman-embed" }
 
@@ -186,5 +189,3 @@ tinyinference-llm = { path = "vendor/openhuman/vendor/tinyagents/vendor/tinyinfe
 tinyinference-local = { path = "vendor/openhuman/vendor/tinyagents/vendor/tinyinference/crates/tinyinference-local" }
 tinyinference-providers = { path = "vendor/openhuman/vendor/tinyagents/vendor/tinyinference/crates/tinyinference-providers" }
 tinyinference-voice = { path = "vendor/openhuman/vendor/tinyagents/vendor/tinyinference/crates/tinyinference-voice" }
-tinyflows = { path = "vendor/openhuman/vendor/tinyflows/crates/tinyflows" }
-tinychannels = { path = "vendor/openhuman/vendor/tinychannels" }

@@ -6364,11 +6364,3 @@ dependencies = [
  "log",
  "simd-adler32",
 ]
-
-[[patch.unused]]
-name = "tinychannels"
-version = "0.1.10"
-
-[[patch.unused]]
-name = "tinyflows"
-version = "0.8.6"
