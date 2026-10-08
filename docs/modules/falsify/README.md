@@ -45,6 +45,18 @@ a provider outage must not look like a clean review.
 
 Both properties are asserted directly in `src/falsify/test.rs`.
 
+## The deterministic pass in front of the model
+
+`src/falsify/defined.rs` runs first and costs nothing. It drops a finding that
+claims a compile or undefined-symbol error ("will not compile", "is not
+defined", "cannot find", …) when **every** symbol the finding names in
+backticks is defined in the same evidence the model filter sees — a definition
+keyword (`fn`, `class`, `def`, `const`, …) right before it on a line the diff
+did not remove, or a changed path with a component of that name. It obeys both
+properties above: it only rejects, its rejections survive a model that fails
+open, and anything short of proof is kept. It reads only the diff and the
+looked-up text, not the repository index, which the pass is not handed.
+
 ## Which lanes run it
 
 `critique`, and `commits`. The `commits` lane was added after issue #47, where
