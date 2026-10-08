@@ -32,8 +32,187 @@ pub fn reject_disproved_symbol_claims(
     findings: Vec<Finding>,
     evidence: &[&str],
 ) -> (Vec<Finding>, Vec<Rejection>) {
-    let _ = (lane, evidence);
-    (findings, Vec::new())
+    let mut kept = Vec::with_capacity(findings.len());
+    let mut rejected = Vec::new();
+    for finding in findings {
+        match disproved_symbols(&finding, evidence) {
+            Some(symbols) => rejected.push(Rejection {
+                lane,
+                title: finding.title.clone(),
+                reason: format!(
+                    "deterministic: the evidence defines {}, so the claim that it is undefined \
+                     or will not compile is disproved",
+                    symbols
+                        .iter()
+                        .map(|symbol| format!("`{symbol}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }),
+            None => kept.push(finding),
+        }
+    }
+    (kept, rejected)
+}
+
+/// Phrases that make a finding a compile or undefined-symbol claim.
+///
+/// Matched lowercased against the title and body. A phrase list rather than
+/// anything cleverer because a miss here is safe: the finding simply goes on to
+/// the model filter.
+const CLAIMS: &[&str] = &[
+    "will not compile",
+    "won't compile",
+    "fail to compile",
+    "fails to compile",
+    "does not compile",
+    "doesn't compile",
+    "compile error",
+    "compilation error",
+    "compile-time error",
+    "is undefined",
+    "not defined",
+    "undefined symbol",
+    "undefined variable",
+    "undefined function",
+    "undefined reference",
+    "undeclared",
+    "cannot find",
+    "unresolved",
+    "nameerror",
+    "referenceerror",
+    "does not exist",
+    "doesn't exist",
+];
+
+/// Keywords that introduce a definition of the identifier that follows them,
+/// across the languages the graph parses.
+const DEFINES: &[&str] = &[
+    "fn",
+    "struct",
+    "enum",
+    "trait",
+    "type",
+    "union",
+    "mod",
+    "const",
+    "static",
+    "let",
+    "macro_rules",
+    "def",
+    "class",
+    "function",
+    "interface",
+    "var",
+    "func",
+    "record",
+];
+
+/// Words that may sit between a definition keyword and the name it defines.
+const MODIFIERS: &[&str] = &[
+    "pub",
+    "crate",
+    "super",
+    "self",
+    "in",
+    "mut",
+    "ref",
+    "async",
+    "unsafe",
+    "extern",
+    "export",
+    "default",
+    "abstract",
+    "final",
+    "public",
+    "private",
+    "protected",
+    "declare",
+    "readonly",
+];
+
+/// The symbols a finding claims are missing, when the evidence defines all of
+/// them. `None` keeps the finding.
+fn disproved_symbols(finding: &Finding, evidence: &[&str]) -> Option<Vec<String>> {
+    let text = format!("{}\n{}", finding.title, finding.body).to_lowercase();
+    if !CLAIMS.iter().any(|claim| text.contains(claim)) {
+        return None;
+    }
+    let mut symbols = named_symbols(&finding.title);
+    if symbols.is_empty() {
+        symbols = named_symbols(&finding.body);
+    }
+    let all_defined = !symbols.is_empty()
+        && symbols
+            .iter()
+            .all(|symbol| evidence.iter().any(|text| defines(text, symbol)));
+    all_defined.then_some(symbols)
+}
+
+/// Identifiers quoted in backticks: `a::b::name()` and `obj.name` count as
+/// `name`; a span with whitespace in it is code, not a name, and is skipped.
+fn named_symbols(text: &str) -> Vec<String> {
+    let mut symbols: Vec<String> = text
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|span| !span.chars().any(char::is_whitespace))
+        .filter_map(|span| {
+            let last = span.rsplit(['.', ':', '/']).next()?;
+            let name = last.trim_end_matches("()").trim_end_matches('!');
+            is_identifier(name).then(|| name.to_string())
+        })
+        .collect();
+    symbols.sort();
+    symbols.dedup();
+    symbols
+}
+
+fn is_identifier(word: &str) -> bool {
+    let mut chars = word.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Whether `text` defines `symbol` on a line that survives the change, or
+/// names a changed path with a component called `symbol`.
+fn defines(text: &str, symbol: &str) -> bool {
+    text.lines().any(|line| {
+        if let Some(path) = line
+            .strip_prefix("--- ")
+            .or_else(|| line.strip_prefix("+++ "))
+        {
+            return path_names(path, symbol);
+        }
+        // The rendered diff prefixes a line with its head-revision number and
+        // a `+`, `-` or space marker. A removed line is what no longer exists.
+        let code = line.trim_start_matches(|c: char| c.is_ascii_digit() || c == ' ');
+        if code.starts_with('-') || code.starts_with("@@") {
+            return false;
+        }
+        let words: Vec<&str> = code
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|word| !word.is_empty())
+            .collect();
+        words.iter().enumerate().any(|(index, word)| {
+            DEFINES.contains(word)
+                && words[index + 1..]
+                    .iter()
+                    .find(|next| !MODIFIERS.contains(next))
+                    .is_some_and(|name| *name == symbol)
+        })
+    })
+}
+
+/// Whether a diff header path has a directory or file-stem component named
+/// `symbol` — the module of that name exists.
+fn path_names(path: &str, symbol: &str) -> bool {
+    let path = path.trim().trim_start_matches("a/").trim_start_matches("b/");
+    path.split('/').any(|component| {
+        component.split('.').next().is_some_and(|stem| stem == symbol)
+    })
 }
 
 #[cfg(test)]
