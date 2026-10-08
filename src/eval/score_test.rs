@@ -95,6 +95,7 @@ fn proposal(findings: Vec<Finding>) -> Proposal {
             usage: Usage::default(),
             models: vec!["z-ai/glm-5.2".into()],
             unanswered: vec![],
+            overflow: vec![],
         }],
         unreviewed: vec![],
         skipped: None,

@@ -1010,6 +1010,7 @@ mod tests {
                 usage: Default::default(),
                 models: vec![],
                 unanswered: vec![],
+                overflow: vec![],
             }],
             cost_usd: 0.01,
             input_tokens: 10_000,
