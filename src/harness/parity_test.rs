@@ -236,3 +236,15 @@ async fn surplus_micro_cost_is_billed() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn a_zero_ceiling_is_not_forwarded() {
+    // `config::validate` rejects `max_tokens = 0`, but a `Config` built in
+    // code can still carry it, and asking a provider for zero output tokens
+    // turns a configuration mistake into an empty answer on every lane.
+    let gateway = FakeGateway::start(vec![Reply::completion("vendor/deep", ANSWER, "stop", usage())]).await;
+    let mut req = request("vendor/deep");
+    req.max_tokens = 0;
+    adapter(&models(&gateway.base_url)).complete(req).await.unwrap();
+    assert!(gateway.requests()[0].get("max_tokens").is_none());
+}

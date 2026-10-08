@@ -9,6 +9,8 @@
 pub mod cassette;
 #[cfg(all(test, feature = "harness"))]
 mod fake_gateway;
+#[cfg(feature = "harness")]
+pub mod langfuse;
 pub mod mock;
 #[cfg(feature = "harness")]
 pub mod openrouter;

@@ -556,7 +556,7 @@ const MAX_TRUNCATION_RETRIES: u32 = 2;
 
 /// The output ceilings one model is tried at, in order.
 ///
-/// A zero base means "no ceiling" (see [`run_config`]): there is nothing to
+/// A zero base means "no ceiling" (it is not forwarded): there is nothing to
 /// double, and a truncation at that point is the provider's own limit rather
 /// than ours, so the ladder is a single rung and the failure is reported
 /// straight away.
@@ -714,17 +714,9 @@ mod tests {
             "what changed?",
             vec!["https://cdn.example/a.png".into()],
         ));
-        let TaMessage::User(user) = wired else {
-            panic!("a user message stays a user message");
-        };
-        assert_eq!(user.content.len(), 2);
-        assert_eq!(user.content[0], ContentBlock::Text("what changed?".into()));
         assert_eq!(
-            user.content[1],
-            ContentBlock::Image(ImageRef {
-                url: "https://cdn.example/a.png".into(),
-                mime_type: Some("image/png".into()),
-            })
+            wired,
+            ChatMessage::user("what changed?").with_image("https://cdn.example/a.png")
         );
     }
 
@@ -734,7 +726,7 @@ mod tests {
         // recorded cassette was made from; images must not change it.
         assert_eq!(
             wire_message(&CrateMessage::user("plain")),
-            TaMessage::user("plain")
+            ChatMessage::user("plain")
         );
     }
 
@@ -989,28 +981,6 @@ mod tests {
         assert!(
             text.to_lowercase().contains("json"),
             "DeepSeek's JSON mode requires the literal word in the prompt"
-        );
-    }
-
-    #[test]
-    fn the_configured_ceiling_reaches_the_run_the_provider_is_called_from() {
-        // `models.max_tokens` was accepted, validated, documented as the
-        // ceiling on a response — and then dropped on the floor, so the
-        // provider's own default decided how long an answer could get.
-        assert_eq!(
-            run_config(request(4_096).max_tokens).max_turn_output_tokens,
-            Some(4_096)
-        );
-    }
-
-    #[test]
-    fn a_zero_ceiling_is_not_forwarded() {
-        // `config::validate` rejects `max_tokens = 0`, but a `Config` built in
-        // code can still carry it, and asking a provider for zero output tokens
-        // turns a configuration mistake into an empty answer on every lane.
-        assert_eq!(
-            run_config(request(0).max_tokens).max_turn_output_tokens,
-            None
         );
     }
 
