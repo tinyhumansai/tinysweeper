@@ -92,12 +92,14 @@ fails, which is the cheaper loss.
 ### Never twice
 
 Every note ends with the hidden marker `<!-- tinysweeper:resolved-note -->`.
-`decide` leaves any thread that already carries one of our notes — matched by
-our exact login *and* either the marker or, for notes posted before the marker
-existed, the `**Resolved** — ` prefix. Since a note now implies a resolve that
-succeeded, a note under an open thread means a human reopened it, which is a
-human overruling us. Legacy notes under threads whose resolve was refused are
-left for a human too, rather than gaining a sibling.
+`plan` flags any thread that already carries one of our notes as `noted`. A
+note counts as ours when the author is our exact login *and* the note has either
+the marker or, for notes posted before the marker existed, the `**Resolved** — `
+prefix. A noted thread is still resolved when the policy says so, but
+`apply_plan` posts no second note. This is what closes the threads left behind
+by the old ordering, where a refused resolve was noted on every push, once the
+installation has the permission. A pasted marker from anyone else does not
+count, so it cannot silence our explanation.
 
 ### When GitHub refuses
 
