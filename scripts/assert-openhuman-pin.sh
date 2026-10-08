@@ -1,11 +1,11 @@
 #!/bin/sh
-# Assert that the three places naming the OpenHuman commit agree, and that this
+# Assert that the two places naming the OpenHuman commit agree, and that this
 # crate's `[patch]` tables still mirror OpenHuman's own.
 #
 # - `Cargo.toml` pins the git `openhuman-embed` dependency at a `rev`;
 # - the `vendor/openhuman` submodule records a commit, which the `[patch]` in
-#   `Cargo.toml` actually builds against;
-# - `Cargo.lock` records the source it resolved the git dependency from.
+#   `Cargo.toml` actually builds against. (`Cargo.lock` cannot carry the rev:
+#   a patched package is locked as a path, with no source.)
 #
 # The patch makes every build here use the submodule, so a rev that drifted from
 # it would be silently ignored locally and only bite whoever builds without the
@@ -27,9 +27,6 @@ rev=$(sed -n 's/^openhuman-embed = { git = "https:\/\/github.com\/tinyhumansai\/
 sub=$(git ls-tree HEAD vendor/openhuman | awk '{print $3}')
 [ -n "$sub" ] || fail "vendor/openhuman is not a submodule at HEAD"
 [ "$rev" = "$sub" ] || fail "Cargo.toml pins openhuman-embed at $rev but vendor/openhuman records $sub"
-
-grep -q "git+https://github.com/tinyhumansai/openhuman?rev=$rev#$rev" Cargo.lock \
-  || fail "Cargo.lock does not resolve openhuman-embed from rev $rev; run cargo update -p openhuman-embed"
 
 # Every crate OpenHuman patches from the tinytools and tinyinference sources
 # must be patched here too (crates-io entries for features this crate does not
