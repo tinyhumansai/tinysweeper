@@ -74,6 +74,11 @@ pub fn doctor(path: &Path, as_json: bool) -> Result<()> {
     Ok(())
 }
 
+/// One line per explicit gate the strictness dial overrode.
+fn gate_notes(_loaded: &Loaded) -> Vec<String> {
+    Vec::new()
+}
+
 fn print_json(loaded: &Loaded) -> Result<()> {
     let provenance: serde_json::Map<String, serde_json::Value> = loaded
         .provenance

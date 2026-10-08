@@ -64,6 +64,30 @@ pub struct Loaded {
     pub preset_source: Option<PathBuf>,
 }
 
+/// An explicit posting gate the strictness dial overrode because it was looser.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClampedGate {
+    /// The dotted key, `review.severity_gate` or `review.confidence_min`.
+    pub key: &'static str,
+    /// What the layer asked for.
+    pub configured: String,
+    /// What the review actually uses.
+    pub effective: String,
+    /// The layer that set the key, when provenance knows it.
+    pub layer: Option<Layer>,
+}
+
+impl std::fmt::Display for ClampedGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.key)
+    }
+}
+
+/// Every explicit gate looser than the dial, and so ignored.
+pub fn clamped_gates(_config: &Config, _provenance: &Provenance) -> Vec<ClampedGate> {
+    Vec::new()
+}
+
 /// Find a config file at or under `path`.
 ///
 /// `path` may be the file itself or a directory to search. Returns `None` when
