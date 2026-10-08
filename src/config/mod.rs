@@ -11,7 +11,6 @@
 //! anyone maintaining a second copy of that knowledge.
 
 pub mod merge;
-pub(crate) use self::warn_clamped as warn_clamped_gates;
 pub mod remote;
 pub mod types;
 pub mod validate;
@@ -124,7 +123,7 @@ pub fn clamped_gates(config: &Config, provenance: &Provenance) -> Vec<ClampedGat
 }
 
 /// Log each clamped gate once, at warn, as the config is loaded.
-fn warn_clamped(config: &Config, provenance: &Provenance, only: Option<Layer>) {
+pub(crate) fn warn_clamped_gates(config: &Config, provenance: &Provenance, only: Option<Layer>) {
     for gate in clamped_gates(config, provenance) {
         if only.is_none_or(|layer| gate.layer == Some(layer)) {
             tracing::warn!(key = gate.key, layer = ?gate.layer, "{gate}");
@@ -222,7 +221,7 @@ pub fn load(root: &Path, explicit: Option<&Path>) -> Result<Loaded> {
     })?;
 
     load_rule_documents(root, &mut config)?;
-    warn_clamped(&config, &provenance, None);
+    warn_clamped_gates(&config, &provenance, None);
 
     Ok(Loaded {
         config,
