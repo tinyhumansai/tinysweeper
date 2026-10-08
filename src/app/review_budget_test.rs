@@ -71,10 +71,12 @@ fn forge() -> MockForge {
     MockForge::with_state(state)
 }
 
-/// Finding `n` of the whole review, quoting changed line `5n` — so file line
-/// `5n + 2`. Every one clears the default gate (high, 0.75).
+/// Finding `n`, quoting changed line `5(n mod 30)` — so file line
+/// `5(n mod 30) + 2`. A later push's findings (`n` offset by 100) sit on the
+/// same lines under new titles and rules, so they are new findings rather
+/// than repeats. Every one clears the default gate (high, 0.75).
 fn finding(n: usize, severity: &str, confidence: f64) -> Value {
-    let k = n * 5;
+    let k = (n % 30) * 5;
     json!({
         "path": "src/large.rs",
         "existing_code": format!("let x{k} = {k};"),
