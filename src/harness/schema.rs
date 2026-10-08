@@ -368,6 +368,37 @@ mod tests {
     }
 
     #[test]
+    fn the_schema_descriptions_carry_the_same_bar_as_the_shared_rules() {
+        // Under `json_object` the schema text is the only contract the model
+        // sees, so it must not invite what the prompt forbids.
+        let schema = json_schema();
+        let findings = schema["properties"]["findings"]["description"]
+            .as_str()
+            .expect("described");
+        assert!(findings.contains("reportable defect"), "{findings}");
+        assert!(
+            findings.contains("Prefer zero findings to weak ones"),
+            "{findings}"
+        );
+        assert!(findings.contains("style or naming"), "{findings}");
+
+        let body = schema["properties"]["findings"]["items"]["properties"]["body"]["description"]
+            .as_str()
+            .expect("described");
+        assert!(body.contains("concrete, reachable input"), "{body}");
+        assert!(body.contains("quote the rule's text"), "{body}");
+    }
+
+    #[test]
+    fn the_schema_still_round_trips_as_json() {
+        let schema = json_schema();
+        let text = serde_json::to_string(&schema).expect("serialises");
+        let reparsed: Value = serde_json::from_str(&text).expect("parses");
+        assert_eq!(reparsed, schema);
+        assert!(json_mode_instruction(&schema).contains("reportable defect"));
+    }
+
+    #[test]
     fn severity_round_trips_through_the_schema_enum() {
         let allowed =
             json_schema()["properties"]["findings"]["items"]["properties"]["severity"]["enum"]
