@@ -424,9 +424,24 @@ async fn publish_wireframe(
 
 /// Whether this proposal draws a Changes Requested review.
 ///
-/// Stub: replaced in the GREEN step.
-pub fn requests_changes(_config: &Config, _proposal: &Proposal) -> bool {
-    false
+/// The one predicate both the submitted review and the umbrella
+/// `tinysweeper/review` check read, so the two cannot disagree.
+///
+/// Blocking needs BOTH a failing lane and a finding severe enough to justify
+/// it. The lane conclusion alone is not enough: `fail_on` and
+/// `request_changes_at` are independent knobs, so a lane configured to fail
+/// on medium must still be able to fail a check without also blocking the
+/// merge when the merge gate is set to high. Reading only the conclusion
+/// made `request_changes_at` inert.
+///
+/// The severity is read from the lane's findings rather than the surviving
+/// comments, so a recurred problem whose comment was deduped away still
+/// blocks — being already visible is not being fixed.
+pub fn requests_changes(config: &Config, proposal: &Proposal) -> bool {
+    match config.request_changes_at() {
+        Some(threshold) => proposal.blocked() && proposal.has_severity_at_or_above(threshold),
+        None => false,
+    }
 }
 
 /// Decide how to submit the review.
@@ -438,21 +453,7 @@ fn review_event(
     previous: Option<ReviewEvent>,
     draft: bool,
 ) -> ReviewEvent {
-    // Blocking needs BOTH a failing lane and a finding severe enough to justify
-    // it. The lane conclusion alone is not enough: `fail_on` and
-    // `request_changes_at` are independent knobs, so a lane configured to fail
-    // on medium must still be able to fail a check without also blocking the
-    // merge when the merge gate is set to high. Reading only the conclusion
-    // here made `request_changes_at` inert.
-    //
-    // The severity is read from the lane's findings rather than the surviving
-    // comments, so a recurred problem whose comment was deduped away still
-    // blocks — being already visible is not being fixed.
-    let blocks = match config.request_changes_at() {
-        Some(threshold) => proposal.blocked() && proposal.has_severity_at_or_above(threshold),
-        None => false,
-    };
-    if blocks {
+    if requests_changes(config, proposal) {
         return ReviewEvent::RequestChanges;
     }
 

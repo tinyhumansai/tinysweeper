@@ -22,13 +22,19 @@
 //! | State | Conclusion | Meaning |
 //! |---|---|---|
 //! | in progress | `None` | accepted, lanes running |
-//! | concluded | `Success` | the lanes ran; their own checks carry the verdicts |
+//! | concluded | `Success` | the lanes ran and the review did not request changes |
+//! | concluded | `Neutral` | the lanes ran and the review requested changes |
 //! | concluded | `ActionRequired` | the review could not run — see [`failure`] |
 //!
 //! `Success` here is deliberately *not* a statement about the code. It means
 //! the review completed; whether the code is any good is what the lane checks
 //! say. Conflating the two would make a repository with findings unable to
 //! merge on a check that was only ever meant to report liveness.
+//!
+//! It must not *contradict* the verdict either, though: a green check beside a
+//! Changes Requested review read as a pass in the field. So a review that
+//! requested changes concludes `Neutral` — not green, and still not a second
+//! merge blocker, because the review itself already blocks.
 //!
 //! ## The obligation this creates
 //!
@@ -78,20 +84,31 @@ pub fn in_progress(head_sha: &str) -> CheckRun {
 /// The check published when the lanes have run.
 ///
 /// `Success` reports that the review *completed*, not that the code passed —
-/// see the module docs. `findings` is rendered so the check is worth reading on
-/// its own, and because it is the one number that tells a contributor whether
-/// to go looking at the inline comments.
-pub fn completed(head_sha: &str, findings: usize) -> CheckRun {
-    let title = match findings {
-        0 => "Reviewed — nothing to report".to_string(),
-        1 => "Reviewed — 1 finding".to_string(),
-        many => format!("Reviewed — {many} findings"),
+/// see the module docs. `changes_requested` is
+/// [`crate::app::apply::requests_changes`], the predicate the submitted review
+/// reads, and turns the conclusion `Neutral` so the check never shows a pass
+/// beside a Changes Requested review. `findings` is rendered so the check is
+/// worth reading on its own, and because it is the one number that tells a
+/// contributor whether to go looking at the inline comments.
+pub fn completed(head_sha: &str, findings: usize, changes_requested: bool) -> CheckRun {
+    let counted = match findings {
+        0 => "nothing to report".to_string(),
+        1 => "1 finding".to_string(),
+        many => format!("{many} findings"),
+    };
+    let (conclusion, title) = if changes_requested {
+        (
+            CheckConclusion::Neutral,
+            format!("Reviewed — changes requested, {counted}"),
+        )
+    } else {
+        (CheckConclusion::Success, format!("Reviewed — {counted}"))
     };
 
     CheckRun {
         name: CHECK_NAME.to_string(),
         head_sha: head_sha.to_string(),
-        conclusion: Some(CheckConclusion::Success),
+        conclusion: Some(conclusion),
         title,
         summary: format!(
             "The review ran to completion and reported {findings} finding(s).\n\n\
@@ -156,7 +173,7 @@ mod tests {
         // the others.
         let err = crate::error::Error::Model("gateway returned 403".into());
         assert_eq!(in_progress("abc123").name, CHECK_NAME);
-        assert_eq!(completed("abc123", 0).name, CHECK_NAME);
+        assert_eq!(completed("abc123", 0, false).name, CHECK_NAME);
         assert_eq!(
             crate::server::failure::check_run("abc123", &err).name,
             CHECK_NAME
@@ -165,7 +182,7 @@ mod tests {
 
     #[test]
     fn completing_is_terminal_and_does_not_block() {
-        let check = completed("abc123", 3);
+        let check = completed("abc123", 3, false);
         assert_eq!(check.conclusion, Some(CheckConclusion::Success));
         assert!(!check.is_in_progress());
         assert!(
@@ -179,7 +196,7 @@ mod tests {
         // The trap this check would otherwise set: a green `tinysweeper/review`
         // sitting next to a red `tinysweeper/security`, read as a pass.
         for findings in [0, 1, 7] {
-            let check = completed("abc123", findings);
+            let check = completed("abc123", findings, false);
             assert!(
                 check.summary.contains("does not mean the code passed"),
                 "a liveness pass must disclaim being a verdict"
@@ -211,7 +228,7 @@ mod tests {
         // pushed again.
         let err = crate::error::Error::Model("gateway returned 403".into());
         for check in [
-            completed("abc123", 0),
+            completed("abc123", 0, false),
             not_reviewed("abc123"),
             crate::server::failure::check_run("abc123", &err),
         ] {
@@ -224,9 +241,27 @@ mod tests {
     }
 
     #[test]
+    fn a_review_that_requested_changes_never_concludes_green() {
+        let check = completed("abc123", 2, true);
+        assert_eq!(check.conclusion, Some(CheckConclusion::Neutral));
+        assert!(check.title.contains("changes requested"), "{}", check.title);
+        assert!(check.title.contains("2 findings"), "{}", check.title);
+
+        let observed = crate::forge::types::CheckStatus {
+            name: check.name.clone(),
+            conclusion: check.conclusion,
+        };
+        assert!(!observed.is_green(), "a pass beside Changes Requested");
+        assert!(
+            !observed.is_failing(),
+            "liveness is not a second merge blocker; the review already blocks"
+        );
+    }
+
+    #[test]
     fn the_title_counts_findings_and_gets_the_plural_right() {
-        assert!(completed("abc", 0).title.contains("nothing to report"));
-        assert!(completed("abc", 1).title.contains("1 finding"));
-        assert!(completed("abc", 4).title.contains("4 findings"));
+        assert!(completed("abc", 0, false).title.contains("nothing to report"));
+        assert!(completed("abc", 1, false).title.contains("1 finding"));
+        assert!(completed("abc", 4, false).title.contains("4 findings"));
     }
 }
