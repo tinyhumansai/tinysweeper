@@ -54,12 +54,17 @@ pub fn render(config: &Config, proposal: &Proposal) -> String {
     let _ = writeln!(body, "{}\n", md(executive));
     let _ = writeln!(body, "**State:** {}  ", state(proposal));
     let _ = writeln!(body, "**Priority:** {}  ", priority(proposal));
-    let _ = writeln!(body, "**Reviewed head:** `{}`", short(&proposal.head_sha));
-    let _ = writeln!(
-        body,
-        "**Updated:** {} (Unix time)",
-        summary.updated_at_epoch
-    );
+    let _ = write!(body, "**Reviewed head:** `{}`", short(&proposal.head_sha));
+    // Zero is "never stamped" — a proposal written before the field existed —
+    // and rendering it would date the review to 1970.
+    if summary.updated_at_epoch > 0 {
+        let _ = write!(
+            body,
+            "  \n**Updated:** {}",
+            iso8601_utc(summary.updated_at_epoch)
+        );
+    }
+    body.push('\n');
 
     for section in &config.summary.sections {
         match section {
@@ -123,13 +128,28 @@ fn snapshot(out: &mut String, proposal: &Proposal, summary: &ReviewSummary) {
     let _ = writeln!(out, "**Test assessment:** {assessment}");
 }
 
+/// The "no summary" texts earlier versions stored in `changes`. A stored
+/// summary is carried forward from push to push, so these keep arriving long
+/// after the code that wrote them is gone.
+const LEGACY_UNSUPPORTED_CHANGES: [&str; 2] = [
+    "No supported behavioral explanation was produced.",
+    "The review could not produce a supported behavioral summary;",
+];
+
+/// "What changed", or nothing at all when no supported summary exists. A
+/// line saying the summary failed tells the reader nothing the absence of the
+/// section does not, and it was on most pull requests.
 fn changes(out: &mut String, summary: &ReviewSummary) {
-    out.push_str("\n## What changed\n\n");
-    if summary.changes.trim().is_empty() {
-        out.push_str("No supported behavioral explanation was produced.");
-    } else {
-        out.push_str(&md(summary.changes.trim()));
+    let changes = summary.changes.trim();
+    if changes.is_empty()
+        || LEGACY_UNSUPPORTED_CHANGES
+            .iter()
+            .any(|legacy| changes.starts_with(legacy))
+    {
+        return;
     }
+    out.push_str("\n## What changed\n\n");
+    out.push_str(&md(changes));
     out.push('\n');
 }
 
@@ -425,11 +445,15 @@ fn run_details(out: &mut String, proposal: &Proposal, summary: &ReviewSummary) {
         for pass in &summary.history {
             let _ = writeln!(
                 out,
-                "| `{}` | {} | {} (at {}) |",
+                "| `{}` | {} | {}{} |",
                 short(&pass.head_sha),
                 md(&pass.state),
                 md(&pass.summary),
-                pass.reviewed_at_epoch,
+                if pass.reviewed_at_epoch > 0 {
+                    format!(" (at {})", iso8601_utc(pass.reviewed_at_epoch))
+                } else {
+                    String::new()
+                },
             );
         }
     }
@@ -493,6 +517,30 @@ fn counts(proposal: &Proposal) -> (usize, usize, usize, usize) {
             + proposal.unreviewed.len(),
     )
 }
+/// Seconds since the Unix epoch as `YYYY-MM-DDTHH:MM:SSZ`.
+///
+/// Hand-rolled rather than a date crate for one field: Howard Hinnant's
+/// civil-from-days, exact for every date a review will carry.
+fn iso8601_utc(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3_600,
+        (rem % 3_600) / 60,
+        rem % 60
+    )
+}
+
 fn short(sha: &str) -> &str {
     sha.get(..sha.len().min(12)).unwrap_or(sha)
 }

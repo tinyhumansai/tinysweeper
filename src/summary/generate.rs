@@ -166,8 +166,9 @@ pub async fn generate(
         validated_narrative(&generated.executive_summary).unwrap_or_else(|| {
             "Tiny Sweeper completed its review; deterministic results follow.".into()
         });
-    summary.changes = validated_narrative(&generated.changes)
-        .unwrap_or_else(|| "No supported behavioral explanation was produced.".into());
+    // Empty, not an apology: the hub omits an empty "What changed" section,
+    // and failure prose there was printed on most pull requests.
+    summary.changes = validated_narrative(&generated.changes).unwrap_or_default();
     summary.features = generated.features;
     summary.tests = generated.tests;
     summary.positive_observations = generated
@@ -214,7 +215,6 @@ pub fn deterministic(
 ) -> ReviewSummary {
     let mut summary = prior.cloned().unwrap_or_else(|| ReviewSummary {
         executive_summary: fallback_executive(lanes),
-        changes: "The review could not produce a supported behavioral summary; inspect the cited changed surface and lane details below.".into(),
         ..ReviewSummary::default()
     });
     summary.surface = classify(diffs);
