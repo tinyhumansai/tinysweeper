@@ -26,10 +26,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::config::types::{LaneId, Severity};
-use crate::council::agree::LINE_TOLERANCE;
 use crate::error::Result;
+use crate::findings::concern::Concern;
 use crate::findings::types::Finding;
-use crate::forge::types::{IssueComment, RepoId};
+use crate::forge::types::{IssueComment, RepoId, ReviewComment, ReviewThread};
+use crate::memory::ingest::{Outcome, classify};
 use crate::ports::forge::ForgeRead;
 
 /// The marker key carrying a finding's fingerprint.
@@ -274,7 +275,24 @@ fn login_matches(login: &str, expected: &str) -> bool {
 pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<PriorReview> {
     let mut prior = PriorReview::default();
 
+    // Which of our fingerprints a maintainer has pushed back on. A failed
+    // read costs the looser bar for declined concerns and nothing else, so
+    // it degrades to "none declined" rather than losing every anchor below.
+    let declined = match read.review_threads(repo, number).await {
+        Ok(threads) => declined_fingerprints(&threads),
+        Err(err) => {
+            tracing::warn!(%err, "could not read review threads; declines are not recognised");
+            BTreeSet::new()
+        }
+    };
+
     for comment in read.review_comments(repo, number).await? {
+        if is_other_reviewer(&comment.author) {
+            if let Some(anchor) = other_reviewer_anchor(&comment) {
+                prior.anchors.push(anchor);
+            }
+            continue;
+        }
         if !is_own_login(&comment.author) {
             continue;
         }
@@ -289,6 +307,13 @@ pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<Pr
                 line: comment.line,
                 start_line: comment.start_line,
                 title: title_in(&comment.body),
+                text: text_in(&comment.body),
+                rule: rule_in(&comment.body),
+                source: if declined.contains(fingerprint) {
+                    AnchorSource::Declined
+                } else {
+                    AnchorSource::Posted
+                },
             });
 
             // A repeated fingerprint is normal — the same finding across two
@@ -455,12 +480,159 @@ pub fn title_in(body: &str) -> Option<String> {
     (!title.is_empty()).then(|| title.to_string())
 }
 
-pub fn text_in(_body: &str) -> Option<String> {
-    None
+/// Fingerprints of our own threads a maintainer pushed back on.
+///
+/// The outcome is [`classify`]'s, the same reading memory records: resolved
+/// by someone with write access without the code changing (rejected or
+/// dismissed), or answered by a maintainer and left open (disputed). A thread
+/// somebody else opened contributes nothing, and neither does a resolve by
+/// the pull request's own author.
+fn declined_fingerprints(threads: &[ReviewThread]) -> BTreeSet<String> {
+    threads
+        .iter()
+        .filter(|thread| {
+            matches!(
+                classify(thread),
+                Some(Outcome::Rejected | Outcome::Dismissed | Outcome::Disputed)
+            )
+        })
+        .filter_map(|thread| thread.comments.first())
+        .filter(|opener| is_own_login(&opener.author))
+        .filter_map(|opener| fingerprint_in(&opener.body))
+        .collect()
 }
 
-pub fn rule_in(_body: &str) -> Option<String> {
-    None
+/// Whether `login` is one of [`OTHER_REVIEWERS`], as its GitHub App.
+fn is_other_reviewer(login: &str) -> bool {
+    login
+        .strip_suffix("[bot]")
+        .is_some_and(|slug| OTHER_REVIEWERS.iter().any(|known| slug.eq_ignore_ascii_case(known)))
+}
+
+/// Another review bot's comment, as an anchor, when it has a readable title.
+///
+/// Their formats are not ours and change without notice, so this reads only
+/// the shape they share: collapsed `<details>` blocks, code fences and HTML
+/// comments are tooling, not the concern, and the first line that is wholly
+/// one bold run — and not a `| `-separated category row — is the title.
+fn other_reviewer_anchor(comment: &ReviewComment) -> Option<PostedAnchor> {
+    let prose = strip_tooling(&comment.body);
+    let (title, text) = prose.lines().enumerate().find_map(|(index, line)| {
+        let line = line.trim();
+        let inner = line.strip_prefix("**")?.strip_suffix("**")?;
+        if inner.contains("**") {
+            return None;
+        }
+        let title = strip_markup(inner);
+        (!title.trim().is_empty()).then(|| {
+            let rest: Vec<&str> = prose.lines().skip(index + 1).collect();
+            (title.trim().to_string(), rest.join("\n").trim().to_string())
+        })
+    })?;
+    Some(PostedAnchor {
+        lane: None,
+        path: comment.path.clone(),
+        line: comment.line,
+        start_line: comment.start_line,
+        title: Some(title),
+        text: Some(text),
+        rule: None,
+        source: AnchorSource::OtherReviewer,
+    })
+}
+
+/// `body` without `<details>` blocks (nested ones too), code fences or HTML
+/// comments.
+fn strip_tooling(body: &str) -> String {
+    let mut out = String::new();
+    let mut depth = 0usize;
+    let mut fenced = false;
+    let mut commented = false;
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if commented {
+            commented = !trimmed.contains("-->");
+            continue;
+        }
+        if trimmed.starts_with("<!--") {
+            commented = !trimmed.contains("-->");
+            continue;
+        }
+        depth += trimmed.matches("<details").count();
+        let closes = trimmed.matches("</details>").count();
+        let inside = depth > 0;
+        depth = depth.saturating_sub(closes);
+        if inside {
+            continue;
+        }
+        if trimmed.starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if !fenced {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Inline HTML and image markup removed from a title.
+fn strip_markup(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(['<', '!']) {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start..];
+        if tail.starts_with('<') {
+            match tail.find('>') {
+                Some(end) => rest = &tail[end + 1..],
+                None => return out,
+            }
+        } else if tail.starts_with("![") {
+            match tail.find(')') {
+                Some(end) => rest = &tail[end + 1..],
+                None => return out,
+            }
+        } else {
+            out.push('!');
+            rest = &tail[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The explanation `apply` rendered under the title of one of our comments.
+///
+/// Everything after the bold title up to whichever comes first: a grouped
+/// observation (`---`), a suggestion block, the `[RULE]` line, or a marker.
+/// Grouped observations are left out because they are other findings; the
+/// title, explanation and rule here are the opener's.
+pub fn text_in(body: &str) -> Option<String> {
+    let title = title_in(body)?;
+    let opener = body.find("**")?;
+    let after = &body[opener + 2..];
+    let after = &after[after.find("**")? + 2..];
+    let _ = title;
+    let end = ["\n\n---\n\n", "**Suggested change", "```suggestion", "**[RULE]", "<!--"]
+        .iter()
+        .filter_map(|stop| after.find(stop))
+        .min()
+        .unwrap_or(after.len());
+    let text = after[..end].trim();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+/// The rule name on the `[RULE]` line `apply` renders, without the
+/// explanation [`render::rule_line`](crate::findings::render::rule_line) puts
+/// after a colon.
+pub fn rule_in(body: &str) -> Option<String> {
+    const OPENER: &str = "**[RULE] ";
+    let start = body.find(OPENER)? + OPENER.len();
+    let rest = &body[start..];
+    let rule = rest[..rest.find("**")?].trim();
+    (!rule.is_empty()).then(|| rule.to_string())
 }
 
 #[cfg(test)]
