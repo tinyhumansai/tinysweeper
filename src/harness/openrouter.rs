@@ -238,7 +238,16 @@ impl GatewayModel {
             ))
         })?;
 
-        Ok(Self {
+        Ok(Self::with_key(models, api_key))
+    }
+
+    /// Build from the `[models]` config with the key already in hand.
+    ///
+    /// For tests that drive the adapter against a fake gateway: reading the
+    /// key from a variable they would have to set means mutating the process
+    /// environment, which races every other test in the binary.
+    pub(crate) fn with_key(models: &Models, api_key: String) -> Self {
+        Self {
             api_key,
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
@@ -247,7 +256,7 @@ impl GatewayModel {
             routes: models.routes.clone(),
             structured_output: models.structured_output,
             langfuse: langfuse_client(),
-        })
+        }
     }
 
     /// A gateway for calls that carry images.

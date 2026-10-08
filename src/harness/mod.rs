@@ -7,9 +7,13 @@
 //! changing how a prompt is assembled.
 
 pub mod cassette;
+#[cfg(all(test, feature = "harness"))]
+mod fake_gateway;
 pub mod mock;
 #[cfg(feature = "harness")]
 pub mod openrouter;
+#[cfg(all(test, feature = "harness"))]
+mod parity_test;
 pub mod pricing;
 pub mod prompt;
 pub mod schema;
