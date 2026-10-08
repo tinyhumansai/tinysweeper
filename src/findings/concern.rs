@@ -181,13 +181,10 @@ impl Concern {
 
 /// Lines between two ranges; zero when they overlap.
 fn gap((left_start, left_end): (u64, u64), (right_start, right_end): (u64, u64)) -> u64 {
-    if left_end < right_start {
-        right_start - left_end
-    } else if right_end < left_start {
-        left_start - right_end
-    } else {
-        0
-    }
+    // Each difference is zero unless that side lies wholly before the other.
+    right_start
+        .saturating_sub(left_end)
+        .max(left_start.saturating_sub(right_end))
 }
 
 /// Size of the intersection over size of the union; zero for two empty sets.
