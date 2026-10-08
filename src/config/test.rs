@@ -456,6 +456,35 @@ fn a_preset_cannot_loosen_the_dial() {
 }
 
 #[test]
+fn only_the_e2e_preset_turns_the_e2e_lane_on() {
+    // Every repository inherits the server's preset, so a preset that lists
+    // `e2e` undoes the default for all of them at once.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for name in [
+        "rust-library",
+        "security-strict",
+        "e2e-required",
+        "polyglot",
+    ] {
+        let dir = repo(
+            Some(&format!("version = 1\npreset = \"{name}\"\n")),
+            &[(
+                name,
+                &std::fs::read_to_string(root.join("presets").join(name).join("preset.toml"))
+                    .expect("read shipped preset"),
+            )],
+        );
+        with_shipped_rules(&dir);
+        let config = load(dir.path(), None).expect("loads").config;
+        assert_eq!(
+            config.enabled_lanes().contains(&LaneId::E2e),
+            name == "e2e-required",
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn no_shipped_preset_loosens_the_dial_it_sets() {
     // Belt and braces: the clamp makes a loose preset inert, but a preset that
     // *says* medium/0.6 while posting high/0.75 is documentation that lies.
