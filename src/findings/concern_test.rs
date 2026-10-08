@@ -411,9 +411,11 @@ fn a_declined_concern_reworded_and_moved_stays_declined() {
 fn a_declined_concern_does_not_swallow_a_different_one() {
     let declined = OH7079_VISIBLE_24.concern();
     assert!(!OH7079_HELPERS_24.concern().same_as_declined(&declined));
-    assert!(!TA341_UNBOUNDED_RETRY_330
-        .concern()
-        .same_as_declined(&TA341_BUDGET_BOUND_329.concern()));
+    assert!(
+        !TA341_UNBOUNDED_RETRY_330
+            .concern()
+            .same_as_declined(&TA341_BUDGET_BOUND_329.concern())
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -424,7 +426,10 @@ fn a_declined_concern_does_not_swallow_a_different_one() {
 fn wording_normalises_case_punctuation_stopwords_and_suffixes() {
     let words = tokens("Use element-helpers instead of the RAW platform types!");
     for expected in ["element", "helper", "raw", "platform"] {
-        assert!(words.contains(expected), "{expected} missing from {words:?}");
+        assert!(
+            words.contains(expected),
+            "{expected} missing from {words:?}"
+        );
     }
     for dropped in ["use", "instead", "of", "the"] {
         assert!(!words.contains(dropped), "{dropped} kept in {words:?}");
@@ -439,7 +444,10 @@ fn wording_normalises_case_punctuation_stopwords_and_suffixes() {
 
 #[test]
 fn siblings_are_a_file_and_its_own_tests() {
-    assert!(siblings("src/config/memory.rs", "src/config/memory_tests.rs"));
+    assert!(siblings(
+        "src/config/memory.rs",
+        "src/config/memory_tests.rs"
+    ));
     assert!(siblings("src/a/composio.rs", "src/a/composio_test.rs"));
     assert!(siblings("app/src/Panel.tsx", "app/src/Panel.test.tsx"));
     assert!(siblings("crate/src/store.rs", "crate/tests/store.rs"));
@@ -447,8 +455,14 @@ fn siblings_are_a_file_and_its_own_tests() {
 
     assert!(!siblings("src/a/mod.rs", "src/b/mod.rs"));
     assert!(!siblings("src/memory/engine.rs", "src/config/memory.rs"));
-    assert!(!siblings("src/a/foo.rs", "src/a/foo.rs"), "a file is not its own sibling");
-    assert!(!siblings("src/a/foo.ts", "src/a/foo.tsx"), "neither is a test");
+    assert!(
+        !siblings("src/a/foo.rs", "src/a/foo.rs"),
+        "a file is not its own sibling"
+    );
+    assert!(
+        !siblings("src/a/foo.ts", "src/a/foo.tsx"),
+        "neither is a test"
+    );
 }
 
 #[test]

@@ -504,9 +504,11 @@ fn declined_fingerprints(threads: &[ReviewThread]) -> BTreeSet<String> {
 
 /// Whether `login` is one of [`OTHER_REVIEWERS`], as its GitHub App.
 fn is_other_reviewer(login: &str) -> bool {
-    login
-        .strip_suffix("[bot]")
-        .is_some_and(|slug| OTHER_REVIEWERS.iter().any(|known| slug.eq_ignore_ascii_case(known)))
+    login.strip_suffix("[bot]").is_some_and(|slug| {
+        OTHER_REVIEWERS
+            .iter()
+            .any(|known| slug.eq_ignore_ascii_case(known))
+    })
 }
 
 /// Another review bot's comment, as an anchor, when it has a readable title.
@@ -614,11 +616,17 @@ pub fn text_in(body: &str) -> Option<String> {
     let opener = body.find("**")?;
     let after = &body[opener + 2..];
     let after = &after[after.find("**")? + 2..];
-    let end = ["\n\n---\n\n", "**Suggested change", "```suggestion", "**[RULE]", "<!--"]
-        .iter()
-        .filter_map(|stop| after.find(stop))
-        .min()
-        .unwrap_or(after.len());
+    let end = [
+        "\n\n---\n\n",
+        "**Suggested change",
+        "```suggestion",
+        "**[RULE]",
+        "<!--",
+    ]
+    .iter()
+    .filter_map(|stop| after.find(stop))
+    .min()
+    .unwrap_or(after.len());
     let text = after[..end].trim();
     (!text.is_empty()).then(|| text.to_string())
 }
@@ -1085,7 +1093,14 @@ mod tests {
         )])
         .await;
 
-        let repeat = worded(LaneId::E2e, SPEC, 24, "invisible-click", VISIBLE, VISIBLE_E2E);
+        let repeat = worded(
+            LaneId::E2e,
+            SPEC,
+            24,
+            "invisible-click",
+            VISIBLE,
+            VISIBLE_E2E,
+        );
         assert!(prior.repeats_concern(&repeat));
 
         // A different concern about the same helper, on the same line.
@@ -1231,7 +1246,14 @@ mod tests {
             "greptile-apps[bot]",
         ] {
             let prior = load_from(vec![coderabbit(author)]).await;
-            let ours = worded(LaneId::E2e, SPEC, 24, "invisible-click", VISIBLE, VISIBLE_E2E);
+            let ours = worded(
+                LaneId::E2e,
+                SPEC,
+                24,
+                "invisible-click",
+                VISIBLE,
+                VISIBLE_E2E,
+            );
             assert!(prior.repeats_concern(&ours), "{author}");
             // Nothing else about another bot's comment is ours to read back.
             assert!(prior.titles.is_empty());
@@ -1245,7 +1267,14 @@ mod tests {
         // match exactly. A person writing the same words is a person.
         for author in ["coderabbitai", "coderabbitai-evil[bot]", "contributor"] {
             let prior = load_from(vec![coderabbit(author)]).await;
-            let ours = worded(LaneId::E2e, SPEC, 24, "invisible-click", VISIBLE, VISIBLE_E2E);
+            let ours = worded(
+                LaneId::E2e,
+                SPEC,
+                24,
+                "invisible-click",
+                VISIBLE,
+                VISIBLE_E2E,
+            );
             assert!(!prior.repeats_concern(&ours), "{author}");
         }
     }

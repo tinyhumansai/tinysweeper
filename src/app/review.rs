@@ -1447,17 +1447,12 @@ fn already_posted(finding: &Finding, continuity: &Continuity<'_>) -> bool {
         || continuity
             .suppressed
             .contains(&finding.fingerprint(&finding.title))
-        // Same lane, same file, **same title**, within a few lines of a comment
-        // that is already there. Weaker evidence than a fingerprint, so it is
-        // asked last.
-        //
-        // The title is what stops this deleting a finding: position says two
-        // findings are in the same place, not that they are the same finding,
-        // and two defects a few lines apart in one function are ordinary. The
-        // rest is the same narrowness — it needs both findings placed on a line,
-        // a comment whose title or lane cannot be read anchors nothing, and the
-        // anchors come off the live pull request rather than the state store, so
-        // a comment a maintainer deleted stops suppressing anything.
+        // The same concern in other words: nearby and similar, or anywhere in
+        // the file (or its test sibling) and near-identical, from any lane,
+        // and held to the nearby bar anywhere in the file when a maintainer
+        // already declined it. Weaker evidence than a fingerprint, so it is
+        // asked last; two different defects in one function survive because
+        // they say different things. See `crate::findings::concern`.
         || continuity.prior.repeats_concern(finding)
 }
 
@@ -2503,7 +2498,9 @@ mod tests {
             .collect();
         assert_eq!(titles.len(), 2);
         assert!(
-            titles.iter().any(|title| title.starts_with("Use element-helpers")),
+            titles
+                .iter()
+                .any(|title| title.starts_with("Use element-helpers")),
             "the repeats must not spend the slots: {titles:?}"
         );
     }

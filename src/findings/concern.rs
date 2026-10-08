@@ -235,7 +235,11 @@ fn rule_tokens(rule: &str) -> BTreeSet<String> {
                 .unwrap_or(&word);
             stem(bare)
         })
-        .filter(|word| !GENERIC_RULE_WORDS.iter().any(|generic| stem(generic) == *word))
+        .filter(|word| {
+            !GENERIC_RULE_WORDS
+                .iter()
+                .any(|generic| stem(generic) == *word)
+        })
         .collect()
 }
 
@@ -281,10 +285,12 @@ const GENERIC_RULE_WORDS: &[&str] = &[
 pub fn tokens(text: &str) -> BTreeSet<String> {
     words(text)
         .map(|word| stem(&word))
-        .map(|word| match SYNONYMS.iter().find(|(from, _)| *from == word) {
-            Some((_, to)) => (*to).to_string(),
-            None => word,
-        })
+        .map(
+            |word| match SYNONYMS.iter().find(|(from, _)| *from == word) {
+                Some((_, to)) => (*to).to_string(),
+                None => word,
+            },
+        )
         .collect()
 }
 
@@ -317,10 +323,10 @@ const STOPWORDS: &[&str] = &[
     "instead", "into", "is", "it", "its", "just", "keep", "let", "lets", "lt", "make", "makes",
     "may", "me", "might", "more", "most", "must", "my", "nor", "not", "no", "of", "off", "on",
     "once", "only", "onto", "or", "other", "our", "out", "over", "own", "per", "quot", "rather",
-    "same", "shall", "she", "should", "so", "some", "such", "than", "that", "the", "their",
-    "them", "then", "there", "these", "they", "this", "those", "to", "too", "under", "up", "us",
-    "use", "uses", "using", "very", "via", "was", "we", "were", "what", "when", "where", "which",
-    "while", "who", "whom", "whose", "why", "will", "with", "would", "you", "your",
+    "same", "shall", "she", "should", "so", "some", "such", "than", "that", "the", "their", "them",
+    "then", "there", "these", "they", "this", "those", "to", "too", "under", "up", "us", "use",
+    "uses", "using", "very", "via", "was", "we", "were", "what", "when", "where", "which", "while",
+    "who", "whom", "whose", "why", "will", "with", "would", "you", "your",
 ];
 
 /// Suffixes stripped by [`stem`], longest first within each family.
@@ -402,7 +408,9 @@ fn split_path(path: &str) -> (&str, &str) {
 fn test_stem(file: &str) -> (&str, bool) {
     let mut stem = file.rsplit_once('.').map_or(file, |(stem, _)| stem);
     let mut marked = false;
-    for suffix in [".test", ".spec", "_tests", "_test", "_spec", "-test", "-spec"] {
+    for suffix in [
+        ".test", ".spec", "_tests", "_test", "_spec", "-test", "-spec",
+    ] {
         if let Some(bare) = stem.strip_suffix(suffix) {
             stem = bare;
             marked = true;
