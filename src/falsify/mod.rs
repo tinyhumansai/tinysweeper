@@ -23,6 +23,7 @@
 //!
 //! Cheap tier, one call per lane.
 
+pub mod defined;
 pub mod types;
 
 use crate::config::types::{Config, LaneId, Workload};
