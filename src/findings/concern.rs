@@ -264,6 +264,7 @@ const GENERIC_RULE_WORDS: &[&str] = &[
     "potential",
     "quality",
     "regression",
+    "rule",
     "risk",
     "safety",
     "security",
