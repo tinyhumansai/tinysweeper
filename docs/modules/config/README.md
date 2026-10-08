@@ -24,6 +24,24 @@ erasing the rest. **Arrays replace wholesale** — appending would make an
 inherited entry impossible to remove, and silent accumulation is worse than
 re-listing.
 
+## The strictness dial is authoritative
+
+`review.strictness` sets the posting gates (`Strictness::for_level`), and an
+explicit `review.severity_gate` or `review.confidence_min` can only make them
+**stricter**. `Config::severity_gate` and `Config::confidence_min` take the
+stricter of the two, whichever layer set the explicit key.
+
+This replaced "an explicit gate overrides the dial", which let a preset loosen
+every repository on it behind the dial's back: `rust-library` set
+`medium`/0.6 under `strictness = 2`, and every repository inheriting the
+server's `preset = "rust-library"` posted medium findings while the dial read
+"default — high-severity findings the model is confident about". Clamping only
+the preset layer would not have been enough — the operator's own config is the
+repository layer for every reviewed repository — so the rule is the same for
+all of them: to see more, turn the dial to 3. A looser explicit value is not a
+validation error, because refusing an existing config over a key that now
+merely does nothing would cost a review rather than a comment; it is inert.
+
 ## Why validation collects everything
 
 `validate::validate` returns a `Vec<String>`, never an early `Err`. Someone
