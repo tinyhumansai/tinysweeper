@@ -1945,6 +1945,46 @@ mod tests {
     }
 
     #[test]
+    fn every_lane_is_told_what_counts_as_a_defect_and_what_not_to_report() {
+        // The production noise was speculative security, hallucinated compile
+        // errors, out-of-scope test demands and nitpicks. Each has a named line
+        // in the shared rules, and every lane carries them in its prefix.
+        let config = config();
+        for lane in LaneId::ALL {
+            let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
+            i.lane = lane;
+            let prompt = build(&i);
+            let prefix = prompt.prefix();
+            for needle in [
+                "## What counts as a reportable defect",
+                "concrete, reachable input",
+                "a regression against behaviour this pull request changes",
+                "quote the rule's text",
+                "## Do not report",
+                "Style or naming.",
+                "existed before this pull request",
+                "a compiler, linter, typechecker or CI would already catch",
+                "\"will not compile\"",
+                "\"is undefined\"",
+                "unless the diff itself proves it",
+                "concrete attacker-controlled input path",
+                "outside this pull request or outside this repository",
+                "only restate the diff",
+                "Prefer zero findings to weak ones",
+            ] {
+                assert!(
+                    prefix.contains(needle),
+                    "{lane}: the shared rules lost `{needle}`"
+                );
+            }
+            assert!(
+                !prompt.suffix().contains("## Do not report"),
+                "{lane}: the rules are constant text and belong in the cacheable prefix"
+            );
+        }
+    }
+
+    #[test]
     fn a_first_review_says_complete_diff_and_a_re_review_says_only_new() {
         let config = config();
         assert!(
