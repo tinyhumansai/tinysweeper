@@ -89,14 +89,14 @@ fn finding(n: usize, severity: &str, confidence: f64) -> Value {
 }
 
 /// Three passes of ten qualifying findings, each pass followed by the
-/// falsifier confirming everything. The two most severe findings arrive in
-/// the *last* pass, so a per-pass or first-come cap would miss them.
-fn three_passes(offset: usize) -> MockModel {
+/// falsifier confirming everything. The first `criticals` findings of the
+/// *last* pass are critical, so a per-pass or first-come cap would miss them.
+fn three_passes(offset: usize, criticals: usize) -> MockModel {
     let pass = |index: usize| {
         let findings: Vec<Value> = (0..PER_PASS)
             .map(|i| {
                 let n = offset + index * PER_PASS + i;
-                if index == 2 && i < 2 {
+                if index == 2 && i < criticals {
                     finding(n, "critical", 0.8)
                 } else {
                     finding(n, "high", 0.76 + (i as f64) / 100.0)
@@ -132,7 +132,7 @@ async fn thirty_findings_over_three_passes_post_the_budget_and_list_the_rest() {
     assert_eq!(config.review.max_comments, 5, "the shipped budget");
     let forge = forge();
 
-    let proposal = review(&forge, Arc::new(three_passes(0)), &config, &repo(), 7)
+    let proposal = review(&forge, Arc::new(three_passes(0, 2)), &config, &repo(), 7)
         .await
         .expect("reviews");
 
@@ -184,7 +184,7 @@ async fn open_findings_from_an_earlier_push_spend_the_same_budget() {
     let config = config();
     let forge = forge();
 
-    let first = review(&forge, Arc::new(three_passes(0)), &config, &repo(), 7)
+    let first = review(&forge, Arc::new(three_passes(0, 2)), &config, &repo(), 7)
         .await
         .expect("reviews");
     crate::app::apply::apply(&forge, &forge, &config, &first, None)
@@ -194,7 +194,7 @@ async fn open_findings_from_an_earlier_push_spend_the_same_budget() {
     // A new push, thirty brand-new findings. Five conversations are already
     // open, so none of them is posted inline — all thirty are listed.
     forge.push(7, "sha-two", vec![large_file()]);
-    let second = review(&forge, Arc::new(three_passes(100)), &config, &repo(), 7)
+    let second = review(&forge, Arc::new(three_passes(100, 0)), &config, &repo(), 7)
         .await
         .expect("reviews");
     assert_eq!(second.findings().count(), 0);
@@ -212,7 +212,7 @@ async fn open_findings_from_an_earlier_push_spend_the_same_budget() {
 async fn a_resolved_conversation_frees_its_slot() {
     let config = config();
     let forge = forge();
-    let first = review(&forge, Arc::new(three_passes(0)), &config, &repo(), 7)
+    let first = review(&forge, Arc::new(three_passes(0, 2)), &config, &repo(), 7)
         .await
         .expect("reviews");
     crate::app::apply::apply(&forge, &forge, &config, &first, None)
@@ -242,8 +242,100 @@ async fn a_resolved_conversation_frees_its_slot() {
         forge.with_review_threads(7, resolved)
     };
 
-    let second = review(&forge, Arc::new(three_passes(100)), &config, &repo(), 7)
+    let second = review(&forge, Arc::new(three_passes(100, 0)), &config, &repo(), 7)
         .await
         .expect("reviews");
     assert_eq!(second.findings().count(), 2);
+}
+
+#[tokio::test]
+async fn a_critical_finding_is_posted_even_when_the_budget_is_spent() {
+    // Five conversations open, one new critical: it gets its own thread. A
+    // critical bug demoted to a summary line because older nits are still
+    // open is the one outcome the budget must never produce.
+    let config = config();
+    let forge = forge();
+    let first = review(&forge, Arc::new(three_passes(0, 0)), &config, &repo(), 7)
+        .await
+        .expect("reviews");
+    crate::app::apply::apply(&forge, &forge, &config, &first, None)
+        .await
+        .expect("applies");
+    assert_eq!(posted(&forge).len(), 5);
+
+    forge.push(7, "sha-two", vec![large_file()]);
+    let second = review(&forge, Arc::new(three_passes(100, 1)), &config, &repo(), 7)
+        .await
+        .expect("reviews");
+    let inline: Vec<&Finding> = second.findings().collect();
+    assert_eq!(inline.len(), 1, "{inline:#?}");
+    assert_eq!(inline[0].severity, Severity::Critical);
+
+    crate::app::apply::apply(&forge, &forge, &config, &second, None)
+        .await
+        .expect("applies");
+    assert_eq!(posted(&forge).len(), 6);
+
+    // Still deduplicated, and still spending the budget: the same critical on
+    // the next push is not posted again, and nothing else fits beside it.
+    forge.push(7, "sha-three", vec![large_file()]);
+    let third = review(&forge, Arc::new(three_passes(100, 1)), &config, &repo(), 7)
+        .await
+        .expect("reviews");
+    assert_eq!(third.findings().count(), 0);
+}
+
+#[test]
+fn the_bypass_is_for_critical_only() {
+    fn lane(findings: Vec<Finding>) -> LaneProposal {
+        LaneProposal {
+            lane: LaneId::Critique,
+            check_name: LaneId::Critique.check_name(),
+            conclusion: CheckConclusion::Failure,
+            summary: "Reviewed.".into(),
+            findings,
+            noted: Vec::new(),
+            resolved: vec![],
+            pending: vec![],
+            deduped: 0,
+            highest_severity: Some(Severity::Critical),
+            usage: Default::default(),
+            models: vec![],
+            unanswered: vec![],
+            overflow: vec![],
+        }
+    }
+    fn finding(title: &str, severity: Severity, line: u64) -> Finding {
+        Finding {
+            lane: LaneId::Critique,
+            severity,
+            confidence: 0.9,
+            path: "src/lib.rs".into(),
+            line: Some(line),
+            end_line: None,
+            rule: "rule".into(),
+            title: title.into(),
+            body: "body".into(),
+            suggestion: None,
+            applicable: None,
+            late: false,
+            identity: None,
+            aliases: vec![],
+            grouped: false,
+            review_pass: 1,
+            corroboration: 1,
+        }
+    }
+
+    let mut lanes = vec![lane(vec![
+        finding("critical one", Severity::Critical, 1),
+        finding("critical two", Severity::Critical, 20),
+        finding("high", Severity::High, 40),
+    ])];
+    cap_proposal_findings(&mut lanes, 1);
+
+    let kept: Vec<&str> = lanes[0].findings.iter().map(|f| f.title.as_str()).collect();
+    assert_eq!(kept, vec!["critical one", "critical two"]);
+    assert_eq!(lanes[0].overflow.len(), 1);
+    assert_eq!(lanes[0].overflow[0].title, "high");
 }

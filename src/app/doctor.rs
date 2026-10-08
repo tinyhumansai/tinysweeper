@@ -477,6 +477,21 @@ mod tests {
     }
 
     #[test]
+    fn doctor_names_a_gate_the_dial_clamped() {
+        let dir = repo("version = 1\n[review]\nstrictness = 2\nconfidence_min = 0.5\n");
+        let loaded = config::load(dir.path(), None).expect("loads");
+
+        let notes = gate_notes(&loaded);
+        assert_eq!(notes.len(), 1, "{notes:#?}");
+        assert!(notes[0].contains("review.confidence_min"), "{}", notes[0]);
+        assert!(notes[0].contains("repo"), "{}", notes[0]);
+        assert!(notes[0].contains("0.75"), "{}", notes[0]);
+
+        let quiet = repo("version = 1\n");
+        assert!(gate_notes(&config::load(quiet.path(), None).expect("loads")).is_empty());
+    }
+
+    #[test]
     fn check_passes_a_valid_config() {
         let dir = repo("version = 1\n[review]\nstrictness = 3\n");
         check(dir.path()).expect("valid");

@@ -430,6 +430,32 @@ fn an_explicit_gate_cannot_loosen_the_dial() {
 }
 
 #[test]
+fn a_clamped_gate_is_reported_with_its_layer_and_effective_value() {
+    let dir = repo(
+        Some("version = 1\npreset = \"loose\"\n[review]\nconfidence_min = 0.9\n"),
+        &[(
+            "loose",
+            "version = 1\n[review]\nstrictness = 2\nseverity_gate = \"medium\"\nconfidence_min = 0.6\n",
+        )],
+    );
+    let loaded = load(dir.path(), None).expect("loads");
+    let clamped = crate::config::clamped_gates(&loaded.config, &loaded.provenance);
+
+    // Only the looser one: the repository's 0.9 tightened, which is allowed.
+    assert_eq!(clamped.len(), 1, "{clamped:#?}");
+    assert_eq!(clamped[0].key, "review.severity_gate");
+    assert_eq!(clamped[0].layer, Some(Layer::Preset));
+    assert_eq!(clamped[0].effective, "high");
+    let message = clamped[0].to_string();
+    assert!(message.contains("preset"), "{message}");
+    assert!(message.contains("medium"), "{message}");
+    assert!(message.contains("high"), "{message}");
+
+    let tight = parse("version = 1\n[review]\nseverity_gate = \"critical\"\n");
+    assert!(crate::config::clamped_gates(&tight, &Default::default()).is_empty());
+}
+
+#[test]
 fn an_explicit_gate_can_still_tighten_the_dial() {
     let config = parse(
         "version = 1\n[review]\nstrictness = 3\nseverity_gate = \"high\"\nconfidence_min = 0.9\n",
