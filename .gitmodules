@@ -4,3 +4,6 @@
 [submodule "vendor/tinyflows"]
 	path = vendor/tinyflows
 	url = https://github.com/tinyhumansai/tinyflows.git
+[submodule "vendor/openhuman"]
+	path = vendor/openhuman
+	url = https://github.com/tinyhumansai/openhuman.git
