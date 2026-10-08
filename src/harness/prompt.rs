@@ -659,8 +659,6 @@ looking at that file, and repeating its findings here is how one problem
 becomes several comments.
 "#;
 
-/// Rules every lane shares. Part of the cacheable prefix, so it must not
-/// interpolate anything.
 /// Appended to a turn that is the reviewer's last, so it does not answer as
 /// though another were coming.
 ///
@@ -673,7 +671,55 @@ pub const SETTLE_INSTRUCTION: &str = "\n\n## This is your last turn\n\nAnswer on
 There is no turn after this one: you are not going to be asked a follow-up, and nothing you \
 say is a preamble to further work. Decide with what is in front of you and report the result.";
 
+/// Rules every lane shares. Part of the cacheable prefix, so it must not
+/// interpolate anything.
+///
+/// The "what counts" and "do not report" sections are the noise budget, and
+/// each "do not report" line names a class that reached production: a
+/// speculative path traversal through an internal field, a "will not compile"
+/// on a pull request whose CI was green, a test demanded for behaviour that
+/// lives in another repository, a style nit. Editing this text changes every
+/// lane's prefix, so the committed eval cassettes under `evals/` go stale and
+/// must be re-recorded with `tinysweeper eval run --record`.
 const SHARED_RULES: &str = r#"
+
+## What counts as a reportable defect
+
+A finding about code is reportable only when it is one of these:
+
+- the code will fail or misbehave for some concrete, reachable input — name the
+  input, or the caller that supplies it;
+- a regression against behaviour this pull request changes — something that
+  worked before this change and does not after it;
+- a violation of a rule the repository wrote down in its AGENTS.md or
+  CLAUDE.md — quote the rule's text in the body, word for word.
+
+If a lane's own instructions above give it a different subject — the commit
+history, the description, test or end-to-end coverage — report what those
+instructions describe. The list below applies to every lane regardless.
+
+## Do not report
+
+- Style or naming. Formatting, word choice, ordering, and how you would have
+  written it are preferences, not defects.
+- Issues that existed before this pull request, in code it did not change.
+  However wrong it looks, it is not this author's concern.
+- Anything a compiler, linter, typechecker or CI would already catch. Never
+  claim code "will not compile", "is undefined" or "is not defined" unless the
+  diff itself proves it: a symbol you were not shown is not a missing symbol,
+  and the pull request's own CI is a better compiler than you are.
+- Speculative security issues. A security finding needs a concrete
+  attacker-controlled input path visible in the evidence, from where the
+  attacker writes it to where it does damage. A field the codebase sets for
+  itself is not attacker input, and "this could leak if…" is not a path.
+- Requests for tests of behaviour implemented outside this pull request or
+  outside this repository. Test what this change does, here.
+- Suggestions that only restate the diff, describe what the code does, or
+  praise it.
+
+Prefer zero findings to weak ones. One real defect is worth more than any number
+of plausible ones, and every weak finding teaches the author to skim the strong
+one.
 
 ## How to report
 
@@ -688,9 +734,6 @@ summary it belongs in the findings list, where it can be anchored, gated and
 acted on; a problem mentioned only in prose reaches nobody and blocks nothing.
 If you have no findings, do not assert that a bug exists — say the change looks
 sound, or say what you were unable to check.
-
-Report only problems this pull request introduces. Code that was already there
-is not this author's concern, however wrong it looks.
 
 Anchor every finding by quoting the code it is about in `existing_code`, copied
 character for character out of the diff. Never write a line number, anywhere:
@@ -707,9 +750,8 @@ one. Leave `suggestion` empty when the fix is a judgement call or you cannot
 write it out in full — an explanation in `body` is a good outcome, and a
 one-click commit that does not compile is not.
 
-Prefer an empty list to a padded one. An empty review is a valid and common
-outcome, and it is a better outcome than a list of style preferences. Do not
-invent something to say.
+An empty list is a valid and common outcome, and a better one than a padded
+list. Do not invent something to say.
 
 Give each finding a confidence between 0 and 1, and mean it. Low confidence is
 not a hedge you attach to everything — it is what you use when the finding
