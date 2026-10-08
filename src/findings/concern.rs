@@ -232,7 +232,7 @@ fn rule_tokens(rule: &str) -> BTreeSet<String> {
             let bare = ["non", "un"]
                 .iter()
                 .find_map(|prefix| word.strip_prefix(prefix).filter(|rest| rest.len() >= 4))
-                .unwrap_or(word);
+                .unwrap_or(&word);
             stem(bare)
         })
         .filter(|word| !GENERIC_RULE_WORDS.iter().any(|generic| stem(generic) == *word))
