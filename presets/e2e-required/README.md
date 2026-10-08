@@ -2,9 +2,9 @@
 
 For repositories with an end-to-end suite worth holding changes to.
 
-The `e2e` lane runs by default in every preset; what this one adds is that a
-tree with **no** harness is a finding rather than a silent skip
-(`missing_harness = "require"`), plus the lane's rule document. The lane asks
+The `e2e` lane is off by default and in every other preset; this one turns it
+on, makes a tree with **no** harness a finding rather than a silent skip
+(`missing_harness = "require"`), and adds the lane's rule document. The lane asks
 two questions the `tests` lane deliberately does not:
 
 1. Is each behavioural change reachable by an end-to-end test — one that

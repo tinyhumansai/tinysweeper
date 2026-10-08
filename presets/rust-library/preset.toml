@@ -1,7 +1,7 @@
 version = 1
 
 [review]
-lanes = ["critique", "security", "tests", "commits", "description", "e2e"]
+lanes = ["critique", "security", "tests", "commits", "description"]
 strictness = 2
 max_comments = 20
 incremental = true
