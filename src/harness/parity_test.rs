@@ -79,6 +79,33 @@ fn render(response: &ModelResponse) -> Value {
     })
 }
 
+/// `value` with every JSON Schema `required` list sorted.
+///
+/// Strict structured output makes the client list every property as required,
+/// in property order — and property order depends on whether some crate in the
+/// build turned on serde_json's `preserve_order`, which `--all-features` does.
+/// `required` is a set, so its order is not part of the wire contract.
+fn canonical(mut value: Value) -> Value {
+    fn walk(value: &mut Value) {
+        match value {
+            Value::Object(map) => {
+                for (key, child) in map.iter_mut() {
+                    if key == "required"
+                        && let Value::Array(items) = child
+                    {
+                        items.sort_by_key(|item| item.to_string());
+                    }
+                    walk(child);
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(walk),
+            _ => {}
+        }
+    }
+    walk(&mut value);
+    value
+}
+
 /// Run one case and compare (or record) its fixture.
 async fn case(
     name: &str,
@@ -118,8 +145,8 @@ async fn case(
         }))
         .unwrap();
     assert_eq!(
-        observed,
-        expected,
+        canonical(observed.clone()),
+        canonical(expected),
         "wire parity broke for `{name}`:\n{}",
         serde_json::to_string_pretty(&observed).unwrap()
     );
