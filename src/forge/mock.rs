@@ -1517,6 +1517,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_refused_resolve_is_recorded_errs_and_leaves_the_thread_open() {
+        let mut state = MockState::default();
+        state.review_threads.insert(
+            7,
+            vec![ReviewThread {
+                id: "PRRT_open".into(),
+                is_resolved: false,
+                is_outdated: true,
+                resolved_by_has_write_access: false,
+                comments: Vec::new(),
+            }],
+        );
+        let forge = MockForge::with_state(state)
+            .refusing_thread_resolves("Resource not accessible by integration");
+
+        let err = forge
+            .resolve_review_thread(&repo(), "PRRT_open")
+            .await
+            .expect_err("refused");
+
+        assert!(err.to_string().contains("not accessible"), "{err}");
+        assert_eq!(
+            forge.writes(),
+            vec![Write::ThreadResolved {
+                thread_id: "PRRT_open".into()
+            }],
+            "the attempt is recorded, as a refused close is"
+        );
+        assert!(!forge.review_threads(&repo(), 7).await.expect("read")[0].is_resolved);
+    }
+
+    #[tokio::test]
+    async fn a_thread_reply_lands_in_the_thread_as_ours() {
+        let mut state = MockState::default();
+        state.review_threads.insert(
+            7,
+            vec![ReviewThread {
+                id: "PRRT_open".into(),
+                is_resolved: false,
+                is_outdated: true,
+                resolved_by_has_write_access: false,
+                comments: Vec::new(),
+            }],
+        );
+        let forge = MockForge::with_state(state);
+
+        forge
+            .reply_to_review_thread(&repo(), "PRRT_open", "noted")
+            .await
+            .expect("replies");
+
+        // A reply that only recorded would hide a run that posted the same
+        // note twice: the second run has to be able to read the first one.
+        let threads = forge.review_threads(&repo(), 7).await.expect("read");
+        let reply = threads[0].comments.last().expect("the reply is in state");
+        assert_eq!(reply.body, "noted");
+        assert!(crate::findings::prior::is_own_login(&reply.author));
+    }
+
+    #[tokio::test]
     async fn an_unknown_commit_has_no_patch_rather_than_an_error() {
         let forge = MockForge::new();
         assert_eq!(
