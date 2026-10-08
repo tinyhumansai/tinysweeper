@@ -35,6 +35,11 @@ strictness = 2
 # collected 115 findings when this was 20 per cycle. With `incremental`
 # off, earlier cycles are not read and every review starts from a full budget.
 #
+# One exception: a critical finding is always posted inline, budget or not.
+# It still counts against the budget and is still deduplicated, so it is never
+# repeated — but it is never demoted to a hub line because older threads are
+# open. Critical only; exempting high would make this no budget at all.
+#
 # Five, because comments that get acted on are few and severe; a reviewer
 # whose every push adds a page of them is read for a week and then ignored.
 max_comments = 5

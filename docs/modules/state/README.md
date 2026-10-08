@@ -175,7 +175,10 @@ that keeps rewriting code would otherwise refill the budget on every push.
 When the thread state cannot be read every posted finding counts as open — the
 quiet direction. Findings that qualify but do not fit move to
 `LaneProposal::overflow` and are listed by title and `path:line` under
-**Over the comment budget** in the review hub.
+**Over the comment budget** in the review hub. The one exception is a
+critical finding: it is always posted inline (still deduplicated, still
+spending the budget), so a critical bug is never demoted to a hub line because
+older threads are open. The bypass is critical-only, not high.
 
 Getting the bot login wrong fails in the noisy direction — nothing is recognised
 as our own, so nothing is deduped — rather than in the direction that lets a

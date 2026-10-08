@@ -40,7 +40,12 @@ the preset layer would not have been enough — the operator's own config is the
 repository layer for every reviewed repository — so the rule is the same for
 all of them: to see more, turn the dial to 3. A looser explicit value is not a
 validation error, because refusing an existing config over a key that now
-merely does nothing would cost a review rather than a comment; it is inert.
+merely does nothing would cost a review rather than a comment; it is inert,
+and said so: `config::clamped_gates` names each clamped key, the layer that
+set it and the effective value. `tinysweeper doctor` prints it (and
+`doctor --json` carries it as `clamped_gates`), and loading the config logs it
+once at `warn` — for the server's remote overlay, only for keys the
+repository layer set, since the operator's own were reported at base load.
 
 ## Why validation collects everything
 
