@@ -705,23 +705,25 @@ mod tests {
         moved.title = "Track cost from failed cases".into();
         moved.identity = Some("aaaaaaaaaaaaaaaa".into());
         assert!(
-            prior.covers_anchor(&moved),
+            prior.repeats_concern(&moved),
             "two lines from a comment we already posted is the same finding"
         );
 
         let mut far_away = moved.clone();
         far_away.line = Some(400);
-        assert!(!prior.covers_anchor(&far_away));
+        assert!(!prior.repeats_concern(&far_away));
 
         let mut other_file = moved.clone();
         other_file.path = "src/other.rs".into();
-        assert!(!prior.covers_anchor(&other_file));
+        assert!(!prior.repeats_concern(&other_file));
 
-        // A different lane looking at the same line is a different reviewer
-        // with a different job, not a repeat.
+        // A different lane saying the same thing on the same line is still the
+        // same thing. Scoping this to one lane is what let `security`, `tests`
+        // and `e2e` each post "Require visible elements before clicking" on
+        // `openhuman#7079`.
         let mut other_lane = moved.clone();
         other_lane.lane = LaneId::Security;
-        assert!(!prior.covers_anchor(&other_lane));
+        assert!(prior.repeats_concern(&other_lane));
     }
 
     #[tokio::test]
@@ -742,14 +744,14 @@ mod tests {
         let mut neighbour = finding(LaneId::Critique, "src/main.rs", Some(41));
         neighbour.title = "Close the file handle on the error path".into();
         assert!(
-            !prior.covers_anchor(&neighbour),
+            !prior.repeats_concern(&neighbour),
             "a different defect one line away was deleted as a duplicate"
         );
 
         // The same title one line away is the repeat this exists to catch.
         let mut repeat = neighbour.clone();
         repeat.title = "Guard the index before dereferencing".into();
-        assert!(prior.covers_anchor(&repeat));
+        assert!(prior.repeats_concern(&repeat));
     }
 
     #[tokio::test]
@@ -767,7 +769,7 @@ mod tests {
 
         let mut anything = finding(LaneId::Critique, "src/main.rs", Some(40));
         anything.title = "Guard the index before dereferencing".into();
-        assert!(!prior.covers_anchor(&anything));
+        assert!(!prior.repeats_concern(&anything));
     }
 
     #[tokio::test]
@@ -782,7 +784,7 @@ mod tests {
         )])
         .await;
 
-        assert!(!prior.covers_anchor(&finding(LaneId::Tests, "src/main.rs", None)));
+        assert!(!prior.repeats_concern(&finding(LaneId::Tests, "src/main.rs", None)));
     }
 
     /// A finding placed at `line`, with nothing else that matters here set.
