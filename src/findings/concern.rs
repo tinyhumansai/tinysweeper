@@ -329,7 +329,7 @@ const SUFFIXES: &[&str] = &[
 ];
 
 /// Light suffix stripping: up to three passes, never leaving fewer than three
-/// letters.
+/// letters — four for a derivational suffix, so `element` keeps its `ment`.
 ///
 /// Not Porter, and not trying to produce English. Both sides of every
 /// comparison go through the same function, so all it has to do is send
@@ -338,7 +338,11 @@ fn stem(word: &str) -> String {
     let mut word = word.to_ascii_lowercase();
     for _ in 0..3 {
         let Some(suffix) = SUFFIXES.iter().find(|suffix| {
-            word.len() >= suffix.len() + 3
+            let inflection = matches!(
+                **suffix,
+                "s" | "es" | "ies" | "ed" | "edly" | "ing" | "ings" | "ingly" | "ly" | "e"
+            );
+            word.len() >= suffix.len() + if inflection { 3 } else { 4 }
                 && word.ends_with(*suffix)
                 // `class`, `status`, `analysis` are not plurals.
                 && !(**suffix == "s"
