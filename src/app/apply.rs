@@ -422,6 +422,13 @@ async fn publish_wireframe(
     Ok(())
 }
 
+/// Whether this proposal draws a Changes Requested review.
+///
+/// Stub: replaced in the GREEN step.
+pub fn requests_changes(_config: &Config, _proposal: &Proposal) -> bool {
+    false
+}
+
 /// Decide how to submit the review.
 ///
 /// `previous` is tinysweeper's own last verdict on this pull request, if any.
@@ -1523,6 +1530,27 @@ mod tests {
                 "missing {identity}"
             );
         }
+    }
+
+    #[test]
+    fn requests_changes_agrees_with_the_submitted_verdict() {
+        // `tinysweeper/review` is concluded from this predicate. When it and
+        // the review disagreed, the check showed a pass beside a Changes
+        // Requested review.
+        let config = config();
+        let blocking = proposal("abc123", vec![finding()]);
+        assert!(requests_changes(&config, &blocking));
+        assert_eq!(
+            review_event(&config, &blocking, None, false),
+            ReviewEvent::RequestChanges
+        );
+
+        let clean = proposal("abc123", vec![]);
+        assert!(!requests_changes(&config, &clean));
+        assert_ne!(
+            review_event(&config, &clean, None, false),
+            ReviewEvent::RequestChanges
+        );
     }
 
     #[tokio::test]
