@@ -894,7 +894,7 @@ resolve_fixed = true
 # On: replies are fenced as untrusted data and the advisory result can only
 # close an existing tinysweeper-owned thread through deterministic policy.
 ask_model = true
-# Reply with the reason and the commit before resolving. On: a thread that
+# Reply with the reason and the commit once a resolve succeeds. On: a thread that
 # collapses silently reads as the bot losing interest rather than as a finding
 # somebody fixed, and the author cannot check a claim that was never made.
 comment_on_resolve = true
