@@ -73,15 +73,6 @@ tree-sitter-typescript = "0.23"
 # must agree, which `scripts/assert-openhuman-pin.sh` checks.
 openhuman-embed = { git = "https://github.com/tinyhumansai/openhuman", rev = "28ebb9985505cf79b3a9e8b933eae10504876015", default-features = false, optional = true }
 
-# --- the orchestration graph ---
-# Not optional, and that is the point: with default features tinyflows links no
-# HTTP client (its `reqwest` is gated behind `chrome-extension`/`host-caps`,
-# neither of which is enabled), so lane orchestration compiles and is tested in
-# the offline default build. Every outside-world call it makes goes through a
-# capability trait this crate implements in `src/flows/caps.rs`, so the model
-# still reaches the network through exactly one adapter.
-tinyflows = { git = "https://github.com/tinyhumansai/tinyflows.git", rev = "3276dd10bf0367b30223abf726e3e878d44036fb", default-features = false }
-
 # --- optional: the webhook server ---
 # Reversed an earlier decision to go Actions-only. The arguments that changed
 # it: a contributor/whitelist database has nowhere to live in a stateless

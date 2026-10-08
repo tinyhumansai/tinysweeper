@@ -247,8 +247,9 @@ async fn each_reviewer_is_asked_with_its_own_prompt() {
 
 #[tokio::test]
 async fn a_reviewer_id_that_is_not_a_legal_node_id_still_gets_its_answer() {
-    // Agent ids are operator config. If `panel::node_id` and the lookup ever
-    // disagree the answer is silently lost and the reviewer reads as failed.
+    // Agent ids are operator config, and the answer is matched back to its
+    // reviewer by position, never by a sanitised id: an id that had to be
+    // rewritten to be carried must still come back verbatim.
     let awkward = Call {
         id: "security-focused reviewer!".into(),
         ..call("ignored")
