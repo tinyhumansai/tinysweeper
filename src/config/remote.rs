@@ -257,6 +257,10 @@ pub fn apply(base: &Config, document: &str) -> Result<(Config, Vec<String>)> {
     config.wireframe.enabled &= base.wireframe.enabled;
     config.wireframe.max_screens = config.wireframe.max_screens.min(base.wireframe.max_screens);
 
+    // Only what the repository layer asked for: the operator's own gates
+    // were reported when the base config loaded.
+    crate::config::warn_clamped_gates(&config, &provenance, Some(Layer::Repo));
+
     let problems = validate::validate(&config);
     if !problems.is_empty() {
         return Err(Error::config(format!(

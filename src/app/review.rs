@@ -1927,7 +1927,8 @@ fn merge_observation(primary: &mut Finding, observation: Finding) {
 /// global — severity, then confidence, then council agreement — so a critical
 /// finding from a late pass of one lane displaces a high one from round one of
 /// another. What does not fit moves to [`LaneProposal::overflow`] for the
-/// review hub to list. Conclusions are deliberately left alone: hiding a
+/// review hub to list. A critical finding is always kept, budget or not, and
+/// counts against it. Conclusions are deliberately left alone: hiding a
 /// lower-ranked comment must not turn its lane green.
 fn cap_proposal_findings(lanes: &mut [LaneProposal], budget: usize) {
     let mut ranked: Vec<(usize, usize, Severity, f64, u8)> = lanes
@@ -1957,9 +1958,19 @@ fn cap_proposal_findings(lanes: &mut [LaneProposal], budget: usize) {
             .then(a.1.cmp(&b.1))
     });
 
+    // Critical findings bypass the budget: every one is posted inline, however
+    // many conversations are already open. They still *spend* it — the ranking
+    // puts them first, so they take slots before anything else — and they were
+    // already deduplicated upstream, so this is never a repeat. Critical only:
+    // high is the ordinary bar for posting at all, and exempting it would turn
+    // the budget back into no budget.
+    let critical = ranked
+        .iter()
+        .filter(|(.., severity, _, _)| *severity == Severity::Critical)
+        .count();
     let keep: BTreeSet<(usize, usize)> = ranked
         .into_iter()
-        .take(budget)
+        .take(budget.max(critical))
         .map(|(lane, finding, ..)| (lane, finding))
         .collect();
     for (lane_index, lane) in lanes.iter_mut().enumerate() {

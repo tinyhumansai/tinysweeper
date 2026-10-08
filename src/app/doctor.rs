@@ -75,8 +75,11 @@ pub fn doctor(path: &Path, as_json: bool) -> Result<()> {
 }
 
 /// One line per explicit gate the strictness dial overrode.
-fn gate_notes(_loaded: &Loaded) -> Vec<String> {
-    Vec::new()
+fn gate_notes(loaded: &Loaded) -> Vec<String> {
+    config::clamped_gates(&loaded.config, &loaded.provenance)
+        .iter()
+        .map(ToString::to_string)
+        .collect()
 }
 
 fn print_json(loaded: &Loaded) -> Result<()> {
@@ -92,6 +95,7 @@ fn print_json(loaded: &Loaded) -> Result<()> {
         "config": redacted_config(&loaded.config)?,
         "provenance": provenance,
         "problems": config::validate::validate(&loaded.config),
+        "clamped_gates": gate_notes(loaded),
         "credentials": credentials(loaded),
     });
 
@@ -184,6 +188,9 @@ fn print_prose(loaded: &Loaded) {
             ""
         }
     );
+    for note in gate_notes(loaded) {
+        println!("  clamped          {note}");
+    }
     println!("  max comments     {}", config.review.max_comments);
     println!("  incremental      {}", config.review.incremental);
 
