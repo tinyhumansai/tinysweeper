@@ -1,7 +1,12 @@
 # This checkout is a single package. Keeping an empty workspace root prevents
 # Cargo from inheriting the superproject workspace that owns `worktrees/`, while
 # still allowing the vendored dependencies to retain their own workspaces.
+#
+# `vendor` is excluded because a path dependency under the workspace root is
+# otherwise adopted as a member, and OpenHuman's crates then try to inherit
+# `workspace.package` fields from this manifest instead of their own.
 [workspace]
+exclude = ["vendor", "worktrees"]
 
 [package]
 name = "tinysweeper"
