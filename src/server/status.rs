@@ -260,7 +260,11 @@ mod tests {
 
     #[test]
     fn the_title_counts_findings_and_gets_the_plural_right() {
-        assert!(completed("abc", 0, false).title.contains("nothing to report"));
+        assert!(
+            completed("abc", 0, false)
+                .title
+                .contains("nothing to report")
+        );
         assert!(completed("abc", 1, false).title.contains("1 finding"));
         assert!(completed("abc", 4, false).title.contains("4 findings"));
     }

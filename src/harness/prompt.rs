@@ -1634,7 +1634,9 @@ mod tests {
             let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
             i.lane = lane;
             assert!(
-                build(&i).prefix().contains("Prefer zero findings to weak ones"),
+                build(&i)
+                    .prefix()
+                    .contains("Prefer zero findings to weak ones"),
                 "{lane} was not told"
             );
         }

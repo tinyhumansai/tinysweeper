@@ -209,9 +209,15 @@ fn defines(text: &str, symbol: &str) -> bool {
 /// Whether a diff header path has a directory or file-stem component named
 /// `symbol` — the module of that name exists.
 fn path_names(path: &str, symbol: &str) -> bool {
-    let path = path.trim().trim_start_matches("a/").trim_start_matches("b/");
+    let path = path
+        .trim()
+        .trim_start_matches("a/")
+        .trim_start_matches("b/");
     path.split('/').any(|component| {
-        component.split('.').next().is_some_and(|stem| stem == symbol)
+        component
+            .split('.')
+            .next()
+            .is_some_and(|stem| stem == symbol)
     })
 }
 
@@ -337,7 +343,10 @@ mod tests {
     fn what_the_reviewer_looked_up_counts_as_evidence() {
         let looked_up = "src/util.rs:\nclass Widget:\n    pass\n";
         let (kept, _) = run(
-            vec![finding("`Widget` is undefined", "NameError at import time.")],
+            vec![finding(
+                "`Widget` is undefined",
+                "NameError at import time.",
+            )],
             &[DIFF, looked_up],
         );
         assert!(kept.is_empty());
