@@ -251,6 +251,7 @@ const GENERIC_RULE_WORDS: &[&str] = &[
     "contract",
     "correctness",
     "coverage",
+    "e2e",
     "edge",
     "error",
     "handling",

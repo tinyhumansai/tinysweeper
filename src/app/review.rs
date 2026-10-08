@@ -2563,8 +2563,18 @@ mod tests {
 
     #[test]
     fn one_pass_can_still_report_two_defects_at_the_same_location() {
-        let first = grouped_finding(LaneId::Critique, "First defect", 42, "1111111111111111");
-        let second = grouped_finding(LaneId::Critique, "Second defect", 43, "2222222222222222");
+        let first = grouped_finding(
+            LaneId::Critique,
+            "Guard the index before dereferencing",
+            42,
+            "1111111111111111",
+        );
+        let second = grouped_finding(
+            LaneId::Critique,
+            "Close the file handle on the error path",
+            43,
+            "2222222222222222",
+        );
         let mut lane = grouped_lane(LaneId::Critique, first);
         lane.findings.push(second);
         let mut lanes = vec![lane];
@@ -2628,9 +2638,24 @@ mod tests {
 
     #[test]
     fn a_non_suggestion_end_line_does_not_widen_the_published_anchor() {
-        let first = grouped_finding(LaneId::Critique, "First edge", 40, "1111111111111111");
-        let second = grouped_finding(LaneId::Security, "Other edge", 42, "2222222222222222");
-        let mut bridge = grouped_finding(LaneId::Tests, "Whole region", 40, "3333333333333333");
+        let first = grouped_finding(
+            LaneId::Critique,
+            "Guard the index before dereferencing",
+            40,
+            "1111111111111111",
+        );
+        let second = grouped_finding(
+            LaneId::Security,
+            "Escape the shell argument",
+            42,
+            "2222222222222222",
+        );
+        let mut bridge = grouped_finding(
+            LaneId::Tests,
+            "Cover the retry loop with a test",
+            40,
+            "3333333333333333",
+        );
         bridge.end_line = Some(42);
         let mut lanes = vec![
             grouped_lane(LaneId::Critique, first),
