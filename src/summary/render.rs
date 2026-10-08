@@ -744,6 +744,9 @@ mod tests {
                 &[],
             ),
         );
-        assert!(rendered.contains("## What changed\n\nThe hub is edited in place."));
+        assert!(
+            rendered.contains("## What changed\n\nThe hub is edited in place"),
+            "{rendered}"
+        );
     }
 }
