@@ -171,7 +171,7 @@ pub fn json_schema() -> Value {
             },
             "findings": {
                 "type": "array",
-                "description": "Reportable defects this pull request introduces: code that fails or misbehaves for a concrete, reachable input, a regression in behaviour this change touches, or a violation of a quoted AGENTS.md or CLAUDE.md rule. Never style or naming, pre-existing issues in unchanged code, anything a compiler, linter or CI would catch, speculative security without an attacker-controlled input path, tests for behaviour outside this pull request or repository, or a restatement of the diff. An empty array is a valid and common answer; do not pad it. Prefer zero findings to weak ones.",
+                "description": "Each entry must be a reportable defect this pull request introduces: code that fails or misbehaves for a concrete, reachable input, a regression in behaviour this change touches, or a violation of a quoted AGENTS.md or CLAUDE.md rule. Never style or naming, pre-existing issues in unchanged code, anything a compiler, linter or CI would catch, speculative security without an attacker-controlled input path, tests for behaviour outside this pull request or repository, or a restatement of the diff. An empty array is a valid and common answer; do not pad it. Prefer zero findings to weak ones.",
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
