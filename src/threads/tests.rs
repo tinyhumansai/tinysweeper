@@ -462,12 +462,12 @@ async fn a_successful_resolve_is_explained_once_and_never_again() {
     assert_eq!(run(&forge).await.resolved, 1);
     assert_eq!(notes(&forge).len(), 1);
 
-    // A human reopens it; the next push must not explain the same resolve a
-    // second time. Reopening is a human overruling us, and is left alone.
+    // Open again on the next push, with our note already under it: the
+    // resolve is attempted again, the explanation is not repeated.
     let mut reopened = forge.review_threads(&repo(), 7).await.expect("read");
     reopened[0].is_resolved = false;
     let next_push = forge_with(reopened);
-    assert_eq!(run(&next_push).await, ApplyReport::default());
+    assert_eq!(run(&next_push).await.resolved, 1);
     assert!(notes(&next_push).is_empty(), "{:?}", next_push.writes());
 }
 
@@ -491,47 +491,59 @@ async fn a_refused_resolve_posts_no_note_and_is_reported() {
     assert!(notes(&forge).is_empty(), "{:?}", forge.writes());
 }
 
-#[test]
-fn a_thread_carrying_our_marked_note_is_never_planned_again() {
-    let thread = with_reply(
+#[tokio::test]
+async fn an_already_noted_open_thread_is_resolved_without_another_note() {
+    // tinyskills#24: dozens of threads carry our note — marked, or from before
+    // the marker — under a resolve GitHub refused. Once the App has the
+    // permission they must close, and none may gain a sibling note.
+    let marked = with_reply(
         ours(),
         "tinysweeper[bot]",
         &resolution_note("the review agent found this finding fixed", HEAD_SHA),
     );
-    assert!(matches!(
-        decide(&thread, &resolved_titles(&[TITLE])),
-        Decision::Leave("already carries our resolution note")
-    ));
+    let legacy = {
+        let mut t = with_reply(ours(), "tinysweeper[bot]", LEGACY_NOTE);
+        t.id = "PRRT_legacy".into();
+        t
+    };
+    let forge = forge_with(vec![marked, legacy]);
+
+    let plan = plan_for(&forge, &config(), &[TITLE]).await;
+    assert!(plan.resolve.iter().all(|entry| entry.noted), "{plan:?}");
+
+    let report = apply_plan(&forge, &config(), &repo(), &plan, HEAD_SHA)
+        .await
+        .expect("applies");
+
+    assert_eq!(report.resolved, 2);
+    assert_eq!(
+        forge.writes(),
+        vec![
+            crate::forge::mock::Write::ThreadResolved {
+                thread_id: "PRRT_1".into()
+            },
+            crate::forge::mock::Write::ThreadResolved {
+                thread_id: "PRRT_legacy".into()
+            },
+        ],
+        "resolved, with zero new replies"
+    );
 }
 
-#[test]
-fn a_thread_carrying_a_note_from_before_the_marker_is_never_planned_again() {
-    // 196 of these sit on one pull request; none may gain a sibling.
-    let thread = with_reply(ours(), "tinysweeper[bot]", LEGACY_NOTE);
-    assert!(matches!(
-        decide(&thread, &resolved_titles(&[TITLE])),
-        Decision::Leave("already carries our resolution note")
-    ));
-}
-
-#[test]
-fn a_note_somebody_else_wrote_does_not_stop_a_resolve() {
+#[tokio::test]
+async fn a_note_somebody_else_wrote_does_not_count_as_ours() {
     // Ours by author and by text, as every other marker check is: anyone can
-    // paste the marker, and doing so must not pin a thread open.
+    // paste the marker, and doing so must not silence our explanation.
     let marked = resolution_note("the review agent found this finding fixed", HEAD_SHA);
     for (author, body) in [
         ("author", marked.as_str()),
         ("tinysweeper-evil", marked.as_str()),
         ("author", LEGACY_NOTE),
     ] {
-        let thread = with_reply(ours(), author, body);
-        assert!(
-            matches!(
-                decide(&thread, &resolved_titles(&[TITLE])),
-                Decision::Resolve(_)
-            ),
-            "{author}: {body}"
-        );
+        let forge = forge_with(vec![with_reply(ours(), author, body)]);
+        let plan = plan_for(&forge, &config(), &[TITLE]).await;
+        assert_eq!(plan.resolve.len(), 1, "{author}: {body}");
+        assert!(!plan.resolve[0].noted, "{author}: {body}");
     }
 }
 
