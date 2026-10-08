@@ -25,10 +25,13 @@
 //! - An unchanged-code thread whose only replies come from bots: two bots
 //!   replying to each other is a loop nobody is watching.
 //! - An already-resolved thread, which would otherwise be resolved forever.
-//! - A thread that already carries our resolution note. Since the note is only
-//!   posted after a resolve succeeds, a note under an open thread means a
-//!   human reopened it — or, for notes from before that ordering, that the
-//!   resolve was refused. Either way another note would be noise.
+//!
+//! ## Explained once
+//!
+//! A thread that already carries our resolution note is still resolved when
+//! the policy says so, but never explained a second time. Notes from before the
+//! resolve-first ordering sit under threads whose resolve GitHub refused; once
+//! the installation has the permission, those must close, silently.
 
 pub mod advise;
 pub mod types;
@@ -59,9 +62,6 @@ pub fn decide(thread: &ReviewThread, resolved: &BTreeSet<String>) -> Decision {
     };
     if !is_own_login(&opener.author) {
         return Decision::Leave("a thread tinysweeper did not open");
-    }
-    if thread.comments.iter().any(is_own_resolution_note) {
-        return Decision::Leave("already carries our resolution note");
     }
 
     let Some(title) = title_in(&opener.body) else {
@@ -116,11 +116,12 @@ pub async fn plan(
     }
 
     for thread in read.review_threads(repo, number).await? {
+        let noted = thread.comments.iter().any(is_own_resolution_note);
         match decide(&thread, resolved) {
             Decision::Resolve(reason) => plan.resolve.push(PlannedResolve {
                 id: thread.id.clone(),
                 reason: reason.to_string(),
-                noted: false,
+                noted,
             }),
             Decision::Leave(_) => {}
             Decision::Ask => {
@@ -136,7 +137,7 @@ pub async fn plan(
                     plan.resolve.push(PlannedResolve {
                         id: thread.id.clone(),
                         reason: "the reply explains why it is not a problem (advisory)".into(),
-                        noted: false,
+                        noted,
                     });
                 }
             }
@@ -216,6 +217,9 @@ pub fn resolution_note(reason: &str, head_sha: &str) -> String {
 /// more note per push, forever. This order can lose the explanation for a
 /// thread that did close, if the reply fails; that is the cheaper loss.
 ///
+/// A thread the plan marks `noted` already carries our explanation, so it is
+/// resolved without a second one.
+///
 /// A thread that fails is logged and the rest still run: one stale node id
 /// must not cost a pull request the whole of its housekeeping. A *permission*
 /// refusal is different — every later resolve would be refused the same way —
@@ -248,7 +252,7 @@ pub async fn apply_plan(
             continue;
         }
         report.resolved += 1;
-        if config.threads.comment_on_resolve {
+        if config.threads.comment_on_resolve && !entry.noted {
             let note = resolution_note(&entry.reason, head_sha);
             if let Err(err) = write.reply_to_review_thread(repo, &entry.id, &note).await {
                 tracing::warn!(%err, thread = %entry.id, "could not explain a resolve");
