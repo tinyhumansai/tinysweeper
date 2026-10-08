@@ -21,7 +21,10 @@
 //!   every finding survives. A noise filter that can silence a review by
 //!   failing is worse than no noise filter.
 //!
-//! Cheap tier, one call per lane.
+//! Cheap tier, one call per lane — preceded by [`defined`], a deterministic
+//! pass that drops a "will not compile" or "is undefined" claim when the same
+//! evidence defines the symbol. It obeys both properties above: it only
+//! rejects, and it rejects only on proof.
 
 pub mod defined;
 pub mod types;
@@ -68,6 +71,26 @@ impl<'a> Falsifier<'a> {
     /// evidence the reviewer had; it still may only reject, and only on
     /// proof.
     pub async fn filter_with(
+        &self,
+        lane: LaneId,
+        findings: Vec<Finding>,
+        rendered_diff: &str,
+        looked_up: &str,
+    ) -> FalsifyOutcome {
+        // The deterministic pass first, so a claim the evidence plainly
+        // disproves costs nothing and survives a model that fails open.
+        let (findings, mut rejected) =
+            defined::reject_disproved_symbol_claims(lane, findings, &[rendered_diff, looked_up]);
+        let mut outcome = self
+            .ask_model(lane, findings, rendered_diff, looked_up)
+            .await;
+        rejected.append(&mut outcome.rejected);
+        outcome.rejected = rejected;
+        outcome
+    }
+
+    /// The model half of [`Self::filter_with`]: one call, rejecting by index.
+    async fn ask_model(
         &self,
         lane: LaneId,
         findings: Vec<Finding>,
