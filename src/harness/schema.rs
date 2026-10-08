@@ -171,7 +171,7 @@ pub fn json_schema() -> Value {
             },
             "findings": {
                 "type": "array",
-                "description": "Problems introduced by this pull request. An empty array is a valid and common answer; do not pad it.",
+                "description": "Reportable defects this pull request introduces: code that fails or misbehaves for a concrete, reachable input, a regression in behaviour this change touches, or a violation of a quoted AGENTS.md or CLAUDE.md rule. Never style or naming, pre-existing issues in unchanged code, anything a compiler, linter or CI would catch, speculative security without an attacker-controlled input path, tests for behaviour outside this pull request or repository, or a restatement of the diff. An empty array is a valid and common answer; do not pad it. Prefer zero findings to weak ones.",
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
@@ -196,7 +196,7 @@ pub fn json_schema() -> Value {
                         },
                         "body": {
                             "type": "string",
-                            "description": "What is wrong, why it matters, and what to do. Markdown."
+                            "description": "What is wrong, why it matters, and what to do. Markdown. Name the concrete, reachable input or the caller that triggers the defect; for a repository-rule violation, quote the rule's text word for word."
                         },
                         "severity": {
                             "type": "string",
