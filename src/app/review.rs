@@ -1684,7 +1684,7 @@ fn lane_proposal(
 
     let mut summary = outcome_summary;
     if deduped > 0 {
-        summary = format!("{summary} ({deduped} already reported on an earlier push)");
+        summary = format!("{summary} ({deduped} already raised on this pull request)");
     }
     // A concern raised before, neither fixed nor repeated, has to stay visible.
     // Silence about it would read as agreement that it is gone.
@@ -1751,6 +1751,10 @@ fn group_co_located_findings(lanes: &mut [LaneProposal]) {
         );
     }
 
+    let concerns: Vec<Concern> = all
+        .iter()
+        .map(|located| Concern::of(&located.finding))
+        .collect();
     let mut clusters: Vec<Vec<usize>> = Vec::new();
     for index in 0..all.len() {
         let matching: Vec<usize> = clusters
@@ -1766,8 +1770,12 @@ fn group_co_located_findings(lanes: &mut [LaneProposal]) {
                             || left.finding.review_pass != right.finding.review_pass;
                         let both_unplaced = anchor_range(&left.finding).is_none()
                             && anchor_range(&right.finding).is_none();
-                        (distinct_source || both_unplaced)
-                            && co_located(&left.finding, &right.finding)
+                        ((distinct_source || both_unplaced)
+                            && co_located(&left.finding, &right.finding))
+                            // One concern in different words, from any lane or
+                            // pass — including one pass repeating itself. The
+                            // thread stays lossless: every rationale is kept.
+                            || concerns[*member].same_as(&concerns[index])
                     })
                     .then_some(cluster_index)
             })
@@ -1897,9 +1905,31 @@ fn merge_observation(primary: &mut Finding, observation: Finding) {
     );
     primary.aliases.sort();
     primary.aliases.dedup();
+    // The opener already has the highest severity — it ranks first on it —
+    // but a lower-severity lane may have been surer.
+    primary.confidence = primary.confidence.max(observation.confidence);
     primary
         .body
         .push_str(&crate::findings::render::grouped_observation(&observation));
+    // A concern grouped from elsewhere in the file, or from its test sibling,
+    // says where, so the thread is still a complete list of sites.
+    let elsewhere = observation.path != primary.path
+        || match (anchor_range(primary), anchor_range(&observation)) {
+            (Some((start, end)), Some((other_start, other_end))) => {
+                other_start > end || other_end < start
+            }
+            _ => false,
+        };
+    if elsewhere {
+        let location = match observation.line {
+            Some(line) => format!("{}:{line}", observation.path),
+            None => observation.path.clone(),
+        };
+        primary.body.push_str(&format!(
+            "\n\n_Raised at {}._",
+            crate::findings::render::escape_emphasis(&location)
+        ));
+    }
 }
 
 /// Apply the comment limit after every lane and scanner fallback has contributed.
@@ -2464,7 +2494,15 @@ mod tests {
         group_co_located_findings(&mut lanes);
         cap_proposal_findings(&mut lanes, 2);
 
-        assert_eq!(published(&lanes).len(), 2, "the repeats spent no slots");
+        let titles: Vec<&str> = published(&lanes)
+            .iter()
+            .map(|finding| finding.title.as_str())
+            .collect();
+        assert_eq!(titles.len(), 2);
+        assert!(
+            titles.iter().any(|title| title.starts_with("Use element-helpers")),
+            "the repeats must not spend the slots: {titles:?}"
+        );
     }
 
     #[test]
