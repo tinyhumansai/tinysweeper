@@ -269,6 +269,8 @@ pub struct MockForge {
     strict_comments: bool,
     /// Whether closing a pull request is refused.
     refuse_closes: bool,
+    /// The error every thread resolve is refused with, if any.
+    refuse_resolves: Option<String>,
 }
 
 impl MockForge {
@@ -461,6 +463,17 @@ impl MockForge {
     /// does about the comment it already posted saying the close was coming.
     pub fn refusing_closes(mut self) -> Self {
         self.refuse_closes = true;
+        self
+    }
+
+    /// Refuse every attempt to resolve a review thread, with `message`.
+    ///
+    /// The commonest production refusal is an installation without
+    /// `Pull requests: write`, which GitHub reports as `Resource not
+    /// accessible by integration`; a test passes that text to exercise the
+    /// permission path, or anything else for a one-off failure.
+    pub fn refusing_thread_resolves(mut self, message: &str) -> Self {
+        self.refuse_resolves = Some(message.to_string());
         self
     }
 
@@ -1050,6 +1063,9 @@ impl ForgeWrite for MockForge {
         self.record(Write::ThreadResolved {
             thread_id: thread_id.to_string(),
         });
+        if let Some(message) = &self.refuse_resolves {
+            return Err(Error::Forge(message.clone()));
+        }
         // Applied to state as well as recorded: the policy skips threads that
         // are already resolved, and a mock that only recorded the call would
         // hide a run that resolved the same thread twice.
