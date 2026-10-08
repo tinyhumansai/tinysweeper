@@ -828,4 +828,73 @@ mod tests {
             "an injected marker before the footer must be ignored"
         );
     }
+
+    // ---- the per-PR comment budget ------------------------------------------
+
+    fn thread(opener: &ReviewComment, resolved: bool) -> crate::forge::types::ReviewThread {
+        crate::forge::types::ReviewThread {
+            id: format!("thread-{}", opener.body.len()),
+            is_resolved: resolved,
+            is_outdated: false,
+            comments: vec![crate::forge::types::ThreadComment {
+                author: opener.author.clone(),
+                body: opener.body.clone(),
+                bot: true,
+                maintainer: false,
+            }],
+            resolved_by_has_write_access: resolved,
+        }
+    }
+
+    async fn load_with_threads(
+        comments: Vec<ReviewComment>,
+        threads: Vec<crate::forge::types::ReviewThread>,
+    ) -> PriorReview {
+        let mut state = MockState::default();
+        state.review_comments.insert(7, comments);
+        state.review_threads.insert(7, threads);
+        load(&MockForge::with_state(state), &repo(), 7)
+            .await
+            .expect("loads")
+    }
+
+    #[tokio::test]
+    async fn every_posted_finding_is_open_until_its_thread_is_resolved() {
+        let first = ours("0123456789abcdef", "Guard the index");
+        let fixed = ours("1111111111111111", "Close the file");
+        let pending = ours("2222222222222222", "Check the length");
+        let prior = load_with_threads(
+            // A repeat of one finding is still one open conversation.
+            vec![first.clone(), first, fixed.clone(), pending.clone()],
+            vec![thread(&fixed, true), thread(&pending, false)],
+        )
+        .await;
+
+        assert_eq!(prior.open_findings(), 2);
+    }
+
+    #[tokio::test]
+    async fn with_no_thread_state_every_posted_finding_counts_as_open() {
+        // The quiet direction: a forge that will not say what was resolved
+        // costs comments, never adds them.
+        let prior = load_from(vec![
+            ours("0123456789abcdef", "Guard the index"),
+            ours("1111111111111111", "Close the file"),
+        ])
+        .await;
+
+        assert_eq!(prior.open_findings(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_resolved_thread_someone_else_opened_frees_no_budget() {
+        // A contributor's own resolved thread quoting our marker is not one of
+        // our findings being settled.
+        let posted = ours("0123456789abcdef", "Guard the index");
+        let mut copied = posted.clone();
+        copied.author = "helpful-contributor".into();
+        let prior = load_with_threads(vec![posted], vec![thread(&copied, true)]).await;
+
+        assert_eq!(prior.open_findings(), 1);
+    }
 }
