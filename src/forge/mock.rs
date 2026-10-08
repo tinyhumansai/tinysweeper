@@ -1056,6 +1056,22 @@ impl ForgeWrite for MockForge {
             thread_id: thread_id.to_string(),
             body: body.to_string(),
         });
+        // Applied to state for the same reason a resolve is: the policy skips
+        // a thread that already carries our note, and a mock that only
+        // recorded would hide a run that posted it twice.
+        if !self.read_only {
+            let mut state = self.state.lock().expect("mock state lock");
+            for threads in state.review_threads.values_mut() {
+                for thread in threads.iter_mut().filter(|t| t.id == thread_id) {
+                    thread.comments.push(ThreadComment {
+                        author: "tinysweeper[bot]".into(),
+                        body: body.to_string(),
+                        bot: true,
+                        maintainer: false,
+                    });
+                }
+            }
+        }
         Ok(())
     }
 
