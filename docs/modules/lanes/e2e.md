@@ -53,14 +53,15 @@ end-to-end coverage and whether the e2e path was exercised. Neither lane
 speaks about the other's subject, so an author is never told the same thing
 twice.
 
-**It is on by default, and opt-out.** Demanding an e2e test from a
-repository that has no e2e harness is exactly the noise the gates exist to
-suppress, and the `tests` rule document's exclusion was written after seeing
-it — so the lane is quiet there by construction: with no e2e test files and
-no e2e workflow in the tree it skips deterministically, with no model call
-and no finding (`missing_harness = "skip"`, the default). Where a harness
-exists, the questions above are worth asking of every change. A repository
-that does not want them lists `review.lanes` without `e2e`.
+**It is off by default, and opt-in.** It used to be on everywhere, on the
+theory that it is quiet without a harness. Where a harness *does* exist,
+though, it asked for an end-to-end test on config flips and settings panels
+(openhuman#7128 four times, #7127 twice, tinymemory#238) and those findings
+were ignored — exactly the noise the gates exist to suppress. A repository
+that wants it lists `e2e` in `review.lanes`, or takes `presets/e2e-required/`.
+Once on, it stays quiet where there is nothing to ask about: with no e2e test
+files and no e2e workflow in the tree it skips deterministically, with no
+model call and no finding (`missing_harness = "skip"`, the default).
 
 ## Evidence
 
