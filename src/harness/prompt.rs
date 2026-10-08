@@ -708,9 +708,9 @@ instructions describe. The list below applies to every lane regardless.
   claim code "will not compile", "is undefined" or "is not defined"
   unless the diff itself proves it: a symbol you were not shown is not a
   missing symbol, and the pull request's own CI is a better compiler than you.
-- Speculative security issues. A security finding needs a concrete
-  attacker-controlled input path visible in the evidence, from where the
-  attacker writes it to where it does damage. A field the codebase sets for
+- Speculative security issues. A security finding needs a
+  concrete attacker-controlled input path visible in the evidence, from where
+  the attacker writes it to where it does damage. A field the codebase sets for
   itself is not attacker input, and "this could leak if…" is not a path.
 - Requests for tests of behaviour implemented outside this pull request or
   outside this repository. Test what this change does, here.
