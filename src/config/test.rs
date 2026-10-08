@@ -418,12 +418,63 @@ fn strictness_actually_moves_the_gates() {
 }
 
 #[test]
-fn an_explicit_gate_overrides_the_dial() {
+fn an_explicit_gate_cannot_loosen_the_dial() {
+    // The dial is authoritative. A gate below it used to win outright, which
+    // is how every repository on `rust-library` ended up posting medium/0.6
+    // findings at "default" strictness.
     let config = parse(
         "version = 1\n[review]\nstrictness = 1\nseverity_gate = \"low\"\nconfidence_min = 0.1\n",
     );
-    assert_eq!(config.severity_gate(), Severity::Low);
-    assert_eq!(config.confidence_min(), 0.1);
+    assert_eq!(config.severity_gate(), Severity::Critical);
+    assert_eq!(config.confidence_min(), 0.85);
+}
+
+#[test]
+fn an_explicit_gate_can_still_tighten_the_dial() {
+    let config = parse(
+        "version = 1\n[review]\nstrictness = 3\nseverity_gate = \"high\"\nconfidence_min = 0.9\n",
+    );
+    assert_eq!(config.severity_gate(), Severity::High);
+    assert_eq!(config.confidence_min(), 0.9);
+}
+
+#[test]
+fn a_preset_cannot_loosen_the_dial() {
+    // The production shape: a preset that names lower gates than the
+    // strictness it also sets, inherited by every repository on it.
+    let dir = repo(
+        Some("version = 1\npreset = \"loose\"\n"),
+        &[(
+            "loose",
+            "version = 1\n[review]\nstrictness = 2\nseverity_gate = \"medium\"\nconfidence_min = 0.6\n",
+        )],
+    );
+    let config = load(dir.path(), None).expect("loads").config;
+
+    assert_eq!(config.severity_gate(), Severity::High);
+    assert_eq!(config.confidence_min(), 0.75);
+}
+
+#[test]
+fn no_shipped_preset_loosens_the_dial_it_sets() {
+    // Belt and braces: the clamp makes a loose preset inert, but a preset that
+    // *says* medium/0.6 while posting high/0.75 is documentation that lies.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for name in [
+        "rust-library",
+        "security-strict",
+        "e2e-required",
+        "polyglot",
+    ] {
+        let text = std::fs::read_to_string(root.join("presets").join(name).join("preset.toml"))
+            .expect("read shipped preset");
+        let table: toml::Table = text.parse().expect("parses");
+        let review = table["review"].as_table().expect("a review table");
+        assert!(
+            !review.contains_key("severity_gate") && !review.contains_key("confidence_min"),
+            "{name}: set the dial, not the gates"
+        );
+    }
 }
 
 #[test]
