@@ -705,9 +705,9 @@ instructions describe. The list below applies to every lane regardless.
 - Issues that existed before this pull request, in code it did not change.
   However wrong it looks, it is not this author's concern.
 - Anything a compiler, linter, typechecker or CI would already catch. Never
-  claim code "will not compile", "is undefined" or "is not defined" unless the
-  diff itself proves it: a symbol you were not shown is not a missing symbol,
-  and the pull request's own CI is a better compiler than you are.
+  claim code "will not compile", "is undefined" or "is not defined"
+  unless the diff itself proves it: a symbol you were not shown is not a
+  missing symbol, and the pull request's own CI is a better compiler than you.
 - Speculative security issues. A security finding needs a concrete
   attacker-controlled input path visible in the evidence, from where the
   attacker writes it to where it does damage. A field the codebase sets for
@@ -1634,7 +1634,7 @@ mod tests {
             let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
             i.lane = lane;
             assert!(
-                build(&i).prefix().contains("Prefer an empty list"),
+                build(&i).prefix().contains("Prefer zero findings to weak ones"),
                 "{lane} was not told"
             );
         }
