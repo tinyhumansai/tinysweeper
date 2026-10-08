@@ -112,6 +112,12 @@ pub struct PriorReview {
     pub anchors: Vec<PostedAnchor>,
     /// The head SHA of the last review, when a marker recorded one.
     pub last_sha: Option<String>,
+    /// Primary fingerprints of our inline findings whose conversation is not
+    /// resolved — what still counts against `review.max_comments`.
+    ///
+    /// One entry per conversation rather than per comment: a repeat posted
+    /// before dedupe existed is the same open finding, not a second one.
+    pub open: BTreeSet<String>,
 }
 
 impl PriorReview {
@@ -121,8 +127,14 @@ impl PriorReview {
     }
 
     /// How many of our inline findings are still open on the pull request.
+    ///
+    /// The per-pull-request comment budget is spent by these. A conversation
+    /// somebody resolved — a maintainer, the author, or `crate::threads`
+    /// closing a fixed finding — has been dealt with and frees its slot; one
+    /// still standing, outdated or not, is still asking the owner for
+    /// attention, and the next push must not pile five more on top of it.
     pub fn open_findings(&self) -> usize {
-        0
+        self.open.len()
     }
 
     /// The severity this finding carried when it was posted, if it was.
@@ -268,6 +280,7 @@ pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<Pr
 
             // A repeated fingerprint is normal — the same finding across two
             // reviews — so the title is only recorded the first time.
+            prior.open.insert(fingerprint.clone());
             let first_seen = prior.posted.insert(fingerprint.clone());
             prior.posted.extend(fingerprints.into_iter().skip(1));
             if first_seen && let Some(title) = title_in(&comment.body) {
@@ -280,6 +293,27 @@ pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<Pr
                 }
                 prior.titles.push(title);
             }
+        }
+    }
+
+    // Which of those conversations are settled. Best effort, and failing
+    // quiet: if the forge will not say, every posted finding stays open and
+    // the budget is spent rather than refilled. Only a thread *we* opened can
+    // close one of our findings — the same author check dedupe relies on —
+    // so a contributor's resolved thread quoting our marker frees nothing.
+    match read.review_threads(repo, number).await {
+        Ok(threads) => {
+            for thread in threads.iter().filter(|thread| thread.is_resolved) {
+                if let Some(opener) = thread.comments.first()
+                    && is_own_login(&opener.author)
+                    && let Some(fingerprint) = fingerprint_in(&opener.body)
+                {
+                    prior.open.remove(&fingerprint);
+                }
+            }
+        }
+        Err(err) => {
+            tracing::warn!(%err, "could not read review threads; counting every posted finding as open");
         }
     }
 
