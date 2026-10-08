@@ -235,35 +235,6 @@ pub fn escape_emphasis(text: &str) -> String {
         .replace('_', "\\_")
 }
 
-/// Render one non-primary observation inside a co-located inline thread.
-///
-/// The title and rule receive the same escaping as check summaries. The body
-/// intentionally remains Markdown, as every finding body does. A secondary
-/// suggestion is rendered as reference-only code: only the opening
-/// observation may own GitHub's one-click suggestion for the shared anchor.
-pub(crate) fn grouped_observation(finding: &Finding) -> String {
-    let mut out = format!(
-        "\n\n---\n\n### Additional `{}` observation\n\n{}  {}\n\n**{}**\n\n{}\n\n{}",
-        finding.lane,
-        priority_badge(finding.severity),
-        confidence_badge(finding.confidence),
-        escape_emphasis(&finding.title),
-        rule_line(&finding.rule),
-        finding.body.trim(),
-    );
-
-    if let Some(replacement) = finding
-        .applicable
-        .as_ref()
-        .map(|suggestion| suggestion.replacement.as_str())
-        .or(finding.suggestion.as_deref())
-    {
-        out.push_str("\n\n**Suggested change for this observation (reference only)**\n\n");
-        out.push_str(&code_fence(replacement));
-    }
-    out
-}
-
 /// Fence arbitrary model text without allowing an embedded fence to close it.
 fn code_fence(text: &str) -> String {
     let longest = text

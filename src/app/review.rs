@@ -301,8 +301,9 @@ impl Proposal {
 
     /// Every finding that becomes its own inline conversation.
     ///
-    /// Co-located observations remain in their originating lane for check-run
-    /// evidence, but are published inside the primary observation's thread.
+    /// Co-located observations remain in their originating lane, and reach
+    /// the author through its check run and the review hub rather than a
+    /// comment of their own.
     pub fn findings(&self) -> impl Iterator<Item = &Finding> {
         self.lanes
             .iter()
@@ -1725,12 +1726,16 @@ fn lane_proposal(
 /// How many below-the-gate findings one lane may note in its summary.
 const MAX_NOTED: usize = 5;
 
-/// Publish overlapping cross-lane observations as one lossless conversation.
+/// Publish overlapping cross-lane observations as one inline comment.
 ///
 /// Lanes keep their own findings and conclusions. Only the inline publication
-/// shape changes: the highest-ranked observation becomes the thread opener and
-/// carries every other rationale plus its durable fingerprint. This makes
-/// independent scrutiny additive without turning agreement into comment spam.
+/// shape changes: the highest-ranked observation becomes the one comment, and
+/// carries every other observation's durable fingerprint so none of them is
+/// re-posted. The others are *not* nested into its body — an "Additional
+/// `security` observation" inside a critique comment read as one lane
+/// speaking for another — they are folded into the summaries instead: their
+/// own lane's check run and the review hub's findings list, both of which
+/// already list every finding a lane kept.
 fn group_co_located_findings(lanes: &mut [LaneProposal]) {
     #[derive(Clone)]
     struct Located {
@@ -1827,7 +1832,7 @@ fn group_co_located_findings(lanes: &mut [LaneProposal]) {
     for (lane, count) in lanes.iter_mut().zip(grouped_by_lane) {
         if count > 0 {
             lane.summary = format!(
-                "{} ({count} observation(s) grouped into shared inline comments)",
+                "{} ({count} observation(s) share another lane's inline comment and are listed here only)",
                 lane.summary
             );
         }
@@ -1897,9 +1902,6 @@ fn merge_observation(primary: &mut Finding, observation: Finding) {
     );
     primary.aliases.sort();
     primary.aliases.dedup();
-    primary
-        .body
-        .push_str(&crate::findings::render::grouped_observation(&observation));
 }
 
 /// Apply the comment limit after every lane and scanner fallback has contributed.
