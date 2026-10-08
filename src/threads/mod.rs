@@ -120,6 +120,7 @@ pub async fn plan(
             Decision::Resolve(reason) => plan.resolve.push(PlannedResolve {
                 id: thread.id.clone(),
                 reason: reason.to_string(),
+                noted: false,
             }),
             Decision::Leave(_) => {}
             Decision::Ask => {
@@ -135,6 +136,7 @@ pub async fn plan(
                     plan.resolve.push(PlannedResolve {
                         id: thread.id.clone(),
                         reason: "the reply explains why it is not a problem (advisory)".into(),
+                        noted: false,
                     });
                 }
             }

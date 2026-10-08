@@ -2525,6 +2525,7 @@ mod tests {
             resolve: vec![crate::threads::PlannedResolve {
                 id: "PRRT_1".into(),
                 reason: "the finding no longer reproduces on the new code".into(),
+                noted: false,
             }],
         };
 
@@ -2554,6 +2555,7 @@ mod tests {
             resolve: vec![crate::threads::PlannedResolve {
                 id: "PRRT_1".into(),
                 reason: "stale".into(),
+                noted: false,
             }],
         };
 

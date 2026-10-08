@@ -25,6 +25,13 @@ pub struct PlannedResolve {
     pub id: String,
     /// Why, for the log and the check-run summary.
     pub reason: String,
+    /// Whether the thread already carries our resolution note, so the resolve
+    /// is retried without explaining it a second time.
+    ///
+    /// Defaulted on read so a proposal serialized before this field existed
+    /// still deserializes — as "not noted", the behaviour it was planned with.
+    #[serde(default)]
+    pub noted: bool,
 }
 
 /// The threads one run decided to resolve.
@@ -85,6 +92,7 @@ mod tests {
             resolve: vec![PlannedResolve {
                 id: "thread-1".into(),
                 reason: "the code changed".into(),
+                noted: false,
             }],
         };
         assert!(!plan.is_empty());
