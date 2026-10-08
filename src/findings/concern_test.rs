@@ -458,9 +458,9 @@ fn an_unplaced_finding_needs_the_whole_file_bar() {
     // Identical title, no line: still the same text in the same file.
     assert!(Concern::of(&unplaced).same_as(&OH7129_CRITIQUE_152.concern()));
 
-    // The reworded socket finding only clears the nearby bar, which an
+    // The reworded helper finding only clears the nearby bar, which an
     // unplaced finding has no position to claim.
-    let mut unplaced = TS24_TRANSPORT_58.finding();
+    let mut unplaced = OH7079_HELPERS_23.finding();
     unplaced.line = None;
-    assert!(!Concern::of(&unplaced).same_as(&TS24_SOCKETS_58.concern()));
+    assert!(!Concern::of(&unplaced).same_as(&OH7079_HELPERS_24.concern()));
 }
