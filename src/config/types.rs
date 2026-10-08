@@ -1732,20 +1732,33 @@ impl Config {
 
     /// The severity at or above which findings are posted.
     ///
-    /// From `strictness` unless the repository set it explicitly.
+    /// The dial's gate, raised by an explicit `severity_gate` and never
+    /// lowered by one. Tighten-only on purpose, whichever layer set the key:
+    /// the merge records provenance for `doctor` but the effective config does
+    /// not carry it, and "a preset may not loosen, a repository may" would
+    /// still let the operator's own `.tinysweeper.toml` — the repo layer for
+    /// every reviewed repository — loosen everyone at once. That is exactly
+    /// what `rust-library`'s `medium`/0.6 did while the dial read "default".
+    /// Anyone who wants more findings turns the dial to 3; that is what it is
+    /// for, and it is one key `doctor` can explain.
     pub fn severity_gate(&self) -> Severity {
+        let dial = self.strictness().severity;
         self.review
             .severity_gate
             .as_deref()
             .and_then(Severity::parse)
-            .unwrap_or_else(|| self.strictness().severity)
+            .map_or(dial, |explicit| explicit.max(dial))
     }
 
     /// The confidence a finding needs before it is posted.
+    ///
+    /// Tighten-only against the dial, for the reason on
+    /// [`Self::severity_gate`].
     pub fn confidence_min(&self) -> f64 {
+        let dial = self.strictness().confidence;
         self.review
             .confidence_min
-            .unwrap_or_else(|| self.strictness().confidence)
+            .map_or(dial, |explicit| explicit.max(dial))
     }
 
     /// The gates `review.strictness` implies.
