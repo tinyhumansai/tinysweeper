@@ -47,6 +47,18 @@ impl ThreadPlan {
     }
 }
 
+/// What executing a [`ThreadPlan`] did, for the caller and for the tests.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ApplyReport {
+    /// Threads GitHub resolved.
+    pub resolved: usize,
+    /// Threads whose resolve GitHub refused.
+    pub failed: usize,
+    /// Threads not attempted because an earlier resolve in the same run was
+    /// refused for want of permission, which every later one would be too.
+    pub skipped: usize,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

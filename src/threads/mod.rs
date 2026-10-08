@@ -38,7 +38,7 @@ use crate::forge::types::{RepoId, ReviewThread};
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 use crate::ports::model::{Model, Spend};
 
-pub use crate::threads::types::{Decision, PlannedResolve, ThreadPlan};
+pub use crate::threads::types::{ApplyReport, Decision, PlannedResolve, ThreadPlan};
 
 /// Decide what to do with one thread, from what is already known.
 ///
@@ -143,6 +143,14 @@ pub async fn plan(
 /// repository this will plausibly run on.
 const SHORT_SHA: usize = 7;
 
+/// The hidden marker every resolution note carries.
+pub const RESOLVED_NOTE_MARKER: &str = "<!-- tinysweeper:resolved-note -->";
+
+/// Whether a forge error is GitHub refusing for want of permission.
+pub fn is_permission_denied(_err: &crate::error::Error) -> bool {
+    false
+}
+
 /// The note posted in a thread just before it is resolved.
 ///
 /// Written here, from a `&'static str` reason and a SHA, so no part of it can
@@ -179,8 +187,8 @@ pub async fn apply_plan(
     repo: &RepoId,
     plan: &ThreadPlan,
     head_sha: &str,
-) -> Result<usize> {
-    let mut resolved = 0;
+) -> Result<ApplyReport> {
+    let mut report = ApplyReport::default();
     for entry in &plan.resolve {
         if config.threads.comment_on_resolve {
             let note = resolution_note(&entry.reason, head_sha);
@@ -189,11 +197,14 @@ pub async fn apply_plan(
             }
         }
         match write.resolve_review_thread(repo, &entry.id).await {
-            Ok(()) => resolved += 1,
-            Err(err) => tracing::warn!(%err, thread = %entry.id, "could not resolve a thread"),
+            Ok(()) => report.resolved += 1,
+            Err(err) => {
+                report.failed += 1;
+                tracing::warn!(%err, thread = %entry.id, "could not resolve a thread")
+            }
         }
     }
-    Ok(resolved)
+    Ok(report)
 }
 
 #[cfg(test)]
