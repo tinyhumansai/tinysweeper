@@ -1,7 +1,7 @@
 //! Embeddings through the OpenRouter gateway. Feature `harness`.
 //!
 //! Why this is a direct client rather than another arm of
-//! [`build_model`](crate::index::provider::build_model): tinyagents'
+//! [`build_model`](crate::index::provider::build_model): the harness
 //! `EmbeddingModel::embed` returns bare `Vec<Vec<f32>>`, and every adapter
 //! behind it decodes the response body and **discards the `usage` object**.
 //! OpenRouter sends one, and it carries both `prompt_tokens` and the actual
@@ -45,7 +45,7 @@ pub struct OpenRouterEmbedder {
     signature: EmbedSignature,
     /// The least time between two requests, from `requests_per_minute`.
     ///
-    /// The harness's process-global limiter governs tinyagents' models, not
+    /// The harness's process-global limiter governs its embedding models, not
     /// this client, so the ceiling `[embeddings]` promises is kept here: a
     /// cold index otherwise sends batches as fast as answers come back and
     /// walks into the gateway's 429 path.

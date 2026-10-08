@@ -123,7 +123,7 @@ fn provider_options(effort: &str, routing: &ProviderRouting) -> serde_json::Valu
 /// The cost the gateway says it charged, when it says so.
 ///
 /// Read out of the raw response body rather than the parsed usage, because the
-/// OpenAI wire shape tinyagents parses has no cost field — this one is
+/// OpenAI wire shape has no cost field — this one is
 /// OpenRouter's extension, returned because [`provider_options`] asked for it.
 /// `None` means the gateway reported nothing and the estimate stands.
 fn gateway_cost(raw: Option<&serde_json::Value>) -> Option<f64> {
