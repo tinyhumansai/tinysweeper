@@ -2435,9 +2435,11 @@ mod tests {
             "invisible-click",
             "The rewrite dropped the zero-size check, so a mounted-but-hidden control now counts as clicked.",
         );
+        // Off line 24 on purpose: cross-lane findings on one line already
+        // share a thread by position, and this one must stand on its words.
         let mut helpers = at(
             LaneId::Tests,
-            24,
+            27,
             "4444444444444444",
             "e2e-raw-element-types",
             "The spec uses `document.querySelector<HTMLElement>` casts directly; E2E code must use the shared element-helpers module.",
