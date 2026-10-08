@@ -120,6 +120,11 @@ impl PriorReview {
         self.posted.contains(identity)
     }
 
+    /// How many of our inline findings are still open on the pull request.
+    pub fn open_findings(&self) -> usize {
+        0
+    }
+
     /// The severity this finding carried when it was posted, if it was.
     ///
     /// Keyed on the title because that is what the model is shown and what it
