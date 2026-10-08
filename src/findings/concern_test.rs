@@ -464,32 +464,3 @@ fn an_unplaced_finding_needs_the_whole_file_bar() {
     unplaced.line = None;
     assert!(!Concern::of(&unplaced).same_as(&OH7079_HELPERS_24.concern()));
 }
-
-#[test]
-#[ignore]
-fn zz_replay() {
-    let dir = std::env::var("REPLAY_DIR").unwrap();
-    for name in ["openhuman-7129", "openhuman-7079", "tinyagents-341", "openhuman-7127", "tinyskills-24"] {
-        let raw = std::fs::read_to_string(format!("{dir}/{name}.json")).unwrap();
-        let comments: Vec<serde_json::Value> = serde_json::from_str(&raw).unwrap();
-        let mut rows: Vec<(String, Concern, String)> = Vec::new();
-        for c in &comments {
-            let login = c["user"]["login"].as_str().unwrap();
-            let body = c["body"].as_str().unwrap();
-            if !login.contains("tinysweeper") || !body.contains("tinysweeper:fp=") { continue; }
-            let title = crate::findings::prior::title_in(body).unwrap();
-            let rest = body.split_once(&format!("**{title}**")).unwrap().1;
-            let text = rest.split("**[RULE]").next().unwrap().split("\n\n---\n\n").next().unwrap();
-            let rule = body.split_once("**[RULE] ").map(|(_, r)| r.split("**").next().unwrap()).unwrap_or("");
-            let line = c["line"].as_u64().or(c["original_line"].as_u64());
-            let path = c["path"].as_str().unwrap();
-            rows.push((c["created_at"].as_str().unwrap().to_string(), Concern::new(path, line.map(|l| (l, l)), &title, text, rule), title));
-        }
-        rows.sort_by(|a, b| a.0.cmp(&b.0));
-        let mut kept: Vec<&Concern> = Vec::new();
-        for (_, concern, _) in &rows {
-            if !kept.iter().any(|k| concern.same_as(k)) { kept.push(concern); }
-        }
-        println!("REPLAY {name}: {} posted -> {} kept", rows.len(), kept.len());
-    }
-}
