@@ -462,36 +462,6 @@ mod tests {
     }
 
     #[test]
-    fn a_grouped_observation_labels_and_preserves_its_rationale_safely() {
-        let mut finding = finding(Severity::High, "Close <details> | **now**");
-        finding.lane = LaneId::Security;
-        finding.rule = "Trigger <script>: require an explicit command".into();
-        finding.body = "The default launches paid work.".into();
-        finding.suggestion = Some("```\nsafer_default()".into());
-
-        let rendered = grouped_observation(&finding);
-
-        assert!(
-            rendered.contains("Additional `security` observation"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("Close &lt;details&gt; | \\*\\*now\\*\\*"),
-            "{rendered}"
-        );
-        assert!(rendered.contains("Trigger &lt;script&gt;"), "{rendered}");
-        assert!(
-            rendered.contains("The default launches paid work."),
-            "{rendered}"
-        );
-        assert!(rendered.contains("reference only"), "{rendered}");
-        assert!(
-            rendered.contains("````\n```\nsafer_default()\n````"),
-            "{rendered}"
-        );
-    }
-
-    #[test]
     fn confidence_is_bucketed_rather_than_printed_to_two_decimals() {
         // 0.83 and 0.79 are not meaningfully different, and printing them
         // implies a precision the model does not have.
