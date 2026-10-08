@@ -1996,7 +1996,12 @@ mod tests {
             let mut i = inputs(&config, "", "@@ -1 +1 @@\n+a\n");
             i.lane = lane;
             let prompt = build(&i);
-            let prefix = prompt.prefix();
+            // Wrapping is presentation; the test is about the words.
+            let prefix = prompt
+                .prefix()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
             for needle in [
                 "## What counts as a reportable defect",
                 "concrete, reachable input",
