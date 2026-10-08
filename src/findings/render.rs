@@ -235,17 +235,6 @@ pub fn escape_emphasis(text: &str) -> String {
         .replace('_', "\\_")
 }
 
-/// Fence arbitrary model text without allowing an embedded fence to close it.
-fn code_fence(text: &str) -> String {
-    let longest = text
-        .split(|character| character != '`')
-        .map(str::len)
-        .max()
-        .unwrap_or(0);
-    let fence = "`".repeat(longest.saturating_add(1).max(3));
-    format!("{fence}\n{}\n{fence}", text.trim())
-}
-
 /// A `<summary>` renders as HTML, so a stray tag in a title would break out of
 /// the disclosure and mangle the rest of the page.
 fn escape_html(text: &str) -> String {
