@@ -294,17 +294,11 @@ pub fn tokens(text: &str) -> BTreeSet<String> {
 const SYNONYMS: &[(&str, &str)] = &[("exercis", "test"), ("cover", "test"), ("coverag", "test")];
 
 /// Lowercase ASCII words of `text`, without stopwords or bare numbers.
-fn words(text: &str) -> impl Iterator<Item = &str> + '_ {
+fn words(text: &str) -> impl Iterator<Item = String> + '_ {
     text.split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|word| word.len() >= 2)
-        .filter(|word| !word.bytes().all(|b| b.is_ascii_digit()))
-        .map(move |word| word)
-        .filter(|word| !STOPWORDS.contains(&word.to_ascii_lowercase().as_str()))
-        .map(|word| {
-            // Lowercasing in place is not possible on a borrowed `&str`; the
-            // allocation is unavoidable once, and `stem` takes ownership.
-            word
-        })
+        .filter(|word| word.len() >= 2 && !word.bytes().all(|b| b.is_ascii_digit()))
+        .map(str::to_ascii_lowercase)
+        .filter(|word| !STOPWORDS.contains(&word.as_str()))
 }
 
 /// Words that carry no concern.
