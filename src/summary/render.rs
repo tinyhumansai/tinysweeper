@@ -623,4 +623,79 @@ mod tests {
         assert!(rendered.contains("Address carried finding"));
         assert!(!rendered.contains("## Before merge\n\nNone."));
     }
+
+    #[test]
+    fn the_update_time_renders_as_iso_8601_utc_never_raw_epoch_seconds() {
+        let mut config = Config::default();
+        config.summary.sections = vec![SummarySection::RunDetails];
+        let rendered = render(
+            &config,
+            &proposal(
+                ReviewSummary {
+                    updated_at_epoch: 1_791_459_570,
+                    history: vec![crate::summary::types::ReviewPass {
+                        head_sha: "abcdef1234567890".into(),
+                        reviewed_at_epoch: 951_782_400,
+                        ..Default::default()
+                    }],
+                    ..ReviewSummary::default()
+                },
+                &[],
+            ),
+        );
+
+        assert!(
+            rendered.contains("**Updated:** 2026-10-08T11:39:30Z"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("2000-02-29T00:00:00Z"), "{rendered}");
+        assert!(!rendered.contains("1791459570"), "{rendered}");
+        assert!(!rendered.contains("951782400"), "{rendered}");
+        assert!(!rendered.contains("Unix time"), "{rendered}");
+    }
+
+    #[test]
+    fn an_unknown_update_time_is_omitted_rather_than_dated_1970() {
+        let rendered = render(&Config::default(), &proposal(ReviewSummary::default(), &[]));
+        assert!(!rendered.contains("**Updated:**"), "{rendered}");
+        assert!(!rendered.contains("1970"), "{rendered}");
+    }
+
+    #[test]
+    fn what_changed_is_omitted_when_no_summary_could_be_produced() {
+        let mut config = Config::default();
+        config.summary.sections = vec![SummarySection::Changes];
+        for failed in [
+            "",
+            "No supported behavioral explanation was produced.",
+            "The review could not produce a supported behavioral summary; inspect the cited \
+             changed surface and lane details below.",
+        ] {
+            let rendered = render(
+                &config,
+                &proposal(
+                    ReviewSummary {
+                        changes: failed.into(),
+                        ..ReviewSummary::default()
+                    },
+                    &[],
+                ),
+            );
+            assert!(!rendered.contains("What changed"), "{rendered}");
+            assert!(!rendered.contains("could not produce"), "{rendered}");
+            assert!(!rendered.contains("No supported behavioral"), "{rendered}");
+        }
+
+        let rendered = render(
+            &config,
+            &proposal(
+                ReviewSummary {
+                    changes: "The hub is edited in place.".into(),
+                    ..ReviewSummary::default()
+                },
+                &[],
+            ),
+        );
+        assert!(rendered.contains("## What changed\n\nThe hub is edited in place."));
+    }
 }

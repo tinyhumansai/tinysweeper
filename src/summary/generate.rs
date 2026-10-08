@@ -500,6 +500,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_unsupported_change_narrative_is_left_empty_not_replaced_with_failure_text() {
+        // The hub omits an empty "What changed"; failure prose in the field
+        // printed on most pull requests instead.
+        let model = MockModel::new().then(json!({
+            "executive_summary": "A supported summary.",
+            "changes": "Tests passed",
+            "features": [],
+            "tests": [],
+            "positive_observations": {}
+        }));
+        let (summary, _, _) = generate(
+            &model,
+            &Config::default(),
+            &PullRequest::default(),
+            &[],
+            &[],
+            None,
+            &[],
+        )
+        .await;
+        assert_eq!(summary.changes, "");
+
+        let fallback = deterministic(&Config::default(), &PullRequest::default(), &[], &[], None);
+        assert_eq!(fallback.changes, "");
+    }
+
+    #[tokio::test]
     async fn model_failure_uses_the_deterministic_fallback() {
         let model = MockModel::new().then_error("offline");
         let prior = ReviewSummary {
