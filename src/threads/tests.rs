@@ -468,9 +468,11 @@ async fn a_successful_resolve_is_explained_once_and_never_again() {
 
     // A human reopens it; the next push must not explain the same resolve a
     // second time. Reopening is a human overruling us, and is left alone.
-    forge.with_state_mut(|state| state.review_threads.get_mut(&7).unwrap()[0].is_resolved = false);
-    assert_eq!(run(&forge).await, ApplyReport::default());
-    assert_eq!(notes(&forge).len(), 1, "{:?}", forge.writes());
+    let mut reopened = forge.review_threads(&repo(), 7).await.expect("read");
+    reopened[0].is_resolved = false;
+    let next_push = forge_with(reopened);
+    assert_eq!(run(&next_push).await, ApplyReport::default());
+    assert!(notes(&next_push).is_empty(), "{:?}", next_push.writes());
 }
 
 #[tokio::test]
