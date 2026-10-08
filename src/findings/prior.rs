@@ -428,7 +428,7 @@ pub fn title_in(body: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::forge::types::{IssueComment, ReviewComment};
+    use crate::forge::types::{IssueComment, ReviewComment, ReviewThread, ThreadComment};
     use crate::forge::{MockForge, MockState};
 
     fn repo() -> RepoId {
@@ -789,6 +789,256 @@ mod tests {
         .await;
 
         assert!(!prior.repeats_concern(&finding(LaneId::Tests, "src/main.rs", None)));
+    }
+
+    /// A comment exactly as `apply` renders an inline finding: badges, bold
+    /// title, explanation, then the `[RULE]` line and the marker.
+    fn production(
+        lane: LaneId,
+        path: &str,
+        line: u64,
+        rule: &str,
+        title: &str,
+        body: &str,
+        fingerprint: &str,
+    ) -> ReviewComment {
+        use crate::findings::render::{
+            escape_emphasis, lane_confidence_badge, priority_badge, rule_line,
+        };
+        ReviewComment {
+            path: path.into(),
+            line: Some(line),
+            start_line: None,
+            author: "tinysweeper[bot]".into(),
+            body: format!(
+                "{}  {}\n\n**{}**\n\n{body}\n\n{} · <!-- tinysweeper:fp={fingerprint} -->",
+                priority_badge(Severity::Medium),
+                lane_confidence_badge(lane, 0.9),
+                escape_emphasis(title),
+                rule_line(rule),
+            ),
+        }
+    }
+
+    /// A finding with the wording that matters set.
+    fn worded(lane: LaneId, path: &str, line: u64, rule: &str, title: &str, body: &str) -> Finding {
+        let mut finding = finding(lane, path, Some(line));
+        finding.rule = rule.into();
+        finding.title = title.into();
+        finding.body = body.into();
+        finding
+    }
+
+    const SPEC: &str = "app/test/e2e/specs/onboarding-modes.spec.ts";
+    const VISIBLE: &str = "Require visible elements before clicking";
+    const VISIBLE_SECURITY: &str = "This helper now treats any non-disabled matching element as clickable and invokes `element.click()` without checking visibility, layout, or whether the element is actually interactable. A hidden or stale duplicate element can therefore advance the flow while the user-facing control is unavailable, allowing the E2E test to pass falsely.";
+    const VISIBLE_E2E: &str = "The previous version of this helper checked getBoundingClientRect for a zero-size box before dispatching the click; the rewrite dropped that check, so a mounted-but-hidden control now counts as clicked and the spec can pass while the user-visible button never actually received input.";
+    const HELPERS: &str = "Use element-helpers instead of raw platform element types in E2E specs";
+    const HELPERS_BODY: &str = "The rewritten spec introduces a local `clickTestId` helper that does `browser.execute` with `document.querySelector<HTMLElement>` casts directly. The repository rule states E2E code must use `app/test/e2e/helpers/element-helpers.ts`, not raw platform element types.";
+
+    #[test]
+    fn the_explanation_and_rule_are_read_back_from_a_rendered_comment() {
+        let comment = production(
+            LaneId::Security,
+            SPEC,
+            23,
+            "e2e-interaction-validity: clicks must be real",
+            VISIBLE,
+            VISIBLE_SECURITY,
+            "0123456789abcdef",
+        );
+        assert_eq!(text_in(&comment.body).as_deref(), Some(VISIBLE_SECURITY));
+        assert_eq!(
+            rule_in(&comment.body).as_deref(),
+            Some("e2e-interaction-validity")
+        );
+
+        // A grouped thread carries other observations after a rule; only the
+        // opening explanation is this comment's own.
+        let grouped = format!(
+            "![p](x) **{VISIBLE}**\n\n{VISIBLE_SECURITY}\n\n---\n\n### Additional `tests` observation\n\n**Other**\n\nother words"
+        );
+        assert_eq!(text_in(&grouped).as_deref(), Some(VISIBLE_SECURITY));
+    }
+
+    #[tokio::test]
+    async fn a_reworded_repeat_from_another_lane_is_recognised() {
+        // `openhuman#7079`: `security` posted this on line 23; `e2e` posted it
+        // again on line 24 a push later, in its own words.
+        let prior = load_from(vec![production(
+            LaneId::Security,
+            SPEC,
+            23,
+            "e2e-interaction-validity",
+            VISIBLE,
+            VISIBLE_SECURITY,
+            "0123456789abcdef",
+        )])
+        .await;
+
+        let repeat = worded(LaneId::E2e, SPEC, 24, "invisible-click", VISIBLE, VISIBLE_E2E);
+        assert!(prior.repeats_concern(&repeat));
+
+        // A different concern about the same helper, on the same line.
+        let different = worded(
+            LaneId::Tests,
+            SPEC,
+            24,
+            "e2e-raw-element-types",
+            HELPERS,
+            HELPERS_BODY,
+        );
+        assert!(!prior.repeats_concern(&different));
+    }
+
+    const LOOPBACK: &str = "crates/tinyskills/tests/registry_loopback.rs";
+    const SOCKETS: &str = "Keep integration tests free of live network sockets";
+    const SOCKETS_BODY: &str = "This integration test starts a real TCP listener and exercises the registry over a loopback socket. The repository requires tests to avoid network access so they remain deterministic and reliable across environments. Use a deterministic in-memory `RegistryTransport` test double for these cases, or move socket-level transport testing outside the deterministic test suite.";
+    const TRANSPORT: &str = "Use a deterministic transport instead of loopback sockets";
+    const TRANSPORT_BODY: &str = "The test starts a real TCP listener and exercises network I/O, but repository rules require deterministic tests with no network access. Test the public API with an in-process `RegistryTransport` implementation instead of `Server` and `SocketTransport`.";
+
+    fn sockets_comment() -> ReviewComment {
+        production(
+            LaneId::Security,
+            LOOPBACK,
+            58,
+            "network-in-tests",
+            SOCKETS,
+            SOCKETS_BODY,
+            "0123456789abcdef",
+        )
+    }
+
+    /// The thread `sockets_comment` opened, after a maintainer answered it.
+    fn answered(resolved: bool, resolver_can_write: bool) -> ReviewThread {
+        ReviewThread {
+            id: "T_1".into(),
+            is_resolved: resolved,
+            is_outdated: false,
+            comments: vec![
+                ThreadComment {
+                    author: "tinysweeper[bot]".into(),
+                    body: sockets_comment().body,
+                    bot: true,
+                    maintainer: false,
+                },
+                ThreadComment {
+                    author: "maintainer".into(),
+                    body: "Loopback is the point of this suite; keeping it.".into(),
+                    bot: false,
+                    maintainer: true,
+                },
+            ],
+            resolved_by_has_write_access: resolver_can_write,
+        }
+    }
+
+    async fn load_with_threads(threads: Vec<ReviewThread>) -> PriorReview {
+        let mut state = MockState::default();
+        state.review_comments.insert(7, vec![sockets_comment()]);
+        state.review_threads.insert(7, threads);
+        load(&MockForge::with_state(state), &repo(), 7)
+            .await
+            .expect("loads")
+    }
+
+    fn reworded_and_moved() -> Finding {
+        // `tinyskills#24`: the same request, 45 lines up, in new words.
+        worded(
+            LaneId::Security,
+            LOOPBACK,
+            13,
+            "live-network-test",
+            TRANSPORT,
+            TRANSPORT_BODY,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_declined_finding_reworded_elsewhere_in_the_file_stays_suppressed() {
+        let declined = load_with_threads(vec![answered(true, true)]).await;
+        assert!(declined.repeats_concern(&reworded_and_moved()));
+
+        // The same comment, never declined: 45 lines and a new title is not
+        // enough evidence to stay quiet about an open concern.
+        let open = load_with_threads(vec![]).await;
+        assert!(!open.repeats_concern(&reworded_and_moved()));
+    }
+
+    #[tokio::test]
+    async fn a_maintainer_reply_on_an_open_thread_is_a_decline() {
+        let disputed = load_with_threads(vec![answered(false, false)]).await;
+        assert!(disputed.repeats_concern(&reworded_and_moved()));
+    }
+
+    #[tokio::test]
+    async fn a_resolve_by_someone_without_write_access_is_not_a_decline() {
+        // The pull request's own author may resolve our thread; that is not a
+        // maintainer saying no, and `memory::ingest::classify` says the same.
+        let resolved_by_author = load_with_threads(vec![answered(true, false)]).await;
+        assert!(!resolved_by_author.repeats_concern(&reworded_and_moved()));
+    }
+
+    #[tokio::test]
+    async fn a_decline_on_a_thread_someone_else_opened_counts_for_nothing() {
+        let mut thread = answered(true, true);
+        thread.comments[0].author = "contributor".into();
+        let prior = load_with_threads(vec![thread]).await;
+        assert!(!prior.repeats_concern(&reworded_and_moved()));
+    }
+
+    #[tokio::test]
+    async fn a_thread_read_failure_still_dedupes_on_the_comments() {
+        let mut state = MockState::default();
+        state.review_comments.insert(7, vec![sockets_comment()]);
+        let forge = MockForge::with_state(state).failing_review_threads();
+        let prior = load(&forge, &repo(), 7).await.expect("degrades, not fails");
+
+        assert!(prior.already_posted("0123456789abcdef"));
+        let mut same_line = reworded_and_moved();
+        same_line.line = Some(58);
+        assert!(prior.repeats_concern(&same_line));
+    }
+
+    /// An inline comment in the shape coderabbit writes: a category row, an
+    /// analysis block, then the title as its own bold line.
+    fn coderabbit(author: &str) -> ReviewComment {
+        ReviewComment {
+            path: SPEC.into(),
+            line: Some(22),
+            start_line: None,
+            author: author.into(),
+            body: format!(
+                "**🩺 Stability & Availability** | **🟡 Minor** | **⚡ Quick win**\n\n<details>\n<summary>🔎 Supported by static analysis</summary>\n\n```bash\nrg clickTestId\n```\n\n<details><summary>nested</summary>more</details>\n\n</details>\n\n**Require the element to be visible before clicking it.**\n\n{VISIBLE_SECURITY}\n\n<!-- fingerprinting:phantom:triton -->"
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn another_review_bots_comment_on_the_line_counts_as_raised() {
+        for author in [
+            "coderabbitai[bot]",
+            "chatgpt-codex-connector[bot]",
+            "greptile-apps[bot]",
+        ] {
+            let prior = load_from(vec![coderabbit(author)]).await;
+            let ours = worded(LaneId::E2e, SPEC, 24, "invisible-click", VISIBLE, VISIBLE_E2E);
+            assert!(prior.repeats_concern(&ours), "{author}");
+            // Nothing else about another bot's comment is ours to read back.
+            assert!(prior.titles.is_empty());
+            assert!(prior.posted.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_person_or_lookalike_cannot_stand_in_for_a_review_bot() {
+        // `[bot]` is a suffix only a GitHub App can hold, and the slug must
+        // match exactly. A person writing the same words is a person.
+        for author in ["coderabbitai", "coderabbitai-evil[bot]", "contributor"] {
+            let prior = load_from(vec![coderabbit(author)]).await;
+            let ours = worded(LaneId::E2e, SPEC, 24, "invisible-click", VISIBLE, VISIBLE_E2E);
+            assert!(!prior.repeats_concern(&ours), "{author}");
+        }
     }
 
     /// A finding placed at `line`, with nothing else that matters here set.
