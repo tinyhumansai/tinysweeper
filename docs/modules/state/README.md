@@ -165,6 +165,18 @@ consuming another slot. Before the cap runs, one structured event records
 `max_review_pass`, making the reduction in comment churn visible without
 conflating it with finding loss.
 
+That cap is one budget for the whole pull request (default 5), not one per
+review cycle. `findings::prior::load` records the primary fingerprint of every
+inline finding we posted and removes those whose thread we opened has since
+been resolved; `PriorReview::open_findings` is what remains, and the review
+spends only `max_comments - open_findings` on new conversations. Resolved
+threads free their slot; outdated-but-unresolved ones do not, because a branch
+that keeps rewriting code would otherwise refill the budget on every push.
+When the thread state cannot be read every posted finding counts as open — the
+quiet direction. Findings that qualify but do not fit move to
+`LaneProposal::overflow` and are listed by title and `path:line` under
+**Over the comment budget** in the review hub.
+
 Getting the bot login wrong fails in the noisy direction — nothing is recognised
 as our own, so nothing is deduped — rather than in the direction that lets a
 stranger silence a review.
