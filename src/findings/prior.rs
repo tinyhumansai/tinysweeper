@@ -709,10 +709,14 @@ mod tests {
             "two lines from a comment we already posted is the same finding"
         );
 
+        // The same title anywhere in the file is the same concern: on
+        // `openhuman#7127` "Drive the learn_from_tasks switch…" was posted at
+        // line 1287 and again at 1254.
         let mut far_away = moved.clone();
         far_away.line = Some(400);
-        assert!(!prior.repeats_concern(&far_away));
+        assert!(prior.repeats_concern(&far_away));
 
+        // In an unrelated file it may be a second real site, and is posted.
         let mut other_file = moved.clone();
         other_file.path = "src/other.rs".into();
         assert!(!prior.repeats_concern(&other_file));
@@ -773,9 +777,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unplaceable_finding_is_never_suppressed_by_an_anchor() {
-        // No line means no positional evidence, and suppressing on none of it
-        // deletes a finding rather than de-duplicating one.
+    async fn an_unplaceable_finding_is_not_suppressed_by_a_file_in_common() {
+        // No line means no positional evidence, so only near-identical
+        // wording can say it is a repeat. A file in common says nothing.
         let prior = load_from(vec![rendered(
             Severity::Medium,
             LaneId::Tests,
