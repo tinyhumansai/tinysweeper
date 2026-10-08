@@ -2370,6 +2370,158 @@ mod tests {
         );
     }
 
+    /// `openhuman#7079`: one concern from three lanes on three adjacent lines,
+    /// and a different concern about the same helper.
+    fn visible_and_helpers() -> Vec<LaneProposal> {
+        let spec = "app/test/e2e/specs/onboarding-modes.spec.ts";
+        let visible = "Require visible elements before clicking";
+        let at = |lane: LaneId, line: u64, identity: &str, rule: &str, body: &str| {
+            let mut finding = grouped_finding(lane, visible, line, identity);
+            finding.path = spec.into();
+            finding.rule = rule.into();
+            finding.body = body.into();
+            finding
+        };
+        let security = at(
+            LaneId::Security,
+            23,
+            "1111111111111111",
+            "e2e-interaction-validity",
+            "This helper treats any non-disabled matching element as clickable and invokes `element.click()` without checking visibility or layout.",
+        );
+        let mut tests = at(
+            LaneId::Tests,
+            25,
+            "2222222222222222",
+            "click-without-visibility",
+            "The click helper only checks that the element exists and is not disabled; a hidden element still reports a successful click.",
+        );
+        tests.confidence = 0.95;
+        let e2e = at(
+            LaneId::E2e,
+            24,
+            "3333333333333333",
+            "invisible-click",
+            "The rewrite dropped the zero-size check, so a mounted-but-hidden control now counts as clicked.",
+        );
+        let mut helpers = at(
+            LaneId::Tests,
+            24,
+            "4444444444444444",
+            "e2e-raw-element-types",
+            "The spec uses `document.querySelector<HTMLElement>` casts directly; E2E code must use the shared element-helpers module.",
+        );
+        helpers.title = "Use element-helpers instead of raw platform element types".into();
+        let mut tests_lane = grouped_lane(LaneId::Tests, tests);
+        tests_lane.findings.push(helpers);
+        vec![
+            grouped_lane(LaneId::Security, security),
+            tests_lane,
+            grouped_lane(LaneId::E2e, e2e),
+        ]
+    }
+
+    fn published(lanes: &[LaneProposal]) -> Vec<&Finding> {
+        lanes
+            .iter()
+            .flat_map(|lane| &lane.findings)
+            .filter(|finding| !finding.grouped)
+            .collect()
+    }
+
+    #[test]
+    fn one_concern_from_three_lanes_on_adjacent_lines_is_one_thread() {
+        let mut lanes = visible_and_helpers();
+
+        group_co_located_findings(&mut lanes);
+
+        let published = published(&lanes);
+        assert_eq!(published.len(), 2, "one per concern: {published:#?}");
+        let visible = published
+            .iter()
+            .find(|finding| finding.title.starts_with("Require visible"))
+            .expect("the visibility concern survives");
+        assert_eq!(visible.lane, LaneId::Security, "highest severity opens");
+        assert_eq!(visible.confidence, 0.95, "and keeps the highest confidence");
+        assert!(visible.body.contains("Additional `tests` observation"));
+        assert!(visible.body.contains("Additional `e2e` observation"));
+        assert_eq!(
+            visible.aliases,
+            vec!["2222222222222222", "3333333333333333"]
+        );
+        assert!(
+            published
+                .iter()
+                .any(|finding| finding.title.starts_with("Use element-helpers")),
+            "a different concern on the same helper must survive"
+        );
+    }
+
+    #[test]
+    fn grouping_by_concern_happens_before_the_cap() {
+        let mut lanes = visible_and_helpers();
+
+        group_co_located_findings(&mut lanes);
+        cap_proposal_findings(&mut lanes, 2);
+
+        assert_eq!(published(&lanes).len(), 2, "the repeats spent no slots");
+    }
+
+    #[test]
+    fn one_pass_repeating_itself_is_one_thread() {
+        // `openhuman#7127`: the security lane posted "Drive the
+        // learn_from_tasks switch…" twice on line 1254 in one review.
+        let first = grouped_finding(
+            LaneId::Security,
+            "Drive the learn_from_tasks switch and forget button through a running app",
+            1254,
+            "1111111111111111",
+        );
+        let second = grouped_finding(
+            LaneId::Security,
+            "Drive the learn_from_tasks switch and forget button through a running app",
+            1254,
+            "2222222222222222",
+        );
+        let mut lane = grouped_lane(LaneId::Security, first);
+        lane.findings.push(second);
+        let mut lanes = vec![lane];
+
+        group_co_located_findings(&mut lanes);
+
+        assert_eq!(published(&lanes).len(), 1);
+    }
+
+    #[test]
+    fn a_repeat_in_the_sibling_test_file_is_grouped_and_says_where() {
+        let title = "Test the write-again-without-actor fallback the change promises";
+        let mut source = grouped_finding(LaneId::Security, title, 154, "1111111111111111");
+        source.path = "crates/core/src/config/schema/memory.rs".into();
+        let mut test = grouped_finding(
+            LaneId::Critique,
+            "Test the write-again-without-actor fallback",
+            260,
+            "2222222222222222",
+        );
+        test.path = "crates/core/src/config/schema/memory_tests.rs".into();
+        let mut lanes = vec![
+            grouped_lane(LaneId::Security, source),
+            grouped_lane(LaneId::Critique, test),
+        ];
+
+        group_co_located_findings(&mut lanes);
+
+        let published = published(&lanes);
+        assert_eq!(published.len(), 1);
+        assert!(
+            published[0]
+                .body
+                .contains("crates/core/src/config/schema/memory\\_tests.rs:260"),
+            "{}",
+            published[0].body
+        );
+    }
+
     #[test]
     fn one_pass_can_still_report_two_defects_at_the_same_location() {
         let first = grouped_finding(LaneId::Critique, "First defect", 42, "1111111111111111");
@@ -2406,8 +2558,18 @@ mod tests {
 
     #[test]
     fn nearby_non_overlapping_ranges_remain_separate() {
-        let first = grouped_finding(LaneId::Critique, "Line forty-two", 42, "1111111111111111");
-        let second = grouped_finding(LaneId::Security, "Line forty-three", 43, "2222222222222222");
+        let first = grouped_finding(
+            LaneId::Critique,
+            "Guard the index before dereferencing",
+            42,
+            "1111111111111111",
+        );
+        let second = grouped_finding(
+            LaneId::Security,
+            "Close the file handle on the error path",
+            43,
+            "2222222222222222",
+        );
         let mut lanes = vec![
             grouped_lane(LaneId::Critique, first),
             grouped_lane(LaneId::Security, second),

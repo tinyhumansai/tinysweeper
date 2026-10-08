@@ -610,11 +610,10 @@ fn strip_markup(text: &str) -> String {
 /// Grouped observations are left out because they are other findings; the
 /// title, explanation and rule here are the opener's.
 pub fn text_in(body: &str) -> Option<String> {
-    let title = title_in(body)?;
+    title_in(body)?;
     let opener = body.find("**")?;
     let after = &body[opener + 2..];
     let after = &after[after.find("**")? + 2..];
-    let _ = title;
     let end = ["\n\n---\n\n", "**Suggested change", "```suggestion", "**[RULE]", "<!--"]
         .iter()
         .filter_map(|stop| after.find(stop))
