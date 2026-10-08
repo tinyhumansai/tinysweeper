@@ -87,7 +87,36 @@ pub struct PostedAnchor {
     /// while the title was identical every time. Keying on the rule would leave
     /// the fallback catching nothing in the exact case it exists for.
     pub title: Option<String>,
+    /// The explanation under the title, when the body has the renderer's shape.
+    pub text: Option<String>,
+    /// The rule name from the `[RULE]` line, without its explanation.
+    pub rule: Option<String>,
+    /// Who left it, and what has happened to it since.
+    pub source: AnchorSource,
 }
+
+/// Where an anchor came from, which decides how much it suppresses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AnchorSource {
+    /// One of our own comments, still standing.
+    #[default]
+    Posted,
+    /// One of our own comments a maintainer pushed back on — resolved without
+    /// the code changing, or answered and left open. A reworded, moved
+    /// version of it is held to the looser bar; see
+    /// [`Concern::same_as_declined`].
+    Declined,
+    /// An inline comment from another review bot on the pull request.
+    OtherReviewer,
+}
+
+/// Review bots whose open inline comments already put a concern in front of
+/// the author.
+///
+/// Matched as `<slug>[bot]`, exactly. The `[bot]` suffix is only ever held by
+/// a GitHub App, so a person — including a contributor with a lookalike
+/// login — cannot stand in for one of these and suppress a finding.
+const OTHER_REVIEWERS: &[&str] = &["coderabbitai", "chatgpt-codex-connector", "greptile-apps"];
 
 /// Everything an earlier cycle left behind on the pull request.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -128,53 +157,50 @@ impl PriorReview {
         self.severities.get(title).copied()
     }
 
-    /// Whether an earlier comment already sits where this finding anchors.
+    /// Whether a comment already on the pull request raises this finding's
+    /// concern, however it was worded.
     ///
-    /// Same lane, same file, same title, anchors within [`LINE_TOLERANCE`] —
-    /// the positional half of the rule
-    /// [`corroborates`](crate::council::agree::corroborates) uses for one defect
-    /// seen by two reviewers, applied across pushes instead of across agents,
-    /// with a content guard on top.
+    /// The second thing dedupe asks, after the fingerprint. The rule is
+    /// [`Concern::same_as`]: nearby and similar, or anywhere in the file (or
+    /// its test sibling) and near-identical. Lanes are not compared — three
+    /// lanes posting one concern was the failure on `openhuman#7079`.
     ///
-    /// It is deliberately the *second* thing dedupe asks. A fingerprint match is
-    /// conclusive and this is not, so it only ever catches what the fingerprint
-    /// missed.
+    /// Every refusal here fails towards repeating ourselves:
     ///
-    /// Every clause here is a way of refusing to suppress on thin evidence,
-    /// which is the same principle `council::agree` applies to two unplaceable
-    /// findings on one file:
-    ///
-    /// - **The title must match.** Position says two findings are in the same
-    ///   place; it does not say they are the same finding. Two defects three
-    ///   lines apart in one function would otherwise be one repeat and one
-    ///   silent deletion — and a deleted finding can flip a verdict.
-    /// - **Both must be placed.** An unplaceable finding never matches, because
-    ///   `.github/workflows/eval.yml` readily produces two different unplaceable
-    ///   problems and there is no positional evidence to tell them apart.
-    /// - **The lane must match**, and a comment whose lane or title we cannot
-    ///   read matches nothing rather than everything.
+    /// - A comment whose title cannot be read anchors nothing. A body we
+    ///   cannot parse is not evidence about anything.
+    /// - Two defects in one function survive because they *say* different
+    ///   things; position alone never suppresses.
+    /// - Only our own comments, and comments from the review bots in
+    ///   [`OTHER_REVIEWERS`] by exact App login, are anchors at all.
     pub fn repeats_concern(&self, finding: &Finding) -> bool {
-        self.covers_anchor(finding)
-    }
-
-    fn covers_anchor(&self, finding: &Finding) -> bool {
-        let Some((start, end)) = finding.range() else {
-            return false;
-        };
+        let concern = Concern::of(finding);
         self.anchors.iter().any(|anchor| {
-            if anchor.path != finding.path || anchor.lane != Some(finding.lane) {
-                return false;
-            }
-            if anchor.title.as_deref() != Some(finding.title.as_str()) {
-                return false;
-            }
-            let Some(anchor_end) = anchor.line else {
+            let Some(posted) = anchor.concern() else {
                 return false;
             };
-            let anchor_start = anchor.start_line.unwrap_or(anchor_end);
-            start <= anchor_end.saturating_add(LINE_TOLERANCE)
-                && end >= anchor_start.saturating_sub(LINE_TOLERANCE)
+            match anchor.source {
+                AnchorSource::Declined => concern.same_as_declined(&posted),
+                AnchorSource::Posted | AnchorSource::OtherReviewer => concern.same_as(&posted),
+            }
         })
+    }
+}
+
+impl PostedAnchor {
+    /// The concern this comment raised, if it can be read at all.
+    fn concern(&self) -> Option<Concern> {
+        let title = self.title.as_deref()?;
+        let range = self
+            .line
+            .map(|end| (self.start_line.unwrap_or(end).min(end), end));
+        Some(Concern::new(
+            &self.path,
+            range,
+            title,
+            self.text.as_deref().unwrap_or_default(),
+            self.rule.as_deref().unwrap_or_default(),
+        ))
     }
 }
 
