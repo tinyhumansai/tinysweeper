@@ -19,6 +19,7 @@ use crate::error::{Error, Result};
 use crate::evidence::diff::{FileDiff, parse_changed_files};
 use crate::evidence::replay;
 use crate::findings::anchor;
+use crate::findings::concern::Concern;
 use crate::findings::prior::{self, PriorReview};
 use crate::findings::types::Finding;
 use crate::forge::types::{CheckConclusion, PullRequestContext, RepoId};
