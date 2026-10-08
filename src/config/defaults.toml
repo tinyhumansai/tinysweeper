@@ -21,7 +21,23 @@ lanes = ["critique", "security", "tests", "commits", "description"]
 # them, and setting them here would make the dial inert for everyone who never
 # overrode them — which is exactly the bug this replaced.
 strictness = 2
-max_comments = 20
+# The inline-comment budget for a whole pull request — not per lane, not per
+# adaptive pass, not per push. Every lane and pass of a review cycle is ranked
+# together (severity, then confidence, then council agreement) and only the
+# top of that list becomes inline conversations; the rest are listed by title
+# and location in the review hub, never dropped.
+#
+# Earlier cycles spend the same budget while their conversations stay open:
+# five unresolved threads leave no room for a sixth until one is resolved
+# (by a maintainer, the author, or `threads` closing a fixed finding). An
+# outdated thread still counts — it is still asking for attention, and
+# letting a rewrite refill the budget is how a 48-commit pull request
+# collected 115 findings when this was 20 per cycle. With `incremental`
+# off, earlier cycles are not read and every review starts from a full budget.
+#
+# Five, because comments that get acted on are few and severe; a reviewer
+# whose every push adds a page of them is read for a week and then ignored.
+max_comments = 5
 # Resource ceilings, checked before commit patches or model calls. These are
 # intentionally generous: ordinary large pull requests still run, while a
 # generated-code dump or repository-scale rewrite cannot consume an unbounded

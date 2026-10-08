@@ -6,7 +6,9 @@ version = 1
 [review]
 lanes = ["critique", "security", "tests", "commits", "description"]
 strictness = 3
-max_comments = 40
+# Twice the default inline budget for the whole pull request; whatever does not
+# fit is still listed in the review hub.
+max_comments = 10
 incremental = true
 draft_prs = true
 respect_agents_md = true

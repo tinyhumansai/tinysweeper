@@ -12,6 +12,8 @@ outside contributions.
   authoritative, so a preset's `severity_gate` or `confidence_min` can only
   make it stricter. (This preset used to ask for `low`/0.4; that request was
   the dial being overridden from below, and it is no longer honoured.)
+- `max_comments = 10` — twice the default inline-comment budget for the whole
+  pull request. Findings over it are listed in the review hub, not dropped.
 - `security` fails the check at **medium**, not high.
 - `passes = 2` — a large group's first council reviewer gets one coverage
   pass: told what it already found in this unit, asked once more for what a

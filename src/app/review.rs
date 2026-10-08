@@ -922,7 +922,13 @@ pub async fn review_with_tree(
     // reported Neutral and its findings would otherwise vanish silently.
     publish_unclaimed(&mut lanes, &scan_findings);
     group_co_located_findings(&mut lanes);
-    cap_proposal_findings(&mut lanes, config.review.max_comments);
+    // One budget for the pull request, not for this cycle: conversations an
+    // earlier push opened and nobody has resolved are still spending it.
+    let budget = config
+        .review
+        .max_comments
+        .saturating_sub(prior.open_findings());
+    cap_proposal_findings(&mut lanes, budget);
 
     let uninspected = uninspected_paths(config, &context)?;
 
@@ -1913,13 +1919,17 @@ fn merge_observation(primary: &mut Finding, observation: Finding) {
         .push_str(&crate::findings::render::grouped_observation(&observation));
 }
 
-/// Apply the comment limit after every lane and scanner fallback has contributed.
+/// Spend the inline-comment budget after every lane, adaptive pass and scanner
+/// fallback has contributed.
 ///
 /// A lane-level cap looks equivalent until two lanes each produce a full limit;
-/// then one pull request receives twice the noise it configured. Conclusions are
-/// deliberately left alone: hiding a lower-ranked comment must not turn its
-/// lane green.
-fn cap_proposal_findings(lanes: &mut [LaneProposal], max_comments: usize) {
+/// then one pull request receives twice the noise it configured. The ranking is
+/// global — severity, then confidence, then council agreement — so a critical
+/// finding from a late pass of one lane displaces a high one from round one of
+/// another. What does not fit moves to [`LaneProposal::overflow`] for the
+/// review hub to list. Conclusions are deliberately left alone: hiding a
+/// lower-ranked comment must not turn its lane green.
+fn cap_proposal_findings(lanes: &mut [LaneProposal], budget: usize) {
     let mut ranked: Vec<(usize, usize, Severity, f64, u8)> = lanes
         .iter()
         .enumerate()
@@ -1949,7 +1959,7 @@ fn cap_proposal_findings(lanes: &mut [LaneProposal], max_comments: usize) {
 
     let keep: BTreeSet<(usize, usize)> = ranked
         .into_iter()
-        .take(max_comments)
+        .take(budget)
         .map(|(lane, finding, ..)| (lane, finding))
         .collect();
     for (lane_index, lane) in lanes.iter_mut().enumerate() {
@@ -1958,21 +1968,29 @@ fn cap_proposal_findings(lanes: &mut [LaneProposal], max_comments: usize) {
             .iter()
             .filter(|finding| !finding.grouped)
             .count();
-        lane.findings = std::mem::take(&mut lane.findings)
+        // A grouped observation rides inside its primary's thread. When the
+        // primary is over budget the observation is already in its body, so
+        // it leaves with it rather than surfacing as a thread of its own.
+        let (kept, over): (Vec<_>, Vec<_>) = std::mem::take(&mut lane.findings)
             .into_iter()
             .enumerate()
-            .filter_map(|(finding_index, finding)| {
-                (finding.grouped || keep.contains(&(lane_index, finding_index))).then_some(finding)
-            })
-            .collect();
+            .partition(|(finding_index, finding)| {
+                finding.grouped || keep.contains(&(lane_index, *finding_index))
+            });
+        lane.findings = kept.into_iter().map(|(_, finding)| finding).collect();
+        lane.overflow
+            .extend(over.into_iter().map(|(_, finding)| finding));
         let kept = lane
             .findings
             .iter()
             .filter(|finding| !finding.grouped)
             .count();
-        let dropped = before - kept;
-        if dropped > 0 {
-            lane.summary = format!("{} (+{dropped} more not shown)", lane.summary);
+        let over = before - kept;
+        if over > 0 {
+            lane.summary = format!(
+                "{} (+{over} over the comment budget, listed in the review summary)",
+                lane.summary
+            );
         }
     }
 }
@@ -2273,7 +2291,8 @@ mod tests {
             1
         );
         assert_eq!(lanes[1].findings[0].title, "security high");
-        assert!(lanes[0].summary.contains("+1 more not shown"));
+        assert!(lanes[0].summary.contains("+1 over the comment budget"));
+        assert_eq!(lanes[0].overflow[0].title, "critique medium");
         assert_eq!(lanes[0].conclusion, CheckConclusion::Failure);
     }
 

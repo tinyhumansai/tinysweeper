@@ -308,11 +308,14 @@ pub struct Review {
     /// Drop findings the model is less sure about than this. Like
     /// `severity_gate`, it can only raise what `strictness` would choose.
     pub confidence_min: Option<f64>,
-    /// Hard cap on published finding threads per pull request.
+    /// The inline-comment budget for the whole pull request.
     ///
-    /// Co-located observations share one thread and therefore count once;
-    /// grouping preserves every observation inside that thread before this
-    /// cap is applied.
+    /// Spent across every lane and adaptive pass of a review, ranked
+    /// globally, and by every earlier finding whose conversation is still
+    /// open (`PriorReview::open_findings`). Findings over budget are listed in
+    /// the review hub rather than posted. Co-located observations share one
+    /// thread and therefore count once; grouping preserves every observation
+    /// inside that thread before this cap is applied.
     pub max_comments: usize,
     /// Most files one pull request may change before review is refused.
     ///

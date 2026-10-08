@@ -149,9 +149,18 @@ async fn thirty_findings_over_three_passes_post_the_budget_and_list_the_rest() {
     kept.sort_unstable();
     assert_eq!(
         kept,
-        vec!["Finding 19", "Finding 20", "Finding 21", "Finding 29", "Finding 9"]
+        vec![
+            "Finding 19",
+            "Finding 20",
+            "Finding 21",
+            "Finding 29",
+            "Finding 9"
+        ]
     );
-    assert!(proposal.blocked(), "the cap hides comments, not the verdict");
+    assert!(
+        proposal.blocked(),
+        "the cap hides comments, not the verdict"
+    );
 
     // The overflow is named in the hub, by title and location.
     let hub = crate::summary::render(&config, &proposal);

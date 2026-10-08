@@ -8,7 +8,6 @@ version = 1
 [review]
 lanes = ["critique", "security", "tests", "commits", "description", "e2e"]
 strictness = 2
-max_comments = 20
 incremental = true
 draft_prs = false
 respect_agents_md = true

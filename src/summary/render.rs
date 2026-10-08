@@ -207,6 +207,42 @@ fn carried_findings(out: &mut String, proposal: &Proposal) {
     }
 }
 
+/// Findings that qualified but did not fit the inline-comment budget.
+///
+/// Compact on purpose — one line, title and location — because the budget
+/// exists to keep the conversation list short, and a long paragraph per
+/// overflowed finding would rebuild the wall of text here instead.
+fn over_budget(out: &mut String, proposal: &Proposal) {
+    let over: Vec<_> = proposal
+        .lanes
+        .iter()
+        .flat_map(|lane| lane.overflow.iter())
+        .filter(|finding| !finding.grouped)
+        .collect();
+    if over.is_empty() {
+        return;
+    }
+    let _ = writeln!(
+        out,
+        "\n**Over the comment budget** — {} more, not posted inline\n",
+        over.len()
+    );
+    for finding in over {
+        let _ = writeln!(
+            out,
+            "- {} · {} — {} (`{}{}`)",
+            severity(finding.severity),
+            finding.lane,
+            md(&finding.title),
+            md(&finding.path),
+            finding
+                .line
+                .map(|line| format!(":{line}"))
+                .unwrap_or_default()
+        );
+    }
+}
+
 fn findings(out: &mut String, proposal: &Proposal) {
     out.push_str("\n## Findings\n\n");
     let current_titles: std::collections::BTreeSet<&str> = proposal
@@ -217,7 +253,8 @@ fn findings(out: &mut String, proposal: &Proposal) {
         .prior_findings
         .iter()
         .any(|title| !current_titles.contains(title.as_str()));
-    if proposal.findings().next().is_none() && !has_carried {
+    let has_over = proposal.lanes.iter().any(|lane| !lane.overflow.is_empty());
+    if proposal.findings().next().is_none() && !has_carried && !has_over {
         out.push_str("No active actionable findings.\n");
     }
     for lane in &proposal.lanes {
@@ -238,6 +275,7 @@ fn findings(out: &mut String, proposal: &Proposal) {
         }
     }
     carried_findings(out, proposal);
+    over_budget(out, proposal);
     let noted: Vec<_> = proposal
         .lanes
         .iter()
@@ -304,7 +342,7 @@ fn before_merge(out: &mut String, proposal: &Proposal) {
         let _ = writeln!(out, "- [ ] Address carried finding **{}**.", md(title));
     }
     for lane in &proposal.lanes {
-        for finding in &lane.findings {
+        for finding in lane.findings.iter().chain(lane.overflow.iter()) {
             if finding.severity >= Severity::High {
                 any = true;
                 let _ = writeln!(
@@ -480,7 +518,7 @@ fn counts(proposal: &Proposal) -> (usize, usize, usize, usize) {
         proposal
             .lanes
             .iter()
-            .map(|lane| lane.findings.len())
+            .map(|lane| lane.findings.len() + lane.overflow.len())
             .sum::<usize>()
             + carried,
         proposal.lanes.iter().map(|lane| lane.noted.len()).sum(),
