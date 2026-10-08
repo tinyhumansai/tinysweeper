@@ -278,7 +278,7 @@ const GENERIC_RULE_WORDS: &[&str] = &[
 /// an ASCII letter or digit, stopwords and numbers dropped, suffixes stripped.
 pub fn tokens(text: &str) -> BTreeSet<String> {
     words(text)
-        .map(stem)
+        .map(|word| stem(&word))
         .map(|word| match SYNONYMS.iter().find(|(from, _)| *from == word) {
             Some((_, to)) => (*to).to_string(),
             None => word,
