@@ -2305,7 +2305,7 @@ mod tests {
     }
 
     #[test]
-    fn cross_lane_observations_share_one_lossless_inline_conversation() {
+    fn cross_lane_observations_share_one_inline_comment_without_nesting() {
         let mut lanes = vec![
             grouped_lane(
                 LaneId::Critique,
@@ -2349,16 +2349,21 @@ mod tests {
             LaneId::Security,
             "highest severity opens"
         );
+        // The opener says only what its own lane found. The other lanes'
+        // observations stay in their own check runs and the hub's findings
+        // list, instead of being nested into this comment as "Additional
+        // `security` observation" sections.
         assert!(
-            published[0].body.contains("Require an explicit command"),
+            !published[0].body.contains("Require an explicit command"),
             "{}",
             published[0].body
         );
         assert!(
-            published[0].body.contains("Exercise the trigger default"),
+            !published[0].body.contains("Exercise the trigger default"),
             "{}",
             published[0].body
         );
+        assert!(!published[0].body.contains("Additional"));
         assert_eq!(
             published[0].aliases,
             vec!["1111111111111111", "3333333333333333"]
