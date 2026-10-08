@@ -153,7 +153,11 @@ impl PriorReview {
     ///   problems and there is no positional evidence to tell them apart.
     /// - **The lane must match**, and a comment whose lane or title we cannot
     ///   read matches nothing rather than everything.
-    pub fn covers_anchor(&self, finding: &Finding) -> bool {
+    pub fn repeats_concern(&self, finding: &Finding) -> bool {
+        self.covers_anchor(finding)
+    }
+
+    fn covers_anchor(&self, finding: &Finding) -> bool {
         let Some((start, end)) = finding.range() else {
             return false;
         };
@@ -423,6 +427,14 @@ pub fn title_in(body: &str) -> Option<String> {
     let end = rest.find("**")?;
     let title = rest[..end].trim();
     (!title.is_empty()).then(|| title.to_string())
+}
+
+pub fn text_in(_body: &str) -> Option<String> {
+    None
+}
+
+pub fn rule_in(_body: &str) -> Option<String> {
+    None
 }
 
 #[cfg(test)]

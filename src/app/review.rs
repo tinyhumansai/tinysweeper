@@ -1457,7 +1457,7 @@ fn already_posted(finding: &Finding, continuity: &Continuity<'_>) -> bool {
         // a comment whose title or lane cannot be read anchors nothing, and the
         // anchors come off the live pull request rather than the state store, so
         // a comment a maintainer deleted stops suppressing anything.
-        || continuity.prior.covers_anchor(finding)
+        || continuity.prior.repeats_concern(finding)
 }
 
 /// The prior findings this cycle did not report as fixed, plus what it raised.
