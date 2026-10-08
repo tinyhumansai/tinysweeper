@@ -1966,20 +1966,21 @@ mod tests {
     }
 
     #[test]
-    fn the_e2e_lane_is_on_by_default_and_opts_out_by_omission() {
-        // On by default because it is quiet without a harness; a repository
-        // that does not want it lists `review.lanes` without it, and nothing
-        // else has to be set.
+    fn the_e2e_lane_is_off_by_default_and_opts_in_by_listing() {
+        // Off by default: with a harness present it asked for an end-to-end
+        // test on config flips and settings panels, which nobody acted on. A
+        // repository that wants it lists it in `review.lanes` (or uses the
+        // `e2e-required` preset), and nothing else has to be set.
         let defaults: Config = crate::config::DEFAULTS
             .parse::<toml::Table>()
             .unwrap()
             .try_into()
             .unwrap();
-        assert!(defaults.enabled_lanes().contains(&LaneId::E2e));
+        assert!(!defaults.enabled_lanes().contains(&LaneId::E2e));
 
-        let mut opted_out = defaults.clone();
-        opted_out.review.lanes.retain(|lane| lane != "e2e");
-        assert!(!opted_out.enabled_lanes().contains(&LaneId::E2e));
+        let mut opted_in = defaults.clone();
+        opted_in.review.lanes.push("e2e".into());
+        assert!(opted_in.enabled_lanes().contains(&LaneId::E2e));
     }
 
     #[test]
