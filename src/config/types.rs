@@ -301,11 +301,12 @@ pub struct Review {
     /// [`Config::confidence_min`]. It was inert for a while: documented as the
     /// dial, validated for range, and read by nothing.
     pub strictness: u8,
-    /// Post findings at or above this severity. Overrides what `strictness`
-    /// would choose; leave it unset unless you need to.
+    /// Post findings at or above this severity. Can only make the gate
+    /// `strictness` chose *stricter*; a value below it is ignored. Leave it
+    /// unset unless you need to.
     pub severity_gate: Option<String>,
-    /// Drop findings the model is less sure about than this. Overrides what
-    /// `strictness` would choose.
+    /// Drop findings the model is less sure about than this. Like
+    /// `severity_gate`, it can only raise what `strictness` would choose.
     pub confidence_min: Option<f64>,
     /// Hard cap on published finding threads per pull request.
     ///
