@@ -14,7 +14,8 @@ use async_trait::async_trait;
 use crate::error::{Error, Result};
 use crate::forge::types::{
     ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, Issue, IssueComment, PullRequest,
-    Remark, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict, TreeListing,
+    Remark, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict, ThreadComment,
+    TreeListing,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -1116,7 +1117,6 @@ impl ForgeWrite for MockForge {
 mod tests {
     use super::*;
     use crate::forge::types::CheckConclusion;
-    use crate::forge::types::ThreadComment;
 
     fn repo() -> RepoId {
         RepoId::parse("tinyhumansai/tinysweeper").expect("parses")
