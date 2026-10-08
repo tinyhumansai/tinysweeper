@@ -6,8 +6,6 @@ version = 1
 [review]
 lanes = ["critique", "security", "tests", "commits", "description", "e2e"]
 strictness = 3
-severity_gate = "low"
-confidence_min = 0.4
 max_comments = 40
 incremental = true
 draft_prs = true
