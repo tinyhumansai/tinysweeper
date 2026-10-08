@@ -68,7 +68,9 @@ impl FakeGateway {
     /// Start a gateway that answers each request with the next reply in
     /// `script`, and with a `500` once the script runs out.
     pub async fn start(script: Vec<Reply>) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind loopback");
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
         let base_url = format!("http://{}/v1", listener.local_addr().expect("addr"));
         let requests = Arc::new(Mutex::new(Vec::new()));
         let script = Arc::new(Mutex::new(std::collections::VecDeque::from(script)));

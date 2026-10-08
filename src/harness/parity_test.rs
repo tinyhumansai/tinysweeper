@@ -80,7 +80,12 @@ fn render(response: &ModelResponse) -> Value {
 }
 
 /// Run one case and compare (or record) its fixture.
-async fn case(name: &str, models_for: impl Fn(&str) -> Models, req: ModelRequest, script: Vec<Reply>) {
+async fn case(
+    name: &str,
+    models_for: impl Fn(&str) -> Models,
+    req: ModelRequest,
+    script: Vec<Reply>,
+) {
     let gateway = FakeGateway::start(script).await;
     let models = models_for(&gateway.base_url);
     let outcome = adapter(&models).complete(req).await;
@@ -97,14 +102,21 @@ async fn case(name: &str, models_for: impl Fn(&str) -> Models, req: ModelRequest
         .join(format!("{name}.json"));
     if std::env::var("TINYSWEEPER_RECORD_WIRE").is_ok_and(|v| v == "1") {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, serde_json::to_string_pretty(&observed).unwrap() + "\n").unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&observed).unwrap() + "\n",
+        )
+        .unwrap();
         return;
     }
-    let expected: Value = serde_json::from_str(
-        &std::fs::read_to_string(&path)
-            .unwrap_or_else(|_| panic!("missing fixture {}; record with TINYSWEEPER_RECORD_WIRE=1", path.display())),
-    )
-    .unwrap();
+    let expected: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap_or_else(|_| {
+            panic!(
+                "missing fixture {}; record with TINYSWEEPER_RECORD_WIRE=1",
+                path.display()
+            )
+        }))
+        .unwrap();
     assert_eq!(
         observed,
         expected,
@@ -119,7 +131,12 @@ async fn schema_mode_basic() {
         "schema_mode_basic",
         models,
         request("vendor/deep"),
-        vec![Reply::completion("vendor/deep-0905", ANSWER, "stop", usage())],
+        vec![Reply::completion(
+            "vendor/deep-0905",
+            ANSWER,
+            "stop",
+            usage(),
+        )],
     )
     .await;
 }
@@ -242,9 +259,18 @@ async fn a_zero_ceiling_is_not_forwarded() {
     // `config::validate` rejects `max_tokens = 0`, but a `Config` built in
     // code can still carry it, and asking a provider for zero output tokens
     // turns a configuration mistake into an empty answer on every lane.
-    let gateway = FakeGateway::start(vec![Reply::completion("vendor/deep", ANSWER, "stop", usage())]).await;
+    let gateway = FakeGateway::start(vec![Reply::completion(
+        "vendor/deep",
+        ANSWER,
+        "stop",
+        usage(),
+    )])
+    .await;
     let mut req = request("vendor/deep");
     req.max_tokens = 0;
-    adapter(&models(&gateway.base_url)).complete(req).await.unwrap();
+    adapter(&models(&gateway.base_url))
+        .complete(req)
+        .await
+        .unwrap();
     assert!(gateway.requests()[0].get("max_tokens").is_none());
 }

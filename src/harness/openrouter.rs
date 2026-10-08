@@ -17,7 +17,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use openhuman_embed::Route;
 use openhuman_embed::complete::{
-    ChatMessage, CompletionRequest, Completer, CompletionObserver, ResponseFormat,
+    ChatMessage, Completer, CompletionObserver, CompletionRequest, ResponseFormat,
 };
 use serde_json::json;
 

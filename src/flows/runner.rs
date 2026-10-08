@@ -99,8 +99,7 @@ async fn one_round(
     calls: &[Call],
     schema: &Value,
 ) -> Vec<Answer> {
-    let results =
-        futures::future::join_all(calls.iter().map(|call| llm.call(call, schema))).await;
+    let results = futures::future::join_all(calls.iter().map(|call| llm.call(call, schema))).await;
     calls
         .iter()
         .zip(results)

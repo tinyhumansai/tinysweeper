@@ -23,8 +23,13 @@ use openhuman_embed::complete::{CompletionObserver, CompletionTrace};
 /// How the exporter authenticates.
 #[derive(Clone)]
 enum Auth {
-    Basic { public_key: String, secret_key: String },
-    Bearer { token: String },
+    Basic {
+        public_key: String,
+        secret_key: String,
+    },
+    Bearer {
+        token: String,
+    },
 }
 
 /// Sends each completion to Langfuse.
@@ -270,7 +275,9 @@ impl CompletionObserver for LangfuseExporter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openhuman_embed::complete::{ChatMessage, CompletionRequest, CompletionResponse, CompletionUsage};
+    use openhuman_embed::complete::{
+        ChatMessage, CompletionRequest, CompletionResponse, CompletionUsage,
+    };
     use std::time::{Duration, UNIX_EPOCH};
 
     fn response() -> CompletionResponse {
@@ -311,7 +318,10 @@ mod tests {
         assert_eq!(generation["usage"]["totalCost"], 0.01);
         assert_eq!(generation["startTime"], "2023-11-14T22:13:20.000Z");
         assert_eq!(generation["endTime"], "2023-11-14T22:13:21.500Z");
-        assert_eq!(generation["metadata"]["requested_model"], "vendor/requested");
+        assert_eq!(
+            generation["metadata"]["requested_model"],
+            "vendor/requested"
+        );
     }
 
     #[test]
@@ -329,7 +339,12 @@ mod tests {
         let batch = ingestion_batch(&trace, None, "t2", UNIX_EPOCH);
         let generation = &batch["batch"][1]["body"];
         assert_eq!(generation["level"], "ERROR");
-        assert!(generation["statusMessage"].as_str().unwrap().contains("boom"));
+        assert!(
+            generation["statusMessage"]
+                .as_str()
+                .unwrap()
+                .contains("boom")
+        );
         assert!(batch["batch"][0]["body"].get("environment").is_none());
     }
 
@@ -340,7 +355,10 @@ mod tests {
             "https://lf.example/api/public/ingestion"
         );
         assert_eq!(
-            normalize("https://lf.example/api/public/ingestion", "/api/public/ingestion"),
+            normalize(
+                "https://lf.example/api/public/ingestion",
+                "/api/public/ingestion"
+            ),
             "https://lf.example/api/public/ingestion"
         );
     }
