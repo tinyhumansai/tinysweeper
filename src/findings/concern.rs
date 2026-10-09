@@ -195,13 +195,30 @@ impl Concern {
     }
 }
 
-/// Lines between two ranges; zero when they overlap.
+/// Lines strictly between two inclusive ranges; zero when they overlap or touch.
 fn gap((left_start, left_end): (u64, u64), (right_start, right_end): (u64, u64)) -> u64 {
     // Each difference is zero unless that side lies wholly before the other.
+    // The difference counts the line-number step, so one line fewer is the
+    // number of lines in between: `1` and `32` have thirty lines between them.
     right_start
         .saturating_sub(left_end)
         .max(left_start.saturating_sub(right_end))
+        .saturating_sub(1)
 }
+
+/// Whether a title negates itself: any negation word, before stopwords are
+/// dropped from the word sets.
+fn negates(title: &str) -> bool {
+    title
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|word| NEGATIONS.contains(&word.to_ascii_lowercase().as_str()))
+}
+
+/// Words that turn a request into its opposite.
+const NEGATIONS: &[&str] = &[
+    "not", "no", "nor", "never", "neither", "cannot", "don", "doesn", "didn", "isn", "aren",
+    "wasn", "won", "shouldn", "wouldn", "couldn",
+];
 
 /// Size of the intersection over size of the union; zero for two empty sets.
 fn jaccard(left: &BTreeSet<String>, right: &BTreeSet<String>) -> f64 {
