@@ -38,7 +38,7 @@ server's `preset = "rust-library"` posted medium findings while the dial read
 "default — high-severity findings the model is confident about". Clamping only
 the preset layer would not have been enough — the operator's own config is the
 repository layer for every reviewed repository — so the rule is the same for
-all of them: to see more, turn the dial to 3. A looser explicit value is not a
+all of them: to see more, turn the dial to 3 and lower or remove any explicit gate that remains stricter. A looser explicit value is not a
 validation error, because refusing an existing config over a key that now
 merely does nothing would cost a review rather than a comment; it is inert,
 and said so: `config::clamped_gates` names each clamped key, the layer that
