@@ -1300,8 +1300,15 @@ mod tests {
     }
 
     async fn load_bot(comment: ReviewComment, threads: Option<Vec<ReviewThread>>) -> PriorReview {
+        load_bots(vec![comment], threads).await
+    }
+
+    async fn load_bots(
+        comments: Vec<ReviewComment>,
+        threads: Option<Vec<ReviewThread>>,
+    ) -> PriorReview {
         let mut state = MockState::default();
-        state.review_comments.insert(7, vec![comment]);
+        state.review_comments.insert(7, comments);
         let forge = match threads {
             Some(threads) => {
                 state.review_threads.insert(7, threads);
@@ -1374,6 +1381,50 @@ mod tests {
         );
         let comment = coderabbit("coderabbitai[bot]");
         let prior = load_bot(comment, None).await;
+        assert!(!prior.repeats_concern(&ours));
+    }
+
+    #[tokio::test]
+    async fn a_person_copying_a_resolved_bot_comment_into_an_open_thread_reactivates_nothing() {
+        // The text of a settled bot comment, pasted by a contributor into a
+        // thread they opened. Only the bot's own comment is evidence.
+        let ours = worded(
+            LaneId::E2e,
+            SPEC,
+            24,
+            "invisible-click",
+            VISIBLE,
+            VISIBLE_E2E,
+        );
+        let comment = coderabbit("coderabbitai[bot]");
+        let settled = bot_thread(&comment, true, false);
+        let mut copy = bot_thread(&comment, false, false);
+        copy.comments[0].author = "contributor".into();
+        copy.comments[0].bot = false;
+        let prior = load_bot(comment, Some(vec![settled, copy])).await;
+        assert!(!prior.repeats_concern(&ours));
+    }
+
+    #[tokio::test]
+    async fn a_bot_body_that_appears_twice_anchors_nothing() {
+        // The same bot text on two files. One is open and one is resolved, and
+        // the REST list cannot say which is which, so neither may vouch.
+        let ours = worded(
+            LaneId::E2e,
+            SPEC,
+            24,
+            "invisible-click",
+            VISIBLE,
+            VISIBLE_E2E,
+        );
+        let open_here = coderabbit("coderabbitai[bot]");
+        let mut resolved_elsewhere = coderabbit("coderabbitai[bot]");
+        resolved_elsewhere.path = "app/test/e2e/specs/other.spec.ts".into();
+        let prior = load_bots(
+            vec![open_here.clone(), resolved_elsewhere],
+            Some(vec![bot_thread(&open_here, false, false)]),
+        )
+        .await;
         assert!(!prior.repeats_concern(&ours));
     }
 
