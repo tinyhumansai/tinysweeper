@@ -90,6 +90,11 @@ const SAME_FILE: Bar = Bar {
     with_rule: None,
 };
 
+/// Title similarity at which two titles say the same thing for polarity
+/// purposes. The lowest title bar used anywhere, so a contradiction is never
+/// suppressed by a match the nearby tier would have accepted.
+const SAME_WORDING: f64 = 0.5;
+
 /// One finding, reduced to what concern identity compares.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Concern {
@@ -98,6 +103,10 @@ pub struct Concern {
     title: BTreeSet<String>,
     text: BTreeSet<String>,
     rule: BTreeSet<String>,
+    /// Whether the title negates itself ("Do not allow X"). Kept apart from the
+    /// word sets, where negation is a stopword, so that opposite guidance is
+    /// never mistaken for a repeat.
+    negated: bool,
 }
 
 /// How two concerns relate in the tree.
