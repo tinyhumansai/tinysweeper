@@ -570,13 +570,28 @@ fn a_different_status_code_is_a_different_concern() {
         "",
         "",
     );
-    assert!(four_oh_one.same_as(&again), "the same code is the same branch");
+    assert!(
+        four_oh_one.same_as(&again),
+        "the same code is the same branch"
+    );
 }
 
 #[test]
 fn avoid_is_negative_guidance() {
-    let avoid = Concern::new("src/log.rs", Some((10, 10)), "Avoid logging secrets", "", "");
-    let allow = Concern::new("src/log.rs", Some((10, 10)), "Allow logging secrets", "", "");
+    let avoid = Concern::new(
+        "src/log.rs",
+        Some((10, 10)),
+        "Avoid logging secrets",
+        "",
+        "",
+    );
+    let allow = Concern::new(
+        "src/log.rs",
+        Some((10, 10)),
+        "Allow logging secrets",
+        "",
+        "",
+    );
     assert!(!avoid.same_as(&allow));
     assert!(!allow.same_as(&avoid));
 }
