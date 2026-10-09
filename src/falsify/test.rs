@@ -237,5 +237,8 @@ async fn an_undefined_symbol_claim_is_left_to_the_model_not_rejected_on_text() {
     assert_eq!(outcome.findings.len(), 2);
     assert!(outcome.rejected.is_empty());
     let prompt = model.last_prompt().expect("recorded");
-    assert!(prompt.contains("1. [src/main.rs] `main` is not defined"), "{prompt}");
+    assert!(
+        prompt.contains("1. [src/main.rs] `main` is not defined"),
+        "{prompt}"
+    );
 }

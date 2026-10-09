@@ -78,7 +78,8 @@ impl<'a> Falsifier<'a> {
         rendered_diff: &str,
         looked_up: &str,
     ) -> FalsifyOutcome {
-        self.ask_model(lane, findings, rendered_diff, looked_up).await
+        self.ask_model(lane, findings, rendered_diff, looked_up)
+            .await
     }
 
     /// The model half of [`Self::filter_with`]: one call, rejecting by index.

@@ -808,6 +808,9 @@ mod tests {
             ),
         );
         assert!(rendered.contains("## What changed"), "{rendered}");
-        assert!(rendered.contains("adds a retry to the sync loop"), "{rendered}");
+        assert!(
+            rendered.contains("adds a retry to the sync loop"),
+            "{rendered}"
+        );
     }
 }
