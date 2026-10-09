@@ -2047,9 +2047,11 @@ fn cap_proposal_findings(
             .iter()
             .filter(|finding| !finding.grouped)
             .count();
-        // A grouped observation rides inside its primary's thread. When the
-        // primary is over budget the observation is already in its body, so
-        // it leaves with it rather than surfacing as a thread of its own.
+        // A grouped observation never takes a slot and never moves to overflow.
+        // Its text already sits in its primary's body, and it stays in the
+        // lane's findings, which is where the check-run evidence and the merge
+        // checklist read it. The primary's own overflow is what the author sees
+        // in the hub and the review body, so nothing is dropped by keeping it.
         let (kept, over): (Vec<_>, Vec<_>) = std::mem::take(&mut lane.findings)
             .into_iter()
             .enumerate()

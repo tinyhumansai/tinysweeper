@@ -246,7 +246,7 @@ fn postable(proposal: &Proposal) -> Vec<&Finding> {
         .flat_map(|lane| {
             lane.findings
                 .iter()
-                .chain(lane.overflow.iter())
+                .chain(lane.overflow.iter().filter(|finding| !finding.grouped))
                 .chain(lane.noted.iter())
         })
         .collect()
