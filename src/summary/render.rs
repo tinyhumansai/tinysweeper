@@ -554,7 +554,7 @@ fn concise(body: &str) -> String {
         .take(180)
         .collect()
 }
-fn md(text: &str) -> String {
+pub(crate) fn md(text: &str) -> String {
     let mut escaped = String::with_capacity(text.len());
     for character in text.chars() {
         match character {
