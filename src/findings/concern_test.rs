@@ -504,7 +504,10 @@ fn opposite_guidance_on_the_same_wording_is_not_a_repeat() {
     );
     assert!(!allow.same_as(&deny));
     assert!(!deny.same_as(&allow));
-    assert!(!allow.same_as_declined(&deny), "a decline is not a reversal");
+    assert!(
+        !allow.same_as_declined(&deny),
+        "a decline is not a reversal"
+    );
 }
 
 #[test]
@@ -533,6 +536,10 @@ fn lines_strictly_between_two_anchors_are_counted() {
     assert_eq!(gap((1, 1), (32, 32)), NEAR_LINES);
     assert_eq!(gap((32, 32), (1, 1)), NEAR_LINES, "symmetric");
     assert_eq!(gap((1, 1), (33, 33)), NEAR_LINES + 1);
-    assert_eq!(gap((1, 1), (2, 2)), 0, "adjacent lines have nothing between");
+    assert_eq!(
+        gap((1, 1), (2, 2)),
+        0,
+        "adjacent lines have nothing between"
+    );
     assert_eq!(gap((5, 9), (7, 7)), 0, "overlapping ranges");
 }

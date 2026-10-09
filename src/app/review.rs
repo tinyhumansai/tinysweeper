@@ -2552,10 +2552,7 @@ mod tests {
 
         let threads = published(&lanes);
         assert_eq!(threads.len(), 2, "A and B are one thread; C stands alone");
-        assert!(
-            !lanes[2].findings[0].grouped,
-            "C is not grouped behind A"
-        );
+        assert!(!lanes[2].findings[0].grouped, "C is not grouped behind A");
     }
 
     #[test]
