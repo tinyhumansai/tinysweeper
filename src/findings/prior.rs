@@ -340,11 +340,18 @@ pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<Pr
             // opener: the secondary observations are rendered into the same
             // comment, and a reworded repeat of one must be recognised too.
             for section in grouped_observations(&comment.body) {
+                // Placed where the observation was raised: its own location when
+                // the renderer said so, otherwise the shared opener's.
+                let (section, raised) = split_raised_at(section);
+                let (path, line) = match raised {
+                    Some(location) => raised_at(&location),
+                    None => (comment.path.clone(), comment.line),
+                };
                 prior.anchors.push(PostedAnchor {
                     lane: None,
-                    path: comment.path.clone(),
-                    line: comment.line,
-                    start_line: comment.start_line,
+                    path,
+                    line,
+                    start_line: comment.start_line.filter(|_| raised.is_none()),
                     title: title_in(section),
                     text: text_in(section),
                     rule: rule_in(section),
@@ -523,6 +530,45 @@ fn grouped_observations(body: &str) -> impl Iterator<Item = &str> {
     body.split("\n\n---\n\n### Additional `").skip(1)
 }
 
+/// Split a grouped section at its `_Raised at path:line._` note, if it has
+/// one. The renderer appends that note directly after the observation it
+/// describes, so it belongs to this section alone.
+fn split_raised_at(section: &str) -> (&str, Option<String>) {
+    const NOTE: &str = "\n\n_Raised at ";
+    let Some(start) = section.find(NOTE) else {
+        return (section, None);
+    };
+    let rest = &section[start + NOTE.len()..];
+    let location = rest.find("._").map(|end| unescape_markdown(&rest[..end]));
+    (&section[..start], location)
+}
+
+/// `path:line` as the renderer wrote it, with markdown escapes removed. A
+/// location with no readable line is kept as a path, unplaced.
+fn raised_at(location: &str) -> (String, Option<u64>) {
+    match location.rsplit_once(':') {
+        Some((path, line)) => match line.parse::<u64>() {
+            Ok(line) => (path.to_string(), Some(line)),
+            Err(_) => (location.to_string(), None),
+        },
+        None => (location.to_string(), None),
+    }
+}
+
+/// Remove the backslash escapes `escape_emphasis` puts before punctuation.
+fn unescape_markdown(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' && chars.peek().is_some_and(|next| next.is_ascii_punctuation()) {
+            out.extend(chars.next());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 pub fn title_in(body: &str) -> Option<String> {
     let start = body.find("**")? + 2;
     let rest = &body[start..];
@@ -690,7 +736,11 @@ pub fn text_in(body: &str) -> Option<String> {
     title_in(body)?;
     let opener = body.find("**")?;
     let after = &body[opener + 2..];
-    let after = &after[after.find("**")? + 2..];
+    let mut after = &after[after.find("**")? + 2..];
+    // A grouped observation puts its rule line between the title and the body.
+    if let Some(rest) = after.trim_start().strip_prefix("**[RULE]") {
+        after = &rest[rest.find("**")? + 2..];
+    }
     let end = [
         "\n\n---\n\n",
         "**Suggested change",

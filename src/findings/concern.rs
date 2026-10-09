@@ -407,15 +407,17 @@ const SUFFIXES: &[&str] = &[
 fn stem(word: &str) -> String {
     let mut word = word.to_ascii_lowercase();
     for _ in 0..3 {
-        let Some(suffix) = SUFFIXES.iter().find(|suffix| {
+        // `|&&suffix|` binds the suffix itself as a `&str`: `iter()` yields
+        // `&&str` and `find` passes a reference to that.
+        let Some(suffix) = SUFFIXES.iter().find(|&&suffix| {
             let inflection = matches!(
-                **suffix,
+                suffix,
                 "s" | "es" | "ies" | "ed" | "edly" | "ing" | "ings" | "ingly" | "ly" | "e"
             );
             word.len() >= suffix.len() + if inflection { 3 } else { 4 }
-                && word.ends_with(*suffix)
+                && word.ends_with(suffix)
                 // `class`, `status`, `analysis` are not plurals.
-                && !(**suffix == "s"
+                && !(suffix == "s"
                     && (word.ends_with("ss") || word.ends_with("us") || word.ends_with("is")))
         }) else {
             break;
