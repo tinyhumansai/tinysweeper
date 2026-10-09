@@ -275,20 +275,26 @@ fn login_matches(login: &str, expected: &str) -> bool {
 pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<PriorReview> {
     let mut prior = PriorReview::default();
 
-    // Which of our fingerprints a maintainer has pushed back on. A failed
-    // read costs the looser bar for declined concerns and nothing else, so
-    // it degrades to "none declined" rather than losing every anchor below.
-    let declined = match read.review_threads(repo, number).await {
-        Ok(threads) => declined_fingerprints(&threads),
+    // Which of our fingerprints a maintainer has pushed back on, and which
+    // review-bot comments still stand. A failed read costs the looser bar for
+    // declined concerns and every review-bot anchor — none of them can be
+    // shown to be open — but never our own markers, so it degrades to
+    // repeating ourselves rather than going silent.
+    let (declined, open_bot_bodies) = match read.review_threads(repo, number).await {
+        Ok(threads) => (declined_fingerprints(&threads), open_bodies(&threads)),
         Err(err) => {
-            tracing::warn!(%err, "could not read review threads; declines are not recognised");
-            BTreeSet::new()
+            tracing::warn!(%err, "could not read review threads; declines and bot anchors are not recognised");
+            (BTreeSet::new(), BTreeSet::new())
         }
     };
 
     for comment in read.review_comments(repo, number).await? {
         if is_other_reviewer(&comment.author) {
-            if let Some(anchor) = other_reviewer_anchor(&comment) {
+            // A resolved or outdated bot thread is history. Anchoring on it
+            // would suppress a concern nobody is raising any more.
+            if open_bot_bodies.contains(&comment.body)
+                && let Some(anchor) = other_reviewer_anchor(&comment)
+            {
                 prior.anchors.push(anchor);
             }
             continue;
