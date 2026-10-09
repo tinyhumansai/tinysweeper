@@ -1965,7 +1965,18 @@ fn merge_observation(primary: &mut Finding, observation: Finding) {
 /// review hub to list. A critical finding is always kept, budget or not, and
 /// counts against it. Conclusions are deliberately left alone: hiding a
 /// lower-ranked comment must not turn its lane green.
-fn cap_proposal_findings(lanes: &mut [LaneProposal], budget: usize) {
+///
+/// Only a finding `publishable` accepts can become a conversation, so only
+/// those compete for the budget. One that cannot be anchored inline (no line,
+/// or a line outside the live diff) is never posted by `inline_comments`
+/// whatever its rank; letting it take a slot would push a postable finding to
+/// the hub for nothing. Such findings stay where they are, reported as they
+/// always were, and do not move to overflow.
+fn cap_proposal_findings(
+    lanes: &mut [LaneProposal],
+    budget: usize,
+    publishable: &dyn Fn(&Finding) -> bool,
+) {
     let mut ranked: Vec<(usize, usize, Severity, f64, u8)> = lanes
         .iter()
         .enumerate()
@@ -1973,7 +1984,7 @@ fn cap_proposal_findings(lanes: &mut [LaneProposal], budget: usize) {
             lane.findings
                 .iter()
                 .enumerate()
-                .filter(|(_, finding)| !finding.grouped)
+                .filter(|(_, finding)| !finding.grouped && publishable(finding))
                 .map(move |(finding_index, finding)| {
                     (
                         lane_index,
