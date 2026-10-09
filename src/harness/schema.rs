@@ -381,6 +381,10 @@ mod tests {
             "{findings}"
         );
         assert!(findings.contains("style or naming"), "{findings}");
+        assert!(
+            findings.contains("will not compile") && !findings.contains("compiler, linter"),
+            "{findings}"
+        );
 
         let body = schema["properties"]["findings"]["items"]["properties"]["body"]["description"]
             .as_str()
