@@ -2032,7 +2032,9 @@ fn cap_proposal_findings(
             .into_iter()
             .enumerate()
             .partition(|(finding_index, finding)| {
-                finding.grouped || keep.contains(&(lane_index, *finding_index))
+                finding.grouped
+                    || !publishable(finding)
+                    || keep.contains(&(lane_index, *finding_index))
             });
         lane.findings = kept.into_iter().map(|(_, finding)| finding).collect();
         lane.overflow
