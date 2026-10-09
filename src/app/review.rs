@@ -2968,8 +2968,10 @@ mod tests {
         .expect("reviews");
 
         let titles: Vec<&str> = proposal.findings().map(|f| f.title.as_str()).collect();
-        assert_eq!(titles, vec!["Rename this binding"]);
+        assert_eq!(titles, vec!["Rename this binding"], "{:#?} {:?}", proposal.lanes.iter().map(|l| (l.lane, l.conclusion, l.summary.clone(), l.findings.len(), l.deduped, l.noted.len())).collect::<Vec<_>>(), prior_debug());
     }
+
+    fn prior_debug() -> &'static str { "dbg" }
 
     fn forge_pr() -> PullRequest {
         PullRequest {
