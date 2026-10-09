@@ -951,7 +951,9 @@ pub async fn review_with_tree(
         .review
         .max_comments
         .saturating_sub(prior.open_findings());
-    cap_proposal_findings(&mut lanes, budget);
+    cap_proposal_findings(&mut lanes, budget, &|finding| {
+        inline_anchor_within(finding, &diffs)
+    });
 
     let uninspected = uninspected_paths(config, &context)?;
 
