@@ -45,17 +45,23 @@ a provider outage must not look like a clean review.
 
 Both properties are asserted directly in `src/falsify/test.rs`.
 
-## The deterministic pass in front of the model
+## No deterministic pass in front of the model
 
-`src/falsify/defined.rs` runs first and costs nothing. It drops a finding that
-claims a compile or undefined-symbol error ("will not compile", "is not
-defined", "cannot find", …) when **every** symbol the finding names in
-backticks is defined in the same evidence the model filter sees — a definition
-keyword (`fn`, `class`, `def`, `const`, …) right before it on a line the diff
-did not remove, or a changed path with a component of that name. It obeys both
-properties above: it only rejects, its rejections survive a model that fails
-open, and anything short of proof is kept. It reads only the diff and the
-looked-up text, not the repository index, which the pass is not handed.
+An earlier version ran a textual pre-pass that dropped "will not compile" or
+"is not defined" claims whenever the evidence contained a definition keyword
+followed by the symbol's name. It was removed, and this module must not grow
+one back. Text cannot prove a symbol is defined:
+
+- a `fn name` inside a comment or a string literal is not a definition;
+- a `+++ /dev/null` or a deleted path header says a file is gone, not that it
+  exists;
+- a path component named `helpers` is not a definition of a symbol `helpers`;
+- a definition in one module does not make a symbol visible in another.
+
+Each of those turned a real undefined-symbol finding into silence. The model
+filter is the only rejecter, it sees the same diff and looked-up text, and it
+is told to reject only on proof, so a claim that the diff disproves is still
+dropped, and a claim it cannot disprove reaches the author.
 
 ## Which lanes run it
 
