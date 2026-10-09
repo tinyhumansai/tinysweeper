@@ -108,10 +108,15 @@ runs. A **permission** refusal — REST's `Resource not accessible by
 integration`, GraphQL's `FORBIDDEN` — would be repeated for every thread, so it
 is logged once, with the stable message `review thread resolve refused for want
 of permission; skipping the rest of this run`, and the rest of the plan is
-skipped. The fix is operational: the GitHub App installation needs
-**Pull requests: write**, which `resolveReviewThread` requires. `apply_plan`
-returns an `ApplyReport` (`resolved`, `failed`, `skipped`) for callers that want
-the counts.
+skipped. `resolveReviewThread` needs **Pull requests: write**, which
+`deploy/github-app-manifest.json` already grants, but GitHub also refuses it
+for installation tokens that have only `contents: read` (reported upstream in
+`github/gh-aw#35726`). So with the manifest as shipped, the first resolve is
+expected to be refused. Granting `contents: write` would clear it, but that
+widens the App's scope and is an operator decision, not a code change; until it
+is made, the refusal is logged and the run skips the rest of the plan.
+`apply_plan` returns an `ApplyReport` (`resolved`, `failed`, `skipped`) for
+callers that want the counts.
 
 `threads.comment_on_resolve` (default on) turns the note off without turning off
 the resolving — deliberately two behaviours behind one switch would mean
