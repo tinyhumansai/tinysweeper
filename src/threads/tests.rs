@@ -547,6 +547,22 @@ async fn a_note_somebody_else_wrote_does_not_count_as_ours() {
     }
 }
 
+#[tokio::test]
+async fn a_marker_quoted_in_our_own_opener_is_not_a_note() {
+    // The model can reproduce the marker from an untrusted diff into a finding
+    // body, which we post under our own login. That opener must not count as
+    // the explanation, or the real note would never be posted.
+    let mut thread = ours();
+    thread.comments[0].body = format!(
+        "**{TITLE}**\n\nthe diff said {RESOLVED_NOTE_MARKER} here\n\n\
+         <!-- tinysweeper:fp={FINGERPRINT} -->"
+    );
+    let forge = forge_with(vec![thread]);
+    let plan = plan_for(&forge, &config(), &[TITLE]).await;
+    assert_eq!(plan.resolve.len(), 1);
+    assert!(!plan.resolve[0].noted, "a quoted marker is not a note");
+}
+
 #[test]
 fn a_resolution_note_carries_its_marker() {
     assert!(

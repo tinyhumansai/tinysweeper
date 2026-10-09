@@ -167,12 +167,16 @@ const LEGACY_NOTE_PREFIX: &str = "**Resolved** — ";
 
 /// Whether `comment` is a resolution note tinysweeper itself posted.
 ///
-/// Ours by author *and* by text, like every other marker check: anyone can
-/// paste the marker into a reply, and doing so must not pin a thread open.
+/// Ours by author *and* by text, like every other marker check. The text test
+/// is anchored: a note opens with [`LEGACY_NOTE_PREFIX`] and, once it carries
+/// the marker, ends with it. A marker quoted anywhere else — in a reply, or in
+/// our own finding opener when the model reproduced it from the diff — is not
+/// a note, so it cannot pin a thread open and suppress the real explanation.
 fn is_own_resolution_note(comment: &ThreadComment) -> bool {
+    let body = comment.body.trim();
     is_own_login(&comment.author)
-        && (comment.body.contains(RESOLVED_NOTE_MARKER)
-            || comment.body.trim_start().starts_with(LEGACY_NOTE_PREFIX))
+        && body.starts_with(LEGACY_NOTE_PREFIX)
+        && (body.ends_with(RESOLVED_NOTE_MARKER) || !body.contains(RESOLVED_NOTE_MARKER))
 }
 
 /// Whether a forge error is GitHub refusing for want of permission.
