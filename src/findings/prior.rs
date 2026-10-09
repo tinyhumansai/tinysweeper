@@ -508,6 +508,20 @@ fn declined_fingerprints(threads: &[ReviewThread]) -> BTreeSet<String> {
         .collect()
 }
 
+/// Bodies of every comment in a thread that is still open: neither resolved
+/// nor outdated.
+///
+/// Matched on body alone. The REST comment list carries no thread id, and the
+/// body is the one thing both reads share. Matching on body cannot make a
+/// comment look open that is not: only the same text in an open thread does.
+fn open_bodies(threads: &[ReviewThread]) -> BTreeSet<String> {
+    threads
+        .iter()
+        .filter(|thread| !thread.is_resolved && !thread.is_outdated)
+        .flat_map(|thread| thread.comments.iter().map(|comment| comment.body.clone()))
+        .collect()
+}
+
 /// Whether `login` is one of [`OTHER_REVIEWERS`], as its GitHub App.
 fn is_other_reviewer(login: &str) -> bool {
     login.strip_suffix("[bot]").is_some_and(|slug| {
