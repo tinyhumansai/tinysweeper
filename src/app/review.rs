@@ -1430,7 +1430,6 @@ fn kept_severities(
     for finding in lanes
         .iter()
         .flat_map(|lane| lane.findings.iter().chain(lane.overflow.iter()))
-        .filter(|finding| !finding.grouped)
     {
         severities
             .entry(finding.title.clone())
