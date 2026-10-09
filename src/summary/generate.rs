@@ -74,7 +74,7 @@ pub async fn generate(
         "scrubbed_diff": crate::evidence::diff::render(diffs),
         "lanes": lanes.iter().map(|lane| json!({
             "lane": lane.lane.as_str(), "summary": lane.summary,
-            "findings": lane.findings.iter().map(|finding| json!({
+            "findings": lane.findings.iter().chain(lane.overflow.iter()).map(|finding| json!({
                 "title": finding.title, "path": finding.path, "rule": finding.rule
             })).collect::<Vec<_>>(),
             "pending": lane.pending, "unanswered": lane.unanswered,
@@ -267,8 +267,18 @@ fn state(lanes: &[LaneProposal]) -> &'static str {
     }
 }
 
+/// Active findings the author is shown: the inline ones and the overflow the
+/// hub lists. Counting only the inline set would have the summary report
+/// "0 active finding(s)" on a review whose hub lists thirty.
+fn active_findings(lanes: &[LaneProposal]) -> usize {
+    lanes
+        .iter()
+        .map(|lane| lane.findings.len() + lane.overflow.len())
+        .sum()
+}
+
 fn fallback_executive(lanes: &[LaneProposal]) -> String {
-    let active: usize = lanes.iter().map(|lane| lane.findings.len()).sum();
+    let active = active_findings(lanes);
     format!(
         "Tiny Sweeper reviewed this change across {} lane(s) and found {active} active actionable finding(s). Detailed lane evidence and any incomplete work are listed below.",
         lanes.len()
@@ -276,7 +286,7 @@ fn fallback_executive(lanes: &[LaneProposal]) -> String {
 }
 
 fn history_summary(lanes: &[LaneProposal]) -> String {
-    let active: usize = lanes.iter().map(|lane| lane.findings.len()).sum();
+    let active = active_findings(lanes);
     let resolved: usize = lanes.iter().map(|lane| lane.resolved.len()).sum();
     format!("{active} active finding(s), {resolved} resolved finding(s)")
 }
