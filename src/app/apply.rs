@@ -827,7 +827,10 @@ fn review_body(
                 .unwrap_or_default();
             body.push_str(&format!(
                 "\n- **{}** {} (`{}{}`)",
-                finding.severity, finding.title, finding.path, line
+                finding.severity,
+                crate::summary::render::md(&finding.title),
+                crate::summary::render::md(&finding.path),
+                line
             ));
         }
         body.push('\n');

@@ -2067,7 +2067,11 @@ fn cap_proposal_findings(
             .extend(over.into_iter().map(|(_, finding)| finding));
         // Counted from what actually moved: findings left in place because they
         // cannot be anchored inline are not over the budget and are not listed.
-        let over = lane.overflow.iter().filter(|finding| !finding.grouped).count();
+        let over = lane
+            .overflow
+            .iter()
+            .filter(|finding| !finding.grouped)
+            .count();
         if over > 0 {
             lane.summary = format!(
                 "{} (+{over} over the comment budget, listed in the review summary)",

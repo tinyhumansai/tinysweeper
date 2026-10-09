@@ -521,7 +521,10 @@ fn counts(proposal: &Proposal) -> (usize, usize, usize, usize) {
             .lanes
             .iter()
             .map(|lane| {
-                lane.findings.len()
+                lane.findings
+                    .iter()
+                    .filter(|finding| !finding.grouped)
+                    .count()
                     + lane
                         .overflow
                         .iter()
