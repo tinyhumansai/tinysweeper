@@ -93,13 +93,16 @@ fails, which is the cheaper loss.
 
 Every note ends with the hidden marker `<!-- tinysweeper:resolved-note -->`.
 `plan` flags any thread that already carries one of our notes as `noted`. A
-note counts as ours when the author is our exact login *and* the note has either
-the marker or, for notes posted before the marker existed, the `**Resolved** — `
-prefix. A noted thread is still resolved when the policy says so, but
-`apply_plan` posts no second note. This is what closes the threads left behind
-by the old ordering, where a refused resolve was noted on every push, once the
-installation has the permission. A pasted marker from anyone else does not
-count, so it cannot silence our explanation.
+note counts as ours when the author is our exact login *and* the comment opens
+with the `**Resolved** — ` prefix and, if it carries the marker, ends with it.
+Notes posted before the marker existed have the prefix alone. The check is
+anchored because a marker can be quoted mid-body: a finding opener that
+reproduces it from the diff is posted under our login, and must not count.
+A noted thread is still resolved when the policy says so, but `apply_plan`
+posts no second note. This is what closes the threads left behind by the old
+ordering, where a refused resolve was noted on every push, once the installation
+has the permission. A pasted marker from anyone else does not count, so it
+cannot silence our explanation.
 
 ### When GitHub refuses
 
