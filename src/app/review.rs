@@ -2345,7 +2345,7 @@ mod tests {
                 vec![finding("security high", Severity::High)],
             ),
         ];
-        cap_proposal_findings(&mut lanes, 1);
+        cap_proposal_findings(&mut lanes, 1, &|_| true);
 
         assert_eq!(
             lanes.iter().map(|lane| lane.findings.len()).sum::<usize>(),
@@ -2648,7 +2648,7 @@ mod tests {
             ),
         ];
         group_co_located_findings(&mut lanes);
-        cap_proposal_findings(&mut lanes, 1);
+        cap_proposal_findings(&mut lanes, 1, &|_| true);
 
         assert_eq!(
             lanes

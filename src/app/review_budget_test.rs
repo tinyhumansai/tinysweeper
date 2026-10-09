@@ -332,7 +332,7 @@ fn the_bypass_is_for_critical_only() {
         finding("critical two", Severity::Critical, 20),
         finding("high", Severity::High, 40),
     ])];
-    cap_proposal_findings(&mut lanes, 1);
+    cap_proposal_findings(&mut lanes, 1, &|_| true);
 
     let kept: Vec<&str> = lanes[0].findings.iter().map(|f| f.title.as_str()).collect();
     assert_eq!(kept, vec!["critical one", "critical two"]);
