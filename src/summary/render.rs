@@ -747,4 +747,24 @@ mod tests {
             "{rendered}"
         );
     }
+
+    #[test]
+    fn a_supported_summary_that_only_begins_like_a_legacy_one_is_kept() {
+        let mut config = Config::default();
+        config.summary.sections = vec![SummarySection::Changes];
+        let rendered = render(
+            &config,
+            &proposal(
+                ReviewSummary {
+                    changes: "No supported behavioral explanation was produced. The \
+                              implementation nevertheless adds a retry to the sync loop."
+                        .into(),
+                    ..ReviewSummary::default()
+                },
+                &[],
+            ),
+        );
+        assert!(rendered.contains("## What changed"), "{rendered}");
+        assert!(rendered.contains("adds a retry to the sync loop"), "{rendered}");
+    }
 }
