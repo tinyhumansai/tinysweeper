@@ -179,6 +179,12 @@ impl Concern {
 
     fn clears(&self, other: &Self, bar: &Bar) -> bool {
         let title = title_similarity(&self.title, &other.title);
+        // "Allow X" and "Do not allow X" share every content word and say the
+        // opposite. Whatever else matches, that is changed guidance, not a
+        // repeat, so it must survive.
+        if self.negated != other.negated && title >= SAME_WORDING {
+            return false;
+        }
         let text = jaccard(&self.text, &other.text);
         if title >= bar.title || text >= bar.text {
             return true;
