@@ -74,7 +74,7 @@ pub async fn generate(
         "scrubbed_diff": crate::evidence::diff::render(diffs),
         "lanes": lanes.iter().map(|lane| json!({
             "lane": lane.lane.as_str(), "summary": lane.summary,
-            "findings": lane.findings.iter().chain(lane.overflow.iter()).map(|finding| json!({
+            "findings": lane.findings.iter().chain(lane.overflow.iter().filter(|finding| !finding.grouped)).map(|finding| json!({
                 "title": finding.title, "path": finding.path, "rule": finding.rule
             })).collect::<Vec<_>>(),
             "pending": lane.pending, "unanswered": lane.unanswered,
@@ -273,7 +273,14 @@ fn state(lanes: &[LaneProposal]) -> &'static str {
 fn active_findings(lanes: &[LaneProposal]) -> usize {
     lanes
         .iter()
-        .map(|lane| lane.findings.len() + lane.overflow.len())
+        .map(|lane| {
+            lane.findings.len()
+                + lane
+                    .overflow
+                    .iter()
+                    .filter(|finding| !finding.grouped)
+                    .count()
+        })
         .sum()
 }
 

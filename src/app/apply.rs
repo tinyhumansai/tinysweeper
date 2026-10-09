@@ -810,6 +810,29 @@ fn review_body(
         }
     }
 
+    // Over-budget findings are named here as well as in the hub. The hub is
+    // best-effort (it is skipped when summaries are disabled, and a failed
+    // update is only logged), while the review body is always submitted, so a
+    // blocking finding that did not fit the budget is never only in a place
+    // that might not be written.
+    let over: Vec<&crate::findings::types::Finding> = proposal.overflowed().collect();
+    if !over.is_empty() {
+        body.push_str(
+            "\n\n### Over the comment budget\n\nNot posted inline; listed here so none is lost.\n",
+        );
+        for finding in over {
+            let line = finding
+                .line
+                .map(|line| format!(":{line}"))
+                .unwrap_or_default();
+            body.push_str(&format!(
+                "\n- **{}** {} (`{}{}`)",
+                finding.severity, finding.title, finding.path, line
+            ));
+        }
+        body.push('\n');
+    }
+
     // The full token breakdown goes in the body deliberately. Cache hit rate is
     // the difference between a cheap re-review and a ruinous one, and nobody
     // tunes a number they cannot see.

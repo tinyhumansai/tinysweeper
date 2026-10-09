@@ -520,7 +520,14 @@ fn counts(proposal: &Proposal) -> (usize, usize, usize, usize) {
         proposal
             .lanes
             .iter()
-            .map(|lane| lane.findings.len() + lane.overflow.len())
+            .map(|lane| {
+                lane.findings.len()
+                    + lane
+                        .overflow
+                        .iter()
+                        .filter(|finding| !finding.grouped)
+                        .count()
+            })
             .sum::<usize>()
             + carried,
         proposal.lanes.iter().map(|lane| lane.noted.len()).sum(),
