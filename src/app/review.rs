@@ -2954,7 +2954,7 @@ mod tests {
                 "path": "src/main.rs", "line": 2,
                 "rule": "style", "title": "Rename this binding",
                 "body": "The name says nothing about the item.",
-                "severity": "medium", "confidence": 0.9
+                "severity": "high", "confidence": 0.9
             }]
         }));
         let proposal = review(
@@ -2968,10 +2968,8 @@ mod tests {
         .expect("reviews");
 
         let titles: Vec<&str> = proposal.findings().map(|f| f.title.as_str()).collect();
-        assert_eq!(titles, vec!["Rename this binding"], "{:#?} {:?}", proposal.lanes.iter().map(|l| (l.lane, l.conclusion, l.summary.clone(), l.findings.len(), l.deduped, l.noted.len())).collect::<Vec<_>>(), prior_debug());
+        assert_eq!(titles, vec!["Rename this binding"]);
     }
-
-    fn prior_debug() -> &'static str { "dbg" }
 
     fn forge_pr() -> PullRequest {
         PullRequest {
