@@ -319,6 +319,29 @@ impl Proposal {
             .filter(|finding| !finding.grouped)
     }
 
+    /// Findings that passed every gate but did not fit the inline budget.
+    ///
+    /// Listed in the review hub by title and location, never posted inline.
+    /// Grouped observations are excluded for the same reason as in
+    /// [`findings`](Self::findings): they are published inside their primary's
+    /// thread, and the hub has no thread of their own to point at.
+    pub fn overflowed(&self) -> impl Iterator<Item = &Finding> {
+        self.lanes
+            .iter()
+            .flat_map(|l| l.overflow.iter())
+            .filter(|finding| !finding.grouped)
+    }
+
+    /// Every finding this pass reports to the author, inline or overflowed.
+    ///
+    /// Anything that decides what the author has been told — the verdict's
+    /// worst severity, the hub's active counts, carry-over between pushes —
+    /// reads this rather than [`findings`](Self::findings), so a finding the
+    /// budget moved out of view still counts as raised.
+    pub fn reported(&self) -> impl Iterator<Item = &Finding> {
+        self.findings().chain(self.overflowed())
+    }
+
     /// Whether any lane raised a finding at or above `threshold`, including a
     /// finding that was suppressed because it already has an inline comment.
     pub fn has_severity_at_or_above(&self, threshold: Severity) -> bool {
