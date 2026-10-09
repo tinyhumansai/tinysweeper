@@ -1382,7 +1382,7 @@ mod tests {
 
         assert!(body.contains("### Over the comment budget"), "{body}");
         assert!(body.contains("Over budget finding"), "{body}");
-        assert!(body.contains("src/main.rs:2"), "{body}");
+        assert!(body.contains("src/main\\.rs:2"), "{body}");
     }
 
     fn finding() -> Finding {
