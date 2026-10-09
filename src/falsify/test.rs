@@ -225,46 +225,17 @@ async fn a_finding_about_code_not_in_the_diff_survives() {
     assert!(outcome.rejected.is_empty());
 }
 
-fn undefined_claim() -> Finding {
+#[tokio::test]
+async fn an_undefined_symbol_claim_is_left_to_the_model_not_rejected_on_text() {
+    // A symbol that the diff visibly defines is still a model decision: the
+    // filter must not drop the claim itself, so the model sees both findings.
+    let model = MockModel::new().then(json!({"incorrect": []}));
     let mut claim = finding("`main` is not defined");
     claim.body = "This will fail to compile.".into();
-    claim
-}
+    let outcome = filter(&model, vec![claim, finding("kept")]).await;
 
-#[tokio::test]
-async fn a_disproved_undefined_symbol_claim_is_dropped_before_the_model_is_asked() {
-    // `DIFF` opens with `fn main() {` as context: the symbol exists, so the
-    // claim is dropped deterministically and only the other finding is shown
-    // to the model — numbered from one, as if the dropped one never existed.
-    let model = MockModel::new().then(json!({"incorrect": []}));
-    let outcome = filter(&model, vec![undefined_claim(), finding("kept")]).await;
-
-    assert_eq!(outcome.findings.len(), 1);
-    assert_eq!(outcome.findings[0].title, "kept");
-    assert_eq!(outcome.rejected.len(), 1);
-    assert!(outcome.rejected[0].reason.starts_with("deterministic"));
+    assert_eq!(outcome.findings.len(), 2);
+    assert!(outcome.rejected.is_empty());
     let prompt = model.last_prompt().expect("recorded");
-    assert!(prompt.contains("1. [src/main.rs] kept"), "{prompt}");
-    assert!(!prompt.contains("is not defined"), "{prompt}");
-}
-
-#[tokio::test]
-async fn the_deterministic_rejection_survives_a_model_that_fails_open() {
-    let model = MockModel::new().then_error("upstream exploded");
-    let outcome = filter(&model, vec![undefined_claim(), finding("kept")]).await;
-
-    assert_eq!(outcome.findings.len(), 1);
-    assert_eq!(outcome.rejected.len(), 1);
-    assert!(outcome.failed_open.is_some());
-}
-
-#[tokio::test]
-async fn nothing_left_after_the_deterministic_pass_never_calls_the_model() {
-    let model = MockModel::new();
-    let outcome = filter(&model, vec![undefined_claim()]).await;
-
-    assert_eq!(model.calls(), 0, "spent money on an emptied list");
-    assert!(outcome.findings.is_empty());
-    assert_eq!(outcome.rejected.len(), 1);
-    assert!(outcome.failed_open.is_none());
+    assert!(prompt.contains("1. [src/main.rs] `main` is not defined"), "{prompt}");
 }
