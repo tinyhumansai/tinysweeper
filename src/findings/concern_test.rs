@@ -611,3 +611,45 @@ fn placement_uses_the_line_github_pins_the_comment_to() {
     finding.end_line = Some(40);
     assert_eq!(Concern::of(&finding).range, Some((10, 10)));
 }
+
+#[test]
+fn an_antonym_imperative_reverses_the_request() {
+    // "Reject" and "Allow" share every content word; only the verb differs.
+    let allow = Concern::new(
+        "src/parser.rs",
+        Some((10, 10)),
+        "Allow empty values in the parser",
+        "",
+        "",
+    );
+    let reject = Concern::new(
+        "src/parser.rs",
+        Some((10, 10)),
+        "Reject empty values in the parser",
+        "",
+        "",
+    );
+    assert!(!allow.same_as(&reject));
+    assert!(!reject.same_as(&allow));
+}
+
+#[test]
+fn a_contraction_is_negation() {
+    // "Can't" splits into "can" and "t"; neither is a negator on its own.
+    let cant = Concern::new(
+        "src/log.rs",
+        Some((10, 10)),
+        "Can't allow logging secrets",
+        "",
+        "",
+    );
+    let allow = Concern::new(
+        "src/log.rs",
+        Some((10, 10)),
+        "Allow logging secrets",
+        "",
+        "",
+    );
+    assert!(!cant.same_as(&allow));
+    assert!(!allow.same_as(&cant));
+}

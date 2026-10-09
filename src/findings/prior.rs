@@ -515,7 +515,7 @@ fn lane_in(body: &str) -> Option<LaneId> {
 /// The secondary observations rendered into one shared inline thread, each as
 /// the text of its own `Additional ... observation` section.
 ///
-/// [`group_co_located_findings`](crate::app::review) publishes overlapping
+/// `group_co_located_findings` in `app::review` publishes overlapping
 /// concerns as one conversation: the opener, then one section per other
 /// concern. The separator is the one the renderer writes, so only a section it
 /// wrote is split off.
@@ -1457,6 +1457,42 @@ mod tests {
         )
         .await;
         assert!(!prior.repeats_concern(&ours));
+    }
+
+    #[tokio::test]
+    async fn a_concern_grouped_into_a_shared_thread_is_still_an_anchor() {
+        // The opener and a second concern, rendered into one inline comment as
+        // the publisher writes them. A reworded repeat of the second concern
+        // must still be recognised, not only repeats of the opener.
+        let secondary = worded(
+            LaneId::Security,
+            SPEC,
+            24,
+            "invisible-click",
+            "Reject hidden elements before clicking",
+            "Hidden controls can still receive the click.",
+        );
+        let body = format!(
+            "![high](x) **{VISIBLE}**\n\nbody\n{}\n\n<sub>critique · x · <!-- tinysweeper:fp=0123456789abcdef --></sub>",
+            crate::findings::render::grouped_observation(&secondary)
+        );
+        let comment = ReviewComment {
+            path: SPEC.into(),
+            line: Some(24),
+            start_line: None,
+            author: "tinysweeper[bot]".into(),
+            body,
+        };
+        let prior = load_from(vec![comment]).await;
+        let repeat = worded(
+            LaneId::E2e,
+            SPEC,
+            24,
+            "hidden-click",
+            "Reject hidden elements before clicking",
+            "Clicks land on hidden controls.",
+        );
+        assert!(prior.repeats_concern(&repeat));
     }
 
     #[tokio::test]
