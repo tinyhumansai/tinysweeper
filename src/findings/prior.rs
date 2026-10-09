@@ -336,6 +336,26 @@ pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<Pr
                 },
             });
 
+            // Every concern a shared thread carries is an anchor, not only the
+            // opener: the secondary observations are rendered into the same
+            // comment, and a reworded repeat of one must be recognised too.
+            for section in grouped_observations(&comment.body) {
+                prior.anchors.push(PostedAnchor {
+                    lane: None,
+                    path: comment.path.clone(),
+                    line: comment.line,
+                    start_line: comment.start_line,
+                    title: title_in(section),
+                    text: text_in(section),
+                    rule: rule_in(section),
+                    source: if declined.contains(fingerprint) {
+                        AnchorSource::Declined
+                    } else {
+                        AnchorSource::Posted
+                    },
+                });
+            }
+
             // A repeated fingerprint is normal — the same finding across two
             // reviews — so the title is only recorded the first time.
             let first_seen = prior.posted.insert(fingerprint.clone());
@@ -492,6 +512,17 @@ fn lane_in(body: &str) -> Option<LaneId> {
 /// Thread resolution uses the same title that the review agent receives as
 /// prior context. A body that does not match this renderer-owned shape has no
 /// trustworthy identity to match and therefore remains open.
+/// The secondary observations rendered into one shared inline thread, each as
+/// the text of its own `Additional ... observation` section.
+///
+/// [`group_co_located_findings`](crate::app::review) publishes overlapping
+/// concerns as one conversation: the opener, then one section per other
+/// concern. The separator is the one the renderer writes, so only a section it
+/// wrote is split off.
+fn grouped_observations(body: &str) -> impl Iterator<Item = &str> {
+    body.split("\n\n---\n\n### Additional `").skip(1)
+}
+
 pub fn title_in(body: &str) -> Option<String> {
     let start = body.find("**")? + 2;
     let rest = &body[start..];

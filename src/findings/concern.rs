@@ -232,17 +232,24 @@ fn numbers(title: &str) -> BTreeSet<String> {
 /// Whether a title negates itself: any negation word, before stopwords are
 /// dropped from the word sets.
 fn negates(title: &str) -> bool {
-    title
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .any(|word| NEGATIONS.contains(&word.to_ascii_lowercase().as_str()))
+    // "Can't" splits into "can" and "t", so contractions are read whole first.
+    let lower = title.to_ascii_lowercase().replace('\u{2019}', "'");
+    lower.contains("n't")
+        || title
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|word| NEGATIONS.contains(&word.to_ascii_lowercase().as_str()))
 }
 
-/// Words that turn a request into its opposite. `avoid` is imperative
-/// negation: "Avoid logging secrets" asks for the opposite of "Allow logging
-/// secrets", although both titles share their content words.
+/// Words that turn a request into its opposite: negators, and negative
+/// imperatives. "Avoid logging secrets" and "Reject empty values" ask for the
+/// opposite of "Allow logging secrets" and "Allow empty values", although the
+/// titles share their content words.
 const NEGATIONS: &[&str] = &[
     "not", "no", "nor", "never", "neither", "cannot", "don", "doesn", "didn", "isn", "aren",
-    "wasn", "won", "shouldn", "wouldn", "couldn", "avoid", "avoids", "avoiding",
+    "wasn", "won", "shouldn", "wouldn", "couldn", "avoid", "avoids", "avoiding", "reject",
+    "rejects", "forbid", "forbids", "disable", "disables", "remove", "removes", "deny", "denies",
+    "block", "blocks", "prevent", "prevents", "ban", "bans", "skip", "skips", "drop", "drops",
+    "refuse", "refuses", "stop", "stops",
 ];
 
 /// Size of the intersection over size of the union; zero for two empty sets.
