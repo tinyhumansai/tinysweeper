@@ -343,8 +343,8 @@ pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<Pr
                 // Placed where the observation was raised: its own location when
                 // the renderer said so, otherwise the shared opener's.
                 let (section, raised) = split_raised_at(section);
-                let (path, line) = match raised {
-                    Some(location) => raised_at(&location),
+                let (path, line) = match &raised {
+                    Some(location) => raised_at(location),
                     None => (comment.path.clone(), comment.line),
                 };
                 prior.anchors.push(PostedAnchor {
@@ -1543,6 +1543,49 @@ mod tests {
             "Clicks land on hidden controls.",
         );
         assert!(prior.repeats_concern(&repeat));
+    }
+
+    #[tokio::test]
+    async fn a_grouped_observation_keeps_its_text_and_its_own_location() {
+        // A secondary raised on another file and line. Its body follows its
+        // rule line, and the renderer notes where it was raised.
+        let secondary = worded(
+            LaneId::Security,
+            "app/other.ts",
+            90,
+            "hidden-click",
+            "Reject hidden elements before clicking",
+            "Hidden controls can still receive the click.",
+        );
+        let body = format!(
+            "![high](x) **{VISIBLE}**\n\nbody\n{}\n\n_Raised at app/other.ts:90._\n\n<sub>critique · x · <!-- tinysweeper:fp=0123456789abcdef --></sub>",
+            crate::findings::render::grouped_observation(&secondary)
+        );
+        let comment = ReviewComment {
+            path: SPEC.into(),
+            line: Some(24),
+            start_line: None,
+            author: "tinysweeper[bot]".into(),
+            body,
+        };
+        let prior = load_from(vec![comment]).await;
+        let anchor = prior
+            .anchors
+            .iter()
+            .find(|a| a.title.as_deref() == Some("Reject hidden elements before clicking"))
+            .expect("the secondary observation is an anchor");
+        assert_eq!(
+            (anchor.path.as_str(), anchor.line),
+            ("app/other.ts", Some(90))
+        );
+        assert!(
+            anchor
+                .text
+                .as_deref()
+                .is_some_and(|text| text.contains("Hidden controls")),
+            "{:?}",
+            anchor.text
+        );
     }
 
     #[tokio::test]
