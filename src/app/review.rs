@@ -2524,6 +2524,36 @@ mod tests {
     }
 
     #[test]
+    fn a_finding_cannot_bridge_two_distinct_concerns_into_one_thread() {
+        // A overlaps B on line 12 and B overlaps C on line 14, but A and C do
+        // not overlap. Linking through B would publish one thread for three
+        // findings and hide C behind A; each concern keeps its own thread.
+        let spanning = |lane: LaneId, title: &str, start: u64, end: u64, id: &str| {
+            let mut finding = grouped_finding(lane, title, start, id);
+            finding.end_line = Some(end);
+            finding.body = String::new();
+            finding
+        };
+        let a = spanning(LaneId::Critique, "Alpha", 10, 12, "1111111111111111");
+        let b = spanning(LaneId::Security, "Bravo", 12, 14, "2222222222222222");
+        let c = spanning(LaneId::Tests, "Charlie", 14, 16, "3333333333333333");
+        let mut lanes = vec![
+            grouped_lane(LaneId::Critique, a),
+            grouped_lane(LaneId::Security, b),
+            grouped_lane(LaneId::Tests, c),
+        ];
+
+        group_co_located_findings(&mut lanes);
+
+        let threads = published(&lanes);
+        assert_eq!(threads.len(), 2, "A and B are one thread; C stands alone");
+        assert!(
+            lanes[2].findings[0].grouped == false,
+            "C is not grouped behind A"
+        );
+    }
+
+    #[test]
     fn a_repeat_in_the_sibling_test_file_is_grouped_and_says_where() {
         let title = "Test the write-again-without-actor fallback the change promises";
         let mut source = grouped_finding(LaneId::Security, title, 154, "1111111111111111");
