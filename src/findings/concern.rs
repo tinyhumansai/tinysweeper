@@ -107,6 +107,10 @@ pub struct Concern {
     /// word sets, where negation is a stopword, so that opposite guidance is
     /// never mistaken for a repeat.
     negated: bool,
+    /// The numbers the title names ("401" in "Handle HTTP 401 responses").
+    /// Kept apart from the word sets, which drop bare numbers: the status code
+    /// is the whole difference between two findings about one branch.
+    numbers: BTreeSet<String>,
 }
 
 /// How two concerns relate in the tree.
@@ -131,14 +135,19 @@ impl Concern {
             text,
             rule: rule_tokens(rule),
             negated: negates(title),
+            numbers: numbers(title),
         }
     }
 
     /// The concern a finding raises.
+    ///
+    /// Placed where the comment is published, which is the span
+    /// [`Finding::published_range`] names, not the whole quoted span: a
+    /// previous comment must be measured against the line GitHub pins it to.
     pub fn of(finding: &Finding) -> Self {
         Self::new(
             &finding.path,
-            finding.range(),
+            finding.published_range(),
             &finding.title,
             &finding.body,
             &finding.rule,
@@ -178,6 +187,11 @@ impl Concern {
     }
 
     fn clears(&self, other: &Self, bar: &Bar) -> bool {
+        // Titles that name different numbers are about different things: "HTTP
+        // 401" and "HTTP 403" share every word but the status code.
+        if !self.numbers.is_empty() && !other.numbers.is_empty() && self.numbers != other.numbers {
+            return false;
+        }
         let title = title_similarity(&self.title, &other.title);
         // "Allow X" and "Do not allow X" share every content word and say the
         // opposite. Whatever else matches, that is changed guidance, not a
@@ -206,6 +220,15 @@ fn gap((left_start, left_end): (u64, u64), (right_start, right_end): (u64, u64))
         .saturating_sub(1)
 }
 
+/// The numbers a title names, such as `401` in "Handle HTTP 401 responses".
+fn numbers(title: &str) -> BTreeSet<String> {
+    title
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty() && word.bytes().all(|b| b.is_ascii_digit()))
+        .map(str::to_string)
+        .collect()
+}
+
 /// Whether a title negates itself: any negation word, before stopwords are
 /// dropped from the word sets.
 fn negates(title: &str) -> bool {
@@ -214,10 +237,12 @@ fn negates(title: &str) -> bool {
         .any(|word| NEGATIONS.contains(&word.to_ascii_lowercase().as_str()))
 }
 
-/// Words that turn a request into its opposite.
+/// Words that turn a request into its opposite. `avoid` is imperative
+/// negation: "Avoid logging secrets" asks for the opposite of "Allow logging
+/// secrets", although both titles share their content words.
 const NEGATIONS: &[&str] = &[
     "not", "no", "nor", "never", "neither", "cannot", "don", "doesn", "didn", "isn", "aren",
-    "wasn", "won", "shouldn", "wouldn", "couldn",
+    "wasn", "won", "shouldn", "wouldn", "couldn", "avoid", "avoids", "avoiding",
 ];
 
 /// Size of the intersection over size of the union; zero for two empty sets.
@@ -436,6 +461,13 @@ fn split_path(path: &str) -> (&str, &str) {
 
 /// The file name without its extension or test marker, and whether it had one.
 fn test_stem(file: &str) -> (&str, bool) {
+    // `memory.test` and `memory.spec` carry the marker as their last dotted
+    // part, so it is taken before the extension is.
+    for suffix in [".test", ".spec"] {
+        if let Some(bare) = file.strip_suffix(suffix) {
+            return (bare, true);
+        }
+    }
     let mut stem = file.rsplit_once('.').map_or(file, |(stem, _)| stem);
     let mut marked = false;
     for suffix in [
