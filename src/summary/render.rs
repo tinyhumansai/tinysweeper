@@ -749,6 +749,49 @@ mod tests {
     }
 
     #[test]
+    fn a_grouped_observation_is_still_listed_in_the_hub_findings() {
+        // A co-located observation is no longer nested into the primary inline
+        // comment, so the hub's findings list is where the author reads it.
+        let finding = |title: &str, grouped: bool| {
+            json!({
+                "lane": "security",
+                "severity": "high",
+                "confidence": 0.9,
+                "path": "src/hub.rs",
+                "line": 2,
+                "rule": "rule",
+                "title": title,
+                "body": "Body text.",
+                "grouped": grouped,
+                "review_pass": 1,
+                "corroboration": 1,
+            })
+        };
+        let proposal: Proposal = serde_json::from_value(json!({
+            "version": crate::app::review::PROPOSAL_VERSION,
+            "repo": "acme/widget",
+            "number": 1,
+            "head_sha": "abcdef1234567890",
+            "lanes": [{
+                "lane": "security",
+                "check_name": "tinysweeper/security",
+                "conclusion": "neutral",
+                "summary": "Reviewed.",
+                "findings": [finding("Primary finding", false), finding("Grouped observation", true)],
+            }],
+            "summary": ReviewSummary::default(),
+            "prior_findings": [],
+            "cost_usd": 0.0,
+            "cached_tokens": 0
+        }))
+        .expect("proposal");
+
+        let rendered = render(&Config::default(), &proposal);
+        assert!(rendered.contains("Primary finding"), "{rendered}");
+        assert!(rendered.contains("Grouped observation"), "{rendered}");
+    }
+
+    #[test]
     fn a_supported_summary_that_only_begins_like_a_legacy_one_is_kept() {
         let mut config = Config::default();
         config.summary.sections = vec![SummarySection::Changes];
