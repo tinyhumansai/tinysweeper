@@ -593,7 +593,8 @@ async fn a_permission_refusal_stops_every_later_resolve_in_the_run() {
 
 #[tokio::test]
 async fn a_one_off_failure_does_not_cost_the_other_threads() {
-    // One stale node id is not a permission problem; the rest still run.
+    // One stale node id is not a permission problem; the rest still run, and
+    // each resolved thread still gets its explanation.
     let threads: Vec<ReviewThread> = (1..=2)
         .map(|n| {
             let mut thread = ours();
@@ -601,14 +602,29 @@ async fn a_one_off_failure_does_not_cost_the_other_threads() {
             thread
         })
         .collect();
-    let forge = refusing_forge(threads, "Could not resolve to a node with the global id");
+    let forge = forge_with(threads)
+        .refusing_thread_resolve_of("PRRT_1", "Could not resolve to a node with the global id");
 
     assert_eq!(
         run(&forge).await,
         ApplyReport {
-            failed: 2,
+            failed: 1,
+            resolved: 1,
             ..ApplyReport::default()
         }
+    );
+    let replied: Vec<String> = forge
+        .writes()
+        .into_iter()
+        .filter_map(|write| match write {
+            crate::forge::mock::Write::ThreadReply { thread_id, .. } => Some(thread_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        replied,
+        vec!["PRRT_2".to_string()],
+        "the note follows the successful resolve, and only that one"
     );
 }
 

@@ -272,6 +272,9 @@ pub struct MockForge {
     refuse_closes: bool,
     /// The error every thread resolve is refused with, if any.
     refuse_resolves: Option<String>,
+    /// Errors for individual thread ids, so one stale id can fail while the
+    /// rest of a run still resolves.
+    refuse_resolve_of: Vec<(String, String)>,
 }
 
 impl MockForge {
@@ -473,8 +476,20 @@ impl MockForge {
     /// `Pull requests: write`, which GitHub reports as `Resource not
     /// accessible by integration`; a test passes that text to exercise the
     /// permission path, or anything else for a one-off failure.
+    ///
+    /// A refused attempt is still recorded in `writes()`, as a refused close
+    /// is, so the log shows what was asked for. Whether it took effect is
+    /// shown by the thread's `is_resolved` state, not by the log.
     pub fn refusing_thread_resolves(mut self, message: &str) -> Self {
         self.refuse_resolves = Some(message.to_string());
+        self
+    }
+
+    /// Refuse attempts to resolve the single thread `thread_id`, with
+    /// `message`. Other threads resolve normally.
+    pub fn refusing_thread_resolve_of(mut self, thread_id: &str, message: &str) -> Self {
+        self.refuse_resolve_of
+            .push((thread_id.to_string(), message.to_string()));
         self
     }
 
@@ -1081,6 +1096,13 @@ impl ForgeWrite for MockForge {
             thread_id: thread_id.to_string(),
         });
         if let Some(message) = &self.refuse_resolves {
+            return Err(Error::Forge(message.clone()));
+        }
+        if let Some((_, message)) = self
+            .refuse_resolve_of
+            .iter()
+            .find(|(id, _)| id == thread_id)
+        {
             return Err(Error::Forge(message.clone()));
         }
         // Applied to state as well as recorded: the policy skips threads that
