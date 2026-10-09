@@ -50,7 +50,11 @@ const REMEMBER_FINDINGS_TIMEOUT: std::time::Duration = std::time::Duration::from
 /// schema that guarantees both. Older proposals remain readable through serde
 /// defaults, but only a proposal of exactly this version is complete: `apply`
 /// can still post another version's findings, but cannot approve on them.
-pub const PROPOSAL_VERSION: u32 = 4;
+///
+/// Version 5 added `overflow`. A version-4 `apply` would ignore it, and could
+/// publish a blocking review whose over-budget findings it never rendered, so
+/// a version-4 proposal must be treated as incomplete rather than accepted.
+pub const PROPOSAL_VERSION: u32 = 5;
 
 /// What a review run concluded, ready for `apply` to publish.
 #[derive(Debug, Clone, Serialize, Deserialize)]
