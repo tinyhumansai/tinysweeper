@@ -21,12 +21,13 @@
 //!   every finding survives. A noise filter that can silence a review by
 //!   failing is worse than no noise filter.
 //!
-//! Cheap tier, one call per lane — preceded by [`defined`], a deterministic
-//! pass that drops a "will not compile" or "is undefined" claim when the same
-//! evidence defines the symbol. It obeys both properties above: it only
-//! rejects, and it rejects only on proof.
+//! Cheap tier, one call per lane. There is deliberately no deterministic
+//! pre-pass over symbol names: a textual "this symbol is defined" check cannot
+//! tell a real definition from a comment, a string, a deleted file, or a
+//! same-named symbol in another module, and a rejection made on that basis
+//! silences a real defect. The model is the only rejecter, and it is told to
+//! reject only on proof from the diff.
 
-pub mod defined;
 pub mod types;
 
 use crate::config::types::{Config, LaneId, Workload};
