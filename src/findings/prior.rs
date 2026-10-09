@@ -955,4 +955,37 @@ mod tests {
 
         assert_eq!(prior.open_findings(), 1);
     }
+
+    #[tokio::test]
+    async fn a_fingerprint_stays_open_while_another_thread_carrying_it_is_unresolved() {
+        // The same finding opened in two conversations. Resolving one must not
+        // refill the slot the other still holds. Before this, the resolved
+        // thread removed the fingerprint outright and the count read 0.
+        let settled = ours("0123456789abcdef", "Guard the index");
+        let still_open = ours("0123456789abcdef", "Guard the index");
+        let prior = load_with_threads(
+            vec![settled.clone(), still_open.clone()],
+            vec![thread(&settled, true), thread(&still_open, false)],
+        )
+        .await;
+
+        assert_eq!(prior.open_findings(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_grouped_conversation_holds_one_slot_and_releases_that_slot() {
+        // The aliases of a grouped comment are dedupe identities, not budget:
+        // resolving the conversation frees one slot, and the other open thread
+        // keeps its own.
+        let mut grouped = ours("0123456789abcdef", "Guard the index");
+        grouped.body = "![high](x) **Guard the index**\n\nbody\n\n<!-- tinysweeper:fps=1111111111111111,2222222222222222 --><!-- tinysweeper:fp=0123456789abcdef -->".into();
+        let pending = ours("3333333333333333", "Check the length");
+        let prior = load_with_threads(
+            vec![grouped.clone(), pending.clone()],
+            vec![thread(&grouped, true), thread(&pending, false)],
+        )
+        .await;
+
+        assert_eq!(prior.open_findings(), 1);
+    }
 }
