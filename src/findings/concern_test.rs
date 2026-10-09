@@ -543,3 +543,56 @@ fn lines_strictly_between_two_anchors_are_counted() {
     );
     assert_eq!(gap((5, 9), (7, 7)), 0, "overlapping ranges");
 }
+
+#[test]
+fn a_different_status_code_is_a_different_concern() {
+    // Every word matches; only the status code differs, and that is the whole
+    // difference between the two branches.
+    let four_oh_one = Concern::new(
+        "src/api.rs",
+        Some((10, 10)),
+        "Handle HTTP 401 responses",
+        "",
+        "",
+    );
+    let four_oh_three = Concern::new(
+        "src/api.rs",
+        Some((10, 10)),
+        "Handle HTTP 403 responses",
+        "",
+        "",
+    );
+    assert!(!four_oh_one.same_as(&four_oh_three));
+    let again = Concern::new(
+        "src/api.rs",
+        Some((12, 12)),
+        "Handle HTTP 401 responses carefully",
+        "",
+        "",
+    );
+    assert!(four_oh_one.same_as(&again), "the same code is the same branch");
+}
+
+#[test]
+fn avoid_is_negative_guidance() {
+    let avoid = Concern::new("src/log.rs", Some((10, 10)), "Avoid logging secrets", "", "");
+    let allow = Concern::new("src/log.rs", Some((10, 10)), "Allow logging secrets", "", "");
+    assert!(!avoid.same_as(&allow));
+    assert!(!allow.same_as(&avoid));
+}
+
+#[test]
+fn a_bare_test_marker_file_is_the_sibling_of_its_source() {
+    assert!(siblings("src/config/memory.rs", "src/config/memory.test"));
+    assert!(siblings("app/src/Panel.ts", "app/src/Panel.spec"));
+}
+
+#[test]
+fn placement_uses_the_line_github_pins_the_comment_to() {
+    // A quoted span reaching line 40 is published as a pin on line 10, so the
+    // concern is placed at 10, not at the far end of the quote.
+    let mut finding = OH7129_TESTS_155.finding();
+    finding.line = Some(10);
+    finding.end_line = Some(40);
+    assert_eq!(Concern::of(&finding).range, Some((10, 10)));
+}

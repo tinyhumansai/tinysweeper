@@ -2556,6 +2556,35 @@ mod tests {
     }
 
     #[test]
+    fn contradictory_guidance_on_one_wording_is_two_threads() {
+        // Two lanes, two lines apart, opposite instructions in the same words.
+        // Lossless grouping must not fold them into one thread: the second
+        // would be published as a repeat of a request it reverses.
+        let mut allow = grouped_finding(
+            LaneId::Critique,
+            "Allow empty values in the parser",
+            10,
+            "1111111111111111",
+        );
+        allow.body = String::new();
+        let mut deny = grouped_finding(
+            LaneId::Security,
+            "Do not allow empty values in the parser",
+            12,
+            "2222222222222222",
+        );
+        deny.body = String::new();
+        let mut lanes = vec![
+            grouped_lane(LaneId::Critique, allow),
+            grouped_lane(LaneId::Security, deny),
+        ];
+
+        group_co_located_findings(&mut lanes);
+
+        assert_eq!(published(&lanes).len(), 2);
+    }
+
+    #[test]
     fn a_repeat_in_the_sibling_test_file_is_grouped_and_says_where() {
         let title = "Test the write-again-without-actor fallback the change promises";
         let mut source = grouped_finding(LaneId::Security, title, 154, "1111111111111111");
@@ -2875,6 +2904,81 @@ mod tests {
                 titles: &[],
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn a_concern_posted_under_another_rule_is_not_posted_again() {
+        // The whole cycle. A review posts a comment; the forge then holds that
+        // comment as ours; a later review raises the same concern under a
+        // different rule name. The fingerprint is keyed on the rule, so only the
+        // concern check can stop the repeat.
+        let mut config = config();
+        config.review.lanes = vec!["critique".into()];
+        let first = MockModel::always(json!({
+            "summary": "Reviewed.",
+            "findings": [{
+                "path": "src/main.rs", "line": 2,
+                "rule": "unchecked-index", "title": "Guard the index",
+                "body": "The index is used without a bounds check.",
+                "severity": "high", "confidence": 0.9
+            }]
+        }));
+        let mut first_state = MockState::default();
+        first_state.pull_requests.insert(7, forge_pr());
+        first_state.files.insert(7, vec![rust_file()]);
+        let posted = review(
+            &MockForge::with_state(first_state.clone()),
+            Arc::new(first),
+            &config,
+            &repo(),
+            7,
+        )
+        .await
+        .expect("reviews");
+        assert_eq!(posted.findings().count(), 1);
+
+        let mut comments = crate::app::apply::test_inline_comments(&posted, &[rust_file()]);
+        assert_eq!(comments.len(), 1);
+        comments[0].author = "tinysweeper[bot]".into();
+        let mut state = first_state;
+        state.review_comments.insert(7, comments);
+
+        let second = MockModel::always(json!({
+            "summary": "Reviewed.",
+            "findings": [{
+                "path": "src/main.rs", "line": 2,
+                "rule": "bounds-check", "title": "Guard the index",
+                "body": "Nothing checks the index before it is read.",
+                "severity": "high", "confidence": 0.9
+            }, {
+                "path": "src/main.rs", "line": 2,
+                "rule": "style", "title": "Rename this binding",
+                "body": "The name says nothing about the item.",
+                "severity": "medium", "confidence": 0.9
+            }]
+        }));
+        let proposal = review(
+            &MockForge::with_state(state),
+            Arc::new(second),
+            &config,
+            &repo(),
+            7,
+        )
+        .await
+        .expect("reviews");
+
+        let titles: Vec<&str> = proposal.findings().map(|f| f.title.as_str()).collect();
+        assert_eq!(titles, vec!["Rename this binding"]);
+    }
+
+    fn forge_pr() -> PullRequest {
+        PullRequest {
+            number: 7,
+            title: "feat: something".into(),
+            body: "Adds an index into the item list, guarded by the caller.".into(),
+            head_sha: "abc123".into(),
+            ..PullRequest::default()
+        }
     }
 
     fn repo() -> RepoId {
