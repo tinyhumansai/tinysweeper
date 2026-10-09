@@ -1365,6 +1365,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn an_over_budget_finding_is_named_in_the_review_body() {
+        // The hub is best-effort and is skipped when summaries are disabled, so
+        // an over-budget finding must also be named in the review body, which
+        // is always submitted.
+        let mut over = finding();
+        over.title = "Over budget finding".into();
+        let mut proposal = proposal("abc123", vec![]);
+        proposal.lanes[0].overflow.push(over);
+
+        let body = review_body(&proposal, ReviewEvent::Comment, None, &[]);
+
+        assert!(body.contains("### Over the comment budget"), "{body}");
+        assert!(body.contains("Over budget finding"), "{body}");
+        assert!(body.contains("src/main.rs:2"), "{body}");
+    }
+
     fn finding() -> Finding {
         Finding {
             lane: LaneId::Critique,
