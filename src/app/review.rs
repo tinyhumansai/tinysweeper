@@ -1751,39 +1751,32 @@ fn group_co_located_findings(lanes: &mut [LaneProposal]) {
         .iter()
         .map(|located| Concern::of(&located.finding))
         .collect();
+    // Complete linkage: a finding joins a cluster only when it repeats every
+    // member, and clusters are never merged. Matching any one member let a
+    // finding bridge two distinct concerns (A repeats B, B repeats C, A does
+    // not repeat C) into one thread, hiding C behind A and spending a single
+    // comment-cap slot on both.
     let mut clusters: Vec<Vec<usize>> = Vec::new();
     for index in 0..all.len() {
-        let matching: Vec<usize> = clusters
+        let repeats = |member: usize| {
+            let left = &all[member];
+            let right = &all[index];
+            let distinct_source = left.lane_index != right.lane_index
+                || left.finding.review_pass != right.finding.review_pass;
+            let both_unplaced =
+                anchor_range(&left.finding).is_none() && anchor_range(&right.finding).is_none();
+            ((distinct_source || both_unplaced) && co_located(&left.finding, &right.finding))
+                // One concern in different words, from any lane or pass —
+                // including one pass repeating itself. The thread stays
+                // lossless: every rationale is kept.
+                || concerns[member].same_as(&concerns[index])
+        };
+        match clusters
             .iter()
-            .enumerate()
-            .filter_map(|(cluster_index, cluster)| {
-                cluster
-                    .iter()
-                    .any(|member| {
-                        let left = &all[*member];
-                        let right = &all[index];
-                        let distinct_source = left.lane_index != right.lane_index
-                            || left.finding.review_pass != right.finding.review_pass;
-                        let both_unplaced = anchor_range(&left.finding).is_none()
-                            && anchor_range(&right.finding).is_none();
-                        ((distinct_source || both_unplaced)
-                            && co_located(&left.finding, &right.finding))
-                            // One concern in different words, from any lane or
-                            // pass — including one pass repeating itself. The
-                            // thread stays lossless: every rationale is kept.
-                            || concerns[*member].same_as(&concerns[index])
-                    })
-                    .then_some(cluster_index)
-            })
-            .collect();
-        if let Some(&first) = matching.first() {
-            clusters[first].push(index);
-            for other in matching.into_iter().skip(1).rev() {
-                let members = clusters.remove(other);
-                clusters[first].extend(members);
-            }
-        } else {
-            clusters.push(vec![index]);
+            .position(|cluster| cluster.iter().all(|member| repeats(*member)))
+        {
+            Some(position) => clusters[position].push(index),
+            None => clusters.push(vec![index]),
         }
     }
 
