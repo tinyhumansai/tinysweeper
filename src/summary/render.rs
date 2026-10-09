@@ -253,7 +253,10 @@ fn findings(out: &mut String, proposal: &Proposal) {
         .prior_findings
         .iter()
         .any(|title| !current_titles.contains(title.as_str()));
-    let has_over = proposal.lanes.iter().any(|lane| !lane.overflow.is_empty());
+    // Only what `over_budget` will actually list counts: a grouped overflow
+    // entry is not rendered there, so suppressing the empty state for it
+    // would leave the section blank with no reason given.
+    let has_over = proposal.overflowed().next().is_some();
     if proposal.findings().next().is_none() && !has_carried && !has_over {
         out.push_str("No active actionable findings.\n");
     }
