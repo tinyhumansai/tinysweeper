@@ -8,10 +8,6 @@ version = 1
 [review]
 lanes = ["critique", "security", "tests", "commits", "description", "e2e"]
 strictness = 2
-# The per-pull-request inline budget this preset has always shipped with. It is
-# a budget, not a gate, so the dial does not clamp it: dropping it would silently
-# fall back to the repository default and hide findings past five.
-max_comments = 20
 incremental = true
 draft_prs = false
 respect_agents_md = true

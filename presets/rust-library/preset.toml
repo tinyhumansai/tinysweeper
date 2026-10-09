@@ -3,9 +3,6 @@ version = 1
 [review]
 lanes = ["critique", "security", "tests", "commits", "description"]
 strictness = 2
-# Unchanged from the budget this preset has always shipped with; see the
-# e2e-required preset for why the key is kept rather than inherited.
-max_comments = 20
 incremental = true
 draft_prs = false
 respect_agents_md = true
