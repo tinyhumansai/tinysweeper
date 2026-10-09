@@ -1258,6 +1258,36 @@ mod tests {
         }
     }
 
+    /// A thread a review bot opened with `comment`, open or settled as the
+    /// caller says.
+    fn bot_thread(comment: &ReviewComment, resolved: bool, outdated: bool) -> ReviewThread {
+        ReviewThread {
+            id: "T_bot".into(),
+            is_resolved: resolved,
+            is_outdated: outdated,
+            comments: vec![ThreadComment {
+                author: comment.author.clone(),
+                body: comment.body.clone(),
+                bot: true,
+                maintainer: false,
+            }],
+            resolved_by_has_write_access: false,
+        }
+    }
+
+    async fn load_bot(comment: ReviewComment, threads: Option<Vec<ReviewThread>>) -> PriorReview {
+        let mut state = MockState::default();
+        state.review_comments.insert(7, vec![comment]);
+        let forge = match threads {
+            Some(threads) => {
+                state.review_threads.insert(7, threads);
+                MockForge::with_state(state)
+            }
+            None => MockForge::with_state(state).failing_review_threads(),
+        };
+        load(&forge, &repo(), 7).await.expect("loads")
+    }
+
     #[tokio::test]
     async fn another_review_bots_comment_on_the_line_counts_as_raised() {
         for author in [
@@ -1265,7 +1295,9 @@ mod tests {
             "chatgpt-codex-connector[bot]",
             "greptile-apps[bot]",
         ] {
-            let prior = load_from(vec![coderabbit(author)]).await;
+            let comment = coderabbit(author);
+            let open = bot_thread(&comment, false, false);
+            let prior = load_bot(comment.clone(), Some(vec![open])).await;
             let ours = worded(
                 LaneId::E2e,
                 SPEC,
