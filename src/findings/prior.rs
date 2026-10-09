@@ -303,13 +303,28 @@ pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<Pr
     // so a contributor's resolved thread quoting our marker frees nothing.
     match read.review_threads(repo, number).await {
         Ok(threads) => {
-            for thread in threads.iter().filter(|thread| thread.is_resolved) {
-                if let Some(opener) = thread.comments.first()
-                    && is_own_login(&opener.author)
-                    && let Some(fingerprint) = fingerprint_in(&opener.body)
-                {
-                    prior.open.remove(&fingerprint);
+            // A grouped comment carries aliases, and one fingerprint can sit on
+            // several conversations. A identity is settled only when every
+            // conversation of ours that carries it is resolved: closing one of
+            // two open threads must not refill a slot the other still holds.
+            let mut settled: BTreeSet<String> = BTreeSet::new();
+            let mut unsettled: BTreeSet<String> = BTreeSet::new();
+            for thread in &threads {
+                let Some(opener) = thread.comments.first() else {
+                    continue;
+                };
+                if !is_own_login(&opener.author) {
+                    continue;
                 }
+                let identities = fingerprints_in(&opener.body);
+                if thread.is_resolved {
+                    settled.extend(identities);
+                } else {
+                    unsettled.extend(identities);
+                }
+            }
+            for identity in settled.difference(&unsettled) {
+                prior.open.remove(identity);
             }
         }
         Err(err) => {
