@@ -1563,8 +1563,15 @@ fn still_open_titles(prior_titles: &[String], lanes: &[LaneProposal]) -> Vec<Str
         .cloned()
         .collect();
 
+    // Overflow is carried too. Dropping it here would let a push that merely
+    // re-states an over-budget finding remove it from the next review's
+    // prior list, and the hub would report it green without it being fixed.
     for lane in lanes {
-        for finding in &lane.findings {
+        for finding in lane
+            .findings
+            .iter()
+            .chain(lane.overflow.iter().filter(|finding| !finding.grouped))
+        {
             if !titles.contains(&finding.title) {
                 titles.push(finding.title.clone());
             }
