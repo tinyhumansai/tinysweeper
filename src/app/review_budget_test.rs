@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::forge::types::{ChangedFile, FileStatus, PullRequest, ReviewThread, ThreadComment};
 use crate::forge::{MockForge, MockState};
+use crate::evidence::diff::parse_file_patch;
 use crate::harness::mock::MockModel;
 
 /// Changed lines in the fixture: enough for every finding to sit more than
@@ -286,52 +287,60 @@ async fn a_critical_finding_is_posted_even_when_the_budget_is_spent() {
     assert_eq!(third.findings().count(), 0);
 }
 
+/// A lane carrying `findings` and nothing else, for exercising the cap alone.
+fn lane_of(findings: Vec<Finding>) -> LaneProposal {
+    LaneProposal {
+        lane: LaneId::Critique,
+        check_name: LaneId::Critique.check_name(),
+        conclusion: CheckConclusion::Failure,
+        summary: "Reviewed.".into(),
+        findings,
+        noted: Vec::new(),
+        resolved: vec![],
+        pending: vec![],
+        deduped: 0,
+        highest_severity: Some(Severity::Critical),
+        usage: Default::default(),
+        models: vec![],
+        unanswered: vec![],
+        overflow: vec![],
+    }
+}
+
+/// A finding on `src/lib.rs` at `line` (`None` for a file-level finding).
+fn proposal_finding(
+    title: &str,
+    severity: Severity,
+    line: Option<u64>,
+    confidence: f64,
+) -> Finding {
+    Finding {
+        lane: LaneId::Critique,
+        severity,
+        confidence,
+        path: "src/lib.rs".into(),
+        line,
+        end_line: None,
+        rule: "rule".into(),
+        title: title.into(),
+        body: "body".into(),
+        suggestion: None,
+        applicable: None,
+        late: false,
+        identity: None,
+        aliases: vec![],
+        grouped: false,
+        review_pass: 1,
+        corroboration: 1,
+    }
+}
+
 #[test]
 fn the_bypass_is_for_critical_only() {
-    fn lane(findings: Vec<Finding>) -> LaneProposal {
-        LaneProposal {
-            lane: LaneId::Critique,
-            check_name: LaneId::Critique.check_name(),
-            conclusion: CheckConclusion::Failure,
-            summary: "Reviewed.".into(),
-            findings,
-            noted: Vec::new(),
-            resolved: vec![],
-            pending: vec![],
-            deduped: 0,
-            highest_severity: Some(Severity::Critical),
-            usage: Default::default(),
-            models: vec![],
-            unanswered: vec![],
-            overflow: vec![],
-        }
-    }
-    fn finding(title: &str, severity: Severity, line: u64) -> Finding {
-        Finding {
-            lane: LaneId::Critique,
-            severity,
-            confidence: 0.9,
-            path: "src/lib.rs".into(),
-            line: Some(line),
-            end_line: None,
-            rule: "rule".into(),
-            title: title.into(),
-            body: "body".into(),
-            suggestion: None,
-            applicable: None,
-            late: false,
-            identity: None,
-            aliases: vec![],
-            grouped: false,
-            review_pass: 1,
-            corroboration: 1,
-        }
-    }
-
-    let mut lanes = vec![lane(vec![
-        finding("critical one", Severity::Critical, 1),
-        finding("critical two", Severity::Critical, 20),
-        finding("high", Severity::High, 40),
+    let mut lanes = vec![lane_of(vec![
+        proposal_finding("critical one", Severity::Critical, Some(1), 0.9),
+        proposal_finding("critical two", Severity::Critical, Some(20), 0.9),
+        proposal_finding("high", Severity::High, Some(40), 0.9),
     ])];
     cap_proposal_findings(&mut lanes, 1, &|_| true);
 
@@ -339,4 +348,40 @@ fn the_bypass_is_for_critical_only() {
     assert_eq!(kept, vec!["critical one", "critical two"]);
     assert_eq!(lanes[0].overflow.len(), 1);
     assert_eq!(lanes[0].overflow[0].title, "high");
+}
+
+#[test]
+fn a_finding_that_cannot_anchor_inline_does_not_spend_the_budget() {
+    // The file-level finding ranks first on confidence, but `inline_comments`
+    // would never post it. It must not take the one slot: the strongest
+    // anchored finding does, and the file-level one stays where it was
+    // reported rather than being moved to the hub's overflow list.
+    let mut lanes = vec![lane_of(vec![
+        proposal_finding("file level", Severity::High, None, 0.99),
+        proposal_finding("anchored strong", Severity::High, Some(10), 0.9),
+        proposal_finding("anchored weak", Severity::High, Some(30), 0.8),
+    ])];
+    cap_proposal_findings(&mut lanes, 1, &|finding| finding.line.is_some());
+
+    let kept: Vec<&str> = lanes[0].findings.iter().map(|f| f.title.as_str()).collect();
+    assert_eq!(kept, vec!["file level", "anchored strong"]);
+    let over: Vec<&str> = lanes[0].overflow.iter().map(|f| f.title.as_str()).collect();
+    assert_eq!(over, vec!["anchored weak"]);
+}
+
+#[test]
+fn only_a_line_inside_the_live_diff_is_anchorable() {
+    // The same rule `apply::inline_comments` applies before posting: a line
+    // outside every hunk is never a conversation, so it never spends a slot.
+    let diffs = [parse_file_patch(
+        "src/lib.rs",
+        "@@ -1,2 +1,3 @@\n fn main() {\n+    let x = 1;\n }\n",
+    )];
+    let inside = proposal_finding("inside", Severity::High, Some(2), 0.9);
+    let outside = proposal_finding("outside", Severity::High, Some(50), 0.9);
+    let unanchored = proposal_finding("none", Severity::High, None, 0.9);
+
+    assert!(inline_anchor_within(&inside, &diffs));
+    assert!(!inline_anchor_within(&outside, &diffs));
+    assert!(!inline_anchor_within(&unanchored, &diffs));
 }
