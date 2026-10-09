@@ -130,6 +130,7 @@ impl Concern {
             title: title_words,
             text,
             rule: rule_tokens(rule),
+            negated: negates(title),
         }
     }
 
