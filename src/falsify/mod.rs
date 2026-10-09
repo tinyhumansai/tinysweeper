@@ -78,16 +78,7 @@ impl<'a> Falsifier<'a> {
         rendered_diff: &str,
         looked_up: &str,
     ) -> FalsifyOutcome {
-        // The deterministic pass first, so a claim the evidence plainly
-        // disproves costs nothing and survives a model that fails open.
-        let (findings, mut rejected) =
-            defined::reject_disproved_symbol_claims(lane, findings, &[rendered_diff, looked_up]);
-        let mut outcome = self
-            .ask_model(lane, findings, rendered_diff, looked_up)
-            .await;
-        rejected.append(&mut outcome.rejected);
-        outcome.rejected = rejected;
-        outcome
+        self.ask_model(lane, findings, rendered_diff, looked_up).await
     }
 
     /// The model half of [`Self::filter_with`]: one call, rejecting by index.
