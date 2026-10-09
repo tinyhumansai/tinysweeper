@@ -191,7 +191,7 @@ fn tests(out: &mut String, proposal: &Proposal, summary: &ReviewSummary) {
 
 fn carried_findings(out: &mut String, proposal: &Proposal) {
     let current_titles: std::collections::BTreeSet<&str> = proposal
-        .findings()
+        .reported()
         .map(|finding| finding.title.as_str())
         .collect();
     let carried: Vec<_> = proposal
@@ -241,7 +241,7 @@ fn over_budget(out: &mut String, proposal: &Proposal) {
 fn findings(out: &mut String, proposal: &Proposal) {
     out.push_str("\n## Findings\n\n");
     let current_titles: std::collections::BTreeSet<&str> = proposal
-        .findings()
+        .reported()
         .map(|finding| finding.title.as_str())
         .collect();
     let has_carried = proposal
@@ -328,7 +328,7 @@ fn before_merge(out: &mut String, proposal: &Proposal) {
     out.push_str("\n## Before merge\n\n");
     let mut any = false;
     let current_titles: std::collections::BTreeSet<&str> = proposal
-        .findings()
+        .reported()
         .map(|finding| finding.title.as_str())
         .collect();
     for title in proposal
@@ -508,7 +508,7 @@ fn severity(severity: Severity) -> &'static str {
 }
 fn counts(proposal: &Proposal) -> (usize, usize, usize, usize) {
     let current_titles: std::collections::BTreeSet<&str> = proposal
-        .findings()
+        .reported()
         .map(|finding| finding.title.as_str())
         .collect();
     let carried = proposal
