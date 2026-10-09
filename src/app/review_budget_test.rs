@@ -11,9 +11,9 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::*;
+use crate::evidence::diff::parse_file_patch;
 use crate::forge::types::{ChangedFile, FileStatus, PullRequest, ReviewThread, ThreadComment};
 use crate::forge::{MockForge, MockState};
-use crate::evidence::diff::parse_file_patch;
 use crate::harness::mock::MockModel;
 
 /// Changed lines in the fixture: enough for every finding to sit more than
@@ -384,4 +384,17 @@ fn only_a_line_inside_the_live_diff_is_anchorable() {
     assert!(inline_anchor_within(&inside, &diffs));
     assert!(!inline_anchor_within(&outside, &diffs));
     assert!(!inline_anchor_within(&unanchored, &diffs));
+}
+
+#[test]
+fn an_over_budget_finding_is_carried_into_the_next_push() {
+    // Codex: a finding moved to overflow was dropped from the prior-title list,
+    // so the next push could mark it resolved by silence. It must carry over.
+    let lanes = vec![LaneProposal {
+        overflow: vec![proposal_finding("over", Severity::High, Some(3), 0.9)],
+        ..lane_of(vec![])
+    }];
+    assert_eq!(still_open_titles(&[], &lanes), vec!["over".to_string()]);
+    let severities = kept_severities(&BTreeMap::new(), &lanes, &["over".to_string()]);
+    assert_eq!(severities.get("over"), Some(&Severity::High));
 }
