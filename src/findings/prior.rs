@@ -1314,6 +1314,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_resolved_or_outdated_review_bot_thread_raises_nothing() {
+        // The bot's finding was settled, or its code moved on. Either way it
+        // is history, and must not suppress a finding nobody is raising now.
+        let ours = worded(
+            LaneId::E2e,
+            SPEC,
+            24,
+            "invisible-click",
+            VISIBLE,
+            VISIBLE_E2E,
+        );
+        let comment = coderabbit("coderabbitai[bot]");
+        for thread in [
+            bot_thread(&comment, true, false),
+            bot_thread(&comment, false, true),
+        ] {
+            let prior = load_bot(comment.clone(), Some(vec![thread])).await;
+            assert!(!prior.repeats_concern(&ours));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_review_bot_comment_with_no_readable_thread_raises_nothing() {
+        // Nothing shows the bot's comment is still open, so it anchors nothing.
+        // Our own markers are unaffected by the same failure; see
+        // `a_thread_read_failure_still_dedupes_on_the_comments`.
+        let ours = worded(
+            LaneId::E2e,
+            SPEC,
+            24,
+            "invisible-click",
+            VISIBLE,
+            VISIBLE_E2E,
+        );
+        let comment = coderabbit("coderabbitai[bot]");
+        let prior = load_bot(comment, None).await;
+        assert!(!prior.repeats_concern(&ours));
+    }
+
+    #[tokio::test]
     async fn a_person_or_lookalike_cannot_stand_in_for_a_review_bot() {
         // `[bot]` is a suffix only a GitHub App can hold, and the slug must
         // match exactly. A person writing the same words is a person.
