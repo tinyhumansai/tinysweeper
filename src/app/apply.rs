@@ -752,8 +752,10 @@ fn review_body(
 
     let mut body = match event {
         ReviewEvent::RequestChanges => {
+            // Overflow counts toward the verdict's worst severity: a high
+            // finding the budget moved to the hub is still what blocks.
             let worst = proposal
-                .findings()
+                .reported()
                 .map(|f| f.severity)
                 .max()
                 .unwrap_or(Severity::Low);
