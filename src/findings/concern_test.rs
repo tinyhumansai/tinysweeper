@@ -478,3 +478,61 @@ fn an_unplaced_finding_needs_the_whole_file_bar() {
     unplaced.line = None;
     assert!(!Concern::of(&unplaced).same_as(&OH7079_HELPERS_24.concern()));
 }
+
+// ---------------------------------------------------------------------------
+// Polarity and placement boundaries.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn opposite_guidance_on_the_same_wording_is_not_a_repeat() {
+    // The same content words, opposite instructions. `Concern` used to drop
+    // "not" as a stopword, so these matched at similarity 1.0 and the new,
+    // contradictory finding was suppressed as already raised.
+    let allow = Concern::new(
+        "src/parser.rs",
+        Some((10, 10)),
+        "Allow empty values in the parser",
+        "",
+        "",
+    );
+    let deny = Concern::new(
+        "src/parser.rs",
+        Some((10, 10)),
+        "Do not allow empty values in the parser",
+        "",
+        "",
+    );
+    assert!(!allow.same_as(&deny));
+    assert!(!deny.same_as(&allow));
+    assert!(!allow.same_as_declined(&deny), "a decline is not a reversal");
+}
+
+#[test]
+fn a_negated_title_still_repeats_the_same_negated_title() {
+    // Polarity only separates opposites; two "do not" findings can repeat.
+    let first = Concern::new(
+        "src/parser.rs",
+        Some((10, 10)),
+        "Do not allow empty values in the parser",
+        "",
+        "",
+    );
+    let again = Concern::new(
+        "src/parser.rs",
+        Some((12, 12)),
+        "Do not allow empty values in the parser",
+        "",
+        "",
+    );
+    assert!(first.same_as(&again));
+}
+
+#[test]
+fn lines_strictly_between_two_anchors_are_counted() {
+    // Lines 1 and 32 have thirty lines between them: exactly the nearby limit.
+    assert_eq!(gap((1, 1), (32, 32)), NEAR_LINES);
+    assert_eq!(gap((32, 32), (1, 1)), NEAR_LINES, "symmetric");
+    assert_eq!(gap((1, 1), (33, 33)), NEAR_LINES + 1);
+    assert_eq!(gap((1, 1), (2, 2)), 0, "adjacent lines have nothing between");
+    assert_eq!(gap((5, 9), (7, 7)), 0, "overlapping ranges");
+}
