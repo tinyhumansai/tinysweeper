@@ -219,14 +219,14 @@ async fn a_resolved_conversation_frees_its_slot() {
         .await
         .expect("applies");
 
-    // Two of the five threads were resolved by a maintainer.
-    let resolved: Vec<ReviewThread> = posted(&forge)
+    // All five conversations are on the forge. Two were resolved by a
+    // maintainer; the other three are still open and keep their slots.
+    let threads: Vec<ReviewThread> = posted(&forge)
         .into_iter()
-        .take(2)
         .enumerate()
         .map(|(index, comment)| ReviewThread {
             id: format!("thread-{index}"),
-            is_resolved: true,
+            is_resolved: index < 2,
             is_outdated: false,
             comments: vec![ThreadComment {
                 author: "tinysweeper[bot]".into(),
@@ -234,12 +234,13 @@ async fn a_resolved_conversation_frees_its_slot() {
                 bot: true,
                 maintainer: false,
             }],
-            resolved_by_has_write_access: true,
+            resolved_by_has_write_access: index < 2,
         })
         .collect();
+    assert_eq!(threads.len(), 5, "every posted conversation is listed");
     let forge = {
         forge.push(7, "sha-two", vec![large_file()]);
-        forge.with_review_threads(7, resolved)
+        forge.with_review_threads(7, threads)
     };
 
     let second = review(&forge, Arc::new(three_passes(100, 0)), &config, &repo(), 7)
