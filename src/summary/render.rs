@@ -128,12 +128,14 @@ fn snapshot(out: &mut String, proposal: &Proposal, summary: &ReviewSummary) {
     let _ = writeln!(out, "**Test assessment:** {assessment}");
 }
 
-/// The "no summary" texts earlier versions stored in `changes`. A stored
-/// summary is carried forward from push to push, so these keep arriving long
-/// after the code that wrote them is gone.
+/// The complete "no summary" texts earlier versions stored in `changes`, each
+/// matched whole. A stored summary is carried forward from push to push, so
+/// these keep arriving long after the code that wrote them is gone; a prefix
+/// match would also swallow a real, supported summary that merely begins the
+/// same way.
 const LEGACY_UNSUPPORTED_CHANGES: [&str; 2] = [
     "No supported behavioral explanation was produced.",
-    "The review could not produce a supported behavioral summary;",
+    "The review could not produce a supported behavioral summary; inspect the cited changed surface and lane details below.",
 ];
 
 /// "What changed", or nothing at all when no supported summary exists. A
@@ -141,11 +143,7 @@ const LEGACY_UNSUPPORTED_CHANGES: [&str; 2] = [
 /// section does not, and it was on most pull requests.
 fn changes(out: &mut String, summary: &ReviewSummary) {
     let changes = summary.changes.trim();
-    if changes.is_empty()
-        || LEGACY_UNSUPPORTED_CHANGES
-            .iter()
-            .any(|legacy| changes.starts_with(legacy))
-    {
+    if changes.is_empty() || LEGACY_UNSUPPORTED_CHANGES.contains(&changes) {
         return;
     }
     out.push_str("\n## What changed\n\n");
