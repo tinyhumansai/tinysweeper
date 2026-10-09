@@ -304,7 +304,7 @@ pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<Pr
     match read.review_threads(repo, number).await {
         Ok(threads) => {
             // A grouped comment carries aliases, and one fingerprint can sit on
-            // several conversations. A identity is settled only when every
+            // several conversations. An identity is settled only when every
             // conversation of ours that carries it is resolved: closing one of
             // two open threads must not refill a slot the other still holds.
             let mut settled: BTreeSet<String> = BTreeSet::new();
