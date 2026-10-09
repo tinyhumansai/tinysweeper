@@ -285,12 +285,12 @@ only the "wait for it to conclude, then settle" half is skipped.
 
 ## Configuration
 
-The lane is in the default `review.lanes`. To opt out, list the lanes
-without it:
+The lane is off by default. To opt in, list it in `review.lanes`, or take the
+`e2e-required` preset, which does so:
 
 ```toml
 [review]
-lanes = ["critique", "security", "tests", "commits", "description"]
+lanes = ["critique", "security", "tests", "commits", "description", "e2e"]
 ```
 
 Its own settings, with their defaults:
