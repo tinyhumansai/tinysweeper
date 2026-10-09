@@ -280,19 +280,33 @@ pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<Pr
     // declined concerns and every review-bot anchor — none of them can be
     // shown to be open — but never our own markers, so it degrades to
     // repeating ourselves rather than going silent.
-    let (declined, open_bot_bodies) = match read.review_threads(repo, number).await {
-        Ok(threads) => (declined_fingerprints(&threads), open_bodies(&threads)),
+    let (declined, open_bot_comments) = match read.review_threads(repo, number).await {
+        Ok(threads) => (declined_fingerprints(&threads), open_bot_comments(&threads)),
         Err(err) => {
             tracing::warn!(%err, "could not read review threads; declines and bot anchors are not recognised");
             (BTreeSet::new(), BTreeSet::new())
         }
     };
 
-    for comment in read.review_comments(repo, number).await? {
+    let comments = read.review_comments(repo, number).await?;
+    // How many review-bot comments carry each (bot, body). The REST list has no
+    // thread id, so a body that appears twice cannot be tied to one open
+    // thread: an open copy on one file would vouch for a resolved copy on
+    // another. Such a body anchors nothing.
+    let mut bot_bodies: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for comment in comments.iter().filter(|c| is_other_reviewer(&c.author)) {
+        *bot_bodies
+            .entry((bot_slug(&comment.author), comment.body.clone()))
+            .or_default() += 1;
+    }
+
+    for comment in comments {
         if is_other_reviewer(&comment.author) {
             // A resolved or outdated bot thread is history. Anchoring on it
             // would suppress a concern nobody is raising any more.
-            if open_bot_bodies.contains(&comment.body)
+            let key = (bot_slug(&comment.author), comment.body.clone());
+            if open_bot_comments.contains(&key)
+                && bot_bodies.get(&key) == Some(&1)
                 && let Some(anchor) = other_reviewer_anchor(&comment)
             {
                 prior.anchors.push(anchor);
@@ -508,18 +522,28 @@ fn declined_fingerprints(threads: &[ReviewThread]) -> BTreeSet<String> {
         .collect()
 }
 
-/// Bodies of every comment in a thread that is still open: neither resolved
-/// nor outdated.
+/// Review-bot comments in threads that are still open: neither resolved nor
+/// outdated, keyed by bot and body.
 ///
-/// Matched on body alone. The REST comment list carries no thread id, and the
-/// body is the one thing both reads share. Matching on body cannot make a
-/// comment look open that is not: only the same text in an open thread does.
-fn open_bodies(threads: &[ReviewThread]) -> BTreeSet<String> {
+/// Only comments the forge marks as bot-authored count, so a person who copies
+/// a bot's text into an open thread vouches for nothing.
+fn open_bot_comments(threads: &[ReviewThread]) -> BTreeSet<(String, String)> {
     threads
         .iter()
         .filter(|thread| !thread.is_resolved && !thread.is_outdated)
-        .flat_map(|thread| thread.comments.iter().map(|comment| comment.body.clone()))
+        .flat_map(|thread| thread.comments.iter())
+        .filter(|comment| comment.bot)
+        .map(|comment| (bot_slug(&comment.author), comment.body.clone()))
         .collect()
+}
+
+/// A review bot's login without its `[bot]` suffix, lowercased. The REST and
+/// GraphQL reads spell the same App differently.
+fn bot_slug(login: &str) -> String {
+    login
+        .strip_suffix("[bot]")
+        .unwrap_or(login)
+        .to_ascii_lowercase()
 }
 
 /// Whether `login` is one of [`OTHER_REVIEWERS`], as its GitHub App.
