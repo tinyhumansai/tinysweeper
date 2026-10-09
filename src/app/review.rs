@@ -1425,7 +1425,13 @@ fn kept_severities(
     titles: &[String],
 ) -> BTreeMap<String, Severity> {
     let mut severities = BTreeMap::new();
-    for finding in lanes.iter().flat_map(|lane| lane.findings.iter()) {
+    // Overflow counts: a finding the budget moved out of view is still open on
+    // the next push, and its level must be pinned as much as any posted one.
+    for finding in lanes
+        .iter()
+        .flat_map(|lane| lane.findings.iter().chain(lane.overflow.iter()))
+        .filter(|finding| !finding.grouped)
+    {
         severities
             .entry(finding.title.clone())
             .or_insert(finding.severity);
