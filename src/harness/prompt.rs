@@ -704,10 +704,12 @@ instructions describe. The list below applies to every lane regardless.
   written it are preferences, not defects.
 - Issues that existed before this pull request, in code it did not change.
   However wrong it looks, it is not this author's concern.
-- Anything a compiler, linter, typechecker or CI would already catch. Never
-  claim code "will not compile", "is undefined" or "is not defined"
-  unless the diff itself proves it: a symbol you were not shown is not a
-  missing symbol, and the pull request's own CI is a better compiler than you.
+- Lint, formatting and CI-policy issues that a tool already enforces. This is
+  narrower than "anything CI would catch": a change the diff itself shows will
+  not compile, or breaks a test it touches, is a reportable defect, so name the
+  line that breaks it. Never claim code "will not compile", "is undefined" or
+  "is not defined" unless the diff itself proves it: a symbol you were not
+  shown is not a missing symbol.
 - Speculative security issues. A security finding needs a
   concrete attacker-controlled input path visible in the evidence, from where
   the attacker writes it to where it does damage. A field the codebase sets for
