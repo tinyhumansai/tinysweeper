@@ -213,12 +213,7 @@ fn carried_findings(out: &mut String, proposal: &Proposal) {
 /// exists to keep the conversation list short, and a long paragraph per
 /// overflowed finding would rebuild the wall of text here instead.
 fn over_budget(out: &mut String, proposal: &Proposal) {
-    let over: Vec<_> = proposal
-        .lanes
-        .iter()
-        .flat_map(|lane| lane.overflow.iter())
-        .filter(|finding| !finding.grouped)
-        .collect();
+    let over: Vec<_> = proposal.overflowed().collect();
     if over.is_empty() {
         return;
     }
