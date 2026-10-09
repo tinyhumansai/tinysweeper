@@ -340,7 +340,11 @@ fn before_merge(out: &mut String, proposal: &Proposal) {
         let _ = writeln!(out, "- [ ] Address carried finding **{}**.", md(title));
     }
     for lane in &proposal.lanes {
-        for finding in lane.findings.iter().chain(lane.overflow.iter()) {
+        for finding in lane
+            .findings
+            .iter()
+            .chain(lane.overflow.iter().filter(|finding| !finding.grouped))
+        {
             if finding.severity >= Severity::High {
                 any = true;
                 let _ = writeln!(
