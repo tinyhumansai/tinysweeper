@@ -1131,9 +1131,16 @@ pub async fn review_with_tree(
     if let Some(recaller) =
         memory.filter(|_| config.memory.enabled && config.memory.remember_reviews)
     {
+        // Over-budget conclusions are remembered too, or a later PR could repeat
+        // a concern this review already reported and nobody was shown.
         let findings: Vec<Finding> = lanes
             .iter()
-            .flat_map(|lane| lane.findings.iter().cloned())
+            .flat_map(|lane| {
+                lane.findings
+                    .iter()
+                    .chain(lane.overflow.iter().filter(|finding| !finding.grouped))
+                    .cloned()
+            })
             .collect();
         let items = crate::memory::ingest::finding_items(&repo.to_string(), number, &findings);
         if !items.is_empty() {
@@ -2042,11 +2049,6 @@ fn cap_proposal_findings(
         .map(|(lane, finding, ..)| (lane, finding))
         .collect();
     for (lane_index, lane) in lanes.iter_mut().enumerate() {
-        let before = lane
-            .findings
-            .iter()
-            .filter(|finding| !finding.grouped)
-            .count();
         // A grouped observation never takes a slot and never moves to overflow.
         // Its text already sits in its primary's body, and it stays in the
         // lane's findings, which is where the check-run evidence and the merge
@@ -2063,12 +2065,9 @@ fn cap_proposal_findings(
         lane.findings = kept.into_iter().map(|(_, finding)| finding).collect();
         lane.overflow
             .extend(over.into_iter().map(|(_, finding)| finding));
-        let kept = lane
-            .findings
-            .iter()
-            .filter(|finding| !finding.grouped)
-            .count();
-        let over = before - kept;
+        // Counted from what actually moved: findings left in place because they
+        // cannot be anchored inline are not over the budget and are not listed.
+        let over = lane.overflow.iter().filter(|finding| !finding.grouped).count();
         if over > 0 {
             lane.summary = format!(
                 "{} (+{over} over the comment budget, listed in the review summary)",
