@@ -580,6 +580,8 @@ async fn a_permission_refusal_stops_every_later_resolve_in_the_run() {
             ..ApplyReport::default()
         }
     );
+    // The mock records an attempt before it refuses it, as GitHub's audit of
+    // the attempt would, so the refused first resolve is the one expected write.
     assert_eq!(
         forge.writes(),
         vec![crate::forge::mock::Write::ThreadResolved {
