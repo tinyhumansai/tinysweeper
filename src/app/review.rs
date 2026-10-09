@@ -2530,7 +2530,12 @@ mod tests {
         // findings and hide C behind A; each concern keeps its own thread.
         let spanning = |lane: LaneId, title: &str, start: u64, end: u64, id: &str| {
             let mut finding = grouped_finding(lane, title, start, id);
-            finding.end_line = Some(end);
+            // A published span comes from the applicable suggestion.
+            finding.applicable = Some(crate::findings::types::Suggestion {
+                start_line: start,
+                end_line: end,
+                replacement: String::new(),
+            });
             finding.body = String::new();
             finding
         };
