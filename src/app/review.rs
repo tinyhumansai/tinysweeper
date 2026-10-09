@@ -1956,6 +1956,22 @@ fn merge_observation(primary: &mut Finding, observation: Finding) {
         .push_str(&crate::findings::render::grouped_observation(&observation));
 }
 
+/// Whether `apply` can post `finding` as an inline conversation on the live diff.
+///
+/// The same anchor rule `apply::inline_comments` applies: the published range
+/// must sit inside a hunk of the file's diff. The budget asks it before ranking
+/// so that only findings able to become a conversation spend a slot.
+fn inline_anchor_within(finding: &Finding, diffs: &[FileDiff]) -> bool {
+    let Some((start, line)) = finding.published_range() else {
+        return false;
+    };
+    let start = if start < line { start } else { line };
+    diffs
+        .iter()
+        .find(|diff| diff.path == finding.path)
+        .is_some_and(|diff| diff.within_hunk(start, line))
+}
+
 /// Spend the inline-comment budget after every lane, adaptive pass and scanner
 /// fallback has contributed.
 ///
