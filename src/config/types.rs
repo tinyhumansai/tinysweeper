@@ -11,6 +11,10 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// A lane: one agent, one narrow job, one GitHub check run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -647,7 +651,8 @@ pub struct ModelRoute {
     pub allow_fallbacks: bool,
     /// Output ceiling for this rung. `0` sends no ceiling at all: the model
     /// answers at the length it needs and a cut-off is the provider's own
-    /// limit. Absent inherits `models.max_tokens`.
+    /// limit. Budgeted reviews reject `0` because admission needs a finite
+    /// output cap. Absent inherits `models.max_tokens`.
     pub max_tokens: Option<u32>,
 }
 
@@ -773,7 +778,7 @@ pub struct Models {
     /// Optional, and `None` by default: the captions then describe a flow
     /// from its transcript alone, which is the honest degradation. Never a
     /// fallback for a text tier and never given one — see
-    /// `harness::openrouter::GatewayModel::for_vision` for why a vision call
+    /// `harness::embed::GatewayModel::for_vision` for why a vision call
     /// must not share the review ladder.
     pub vision: Option<String>,
     /// Which upstream providers the gateway may serve these models from.
@@ -806,8 +811,30 @@ pub struct Models {
     /// can be answered by any model in it and a prompt that carries its own
     /// schema has to be built before the answering model is known.
     pub structured_output: StructuredOutput,
+    /// Opt into read-only agent tool exploration for council reviewers.
+    /// Disabled until scripted and live evaluation establish parity.
+    #[serde(skip_serializing_if = "is_false")]
+    pub agentic_reviewers: bool,
     /// Hard USD ceiling for a single pull request's review.
     pub budget_usd_per_pr: f64,
+    /// Operator-verified upper rates for gateway aliases, in USD per million
+    /// tokens. Each bound must cover every provider and fallback behind the
+    /// alias, including long-context pricing. Empty preserves config digests.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub budget_prices: BTreeMap<String, BudgetPriceBound>,
+}
+
+/// Explicit admission rates for an alias without a public model price row.
+/// These reserve spend; they do not force a provider's actual billing rate.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetPriceBound {
+    /// Maximum price of uncached input, in USD per million tokens; finite and nonnegative.
+    pub input: f64,
+    /// Maximum price of cached input, in USD per million tokens; finite and nonnegative.
+    pub cached: f64,
+    /// Maximum price of output, in USD per million tokens; finite and strictly positive.
+    pub output: f64,
 }
 
 /// The knowledge centre: curated documents, and rules read out of the
@@ -1885,6 +1912,16 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_alias_budget_prices_deserialize_without_changing_empty_defaults() {
+        let configured = serde_json::json!({
+            "budget_prices": {"deep": {"input": 0.20, "cached": 0.02, "output": 1.20}}
+        });
+        assert!(serde_json::from_value::<Models>(configured).is_ok());
+        let defaults = serde_json::to_value(Models::default()).unwrap();
+        assert!(defaults.get("budget_prices").is_none());
+    }
 
     #[test]
     fn lane_ids_round_trip_through_their_string_form() {

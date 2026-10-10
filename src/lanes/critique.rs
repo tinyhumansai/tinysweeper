@@ -222,7 +222,7 @@ async fn review_group(
     let reviewers = council::reviewers(config, LaneId::Critique);
     let redaction_note = redaction_note(&evidence);
 
-    // Every reviewer at once, as one graph. `ask_all` returns one answer per
+    // Every reviewer at once, as one concurrent round. `ask_all` returns one answer per
     // reviewer in the order asked, and reports a reviewer it could not reach
     // rather than failing the council for it.
     let calls: Vec<Call> = reviewers
@@ -378,7 +378,7 @@ async fn review_group(
                 Ok(coverage) => coverage,
                 Err(err) => {
                     tracing::warn!(%err, "an adaptive review pass failed");
-                    // No per-call usage is observable when the graph itself
+                    // No per-call usage is observable when the round itself
                     // fails to return an outcome; count the attempt without
                     // attributing concurrent groups' shared lane spend to it.
                     metrics.record(Usage::default(), Duration::ZERO, 0);
@@ -1422,7 +1422,7 @@ fn helper() {
         // additional coverage result, not a reason to fail the whole group.
         //
         // Round one's review call and the coverage pass's own review call are
-        // routed through the graph, so they alone count against
+        // routed through the lane capability, so they alone count against
         // `budget_usd_per_pr` (0.02 for both). Relocation calls go straight to
         // the model port and are bounded only by `place`'s own tally, so the
         // budget is set just above what round one and the coverage review

@@ -30,6 +30,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 
+#[path = "tree_explore.rs"]
+mod explore;
+pub use explore::TreeQuery;
+pub(crate) use explore::{paths as exploration_paths, visible_path as visible_exploration_path};
+
 /// The most lines one [`Lookup::Read`] returns.
 ///
 /// A file read whole is a prompt the model skims; a range it asked for is one
@@ -176,6 +181,12 @@ pub trait TreeReader: Send + Sync {
     /// "Not there" and "cannot do that here" are outcomes, not errors, because
     /// the model has to be told them.
     async fn lookup(&self, lookup: &Lookup) -> Result<Found>;
+
+    /// Answer an additional read-only query when this host supports it.
+    /// Default implementations report unavailable without reading anything.
+    async fn explore(&self, _query: &TreeQuery) -> Result<Found> {
+        Ok(explore::unavailable())
+    }
 
     /// One line describing what this reader can do, for the reviewer's
     /// instructions: whether search works, and any caveat.
@@ -348,6 +359,34 @@ impl MockTree {
 
 #[async_trait]
 impl TreeReader for MockTree {
+    async fn explore(&self, query: &TreeQuery) -> Result<Found> {
+        if !query.valid() {
+            return Ok(explore::unavailable());
+        }
+        if let TreeQuery::History { path, .. } = query
+            && crate::scan::is_sensitive_path(path)
+        {
+            return Ok(sensitive_path_refusal());
+        }
+        if let Some(found) = self.recorded.get(&query.key()) {
+            let limit = match query {
+                TreeQuery::List { limit, .. } | TreeQuery::Symbol { limit, .. } => *limit,
+                TreeQuery::History { .. } => 200,
+            };
+            return Ok(explore::bound(found.clone(), limit));
+        }
+        match query {
+            TreeQuery::List { path, limit } => Ok(explore::paths(
+                self.files.keys().cloned().collect(),
+                path,
+                *limit,
+                false,
+            )),
+            TreeQuery::Symbol { symbol, limit } => explore::symbol(self, symbol, *limit).await,
+            TreeQuery::History { .. } => Ok(explore::unavailable()),
+        }
+    }
+
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
         // Checked before the recorded map and before `self.files`: a
         // cassette can carry a `Lookup::Read` recorded before this guard
@@ -453,6 +492,14 @@ impl<'a> RecordingTree<'a> {
 
 #[async_trait]
 impl TreeReader for RecordingTree<'_> {
+    async fn explore(&self, query: &TreeQuery) -> Result<Found> {
+        let found = RedactingTree::new(self.inner).explore(query).await?;
+        if let Ok(mut recorded) = self.recorded.lock() {
+            recorded.insert(query.key(), found.clone());
+        }
+        Ok(found)
+    }
+
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
         let found = self.inner.lookup(lookup).await?;
         if let Ok(mut recorded) = self.recorded.lock() {
@@ -502,6 +549,91 @@ impl<'a> RedactingTree<'a> {
 
 #[async_trait]
 impl TreeReader for RedactingTree<'_> {
+    async fn explore(&self, query: &TreeQuery) -> Result<Found> {
+        if !query.valid() {
+            return Ok(explore::unavailable());
+        }
+        if let TreeQuery::History { path, .. } = query
+            && (crate::scan::is_sensitive_path(path) || self.refused_paths.contains(path))
+        {
+            return Ok(sensitive_path_refusal());
+        }
+        let found = self.inner.explore(query).await?;
+        match (query, found) {
+            (
+                TreeQuery::List { limit, .. },
+                Found::Hits {
+                    mut hits,
+                    truncated,
+                    mut skipped,
+                },
+            ) => {
+                hits.retain(|hit| !self.refused_paths.contains(&hit.path));
+                skipped.retain(|path| !self.refused_paths.contains(path));
+                Ok(explore::bound(
+                    Found::Hits {
+                        hits,
+                        truncated,
+                        skipped,
+                    },
+                    *limit,
+                ))
+            }
+            (
+                TreeQuery::Symbol { limit, .. },
+                Found::Hits {
+                    hits,
+                    truncated,
+                    skipped,
+                },
+            ) => {
+                let mut safe = Vec::new();
+                for mut hit in hits {
+                    if !explore::visible_path(&hit.path) || self.refused_paths.contains(&hit.path) {
+                        continue;
+                    }
+                    let prefix = self
+                        .inner
+                        .lookup(&Lookup::Read {
+                            path: hit.path.clone(),
+                            start: Some(hit.line.saturating_sub(MAX_READ_LINES - 1)),
+                            end: Some(hit.line),
+                        })
+                        .await?;
+                    let mut state = private_key_state_before_last_line(&prefix).unwrap_or(false);
+                    hit.text = crate::scan::redact_stream_line(&hit.text, &mut state);
+                    safe.push(hit);
+                }
+                Ok(explore::bound(
+                    Found::Hits {
+                        hits: safe,
+                        truncated,
+                        skipped,
+                    },
+                    *limit,
+                ))
+            }
+            (TreeQuery::History { commit, path, .. }, found @ Found::Text { start, .. }) => {
+                let state = if start > 1 {
+                    let prefix = self
+                        .inner
+                        .explore(&TreeQuery::History {
+                            commit: commit.clone(),
+                            path: path.clone(),
+                            start: start.saturating_sub(MAX_READ_LINES).max(1),
+                            end: start - 1,
+                        })
+                        .await?;
+                    private_key_state(&prefix)
+                } else {
+                    false
+                };
+                Ok(redact_found(found, state))
+            }
+            (_, found) => Ok(redact_found(found, false)),
+        }
+    }
+
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
         if let Lookup::Read { path, .. } = lookup
             && (crate::scan::is_sensitive_path(path)
@@ -1036,6 +1168,34 @@ fn safe_relative(path: &str) -> bool {
 
 #[async_trait]
 impl TreeReader for DirTree {
+    async fn explore(&self, query: &TreeQuery) -> Result<Found> {
+        if !query.valid() {
+            return Ok(explore::unavailable());
+        }
+        match query {
+            TreeQuery::List { path, limit } => {
+                let mut paths = Vec::new();
+                self.walk(&self.root, &mut paths);
+                Ok(explore::paths(paths, path, *limit, false))
+            }
+            TreeQuery::Symbol { symbol, limit } => explore::symbol(self, symbol, *limit).await,
+            TreeQuery::History {
+                commit,
+                path,
+                start,
+                end,
+            } if self.revision.as_deref() == Some(commit.as_str()) => {
+                self.lookup(&Lookup::Read {
+                    path: path.clone(),
+                    start: Some(*start),
+                    end: Some(*end),
+                })
+                .await
+            }
+            TreeQuery::History { .. } => Ok(explore::unavailable()),
+        }
+    }
+
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
         Ok(match lookup {
             Lookup::Read { path, start, end } => {
@@ -1121,6 +1281,19 @@ impl<'a> ChainTree<'a> {
 
 #[async_trait]
 impl TreeReader for ChainTree<'_> {
+    async fn explore(&self, query: &TreeQuery) -> Result<Found> {
+        let mut last = Found::NotFound;
+        for reader in &self.readers {
+            let found = reader.explore(query).await?;
+            match found {
+                Found::NotFound => {}
+                Found::Unavailable { .. } => last = found,
+                answered => return Ok(answered),
+            }
+        }
+        Ok(last)
+    }
+
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
         // "Unavailable" outranks "not found" when nobody answered: one reader
         // saying the truth is unknown is not undone by a later one that could
@@ -2052,3 +2225,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "tree_explore_test.rs"]
+mod explore_tests;

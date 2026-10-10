@@ -343,6 +343,8 @@ reasoning_effort = "medium"
 # model is known. GLM 5.2 and MiniMax M3 both accept `json_object`, so the
 # safety net still works.
 structured_output = "json_object"
+# Read-only tool exploration is opt-in and requires structured_output = "schema".
+agentic_reviewers = false
 budget_usd_per_pr = 1.0
 
 # Per-model routing, for a rung that should not share the pin below.
@@ -351,8 +353,9 @@ budget_usd_per_pr = 1.0
 # serve at prices spanning 4x. A rung meant for one specific endpoint — OpenAI's
 # flex tier, the surplus-capacity endpoint at half price — gets its own entry
 # here, with its own `order`, its own `allow_fallbacks`, and optionally its own
-# output ceiling: `max_tokens = 0` sends none, so the model answers at the
-# length it needs and a cut-off is the provider's own limit. A rung with a
+# output ceiling. `max_tokens = 0` means no ceiling on the wire, but budgeted
+# reviews reject it: admission needs a finite output cap. Omit the override
+# to inherit `models.max_tokens`, or set a positive ceiling. A rung with a
 # route never falls to the unpinned last resort: naming the endpoint means it.
 # None by default; the deployment's `.tinysweeper.toml` is where one lives.
 #
@@ -360,7 +363,7 @@ budget_usd_per_pr = 1.0
 #   model = "openai/gpt-5.6-luna"
 #   order = ["openai/flex"]
 #   allow_fallbacks = false
-#   max_tokens = 0
+#   max_tokens = 16000
 routes = []
 
 # Pin the upstream provider, so the price this repository records is the price

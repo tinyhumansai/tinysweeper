@@ -106,7 +106,7 @@ const MAX_LEXICAL_TERMS: usize = 300;
 /// Two separate concerns, and conflating them broke one of them:
 ///
 /// **Counting.** The analyzer splits on punctuation, so one whitespace-separated
-/// word can be several clauses — `src/harness/openrouter.rs` is one word and
+/// word can be several clauses — `src/harness/embed.rs` is one word and
 /// three or four tokens. Counting words would let a path-heavy query pass a
 /// cap of 300 and still overrun the 1024 clause limit.
 ///

@@ -122,6 +122,7 @@ pub fn check_run(head_sha: &str, err: &Error) -> CheckRun {
 fn title_for(err: &Error) -> &'static str {
     match err {
         Error::Model(_) => "The review could not reach a model",
+        Error::ModelUsage { .. } => "The model could not produce a valid review",
         Error::Forge(_) => "The review could not read the pull request",
         Error::Budget { .. } => "The review ran out of budget",
         Error::Timeout { .. } => "The review ran out of time",
@@ -143,6 +144,10 @@ fn summary_for(err: &Error) -> String {
             "The model gateway rejected every model in the fallback chain. This is usually \
              credit, a per-key daily cap, or a provider outage — check the gateway's key \
              status before re-running."
+        }
+        Error::ModelUsage { .. } => {
+            "Paid model attempts did not produce a valid review. Check the configured response schema \
+             and repository lookup limits before re-running."
         }
         Error::Forge(_) => {
             "GitHub rejected a read the review depends on. If this persists, check the app \

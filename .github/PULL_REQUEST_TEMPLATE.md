@@ -9,7 +9,7 @@
 
 ## Tests
 
-- [ ] `cargo fmt --all -- --check`
+- [ ] `cargo fmt --package tinysweeper -- --check`
 - [ ] `cargo clippy --locked --all-targets -- -D warnings`
 - [ ] `cargo test --locked`
 - [ ] `cargo check --locked --all-features --all-targets`

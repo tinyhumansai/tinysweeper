@@ -1,23 +1,24 @@
 //! The real model, behind the `harness` feature.
 //!
-//! A thin adapter over tinyagents' OpenAI-compatible provider. OpenRouter,
+//! A thin adapter over OpenHuman's stateless completion ladder, with bounded
+//! truncation retries against an OpenAI-compatible gateway. OpenRouter,
 //! Moonshot and MiniMax all speak the same wire format, so pointing `base_url`
 //! elsewhere is the whole of "switching provider" — there is no second code
 //! path to maintain and no provider-specific SDK in the tree.
+//!
+//! Council reviewers can opt into Embed agent turns with host-owned read-only
+//! repository tools. Both structured modes require the complete terminal answer
+//! to be valid JSON; trailing prose is refused. Provider credentials remain inside
+//! the adapter, and write
+//! credentials never enter this model capability.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use openhuman_embed::Route;
+use openhuman_embed::complete::{ChatMessage, Completer, CompletionRequest, ResponseFormat};
+use openhuman_embed::routing::{CompletionLadder, CompletionRung, TruncationRetry};
 use serde_json::json;
-use tinyagents::context::{RunConfig, RunContext};
-use tinyagents::events::EventSink;
-use tinyagents::runtime::{AgentHarness, PayloadCapture, RunPolicy};
-use tinyagents::{
-    HarnessEventJournal, InMemoryEventJournal, JournalSink, LangfuseClient, LangfuseTraceConfig,
-};
-use tinyinference::message::{ContentBlock, ImageRef, Message as TaMessage, UserMessage};
-use tinyinference::model::ResponseFormat;
-use tinyinference::providers::openai::OpenAiModel;
 
 use crate::config::types::{Models, ProviderRouting, StructuredOutput};
 use crate::error::{Error, Result};
@@ -30,7 +31,11 @@ use crate::ports::model::{
 ///
 /// `Debug` is written by hand rather than derived: deriving it would print the
 /// API key in any log line, panic message or test failure that formats this.
+#[derive(Clone)]
 pub struct GatewayModel {
+    budget: Option<openhuman_embed::budget::Budget>,
+    budget_prices: std::collections::BTreeMap<String, crate::config::types::BudgetPriceBound>,
+    agentic_reviewers: bool,
     api_key: String,
     base_url: String,
     fallbacks: Vec<String>,
@@ -38,7 +43,7 @@ pub struct GatewayModel {
     provider: ProviderRouting,
     routes: Vec<crate::config::types::ModelRoute>,
     structured_output: StructuredOutput,
-    langfuse: Option<LangfuseClient>,
+    langfuse: Option<Arc<crate::harness::langfuse::LangfuseExporter>>,
 }
 
 impl std::fmt::Debug for GatewayModel {
@@ -121,7 +126,7 @@ fn provider_options(effort: &str, routing: &ProviderRouting) -> serde_json::Valu
 /// The cost the gateway says it charged, when it says so.
 ///
 /// Read out of the raw response body rather than the parsed usage, because the
-/// OpenAI wire shape tinyagents parses has no cost field — this one is
+/// OpenAI wire shape has no cost field — this one is
 /// OpenRouter's extension, returned because [`provider_options`] asked for it.
 /// `None` means the gateway reported nothing and the estimate stands.
 fn gateway_cost(raw: Option<&serde_json::Value>) -> Option<f64> {
@@ -174,6 +179,24 @@ fn answered_model(raw: Option<&serde_json::Value>) -> Option<&str> {
     (!model.is_empty()).then_some(model)
 }
 
+/// One crate message as the completion API wants it.
+///
+/// Images ride on user messages only: the OpenAI-compatible format has no
+/// image part for the other roles. `Message::user_with_images` is the only
+/// constructor that sets images, so the other arms never see any.
+fn wire_message(m: &CrateMessage) -> ChatMessage {
+    match m.role {
+        Role::System => ChatMessage::system(&m.content),
+        Role::Assistant => ChatMessage::assistant(&m.content),
+        Role::User => m
+            .images
+            .iter()
+            .fold(ChatMessage::user(&m.content), |message, url| {
+                message.with_image(url.clone())
+            }),
+    }
+}
+
 /// The conversation as it goes on the wire, including anything the structured
 /// output mode has to say.
 ///
@@ -182,33 +205,6 @@ fn answered_model(raw: Option<&serde_json::Value>) -> Option<&str> {
 /// if this function stops appending the schema the model is left describing a
 /// contract nobody gave it — and that failure looks like a quality regression
 /// rather than a bug, which is exactly the kind that survives a review.
-/// One crate message as tinyinference wants it.
-///
-/// Images become content parts on a user message and nowhere else: the
-/// OpenAI-compatible format has no image part for the other roles, and
-/// tinyinference's converter rejects one rather than dropping it silently.
-/// `Message::user_with_images` is the only constructor that sets images, so
-/// the other arms never see any — but if one did, ignoring it would send a
-/// caption request with no picture, and this arm is written so that cannot
-/// happen without a compile error naming it.
-fn wire_message(m: &CrateMessage) -> TaMessage {
-    match m.role {
-        Role::System => TaMessage::system(&m.content),
-        Role::Assistant => TaMessage::assistant(&m.content),
-        Role::User if m.images.is_empty() => TaMessage::user(&m.content),
-        Role::User => {
-            let mut content = vec![ContentBlock::Text(m.content.clone())];
-            content.extend(m.images.iter().map(|url| {
-                ContentBlock::Image(ImageRef {
-                    url: url.clone(),
-                    mime_type: Some("image/png".to_string()),
-                })
-            }));
-            TaMessage::User(UserMessage { content })
-        }
-    }
-}
-
 fn wire_messages(request: &ModelRequest, mode: StructuredOutput) -> Vec<CrateMessage> {
     let mut messages = request.messages.clone();
     // Appended as its own system message rather than folded into the lane
@@ -238,8 +234,20 @@ impl GatewayModel {
             ))
         })?;
 
-        Ok(Self {
+        Ok(Self::with_key(models, api_key))
+    }
+
+    /// Build from the `[models]` config with the key already in hand.
+    ///
+    /// For tests that drive the adapter against a fake gateway: reading the
+    /// key from a variable they would have to set means mutating the process
+    /// environment, which races every other test in the binary.
+    pub(crate) fn with_key(models: &Models, api_key: String) -> Self {
+        Self {
             api_key,
+            budget: None,
+            budget_prices: models.budget_prices.clone(),
+            agentic_reviewers: models.agentic_reviewers,
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
@@ -247,7 +255,7 @@ impl GatewayModel {
             routes: models.routes.clone(),
             structured_output: models.structured_output,
             langfuse: langfuse_client(),
-        })
+        }
     }
 
     /// A gateway for calls that carry images.
@@ -272,365 +280,271 @@ impl GatewayModel {
         Ok(gateway)
     }
 
-    fn harness(&self, model: &str, routing: &ProviderRouting) -> Result<AgentHarness<()>> {
-        let provider = OpenAiModel::new(&self.api_key)
-            .with_base_url(&self.base_url)
-            .with_model(model)
-            // Reasoning, at the configured effort.
-            //
-            // This was hard-disabled, and the reason is worth keeping because
-            // it is a real hazard rather than a preference: reasoning is billed
-            // against the same `max_tokens` as the answer, so a model that
-            // thinks too much spends the whole budget and returns **empty**
-            // content. Measured on `kimi-k3` with a 49k-token prompt:
-            // finish_reason `length`, all 8000 completion tokens consumed, 17k
-            // characters of reasoning, nothing left to answer with — and every
-            // review then fell back to a weaker model, silently. Capping it
-            // with `reasoning: {max_tokens: N}` did not hold; that model
-            // ignored the cap and ran to 37k characters.
-            //
-            // It was turned on again on the strength of a measurement — 416
-            // reasoning tokens on `deepseek-v4-pro` at `high` — and that
-            // measurement was taken on a toy prompt. Re-measured against a
-            // 23k-token diff, the same model at the same setting and the same
-            // 8000-token ceiling spends **8000** reasoning tokens and returns
-            // empty content. So this is not a hazard that belonged to `kimi-k3`
-            // and went away; it is a property of reasoning sharing the budget,
-            // and every thinking model has it.
-            //
-            // Two findings from that re-measurement are load-bearing here:
-            //
-            // - **`low` is not a smaller `high`.** Both configured models burn
-            //   the entire allowance at either setting. This key selects a
-            //   *style* of thinking, never an amount, so it cannot be used to
-            //   bound spend. Only `"off"` bounds it.
-            // - **The failure is bimodal.** There is no setting at which the
-            //   model thinks a little and answers a little: either reasoning
-            //   fits and the answer is whole, or reasoning takes everything and
-            //   `finish_reason` is `length` with nothing to parse.
-            //
-            // What keeps it working today is `models.max_tokens`, raised to
-            // 16000, not this key. Anyone lowering that number should read the
-            // table in `config/defaults.toml` first.
-            //
-            // `models.reasoning_effort = "off"` restores the old behaviour for
-            // a deployment that puts a thinking-heavy model back.
-            //
-            // The `provider` pin rides in the same object; see
-            // [`provider_options`] for why they are merged rather than set
-            // separately.
-            .with_default_provider_options(provider_options(&self.reasoning_effort, routing))
+    /// The completer for one call, carrying this deployment's key and base
+    /// URL and the gateway attribution headers.
+    fn completer(&self) -> Completer {
+        let completer = Completer::new(Route::openai_compatible(&self.base_url, &self.api_key))
             // Identifies us to OpenRouter, which is how per-application usage
             // shows up separately in their dashboard.
-            .with_header(
+            .header(
                 "HTTP-Referer",
                 "https://github.com/tinyhumansai/tinysweeper",
             )
-            .with_header("X-Title", "tinysweeper");
-
-        let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness
-            .register_model("gateway", Arc::new(provider))
-            .set_default_model("gateway");
-        Ok(harness)
+            .header("X-Title", "tinysweeper");
+        match &self.langfuse {
+            Some(observer) => completer.observer(observer.clone()),
+            None => completer,
+        }
     }
 
-    async fn call(
-        &self,
-        model: &str,
-        request: &ModelRequest,
-        cap: u32,
-        routing: &ProviderRouting,
-    ) -> Result<CallOutcome> {
-        let mut harness = self.harness(model, routing)?;
-        // Who enforces the schema. These two arms are one decision, not two
-        // independent settings: `JsonObject` asks the provider for *some* JSON
-        // and therefore has to carry the schema in the prompt itself, and the
-        // prompt half is added below. Changing one arm without the other either
-        // sends a schema nobody reads or asks for a shape nobody described.
-        let response_format = match self.structured_output {
-            StructuredOutput::Schema => {
-                ResponseFormat::json_schema(&request.schema_name, request.schema.clone())
-            }
+    /// Build the immutable prompt shared by all completion routes.
+    fn completion_request(&self, request: &ModelRequest) -> CompletionRequest {
+        let format = match self.structured_output {
+            StructuredOutput::Schema => ResponseFormat::JsonSchema {
+                name: request.schema_name.clone(),
+                schema: request.schema.clone(),
+            },
             StructuredOutput::JsonObject => ResponseFormat::JsonObject,
         };
-        harness.with_policy(RunPolicy {
-            default_response_format: Some(response_format),
-            capture: if self.langfuse.is_some() {
-                PayloadCapture {
-                    model_io: true,
-                    tool_io: false,
-                }
-            } else {
-                PayloadCapture::default()
-            },
-            ..RunPolicy::default()
-        });
-
-        let messages: Vec<TaMessage> = wire_messages(request, self.structured_output)
+        let messages = wire_messages(request, self.structured_output)
             .iter()
             .map(wire_message)
             .collect();
-
-        // `invoke` rather than `invoke_default`, because the run configuration
-        // is where the output ceiling lives — see [`run_config`].
-        let run_config = run_config(cap);
-        let run_id = run_config.run_id.clone();
-        let (journal, journal_sink) = self
-            .langfuse
-            .as_ref()
-            .map(|_| {
-                let journal = Arc::new(InMemoryEventJournal::new());
-                let sink = Arc::new(JournalSink::new(journal.clone(), run_id.clone()));
-                (journal, sink)
-            })
-            .unzip();
-        let events = EventSink::new();
-        if let Some(sink) = &journal_sink {
-            events.subscribe(sink.clone());
-        }
-        let result = harness
-            .invoke_in_context(
-                &(),
-                RunContext::new(run_config, ()).with_events(events),
-                messages,
-            )
-            .await;
-
-        if let (Some(journal), Some(sink), Some(client)) =
-            (journal, journal_sink, self.langfuse.as_ref())
-        {
-            sink.flush();
-            match journal.read_from(run_id.as_str(), 0).await {
-                Ok(observations) if !observations.is_empty() => {
-                    if let Err(err) = client
-                        .send_observations(
-                            LangfuseTraceConfig {
-                                name: Some("tinysweeper model call".to_string()),
-                                environment: std::env::var("LANGFUSE_ENVIRONMENT").ok(),
-                                ..Default::default()
-                            },
-                            &observations,
-                        )
-                        .await
-                    {
-                        tracing::warn!(%err, "could not export model call to Langfuse");
-                    }
-                }
-                Ok(_) => {}
-                Err(err) => tracing::warn!(%err, "could not read Langfuse observations"),
-            }
-        }
-
-        let run = result.map_err(|err| Error::Model(format!("{model}: {err}")))?;
-
-        let totals = run.usage.usage;
-        let finish_reason = run
-            .final_response
-            .as_ref()
-            .and_then(|response| response.finish_reason.clone())
-            .unwrap_or_default();
-        let raw = run.final_response.as_ref().and_then(|r| r.raw.as_ref());
-        let reported_cost = gateway_cost(raw);
-        let answered = answered_model(raw).unwrap_or(model);
-
-        // Every model call, at info, because the two failures this module has
-        // actually had — reasoning eating the whole budget, and an answer cut
-        // off part way through the findings array — are both invisible without
-        // these four numbers side by side.
-        tracing::info!(
-            model,
-            answered,
-            cap,
-            input_tokens = totals.input_tokens,
-            cached_tokens = totals.cache_read_tokens,
-            output_tokens = totals.output_tokens,
-            reasoning_tokens = totals.reasoning_tokens,
-            finish_reason = %finish_reason,
-            reported_cost_usd = reported_cost,
-            "model call"
-        );
-
-        // Truncation, reported rather than repaired.
-        //
-        // `finish_reason == "length"` means the answer was cut off at the
-        // ceiling. The harness recovers the *empty* case on its own, but the
-        // expensive case is the partial one: its repair ladder closes the
-        // unterminated JSON, so a findings array cut off after two entries
-        // parses cleanly and reads exactly like a review that found two things.
-        // Returning `Truncated` instead sends the call back up to `complete`,
-        // which retries with a larger ceiling before anything is published.
-        if finish_reason == "length" {
-            return Ok(CallOutcome::Truncated {
-                output_tokens: totals.output_tokens,
-                reasoning_tokens: totals.reasoning_tokens,
-            });
-        }
-
-        // Reasoning is billed against the same ceiling as the answer, so a
-        // model spending most of the budget thinking is one prompt away from
-        // the truncation above. Say so while the review still succeeds.
-        if reasoning_crowds_the_answer(cap, totals.reasoning_tokens) {
-            tracing::warn!(
-                model,
-                cap,
-                reasoning_tokens = totals.reasoning_tokens,
-                "reasoning consumed over half the output budget; \
-                 consider raising `models.max_tokens` or lowering `models.reasoning_effort`"
-            );
-        }
-
-        // Structured output is not optional: a lane that falls back to parsing
-        // prose posts nonsense the first time a model phrases something
-        // differently.
-        //
-        // `run.structured` is populated only when the harness was given a schema
-        // to extract against, which is the `schema` mode. Under `json_object`
-        // there is no schema on the wire, so the harness has nothing to extract
-        // with and leaves it empty — the answer arrives as the run's text. That
-        // is *not* a licence to parse prose: `serde_json::from_str` either
-        // yields a JSON value or fails, and `schema::parse` downstream rejects
-        // any value of the wrong shape. Both modes end at the same guarantee;
-        // only the enforcer differs.
-        let value = match (run.structured.clone(), self.structured_output) {
-            (Some(value), _) => value,
-            (None, StructuredOutput::JsonObject) => {
-                let text = run.text().unwrap_or_default();
-                first_json_value(model, text.trim())?
-            }
-            (None, StructuredOutput::Schema) => {
-                return Err(Error::Model(format!(
-                    "{model} returned no structured output; the response did not satisfy the \
-                     schema"
-                )));
-            }
-        };
-
-        let usage = Usage {
-            input_tokens: totals.input_tokens,
-            output_tokens: totals.output_tokens,
-            cached_tokens: totals.cache_read_tokens,
-            embed_tokens: 0,
-            // What the gateway says it charged, when it says — the rate table is
-            // a fallback for a gateway that reports nothing, not the preferred
-            // figure. `models.budget_usd_per_pr` stops a review on this number,
-            // so an estimate that drifts with a provider's repricing is the
-            // wrong thing to enforce a real bill against.
-            cost_usd: reported_cost.unwrap_or_else(|| {
-                // Priced as what answered, not as what was asked for: the rate
-                // table has no row for a ladder alias.
-                pricing::completion_cost(
-                    answered,
-                    totals.input_tokens,
-                    totals.cache_read_tokens,
-                    totals.output_tokens,
-                )
-            }),
-        };
-
-        Ok(CallOutcome::Answer(ModelResponse {
-            value,
-            model: answered.to_string(),
-            usage,
-        }))
+        CompletionRequest::new(&request.model, messages).response_format(format)
     }
 
-    /// One model, tried at the configured ceiling and then at growing ones
-    /// until it answers without being cut off.
-    ///
-    /// The ladder doubles, capped at [`MAX_TRUNCATION_RETRIES`] steps, and the
-    /// last rung's truncation is returned as an error naming the config key —
-    /// a review that cannot fit its findings in four times the configured
-    /// budget is a review whose operator needs to know, not one to publish half
-    /// of. Tokens are billed as produced, so a rung that is never reached costs
-    /// nothing.
-    async fn call_until_complete(
+    /// Configure one route; the owner ladder handles every physical dispatch.
+    fn completion_rung(
         &self,
         model: &str,
         request: &ModelRequest,
-        routing: &ProviderRouting,
-    ) -> Result<ModelResponse> {
-        // A rung with its own route may set its own ceiling — including none.
-        let routed = self
+        completion: &CompletionRequest,
+        unpinned: bool,
+    ) -> Result<CompletionRung> {
+        let base = self
             .routes
             .iter()
-            .find(|r| r.model == model)
-            .and_then(|r| r.max_tokens);
-        let base = routed.unwrap_or(request.max_tokens);
-        // The key the error names must be the one that set the ceiling:
-        // telling an operator to raise `models.max_tokens` while a route
-        // override stands has them change a number the next call ignores.
-        let ceiling_key = if routed.is_some() {
-            format!("`models.routes[{model}].max_tokens`")
+            .find(|route| route.model == model)
+            .and_then(|route| route.max_tokens)
+            .unwrap_or(request.max_tokens);
+        let routing = if unpinned {
+            std::borrow::Cow::Owned(ProviderRouting::unpinned())
         } else {
-            "`models.max_tokens`".to_string()
+            self.routing_for(model)
         };
-        let ladder = truncation_ladder(base);
-        let last = ladder.len() - 1;
+        let options = provider_options(&self.reasoning_effort, &routing);
+        let mut completer = self.completer();
+        if let Some(ledger) = &self.budget {
+            let mut bound = completion.clone();
+            bound.model = model.to_owned();
+            bound.provider_options = options.clone();
+            // Every dispatch reserves the largest possible output on this
+            // route. Smaller attempts retain their original wire caps; the
+            // shared ledger settles their reported spend after each response.
+            bound.max_tokens = (base != 0).then(|| *truncation_ladder(base).last().unwrap());
+            completer = completer.budget(crate::harness::budget::call(
+                ledger,
+                &bound,
+                0,
+                &self.budget_prices,
+            )?);
+        }
+        let rung = CompletionRung::new(completer, model)
+            .provider_options(options)
+            .max_tokens((base != 0).then_some(base));
+        Ok(if unpinned { rung.unpinned() } else { rung })
+    }
 
-        for (attempt, cap) in ladder.into_iter().enumerate() {
-            match self.call(model, request, cap, routing).await? {
-                CallOutcome::Answer(response) => return Ok(response),
-                CallOutcome::Truncated {
-                    output_tokens,
-                    reasoning_tokens,
-                } => {
-                    if attempt == last {
-                        return Err(Error::Model(format!(
-                            "{model} ran out of output tokens at {cap} \
-                             ({output_tokens} generated, {reasoning_tokens} of them reasoning); \
-                             the answer was cut off. Raise {ceiling_key} (currently {base}) \
-                             or lower `models.reasoning_effort`."
-                        )));
-                    }
-                    tracing::warn!(
-                        model,
-                        cap,
-                        output_tokens,
-                        reasoning_tokens,
-                        "answer was cut off at the output ceiling; retrying with a larger one"
-                    );
-                }
+    async fn complete_ladder(&self, request: &ModelRequest) -> Result<ModelResponse> {
+        let completion = self.completion_request(request);
+        let mut ladder = CompletionLadder::new(self.completion_rung(
+            &request.model,
+            request,
+            &completion,
+            false,
+        )?)
+        .truncation_retry(TruncationRetry::new(MAX_TRUNCATION_RETRIES as u8, u32::MAX));
+        for model in &self.fallbacks {
+            ladder = ladder.fallback(self.completion_rung(model, request, &completion, false)?);
+        }
+        let primary = self.routing_for(&request.model);
+        if primary.last_resort_unpinned && !primary.is_empty() {
+            ladder = ladder.fallback(self.completion_rung(
+                &request.model,
+                request,
+                &completion,
+                true,
+            )?);
+        }
+        let result = ladder.complete(completion).await.map_err(|error| {
+            // Keep the operator's actionable ceiling diagnostic when every
+            // bounded attempt is cut off. Other refusal types retain their
+            // owner error instead of being interpreted from message text.
+            let refusal = if let Some(attempt) = error.attempts.last()
+                && matches!(attempt.finish_reason.as_deref(), Some("length" | "max_tokens" | "MAX_TOKENS"))
+            {
+                let model = &attempt.requested_model;
+                let routed = self.routes.iter().find(|route| &route.model == model)
+                    .and_then(|route| route.max_tokens);
+                let base = routed.unwrap_or(request.max_tokens);
+                let key = if routed.is_some() {
+                    format!("`models.routes[{model}].max_tokens`")
+                } else {
+                    "`models.max_tokens`".to_owned()
+                };
+                let usage = attempt.usage.clone().unwrap_or_default();
+                Error::Model(format!(
+                    "{model} ran out of output tokens at {} ({} generated, {} of them reasoning); the answer was cut off. Raise {key} (currently {base}) or lower `models.reasoning_effort`.",
+                    attempt.max_tokens.unwrap_or_default(), usage.output_tokens, usage.reasoning_tokens,
+                ))
+            } else {
+                Error::Model(error.to_string())
+            };
+            // Structured refusals can arrive after several billed dispatches.
+            // Preserve their safe owner metadata for lane and budget accounting,
+            // pricing omitted charges against the model that actually answered.
+            if let Some(totals) = error.total_usage {
+                let cost_usd = error.attempts.iter().filter_map(|attempt| {
+                    let usage = attempt.usage.as_ref()?;
+                    let model = attempt.answered_model.as_deref()
+                        .unwrap_or(&attempt.requested_model);
+                    Some(usage.cost_usd.unwrap_or_else(|| pricing::completion_cost(
+                        model, usage.input_tokens, usage.cached_tokens, usage.output_tokens,
+                    )))
+                }).sum();
+                refusal.with_usage(Usage {
+                    input_tokens: totals.input_tokens,
+                    output_tokens: totals.output_tokens,
+                    cached_tokens: totals.cached_tokens,
+                    embed_tokens: 0,
+                    cost_usd,
+                })
+            } else {
+                refusal
+            }
+        })?;
+        let response = result.response;
+        let answered = response
+            .answered_model
+            .as_deref()
+            .or_else(|| answered_model(response.raw.as_ref()))
+            .unwrap_or(&request.model);
+        let value = response.structured.ok_or_else(|| {
+            Error::Model(format!(
+                "{answered} returned no structured output; the response did not satisfy the schema"
+            ))
+        })?;
+        let totals = result.total_usage.unwrap_or_default();
+        let last = result.attempts.len().saturating_sub(1);
+        let mut cost = 0.0;
+        for (index, attempt) in result.attempts.iter().enumerate() {
+            let usage = attempt.usage.clone().unwrap_or_default();
+            let model = attempt
+                .answered_model
+                .as_deref()
+                .unwrap_or(&attempt.requested_model);
+            let reported = if index == last {
+                gateway_cost(response.raw.as_ref()).or(usage.cost_usd)
+            } else {
+                usage.cost_usd
+            };
+            cost += reported.unwrap_or_else(|| {
+                pricing::completion_cost(
+                    model,
+                    usage.input_tokens,
+                    usage.cached_tokens,
+                    usage.output_tokens,
+                )
+            });
+            tracing::info!(model, cap = attempt.max_tokens, input_tokens = usage.input_tokens,
+                cached_tokens = usage.cached_tokens, output_tokens = usage.output_tokens,
+                reasoning_tokens = usage.reasoning_tokens, finish_reason = ?attempt.finish_reason,
+                reported_cost_usd = reported, "model call");
+            if reasoning_crowds_the_answer(
+                attempt.max_tokens.unwrap_or_default(),
+                usage.reasoning_tokens,
+            ) {
+                tracing::warn!(
+                    model,
+                    "reasoning consumed over half the output budget; consider raising `models.max_tokens` or lowering `models.reasoning_effort`"
+                );
             }
         }
-
-        unreachable!("the loop returns on its last iteration")
+        Ok(ModelResponse {
+            value,
+            model: answered.to_owned(),
+            usage: Usage {
+                input_tokens: totals.input_tokens,
+                output_tokens: totals.output_tokens,
+                cached_tokens: totals.cached_tokens,
+                embed_tokens: 0,
+                cost_usd: cost,
+            },
+        })
     }
-}
 
-/// The first JSON value in `text`, tolerating what follows it.
-///
-/// OpenAI's first-party endpoints, under `json_object` mode inside the agent
-/// harness, routinely hand back one well-formed object and then more text on
-/// the next line — a second copy, a sentence — and `from_str` refuses the
-/// whole answer for the trailing part. Five of eight files on one review were
-/// lost to that. The object is what the mode guarantees; what follows it is
-/// logged and dropped. Prose *before* the object is still a failure: there is
-/// no JSON to take, and guessing at where one starts is parsing prose.
-fn first_json_value(model: &str, text: &str) -> Result<serde_json::Value> {
-    let mut stream = serde_json::Deserializer::from_str(text).into_iter::<serde_json::Value>();
-    let value = match stream.next() {
-        Some(Ok(value)) => value,
-        Some(Err(err)) => {
-            return Err(Error::Model(format!(
-                "{model} answered in `json_object` mode with something that is not JSON: {err}"
-            )));
-        }
-        None => {
-            return Err(Error::Model(format!(
-                "{model} answered in `json_object` mode with nothing"
-            )));
-        }
-    };
-    let rest = text[stream.byte_offset()..].trim();
-    if !rest.is_empty() {
-        tracing::debug!(
-            model,
-            trailing_chars = rest.len(),
-            "json_object answer carried text after the object; the object is kept"
+    /// Run one isolated reviewer on its effective model route.
+    async fn agentic_attempt(
+        &self,
+        model: &str,
+        request: &ModelRequest,
+        tree: &dyn crate::ports::tree::TreeReader,
+        policy: &crate::config::types::LookupPolicy,
+        routing: &ProviderRouting,
+        lookup_budget: &Arc<crate::harness::agentic::LookupBudget>,
+    ) -> std::result::Result<ModelResponse, crate::harness::agentic::ReviewFailure> {
+        let mut request = request.clone();
+        request.model = model.to_owned();
+        request.max_tokens = self
+            .routes
+            .iter()
+            .find(|route| route.model == model)
+            .and_then(|route| route.max_tokens)
+            .unwrap_or(request.max_tokens);
+        let messages = wire_messages(&request, self.structured_output)
+            .iter()
+            .map(wire_message)
+            .collect();
+        let mut completion = CompletionRequest::new(&request.model, messages).response_format(
+            ResponseFormat::JsonSchema {
+                name: request.schema_name.clone(),
+                schema: request.schema.clone(),
+            },
         );
+        completion.max_tokens = Some(request.max_tokens);
+        completion.provider_options = provider_options(&self.reasoning_effort, routing);
+        let budget = self
+            .budget
+            .as_ref()
+            .map(|ledger| {
+                crate::harness::budget::call(
+                    ledger,
+                    &completion,
+                    (policy.max_chars as u64)
+                        .saturating_mul(12)
+                        .saturating_add(32768),
+                    &self.budget_prices,
+                )
+            })
+            .transpose()?;
+        let provider = openhuman_embed::Provider::openai_compatible(&self.base_url, &self.api_key)
+            .model(&request.model);
+        crate::harness::agentic::review_accounted(
+            request,
+            tree,
+            policy,
+            provider,
+            provider_options(&self.reasoning_effort, routing),
+            crate::harness::agentic::ReviewResources {
+                model_budget: budget,
+                lookup_budget: lookup_budget.clone(),
+            },
+            self.langfuse.as_ref().map(|observer| {
+                observer.clone() as Arc<dyn openhuman_embed::observe::TurnObserver>
+            }),
+        )
+        .await
     }
-    Ok(value)
 }
 
 /// How many times a truncated answer is retried with a doubled ceiling before
@@ -640,7 +554,7 @@ const MAX_TRUNCATION_RETRIES: u32 = 2;
 
 /// The output ceilings one model is tried at, in order.
 ///
-/// A zero base means "no ceiling" (see [`run_config`]): there is nothing to
+/// A zero base means "no ceiling" (it is not forwarded): there is nothing to
 /// double, and a truncation at that point is the provider's own limit rather
 /// than ours, so the ladder is a single rung and the failure is reported
 /// straight away.
@@ -653,73 +567,12 @@ fn truncation_ladder(base: u32) -> Vec<u32> {
         .collect()
 }
 
-/// What one model call produced.
-///
-/// Truncation is a third outcome rather than an error because it is the one
-/// failure worth *retrying differently*: same model, same prompt, more room.
-enum CallOutcome {
-    /// A complete, schema-satisfying answer.
-    Answer(ModelResponse),
-    /// The answer was cut off at the output ceiling.
-    Truncated {
-        /// Tokens generated before the cut-off.
-        output_tokens: u64,
-        /// How many of them went to the hidden reasoning channel.
-        reasoning_tokens: u64,
-    },
-}
-
-/// The run this call is made from, carrying the configured output ceiling.
-///
-/// `models.max_tokens` reaches the provider as the run's per-turn output cap
-/// rather than as a field on the request: the agent loop builds the provider
-/// request itself, and `RunConfig::max_turn_output_tokens` is the documented
-/// hook it applies before dispatching. Setting it on a request we do not own
-/// would be discarded — which is exactly what used to happen to this setting.
-///
-/// The loop lowers, never raises: it takes the minimum of this cap and any cap
-/// the request already carries, and its truncated-empty retry may still grow
-/// the budget from here. Both are wanted — the ceiling is protection against a
-/// runaway answer, not a demand for one.
-/// The run id is unique per call, and stays that way across the truncation
-/// ladder: each rung is its own Langfuse trace, so a retry at a larger ceiling
-/// is visible as a retry rather than overwriting the attempt that was cut off.
-fn run_config(cap: u32) -> RunConfig {
-    static NEXT_RUN_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    let run_id = NEXT_RUN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let config = RunConfig::new(format!("tinysweeper-lane-{run_id}"));
-    // `config::validate` rejects `max_tokens = 0`, but a `Config` built in code
-    // can carry it, and forwarding a zero cap asks the provider for an empty
-    // answer on every lane. Leave the ceiling off rather than guarantee failure.
-    if cap == 0 {
-        return config;
-    }
-    config.with_max_turn_output_tokens(cap)
-}
-
-/// Build the direct Langfuse exporter only when its complete environment
-/// configuration is present. A deployment without telemetry keeps the
-/// existing offline and non-networking behaviour; malformed telemetry config
-/// is reported and never prevents a review from running.
-fn langfuse_client() -> Option<LangfuseClient> {
-    let configured = [
-        "LANGFUSE_BASE_URL",
-        "LANGFUSE_PUBLIC_KEY",
-        "LANGFUSE_SECRET_KEY",
-    ]
-    .iter()
-    .any(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()));
-    if !configured {
-        return None;
-    }
-
-    match LangfuseClient::from_env() {
-        Ok(client) => Some(client),
-        Err(err) => {
-            tracing::warn!(%err, "Langfuse telemetry is configured but unusable; continuing without it");
-            None
-        }
-    }
+/// The Langfuse exporter, when the environment configures one. A deployment
+/// without telemetry keeps the existing offline and non-networking behaviour;
+/// malformed telemetry config is reported and never prevents a review from
+/// running.
+fn langfuse_client() -> Option<Arc<crate::harness::langfuse::LangfuseExporter>> {
+    crate::harness::langfuse::LangfuseExporter::from_env().map(Arc::new)
 }
 
 impl GatewayModel {
@@ -735,73 +588,88 @@ impl GatewayModel {
 
 #[async_trait]
 impl Model for GatewayModel {
-    async fn complete(&self, request: ModelRequest) -> Result<ModelResponse> {
-        let mut last = match self
-            .call_until_complete(&request.model, &request, &self.routing_for(&request.model))
-            .await
-        {
-            Ok(response) => return Ok(response),
-            Err(err) => err,
-        };
+    fn scoped_budget(&self, budget_usd: f64) -> Option<Arc<dyn Model>> {
+        let mut model = self.clone();
+        model.budget = Some(crate::harness::budget::ledger(budget_usd));
+        Some(Arc::new(model))
+    }
 
-        // Fallbacks exist because a single provider outage should degrade the
-        // review rather than fail the check. The model that actually answered
-        // is reported back so the summary can say so.
-        for fallback in &self.fallbacks {
-            tracing::warn!(
-                primary = %request.model,
-                fallback = %fallback,
-                error = %last,
-                "model call failed; trying the next model"
-            );
+    async fn review(
+        &self,
+        request: ModelRequest,
+        tree: &dyn crate::ports::tree::TreeReader,
+        policy: &crate::config::types::LookupPolicy,
+    ) -> Result<ModelResponse> {
+        if !self.agentic_reviewers
+            || !policy.enabled
+            || policy.rounds == 0
+            || policy.per_round == 0
+            || policy.max_chars == 0
+        {
+            return self.complete(request).await;
+        }
+        let lookup_budget = crate::harness::agentic::LookupBudget::new(policy);
+        let mut last = None;
+        let mut prior = Usage::default();
+        for model in std::iter::once(&request.model).chain(self.fallbacks.iter()) {
             match self
-                .call_until_complete(fallback, &request, &self.routing_for(fallback))
+                .agentic_attempt(
+                    model,
+                    &request,
+                    tree,
+                    policy,
+                    &self.routing_for(model),
+                    &lookup_budget,
+                )
                 .await
             {
-                Ok(response) => return Ok(response),
-                Err(err) => last = err,
+                Ok(mut response) => {
+                    crate::harness::agentic::accumulate_usage(&mut response.usage, prior);
+                    return Ok(response);
+                }
+                Err(failure) => {
+                    if let Some(usage) = failure.usage {
+                        crate::harness::agentic::accumulate_usage(&mut prior, *usage);
+                    }
+                    last = Some(failure.error);
+                }
             }
         }
-
-        // The last rung, and the only one that changes *provider* rather than
-        // model.
-        //
-        // Every rung above shares `self.provider`, so a pin that cannot serve
-        // these models fails all of them for one reason and the ladder is
-        // decoration. That is the outage this rung exists for: `deepseek` was
-        // pinned while the configured models were served only by StreamLake and
-        // DeepInfra, every rung returned `404 No endpoints found`, and each pull
-        // request was told there was nothing to review.
-        //
-        // Only reached when every priced route has already failed, so it costs
-        // nothing on a healthy deployment. It is loud because an unpinned call
-        // is billed at a price `harness::pricing` did not predict, and an
-        // operator who never learns the pin is broken keeps paying it.
-        //
-        // Decided from the primary's *effective* routing, not the ladder-wide
-        // pin: a model with its own `[[models.routes]]` entry named its
-        // endpoint on purpose, and `ModelRoute::routing` turns this rung off
-        // for it. Reading `self.provider` here would put it back on.
         let primary = self.routing_for(&request.model);
         if primary.last_resort_unpinned && !primary.is_empty() {
-            let unpinned = ProviderRouting::unpinned();
-            tracing::warn!(
-                primary = %request.model,
-                pinned_to = %primary.order.join(", "),
-                error = %last,
-                "every model failed on the pinned provider; retrying unpinned — \
-                 the cost line for this review is an estimate, and the pin needs fixing"
-            );
             match self
-                .call_until_complete(&request.model, &request, &unpinned)
+                .agentic_attempt(
+                    &request.model,
+                    &request,
+                    tree,
+                    policy,
+                    &ProviderRouting::unpinned(),
+                    &lookup_budget,
+                )
                 .await
             {
-                Ok(response) => return Ok(response),
-                Err(err) => last = err,
+                Ok(mut response) => {
+                    crate::harness::agentic::accumulate_usage(&mut response.usage, prior);
+                    return Ok(response);
+                }
+                Err(failure) => {
+                    if let Some(usage) = failure.usage {
+                        crate::harness::agentic::accumulate_usage(&mut prior, *usage);
+                    }
+                    last = Some(failure.error);
+                }
             }
         }
+        let error = last.expect("the primary model is always attempted");
+        if prior != Usage::default() {
+            Err(error.with_usage(prior))
+        } else {
+            Err(error)
+        }
+    }
 
-        Err(last)
+    async fn complete(&self, request: ModelRequest) -> Result<ModelResponse> {
+        self.complete_ladder(&request).await
     }
 }
 
@@ -811,6 +679,7 @@ mod tests {
 
     fn models() -> Models {
         Models {
+            agentic_reviewers: false,
             reasoning_effort: "high".into(),
             structured_output: StructuredOutput::Schema,
             gateway: "openrouter".into(),
@@ -825,6 +694,7 @@ mod tests {
             routes: Vec::new(),
             max_tokens: 100,
             budget_usd_per_pr: 1.0,
+            budget_prices: Default::default(),
         }
     }
 
@@ -842,17 +712,9 @@ mod tests {
             "what changed?",
             vec!["https://cdn.example/a.png".into()],
         ));
-        let TaMessage::User(user) = wired else {
-            panic!("a user message stays a user message");
-        };
-        assert_eq!(user.content.len(), 2);
-        assert_eq!(user.content[0], ContentBlock::Text("what changed?".into()));
         assert_eq!(
-            user.content[1],
-            ContentBlock::Image(ImageRef {
-                url: "https://cdn.example/a.png".into(),
-                mime_type: Some("image/png".into()),
-            })
+            wired,
+            ChatMessage::user("what changed?").with_image("https://cdn.example/a.png")
         );
     }
 
@@ -862,7 +724,7 @@ mod tests {
         // recorded cassette was made from; images must not change it.
         assert_eq!(
             wire_message(&CrateMessage::user("plain")),
-            TaMessage::user("plain")
+            ChatMessage::user("plain")
         );
     }
 
@@ -1009,6 +871,9 @@ mod tests {
             max_tokens: Some(0),
         }];
         let gateway = GatewayModel {
+            budget: None,
+            budget_prices: Default::default(),
+            agentic_reviewers: false,
             api_key: "unused".into(),
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
@@ -1051,6 +916,9 @@ mod tests {
             max_tokens: None,
         }];
         let mut gateway = GatewayModel {
+            budget: None,
+            budget_prices: Default::default(),
+            agentic_reviewers: false,
             api_key: "unused".into(),
             base_url: models.base_url.clone(),
             fallbacks: vec!["c".into()],
@@ -1096,17 +964,6 @@ mod tests {
     }
 
     #[test]
-    fn a_json_object_answer_with_trailing_text_keeps_the_object() {
-        let value = first_json_value("m", "{\"summary\": \"ok\", \"findings\": []}\n\nDone.")
-            .expect("the object is taken");
-        assert_eq!(value["summary"], "ok");
-        let twice = first_json_value("m", "{\"a\": 1}\n{\"a\": 2}").expect("first wins");
-        assert_eq!(twice["a"], 1);
-        assert!(first_json_value("m", "Sure, here it is: {\"a\": 1}").is_err());
-        assert!(first_json_value("m", "").is_err());
-    }
-
-    #[test]
     fn the_json_mode_instruction_says_the_word_json() {
         // Not a style assertion. DeepSeek's JSON mode **rejects** a request
         // whose prompt never says "json", so a well-meaning reword that drops
@@ -1117,28 +974,6 @@ mod tests {
         assert!(
             text.to_lowercase().contains("json"),
             "DeepSeek's JSON mode requires the literal word in the prompt"
-        );
-    }
-
-    #[test]
-    fn the_configured_ceiling_reaches_the_run_the_provider_is_called_from() {
-        // `models.max_tokens` was accepted, validated, documented as the
-        // ceiling on a response — and then dropped on the floor, so the
-        // provider's own default decided how long an answer could get.
-        assert_eq!(
-            run_config(request(4_096).max_tokens).max_turn_output_tokens,
-            Some(4_096)
-        );
-    }
-
-    #[test]
-    fn a_zero_ceiling_is_not_forwarded() {
-        // `config::validate` rejects `max_tokens = 0`, but a `Config` built in
-        // code can still carry it, and asking a provider for zero output tokens
-        // turns a configuration mistake into an empty answer on every lane.
-        assert_eq!(
-            run_config(request(0).max_tokens).max_turn_output_tokens,
-            None
         );
     }
 
@@ -1235,6 +1070,9 @@ mod tests {
             provider: ProviderRouting::default(),
             routes: Vec::new(),
             langfuse: None,
+            agentic_reviewers: false,
+            budget: None,
+            budget_prices: Default::default(),
         };
         let rendered = format!("{model:?}");
         assert!(!rendered.contains("sk-secret-value"), "{rendered}");
@@ -1286,6 +1124,9 @@ mod tests {
         // config names, so the test names one it sets nowhere and asserts the
         // error, then builds the gateway directly for the positive case.
         let gateway = GatewayModel {
+            budget: None,
+            budget_prices: Default::default(),
+            agentic_reviewers: false,
             api_key: "unused".into(),
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),

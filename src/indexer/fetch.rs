@@ -135,7 +135,7 @@ impl Checkout {
         })
     }
 
-    /// Fetch the repository's own submodules into this checkout, shallowly.
+    /// Fetch allowed submodules recursively into this checkout, shallowly.
     ///
     /// Only submodules whose remote is on `host`: the read token rides on
     /// every request as a header, and `.gitmodules` is written by whoever
@@ -154,76 +154,126 @@ impl Checkout {
     /// fetched: `.gitmodules` is written by whoever opened the pull request,
     /// and neither same host nor same owner says the reviewed repository is
     /// entitled to pull the target with this token. The operator's list does.
+    /// Every nested manifest is checked independently; repeated repository/commit
+    /// pairs and paths deeper than sixteen gitlinks are denied.
     pub async fn fetch_submodules(
         &self,
         host: &str,
         token: &str,
         allowed: &[String],
     ) -> Result<Unfetched> {
+        self.fetch_submodules_with(host, token, allowed, |dir, url, gitlink| async move {
+            std::fs::create_dir_all(&dir).map_err(|err| {
+                Error::Forge(format!("could not make a submodule directory: {err}"))
+            })?;
+            git(&dir, token, &["init", "--quiet"]).await?;
+            git(
+                &dir,
+                token,
+                &[
+                    "fetch",
+                    "--quiet",
+                    "--depth",
+                    "1",
+                    "--no-tags",
+                    &url,
+                    &gitlink,
+                ],
+            )
+            .await?;
+            git(
+                &dir,
+                token,
+                &["checkout", "--quiet", "--detach", "FETCH_HEAD"],
+            )
+            .await
+        })
+        .await
+    }
+
+    /// Walk declared gitlinks using the same policy for each repository.
+    async fn fetch_submodules_with<F, Fut>(
+        &self,
+        host: &str,
+        token: &str,
+        allowed: &[String],
+        mut fetch: F,
+    ) -> Result<Unfetched>
+    where
+        F: FnMut(std::path::PathBuf, String, String) -> Fut,
+        Fut: std::future::Future<Output = Result<()>>,
+    {
         let root = self.dir.path();
         let allowed: Vec<crate::forge::types::RepoId> = allowed
             .iter()
             .filter_map(|r| crate::forge::types::RepoId::parse(r))
             .collect();
-        let Ok(text) = std::fs::read_to_string(root.join(".gitmodules")) else {
-            return Ok(Unfetched::default());
-        };
         let mut unfetched = Unfetched::default();
         let mut fetched: Vec<String> = Vec::new();
-        for sub in crate::forge::tree::parse_gitmodules(&text, host) {
-            let Some(repo) = &sub.repo else {
-                unfetched.denied.push(sub.path.clone());
+        // An explicit stack avoids recursive async futures and carries each
+        // branch's ancestors, so shared dependencies remain valid while cycles
+        // and contributor-controlled chains are bounded.
+        let mut pending = vec![(root.to_path_buf(), String::new(), Vec::new())];
+        while let Some((parent, prefix, ancestors)) = pending.pop() {
+            let manifest = parent.join(".gitmodules");
+            let Ok(metadata) = std::fs::symlink_metadata(&manifest) else {
                 continue;
             };
-            if !allowed.iter().any(|a| a == repo) {
-                unfetched.denied.push(sub.path.clone());
+            if !metadata.is_file() {
+                if !prefix.is_empty() {
+                    unfetched.denied.push(prefix);
+                }
                 continue;
             }
-            let dir = root.join(&sub.path);
-            if !dir.starts_with(root) || sub.path.contains("..") {
-                unfetched.denied.push(sub.path.clone());
-                continue;
-            }
-            // No gitlink at this commit means no submodule at this commit,
-            // whatever `.gitmodules` says — and `.gitmodules` is the
-            // contributor's. Not a fetch that failed: nothing was there to
-            // fetch, so whatever the index holds under the path is gone.
-            let Some(gitlink) = gitlink(root, token, &sub.path).await? else {
-                unfetched.denied.push(sub.path.clone());
+            let Ok(text) = std::fs::read_to_string(&manifest) else {
                 continue;
             };
-            let url = format!("https://{host}/{}/{}.git", repo.owner, repo.name);
-            let fetched_now = async {
-                std::fs::create_dir_all(&dir)
-                    .map_err(|err| Error::Forge(format!("could not make {}: {err}", sub.path)))?;
-                git(&dir, token, &["init", "--quiet"]).await?;
-                git(
-                    &dir,
-                    token,
-                    &[
-                        "fetch",
-                        "--quiet",
-                        "--depth",
-                        "1",
-                        "--no-tags",
-                        &url,
-                        &gitlink,
-                    ],
-                )
-                .await?;
-                git(
-                    &dir,
-                    token,
-                    &["checkout", "--quiet", "--detach", "FETCH_HEAD"],
-                )
-                .await
-            }
-            .await;
-            match fetched_now {
-                Ok(()) => fetched.push(sub.path.clone()),
-                Err(err) => {
-                    tracing::warn!(path = %sub.path, %err, "a submodule could not be fetched; indexed without it");
-                    unfetched.failed.push(sub.path.clone());
+            for sub in crate::forge::tree::parse_gitmodules(&text, host) {
+                let full_path = if prefix.is_empty() {
+                    sub.path.clone()
+                } else {
+                    format!("{prefix}/{}", sub.path)
+                };
+                let Some(repo) = &sub.repo else {
+                    unfetched.denied.push(full_path);
+                    continue;
+                };
+                if ancestors.len() >= crate::forge::tree::MAX_SUBMODULE_DEPTH
+                    || !allowed.iter().any(|a| a == repo)
+                {
+                    unfetched.denied.push(full_path);
+                    continue;
+                }
+                let dir = root.join(&full_path);
+                if !safe_submodule_directory(root, &dir) {
+                    unfetched.denied.push(full_path);
+                    continue;
+                }
+                // Resolve the gitlink in its immediate parent's pinned HEAD,
+                // never against the root or the remote's default branch.
+                let Some(gitlink) = gitlink(&parent, token, &sub.path).await? else {
+                    unfetched.denied.push(full_path);
+                    continue;
+                };
+                let identity = (repo.clone(), gitlink.clone());
+                if ancestors.contains(&identity) {
+                    unfetched.denied.push(full_path);
+                    continue;
+                }
+                // Construct the URL from the validated forge repository id;
+                // contributor URLs never receive the installation credential.
+                let url = format!("https://{host}/{}/{}.git", repo.owner, repo.name);
+                match fetch(dir.clone(), url, gitlink).await {
+                    Ok(()) => {
+                        fetched.push(full_path.clone());
+                        let mut ancestry = ancestors.clone();
+                        ancestry.push(identity);
+                        pending.push((dir, full_path, ancestry));
+                    }
+                    Err(err) => {
+                        tracing::warn!(path = %full_path, %err, "a submodule could not be fetched; indexed without it");
+                        unfetched.failed.push(full_path);
+                    }
                 }
             }
         }
@@ -236,7 +286,11 @@ impl Checkout {
         unfetched.denied.retain(|path| seen.insert(path.clone()));
         let denied = unfetched.denied.clone();
         unfetched.failed.retain(|path| {
-            !denied.contains(path) && !fetched.contains(path) && seen.insert(path.clone())
+            !denied
+                .iter()
+                .any(|denied| path == denied || path.starts_with(&format!("{denied}/")))
+                && !fetched.contains(path)
+                && seen.insert(path.clone())
         });
         Ok(unfetched)
     }
@@ -250,6 +304,29 @@ impl Checkout {
     pub fn revision(&self) -> &str {
         &self.revision
     }
+}
+
+/// Reject existing symlink components before creating or initializing a repo.
+/// A lexical containment check alone does not keep a nested checkout on disk
+/// inside the root when a contributor supplied a symlink along the path.
+fn safe_submodule_directory(root: &Path, dir: &Path) -> bool {
+    let Ok(relative) = dir.strip_prefix(root) else {
+        return false;
+    };
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            return false;
+        };
+        current.push(name);
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => return false,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return false,
+        }
+    }
+    true
 }
 
 /// The commit the superproject's `HEAD` records for the submodule at `path`.
@@ -398,6 +475,251 @@ mod tests {
                 "`{repo}` must not reach git"
             );
         }
+    }
+
+    async fn fixture_repo(root: &Path, modules: &str, links: &[(&str, &str)]) -> String {
+        std::fs::create_dir_all(root).unwrap();
+        git(root, "", &["init", "--quiet"]).await.unwrap();
+        std::fs::write(root.join(".gitmodules"), modules).unwrap();
+        git(root, "", &["add", ".gitmodules"]).await.unwrap();
+        for (path, sha) in links {
+            git(
+                root,
+                "",
+                &[
+                    "update-index",
+                    "--add",
+                    "--cacheinfo",
+                    &format!("160000,{sha},{path}"),
+                ],
+            )
+            .await
+            .unwrap();
+        }
+        git(
+            root,
+            "",
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--quiet",
+                "-m",
+                "fixture",
+            ],
+        )
+        .await
+        .unwrap();
+        git_stdout(root, "", &["rev-parse", "HEAD"])
+            .await
+            .unwrap()
+            .trim()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn nested_fetches_enforce_each_allowlist_entry_and_exact_gitlink() {
+        let fixtures = tempfile::tempdir().unwrap();
+        let inner = fixtures.path().join("inner");
+        let inner_pin = fixture_repo(&inner, "", &[]).await;
+        let outer = fixtures.path().join("outer");
+        let outer_pin = fixture_repo(
+            &outer,
+            "[submodule \"inner\"]\npath = sdk/inner\nurl = https://github.com/acme/inner\n",
+            &[("sdk/inner", &inner_pin)],
+        )
+        .await;
+        for allow_inner in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let revision = fixture_repo(
+                dir.path(),
+                "[submodule \"outer\"]\npath = vendor/outer\nurl = https://github.com/acme/outer\n",
+                &[("vendor/outer", &outer_pin)],
+            )
+            .await;
+            let checkout = Checkout { dir, revision };
+            let mut allowed = vec!["acme/outer".to_string()];
+            if allow_inner {
+                allowed.push("acme/inner".to_string());
+            }
+            let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let recorded = requests.clone();
+            let outer = outer.clone();
+            let inner = inner.clone();
+            let result = checkout
+                .fetch_submodules_with("github.com", "", &allowed, move |dir, url, pin| {
+                    recorded.lock().unwrap().push((url.clone(), pin.clone()));
+                    let source = if url.ends_with("acme/outer.git") {
+                        outer.clone()
+                    } else {
+                        inner.clone()
+                    };
+                    async move {
+                        std::fs::create_dir_all(&dir).unwrap();
+                        git(&dir, "", &["init", "--quiet"]).await?;
+                        git(
+                            &dir,
+                            "",
+                            &["fetch", "--quiet", source.to_str().unwrap(), &pin],
+                        )
+                        .await?;
+                        git(&dir, "", &["checkout", "--quiet", "--detach", "FETCH_HEAD"]).await
+                    }
+                })
+                .await
+                .unwrap();
+            let requests = requests.lock().unwrap();
+            assert_eq!(
+                requests[0],
+                (
+                    "https://github.com/acme/outer.git".into(),
+                    outer_pin.clone()
+                )
+            );
+            if allow_inner {
+                assert!(result.is_empty(), "{result:?}");
+                assert_eq!(requests.len(), 2);
+                assert_eq!(
+                    requests[1],
+                    (
+                        "https://github.com/acme/inner.git".into(),
+                        inner_pin.clone()
+                    )
+                );
+                assert!(
+                    checkout
+                        .path()
+                        .join("vendor/outer/sdk/inner/.gitmodules")
+                        .is_file()
+                );
+            } else {
+                assert_eq!(result.denied, ["vendor/outer/sdk/inner"]);
+                assert_eq!(requests.len(), 1, "a denied nested repo is never accessed");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_nested_fetches_keep_the_full_checkout_path() {
+        let fixtures = tempfile::tempdir().unwrap();
+        let outer = fixtures.path().join("outer");
+        let inner_pin = "1".repeat(40);
+        let outer_pin = fixture_repo(
+            &outer,
+            "[submodule \"inner\"]\npath = sdk/inner\nurl = https://github.com/acme/inner\n",
+            &[("sdk/inner", &inner_pin)],
+        )
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let revision = fixture_repo(
+            dir.path(),
+            "[submodule \"outer\"]\npath = vendor/outer\nurl = https://github.com/acme/outer\n",
+            &[("vendor/outer", &outer_pin)],
+        )
+        .await;
+        let checkout = Checkout { dir, revision };
+        let result = checkout
+            .fetch_submodules_with(
+                "github.com",
+                "",
+                &["acme/outer".to_string(), "acme/inner".to_string()],
+                move |dir, url, pin| {
+                    let source = outer.clone();
+                    async move {
+                        if url.ends_with("acme/inner.git") {
+                            return Err(Error::Forge("offline nested fetch failure".into()));
+                        }
+                        std::fs::create_dir_all(&dir).unwrap();
+                        git(&dir, "", &["init", "--quiet"]).await?;
+                        git(
+                            &dir,
+                            "",
+                            &["fetch", "--quiet", source.to_str().unwrap(), &pin],
+                        )
+                        .await?;
+                        git(&dir, "", &["checkout", "--quiet", "--detach", "FETCH_HEAD"]).await
+                    }
+                },
+            )
+            .await
+            .unwrap();
+        assert!(result.denied.is_empty());
+        assert_eq!(result.failed, ["vendor/outer/sdk/inner"]);
+    }
+
+    #[tokio::test]
+    async fn an_uninitialized_checkout_without_gitmodules_needs_no_fetches() {
+        let checkout = Checkout {
+            dir: tempfile::tempdir().unwrap(),
+            revision: "0".repeat(40),
+        };
+        let result = checkout
+            .fetch_submodules_with("github.com", "", &[], |_, _, _| async {
+                panic!("no gitlinks to fetch")
+            })
+            .await
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn submodule_directories_cannot_escape_through_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let pin = "1".repeat(40);
+        let revision = fixture_repo(
+            dir.path(),
+            "[submodule \"lib\"]\npath = vendor/lib\nurl = https://github.com/acme/lib\n",
+            &[("vendor/lib", &pin)],
+        )
+        .await;
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("vendor")).unwrap();
+        let checkout = Checkout { dir, revision };
+        let result = checkout
+            .fetch_submodules_with(
+                "github.com",
+                "",
+                &["acme/lib".to_string()],
+                |_, _, _| async { panic!("symlink destination must not be fetched") },
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.denied, ["vendor/lib"]);
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_symlink_gitmodules_file_is_never_read() {
+        let checkout = Checkout {
+            dir: tempfile::tempdir().unwrap(),
+            revision: "0".repeat(40),
+        };
+        let outside = tempfile::tempdir().unwrap();
+        let manifest = outside.path().join("manifest");
+        std::fs::write(
+            &manifest,
+            "[submodule \"lib\"]\npath = vendor/lib\nurl = https://github.com/acme/lib\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&manifest, checkout.path().join(".gitmodules")).unwrap();
+        // There is deliberately no initialized git repository: following the
+        // manifest would invoke ls-tree and error before the fetch callback.
+        assert!(
+            checkout
+                .fetch_submodules_with(
+                    "github.com",
+                    "",
+                    &["acme/lib".to_string()],
+                    |_, _, _| async { panic!("external manifest must not be read") }
+                )
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

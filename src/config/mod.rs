@@ -369,9 +369,12 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "max_tokens",
             "reasoning_effort",
             "structured_output",
+            "agentic_reviewers",
+            "budget_prices",
             "budget_usd_per_pr",
             "routes",
         ]),
+        "models.budget_prices" => None,
         "models.routes.*" => Some(&["model", "order", "allow_fallbacks", "max_tokens"]),
         "models.provider" => Some(&[
             "order",

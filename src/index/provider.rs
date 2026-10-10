@@ -1,14 +1,15 @@
 //! The real embedder, behind the `harness` feature.
 //!
-//! A thin adapter over tinyagents' `EmbeddingModel`, exactly parallel to
-//! `crate::harness::openrouter::GatewayModel` over its completion provider: the
+//! A thin adapter over the `EmbeddingModel`s OpenHuman re-exports
+//! (`openhuman_embed::embeddings`), exactly parallel to
+//! `crate::harness::embed::GatewayModel` over its completion provider: the
 //! harness owns the transport, the rate limiter and the `Retry-After` backoff,
 //! and this file owns the two things tinysweeper cares about that the harness
 //! has no opinion on — the **signature** and the **bill**.
 //!
 //! # The signature is the whole point
 //!
-//! Both sides name an embedding space. tinyagents spells it
+//! Both sides name an embedding space. The model spells it
 //! `provider=…;model=…;dims=…`; [`EmbedSignature`] spells it
 //! `provider:model:dims` and writes it onto every indexed document. If those
 //! two ever describe different things the failure is silent: the index keeps
@@ -34,7 +35,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tinyinference::embeddings::{
+use openhuman_embed::embeddings::{
     CohereEmbeddingModel, EmbeddingModel, MockEmbeddingModel, OllamaEmbeddingModel,
     OpenAiEmbeddingModel, VoyageEmbeddingModel, set_rate_limit,
 };
@@ -148,7 +149,7 @@ fn build_model(config: &Embeddings, signature: &EmbedSignature) -> Result<Arc<dy
     let model: Arc<dyn EmbeddingModel> = match provider {
         "voyage" => {
             let url = if base_url.is_empty() {
-                tinyinference::embeddings::VOYAGE_API_BASE
+                openhuman_embed::embeddings::VOYAGE_API_BASE
             } else {
                 base_url
             };
@@ -179,7 +180,7 @@ fn build_model(config: &Embeddings, signature: &EmbedSignature) -> Result<Arc<dy
         }
         "ollama" => {
             let url = if base_url.is_empty() {
-                tinyinference::embeddings::DEFAULT_OLLAMA_URL
+                openhuman_embed::embeddings::DEFAULT_OLLAMA_URL
             } else {
                 base_url
             };

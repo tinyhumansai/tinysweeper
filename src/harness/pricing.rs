@@ -45,7 +45,7 @@ pub struct Price {
 /// the two DeepSeek V4 Pro rows re-verified against the endpoint listing on
 /// 2026-08-13.
 ///
-/// tinyagents reports tokens but not cost, and the budget ceiling is
+/// The OpenAI wire shape reports tokens but not cost, and the budget ceiling is
 /// denominated in dollars, so the conversion happens here.
 /// Entries exist for models this deployment does not currently select. That is
 /// deliberate: `completion_cost` fails closed on an unpriced model, so a

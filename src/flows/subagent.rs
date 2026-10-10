@@ -7,7 +7,7 @@
 //! human has to go and check, which is the work the review was supposed to do.
 //!
 //! So a reviewer may end its turn with **questions** instead of guessing. Each
-//! one is dispatched to a child workflow that answers it against the evidence
+//! one is dispatched to a sub-agent call that answers it against the evidence
 //! already gathered — the diff, and what the reviewer looked up first, see
 //! `flows::lookup` — and the reviewer then gets **one** more turn with those
 //! answers in hand. What it says on that turn is what counts. The instruction
@@ -24,12 +24,11 @@
 //! ## The depth bound is structural, not a counter
 //!
 //! Exactly one level. Not enforced by threading a depth integer through the
-//! run — that is a bound a future edit removes by accident — but by what the
-//! child graph *is*: [`answer_graph`] contains `agent` nodes and nothing else,
-//! and the resolver in [`crate::flows::caps::ChildGraphs`] is populated only
-//! with graphs this module builds. A sub-agent therefore has no `sub_workflow`
-//! node to reach for and no registry entry it could name if it had one. The
-//! test at the bottom of this file is what keeps that true.
+//! run — that is a bound a future edit removes by accident — but by what a
+//! sub-agent *is*: [`answer_call`] builds a single completion answering
+//! [`answer_schema`], which has no `questions` key and no `lookups` key. A
+//! sub-agent therefore has nothing it could ask with and no turn after its
+//! answer to ask on. The tests at the bottom of this file keep that true.
 //!
 //! The reason for the bound is cost, and it compounds rather than adds: files
 //! times reviewers times questions is already the widest part of a review, and
@@ -44,7 +43,8 @@
 //! that cannot say anything the first did not.
 
 use serde_json::{Value, json};
-use tinyflows::model::{Edge, Node, NodeKind, WorkflowGraph};
+
+use crate::flows::panel::Call;
 
 /// How many questions one reviewer may ask.
 ///
@@ -135,127 +135,20 @@ pub fn with_questions(mut schema: Value) -> Value {
     schema
 }
 
-/// The node id one question's answer lands under.
-pub fn node_id(index: usize) -> String {
-    format!("answer_{index}")
-}
-
-/// The child graph a batch of questions is answered by.
+/// The call one question is answered by.
 ///
-/// One `agent` node per question, all concurrent. Still nothing but a trigger
-/// and agents: everything this module promises about depth rests on there being
-/// no node here that could run another graph.
-pub fn answers_graph(model: &str, questions: &[String], evidence: &str) -> WorkflowGraph {
-    let mut nodes = vec![Node {
-        id: "trigger".into(),
-        kind: NodeKind::Trigger,
-        type_version: 1,
-        name: "questions".into(),
-        config: Value::Null,
-        ports: Vec::new(),
-        position: None,
-    }];
-    let mut edges = Vec::new();
-
-    for (index, question) in questions.iter().enumerate() {
-        let id = node_id(index);
-
-        nodes.push(Node {
-            id: id.clone(),
-            kind: NodeKind::Agent,
-            type_version: 1,
-            name: "tinysweeper_subagent_answer".into(),
-            config: json!({
-                "model": model,
-                "system": ANSWER_SYSTEM,
-                "prompt": format!("{evidence}\n\nThe question:\n{question}\n"),
-                "schema": answer_schema(),
-                "schema_name": "tinysweeper_subagent_answer",
-                // A question that cannot be answered is a question left
-                // unanswered, never a failed review.
-                "on_error": "continue",
-            }),
-            ports: Vec::new(),
-            position: None,
-        });
-
-        edges.push(Edge {
-            from_node: "trigger".into(),
-            from_port: "main".into(),
-            to_node: id.clone(),
-            to_port: "main".into(),
-        });
-        edges.push(Edge {
-            from_node: id,
-            from_port: "main".into(),
-            to_node: "answers".into(),
-            to_port: "main".into(),
-        });
-    }
-
-    nodes.push(Node {
-        id: "answers".into(),
-        kind: NodeKind::Merge,
-        type_version: 1,
-        name: "answers".into(),
-        config: json!({ "mode": "append" }),
-        ports: Vec::new(),
-        position: None,
-    });
-
-    WorkflowGraph {
-        name: "subagent-answers".into(),
-        nodes,
-        edges,
-        ..WorkflowGraph::default()
-    }
-}
-
-/// The child graph one question is answered by.
-///
-/// A single `agent` node and a trigger. Deliberately the smallest graph that
-/// can exist: everything this module promises about depth rests on there being
-/// nothing else in here.
-pub fn answer_graph(model: &str, system: &str, prompt: &str) -> WorkflowGraph {
-    WorkflowGraph {
-        name: "subagent-answer".into(),
-        nodes: vec![
-            Node {
-                id: "trigger".into(),
-                kind: NodeKind::Trigger,
-                type_version: 1,
-                name: "question".into(),
-                config: Value::Null,
-                ports: Vec::new(),
-                position: None,
-            },
-            Node {
-                id: "answer".into(),
-                kind: NodeKind::Agent,
-                type_version: 1,
-                name: "tinysweeper_subagent_answer".into(),
-                config: json!({
-                    // Whatever tier the caller picked, which should be the
-                    // cheapest available: a sub-agent answers one narrow
-                    // factual question against evidence already in hand, the
-                    // least demanding call a review makes.
-                    "model": model,
-                    "system": system,
-                    "prompt": prompt,
-                    "schema": answer_schema(),
-                    "schema_name": "tinysweeper_subagent_answer",
-                }),
-                ports: Vec::new(),
-                position: None,
-            },
-        ],
-        edges: vec![Edge {
-            from_node: "trigger".into(),
-            from_port: "main".into(),
-            to_node: "answer".into(),
-            to_port: "main".into(),
-        }],
-        ..WorkflowGraph::default()
+/// A single completion against [`answer_schema`], on whatever tier the caller
+/// picked — which should be the cheapest available: a sub-agent answers one
+/// narrow factual question against evidence already in hand, the least
+/// demanding call a review makes. Everything this module promises about depth
+/// rests on this being one call with nowhere to ask from.
+pub fn answer_call(model: &str, index: usize, question: &str, evidence: &str) -> Call {
+    Call {
+        id: format!("answer_{index}"),
+        model: model.to_string(),
+        system: ANSWER_SYSTEM.to_string(),
+        prompt: format!("{evidence}\n\nThe question:\n{question}\n"),
+        schema_name: "tinysweeper_subagent_answer".to_string(),
     }
 }
 

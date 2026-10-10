@@ -94,12 +94,94 @@ fn a_route_ceiling_below_the_floor_is_rejected_like_the_global_one() {
         "{joined}"
     );
 
-    // Zero is "no ceiling", not a small one.
+    // Zero means no wire ceiling, which budgeted reviews cannot admit.
     let config = parse(
         "version = 1\n[models]\nmax_tokens = 16000\nreasoning_effort = \"high\"\n\
          [[models.routes]]\nmodel = \"deep\"\nmax_tokens = 0\n",
     );
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("finite output cap"), "{joined}");
+}
+
+#[test]
+fn alias_budget_rates_reject_nonfinite_and_negative_values_without_echoing_them() {
+    use crate::config::types::BudgetPriceBound;
+
+    for field in ["input", "cached", "output"] {
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -12345.6789] {
+            let mut config = parse("version = 1\n");
+            let mut rates = BudgetPriceBound {
+                input: 0.0,
+                cached: 0.0,
+                output: 1.0,
+            };
+            match field {
+                "input" => rates.input = invalid,
+                "cached" => rates.cached = invalid,
+                "output" => rates.output = invalid,
+                _ => unreachable!(),
+            }
+            config
+                .models
+                .budget_prices
+                .insert("gateway-alias".into(), rates);
+            let joined = validate::validate(&config).join("\n");
+            assert!(
+                joined.contains(&format!("models.budget_prices[gateway-alias].{field}")),
+                "{field}: {joined}"
+            );
+            assert!(!joined.contains(&invalid.to_string()), "{joined}");
+        }
+    }
+}
+
+#[test]
+fn alias_budget_output_rate_must_be_positive_but_input_can_be_free() {
+    use crate::config::types::BudgetPriceBound;
+
+    let mut config = parse("version = 1\n");
+    config.models.budget_prices.insert(
+        "gateway-alias".into(),
+        BudgetPriceBound {
+            input: 0.0,
+            cached: 0.0,
+            output: 0.0,
+        },
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(
+        joined.contains("models.budget_prices[gateway-alias].output"),
+        "{joined}"
+    );
+    config
+        .models
+        .budget_prices
+        .get_mut("gateway-alias")
+        .unwrap()
+        .output = 1.0;
     assert!(validate::validate(&config).is_empty());
+}
+
+#[test]
+fn budgeted_routes_require_a_finite_output_cap_with_or_without_agentic_reviewers() {
+    for agentic in [false, true] {
+        let mut config = parse(
+            "version = 1\n[models]\nreasoning_effort = \"off\"\n\
+             [[models.routes]]\nmodel = \"deep\"\nmax_tokens = 0\n",
+        );
+        config.models.agentic_reviewers = agentic;
+        config.models.structured_output = StructuredOutput::Schema;
+        let joined = validate::validate(&config).join("\n");
+        assert!(
+            joined.contains("models.routes[deep].max_tokens"),
+            "{joined}"
+        );
+        assert!(joined.contains("finite output cap"), "{joined}");
+        config.models.routes[0].max_tokens = Some(16_000);
+        assert!(validate::validate(&config).is_empty());
+        config.models.routes[0].max_tokens = None;
+        assert!(validate::validate(&config).is_empty());
+    }
 }
 
 #[test]
@@ -1676,5 +1758,39 @@ fn a_private_network_engine_needs_the_operators_say_so() {
         validate::validate(&allowed).is_empty(),
         "{:?}",
         validate::validate(&allowed)
+    );
+}
+
+#[test]
+fn agentic_reviewers_are_explicit_opt_in_and_require_strict_schemas() {
+    let config = Config::default();
+    assert!(!config.models.agentic_reviewers);
+    let mut enabled = config;
+    enabled.models.agentic_reviewers = true;
+    enabled.models.structured_output = crate::config::types::StructuredOutput::JsonObject;
+    assert!(
+        crate::config::validate::validate(&enabled)
+            .iter()
+            .any(|problem| problem.contains("agentic_reviewers"))
+    );
+}
+
+#[test]
+fn disabled_agentic_reviewers_preserve_serialized_baseline_configuration() {
+    let mut config = Config::default();
+    let default = serde_json::to_value(&config).unwrap();
+    assert!(default["models"].get("agentic_reviewers").is_none());
+    let default_toml = toml::to_string(&config).unwrap();
+    assert!(!default_toml.contains("agentic_reviewers"));
+    config.models.agentic_reviewers = true;
+    let enabled = serde_json::to_value(&config).unwrap();
+    assert_eq!(
+        enabled["models"]["agentic_reviewers"],
+        serde_json::json!(true)
+    );
+    assert!(
+        toml::to_string(&config)
+            .unwrap()
+            .contains("agentic_reviewers = true")
     );
 }
