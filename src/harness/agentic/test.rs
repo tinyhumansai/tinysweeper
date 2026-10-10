@@ -8,6 +8,7 @@ use serde_json::json;
 
 #[tokio::test]
 async fn host_only_reviewer_reads_redacted_source_and_refuses_execution_tools() {
+    let _guard = TEST_LOCK.lock().await;
     let calls = [
         ("shell", json!({"command":"touch exploited"})),
         ("write_file", json!({"path":"exploited","content":"owned"})),
@@ -193,4 +194,176 @@ async fn host_only_reviewer_reads_redacted_source_and_refuses_execution_tools() 
     })
     .await
     .expect("cancelled agent reaped");
+}
+
+async fn scripted_billed_fallback(
+    policy: LookupPolicy,
+) -> (Result<ModelResponse>, Vec<serde_json::Value>, usize) {
+    use crate::ports::model::Model;
+    let lookup = |model: &str, input: u64, output: u64, cost: f64| Reply {
+        status: 200,
+        body: json!({
+            "id":"lookup", "object":"chat.completion", "model":model,
+            "choices":[{"index":0,"message":{"role":"assistant","content":null,
+                "tool_calls":[{"id":"read","type":"function","function":{
+                    "name":"repo_read","arguments":json!({"path":"src/lib.rs","start_line":1,"end_line":1}).to_string()
+                }}]},"finish_reason":"tool_calls"}],
+            "usage":{"prompt_tokens":input,"completion_tokens":output,"cost":cost}
+        }),
+    };
+    let gateway = FakeGateway::start(vec![
+        lookup("primary", 5, 2, 0.001),
+        Reply::completion(
+            "primary",
+            r#"{"summary":7}"#,
+            "stop",
+            json!({"prompt_tokens":7,"completion_tokens":3,"cost":0.002}),
+        ),
+        lookup("fallback", 11, 4, 0.003),
+        Reply::completion(
+            "fallback",
+            r#"{"summary":"checked"}"#,
+            "stop",
+            json!({"prompt_tokens":13,"completion_tokens":5,"cost":0.004}),
+        ),
+    ])
+    .await;
+    let models = crate::config::types::Models {
+        agentic_reviewers: true,
+        base_url: gateway.base_url.clone(),
+        fallback: vec!["fallback".into()],
+        ..Default::default()
+    };
+    let model = crate::harness::embed::GatewayModel::with_key(&models, "fixture".into());
+    let request = ModelRequest {
+        model: "primary".into(),
+        messages: vec![
+            Message::system("Review."),
+            Message::user("Review src/lib.rs."),
+        ],
+        schema: json!({"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}),
+        schema_name: "review".into(),
+        max_tokens: 128,
+    };
+    struct CountingTree {
+        inner: MockTree,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl TreeReader for CountingTree {
+        async fn lookup(
+            &self,
+            query: &crate::ports::tree::Lookup,
+        ) -> Result<crate::ports::tree::Found> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.lookup(query).await
+        }
+        fn describe(&self) -> String {
+            "counting fixture".into()
+        }
+    }
+    let tree = CountingTree {
+        inner: MockTree::from_files([("src/lib.rs", "pub fn f() {}")]),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    };
+    let response = model.review(request, &tree, &policy).await;
+    (
+        response,
+        gateway.requests(),
+        tree.calls.load(Ordering::SeqCst),
+    )
+}
+
+#[tokio::test]
+async fn a_successful_agentic_fallback_includes_the_refused_reviewers_bill() {
+    let _guard = TEST_LOCK.lock().await;
+    let (response, requests, reads) = scripted_billed_fallback(LookupPolicy::default()).await;
+    let response = response.unwrap();
+    assert_eq!(response.model, "fallback");
+    assert_eq!(requests.len(), 4);
+    assert_eq!(reads, 2);
+    assert_eq!(response.usage.input_tokens, 36);
+    assert_eq!(response.usage.output_tokens, 14);
+    assert!(
+        (response.usage.cost_usd - 0.010).abs() < 1e-12,
+        "{:?}",
+        response.usage
+    );
+}
+
+#[tokio::test]
+async fn an_agentic_fallback_cannot_reset_the_review_lookup_allowance() {
+    let _guard = TEST_LOCK.lock().await;
+    let (response, requests, reads) = scripted_billed_fallback(LookupPolicy {
+        rounds: 1,
+        per_round: 1,
+        ..Default::default()
+    })
+    .await;
+    assert_eq!(
+        reads, 1,
+        "fallback must not read after the primary exhausted the review allowance"
+    );
+    assert!(
+        response.is_err(),
+        "fallback without repository evidence must be refused"
+    );
+    let usage = response
+        .unwrap_err()
+        .usage()
+        .expect("paid failed reviewers retain accounting");
+    assert_eq!(usage.input_tokens, 36);
+    assert_eq!(usage.output_tokens, 14);
+    assert!((usage.cost_usd - 0.010).abs() < 1e-12);
+    assert_eq!(requests.len(), 4);
+    // Embed deliberately keeps host errors generic; the exhausted allowance
+    // must become a failed tool result without exposing the host error text.
+    assert!(
+        requests[3]
+            .to_string()
+            .contains("Repository host query failed"),
+        "{}",
+        requests[3]
+    );
+}
+
+#[test]
+fn unknown_failure_accounting_does_not_include_concurrent_reviewers() {
+    use openhuman_embed::budget::{Budget, Spend};
+    let root = Budget::new(Default::default());
+    let other = root.child(Default::default());
+    drop(
+        other
+            .reserve(Spend {
+                tokens: 99,
+                cost_micros: 99000,
+            })
+            .unwrap(),
+    );
+    let current = root.child(Default::default());
+    let estimate = Usage {
+        input_tokens: 100,
+        output_tokens: 20,
+        cost_usd: 0.5,
+        ..Default::default()
+    };
+    let failure = ReviewFailure::unknown(Error::Model("failed".into()), Some(&current), estimate);
+    assert!(
+        failure.usage.is_none(),
+        "the other reviewer is not this attempt's spend"
+    );
+    drop(
+        current
+            .reserve(Spend {
+                tokens: 7,
+                cost_micros: 2000,
+            })
+            .unwrap(),
+    );
+    let failure = ReviewFailure::unknown(Error::Model("failed".into()), Some(&current), estimate);
+    let usage = failure.usage.unwrap();
+    assert_eq!(usage.input_tokens, 7);
+    assert_eq!(usage.cost_usd, 0.002);
+    let unmetered = ReviewFailure::unknown(Error::Model("failed".into()), None, estimate);
+    assert_eq!(*unmetered.usage.unwrap(), estimate);
 }

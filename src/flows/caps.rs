@@ -166,15 +166,22 @@ impl ModelCapability {
                     && policy.per_round > 0
                     && policy.max_chars > 0 =>
             {
-                self.model.review(request, tree, policy).await?
+                self.model.review(request, tree, policy).await
             }
-            _ => self.model.complete(request).await?,
+            _ => self.model.complete(request).await,
         };
 
         if let Ok(mut spend) = self.spend.lock() {
-            spend.record(&response.model, response.usage);
+            match &response {
+                Ok(response) => spend.record(&response.model, response.usage),
+                Err(error) => {
+                    if let Some(usage) = error.usage() {
+                        spend.record(&call.model, usage);
+                    }
+                }
+            }
         }
-        Ok(response)
+        response
     }
 }
 

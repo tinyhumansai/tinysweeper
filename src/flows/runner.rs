@@ -67,7 +67,7 @@ impl Answer {
 pub struct AskOutcome {
     /// One answer per requested reviewer, in request order.
     pub answers: Vec<Answer>,
-    /// Usage from every successful model call made during this invocation.
+    /// Usage from successful calls and paid refusals during this invocation.
     pub usage: Usage,
     /// Wall time for the complete invocation, including follow-up turns.
     pub elapsed: std::time::Duration,
@@ -149,7 +149,9 @@ async fn one_round_review(
             },
             Err(err) => {
                 tracing::debug!(lane = lane.as_str(), reviewer = %call.id, %err, "reviewer call failed");
-                Answer::failed(&call.id, err.to_string())
+                let mut answer = Answer::failed(&call.id, err.to_string());
+                answer.usage = err.usage().unwrap_or_default();
+                answer
             }
         })
         .collect()

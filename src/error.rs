@@ -56,6 +56,15 @@ pub enum Error {
     #[error("model: {0}")]
     Model(String),
 
+    /// A refused model answer with safe accounting from paid attempts.
+    #[error("model: {message}")]
+    ModelUsage {
+        /// Refusal description without rejected provider content.
+        message: String,
+        /// Known or conservatively bounded paid usage.
+        usage: Box<crate::ports::model::Usage>,
+    },
+
     /// A lane refused to run or could not produce a verdict.
     #[error("lane {lane}: {message}")]
     Lane {
@@ -132,6 +141,26 @@ fn reset_clause(reset_at: Option<u64>) -> String {
 }
 
 impl Error {
+    /// Paid usage retained by a model refusal, when available.
+    pub fn usage(&self) -> Option<crate::ports::model::Usage> {
+        match self {
+            Self::ModelUsage { usage, .. } => Some(**usage),
+            _ => None,
+        }
+    }
+
+    /// Keep safe paid accounting when a model cannot return an answer.
+    pub fn with_usage(self, usage: crate::ports::model::Usage) -> Self {
+        let message = match self {
+            Self::Model(message) | Self::ModelUsage { message, .. } => message,
+            other => other.to_string(),
+        };
+        Self::ModelUsage {
+            message,
+            usage: Box::new(usage),
+        }
+    }
+
     /// Build a [`Error::Config`] from anything displayable.
     pub fn config(message: impl std::fmt::Display) -> Self {
         Self::Config(message.to_string())

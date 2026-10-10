@@ -469,7 +469,8 @@ impl GatewayModel {
         tree: &dyn crate::ports::tree::TreeReader,
         policy: &crate::config::types::LookupPolicy,
         routing: &ProviderRouting,
-    ) -> Result<ModelResponse> {
+        lookup_budget: &Arc<crate::harness::agentic::LookupBudget>,
+    ) -> std::result::Result<ModelResponse, crate::harness::agentic::ReviewFailure> {
         let mut request = request.clone();
         request.model = model.to_owned();
         request.max_tokens = self
@@ -506,13 +507,16 @@ impl GatewayModel {
             .transpose()?;
         let provider = openhuman_embed::Provider::openai_compatible(&self.base_url, &self.api_key)
             .model(&request.model);
-        crate::harness::agentic::review(
+        crate::harness::agentic::review_accounted(
             request,
             tree,
             policy,
             provider,
             provider_options(&self.reasoning_effort, routing),
-            budget,
+            crate::harness::agentic::ReviewResources {
+                model_budget: budget,
+                lookup_budget: lookup_budget.clone(),
+            },
             self.langfuse.as_ref().map(|observer| {
                 observer.clone() as Arc<dyn openhuman_embed::observe::TurnObserver>
             }),
@@ -582,29 +586,64 @@ impl Model for GatewayModel {
         {
             return self.complete(request).await;
         }
+        let lookup_budget = crate::harness::agentic::LookupBudget::new(policy);
         let mut last = None;
+        let mut prior = Usage::default();
         for model in std::iter::once(&request.model).chain(self.fallbacks.iter()) {
             match self
-                .agentic_attempt(model, &request, tree, policy, &self.routing_for(model))
+                .agentic_attempt(
+                    model,
+                    &request,
+                    tree,
+                    policy,
+                    &self.routing_for(model),
+                    &lookup_budget,
+                )
                 .await
             {
-                Ok(response) => return Ok(response),
-                Err(error) => last = Some(error),
+                Ok(mut response) => {
+                    crate::harness::agentic::accumulate_usage(&mut response.usage, prior);
+                    return Ok(response);
+                }
+                Err(failure) => {
+                    if let Some(usage) = failure.usage {
+                        crate::harness::agentic::accumulate_usage(&mut prior, *usage);
+                    }
+                    last = Some(failure.error);
+                }
             }
         }
         let primary = self.routing_for(&request.model);
         if primary.last_resort_unpinned && !primary.is_empty() {
-            return self
+            match self
                 .agentic_attempt(
                     &request.model,
                     &request,
                     tree,
                     policy,
                     &ProviderRouting::unpinned(),
+                    &lookup_budget,
                 )
-                .await;
+                .await
+            {
+                Ok(mut response) => {
+                    crate::harness::agentic::accumulate_usage(&mut response.usage, prior);
+                    return Ok(response);
+                }
+                Err(failure) => {
+                    if let Some(usage) = failure.usage {
+                        crate::harness::agentic::accumulate_usage(&mut prior, *usage);
+                    }
+                    last = Some(failure.error);
+                }
+            }
         }
-        Err(last.expect("the primary model is always attempted"))
+        let error = last.expect("the primary model is always attempted");
+        if prior != Usage::default() {
+            Err(error.with_usage(prior))
+        } else {
+            Err(error)
+        }
     }
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse> {

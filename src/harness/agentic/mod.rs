@@ -4,6 +4,9 @@
 //! request bridge to its borrowed tree; no contributor code is executed.
 
 mod bridge;
+mod types;
+pub(crate) use bridge::LookupBudget;
+pub(crate) use types::{ReviewFailure, accumulate_usage};
 
 use crate::config::types::LookupPolicy;
 use crate::error::{Error, Result};
@@ -34,6 +37,8 @@ static WORKERS: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 });
 static RUNTIME: OnceCell<Arc<Runtime>> = OnceCell::const_new();
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 async fn shared_runtime() -> Result<Arc<Runtime>> {
     RUNTIME
@@ -85,6 +90,11 @@ impl<T> Drop for TurnGuard<T> {
     }
 }
 
+pub(crate) struct ReviewResources {
+    pub(crate) model_budget: Option<ModelBudget>,
+    pub(crate) lookup_budget: Arc<LookupBudget>,
+}
+
 /// Run one bounded reviewer using only host repository tools.
 ///
 /// The adapter supplies its resolved provider, routing options and lane ledger.
@@ -100,10 +110,41 @@ pub async fn review(
     budget: Option<ModelBudget>,
     observer: Option<Arc<dyn openhuman_embed::observe::TurnObserver>>,
 ) -> Result<ModelResponse> {
+    review_accounted(
+        request,
+        tree,
+        policy,
+        provider,
+        provider_options,
+        ReviewResources {
+            model_budget: budget,
+            lookup_budget: LookupBudget::new(policy),
+        },
+        observer,
+    )
+    .await
+    .map_err(ReviewFailure::into_error)
+}
+
+/// Retain paid refusal accounting for the adapter's explicit fallback routes.
+pub(crate) async fn review_accounted(
+    request: ModelRequest,
+    tree: &dyn TreeReader,
+    policy: &LookupPolicy,
+    provider: Provider,
+    provider_options: serde_json::Value,
+    resources: ReviewResources,
+    observer: Option<Arc<dyn openhuman_embed::observe::TurnObserver>>,
+) -> std::result::Result<ModelResponse, ReviewFailure> {
+    let ReviewResources {
+        model_budget: budget,
+        lookup_budget,
+    } = resources;
     if !policy.enabled || policy.rounds == 0 || policy.per_round == 0 || policy.max_chars == 0 {
         return Err(Error::Model(
             "agentic review requires an enabled repository lookup policy".into(),
-        ));
+        )
+        .into());
     }
     if request
         .messages
@@ -112,7 +153,8 @@ pub async fn review(
     {
         return Err(Error::Model(
             "agentic review accepts text-only system and evidence messages".into(),
-        ));
+        )
+        .into());
     }
     let initialized = WORKERS.spawn(shared_runtime());
     let runtime = initialized
@@ -152,6 +194,35 @@ pub async fn review(
         agent: agent.clone(),
         armed: true,
     };
+    let requested_model = request.model.clone();
+    let calls = u64::from(policy.rounds) * u64::from(policy.per_round) + 2;
+    let input_bound = request
+        .messages
+        .iter()
+        .map(|message| message.content.len() as u64)
+        .sum::<u64>()
+        .saturating_add(request.schema.to_string().len() as u64)
+        .saturating_add(provider_options.to_string().len() as u64)
+        .saturating_mul(2)
+        .saturating_add((policy.max_chars as u64).saturating_mul(12))
+        .saturating_add(36864);
+    let estimate = Usage {
+        input_tokens: input_bound.saturating_mul(calls),
+        output_tokens: u64::from(request.max_tokens).saturating_mul(calls),
+        cached_tokens: 0,
+        embed_tokens: 0,
+        cost_usd: crate::harness::pricing::completion_cost(
+            &requested_model,
+            input_bound.saturating_mul(calls),
+            0,
+            u64::from(request.max_tokens).saturating_mul(calls),
+        ),
+    };
+    let budget = budget.map(|budget| ModelBudget {
+        ledger: budget.ledger.child(Default::default()),
+        call: budget.call,
+    });
+    let ledger = budget.as_ref().map(|budget| budget.ledger.clone());
     let mut running = TurnGuard(WORKERS.spawn(async move {
         let mut turn = agent
             .turn(evidence)
@@ -172,54 +243,71 @@ pub async fn review(
         }
         turn.send().await
     }));
-    let dispatch = bridge::dispatch(tree, policy, received, successful.clone());
+    let dispatch = bridge::dispatch(tree, policy, received, successful.clone(), lookup_budget);
     tokio::pin!(dispatch);
-    let outcome = tokio::select! {
-        result = &mut running.0 => result.map_err(|_| Error::Model("review worker failed".into()))?.map_err(|_| Error::Model("agentic reviewer failed".into())),
-        () = &mut dispatch => (&mut running.0).await.map_err(|_| Error::Model("review worker failed".into()))?.map_err(|_| Error::Model("agentic reviewer failed".into())),
+    let joined = tokio::select! {
+        result = &mut running.0 => result,
+        () = &mut dispatch => (&mut running.0).await,
     };
     cleanup.finish().await;
-    let outcome = outcome?;
-    if successful.load(Ordering::Relaxed) == 0 {
-        return Err(Error::Model(
-            "agentic review completed without a successful repository lookup".into(),
-        ));
-    }
-    let model = outcome
-        .answered_model
-        .filter(|model| !model.trim().is_empty())
-        .ok_or_else(|| Error::Model("review provider reported no answering model".into()))?;
-    let usage = outcome
-        .usage
-        .ok_or_else(|| Error::Model("review provider reported no usage".into()))?;
-    if usage.input_tokens == 0 && usage.output_tokens == 0 && usage.cost_usd.is_none() {
-        return Err(Error::Model(
-            "review provider reported no billable usage".into(),
-        ));
-    }
-    let cost_usd = usage
-        .cost_usd
-        .filter(|cost| cost.is_finite() && *cost >= 0.0)
-        .unwrap_or_else(|| {
-            crate::harness::pricing::completion_cost(
-                &model,
-                usage.input_tokens,
-                usage.cached_input_tokens,
-                usage.output_tokens,
+    let outcome = joined
+        .map_err(|_| {
+            ReviewFailure::unknown(
+                Error::Model("review worker failed".into()),
+                ledger.as_ref(),
+                estimate,
             )
-        });
+        })?
+        .map_err(|error| ReviewFailure::core(error, &requested_model, ledger.as_ref(), estimate))?;
+    let reported_model = outcome
+        .answered_model
+        .filter(|model| !model.trim().is_empty());
+    let model = reported_model.as_deref().unwrap_or(&requested_model);
+    let usage = outcome.usage.map(|usage| Usage {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cached_tokens: usage.cached_input_tokens,
+        embed_tokens: 0,
+        cost_usd: usage
+            .cost_usd
+            .filter(|cost| cost.is_finite() && *cost >= 0.0)
+            .unwrap_or_else(|| {
+                crate::harness::pricing::completion_cost(
+                    model,
+                    usage.input_tokens,
+                    usage.cached_input_tokens,
+                    usage.output_tokens,
+                )
+            }),
+    });
+    let refuse = |message: &str| ReviewFailure {
+        error: Error::Model(message.into()),
+        usage: usage.map(Box::new).or_else(|| {
+            ReviewFailure::unknown(Error::Model(message.into()), ledger.as_ref(), estimate).usage
+        }),
+    };
+    if successful.load(Ordering::Relaxed) == 0 {
+        return Err(refuse(
+            "agentic review completed without a successful repository lookup",
+        ));
+    }
+    let model =
+        reported_model.ok_or_else(|| refuse("review provider reported no answering model"))?;
+    let usage = usage.ok_or_else(|| refuse("review provider reported no usage"))?;
+    if usage.input_tokens == 0 && usage.output_tokens == 0 && usage.cost_usd == 0.0 {
+        return Err(ReviewFailure::unknown(
+            Error::Model("review provider reported no billable usage".into()),
+            ledger.as_ref(),
+            estimate,
+        ));
+    }
+    let value = outcome
+        .structured
+        .ok_or_else(|| refuse("review provider returned no structured answer"))?;
     Ok(ModelResponse {
-        value: outcome
-            .structured
-            .ok_or_else(|| Error::Model("review provider returned no structured answer".into()))?,
+        value,
         model,
-        usage: Usage {
-            input_tokens: usage.input_tokens,
-            output_tokens: usage.output_tokens,
-            cached_tokens: usage.cached_input_tokens,
-            cost_usd,
-            embed_tokens: 0,
-        },
+        usage,
     })
 }
 
