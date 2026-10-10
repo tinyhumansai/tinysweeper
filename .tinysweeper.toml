@@ -71,6 +71,9 @@ step that interpolates untrusted context into a shell.
 # "unpinned" call to the ladder is the same call.
 [models]
 gateway = "ladder"
+# The ladder routes across providers with different reasoning protocols.
+# Let it choose per-route controls instead of sending OpenRouter-only fields.
+reasoning_effort = "gateway"
 base_url = "https://sweeper.tinyhumans.ai:7443/v1"
 api_key_env = "LADDER_API_KEY"
 scan = "flash"
