@@ -4,17 +4,18 @@
 //! request bridge to its borrowed tree; no contributor code is executed.
 
 mod bridge;
+mod repository;
 mod types;
 pub(crate) use bridge::LookupBudget;
 pub(crate) use types::{ReviewFailure, accumulate_usage};
 
+use self::repository::repository_tools;
 use crate::config::types::LookupPolicy;
 use crate::error::{Error, Result};
 use crate::ports::model::{ModelRequest, ModelResponse, Role, Usage};
 use crate::ports::tree::TreeReader;
 use openhuman_embed::budget::ModelBudget;
 use openhuman_embed::complete::ResponseFormat;
-use openhuman_embed::repository::repository_tools;
 use openhuman_embed::{
     Access, Agent, AgentDefinitionSpec, AgentSpec, HostTurnTools, Provider, Runtime, RuntimeConfig,
     ToolScopeSpec, Workspace,
