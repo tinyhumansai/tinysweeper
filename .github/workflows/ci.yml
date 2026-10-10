@@ -31,7 +31,9 @@ jobs:
       # submodule pointer) and its [patch] tables mirror OpenHuman's own;
       # drift between them builds a different tree than anyone tested.
       - name: Verify the OpenHuman pin
-        run: scripts/assert-openhuman-pin.sh
+        run: |
+          python3 scripts/assert_openhuman_pin_test.py
+          scripts/assert-openhuman-pin.sh
 
       # Cheap step whose only job is to name a stale lockfile clearly, before a
       # confusing failure deeper in the build.

@@ -28,6 +28,9 @@ sub=$(git ls-tree HEAD vendor/openhuman | awk '{print $3}')
 [ -n "$sub" ] || fail "vendor/openhuman is not a submodule at HEAD"
 [ "$rev" = "$sub" ] || fail "Cargo.toml pins openhuman-embed at $rev but vendor/openhuman records $sub"
 
+checkout=$(git -C vendor/openhuman rev-parse HEAD)
+[ "$rev" = "$checkout" ] || fail "Cargo.toml pins openhuman-embed at $rev but vendor/openhuman is checked out at $checkout"
+
 # Compare every upstream patch, including optional feature dependencies.
 python3 - <<'CHECK'
 import pathlib
