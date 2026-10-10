@@ -29,9 +29,18 @@ use crate::eval::corpus::{Corpus, LoadedCase};
 use crate::eval::types::CaseScore;
 use crate::forge::types::RepoId;
 use crate::harness::cassette::{Cassette, Mode};
-use crate::ports::model::Model;
+use crate::ports::model::{Model, Spend, Usage};
 use crate::ports::tree::TreeReader;
 use crate::state::memory::MemoryState;
+
+/// Failure metadata is separate from labels, so re-scoring uses current ground truth.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RecordedFailure {
+    reason: String,
+    wall_secs: f64,
+    usage: Usage,
+    models: Vec<String>,
+}
 
 /// How a corpus run behaves.
 #[derive(Debug, Clone)]
@@ -137,11 +146,13 @@ pub async fn run(
         let cassette = match open_cassette(case, corpus, model.clone(), options) {
             Ok(cassette) => cassette,
             Err(err) => {
-                scores.push(crate::eval::score::failed(
-                    &case.case,
+                scores.push(persist_failure_with_spend(
+                    case,
+                    &options.out,
                     err.to_string(),
                     std::time::Duration::default(),
-                ));
+                    Spend::default(),
+                )?);
                 continue;
             }
         };
@@ -214,15 +225,14 @@ pub async fn run(
                          describe the old prompt",
                         strict_misses
                     );
-                    write_failure(&options.out, &case.case.id, &reason)?;
-                    crate::eval::score::failed(&case.case, reason, wall)
+                    persist_failed_case(case, &options.out, reason, wall, &cassette)?
                 } else {
                     write_proposal(&options.out, &case.case.id, &proposal)?;
                     crate::eval::score::score(&case.case, &proposal, wall)
                 }
             }
             // A case that fails is scored, not dropped: see `score::failed`.
-            Err(err) => crate::eval::score::failed(&case.case, err.to_string(), wall),
+            Err(err) => persist_failed_case(case, &options.out, err.to_string(), wall, &cassette)?,
         };
         scores.push(score);
     }
@@ -324,9 +334,33 @@ pub fn rescore(corpus: &Corpus, out: &Path) -> Result<Vec<CaseScore>> {
         // normal scorecard entry.
         let score = match std::fs::read_to_string(dir.join("failure.json")) {
             Ok(raw) => {
-                let reason = serde_json::from_str::<String>(&raw)
-                    .unwrap_or_else(|_| format!("the run failed for an unreadable reason: {raw}"));
-                crate::eval::score::failed(&case.case, reason, std::time::Duration::default())
+                match serde_json::from_str::<RecordedFailure>(&raw) {
+                    Ok(failure)
+                        if std::time::Duration::try_from_secs_f64(failure.wall_secs).is_ok() =>
+                    {
+                        crate::eval::score::failed_with_spend(
+                            &case.case,
+                            failure.reason,
+                            std::time::Duration::try_from_secs_f64(failure.wall_secs)
+                                .expect("validated failure duration"),
+                            Spend {
+                                usage: failure.usage,
+                                models: failure.models,
+                            },
+                        )
+                    }
+                    _ => {
+                        // Older runs persisted just the reason, without known usage.
+                        let reason = serde_json::from_str::<String>(&raw).unwrap_or_else(|_| {
+                            format!("the run failed for an unreadable reason: {raw}")
+                        });
+                        crate::eval::score::failed(
+                            &case.case,
+                            reason,
+                            std::time::Duration::default(),
+                        )
+                    }
+                }
             }
             Err(_) => {
                 let path = dir.join("proposal.json");
@@ -398,13 +432,51 @@ fn write_proposal(out: &Path, id: &str, proposal: &Proposal) -> Result<()> {
 /// disk. A strict replay that could not answer a call is not a measurement, so
 /// it must not leave a proposal behind that a later `eval score` would trust
 /// as one — the failure is what belongs there, and `rescore` prefers it.
-fn write_failure(out: &Path, id: &str, reason: &str) -> Result<()> {
+fn write_failure(out: &Path, id: &str, failure: &RecordedFailure) -> Result<()> {
     let dir = out.join(id);
     std::fs::create_dir_all(&dir).map_err(|err| crate::error::Error::path(&dir, err))?;
     let _ = std::fs::remove_file(dir.join("proposal.json"));
     let path = dir.join("failure.json");
-    std::fs::write(&path, serde_json::to_string(reason)?)
+    std::fs::write(&path, serde_json::to_string_pretty(failure)?)
         .map_err(|err| crate::error::Error::path(&path, err))
+}
+
+/// Keep failure, known paid usage, and wall time together; never price an unknown refusal.
+fn persist_failed_case(
+    case: &LoadedCase,
+    out: &Path,
+    mut reason: String,
+    wall: std::time::Duration,
+    cassette: &Cassette,
+) -> Result<CaseScore> {
+    let spend = cassette.spend();
+    if cassette.has_unreported_usage() {
+        reason.push_str("; cost includes known reported usage only; charges for model calls without reported usage are unknown");
+    }
+    persist_failure_with_spend(case, out, reason, wall, spend)
+}
+
+/// A failure before dispatch has known zero usage and still supersedes an old proposal.
+fn persist_failure_with_spend(
+    case: &LoadedCase,
+    out: &Path,
+    reason: String,
+    wall: std::time::Duration,
+    spend: Spend,
+) -> Result<CaseScore> {
+    write_failure(
+        out,
+        &case.case.id,
+        &RecordedFailure {
+            reason: reason.clone(),
+            wall_secs: wall.as_secs_f64(),
+            usage: spend.usage,
+            models: spend.models.clone(),
+        },
+    )?;
+    Ok(crate::eval::score::failed_with_spend(
+        &case.case, reason, wall, spend,
+    ))
 }
 
 /// A short hash of everything about the configuration that can move a score.

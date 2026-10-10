@@ -37,7 +37,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
-use crate::ports::model::{Message, Model, ModelRequest, ModelResponse, Usage};
+use crate::ports::model::{Message, Model, ModelRequest, ModelResponse, Spend, Usage};
 
 /// One recorded call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,12 +119,14 @@ struct Playback {
     /// hit is an allowed fallback and is reported; a strict miss is the
     /// staleness the corpus exists to make loud.
     misses: usize,
-    /// Dollars of every answer served this run, recorded or replayed.
+    /// Known paid usage of every answer served this run, recorded or replayed.
     ///
     /// Accumulated at serve time rather than derived from the written files,
     /// so the figure is right even for a case that failed after its calls —
     /// the ones no proposal will ever account for.
-    cost_usd: f64,
+    spend: Spend,
+    /// A live refusal without reported usage cannot be assumed free.
+    unreported_errors: usize,
     /// Takes recorded this run, in call order.
     recorded: Vec<Take>,
 }
@@ -211,7 +213,17 @@ impl Cassette {
     /// their calls — the ones a proposal never exists for. The corpus ceiling
     /// keys off this so a run of failing cases cannot walk its budget.
     pub fn cost_usd(&self) -> f64 {
-        self.state.lock().expect("cassette lock").cost_usd
+        self.state.lock().expect("cassette lock").spend.cost_usd()
+    }
+
+    /// Known served-response usage and actual answering models, including failed cases.
+    pub fn spend(&self) -> Spend {
+        self.state.lock().expect("cassette lock").spend.clone()
+    }
+
+    /// Whether a live refusal carried no usage, leaving any charge unknown.
+    pub fn has_unreported_usage(&self) -> bool {
+        self.state.lock().expect("cassette lock").unreported_errors > 0
     }
 
     /// Write everything recorded this run to disk, oldest call first.
@@ -254,7 +266,20 @@ impl Model for Cassette {
                 .inner
                 .as_ref()
                 .ok_or_else(|| Error::Model("cassette is recording with no model".into()))?;
-            let response = inner.complete(request.clone()).await?;
+            let response = match inner.complete(request.clone()).await {
+                Ok(response) => response,
+                Err(error) => {
+                    let mut state = self.state.lock().expect("cassette lock");
+                    if let Some(usage) = error.usage() {
+                        // A refusal reports usage without an answering model.
+                        // Count its known charge without inventing attribution.
+                        state.spend.usage.add(usage);
+                    } else {
+                        state.unreported_errors += 1;
+                    }
+                    return Err(error);
+                }
+            };
             let take = Take {
                 key,
                 model_requested: request.model.clone(),
@@ -277,7 +302,7 @@ impl Model for Cassette {
             let mut state = self.state.lock().expect("cassette lock");
             state.recorded.push(take);
             state.served += 1;
-            state.cost_usd += response.usage.cost_usd;
+            state.spend.record(&response.model, response.usage);
             return Ok(response);
         }
 
@@ -286,7 +311,7 @@ impl Model for Cassette {
         state.served += 1;
 
         if let Some(take) = self.takes.get(&key) {
-            state.cost_usd += take.usage.cost_usd;
+            state.spend.record(&take.model_answered, take.usage);
             return Ok(replayed(take));
         }
 
@@ -315,7 +340,7 @@ impl Model for Cassette {
         match self.ordered.get(cursor) {
             Some(take) => {
                 state.loose_hits += 1;
-                state.cost_usd += take.usage.cost_usd;
+                state.spend.record(&take.model_answered, take.usage);
                 Ok(replayed(take))
             }
             None => Err(Error::Model(format!(
