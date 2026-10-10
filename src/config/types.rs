@@ -802,6 +802,9 @@ pub struct Models {
     /// can be answered by any model in it and a prompt that carries its own
     /// schema has to be built before the answering model is known.
     pub structured_output: StructuredOutput,
+    /// Opt into read-only agent tool exploration for council reviewers.
+    /// Disabled until scripted and live evaluation establish parity.
+    pub agentic_reviewers: bool,
     /// Hard USD ceiling for a single pull request's review.
     pub budget_usd_per_pr: f64,
 }

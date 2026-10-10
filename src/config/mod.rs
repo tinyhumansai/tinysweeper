@@ -301,6 +301,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "max_tokens",
             "reasoning_effort",
             "structured_output",
+            "agentic_reviewers",
             "budget_usd_per_pr",
             "routes",
         ]),

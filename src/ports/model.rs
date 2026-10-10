@@ -9,6 +9,8 @@
 //! Structured output is not optional. A lane that parses prose is a lane that
 //! silently misbehaves when a model phrases something differently.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -196,6 +198,24 @@ impl Spend {
 pub trait Model: Send + Sync {
     /// Run one completion.
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse>;
+
+    /// Review against a borrowed read-only repository. Offline models retain
+    /// their completion behavior; live adapters may supply bounded tools.
+    async fn review(
+        &self,
+        request: ModelRequest,
+        _tree: &dyn crate::ports::tree::TreeReader,
+        _policy: &crate::config::types::LookupPolicy,
+    ) -> Result<ModelResponse> {
+        self.complete(request).await
+    }
+
+    /// Create a fresh shared budget scope for a lane, when supported.
+    /// Replaces any prior scope rather than nesting ledgers. Offline models
+    /// need no provider budget and keep returning `None`.
+    fn scoped_budget(&self, _budget_usd: f64) -> Option<Arc<dyn Model>> {
+        None
+    }
 }
 
 #[cfg(test)]

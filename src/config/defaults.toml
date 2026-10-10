@@ -318,6 +318,8 @@ reasoning_effort = "medium"
 # model is known. GLM 5.2 and MiniMax M3 both accept `json_object`, so the
 # safety net still works.
 structured_output = "json_object"
+# Read-only tool exploration is opt-in and requires structured_output = "schema".
+agentic_reviewers = false
 budget_usd_per_pr = 1.0
 
 # Per-model routing, for a rung that should not share the pin below.

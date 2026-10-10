@@ -242,6 +242,13 @@ fn validate_paths(config: &Config, problems: &mut Vec<String>) {
 
 fn validate_models(config: &Config, problems: &mut Vec<String>) {
     let models = &config.models;
+    if models.agentic_reviewers
+        && models.structured_output != crate::config::types::StructuredOutput::Schema
+    {
+        problems.push(
+            "`models.agentic_reviewers` requires `models.structured_output = \"schema\"`".into(),
+        );
+    }
 
     if models.base_url.trim().is_empty() {
         problems.push("`models.base_url` is empty".into());

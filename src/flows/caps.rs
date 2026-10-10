@@ -1,7 +1,8 @@
 //! The one capability a lane has: calling the model, under a budget.
 //!
 //! A review lane proposes and never acts, so the only thing it is granted is a
-//! structured model call through [`crate::ports::model::Model`]. There is no
+//! structured model call through [`crate::ports::model::Model`]. Opt-in agentic
+//! reviewers receive only the borrowed read-only tree. There is no
 //! tool, HTTP, code or shell capability to refuse, because nothing in the lane
 //! path can express one: a reviewer's turn is a [`Call`] — a system prompt, an
 //! evidence suffix and a schema — and its answer is JSON the host reads. Repo
@@ -30,6 +31,7 @@ use crate::ports::model::{Message, Model, ModelRequest, ModelResponse, Spend};
 /// used to go missing.
 pub struct ModelCapability {
     model: Arc<dyn Model>,
+    unscoped_model: Arc<dyn Model>,
     models: Models,
     spend: Mutex<Spend>,
     budget_usd: f64,
@@ -38,16 +40,18 @@ pub struct ModelCapability {
 impl ModelCapability {
     /// Wire a lane's reviewers to `model`, under `models`' ceilings.
     ///
-    /// The budget ceiling is enforced **here** rather than by the caller, and
-    /// that is what lets a lane fan out at all. Usage is only known once a
-    /// call returns, so concurrent work could otherwise start after the
-    /// ceiling had already been spent. This object sees every call, so it can
-    /// refuse one no matter how many are in flight — a stronger guarantee than
-    /// serialising ever gave, and it costs no concurrency.
+    /// Live adapters reserve provider spending against a fresh shared lane
+    /// ledger through `Model::scoped_budget`, including concurrent calls.
+    /// This capability also records returned usage and refuses further calls
+    /// once that tally reaches the ceiling. Offline models may omit the ledger.
     pub fn new(model: Arc<dyn Model>, models: Models) -> Self {
         let budget_usd = models.budget_usd_per_pr;
+        let scoped = model
+            .scoped_budget(budget_usd)
+            .unwrap_or_else(|| model.clone());
         Self {
-            model,
+            model: scoped,
+            unscoped_model: model,
             models,
             spend: Mutex::new(Spend::default()),
             budget_usd,
@@ -59,6 +63,10 @@ impl ModelCapability {
     /// A lane's share, when several lanes run against one pull request budget.
     pub fn with_budget(mut self, budget_usd: f64) -> Self {
         self.budget_usd = budget_usd;
+        self.model = self
+            .unscoped_model
+            .scoped_budget(budget_usd)
+            .unwrap_or_else(|| self.unscoped_model.clone());
         self
     }
 
@@ -88,6 +96,38 @@ impl ModelCapability {
     /// Resolution stays there rather than here so there is exactly one answer
     /// to "what did this call run on", and it is the one the cost line reports.
     pub async fn call(&self, call: &Call, schema: &Value) -> Result<ModelResponse> {
+        self.call_inner(call, schema, None).await
+    }
+
+    /// Whether council reviewers should use read-only agent exploration.
+    pub fn agentic_reviewers(&self) -> bool {
+        self.models.agentic_reviewers
+    }
+
+    /// Review against a borrowed tree, capturing redacted evidence for later stages.
+    pub async fn review(
+        &self,
+        call: &Call,
+        schema: &Value,
+        tree: &dyn crate::ports::tree::TreeReader,
+        policy: &crate::config::types::LookupPolicy,
+    ) -> Result<(ModelResponse, String)> {
+        let recorded = super::review_tree::RecordedTree::new(tree, policy.max_chars);
+        let response = self
+            .call_inner(call, schema, Some((&recorded, policy)))
+            .await?;
+        Ok((response, recorded.evidence()))
+    }
+
+    async fn call_inner(
+        &self,
+        call: &Call,
+        schema: &Value,
+        repository: Option<(
+            &dyn crate::ports::tree::TreeReader,
+            &crate::config::types::LookupPolicy,
+        )>,
+    ) -> Result<ModelResponse> {
         // Checked before the call, not after. Refusing a call that has already
         // been paid for would throw away work and still overspend.
         let spent = self.spend().cost_usd();
@@ -107,19 +147,27 @@ impl ModelCapability {
             )));
         }
 
-        let response = self
-            .model
-            .complete(ModelRequest {
-                model: call.model.clone(),
-                messages: vec![
-                    Message::system(call.system.clone()),
-                    Message::user(call.prompt.clone()),
-                ],
-                schema: schema.clone(),
-                schema_name: call.schema_name.clone(),
-                max_tokens: self.models.max_tokens,
-            })
-            .await?;
+        let request = ModelRequest {
+            model: call.model.clone(),
+            messages: vec![
+                Message::system(call.system.clone()),
+                Message::user(call.prompt.clone()),
+            ],
+            schema: schema.clone(),
+            schema_name: call.schema_name.clone(),
+            max_tokens: self.models.max_tokens,
+        };
+        let response = match repository {
+            Some((tree, policy))
+                if self.models.agentic_reviewers
+                    && policy.enabled
+                    && policy.rounds > 0
+                    && policy.per_round > 0 =>
+            {
+                self.model.review(request, tree, policy).await?
+            }
+            _ => self.model.complete(request).await?,
+        };
 
         if let Ok(mut spend) = self.spend.lock() {
             spend.record(&response.model, response.usage);
@@ -163,6 +211,113 @@ mod tests {
         });
 
         ModelCapability::new(Arc::new(model), models()).with_budget(budget)
+    }
+
+    struct ExploringModel;
+    #[async_trait::async_trait]
+    impl Model for ExploringModel {
+        async fn complete(&self, _: ModelRequest) -> Result<ModelResponse> {
+            Ok(ModelResponse {
+                value: json!("completion"),
+                model: "offline".into(),
+                usage: Usage::default(),
+            })
+        }
+        async fn review(
+            &self,
+            _: ModelRequest,
+            tree: &dyn crate::ports::tree::TreeReader,
+            _: &crate::config::types::LookupPolicy,
+        ) -> Result<ModelResponse> {
+            tree.lookup(&crate::ports::tree::Lookup::Read {
+                path: "src/config.rs".into(),
+                start: Some(1),
+                end: Some(1),
+            })
+            .await?;
+            Ok(ModelResponse {
+                value: json!("explored"),
+                model: "reviewer".into(),
+                usage: Usage::default(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn opt_in_review_captures_redacted_source_and_disabled_policy_completes() {
+        let mut config = models();
+        config.agentic_reviewers = true;
+        let cap = ModelCapability::new(Arc::new(ExploringModel), config);
+        let key = format!("AKIA{}", "IOSFODNN7EXAMPLE");
+        let tree = crate::ports::tree::MockTree::from_files([(
+            "src/config.rs",
+            format!("const KEY: &str = \"{key}\";"),
+        )]);
+        let mut policy = crate::config::types::LookupPolicy::default();
+        let (response, evidence) = cap
+            .review(&call("reviewer"), &json!({}), &tree, &policy)
+            .await
+            .unwrap();
+        assert_eq!(response.value, json!("explored"));
+        assert!(evidence.contains("What you looked up"));
+        assert!(evidence.contains("src/config.rs"));
+        assert!(!evidence.contains(&key));
+        policy.rounds = 0;
+        let (response, evidence) = cap
+            .review(&call("reviewer"), &json!({}), &tree, &policy)
+            .await
+            .unwrap();
+        assert_eq!(response.value, json!("completion"));
+        assert!(evidence.is_empty());
+    }
+
+    struct ScopedModel {
+        scopes: Arc<Mutex<Vec<f64>>>,
+        marker: f64,
+    }
+
+    #[async_trait::async_trait]
+    impl Model for ScopedModel {
+        async fn complete(&self, _: ModelRequest) -> Result<ModelResponse> {
+            Ok(ModelResponse {
+                value: json!(self.marker),
+                model: "scoped".into(),
+                usage: Usage::default(),
+            })
+        }
+
+        fn scoped_budget(&self, budget_usd: f64) -> Option<Arc<dyn Model>> {
+            self.scopes.lock().unwrap().push(budget_usd);
+            Some(Arc::new(Self {
+                scopes: self.scopes.clone(),
+                marker: budget_usd,
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn lane_budget_scopes_direct_and_panel_calls_to_the_same_model() {
+        let scopes = Arc::new(Mutex::new(Vec::new()));
+        let model = Arc::new(ScopedModel {
+            scopes: scopes.clone(),
+            marker: -1.0,
+        });
+        let cap = ModelCapability::new(model, models()).with_budget(0.25);
+        assert_eq!(*scopes.lock().unwrap(), vec![1.0, 0.25]);
+        let direct = cap
+            .model()
+            .complete(ModelRequest {
+                model: "scoped".into(),
+                messages: vec![],
+                schema: json!({}),
+                schema_name: "test".into(),
+                max_tokens: 1,
+            })
+            .await
+            .unwrap();
+        let panel = cap.call(&call("scoped"), &json!({})).await.unwrap();
+        assert_eq!(direct.value, json!(0.25));
+        assert_eq!(panel.value, direct.value);
     }
 
     #[tokio::test]

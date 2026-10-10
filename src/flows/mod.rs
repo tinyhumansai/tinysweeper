@@ -22,5 +22,6 @@
 pub mod caps;
 pub mod lookup;
 pub mod panel;
+pub(crate) mod review_tree;
 pub mod runner;
 pub mod subagent;

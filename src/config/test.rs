@@ -1572,3 +1572,17 @@ fn a_private_network_engine_needs_the_operators_say_so() {
         validate::validate(&allowed)
     );
 }
+
+#[test]
+fn agentic_reviewers_are_explicit_opt_in_and_require_strict_schemas() {
+    let config = Config::default();
+    assert!(!config.models.agentic_reviewers);
+    let mut enabled = config;
+    enabled.models.agentic_reviewers = true;
+    enabled.models.structured_output = crate::config::types::StructuredOutput::JsonObject;
+    assert!(
+        crate::config::validate::validate(&enabled)
+            .iter()
+            .any(|problem| problem.contains("agentic_reviewers"))
+    );
+}

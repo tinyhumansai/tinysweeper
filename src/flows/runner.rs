@@ -99,17 +99,36 @@ async fn one_round(
     calls: &[Call],
     schema: &Value,
 ) -> Vec<Answer> {
-    let results = futures::future::join_all(calls.iter().map(|call| llm.call(call, schema))).await;
+    one_round_review(llm, lane, calls, schema, None).await
+}
+
+async fn one_round_review(
+    llm: &ModelCapability,
+    lane: LaneId,
+    calls: &[Call],
+    schema: &Value,
+    repository: Option<(&dyn TreeReader, &LookupPolicy)>,
+) -> Vec<Answer> {
+    let results = futures::future::join_all(calls.iter().map(|call| async move {
+        match repository {
+            Some((tree, policy)) => llm.review(call, schema, tree, policy).await,
+            None => llm
+                .call(call, schema)
+                .await
+                .map(|response| (response, String::new())),
+        }
+    }))
+    .await;
     calls
         .iter()
         .zip(results)
         .map(|(call, result)| match result {
-            Ok(response) => Answer {
+            Ok((response, looked_up)) => Answer {
                 id: call.id.clone(),
                 value: Some(response.value),
                 model: response.model,
                 error: None,
-                looked_up: String::new(),
+                looked_up,
                 usage: response.usage,
             },
             Err(err) => {
@@ -249,7 +268,12 @@ pub async fn ask_all_accounted(
         });
     }
 
-    let lookups = asking.lookups();
+    let agentic_tree = asking.lookups().filter(|_| llm.agentic_reviewers());
+    let lookups = if agentic_tree.is_some() {
+        None
+    } else {
+        asking.lookups()
+    };
     let subagent_model = asking.subagent_model;
 
     // The schema and the instruction travel together: a reviewer told it may
@@ -289,7 +313,12 @@ pub async fn ask_all_accounted(
         .iter()
         .cloned()
         .map(|mut call| {
-            call.system = system_for(&call.system, max_rounds > 0, subagent_model.is_some());
+            if agentic_tree.is_some() && subagent_model.is_none() {
+                // The agent has tool iterations inside this turn; a settling
+                // instruction would falsely tell it no further reads exist.
+            } else {
+                call.system = system_for(&call.system, max_rounds > 0, subagent_model.is_some());
+            }
             call
         })
         .collect();
@@ -317,16 +346,24 @@ pub async fn ask_all_accounted(
         }
     }
 
-    let mut answers = one_round(
+    let mut answers = one_round_review(
         &llm,
         lane,
         &prompts,
         &schema_for(max_rounds > 0, subagent_model.is_some()),
+        agentic_tree,
     )
     .await;
     let mut usage = Usage::default();
     for answer in &answers {
         usage.add(answer.usage);
+    }
+
+    if agentic_tree.is_some() {
+        for (prompt, answer) in prompts.iter_mut().zip(&mut answers) {
+            prompt.prompt.push_str(&answer.looked_up);
+            answer.looked_up.clear();
+        }
     }
 
     // The lookup rounds. Each reviewer that asked gets its results appended
@@ -396,11 +433,12 @@ pub async fn ask_all_accounted(
     // when the early return below would otherwise skip it entirely and leave
     // every `looked_up` empty.
     for (index, answer) in answers.iter_mut().enumerate() {
-        answer.looked_up = prompts[index]
+        let legacy_evidence = prompts[index]
             .prompt
             .strip_prefix(calls[index].prompt.as_str())
             .unwrap_or_default()
             .to_string();
+        answer.looked_up.push_str(&legacy_evidence);
     }
 
     let Some(model) = subagent_model else {
@@ -479,3 +517,7 @@ pub async fn ask_all(
 #[cfg(test)]
 #[path = "runner_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "runner_agentic_test.rs"]
+mod agentic_tests;
