@@ -165,3 +165,7 @@ Asking is necessary and not sufficient, so `app::review` pins the level of any
 finding whose title it has seen before, ahead of the check-run conclusion and the
 request-changes verdict. The prompt makes the model's own answer stable; the pin
 makes the *verdict* stable whatever the model answers.
+
+Reviewer repository tool schemas, validation, redaction and envelopes are owned
+by TinySweeper in `agentic/repository/`, registered through Embed’s neutral host
+tool API. See [repository tools](REPOSITORY-TOOLS.md).
