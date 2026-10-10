@@ -69,8 +69,8 @@ A resolve used to happen silently. GitHub indexed that as resolved and the
 author read it as the bot losing interest: the objection was tinysweeper's, so
 the retraction should be too, and it should name the commit it is crediting.
 
-`apply_plan` therefore posts `threads::resolution_note` into the thread before
-resolving it. The note carries the deterministic reason and the abbreviated head
+`apply_plan` therefore posts `threads::resolution_note` into the thread once
+it has resolved it. The note carries the deterministic reason and the abbreviated head
 SHA of the reviewed commit — the same SHA `app::apply` has already checked
 against live state, so a note cannot credit a commit nobody is looking at:
 
@@ -81,10 +81,45 @@ Both halves of that string are crate-owned. `reason` is a `&'static str` from
 `Decision`, and the SHA is read off the forge, so nothing a contributor writes
 reaches the rendered comment.
 
-The note comes **first** and its failure does not stop the resolve. Both
-orderings lose something when the second call fails; this one loses the
-explanation for a thread that did close, rather than leaving a thread open
-underneath a comment announcing it was resolved.
+The resolve comes **first**, and the note is posted only after it succeeded.
+The opposite order shipped first and failed in production: when GitHub refused
+the resolve, the thread stayed open under a note announcing it was resolved,
+and the next push planned the same thread and posted the note again — 196 notes
+across 52 threads on a single pull request, none of them resolved by the bot.
+This order can lose the explanation for a thread that did close, if the reply
+fails, which is the cheaper loss.
+
+### Never twice
+
+Every note ends with the hidden marker `<!-- tinysweeper:resolved-note -->`.
+`plan` flags any thread that already carries one of our notes as `noted`. A
+note counts as ours when the author is our exact login *and* the comment opens
+with the `**Resolved** — ` prefix and, if it carries the marker, ends with it.
+Notes posted before the marker existed have the prefix alone. The check is
+anchored because a marker can be quoted mid-body: a finding opener that
+reproduces it from the diff is posted under our login, and must not count.
+A noted thread is still resolved when the policy says so, but `apply_plan`
+posts no second note. This is what closes the threads left behind by the old
+ordering, where a refused resolve was noted on every push, once the installation
+has the permission. A pasted marker from anyone else does not count, so it
+cannot silence our explanation.
+
+### When GitHub refuses
+
+A one-off failure (a stale node id) is logged and the rest of the plan still
+runs. A **permission** refusal — REST's `Resource not accessible by
+integration`, GraphQL's `FORBIDDEN` — would be repeated for every thread, so it
+is logged once, with the stable message `review thread resolve refused for want
+of permission; skipping the rest of this run`, and the rest of the plan is
+skipped. `resolveReviewThread` needs **Pull requests: write**, which
+`deploy/github-app-manifest.json` already grants, but GitHub also refuses it
+for installation tokens that have only `contents: read` (reported upstream in
+`github/gh-aw#35726`). So with the manifest as shipped, the first resolve is
+expected to be refused. Granting `contents: write` would clear it, but that
+widens the App's scope and is an operator decision, not a code change; until it
+is made, the refusal is logged and the run skips the rest of the plan.
+`apply_plan` returns an `ApplyReport` (`resolved`, `failed`, `skipped`) for
+callers that want the counts.
 
 `threads.comment_on_resolve` (default on) turns the note off without turning off
 the resolving — deliberately two behaviours behind one switch would mean

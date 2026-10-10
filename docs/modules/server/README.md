@@ -124,9 +124,15 @@ model call — and the same run is concluded afterwards by id.
 | State | Conclusion | Meaning |
 |---|---|---|
 | in progress | `None` | accepted, lanes running |
-| concluded | `Success` | the lanes ran; the lane checks carry the verdicts |
+| concluded | `Success` | the lanes ran and the review did not request changes |
+| concluded | `Neutral` | the lanes ran and the review requested changes |
 | concluded | `Neutral` | opened, then declined — draft, blocked author, taken |
 | concluded | `ActionRequired` | the review could not run (see below) |
+
+A completed review concludes from `app::apply::requests_changes`, the same
+predicate the submitted review reads, so the check never shows a pass beside a
+Changes Requested review. `Neutral` rather than `Failure`: the review already
+blocks, and liveness must not become a second merge gate.
 
 It is opened *after* the draft check and the lease claim, not on the delivery
 path, so a draft, a blocked contributor or a duplicate delivery never announces

@@ -7,9 +7,6 @@ version = 1
 [review]
 lanes = ["critique", "security", "tests", "commits", "description"]
 strictness = 2
-severity_gate = "medium"
-confidence_min = 0.6
-max_comments = 20
 incremental = true
 draft_prs = false
 respect_agents_md = true

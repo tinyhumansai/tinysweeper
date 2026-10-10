@@ -224,3 +224,21 @@ async fn a_finding_about_code_not_in_the_diff_survives() {
     assert_eq!(outcome.findings[0], finding_about_absent_code);
     assert!(outcome.rejected.is_empty());
 }
+
+#[tokio::test]
+async fn an_undefined_symbol_claim_is_left_to_the_model_not_rejected_on_text() {
+    // A symbol that the diff visibly defines is still a model decision: the
+    // filter must not drop the claim itself, so the model sees both findings.
+    let model = MockModel::new().then(json!({"incorrect": []}));
+    let mut claim = finding("`main` is not defined");
+    claim.body = "This will fail to compile.".into();
+    let outcome = filter(&model, vec![claim, finding("kept")]).await;
+
+    assert_eq!(outcome.findings.len(), 2);
+    assert!(outcome.rejected.is_empty());
+    let prompt = model.last_prompt().expect("recorded");
+    assert!(
+        prompt.contains("1. [src/main.rs] `main` is not defined"),
+        "{prompt}"
+    );
+}

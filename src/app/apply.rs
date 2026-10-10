@@ -422,6 +422,28 @@ async fn publish_wireframe(
     Ok(())
 }
 
+/// Whether this proposal draws a Changes Requested review.
+///
+/// The one predicate both the submitted review and the umbrella
+/// `tinysweeper/review` check read, so the two cannot disagree.
+///
+/// Blocking needs BOTH a failing lane and a finding severe enough to justify
+/// it. The lane conclusion alone is not enough: `fail_on` and
+/// `request_changes_at` are independent knobs, so a lane configured to fail
+/// on medium must still be able to fail a check without also blocking the
+/// merge when the merge gate is set to high. Reading only the conclusion
+/// made `request_changes_at` inert.
+///
+/// The severity is read from the lane's findings rather than the surviving
+/// comments, so a recurred problem whose comment was deduped away still
+/// blocks — being already visible is not being fixed.
+pub fn requests_changes(config: &Config, proposal: &Proposal) -> bool {
+    match config.request_changes_at() {
+        Some(threshold) => proposal.blocked() && proposal.has_severity_at_or_above(threshold),
+        None => false,
+    }
+}
+
 /// Decide how to submit the review.
 ///
 /// `previous` is tinysweeper's own last verdict on this pull request, if any.
@@ -431,21 +453,7 @@ fn review_event(
     previous: Option<ReviewEvent>,
     draft: bool,
 ) -> ReviewEvent {
-    // Blocking needs BOTH a failing lane and a finding severe enough to justify
-    // it. The lane conclusion alone is not enough: `fail_on` and
-    // `request_changes_at` are independent knobs, so a lane configured to fail
-    // on medium must still be able to fail a check without also blocking the
-    // merge when the merge gate is set to high. Reading only the conclusion
-    // here made `request_changes_at` inert.
-    //
-    // The severity is read from the lane's findings rather than the surviving
-    // comments, so a recurred problem whose comment was deduped away still
-    // blocks — being already visible is not being fixed.
-    let blocks = match config.request_changes_at() {
-        Some(threshold) => proposal.blocked() && proposal.has_severity_at_or_above(threshold),
-        None => false,
-    };
-    if blocks {
+    if requests_changes(config, proposal) {
         return ReviewEvent::RequestChanges;
     }
 
@@ -752,8 +760,10 @@ fn review_body(
 
     let mut body = match event {
         ReviewEvent::RequestChanges => {
+            // Overflow counts toward the verdict's worst severity: a high
+            // finding the budget moved to the hub is still what blocks.
             let worst = proposal
-                .findings()
+                .reported()
                 .map(|f| f.severity)
                 .max()
                 .unwrap_or(Severity::Low);
@@ -806,6 +816,32 @@ fn review_body(
                 finding.title, finding.path, finding.rule, finding.body
             ));
         }
+    }
+
+    // Over-budget findings are named here as well as in the hub. The hub is
+    // best-effort (it is skipped when summaries are disabled, and a failed
+    // update is only logged), while the review body is always submitted, so a
+    // blocking finding that did not fit the budget is never only in a place
+    // that might not be written.
+    let over: Vec<&crate::findings::types::Finding> = proposal.overflowed().collect();
+    if !over.is_empty() {
+        body.push_str(
+            "\n\n### Over the comment budget\n\nNot posted inline; listed here so none is lost.\n",
+        );
+        for finding in over {
+            let line = finding
+                .line
+                .map(|line| format!(":{line}"))
+                .unwrap_or_default();
+            body.push_str(&format!(
+                "\n- **{}** {} (`{}{}`)",
+                finding.severity,
+                crate::summary::render::md(&finding.title),
+                crate::summary::render::md(&finding.path),
+                line
+            ));
+        }
+        body.push('\n');
     }
 
     // The full token breakdown goes in the body deliberately. Cache hit rate is
@@ -1010,6 +1046,7 @@ mod tests {
                 usage: Default::default(),
                 models: vec![],
                 unanswered: vec![],
+                overflow: vec![],
             }],
             cost_usd: 0.01,
             input_tokens: 10_000,
@@ -1339,6 +1376,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn an_over_budget_finding_is_named_in_the_review_body() {
+        // The hub is best-effort and is skipped when summaries are disabled, so
+        // an over-budget finding must also be named in the review body, which
+        // is always submitted.
+        let mut over = finding();
+        over.title = "Over budget finding".into();
+        let mut proposal = proposal("abc123", vec![]);
+        proposal.lanes[0].overflow.push(over);
+
+        let body = review_body(&proposal, ReviewEvent::Comment, None, &[]);
+
+        assert!(body.contains("### Over the comment budget"), "{body}");
+        assert!(body.contains("Over budget finding"), "{body}");
+        assert!(body.contains("src/main\\.rs:2"), "{body}");
+    }
+
     fn finding() -> Finding {
         Finding {
             lane: LaneId::Critique,
@@ -1523,6 +1577,27 @@ mod tests {
                 "missing {identity}"
             );
         }
+    }
+
+    #[test]
+    fn requests_changes_agrees_with_the_submitted_verdict() {
+        // `tinysweeper/review` is concluded from this predicate. When it and
+        // the review disagreed, the check showed a pass beside a Changes
+        // Requested review.
+        let config = config();
+        let blocking = proposal("abc123", vec![finding()]);
+        assert!(requests_changes(&config, &blocking));
+        assert_eq!(
+            review_event(&config, &blocking, None, false),
+            ReviewEvent::RequestChanges
+        );
+
+        let clean = proposal("abc123", vec![]);
+        assert!(!requests_changes(&config, &clean));
+        assert_ne!(
+            review_event(&config, &clean, None, false),
+            ReviewEvent::RequestChanges
+        );
     }
 
     #[tokio::test]
@@ -2525,6 +2600,7 @@ mod tests {
             resolve: vec![crate::threads::PlannedResolve {
                 id: "PRRT_1".into(),
                 reason: "the finding no longer reproduces on the new code".into(),
+                noted: false,
             }],
         };
 
@@ -2554,6 +2630,7 @@ mod tests {
             resolve: vec![crate::threads::PlannedResolve {
                 id: "PRRT_1".into(),
                 reason: "stale".into(),
+                noted: false,
             }],
         };
 

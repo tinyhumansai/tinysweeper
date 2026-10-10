@@ -243,7 +243,12 @@ fn postable(proposal: &Proposal) -> Vec<&Finding> {
     proposal
         .lanes
         .iter()
-        .flat_map(|lane| lane.findings.iter().chain(lane.noted.iter()))
+        .flat_map(|lane| {
+            lane.findings
+                .iter()
+                .chain(lane.overflow.iter().filter(|finding| !finding.grouped))
+                .chain(lane.noted.iter())
+        })
         .collect()
 }
 

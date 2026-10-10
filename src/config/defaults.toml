@@ -11,13 +11,38 @@
 version = 1
 
 [review]
-lanes = ["critique", "security", "tests", "commits", "description", "e2e"]
+# `e2e` is opt-in: list it here (or use the `e2e-required` preset) to turn it
+# on. It was on by default and, wherever a harness existed, asked for an
+# end-to-end test on config flips and settings panels nobody acted on
+# (openhuman#7128, #7127, tinymemory#238). See docs/modules/lanes/e2e.md.
+lanes = ["critique", "security", "tests", "commits", "description"]
 # The one dial most repositories should touch. 1 chill, 2 default, 3 assertive.
 # `severity_gate` and `confidence_min` are deliberately absent: strictness sets
 # them, and setting them here would make the dial inert for everyone who never
 # overrode them — which is exactly the bug this replaced.
 strictness = 2
-max_comments = 20
+# The inline-comment budget for a whole pull request — not per lane, not per
+# adaptive pass, not per push. Every lane and pass of a review cycle is ranked
+# together (severity, then confidence, then council agreement) and only the
+# top of that list becomes inline conversations; the rest are listed by title
+# and location in the review hub, never dropped.
+#
+# Earlier cycles spend the same budget while their conversations stay open:
+# five unresolved threads leave no room for a sixth until one is resolved
+# (by a maintainer, the author, or `threads` closing a fixed finding). An
+# outdated thread still counts — it is still asking for attention, and
+# letting a rewrite refill the budget is how a 48-commit pull request
+# collected 115 findings when this was 20 per cycle. With `incremental`
+# off, earlier cycles are not read and every review starts from a full budget.
+#
+# One exception: a critical finding is always posted inline, budget or not.
+# It still counts against the budget and is still deduplicated, so it is never
+# repeated — but it is never demoted to a hub line because older threads are
+# open. Critical only; exempting high would make this no budget at all.
+#
+# Five, because comments that get acted on are few and severe; a reviewer
+# whose every push adds a page of them is read for a week and then ignored.
+max_comments = 5
 # Resource ceilings, checked before commit patches or model calls. These are
 # intentionally generous: ordinary large pull requests still run, while a
 # generated-code dump or repository-scale rewrite cannot consume an unbounded
@@ -896,7 +921,7 @@ resolve_fixed = true
 # On: replies are fenced as untrusted data and the advisory result can only
 # close an existing tinysweeper-owned thread through deterministic policy.
 ask_model = true
-# Reply with the reason and the commit before resolving. On: a thread that
+# Reply with the reason and the commit once a resolve succeeds. On: a thread that
 # collapses silently reads as the bot losing interest rather than as a finding
 # somebody fixed, and the author cannot check a claim that was never made.
 comment_on_resolve = true

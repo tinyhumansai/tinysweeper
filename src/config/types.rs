@@ -305,17 +305,21 @@ pub struct Review {
     /// [`Config::confidence_min`]. It was inert for a while: documented as the
     /// dial, validated for range, and read by nothing.
     pub strictness: u8,
-    /// Post findings at or above this severity. Overrides what `strictness`
-    /// would choose; leave it unset unless you need to.
+    /// Post findings at or above this severity. Can only make the gate
+    /// `strictness` chose *stricter*; a value below it is ignored. Leave it
+    /// unset unless you need to.
     pub severity_gate: Option<String>,
-    /// Drop findings the model is less sure about than this. Overrides what
-    /// `strictness` would choose.
+    /// Drop findings the model is less sure about than this. Like
+    /// `severity_gate`, it can only raise what `strictness` would choose.
     pub confidence_min: Option<f64>,
-    /// Hard cap on published finding threads per pull request.
+    /// The inline-comment budget for the whole pull request.
     ///
-    /// Co-located observations share one thread and therefore count once;
-    /// grouping preserves every observation inside that thread before this
-    /// cap is applied.
+    /// Spent across every lane and adaptive pass of a review, ranked
+    /// globally, and by every earlier finding whose conversation is still
+    /// open (`PriorReview::open_findings`). Findings over budget are listed in
+    /// the review hub rather than posted. Co-located observations share one
+    /// thread and therefore count once; grouping preserves every observation
+    /// inside that thread before this cap is applied.
     pub max_comments: usize,
     /// Most files one pull request may change before review is refused.
     ///
@@ -393,7 +397,7 @@ pub struct Threads {
     /// deterministic code executes, and it can only ever close a thread
     /// tinysweeper itself opened.
     pub ask_model: bool,
-    /// Say why, in the thread, before resolving it.
+    /// Say why, in the thread, once it has been resolved.
     ///
     /// On by default. A conversation that collapses with no reply is indexed
     /// by GitHub as resolved and by the author as unexplained: the objection
@@ -1758,20 +1762,33 @@ impl Config {
 
     /// The severity at or above which findings are posted.
     ///
-    /// From `strictness` unless the repository set it explicitly.
+    /// The dial's gate, raised by an explicit `severity_gate` and never
+    /// lowered by one. Tighten-only on purpose, whichever layer set the key:
+    /// the merge records provenance for `doctor` but the effective config does
+    /// not carry it, and "a preset may not loosen, a repository may" would
+    /// still let the operator's own `.tinysweeper.toml` — the repo layer for
+    /// every reviewed repository — loosen everyone at once. That is exactly
+    /// what `rust-library`'s `medium`/0.6 did while the dial read "default".
+    /// Anyone who wants more findings turns the dial to 3; that is what it is
+    /// for, and it is one key `doctor` can explain.
     pub fn severity_gate(&self) -> Severity {
+        let dial = self.strictness().severity;
         self.review
             .severity_gate
             .as_deref()
             .and_then(Severity::parse)
-            .unwrap_or_else(|| self.strictness().severity)
+            .map_or(dial, |explicit| explicit.max(dial))
     }
 
     /// The confidence a finding needs before it is posted.
+    ///
+    /// Tighten-only against the dial, for the reason on
+    /// [`Self::severity_gate`].
     pub fn confidence_min(&self) -> f64 {
+        let dial = self.strictness().confidence;
         self.review
             .confidence_min
-            .unwrap_or_else(|| self.strictness().confidence)
+            .map_or(dial, |explicit| explicit.max(dial))
     }
 
     /// The gates `review.strictness` implies.
@@ -1988,20 +2005,21 @@ mod tests {
     }
 
     #[test]
-    fn the_e2e_lane_is_on_by_default_and_opts_out_by_omission() {
-        // On by default because it is quiet without a harness; a repository
-        // that does not want it lists `review.lanes` without it, and nothing
-        // else has to be set.
+    fn the_e2e_lane_is_off_by_default_and_opts_in_by_listing() {
+        // Off by default: with a harness present it asked for an end-to-end
+        // test on config flips and settings panels, which nobody acted on. A
+        // repository that wants it lists it in `review.lanes` (or uses the
+        // `e2e-required` preset), and nothing else has to be set.
         let defaults: Config = crate::config::DEFAULTS
             .parse::<toml::Table>()
             .unwrap()
             .try_into()
             .unwrap();
-        assert!(defaults.enabled_lanes().contains(&LaneId::E2e));
+        assert!(!defaults.enabled_lanes().contains(&LaneId::E2e));
 
-        let mut opted_out = defaults.clone();
-        opted_out.review.lanes.retain(|lane| lane != "e2e");
-        assert!(!opted_out.enabled_lanes().contains(&LaneId::E2e));
+        let mut opted_in = defaults.clone();
+        opted_in.review.lanes.push("e2e".into());
+        assert!(opted_in.enabled_lanes().contains(&LaneId::E2e));
     }
 
     #[test]

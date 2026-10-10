@@ -1,7 +1,7 @@
 //! Structured generation and deterministic rendering for the durable PR review hub.
 
 mod generate;
-mod render;
+pub(crate) mod render;
 mod types;
 
 pub use generate::{deterministic, generate};

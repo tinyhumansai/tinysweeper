@@ -12,6 +12,10 @@ observations. A generated feature or test claim is discarded unless every
 citation names a changed path or known changed symbol. Unsupported claims that
 tests ran, passed, or reached numerical coverage are discarded as well.
 
+When no supported change explanation exists the "What changed" section is
+omitted rather than filled with failure text, and the update time renders as
+ISO 8601 UTC (`2026-10-08T11:39:30Z`), never as raw epoch seconds.
+
 Readiness, priority, change counts, findings, incomplete work, the before-merge
 checklist, usage, and bounded pass history are deterministic. Inline findings,
 lane checks, approvals, and changes-requested reviews remain the enforcement
