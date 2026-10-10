@@ -170,6 +170,8 @@ pub struct MockState {
     pub own_review_state_fails: bool,
     /// Whether withdrawing our own approval fails.
     pub dismissals_fail: bool,
+    /// Whether reading review threads fails, as a GraphQL outage would.
+    pub review_threads_fail: bool,
     /// Check runs, keyed by the commit they report on and then by check name.
     pub checks: BTreeMap<String, BTreeMap<String, CheckStatus>>,
     /// Reviews, oldest first, keyed by pull request number.
@@ -424,6 +426,15 @@ impl MockForge {
         self
     }
 
+    /// Make `review_threads` fail, as a GraphQL outage would.
+    pub fn failing_review_threads(self) -> Self {
+        {
+            let mut state = self.state.lock().expect("mock state lock");
+            state.review_threads_fail = true;
+        }
+        self
+    }
+
     /// Make `own_review_state` fail, as a forge mid-outage would.
     pub fn failing_own_review_state(self) -> Self {
         {
@@ -615,6 +626,9 @@ impl ForgeRead for MockForge {
 
     async fn review_threads(&self, _repo: &RepoId, number: u64) -> Result<Vec<ReviewThread>> {
         let state = self.state.lock().expect("mock state lock");
+        if state.review_threads_fail {
+            return Err(Error::Forge("review threads unavailable".into()));
+        }
         Ok(state
             .review_threads
             .get(&number)

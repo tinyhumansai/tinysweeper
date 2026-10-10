@@ -33,6 +33,7 @@ jobs:
       - name: Verify the OpenHuman pin
         run: |
           python3 scripts/assert_openhuman_pin_test.py
+          python3 scripts/deploy_preflight_test.py
           scripts/assert-openhuman-pin.sh
 
       # Cheap step whose only job is to name a stale lockfile clearly, before a

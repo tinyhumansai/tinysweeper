@@ -32,6 +32,13 @@ fn signature() -> EmbedSignature {
 // --- pure: always run, no server -----------------------------------------
 
 #[test]
+fn stored_documents_use_the_mongodb_driver_bson_type() {
+    let node = GraphNode::symbol("o/r", "src/a.rs", "alpha");
+    let document: mongodb::bson::Document = node_document(&node);
+    assert_eq!(node_from_document(&document), node);
+}
+
+#[test]
 fn a_vector_is_stored_as_float32_bindata_not_an_array_of_doubles() {
     // Four bytes per dimension against eight plus per-element overhead. On a
     // 1024-dimension index this field is most of the document.
