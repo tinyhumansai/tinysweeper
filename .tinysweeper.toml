@@ -109,8 +109,8 @@ max_tokens = 16000
 # separate space from BGE-M3 (`vectors`), which this box does not serve.
 # Naming the space in the signature partitions existing indexes so a model
 # change re-indexes rather than mixing incompatible vectors. The three
-# signature fields below are the index partition key: change any of them and the vectors already written stop
-# matching, which is why they live here rather than in the environment, and
+# signature fields below are the index partition key: change any of them
+# and the vectors already written stop matching, which is why they live here rather than in the environment, and
 # why moving here from `openrouter:openai/text-embedding-3-small:1536` means
 # each repository re-indexes on its next push.
 [embeddings]
