@@ -51,33 +51,25 @@ sudo certbot certonly --webroot -w /var/www/certbot -d sweeper.tinyhumans.ai
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
+The nginx file also defines a private TLS ladder listener on
+`172.17.0.1:7443`. It reuses the server certificate; Compose maps
+`sweeper.tinyhumans.ai` to the host gateway for this connection. The ladder
+continues to validate its bearer, and no model route is exposed on public
+ports. Install this nginx file before using the shipped HTTPS model endpoints.
+This satisfies Embed's TLS requirement for bearer routes outside loopback.
+
 ### The memory engine, before the first `up`
 
-`.tinysweeper.toml` turns `[memory]` on against `http://cortexdb:3141`, and
-the server **refuses to boot** when an enabled engine cannot be reached — a
-silently forgetful reviewer would be worse. So the engine has to be reachable
-*before* the stack comes up, and `CORTEX_API_KEY` goes in `.env` alongside the
-rest.
+`.tinysweeper.toml` turns `[memory]` on against
+`http://host.docker.internal:3141`. The server refuses to boot when an enabled
+engine cannot be reached, so configure `CORTEX_API_KEY` in `.env` first.
 
-On the box the engine is the shared CortexDB every service uses (teeny and
-tinysweeper today): the container named `cortex`, published on
-`127.0.0.1:3141`, with its data in the `cortex-data` volume. It is nobody's
-compose project — it was started by hand with the workspace's own tooling and
-this repository neither defines nor starts it. What this stack needs is the
-name `cortexdb` resolving from the server container, which is a network
-attachment done once by hand, because Compose cannot adopt a container it did
-not create:
-
-```sh
-docker network create --label com.docker.compose.project=tinysweeper \
-  --label com.docker.compose.network=default tinysweeper_default
-docker network connect --alias cortexdb tinysweeper_default cortex
-```
-
-Repeat the `connect` whenever the `cortex` container is recreated; the
-attachment does not survive that. `CORTEX_API_KEY` in `.env` is the bearer that
-container was started with (`docker inspect cortex` shows it), the same value
-teeny's `deploy/.env` carries.
+The shared CortexDB container (`cortex`) lives on a separate Docker network.
+It publishes port 3141 on both `127.0.0.1` and the Docker host gateway
+`172.17.0.1`; Compose maps `host.docker.internal` to that gateway. This avoids
+an extra network attachment that disappears whenever Cortex is recreated.
+TinySweeper neither defines nor starts the shared engine. Keep its bearer in
+`.env`; do not print the container environment to recover credentials.
 
 Isolation between the services sharing the engine is by CortexDB scope, not by
 network or key: tinysweeper writes under `owner:<org>/repo:<name>/section:…`,
@@ -94,23 +86,22 @@ the box, and the old volume is still there — it is the only copy of the
 pre-migration data, so leave it until nobody wants the rollback.
 
 A host without a shared engine (a replacement box, a laptop) runs its own
-CortexDB, joins it to `tinysweeper_default` under the same alias, and sets the
+CortexDB, publishes port 3141 on the Docker host gateway, and sets the
 key in `.env`. The minimum is one container against any OpenAI-compatible
 endpoint `$U` that serves an embedding model and a chat model — the ladder
-serves them as `vectors` (1024-dimensional) and `flash`:
+serves them as `vectors-oai3` (1024-dimensional) and `flash`:
 
 ```sh
 docker run -d --name cortex --restart unless-stopped \
-  -p 127.0.0.1:3141:3141 -v cortex-data:/data \
+  -p 127.0.0.1:3141:3141 -p 172.17.0.1:3141:3141 -v cortex-data:/data \
   -e CORTEX_API_KEY=<bearer> -e CORTEX_DEPLOYMENT_PRESET=on_prem_enterprise -e CORTEX_BIND_ALL=1 \
-  -e CORTEX_EMBEDDING_URL=$U -e CORTEX_EMBEDDING_MODEL=vectors -e CORTEX_EMBEDDING_DIMS=1024 \
+  -e CORTEX_EMBEDDING_URL=$U -e CORTEX_EMBEDDING_MODEL=vectors-oai3 -e CORTEX_EMBEDDING_DIMS=1024 \
   -e CORTEX_LLM_URL=$U -e CORTEX_LLM_MODEL=flash \
   -e CORTEX_ENRICHMENT_URL=$U -e CORTEX_ENRICHMENT_MODEL=flash \
   -e CORTEX_ANSWER_PROVIDER=openai -e CORTEX_ANSWER_URL=$U -e CORTEX_ANSWER_MODEL=flash \
   -e CORTEX_VERIFIER_URL=$U -e CORTEX_VERIFIER_MODEL=flash \
   -e OPENAI_API_KEY=<endpoint key> -e LLM_API_KEY=<endpoint key> \
   cortexdb/cortexdb:latest 3141 /data
-docker network connect --alias cortexdb tinysweeper_default cortex
 ```
 
 The embedding size is pinned by the first write and cannot change afterwards,
@@ -173,13 +164,17 @@ Actions tab; it opens an SSH session as `droid` and runs, in
 
 ```sh
 docker compose -f docker-compose.yml -f docker-compose.prod.yml pull tinysweeper
+docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm --no-deps --interactive=false tinysweeper check .tinysweeper.toml
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --remove-orphans --wait
 ```
 
-`--wait` makes the job fail if the new container never becomes healthy, and
-Compose leaves the previous container in place until the new one is created,
-so a bad image costs one failed run rather than an outage. The same two
-commands, run by hand on the box, are the whole of a manual deploy.
+The incoming image validates the mounted operator config before replacing the
+running server. A rejected config leaves it running; keep finite output caps
+and model budget prices current when upgrading. `--interactive=false` keeps
+Compose from consuming the remaining SSH script. `--wait` then checks runtime
+health. A runtime failure after replacement can still cause an outage; roll
+back to the last known good image and configuration if it does. The same three
+commands are the manual deploy path.
 
 The workflow needs, on the `production` environment:
 

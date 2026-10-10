@@ -111,6 +111,7 @@ services:
     # in `.tinysweeper.toml` points at it.
     extra_hosts:
       - "host.docker.internal:host-gateway"
+      - "sweeper.tinyhumans.ai:host-gateway"
     environment:
       TINYSWEEPER_MONGODB_URI: mongodb://${MONGO_ROOT_USERNAME:-tinysweeper}:${MONGO_ROOT_PASSWORD}@mongod:27017/?authSource=admin&directConnection=true
       TINYSWEEPER_MONGODB_DB: tinysweeper
