@@ -137,6 +137,13 @@ jobs:
           compose pull tinysweeper
           echo "::endgroup::"
 
+          # Validate the mounted operator config with the new image before
+          # replacing the healthy server. Image upgrades can tighten validation.
+          # Disable stdin so Compose cannot consume the remaining SSH script.
+          echo "::group::config preflight"
+          compose run --rm --no-deps --interactive=false tinysweeper check .tinysweeper.toml
+          echo "::endgroup::"
+
           echo "::group::up"
           # `--wait` blocks until every service is healthy or gives up, so a
           # crash-looping image fails the job instead of going green the

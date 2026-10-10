@@ -1794,3 +1794,16 @@ fn disabled_agentic_reviewers_preserve_serialized_baseline_configuration() {
             .contains("agentic_reviewers = true")
     );
 }
+
+#[test]
+fn deployment_retrieval_uses_the_served_embedding_space_and_reachable_memory_host() {
+    let deployment: Config = toml::from_str(include_str!("../../.tinysweeper.toml")).unwrap();
+    assert!(deployment.models.base_url.starts_with("https://"));
+    assert_eq!(deployment.embeddings.model, "vectors-oai3");
+    assert_eq!(deployment.embeddings.dimensions, 1024);
+    let endpoint = url::Url::parse(&deployment.memory.endpoint).unwrap();
+    assert_eq!(endpoint.host_str(), Some("host.docker.internal"));
+    assert_eq!(endpoint.port(), Some(3141));
+    assert!(deployment.memory.allow_private_http);
+    assert!(include_str!("../../docker-compose.yml").contains("host.docker.internal:host-gateway"));
+}
