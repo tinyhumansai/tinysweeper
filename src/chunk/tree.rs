@@ -91,6 +91,9 @@ const EXTRA_DEFINITIONS: &[&str] = &[
 /// is actually a data dump, say — and the caller should fall back to the line
 /// splitter so the resulting chunks are labelled honestly.
 pub fn split(source: &str, language: Language, options: &ChunkOptions) -> Option<Vec<SourceChunk>> {
+    if source.trim().is_empty() {
+        return Some(Vec::new());
+    }
     let mut parser = Parser::new();
     parser.set_language(&grammar(language)).ok()?;
     let tree = parser.parse(source, None)?;
@@ -338,8 +341,7 @@ fn emit(
     let Some(text) = source.get(start..end) else {
         return;
     };
-    if text.trim().is_empty() {
-        // Whitespace embeds to nothing useful and still costs a call.
+    if text.is_empty() {
         return;
     }
     let start_line = line_of(starts, start);
@@ -350,7 +352,9 @@ fn emit(
     // provider will refuse. `split_ceiling` rather than `max_chars` so the
     // provider's own per-input limit binds even when `max_chars` is larger.
     if text.len() > options.split_ceiling() {
-        chunks.extend(lines::split(text, start_line, options));
+        chunks.extend(lines::split_preserving_whitespace(
+            text, start_line, options,
+        ));
         return;
     }
 

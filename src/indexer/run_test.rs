@@ -1013,8 +1013,8 @@ async fn a_binary_file_on_the_allowlist_is_reported_as_not_text() {
 // These assert the token ceiling and, more importantly, that adding it did not
 // cost the partition invariant: every queued chunk is embedded exactly once.
 
-/// A chunk whose text is `chars` bytes long, so its estimated token cost is
-/// `chars / 4` and a batch's expected split is arithmetic rather than a guess.
+/// A chunk whose text is `chars` bytes long, so the conservative admission
+/// bound and expected batch split are arithmetic rather than a guess.
 fn sized_chunk(chars: usize) -> Chunk {
     Chunk {
         repo_id: REPO.into(),
@@ -1039,10 +1039,10 @@ fn bounds_over(chunks: &[Chunk], max_items: usize, max_tokens: u64) -> Vec<(usiz
 fn the_token_ceiling_splits_a_batch_the_count_ceiling_would_keep_whole() {
     // The production regression, in miniature. Ten chunks is under a count
     // ceiling of 64, so the old `queue.chunks(self.batch)` sent all ten in one
-    // call; at 4,000 estimated tokens each that is 40,000 against a ceiling of
+    // call; at 4,000 bytes each that is 40,000 against a ceiling of
     // 12,000, which is exactly the shape the provider rejected with
     // `max_tokens_per_request`.
-    let chunks: Vec<Chunk> = (0..10).map(|_| sized_chunk(16_000)).collect();
+    let chunks: Vec<Chunk> = (0..10).map(|_| sized_chunk(4_000)).collect();
     let bounds = bounds_over(&chunks, 64, 12_000);
     assert!(
         bounds.len() > 1,
@@ -1051,7 +1051,7 @@ fn the_token_ceiling_splits_a_batch_the_count_ceiling_would_keep_whole() {
     for (start, end) in &bounds {
         let tokens: u64 = chunks[*start..*end]
             .iter()
-            .map(|chunk| estimate_tokens(&chunk.text))
+            .map(|chunk| chunk.text.len() as u64)
             .sum();
         assert!(tokens <= 12_000, "batch {start}..{end} carries {tokens}");
     }
@@ -1061,22 +1061,20 @@ fn the_token_ceiling_splits_a_batch_the_count_ceiling_would_keep_whole() {
 fn the_real_rejected_batch_now_fits_under_the_default_ceiling() {
     // The measured failure: 64 chunks at the chunker's 14,400-char cap. The
     // provider counted 467,846 real tokens against a 300,000 limit. Under the
-    // default ceiling this must split, and each batch must stay under half of
-    // 300,000 — the headroom that covers `estimate_tokens` under-counting code
-    // by roughly 2x.
+    // default ceiling this must split, and each batch's byte bound must fit
+    // without depending on the source's bytes-per-token ratio.
     let chunks: Vec<Chunk> = (0..64).map(|_| sized_chunk(14_400)).collect();
     let bounds = bounds_over(&chunks, DEFAULT_BATCH, DEFAULT_MAX_BATCH_TOKENS);
     assert!(bounds.len() > 1, "64 full chunks must not be one call");
     for (start, end) in &bounds {
-        let estimated: u64 = chunks[*start..*end]
+        let bytes: u64 = chunks[*start..*end]
             .iter()
-            .map(|chunk| estimate_tokens(&chunk.text))
+            .map(|chunk| chunk.text.len() as u64)
             .sum();
-        assert!(estimated <= DEFAULT_MAX_BATCH_TOKENS);
+        assert!(bytes <= DEFAULT_MAX_BATCH_TOKENS);
         assert!(
-            estimated * 2 < 300_000,
-            "batch {start}..{end} would be ~{} real tokens",
-            estimated * 2
+            bytes < 300_000,
+            "batch {start}..{end} carries {bytes} source bytes"
         );
     }
 }
@@ -1130,4 +1128,31 @@ fn a_zero_token_ceiling_is_read_as_the_default_not_as_unbounded() {
     let indexer = Rig::new();
     let built = indexer.indexer().with_max_batch_tokens(0);
     assert_eq!(built.max_batch_tokens, DEFAULT_MAX_BATCH_TOKENS);
+}
+
+#[test]
+fn dense_utf8_batches_use_a_byte_bound_instead_of_a_prose_token_estimate() {
+    let chunks: Vec<Chunk> = (0..64)
+        .map(|_| {
+            let mut chunk = sized_chunk(0);
+            chunk.text = "😀".repeat(2_000);
+            chunk
+        })
+        .collect();
+    let bounds = bounds_over(&chunks, DEFAULT_BATCH, DEFAULT_MAX_BATCH_TOKENS);
+    for (start, end) in &bounds {
+        let bytes: u64 = chunks[*start..*end]
+            .iter()
+            .map(|chunk| chunk.text.len() as u64)
+            .sum();
+        assert!(
+            bytes <= DEFAULT_MAX_BATCH_TOKENS,
+            "batch {start}..{end} carries {bytes} bytes"
+        );
+    }
+    let covered: Vec<usize> = bounds
+        .iter()
+        .flat_map(|(start, end)| *start..*end)
+        .collect();
+    assert_eq!(covered, (0..chunks.len()).collect::<Vec<_>>());
 }

@@ -71,13 +71,13 @@ pub struct ChunkOptions {
 /// repository in the fleet kept reviewing from the diff alone after the
 /// batch-level token ceiling was already fixed.
 ///
-/// The provider's limit is 8,192 tokens **per input**. Dense code measured at
-/// roughly 1.8 bytes per token — the same measurement behind
-/// [`DEFAULT_MAX_BATCH_TOKENS`](crate::indexer::run::DEFAULT_MAX_BATCH_TOKENS)
-/// — putting 8,192 tokens at about 14,700 bytes. 12,000 leaves room for source
-/// denser still, which is exactly the kind of file that trips this: minified
-/// bundles, generated code, and long embedded literals.
-pub const DEFAULT_MAX_EMBED_BYTES: usize = 12_000;
+/// The provider's limit is 8,192 tokens **per input**. An empirical
+/// bytes-per-token ratio cannot bound dense punctuation or arbitrary UTF-8.
+/// Cap the source at 8,000 bytes instead: byte-based tokenization cannot need
+/// more source tokens than input bytes, and the remaining margin avoids
+/// riding the provider's exact ceiling. This is a conservative input bound,
+/// not a measured token count. Oversized source is split, never truncated.
+pub const DEFAULT_MAX_EMBED_BYTES: usize = 8_000;
 
 impl Default for ChunkOptions {
     fn default() -> Self {

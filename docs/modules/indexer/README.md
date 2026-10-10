@@ -160,13 +160,13 @@ each pinned by a test:
   being skipped or wedging the loop. The provider will reject that call, but an
   error naming the limit beats a silent gap or an index that never finishes.
 
-The default is 120,000 estimated tokens against a 300,000-token provider limit,
-and the factor of two is not padding. `estimate_tokens` assumes four bytes per
-token, which is about right for prose and roughly **half** the true rate for
-code. The rejected batch is the measurement: 64 chunks at the chunker's
-14,400-char cap is at most 230,400 *estimated* tokens, and the provider counted
-467,846 real ones. So a ceiling expressed in estimated tokens has to be halved
-before it means anything to the provider enforcing it.
+The default admits at most 120,000 UTF-8 source bytes per batch against a
+300,000-token provider limit. Each byte counts as one possible token for this
+conservative bound; a four-bytes-per-token prose estimate can badly undercount
+dense source. This admission bound is separate from the billing estimate and
+is not a measured token count. Together with the chunker's 8,000-byte input
+ceiling, it bounds both individual inputs and the aggregate request without
+truncating source or dropping queued chunks.
 
 A deployment on a provider with a different limit sets
 `embeddings.max_request_tokens`. Zero is read as the default rather than as

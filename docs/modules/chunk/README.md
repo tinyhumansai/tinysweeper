@@ -53,12 +53,22 @@ every byte lands in some chunk and no cut lands inside a body.
   its members become cut points too. `CONTAINERS` is a closed list, and that is
   the load-bearing decision in the file: adding a function or a block to it
   would permit a cut inside a body.
-- A definition past `max_chars` is line-split and labelled `Lines`, because an
-  embedder silently truncates its input and a "parsed" chunk whose tail was
-  never embedded is a lie.
+- A definition past `max_chars` or `max_embed_bytes` is line-split and labelled
+  `Lines`. The provider rejects oversized inputs, so keeping such a definition
+  whole can prevent the entire repository from being indexed.
 
 A chunk is named only when one definition dominates it — more than half its
 bytes. A chunk that merged three equal functions is not the first one.
+
+## Embedding input bound
+
+The default per-input ceiling is 8,000 UTF-8 bytes, below the provider's
+8,192-token window. A sampled bytes-per-token ratio failed on dense source;
+byte-based admission is conservative and does not claim an exact token count.
+Long lines split on UTF-8 boundaries, preserving their source and line numbers.
+Whitespace fragments of nonblank source remain present when the hard ceiling
+forces a split; wholly blank files keep their existing empty-file skip.
+The size target remains a retrieval preference and cannot raise this ceiling.
 
 ## Languages
 

@@ -35,6 +35,18 @@ use crate::index::types::ChunkMethod;
 /// split a fragment of a file — an oversized function body, say — and still
 /// report line numbers in the file's own coordinates.
 pub fn split(text: &str, first_line: u32, options: &ChunkOptions) -> Vec<SourceChunk> {
+    if text.trim().is_empty() {
+        return Vec::new();
+    }
+    split_preserving_whitespace(text, first_line, options)
+}
+
+/// Split a span inside nonblank source, retaining its whitespace fragments.
+pub(super) fn split_preserving_whitespace(
+    text: &str,
+    first_line: u32,
+    options: &ChunkOptions,
+) -> Vec<SourceChunk> {
     let mut chunks = Vec::new();
     let mut buffer = String::new();
     let mut buffer_start = first_line;
@@ -56,10 +68,9 @@ pub fn split(text: &str, first_line: u32, options: &ChunkOptions) -> Vec<SourceC
             // rather than at an arbitrary character count part-way through a
             // paragraph of code.
             let blank = piece.trim().is_empty();
-            // A buffer holding only blank lines is never flushed: it would be
-            // dropped as whitespace and those lines would vanish from the file
-            // the chunks reconstruct. It keeps accumulating instead, and the
-            // blank run ends up at the head of the next real chunk.
+            // Keep blank runs with neighboring source where possible. The hard
+            // input bound still wins, and those fragments must be retained so
+            // a long prefix or final newline cannot disappear from the source.
             let flushable = !buffer.trim().is_empty();
             // Whichever ceiling is lower binds. Splitting the *line* is not
             // enough on its own: the buffer goes on accumulating pieces until
@@ -67,10 +78,12 @@ pub fn split(text: &str, first_line: u32, options: &ChunkOptions) -> Vec<SourceC
             // run of pieces reassembles into exactly the oversized chunk the
             // split was meant to prevent.
             let ceiling = options.target_chars.min(options.max_embed_bytes);
+            let hard_full =
+                !buffer.is_empty() && buffer.len() + piece.len() > options.max_embed_bytes;
             let would_exceed = flushable && buffer.len() + piece.len() > ceiling;
             let at_a_seam = flushable && blank && buffer.len() >= ceiling / 2;
 
-            if would_exceed || at_a_seam {
+            if hard_full || would_exceed || at_a_seam {
                 push(&mut chunks, &mut buffer, buffer_start, buffer_end);
                 buffer_start = line_number;
             }
@@ -121,10 +134,7 @@ fn pieces(line: &str, ceiling: usize) -> Vec<&str> {
 }
 
 fn push(chunks: &mut Vec<SourceChunk>, buffer: &mut String, start_line: u32, end_line: u32) {
-    if buffer.trim().is_empty() {
-        // Whitespace-only spans are dropped rather than emitted: embedding them
-        // costs money and they can never be the right answer to a query.
-        buffer.clear();
+    if buffer.is_empty() {
         return;
     }
     chunks.push(SourceChunk {
@@ -207,6 +217,47 @@ mod tests {
     // These guard the provider's own limit rather than a preference. A chunk
     // over it fails the whole embedding call, which leaves a repository
     // unindexed and its reviews silently diff-only.
+
+    #[test]
+    fn default_dense_and_utf8_long_lines_fit_a_conservative_provider_bound() {
+        for source in [
+            format!("{}\n", "~".repeat(24_000)),
+            format!("{}\n", "€".repeat(8_000)),
+        ] {
+            let chunks = split(&source, 7, &ChunkOptions::default());
+            assert!(chunks.iter().all(|chunk| chunk.text.len() <= 8_000));
+            assert_eq!(
+                chunks
+                    .iter()
+                    .map(|chunk| chunk.text.as_str())
+                    .collect::<String>(),
+                source
+            );
+            assert!(
+                chunks
+                    .iter()
+                    .all(|chunk| chunk.start_line == 7 && chunk.end_line == 7)
+            );
+        }
+    }
+
+    fn assert_bounded_source(source: &str) {
+        let chunks = split(source, 1, &ChunkOptions::default());
+        assert!(chunks.iter().all(|chunk| chunk.text.len() <= 8_000));
+        let joined: String = chunks.iter().map(|chunk| chunk.text.as_str()).collect();
+        assert_eq!(joined.len(), source.len(), "no source bytes may disappear");
+        assert_eq!(joined, source);
+    }
+
+    #[test]
+    fn whitespace_prefix_obeys_the_hard_bound_without_losing_source() {
+        assert_bounded_source(&format!("{}value\n", " ".repeat(16_001)));
+    }
+
+    #[test]
+    fn whitespace_tail_obeys_the_hard_bound_without_losing_source() {
+        assert_bounded_source(&format!("value\n{}", " ".repeat(16_001)));
+    }
 
     /// The longest chunk `split` produced, in bytes.
     fn widest(chunks: &[SourceChunk]) -> usize {
