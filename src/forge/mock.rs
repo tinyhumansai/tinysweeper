@@ -13,9 +13,9 @@ use async_trait::async_trait;
 
 use crate::error::{Error, Result};
 use crate::forge::types::{
-    ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, Issue, IssueComment, PullRequest,
-    Remark, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict, ThreadComment,
-    TreeListing,
+    ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, Issue, IssueComment, OwnReview,
+    PullRequest, Remark, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict,
+    ThreadComment, TreeListing,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -164,8 +164,8 @@ pub struct MockState {
     /// Empty by default, which is what an organisation that never enabled
     /// issue types looks like — the case triage has to survive.
     pub issue_types: Vec<String>,
-    /// tinysweeper's own last review state, keyed by pull request number.
-    pub own_reviews: BTreeMap<u64, ReviewEvent>,
+    /// Tinysweeper's own standing review and reviewed commit, keyed by PR number.
+    pub own_reviews: BTreeMap<u64, OwnReview>,
     /// Whether reading our own review history fails, as a forge mid-outage.
     pub own_review_state_fails: bool,
     /// Whether withdrawing our own approval fails.
@@ -444,10 +444,18 @@ impl MockForge {
         self
     }
 
+    /// Seed a review at this mock PR's current head, or an unknown head when
+    /// the PR has not been supplied. Later pushes retain this reviewed commit.
     pub fn with_own_review(self, number: u64, event: ReviewEvent) -> Self {
         {
             let mut state = self.state.lock().expect("mock state lock");
-            state.own_reviews.insert(number, event);
+            let head_sha = state
+                .pull_requests
+                .get(&number)
+                .map(|pr| pr.head_sha.clone());
+            state
+                .own_reviews
+                .insert(number, OwnReview { event, head_sha });
         }
         self
     }
@@ -636,12 +644,12 @@ impl ForgeRead for MockForge {
             .unwrap_or_default())
     }
 
-    async fn own_review_state(&self, _repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
+    async fn own_review_state(&self, _repo: &RepoId, number: u64) -> Result<Option<OwnReview>> {
         let state = self.state.lock().expect("mock state lock");
         if state.own_review_state_fails {
             return Err(Error::Forge("review history unavailable".into()));
         }
-        Ok(state.own_reviews.get(&number).copied())
+        Ok(state.own_reviews.get(&number).cloned())
     }
 
     async fn file_at(&self, _repo: &RepoId, path: &str, sha: &str) -> Result<Option<String>> {
@@ -915,13 +923,22 @@ impl ForgeWrite for MockForge {
             // GitHub's semantics, so multi-push tests see what production
             // sees: a comment leaves a standing verdict in force, and only a
             // verdict replaces a verdict.
-            match (event, state.own_reviews.get(&number)) {
+            match (
+                event,
+                state.own_reviews.get(&number).map(|review| review.event),
+            ) {
                 (
                     ReviewEvent::Comment,
                     Some(ReviewEvent::Approve | ReviewEvent::RequestChanges),
                 ) => {}
                 _ => {
-                    state.own_reviews.insert(number, event);
+                    let head_sha = state
+                        .pull_requests
+                        .get(&number)
+                        .map(|pr| pr.head_sha.clone());
+                    state
+                        .own_reviews
+                        .insert(number, OwnReview { event, head_sha });
                 }
             }
         }
@@ -940,7 +957,10 @@ impl ForgeWrite for MockForge {
             if state.dismissals_fail {
                 return Err(Error::Forge("dismissal refused".into()));
             }
-            let standing = state.own_reviews.get(&number) == Some(&ReviewEvent::Approve);
+            let standing = state
+                .own_reviews
+                .get(&number)
+                .is_some_and(|review| review.event == ReviewEvent::Approve);
             // Recorded either way; the state only moves when the mock is
             // allowed to write, like every other write here.
             if standing && !self.read_only {

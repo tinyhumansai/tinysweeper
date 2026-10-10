@@ -12,7 +12,7 @@ use crate::app::review::{PROPOSAL_VERSION, Proposal};
 use crate::config::types::{Config, Severity};
 use crate::error::{Error, Result};
 use crate::evidence::diff::{FileDiff, parse_file_patch};
-use crate::forge::types::{ChangedFile, CheckRun, RepoId, ReviewComment, ReviewEvent};
+use crate::forge::types::{ChangedFile, CheckRun, OwnReview, RepoId, ReviewComment, ReviewEvent};
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 use crate::ports::review_state::ReviewStateStore;
 use crate::{MARKER_PREFIX, VERSION};
@@ -125,9 +125,10 @@ pub async fn apply(
     // the latest review per reviewer, which makes this load-bearing twice: it
     // is how a fixed pull request gets unblocked — without an explicit clearing
     // verdict a stale objection blocks the merge button until a human dismisses
-    // it by hand — and it is how an approval that already stands avoids being
-    // restated on every push.
-    let (previous, previous_known) = own_review_state(read, &repo, proposal.number).await;
+    // it by hand — and it is how an approval of this same commit avoids being
+    // restated on a repeated review.
+    let (previous_review, previous_known) = own_review_state(read, &repo, proposal.number).await;
+    let previous = previous_review.as_ref().map(|review| review.event);
     let event = review_event(config, proposal, previous, live.draft);
     // Every lane is expected to leave an unpostable finding without a line,
     // but `apply` is the final boundary before GitHub sees it. One invalid
@@ -168,12 +169,15 @@ pub async fn apply(
     // findings that could not be anchored to lines still appear in the summary
     // and need the blocking verdict on GitHub to enforce the gate.
     //
-    // The one thing not worth saying twice is an approval that already stands.
-    // GitHub keeps the latest review per reviewer, so re-approving changes
-    // nothing on the merge button and only adds a timeline entry — on every
-    // push, for the whole life of a clean pull request.
+    // Suppress a repeated approval only for the exact commit already reviewed.
+    // A changed head needs its own verdict, even when the old approval still
+    // stands on GitHub. Unknown commit metadata cannot certify this head.
     let redundant_approval = event == ReviewEvent::Approve
         && previous == Some(ReviewEvent::Approve)
+        && previous_review
+            .as_ref()
+            .and_then(|review| review.head_sha.as_deref())
+            == Some(proposal.head_sha.as_str())
         && comments.is_empty();
 
     // A push this review could not vouch for — a model that never answered,
@@ -512,7 +516,7 @@ async fn own_review_state(
     read: &dyn ForgeRead,
     repo: &RepoId,
     number: u64,
-) -> (Option<ReviewEvent>, bool) {
+) -> (Option<OwnReview>, bool) {
     match read.own_review_state(repo, number).await {
         Ok(state) => (state, true),
         Err(err) => {
@@ -2281,14 +2285,77 @@ mod tests {
 
     #[tokio::test]
     async fn an_approval_that_already_stands_is_not_restated() {
-        // Otherwise every push to a clean pull request adds a review that
-        // changes nothing on the merge button.
+        // Re-reviewing the same commit must not add another timeline entry.
         let forge = forge("abc123").with_own_review(7, ReviewEvent::Approve);
         apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
             .await
             .expect("applies");
 
         assert!(review_of(&forge).is_none(), "{:#?}", forge.writes());
+    }
+
+    #[tokio::test]
+    async fn a_clean_changed_head_receives_a_fresh_approval() {
+        let forge = forge("previous-head").with_own_review(7, ReviewEvent::Approve);
+        forge.push(7, "abc123", vec![]);
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
+            .await
+            .expect("applies");
+        let (_, event) = review_of(&forge).expect("the changed head gets its own approval");
+        assert_eq!(event, ReviewEvent::Approve);
+    }
+
+    #[tokio::test]
+    async fn a_clean_head_is_approved_once_even_across_repeated_reviews_and_pushes() {
+        let forge = forge("abc123");
+        for head in ["abc123", "next-head"] {
+            forge.push(7, head, vec![]);
+            for _ in 0..2 {
+                apply(&forge, &forge, &config(), &proposal(head, vec![]), None)
+                    .await
+                    .expect("applies");
+            }
+        }
+        let approvals = forge
+            .writes()
+            .into_iter()
+            .filter(|write| {
+                matches!(
+                    write,
+                    Write::Review {
+                        event: ReviewEvent::Approve,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(approvals, 2, "one real approval per reviewed head");
+    }
+
+    #[tokio::test]
+    async fn an_approval_without_a_known_reviewed_head_is_refreshed() {
+        let mut state = MockState::default();
+        state.pull_requests.insert(
+            7,
+            PullRequest {
+                number: 7,
+                head_sha: "abc123".into(),
+                ..PullRequest::default()
+            },
+        );
+        state.own_reviews.insert(
+            7,
+            OwnReview {
+                event: ReviewEvent::Approve,
+                head_sha: None,
+            },
+        );
+        let forge = MockForge::with_state(state);
+        apply(&forge, &forge, &config(), &proposal("abc123", vec![]), None)
+            .await
+            .expect("applies");
+        let (_, event) = review_of(&forge).expect("unknown history cannot certify this head");
+        assert_eq!(event, ReviewEvent::Approve);
     }
 
     #[tokio::test]

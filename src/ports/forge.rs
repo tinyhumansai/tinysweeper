@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use crate::automerge::policy::MergeApproved;
 use crate::error::{Error, Result};
 use crate::forge::types::{
-    ChangedFile, CheckRun, CheckStatus, Commit, Issue, IssueComment, PullRequest,
+    ChangedFile, CheckRun, CheckStatus, Commit, Issue, IssueComment, OwnReview, PullRequest,
     PullRequestContext, Remark, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict,
     TreeListing,
 };
@@ -87,12 +87,14 @@ pub trait ForgeRead: Send + Sync {
     /// resolution would silently become a no-op nobody noticed.
     async fn review_threads(&self, repo: &RepoId, number: u64) -> Result<Vec<ReviewThread>>;
 
-    /// The state of tinysweeper's own most recent review on a pull request.
+    /// Tinysweeper's own standing review verdict and its reviewed commit.
     ///
     /// `None` when it has never reviewed. Used to clear a stale
     /// changes-requested verdict, which GitHub will otherwise leave blocking
-    /// the merge button forever.
-    async fn own_review_state(&self, repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>>;
+    /// the merge button forever. Commit metadata distinguishes an approval of
+    /// this head from one of an earlier push; unknown metadata never certifies
+    /// the current head. Read both fields from the same review-history fetch.
+    async fn own_review_state(&self, repo: &RepoId, number: u64) -> Result<Option<OwnReview>>;
 
     /// Fetch one file's contents at a commit.
     ///
