@@ -1939,6 +1939,9 @@ fn group_summary_notes(lanes: &mut [LaneProposal]) {
                     &lanes[*left_lane].noted[*left_note],
                     &lanes[*right_lane].noted[*right_note],
                 )
+                // Stable source order breaks equal ranks, so a repeated
+                // later lane does not move an unchanged visible note.
+                .then_with(|| right.cmp(left))
             })
             .expect("a non-empty note cluster");
         for index in cluster.into_iter().filter(|index| *index != primary) {
