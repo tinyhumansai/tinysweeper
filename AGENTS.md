@@ -25,11 +25,14 @@
 - `presets/` — review policy as **data**, not code. A preset is a folder with a
   `preset.toml`, a `README.md`, and optional prompt overrides. Adding a preset
   is a new folder, never a new module.
-- `vendor/tinyagents` — the agent harness, as a git submodule. Never edit it
-  here; change it upstream and bump the pin.
-- `vendor/tinyflows` — the orchestration graph, as a git submodule. Same rule.
-  Lane concurrency, the consensus panel and sub-agents are all expressed as
-  graphs against it; see `docs/modules/flows/README.md`.
+- `vendor/openhuman` — the model harness, as a git submodule (recursive). Never
+  edit it here; change it upstream and bump the pin, keeping the `Cargo.toml`
+  rev, the submodule pointer and the `[patch]` tables in step —
+  `scripts/assert-openhuman-pin.sh` checks these and the actual checkout.
+  TinySweeper uses Embed's structured completions, embeddings and opt-in
+  read-only review agents. Lane concurrency uses Embed's borrowed fan-out
+  with a pure-future offline path in `src/flows/`; see
+  `docs/modules/flows/README.md`.
 - `docs/modules/<module>/README.md` — one document per `src/` module.
 - `examples/` — declared explicitly in `Cargo.toml` with `required-features`, so
   credential-needing smoke tests never build in CI.
@@ -38,7 +41,7 @@
 
 ```sh
 git submodule update --init --recursive
-cargo fmt --all -- --check
+cargo fmt --package tinysweeper -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 cargo check --locked --all-features --all-targets

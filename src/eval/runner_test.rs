@@ -569,3 +569,21 @@ async fn recording_without_a_model_says_which_feature_is_missing() {
 
     assert!(err.to_string().contains("--features harness"), "{err}");
 }
+
+#[test]
+fn agentic_review_and_price_bounds_change_the_evaluation_digest() {
+    let base = config();
+    let mut agentic = base.clone();
+    agentic.models.agentic_reviewers = true;
+    assert_ne!(digest_of(&base), digest_of(&agentic));
+    let mut bounded = base.clone();
+    bounded.models.budget_prices.insert(
+        "flash".into(),
+        crate::config::types::BudgetPriceBound {
+            input: 1.0,
+            cached: 0.1,
+            output: 2.0,
+        },
+    );
+    assert_ne!(digest_of(&base), digest_of(&bounded));
+}

@@ -37,6 +37,12 @@ remote URL puts a credential in the process table for anything on the host to
 read; git's `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` protocol carries the same
 `http.extraHeader` through the environment instead.
 
+Allowed submodules are fetched recursively at their parent's pinned gitlink,
+with `retrieval.submodules` checked at every level. Cycles, paths through
+symlinks and chains beyond 16 levels are refused. Denied and failed nested
+fetches retain their full root-relative paths so stale index entries can be
+handled under the existing revocation and retry policy.
+
 ## Write first, delete afterwards
 
 The obvious order is *delete this repository's chunks, then embed and write the
@@ -117,7 +123,7 @@ Two honesty caveats, both deliberate:
   shipping a tokenizer per provider to price a call already made.
 - A model with no price on file costs zero and logs a warning, rather than being
   given an invented rate that would make a budget check meaningless. Same rule
-  as `harness::openrouter`.
+  as `harness::embed`.
 
 `Indexer::with_budget` stops at a batch boundary and reports
 `IndexReport::budget_exhausted`. It does not fail and does not discard what it

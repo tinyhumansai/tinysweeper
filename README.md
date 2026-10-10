@@ -226,10 +226,11 @@ the corpus does not measure yet.
 
 ## Built on
 
-[TinyAgents](https://github.com/tinyhumansai/tinyagents), a recursive
-language-model harness for Rust, vendored at `vendor/tinyagents`. Models are
-reached through an OpenAI-compatible gateway, so OpenRouter, Moonshot and
-MiniMax are all the same code path.
+[OpenHuman](https://github.com/tinyhumansai/openhuman)'s embedding facade,
+vendored at `vendor/openhuman`: its stateless `Completer` makes every model
+call and its embedding models feed the code index. Models are reached through an
+OpenAI-compatible gateway, so OpenRouter, Moonshot and MiniMax are all the same
+code path.
 
 ## Documentation
 

@@ -45,6 +45,24 @@ a provider outage must not look like a clean review.
 
 Both properties are asserted directly in `src/falsify/test.rs`.
 
+## No deterministic pass in front of the model
+
+An earlier version ran a textual pre-pass that dropped "will not compile" or
+"is not defined" claims whenever the evidence contained a definition keyword
+followed by the symbol's name. It was removed, and this module must not grow
+one back. Text cannot prove a symbol is defined:
+
+- a `fn name` inside a comment or a string literal is not a definition;
+- a `+++ /dev/null` or a deleted path header says a file is gone, not that it
+  exists;
+- a path component named `helpers` is not a definition of a symbol `helpers`;
+- a definition in one module does not make a symbol visible in another.
+
+Each of those turned a real undefined-symbol finding into silence. The model
+filter is the only rejecter, it sees the same diff and looked-up text, and it
+is told to reject only on proof, so a claim that the diff disproves is still
+dropped, and a claim it cannot disprove reaches the author.
+
 ## Which lanes run it
 
 `critique`, and `commits`. The `commits` lane was added after issue #47, where

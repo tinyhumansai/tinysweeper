@@ -11,6 +11,10 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// A lane: one agent, one narrow job, one GitHub check run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -301,17 +305,21 @@ pub struct Review {
     /// [`Config::confidence_min`]. It was inert for a while: documented as the
     /// dial, validated for range, and read by nothing.
     pub strictness: u8,
-    /// Post findings at or above this severity. Overrides what `strictness`
-    /// would choose; leave it unset unless you need to.
+    /// Post findings at or above this severity. Can only make the gate
+    /// `strictness` chose *stricter*; a value below it is ignored. Leave it
+    /// unset unless you need to.
     pub severity_gate: Option<String>,
-    /// Drop findings the model is less sure about than this. Overrides what
-    /// `strictness` would choose.
+    /// Drop findings the model is less sure about than this. Like
+    /// `severity_gate`, it can only raise what `strictness` would choose.
     pub confidence_min: Option<f64>,
-    /// Hard cap on published finding threads per pull request.
+    /// The inline-comment budget for the whole pull request.
     ///
-    /// Co-located observations share one thread and therefore count once;
-    /// grouping preserves every observation inside that thread before this
-    /// cap is applied.
+    /// Spent across every lane and adaptive pass of a review, ranked
+    /// globally, and by every earlier finding whose conversation is still
+    /// open (`PriorReview::open_findings`). Findings over budget are listed in
+    /// the review hub rather than posted. Co-located observations share one
+    /// thread and therefore count once; grouping preserves every observation
+    /// inside that thread before this cap is applied.
     pub max_comments: usize,
     /// Most files one pull request may change before review is refused.
     ///
@@ -389,7 +397,7 @@ pub struct Threads {
     /// deterministic code executes, and it can only ever close a thread
     /// tinysweeper itself opened.
     pub ask_model: bool,
-    /// Say why, in the thread, before resolving it.
+    /// Say why, in the thread, once it has been resolved.
     ///
     /// On by default. A conversation that collapses with no reply is indexed
     /// by GitHub as resolved and by the author as unexplained: the objection
@@ -643,7 +651,8 @@ pub struct ModelRoute {
     pub allow_fallbacks: bool,
     /// Output ceiling for this rung. `0` sends no ceiling at all: the model
     /// answers at the length it needs and a cut-off is the provider's own
-    /// limit. Absent inherits `models.max_tokens`.
+    /// limit. Budgeted reviews reject `0` because admission needs a finite
+    /// output cap. Absent inherits `models.max_tokens`.
     pub max_tokens: Option<u32>,
 }
 
@@ -769,7 +778,7 @@ pub struct Models {
     /// Optional, and `None` by default: the captions then describe a flow
     /// from its transcript alone, which is the honest degradation. Never a
     /// fallback for a text tier and never given one — see
-    /// `harness::openrouter::GatewayModel::for_vision` for why a vision call
+    /// `harness::embed::GatewayModel::for_vision` for why a vision call
     /// must not share the review ladder.
     pub vision: Option<String>,
     /// Which upstream providers the gateway may serve these models from.
@@ -802,8 +811,30 @@ pub struct Models {
     /// can be answered by any model in it and a prompt that carries its own
     /// schema has to be built before the answering model is known.
     pub structured_output: StructuredOutput,
+    /// Opt into read-only agent tool exploration for council reviewers.
+    /// Disabled until scripted and live evaluation establish parity.
+    #[serde(skip_serializing_if = "is_false")]
+    pub agentic_reviewers: bool,
     /// Hard USD ceiling for a single pull request's review.
     pub budget_usd_per_pr: f64,
+    /// Operator-verified upper rates for gateway aliases, in USD per million
+    /// tokens. Each bound must cover every provider and fallback behind the
+    /// alias, including long-context pricing. Empty preserves config digests.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub budget_prices: BTreeMap<String, BudgetPriceBound>,
+}
+
+/// Explicit admission rates for an alias without a public model price row.
+/// These reserve spend; they do not force a provider's actual billing rate.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetPriceBound {
+    /// Maximum price of uncached input, in USD per million tokens; finite and nonnegative.
+    pub input: f64,
+    /// Maximum price of cached input, in USD per million tokens; finite and nonnegative.
+    pub cached: f64,
+    /// Maximum price of output, in USD per million tokens; finite and strictly positive.
+    pub output: f64,
 }
 
 /// The knowledge centre: curated documents, and rules read out of the
@@ -1732,20 +1763,33 @@ impl Config {
 
     /// The severity at or above which findings are posted.
     ///
-    /// From `strictness` unless the repository set it explicitly.
+    /// The dial's gate, raised by an explicit `severity_gate` and never
+    /// lowered by one. Tighten-only on purpose, whichever layer set the key:
+    /// the merge records provenance for `doctor` but the effective config does
+    /// not carry it, and "a preset may not loosen, a repository may" would
+    /// still let the operator's own `.tinysweeper.toml` — the repo layer for
+    /// every reviewed repository — loosen everyone at once. That is exactly
+    /// what `rust-library`'s `medium`/0.6 did while the dial read "default".
+    /// Anyone who wants more findings turns the dial to 3; that is what it is
+    /// for, and it is one key `doctor` can explain.
     pub fn severity_gate(&self) -> Severity {
+        let dial = self.strictness().severity;
         self.review
             .severity_gate
             .as_deref()
             .and_then(Severity::parse)
-            .unwrap_or_else(|| self.strictness().severity)
+            .map_or(dial, |explicit| explicit.max(dial))
     }
 
     /// The confidence a finding needs before it is posted.
+    ///
+    /// Tighten-only against the dial, for the reason on
+    /// [`Self::severity_gate`].
     pub fn confidence_min(&self) -> f64 {
+        let dial = self.strictness().confidence;
         self.review
             .confidence_min
-            .unwrap_or_else(|| self.strictness().confidence)
+            .map_or(dial, |explicit| explicit.max(dial))
     }
 
     /// The gates `review.strictness` implies.
@@ -1870,6 +1914,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn configured_alias_budget_prices_deserialize_without_changing_empty_defaults() {
+        let configured = serde_json::json!({
+            "budget_prices": {"deep": {"input": 0.20, "cached": 0.02, "output": 1.20}}
+        });
+        assert!(serde_json::from_value::<Models>(configured).is_ok());
+        let defaults = serde_json::to_value(Models::default()).unwrap();
+        assert!(defaults.get("budget_prices").is_none());
+    }
+
+    #[test]
     fn lane_ids_round_trip_through_their_string_form() {
         for lane in LaneId::ALL {
             assert_eq!(LaneId::parse(lane.as_str()), Some(lane));
@@ -1952,20 +2006,21 @@ mod tests {
     }
 
     #[test]
-    fn the_e2e_lane_is_on_by_default_and_opts_out_by_omission() {
-        // On by default because it is quiet without a harness; a repository
-        // that does not want it lists `review.lanes` without it, and nothing
-        // else has to be set.
+    fn the_e2e_lane_is_off_by_default_and_opts_in_by_listing() {
+        // Off by default: with a harness present it asked for an end-to-end
+        // test on config flips and settings panels, which nobody acted on. A
+        // repository that wants it lists it in `review.lanes` (or uses the
+        // `e2e-required` preset), and nothing else has to be set.
         let defaults: Config = crate::config::DEFAULTS
             .parse::<toml::Table>()
             .unwrap()
             .try_into()
             .unwrap();
-        assert!(defaults.enabled_lanes().contains(&LaneId::E2e));
+        assert!(!defaults.enabled_lanes().contains(&LaneId::E2e));
 
-        let mut opted_out = defaults.clone();
-        opted_out.review.lanes.retain(|lane| lane != "e2e");
-        assert!(!opted_out.enabled_lanes().contains(&LaneId::E2e));
+        let mut opted_in = defaults.clone();
+        opted_in.review.lanes.push("e2e".into());
+        assert!(opted_in.enabled_lanes().contains(&LaneId::E2e));
     }
 
     #[test]

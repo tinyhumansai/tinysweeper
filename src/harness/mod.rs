@@ -6,10 +6,22 @@
 //! unchanged. [`prompt`] exists to guarantee that; see its module docs before
 //! changing how a prompt is assembled.
 
-pub mod cassette;
-pub mod mock;
 #[cfg(feature = "harness")]
-pub mod openrouter;
+pub mod agentic;
+#[cfg(feature = "harness")]
+pub(crate) mod budget;
+pub mod cassette;
+#[cfg(feature = "harness")]
+pub mod embed;
+#[cfg(feature = "harness")]
+pub mod factory;
+#[cfg(all(test, feature = "harness"))]
+mod fake_gateway;
+#[cfg(feature = "harness")]
+pub mod langfuse;
+pub mod mock;
+#[cfg(all(test, feature = "harness"))]
+mod parity_test;
 pub mod pricing;
 pub mod prompt;
 pub mod schema;

@@ -267,9 +267,9 @@ is the "do NOT report" list; that half is where the precision comes from. See
 
 It owns end-to-end coverage and whether the repository's own e2e jobs ran on
 the head — the concern the `tests` rule document deliberately excludes. It is
-on by default and skips, with no model call, on a repository that has no e2e
-harness; `presets/e2e-required/` turns that skip into a finding. Opt out by
-listing `review.lanes` without it. Its harness inventory, trigger analysis and job states are decided in code
+off by default: opt in by listing `e2e` in `review.lanes`. Once on, it skips,
+with no model call, on a repository that has no e2e harness;
+`presets/e2e-required/` turns it on and turns that skip into a finding. Its harness inventory, trigger analysis and job states are decided in code
 before any model call, and a job still running when the review finishes
 leaves the check `neutral` until the server settles it on the job's
 completion. See [e2e.md](e2e.md).

@@ -183,6 +183,7 @@ mod tests {
                 usage: Default::default(),
                 models: vec![],
                 unanswered: vec![],
+                overflow: vec![],
             }],
             cost_usd: 0.0,
             input_tokens: 0,

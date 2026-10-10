@@ -23,6 +23,7 @@ use crate::forge::{PullRequest, RepoId};
 use crate::index::mongo::MongoIndex;
 use crate::ports::forge::ForgeRead as _;
 use crate::ports::knowledge::KnowledgeStore;
+use crate::ports::model_factory::ModelFactory;
 use crate::pr_triage::Report as PrTriageReport;
 use crate::server::admin::{self, AdminAuth};
 use crate::server::auth::AppAuth;
@@ -33,6 +34,7 @@ use crate::server::mcp;
 use crate::server::memory::{
     BackfillStart, BackfillStatus, MemoryBackend, ingest_in_background, remember_in_background,
 };
+use crate::server::model::{GatewayModelFactory, ResolvedModels};
 use crate::server::preview::{
     self, FinishReply, FinishRequest, Previews, StartReply, StartRequest,
     StepReply as PreviewStepReply,
@@ -156,6 +158,8 @@ pub struct ServerConfig {
 struct AppState {
     config: Arc<ServerConfig>,
     store: Store,
+    /// Resolved once at boot; clones share provider/runtime state across workers.
+    models: ResolvedModels,
     /// Curated knowledge documents. `None` when no retrieval database is
     /// reachable: the review still runs, without pinned context.
     knowledge: Option<Arc<dyn KnowledgeStore>>,
@@ -194,7 +198,21 @@ struct AppState {
 
 /// Run the server until the process is stopped.
 pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<()> {
+    serve_with_model_factory(config, store, auth, Arc::new(GatewayModelFactory)).await
+}
+
+/// Run with host-supplied model construction, resolving shared adapters at startup.
+///
+/// Factory errors refuse startup before the listener or background workers exist.
+/// The factory receives only deployment model configuration, never forge credentials.
+pub async fn serve_with_model_factory(
+    config: ServerConfig,
+    store: Store,
+    auth: AppAuth,
+    factory: Arc<dyn ModelFactory>,
+) -> Result<()> {
     let bind = config.bind.clone();
+    let models = ResolvedModels::resolve(factory.as_ref(), &config.config).await?;
 
     // The boot assertion. `$vectorSearch` and `$rankFusion` are stages a stock
     // `mongo:` image does not have, and an unsupported stage fails when the
@@ -254,6 +272,7 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
     let state = AppState {
         config: Arc::new(config),
         store: store.clone(),
+        models,
         knowledge: knowledge.clone(),
         auth: Arc::new(auth),
         permits: Arc::new(Semaphore::new(MAX_CONCURRENT_REVIEWS)),
@@ -992,9 +1011,7 @@ async fn triage_and_apply(
 ) -> Result<crate::issues::TriagePlan> {
     let read_token = state.auth.installation_token(installation).await?;
     let forge = crate::forge::github::GitHubRead::new(&read_token)?;
-    let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
-        &state.config.config.models,
-    )?);
+    let model = state.models.text();
 
     // The model runs against a read-only handle; the write token below is
     // minted only after it has answered. Same boundary as a review.
@@ -1753,13 +1770,16 @@ async fn close_status(state: &AppState, slot: &StatusSlot, conclusion: Conclusio
     };
 
     let check = match conclusion {
-        Conclusion::Reviewed(findings) => status::completed(&open.head_sha, findings),
+        Conclusion::Reviewed {
+            findings,
+            changes_requested,
+        } => status::completed(&open.head_sha, findings, changes_requested),
         Conclusion::NotReviewed => status::not_reviewed(&open.head_sha),
         Conclusion::Failed(err) => failure::check_run(&open.head_sha, err),
     };
 
     let hub_body = match conclusion {
-        Conclusion::Reviewed(_) => None,
+        Conclusion::Reviewed { .. } => None,
         Conclusion::NotReviewed => Some(crate::summary::failed(
             &open.head_sha,
             "This pass stopped before a review could be completed.",
@@ -1935,8 +1955,14 @@ fn hub_slot_is_open(slot: &StatusSlot, head_sha: &str) -> bool {
 
 /// How a review ended, for the umbrella check.
 enum Conclusion<'a> {
-    /// The lanes ran. Carries the finding count, for the title.
-    Reviewed(usize),
+    /// The lanes ran.
+    Reviewed {
+        /// The finding count, for the title.
+        findings: usize,
+        /// Whether the published review requested changes, so the check
+        /// cannot show a pass beside that verdict.
+        changes_requested: bool,
+    },
     /// The run stopped deliberately, without reviewing anything.
     ///
     /// Reachable when a check was already opened and the run *then* declined —
@@ -2028,7 +2054,10 @@ async fn handle_review(
                 // where it is not: an earlier attempt opened the check and this
                 // one declined.
                 let conclusion = match findings {
-                    Some(findings) => Conclusion::Reviewed(findings),
+                    Some((findings, changes_requested)) => Conclusion::Reviewed {
+                        findings,
+                        changes_requested,
+                    },
                     None => Conclusion::NotReviewed,
                 };
                 // The review is over; concluding the check is one GitHub
@@ -2154,7 +2183,7 @@ async fn review_inner(
     author: &str,
     installation: u64,
     run: &Run,
-) -> Result<Option<usize>> {
+) -> Result<Option<(usize, bool)>> {
     let who = state.store.contributor(author).await?;
     if who.trust == Trust::Blocked {
         tracing::info!(%author, "blocked contributor; not reviewing");
@@ -2410,7 +2439,11 @@ async fn review_inner(
                         published
                             .unwrap_or_else(|_| Err(Error::lane("review", "publishing panicked")))
                     })
-                    .map(|()| proposal)
+                    .map(|()| {
+                        let changes_requested =
+                            crate::app::apply::requests_changes(&config, &proposal);
+                        (proposal, changes_requested)
+                    })
             }
             Err(err) => Err(err),
         };
@@ -2425,7 +2458,7 @@ async fn review_inner(
         outcome
     };
 
-    let proposal = outcome?;
+    let (proposal, changes_requested) = outcome?;
     let findings = proposal.findings().count();
     state.store.record_review(author, findings as u64).await?;
 
@@ -2449,7 +2482,7 @@ async fn review_inner(
         installation,
     ));
 
-    Ok(Some(findings))
+    Ok(Some((findings, changes_requested)))
 }
 
 fn review_is_kill_switched(config: &Config, pull_request: &PullRequest) -> bool {
@@ -2480,9 +2513,7 @@ async fn run_lanes(
     read_token: &str,
     run: &Run,
 ) -> Result<(Config, crate::app::Proposal)> {
-    let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
-        &state.config.config.models,
-    )?);
+    let model = state.models.text();
 
     // The model runs against a read-only handle. The write token is minted by
     // the caller, after this returns — same boundary as the workflow, same
@@ -2682,9 +2713,7 @@ impl Previews for PreviewDispatch {
 
         let files = forge.changed_files(&repo, request.pull_request).await?;
         let diffs = crate::evidence::diff::parse_changed_files(&files);
-        let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
-            &effective.models,
-        )?);
+        let model = self.state.models.text();
         let plan = crate::preview::plan::plan(
             &crate::preview::plan::PlanInputs {
                 diffs: &diffs,
@@ -2797,9 +2826,7 @@ impl Previews for PreviewDispatch {
                 spend: Default::default(),
             }
         } else {
-            let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
-                &config.models,
-            )?);
+            let model = self.state.models.text();
             crate::preview::step::next(
                 &crate::preview::step::StepContext {
                     flow: &flow,
@@ -2862,23 +2889,7 @@ impl Previews for PreviewDispatch {
                 .iter()
                 .map(|(id, state)| (id.clone(), state.clone()))
                 .collect();
-            let (model, model_id, vision): (Arc<dyn crate::ports::model::Model>, &str, bool) =
-                match config.model_for_vision() {
-                    Some(vision) => (
-                        Arc::new(crate::harness::openrouter::GatewayModel::for_vision(
-                            &config.models,
-                        )?),
-                        vision,
-                        true,
-                    ),
-                    None => (
-                        Arc::new(crate::harness::openrouter::GatewayModel::from_config(
-                            &config.models,
-                        )?),
-                        config.model_for_workload(crate::config::types::Workload::Preview),
-                        false,
-                    ),
-                };
+            let (model, model_id, vision) = self.state.models.caption(config);
             let spend = crate::preview::caption::caption(
                 &mut gallery,
                 &crate::preview::caption::CaptionInputs {

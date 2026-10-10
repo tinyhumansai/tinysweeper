@@ -570,10 +570,8 @@ async fn run_review(
     dry_run: bool,
     propose_to: &std::path::Path,
 ) -> Result<()> {
-    use std::sync::Arc;
     use tinysweeper::forge::RepoId;
     use tinysweeper::forge::github::GitHubRead;
-    use tinysweeper::harness::openrouter::GatewayModel;
 
     let repo_id = RepoId::parse(repo)
         .ok_or_else(|| tinysweeper::Error::config(format!("`{repo}` is not owner/name")))?;
@@ -585,7 +583,7 @@ async fn run_review(
     }
 
     let forge = GitHubRead::from_env()?;
-    let model = Arc::new(GatewayModel::from_config(&loaded.config.models)?);
+    let model = live_model(&loaded.config).await?;
 
     let proposal = tinysweeper::app::review(&forge, model, &loaded.config, &repo_id, pr).await?;
 
@@ -636,7 +634,7 @@ async fn run_eval(command: EvalCommand) -> Result<()> {
                 tinysweeper::config::load_validated(std::path::Path::new("."), config.as_deref())?;
             let corpus_data = eval::load(&corpus)?.select(&cases)?;
             let model = if record {
-                Some(live_model(&loaded.config)?)
+                Some(live_model(&loaded.config).await?)
             } else {
                 None
             };
@@ -750,16 +748,17 @@ async fn run_eval(command: EvalCommand) -> Result<()> {
 
 /// The live provider, when the build has one.
 #[cfg(feature = "harness")]
-fn live_model(
+async fn live_model(
     config: &tinysweeper::config::types::Config,
 ) -> Result<std::sync::Arc<dyn tinysweeper::ports::model::Model>> {
-    Ok(std::sync::Arc::new(
-        tinysweeper::harness::openrouter::GatewayModel::from_config(&config.models)?,
-    ))
+    use tinysweeper::ports::model_factory::{ModelFactory, ModelPurpose};
+    tinysweeper::harness::factory::GatewayModelFactory
+        .create(&config.models, ModelPurpose::Text)
+        .await
 }
 
 #[cfg(not(feature = "harness"))]
-fn live_model(
+async fn live_model(
     _config: &tinysweeper::config::types::Config,
 ) -> Result<std::sync::Arc<dyn tinysweeper::ports::model::Model>> {
     Err(tinysweeper::Error::FeatureDisabled(
@@ -783,17 +782,15 @@ async fn run_local_review(
     title: Option<String>,
     body: Option<String>,
 ) -> Result<()> {
-    use std::sync::Arc;
     use tinysweeper::app::{LocalInput, local_review};
     use tinysweeper::evidence::git::Range;
-    use tinysweeper::harness::openrouter::GatewayModel;
 
     let mut loaded = tinysweeper::config::load_validated(dir, config_path.as_deref())?;
     if !lanes.is_empty() {
         loaded.config.review.lanes = lanes;
     }
 
-    let model = Arc::new(GatewayModel::from_config(&loaded.config.models)?);
+    let model = live_model(&loaded.config).await?;
     let input = LocalInput {
         range: Range { base, head },
         title,
@@ -1159,7 +1156,6 @@ async fn run_preview(command: PreviewCommand) -> Result<()> {
 /// Plan the flows for a pull request, as the server would at session start.
 #[cfg(all(feature = "harness", feature = "github"))]
 async fn run_preview_plan(repo: &str, pr: u64, config: Option<std::path::PathBuf>) -> Result<()> {
-    use std::sync::Arc;
     use tinysweeper::forge::RepoId;
     use tinysweeper::forge::github::GitHubRead;
     use tinysweeper::ports::forge::ForgeRead as _;
@@ -1172,9 +1168,7 @@ async fn run_preview_plan(repo: &str, pr: u64, config: Option<std::path::PathBuf
     let pull_request = read.pull_request(&repo_id, pr).await?;
     let files = read.changed_files(&repo_id, pr).await?;
     let diffs = tinysweeper::evidence::diff::parse_changed_files(&files);
-    let model = Arc::new(tinysweeper::harness::openrouter::GatewayModel::from_config(
-        &config.models,
-    )?);
+    let model = live_model(&config).await?;
     let plan = tinysweeper::preview::plan::plan(
         &tinysweeper::preview::plan::PlanInputs {
             diffs: &diffs,

@@ -442,6 +442,17 @@ pub fn digest_of(config: &Config) -> String {
     field(b"fallback\0", models.fallback.join(",").as_bytes());
     field(b"max_tokens\0", &models.max_tokens.to_le_bytes());
     field(b"reasoning_effort\0", models.reasoning_effort.as_bytes());
+    // Preserve historical one-shot digests, but never compare an agentic
+    // tool run or different physical-call admission bounds as the same run.
+    if models.agentic_reviewers {
+        field(b"agentic_reviewers\0", &[1]);
+    }
+    for (model, bound) in &models.budget_prices {
+        field(b"budget_price_model\0", model.as_bytes());
+        field(b"budget_price_input\0", &bound.input.to_le_bytes());
+        field(b"budget_price_cached\0", &bound.cached.to_le_bytes());
+        field(b"budget_price_output\0", &bound.output.to_le_bytes());
+    }
     // A per-model route moves a score the same way the global ceiling does —
     // a ceiling of 0 completes a review that 16k truncates — and pins the
     // call to an endpoint with its own price. Two runs with the same tier

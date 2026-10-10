@@ -74,7 +74,7 @@ pub async fn generate(
         "scrubbed_diff": crate::evidence::diff::render(diffs),
         "lanes": lanes.iter().map(|lane| json!({
             "lane": lane.lane.as_str(), "summary": lane.summary,
-            "findings": lane.findings.iter().map(|finding| json!({
+            "findings": lane.findings.iter().chain(lane.overflow.iter().filter(|finding| !finding.grouped)).map(|finding| json!({
                 "title": finding.title, "path": finding.path, "rule": finding.rule
             })).collect::<Vec<_>>(),
             "pending": lane.pending, "unanswered": lane.unanswered,
@@ -166,8 +166,9 @@ pub async fn generate(
         validated_narrative(&generated.executive_summary).unwrap_or_else(|| {
             "Tiny Sweeper completed its review; deterministic results follow.".into()
         });
-    summary.changes = validated_narrative(&generated.changes)
-        .unwrap_or_else(|| "No supported behavioral explanation was produced.".into());
+    // Empty, not an apology: the hub omits an empty "What changed" section,
+    // and failure prose there was printed on most pull requests.
+    summary.changes = validated_narrative(&generated.changes).unwrap_or_default();
     summary.features = generated.features;
     summary.tests = generated.tests;
     summary.positive_observations = generated
@@ -214,7 +215,6 @@ pub fn deterministic(
 ) -> ReviewSummary {
     let mut summary = prior.cloned().unwrap_or_else(|| ReviewSummary {
         executive_summary: fallback_executive(lanes),
-        changes: "The review could not produce a supported behavioral summary; inspect the cited changed surface and lane details below.".into(),
         ..ReviewSummary::default()
     });
     summary.surface = classify(diffs);
@@ -267,8 +267,28 @@ fn state(lanes: &[LaneProposal]) -> &'static str {
     }
 }
 
+/// Active findings the author is shown: the inline ones and the overflow the
+/// hub lists. Counting only the inline set would have the summary report
+/// "0 active finding(s)" on a review whose hub lists thirty.
+fn active_findings(lanes: &[LaneProposal]) -> usize {
+    lanes
+        .iter()
+        .map(|lane| {
+            lane.findings
+                .iter()
+                .filter(|finding| !finding.grouped)
+                .count()
+                + lane
+                    .overflow
+                    .iter()
+                    .filter(|finding| !finding.grouped)
+                    .count()
+        })
+        .sum()
+}
+
 fn fallback_executive(lanes: &[LaneProposal]) -> String {
-    let active: usize = lanes.iter().map(|lane| lane.findings.len()).sum();
+    let active = active_findings(lanes);
     format!(
         "Tiny Sweeper reviewed this change across {} lane(s) and found {active} active actionable finding(s). Detailed lane evidence and any incomplete work are listed below.",
         lanes.len()
@@ -276,7 +296,7 @@ fn fallback_executive(lanes: &[LaneProposal]) -> String {
 }
 
 fn history_summary(lanes: &[LaneProposal]) -> String {
-    let active: usize = lanes.iter().map(|lane| lane.findings.len()).sum();
+    let active = active_findings(lanes);
     let resolved: usize = lanes.iter().map(|lane| lane.resolved.len()).sum();
     format!("{active} active finding(s), {resolved} resolved finding(s)")
 }
@@ -497,6 +517,33 @@ mod tests {
             ["old-2", "new"]
         );
         assert_eq!(transcript.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_unsupported_change_narrative_is_left_empty_not_replaced_with_failure_text() {
+        // The hub omits an empty "What changed"; failure prose in the field
+        // printed on most pull requests instead.
+        let model = MockModel::new().then(json!({
+            "executive_summary": "A supported summary.",
+            "changes": "Tests passed",
+            "features": [],
+            "tests": [],
+            "positive_observations": {}
+        }));
+        let (summary, _, _) = generate(
+            &model,
+            &Config::default(),
+            &PullRequest::default(),
+            &[],
+            &[],
+            None,
+            &[],
+        )
+        .await;
+        assert_eq!(summary.changes, "");
+
+        let fallback = deterministic(&Config::default(), &PullRequest::default(), &[], &[], None);
+        assert_eq!(fallback.changes, "");
     }
 
     #[tokio::test]

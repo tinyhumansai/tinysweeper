@@ -2,12 +2,14 @@
 //!
 //! Lanes never talk to a provider SDK. They describe what they want — messages,
 //! a JSON schema the answer must satisfy, a token ceiling — and get back either
-//! a parsed value or an error. That keeps tinyagents (and its HTTP client) out
+//! a parsed value or an error. That keeps the harness (and its HTTP client) out
 //! of the default build, and it makes every lane testable against a canned
 //! response.
 //!
 //! Structured output is not optional. A lane that parses prose is a lane that
 //! silently misbehaves when a model phrases something differently.
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -25,8 +27,7 @@ pub struct Message {
     /// Images shown alongside the text, as URLs the provider fetches.
     ///
     /// Only ever populated on a [`Role::User`] message: the OpenAI-compatible
-    /// wire format has no image part on a system or assistant message, and
-    /// tinyinference refuses to translate one there. Empty for every lane —
+    /// wire format has no image part on a system or assistant message. Empty for every lane —
     /// a review reads a diff, not a picture — and non-empty only for the UI
     /// preview's captions, which look at the screenshots they describe.
     pub images: Vec<String>,
@@ -196,6 +197,26 @@ impl Spend {
 pub trait Model: Send + Sync {
     /// Run one completion.
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse>;
+
+    /// Review against a borrowed read-only repository. Offline models retain
+    /// their completion behavior; live adapters may supply bounded tools.
+    /// Implementations must enforce the lookup policy and redact repository
+    /// data before it enters any provider request.
+    async fn review(
+        &self,
+        request: ModelRequest,
+        _tree: &dyn crate::ports::tree::TreeReader,
+        _policy: &crate::config::types::LookupPolicy,
+    ) -> Result<ModelResponse> {
+        self.complete(request).await
+    }
+
+    /// Create a fresh shared budget scope for a lane, when supported.
+    /// Replaces any prior scope rather than nesting ledgers. Offline models
+    /// need no provider budget and keep returning `None`.
+    fn scoped_budget(&self, _budget_usd: f64) -> Option<Arc<dyn Model>> {
+        None
+    }
 }
 
 #[cfg(test)]

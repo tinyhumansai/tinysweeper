@@ -14,7 +14,8 @@ use async_trait::async_trait;
 use crate::error::{Error, Result};
 use crate::forge::types::{
     ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, Issue, IssueComment, PullRequest,
-    Remark, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict, TreeListing,
+    Remark, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict, ThreadComment,
+    TreeListing,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -271,6 +272,11 @@ pub struct MockForge {
     strict_comments: bool,
     /// Whether closing a pull request is refused.
     refuse_closes: bool,
+    /// The error every thread resolve is refused with, if any.
+    refuse_resolves: Option<String>,
+    /// Errors for individual thread ids, so one stale id can fail while the
+    /// rest of a run still resolves.
+    refuse_resolve_of: Vec<(String, String)>,
 }
 
 impl MockForge {
@@ -472,6 +478,29 @@ impl MockForge {
     /// does about the comment it already posted saying the close was coming.
     pub fn refusing_closes(mut self) -> Self {
         self.refuse_closes = true;
+        self
+    }
+
+    /// Refuse every attempt to resolve a review thread, with `message`.
+    ///
+    /// The commonest production refusal is an installation without
+    /// `Pull requests: write`, which GitHub reports as `Resource not
+    /// accessible by integration`; a test passes that text to exercise the
+    /// permission path, or anything else for a one-off failure.
+    ///
+    /// A refused attempt is still recorded in `writes()`, as a refused close
+    /// is, so the log shows what was asked for. Whether it took effect is
+    /// shown by the thread's `is_resolved` state, not by the log.
+    pub fn refusing_thread_resolves(mut self, message: &str) -> Self {
+        self.refuse_resolves = Some(message.to_string());
+        self
+    }
+
+    /// Refuse attempts to resolve the single thread `thread_id`, with
+    /// `message`. Other threads resolve normally.
+    pub fn refusing_thread_resolve_of(mut self, thread_id: &str, message: &str) -> Self {
+        self.refuse_resolve_of
+            .push((thread_id.to_string(), message.to_string()));
         self
     }
 
@@ -1057,6 +1086,22 @@ impl ForgeWrite for MockForge {
             thread_id: thread_id.to_string(),
             body: body.to_string(),
         });
+        // Applied to state for the same reason a resolve is: the policy skips
+        // a thread that already carries our note, and a mock that only
+        // recorded would hide a run that posted it twice.
+        if !self.read_only {
+            let mut state = self.state.lock().expect("mock state lock");
+            for threads in state.review_threads.values_mut() {
+                for thread in threads.iter_mut().filter(|t| t.id == thread_id) {
+                    thread.comments.push(ThreadComment {
+                        author: "tinysweeper[bot]".into(),
+                        body: body.to_string(),
+                        bot: true,
+                        maintainer: false,
+                    });
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1064,6 +1109,16 @@ impl ForgeWrite for MockForge {
         self.record(Write::ThreadResolved {
             thread_id: thread_id.to_string(),
         });
+        if let Some(message) = &self.refuse_resolves {
+            return Err(Error::Forge(message.clone()));
+        }
+        if let Some((_, message)) = self
+            .refuse_resolve_of
+            .iter()
+            .find(|(id, _)| id == thread_id)
+        {
+            return Err(Error::Forge(message.clone()));
+        }
         // Applied to state as well as recorded: the policy skips threads that
         // are already resolved, and a mock that only recorded the call would
         // hide a run that resolved the same thread twice.
@@ -1098,7 +1153,6 @@ impl ForgeWrite for MockForge {
 mod tests {
     use super::*;
     use crate::forge::types::CheckConclusion;
-    use crate::forge::types::ThreadComment;
 
     fn repo() -> RepoId {
         RepoId::parse("tinyhumansai/tinysweeper").expect("parses")
@@ -1528,6 +1582,66 @@ mod tests {
             forge.review_threads(&repo(), 7).await.expect("read")[0].is_resolved,
             "a resolved thread must read back as resolved, or a second run resolves it again"
         );
+    }
+
+    #[tokio::test]
+    async fn a_refused_resolve_is_recorded_errs_and_leaves_the_thread_open() {
+        let mut state = MockState::default();
+        state.review_threads.insert(
+            7,
+            vec![ReviewThread {
+                id: "PRRT_open".into(),
+                is_resolved: false,
+                is_outdated: true,
+                resolved_by_has_write_access: false,
+                comments: Vec::new(),
+            }],
+        );
+        let forge = MockForge::with_state(state)
+            .refusing_thread_resolves("Resource not accessible by integration");
+
+        let err = forge
+            .resolve_review_thread(&repo(), "PRRT_open")
+            .await
+            .expect_err("refused");
+
+        assert!(err.to_string().contains("not accessible"), "{err}");
+        assert_eq!(
+            forge.writes(),
+            vec![Write::ThreadResolved {
+                thread_id: "PRRT_open".into()
+            }],
+            "the attempt is recorded, as a refused close is"
+        );
+        assert!(!forge.review_threads(&repo(), 7).await.expect("read")[0].is_resolved);
+    }
+
+    #[tokio::test]
+    async fn a_thread_reply_lands_in_the_thread_as_ours() {
+        let mut state = MockState::default();
+        state.review_threads.insert(
+            7,
+            vec![ReviewThread {
+                id: "PRRT_open".into(),
+                is_resolved: false,
+                is_outdated: true,
+                resolved_by_has_write_access: false,
+                comments: Vec::new(),
+            }],
+        );
+        let forge = MockForge::with_state(state);
+
+        forge
+            .reply_to_review_thread(&repo(), "PRRT_open", "noted")
+            .await
+            .expect("replies");
+
+        // A reply that only recorded would hide a run that posted the same
+        // note twice: the second run has to be able to read the first one.
+        let threads = forge.review_threads(&repo(), 7).await.expect("read");
+        let reply = threads[0].comments.last().expect("the reply is in state");
+        assert_eq!(reply.body, "noted");
+        assert!(crate::findings::prior::is_own_login(&reply.author));
     }
 
     #[tokio::test]

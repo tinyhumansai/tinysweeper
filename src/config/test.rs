@@ -94,12 +94,94 @@ fn a_route_ceiling_below_the_floor_is_rejected_like_the_global_one() {
         "{joined}"
     );
 
-    // Zero is "no ceiling", not a small one.
+    // Zero means no wire ceiling, which budgeted reviews cannot admit.
     let config = parse(
         "version = 1\n[models]\nmax_tokens = 16000\nreasoning_effort = \"high\"\n\
          [[models.routes]]\nmodel = \"deep\"\nmax_tokens = 0\n",
     );
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("finite output cap"), "{joined}");
+}
+
+#[test]
+fn alias_budget_rates_reject_nonfinite_and_negative_values_without_echoing_them() {
+    use crate::config::types::BudgetPriceBound;
+
+    for field in ["input", "cached", "output"] {
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -12345.6789] {
+            let mut config = parse("version = 1\n");
+            let mut rates = BudgetPriceBound {
+                input: 0.0,
+                cached: 0.0,
+                output: 1.0,
+            };
+            match field {
+                "input" => rates.input = invalid,
+                "cached" => rates.cached = invalid,
+                "output" => rates.output = invalid,
+                _ => unreachable!(),
+            }
+            config
+                .models
+                .budget_prices
+                .insert("gateway-alias".into(), rates);
+            let joined = validate::validate(&config).join("\n");
+            assert!(
+                joined.contains(&format!("models.budget_prices[gateway-alias].{field}")),
+                "{field}: {joined}"
+            );
+            assert!(!joined.contains(&invalid.to_string()), "{joined}");
+        }
+    }
+}
+
+#[test]
+fn alias_budget_output_rate_must_be_positive_but_input_can_be_free() {
+    use crate::config::types::BudgetPriceBound;
+
+    let mut config = parse("version = 1\n");
+    config.models.budget_prices.insert(
+        "gateway-alias".into(),
+        BudgetPriceBound {
+            input: 0.0,
+            cached: 0.0,
+            output: 0.0,
+        },
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(
+        joined.contains("models.budget_prices[gateway-alias].output"),
+        "{joined}"
+    );
+    config
+        .models
+        .budget_prices
+        .get_mut("gateway-alias")
+        .unwrap()
+        .output = 1.0;
     assert!(validate::validate(&config).is_empty());
+}
+
+#[test]
+fn budgeted_routes_require_a_finite_output_cap_with_or_without_agentic_reviewers() {
+    for agentic in [false, true] {
+        let mut config = parse(
+            "version = 1\n[models]\nreasoning_effort = \"off\"\n\
+             [[models.routes]]\nmodel = \"deep\"\nmax_tokens = 0\n",
+        );
+        config.models.agentic_reviewers = agentic;
+        config.models.structured_output = StructuredOutput::Schema;
+        let joined = validate::validate(&config).join("\n");
+        assert!(
+            joined.contains("models.routes[deep].max_tokens"),
+            "{joined}"
+        );
+        assert!(joined.contains("finite output cap"), "{joined}");
+        config.models.routes[0].max_tokens = Some(16_000);
+        assert!(validate::validate(&config).is_empty());
+        config.models.routes[0].max_tokens = None;
+        assert!(validate::validate(&config).is_empty());
+    }
 }
 
 #[test]
@@ -418,12 +500,118 @@ fn strictness_actually_moves_the_gates() {
 }
 
 #[test]
-fn an_explicit_gate_overrides_the_dial() {
+fn an_explicit_gate_cannot_loosen_the_dial() {
+    // The dial is authoritative. A gate below it used to win outright, which
+    // is how every repository on `rust-library` ended up posting medium/0.6
+    // findings at "default" strictness.
     let config = parse(
         "version = 1\n[review]\nstrictness = 1\nseverity_gate = \"low\"\nconfidence_min = 0.1\n",
     );
-    assert_eq!(config.severity_gate(), Severity::Low);
-    assert_eq!(config.confidence_min(), 0.1);
+    assert_eq!(config.severity_gate(), Severity::Critical);
+    assert_eq!(config.confidence_min(), 0.85);
+}
+
+#[test]
+fn a_clamped_gate_is_reported_with_its_layer_and_effective_value() {
+    let dir = repo(
+        Some("version = 1\npreset = \"loose\"\n[review]\nconfidence_min = 0.9\n"),
+        &[(
+            "loose",
+            "version = 1\n[review]\nstrictness = 2\nseverity_gate = \"medium\"\nconfidence_min = 0.6\n",
+        )],
+    );
+    let loaded = load(dir.path(), None).expect("loads");
+    let clamped = crate::config::clamped_gates(&loaded.config, &loaded.provenance);
+
+    // Only the looser one: the repository's 0.9 tightened, which is allowed.
+    assert_eq!(clamped.len(), 1, "{clamped:#?}");
+    assert_eq!(clamped[0].key, "review.severity_gate");
+    assert_eq!(clamped[0].layer, Some(Layer::Preset));
+    assert_eq!(clamped[0].effective, "high");
+    let message = clamped[0].to_string();
+    assert!(message.contains("preset"), "{message}");
+    assert!(message.contains("medium"), "{message}");
+    assert!(message.contains("high"), "{message}");
+
+    let tight = parse("version = 1\n[review]\nseverity_gate = \"critical\"\n");
+    assert!(crate::config::clamped_gates(&tight, &Default::default()).is_empty());
+}
+
+#[test]
+fn an_explicit_gate_can_still_tighten_the_dial() {
+    let config = parse(
+        "version = 1\n[review]\nstrictness = 3\nseverity_gate = \"high\"\nconfidence_min = 0.9\n",
+    );
+    assert_eq!(config.severity_gate(), Severity::High);
+    assert_eq!(config.confidence_min(), 0.9);
+}
+
+#[test]
+fn a_preset_cannot_loosen_the_dial() {
+    // The production shape: a preset that names lower gates than the
+    // strictness it also sets, inherited by every repository on it.
+    let dir = repo(
+        Some("version = 1\npreset = \"loose\"\n"),
+        &[(
+            "loose",
+            "version = 1\n[review]\nstrictness = 2\nseverity_gate = \"medium\"\nconfidence_min = 0.6\n",
+        )],
+    );
+    let config = load(dir.path(), None).expect("loads").config;
+
+    assert_eq!(config.severity_gate(), Severity::High);
+    assert_eq!(config.confidence_min(), 0.75);
+}
+
+#[test]
+fn only_the_e2e_preset_turns_the_e2e_lane_on() {
+    // Every repository inherits the server's preset, so a preset that lists
+    // `e2e` undoes the default for all of them at once.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for name in [
+        "rust-library",
+        "security-strict",
+        "e2e-required",
+        "polyglot",
+    ] {
+        let dir = repo(
+            Some(&format!("version = 1\npreset = \"{name}\"\n")),
+            &[(
+                name,
+                &std::fs::read_to_string(root.join("presets").join(name).join("preset.toml"))
+                    .expect("read shipped preset"),
+            )],
+        );
+        with_shipped_rules(&dir);
+        let config = load(dir.path(), None).expect("loads").config;
+        assert_eq!(
+            config.enabled_lanes().contains(&LaneId::E2e),
+            name == "e2e-required",
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn no_shipped_preset_loosens_the_dial_it_sets() {
+    // Belt and braces: the clamp makes a loose preset inert, but a preset that
+    // *says* medium/0.6 while posting high/0.75 is documentation that lies.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for name in [
+        "rust-library",
+        "security-strict",
+        "e2e-required",
+        "polyglot",
+    ] {
+        let text = std::fs::read_to_string(root.join("presets").join(name).join("preset.toml"))
+            .expect("read shipped preset");
+        let table: toml::Table = text.parse().expect("parses");
+        let review = table["review"].as_table().expect("a review table");
+        assert!(
+            !review.contains_key("severity_gate") && !review.contains_key("confidence_min"),
+            "{name}: set the dial, not the gates"
+        );
+    }
 }
 
 #[test]
@@ -1570,5 +1758,39 @@ fn a_private_network_engine_needs_the_operators_say_so() {
         validate::validate(&allowed).is_empty(),
         "{:?}",
         validate::validate(&allowed)
+    );
+}
+
+#[test]
+fn agentic_reviewers_are_explicit_opt_in_and_require_strict_schemas() {
+    let config = Config::default();
+    assert!(!config.models.agentic_reviewers);
+    let mut enabled = config;
+    enabled.models.agentic_reviewers = true;
+    enabled.models.structured_output = crate::config::types::StructuredOutput::JsonObject;
+    assert!(
+        crate::config::validate::validate(&enabled)
+            .iter()
+            .any(|problem| problem.contains("agentic_reviewers"))
+    );
+}
+
+#[test]
+fn disabled_agentic_reviewers_preserve_serialized_baseline_configuration() {
+    let mut config = Config::default();
+    let default = serde_json::to_value(&config).unwrap();
+    assert!(default["models"].get("agentic_reviewers").is_none());
+    let default_toml = toml::to_string(&config).unwrap();
+    assert!(!default_toml.contains("agentic_reviewers"));
+    config.models.agentic_reviewers = true;
+    let enabled = serde_json::to_value(&config).unwrap();
+    assert_eq!(
+        enabled["models"]["agentic_reviewers"],
+        serde_json::json!(true)
+    );
+    assert!(
+        toml::to_string(&config)
+            .unwrap()
+            .contains("agentic_reviewers = true")
     );
 }

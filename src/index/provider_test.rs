@@ -1,6 +1,6 @@
 //! Behaviour tests for the provider-backed embedder. Requires `harness`.
 //!
-//! Offline throughout. Every test here runs against tinyagents'
+//! Offline throughout. Every test here runs against the harness'
 //! `MockEmbeddingModel`, which hashes its input and makes no request, so
 //! `cargo test --features harness` still touches no network. The one thing
 //! these tests cannot cover offline — that a live provider returns what it says
@@ -26,7 +26,7 @@ fn config(provider: &str, model: &str, dims: usize) -> Embeddings {
 
 #[test]
 fn our_signature_and_the_harness_signature_describe_the_same_space() {
-    // The correspondence the index partition depends on. tinyagents writes
+    // The correspondence the index partition depends on. The embedding model writes
     // `provider=…;model=…;dims=…`; if `EmbedSignature::harness_key` ever drifts
     // from it, the two sides are naming spaces by different rules and a model
     // swap stops being detectable.

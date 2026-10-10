@@ -12,6 +12,7 @@ pub mod knowledge;
 pub mod manifest;
 pub mod memory;
 pub mod model;
+pub mod model_factory;
 pub mod review_state;
 pub mod sentry;
 pub mod tree;
@@ -24,6 +25,11 @@ pub use crate::ports::knowledge::KnowledgeStore;
 pub use crate::ports::manifest::IndexManifest;
 pub use crate::ports::memory::Memory;
 pub use crate::ports::model::{Message, Model, ModelRequest, ModelResponse, Role, Usage};
+pub use crate::ports::model_factory::{ModelFactory, ModelPurpose, StaticModelFactory};
 pub use crate::ports::review_state::ReviewStateStore;
 pub use crate::ports::sentry::SentryApi;
 pub use crate::ports::tree::TreeReader;
+
+#[cfg(test)]
+#[path = "model_factory_test.rs"]
+mod model_factory_tests;

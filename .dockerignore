@@ -1,7 +1,7 @@
 # Keep the build context small, but never at the cost of a working build.
 #
 # An earlier version of this file pruned inside vendor/ — docs, examples, tests.
-# That broke the image: tinyagents declares explicit `[[example]]` entries, so
+# That broke the image: vendored crates declare explicit `[[example]]` entries, so
 # removing examples/ makes cargo refuse to parse its manifest at all. Vendored
 # crates are now left intact apart from their build output. The context is a few
 # megabytes larger and the build works, which is the right trade.

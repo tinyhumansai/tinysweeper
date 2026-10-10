@@ -653,3 +653,17 @@ fn a_contraction_is_negation() {
     assert!(!cant.same_as(&allow));
     assert!(!allow.same_as(&cant));
 }
+
+#[test]
+fn negating_a_negative_imperative_preserves_opposite_guidance() {
+    for (negative, negated) in [
+        ("Disable CSRF validation", "Do not disable CSRF validation"),
+        ("Remove authorization checks", "Never remove authorization checks"),
+        ("Skip signature verification", "Don't skip signature verification"),
+    ] {
+        let left = Concern::new("src/auth.rs", Some((10, 10)), negative, "", "");
+        let right = Concern::new("src/auth.rs", Some((11, 11)), negated, "", "");
+        assert!(!left.same_as(&right), "opposite guidance: {negative} / {negated}");
+        assert!(!left.same_as_declined(&right));
+    }
+}

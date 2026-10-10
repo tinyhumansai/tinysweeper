@@ -171,7 +171,7 @@ pub fn json_schema() -> Value {
             },
             "findings": {
                 "type": "array",
-                "description": "Problems introduced by this pull request. An empty array is a valid and common answer; do not pad it.",
+                "description": "Each entry must be a reportable defect this pull request introduces: code that fails or misbehaves for a concrete, reachable input, a regression in behaviour this change touches, or a violation of a quoted AGENTS.md or CLAUDE.md rule. Never style or naming, lint or formatting nits, pre-existing issues in unchanged code, speculative security without an attacker-controlled input path, tests for behaviour outside this pull request or repository, or a restatement of the diff. A change the diff shows will not compile, or breaks a test it touches, is a reportable defect. An empty array is a valid and common answer; do not pad it. Prefer zero findings to weak ones.",
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
@@ -196,7 +196,7 @@ pub fn json_schema() -> Value {
                         },
                         "body": {
                             "type": "string",
-                            "description": "What is wrong, why it matters, and what to do. Markdown."
+                            "description": "What is wrong, why it matters, and what to do. Markdown. Name the concrete, reachable input or the caller that triggers the defect; for a repository-rule violation, quote the rule's text word for word."
                         },
                         "severity": {
                             "type": "string",
@@ -365,6 +365,41 @@ mod tests {
             description.contains("empty array is a valid"),
             "{description}"
         );
+    }
+
+    #[test]
+    fn the_schema_descriptions_carry_the_same_bar_as_the_shared_rules() {
+        // Under `json_object` the schema text is the only contract the model
+        // sees, so it must not invite what the prompt forbids.
+        let schema = json_schema();
+        let findings = schema["properties"]["findings"]["description"]
+            .as_str()
+            .expect("described");
+        assert!(findings.contains("reportable defect"), "{findings}");
+        assert!(
+            findings.contains("Prefer zero findings to weak ones"),
+            "{findings}"
+        );
+        assert!(findings.contains("style or naming"), "{findings}");
+        assert!(
+            findings.contains("will not compile") && !findings.contains("compiler, linter"),
+            "{findings}"
+        );
+
+        let body = schema["properties"]["findings"]["items"]["properties"]["body"]["description"]
+            .as_str()
+            .expect("described");
+        assert!(body.contains("concrete, reachable input"), "{body}");
+        assert!(body.contains("quote the rule's text"), "{body}");
+    }
+
+    #[test]
+    fn the_schema_still_round_trips_as_json() {
+        let schema = json_schema();
+        let text = serde_json::to_string(&schema).expect("serialises");
+        let reparsed: Value = serde_json::from_str(&text).expect("parses");
+        assert_eq!(reparsed, schema);
+        assert!(json_mode_instruction(&schema).contains("reportable defect"));
     }
 
     #[test]

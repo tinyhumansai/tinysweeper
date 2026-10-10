@@ -4,11 +4,16 @@
 
 ```sh
 git submodule update --init --recursive
-cargo fmt --all -- --check
+cargo fmt --package tinysweeper -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 cargo check --locked --all-features --all-targets
 ```
+
+Formatting targets this crate: `--all` traverses the vendored OpenHuman path
+dependency and its independent workspaces. Those repositories enforce their
+own formatting with their pinned toolchains.
+
 
 The default build must stay offline — no HTTP client linked, no network in the
 test suite. Put anything that needs the network behind a feature.

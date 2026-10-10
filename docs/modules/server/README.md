@@ -8,10 +8,33 @@ composite action, reusable workflow or release binary to install.
 | --- | --- |
 | `routes.rs` | The axum app: `/healthz`, `/webhook`, the review worker |
 | `webhook.rs` | HMAC verification and event parsing |
+| `model.rs` | Resolve reusable text and optional vision models through the `ModelFactory` port |
 | `auth.rs` | App JWT and cached installation tokens |
 | `store.rs` | MongoDB: contributors, trust, delivery and lease claims |
 | `indexing.rs` | `IndexBackend`: the embedder and the retrieval stores, and the background index job |
 | `admin.rs` | The authenticated `/admin` API |
+
+## Model lifetime and construction
+
+`serve` uses the default gateway-backed `ModelFactory`; hosts can inject another
+factory through `serve_with_model_factory`. Model construction is async and
+receives only the operator's `[models]` configuration. The always-compiled
+`StaticModelFactory` provides offline text and optional vision handles.
+
+The server resolves one text adapter and, when `model_for_vision` returns an
+explicit nonempty ID, one separate vision adapter before opening its listener.
+A construction failure refuses startup rather than surfacing on the first
+contributor's request. `AppState` and its worker clones share these handles for
+review lanes, issue triage, preview planning/steps, and captions. Workload model
+IDs and token limits remain request-specific. Repository overlays cannot change
+model credentials or routes, so they do not rebuild the adapters.
+
+Vision still uses its own unpinned gateway with no text fallbacks or per-model
+text routes. Without a vision ID, captions use the same text adapter and their
+preview workload ID, with images omitted as before. The model factory never
+receives GitHub credentials; write-token ordering remains independent of model
+construction. Credentials and provider policy are fixed for the server's
+lifetime; restart to pick up a rotated model key.
 
 ## The write-token boundary
 
@@ -101,9 +124,15 @@ model call — and the same run is concluded afterwards by id.
 | State | Conclusion | Meaning |
 |---|---|---|
 | in progress | `None` | accepted, lanes running |
-| concluded | `Success` | the lanes ran; the lane checks carry the verdicts |
+| concluded | `Success` | the lanes ran and the review did not request changes |
+| concluded | `Neutral` | the lanes ran and the review requested changes |
 | concluded | `Neutral` | opened, then declined — draft, blocked author, taken |
 | concluded | `ActionRequired` | the review could not run (see below) |
+
+A completed review concludes from `app::apply::requests_changes`, the same
+predicate the submitted review reads, so the check never shows a pass beside a
+Changes Requested review. `Neutral` rather than `Failure`: the review already
+blocks, and liveness must not become a second merge gate.
 
 It is opened *after* the draft check and the lease claim, not on the delivery
 path, so a draft, a blocked contributor or a duplicate delivery never announces

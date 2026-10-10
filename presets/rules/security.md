@@ -89,6 +89,13 @@ not the caveat.
   debugger, say what you saw and give it low confidence — do not assert it.
 - **A missing security header or hardening option** on a file that does not
   configure them.
+- **An internal field treated as attacker input.** A value the codebase sets
+  for itself — a task's `site`, a workspace id read from the caller's own
+  session — is not a source. "Path traversal via `task.site`" needs the place an
+  attacker writes `site`, visible in the evidence.
+- **Cross-tenant mixing you inferred from a name.** Data from two workspaces
+  meeting in one structure is a finding only when you can show the code path
+  that lets one tenant's input reach the other's read.
 
 ## Severity
 

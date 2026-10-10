@@ -859,3 +859,28 @@ async fn without_a_tree_the_prompt_is_the_plain_one() {
     );
     assert!(request.schema["properties"].is_null());
 }
+
+#[tokio::test]
+async fn a_paid_refusal_retains_answer_usage_and_capability_spend() {
+    struct Refused;
+    #[async_trait::async_trait]
+    impl Model for Refused {
+        async fn complete(&self, _: crate::ports::model::ModelRequest) -> Result<ModelResponse> {
+            Err(
+                crate::error::Error::Model("review refused".into()).with_usage(Usage {
+                    input_tokens: 36,
+                    output_tokens: 14,
+                    cost_usd: 0.01,
+                    ..Default::default()
+                }),
+            )
+        }
+    }
+    let llm = lane_llm(Arc::new(Refused), &config(), 100.0);
+    let answers = one_round(&llm, LaneId::Critique, &[call("a")], &schema()).await;
+    assert!(answers[0].value.is_none());
+    assert_eq!(answers[0].usage.input_tokens, 36);
+    assert_eq!(answers[0].usage.output_tokens, 14);
+    assert_eq!(answers[0].usage.cost_usd, 0.01);
+    assert_eq!(llm.spend().cost_usd(), 0.01);
+}

@@ -2431,7 +2431,7 @@ mod tests {
             "tree": [
                 {"path": "e2e", "type": "tree"},
                 {"path": "e2e/login.spec.ts", "type": "blob", "size": 120},
-                {"path": "vendor/tinyagents", "type": "commit"},
+                {"path": "vendor/openhuman", "type": "commit"},
                 {"path": ".github/workflows/e2e.yml", "type": "blob", "size": 300}
             ]
         });

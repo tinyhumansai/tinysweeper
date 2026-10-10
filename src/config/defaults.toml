@@ -11,13 +11,38 @@
 version = 1
 
 [review]
-lanes = ["critique", "security", "tests", "commits", "description", "e2e"]
+# `e2e` is opt-in: list it here (or use the `e2e-required` preset) to turn it
+# on. It was on by default and, wherever a harness existed, asked for an
+# end-to-end test on config flips and settings panels nobody acted on
+# (openhuman#7128, #7127, tinymemory#238). See docs/modules/lanes/e2e.md.
+lanes = ["critique", "security", "tests", "commits", "description"]
 # The one dial most repositories should touch. 1 chill, 2 default, 3 assertive.
 # `severity_gate` and `confidence_min` are deliberately absent: strictness sets
 # them, and setting them here would make the dial inert for everyone who never
 # overrode them — which is exactly the bug this replaced.
 strictness = 2
-max_comments = 20
+# The inline-comment budget for a whole pull request — not per lane, not per
+# adaptive pass, not per push. Every lane and pass of a review cycle is ranked
+# together (severity, then confidence, then council agreement) and only the
+# top of that list becomes inline conversations; the rest are listed by title
+# and location in the review hub, never dropped.
+#
+# Earlier cycles spend the same budget while their conversations stay open:
+# five unresolved threads leave no room for a sixth until one is resolved
+# (by a maintainer, the author, or `threads` closing a fixed finding). An
+# outdated thread still counts — it is still asking for attention, and
+# letting a rewrite refill the budget is how a 48-commit pull request
+# collected 115 findings when this was 20 per cycle. With `incremental`
+# off, earlier cycles are not read and every review starts from a full budget.
+#
+# One exception: a critical finding is always posted inline, budget or not.
+# It still counts against the budget and is still deduplicated, so it is never
+# repeated — but it is never demoted to a hub line because older threads are
+# open. Critical only; exempting high would make this no budget at all.
+#
+# Five, because comments that get acted on are few and severe; a reviewer
+# whose every push adds a page of them is read for a week and then ignored.
+max_comments = 5
 # Resource ceilings, checked before commit patches or model calls. These are
 # intentionally generous: ordinary large pull requests still run, while a
 # generated-code dump or repository-scale rewrite cannot consume an unbounded
@@ -318,6 +343,8 @@ reasoning_effort = "medium"
 # model is known. GLM 5.2 and MiniMax M3 both accept `json_object`, so the
 # safety net still works.
 structured_output = "json_object"
+# Read-only tool exploration is opt-in and requires structured_output = "schema".
+agentic_reviewers = false
 budget_usd_per_pr = 1.0
 
 # Per-model routing, for a rung that should not share the pin below.
@@ -326,8 +353,9 @@ budget_usd_per_pr = 1.0
 # serve at prices spanning 4x. A rung meant for one specific endpoint — OpenAI's
 # flex tier, the surplus-capacity endpoint at half price — gets its own entry
 # here, with its own `order`, its own `allow_fallbacks`, and optionally its own
-# output ceiling: `max_tokens = 0` sends none, so the model answers at the
-# length it needs and a cut-off is the provider's own limit. A rung with a
+# output ceiling. `max_tokens = 0` means no ceiling on the wire, but budgeted
+# reviews reject it: admission needs a finite output cap. Omit the override
+# to inherit `models.max_tokens`, or set a positive ceiling. A rung with a
 # route never falls to the unpinned last resort: naming the endpoint means it.
 # None by default; the deployment's `.tinysweeper.toml` is where one lives.
 #
@@ -335,7 +363,7 @@ budget_usd_per_pr = 1.0
 #   model = "openai/gpt-5.6-luna"
 #   order = ["openai/flex"]
 #   allow_fallbacks = false
-#   max_tokens = 0
+#   max_tokens = 16000
 routes = []
 
 # Pin the upstream provider, so the price this repository records is the price
@@ -894,7 +922,7 @@ resolve_fixed = true
 # On: replies are fenced as untrusted data and the advisory result can only
 # close an existing tinysweeper-owned thread through deterministic policy.
 ask_model = true
-# Reply with the reason and the commit before resolving. On: a thread that
+# Reply with the reason and the commit once a resolve succeeds. On: a thread that
 # collapses silently reads as the bot losing interest rather than as a finding
 # somebody fixed, and the author cannot check a claim that was never made.
 comment_on_resolve = true

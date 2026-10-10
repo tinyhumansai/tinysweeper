@@ -97,7 +97,7 @@ impl Lane for Tests {
             ..PromptInputs::new(LaneId::Tests, input.config)
         });
 
-        // Every reviewer at once, as one graph. With no council configured
+        // Every reviewer at once, as one concurrent round. With no council configured
         // this is the single default reviewer on the lane's own model, so the
         // shape of a solo run and a council run is one code path rather than
         // two that drift.

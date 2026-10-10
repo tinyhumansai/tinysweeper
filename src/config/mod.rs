@@ -64,6 +64,73 @@ pub struct Loaded {
     pub preset_source: Option<PathBuf>,
 }
 
+/// An explicit posting gate the strictness dial overrode because it was looser.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClampedGate {
+    /// The dotted key, `review.severity_gate` or `review.confidence_min`.
+    pub key: &'static str,
+    /// What the layer asked for.
+    pub configured: String,
+    /// What the review actually uses.
+    pub effective: String,
+    /// The layer that set the key, when provenance knows it.
+    pub layer: Option<Layer>,
+}
+
+impl std::fmt::Display for ClampedGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let layer = self.layer.map_or("an unknown", Layer::as_str);
+        write!(
+            f,
+            "`{} = {}` from the {layer} layer is looser than `review.strictness` \
+             allows; the dial is authoritative, so the effective value is {}",
+            self.key, self.configured, self.effective
+        )
+    }
+}
+
+/// Every explicit gate looser than the strictness dial, and so ignored.
+///
+/// Reported rather than silently clamped: a setting that reads as applied and
+/// is not is the worst failure a config file has (see `validate`). Not a
+/// validation problem, because refusing a config over a key that now merely
+/// does nothing would cost a review rather than a comment.
+pub fn clamped_gates(config: &Config, provenance: &Provenance) -> Vec<ClampedGate> {
+    let dial = types::Strictness::for_level(config.review.strictness);
+    let mut clamped = Vec::new();
+    if let Some(configured) = config.review.severity_gate.as_deref()
+        && let Some(severity) = types::Severity::parse(configured)
+        && severity < dial.severity
+    {
+        clamped.push(ClampedGate {
+            key: "review.severity_gate",
+            configured: format!("\"{configured}\""),
+            effective: config.severity_gate().to_string(),
+            layer: provenance.get("review.severity_gate"),
+        });
+    }
+    if let Some(configured) = config.review.confidence_min
+        && configured < dial.confidence
+    {
+        clamped.push(ClampedGate {
+            key: "review.confidence_min",
+            configured: configured.to_string(),
+            effective: config.confidence_min().to_string(),
+            layer: provenance.get("review.confidence_min"),
+        });
+    }
+    clamped
+}
+
+/// Log each clamped gate once, at warn, as the config is loaded.
+pub(crate) fn warn_clamped_gates(config: &Config, provenance: &Provenance, only: Option<Layer>) {
+    for gate in clamped_gates(config, provenance) {
+        if only.is_none_or(|layer| gate.layer == Some(layer)) {
+            tracing::warn!(key = gate.key, layer = ?gate.layer, "{gate}");
+        }
+    }
+}
+
 /// Find a config file at or under `path`.
 ///
 /// `path` may be the file itself or a directory to search. Returns `None` when
@@ -154,6 +221,7 @@ pub fn load(root: &Path, explicit: Option<&Path>) -> Result<Loaded> {
     })?;
 
     load_rule_documents(root, &mut config)?;
+    warn_clamped_gates(&config, &provenance, None);
 
     Ok(Loaded {
         config,
@@ -301,9 +369,12 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "max_tokens",
             "reasoning_effort",
             "structured_output",
+            "agentic_reviewers",
+            "budget_prices",
             "budget_usd_per_pr",
             "routes",
         ]),
+        "models.budget_prices" => None,
         "models.routes.*" => Some(&["model", "order", "allow_fallbacks", "max_tokens"]),
         "models.provider" => Some(&[
             "order",

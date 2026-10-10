@@ -80,12 +80,22 @@ itself, why `ChunkIndex` needs deletes, and what MongoDB has to be — is in
 ## `TreeReader`
 
 What a reviewer may look up before it answers: a range of one file at the
-reviewed commit, or every line containing a literal. Two verbs, both reads,
+reviewed commit, or every line containing a literal. All operations are reads,
 so the port cannot be argued into running anything. `DirTree` serves a
 checkout and searches in-process; `forge::tree::ForgeTree` serves the
 forge API one file at a time, following one level of submodule through
 `ForgeRead::submodule_at`, and answers *unavailable* for search. See
 [`docs/modules/lanes/lookup.md`](../lanes/lookup.md).
+
+The optional `explore(TreeQuery)` seam adds bounded file listing, literal symbol
+lookup and ranges at full immutable commit IDs. Its default reports unavailable,
+so existing readers retain their behavior. Directory and mock snapshots support
+listing and symbols; forge snapshots also support historical reads through
+`ForgeRead::file_at`. Forge symbol search reads at most 32 safe paths and reports
+truncation. Directory history is limited to its recorded current revision.
+Queries validate normalized paths, bounds and full commit IDs. Listing excludes
+sensitive filenames. Redacting and recording wrappers scrub results, including
+private-key range context, before capture or model consumption.
 
 ## `Memory`
 

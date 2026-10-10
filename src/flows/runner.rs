@@ -1,12 +1,11 @@
 //! Running a lane's reviewers concurrently, and reporting who could not be
 //! reached.
 //!
-//! This is the whole of what the graph does for a lane: it makes N model calls
+//! This is the whole of what the runner does for a lane: it makes N model calls
 //! at once and hands back one answer per reviewer, in the order they were
 //! asked. Placement, merging and removal all stay where they were — in the
 //! lane, in `council`, and in `falsify` respectively — because those are the
-//! steps whose behaviour the golden tests pin, and moving them into a graph
-//! would buy nothing and cost the tests.
+//! steps whose behaviour the golden tests pin.
 //!
 //! A reviewer whose call fails is reported, not swallowed. A council that
 //! returns nothing because one member timed out is a review that reads "all
@@ -15,16 +14,17 @@
 
 use std::sync::Arc;
 
-use serde_json::{Value, json};
-use tinyflows::engine;
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 
 use crate::config::types::{LaneId, LookupPolicy};
 use crate::error::Result;
-use crate::flows::caps::{ChildGraphs, ModelCapability};
+use crate::flows::caps::ModelCapability;
 use crate::flows::lookup;
-use crate::flows::panel::{self, Call};
+use crate::flows::panel::Call;
 use crate::flows::subagent::{self, Answered};
-use crate::ports::model::{Model, Usage};
+use crate::ports::model::{Model, ModelResponse, Usage};
 use crate::ports::tree::{Lookup, TreeReader};
 
 /// What one reviewer said, or why it said nothing.
@@ -67,7 +67,7 @@ impl Answer {
 pub struct AskOutcome {
     /// One answer per requested reviewer, in request order.
     pub answers: Vec<Answer>,
-    /// Usage from every successful model call made during this invocation.
+    /// Usage from successful calls and paid refusals during this invocation.
     pub usage: Usage,
     /// Wall time for the complete invocation, including follow-up turns.
     pub elapsed: std::time::Duration,
@@ -87,87 +87,74 @@ pub fn lane_llm(
     Arc::new(ModelCapability::new(model, config.models.clone()).with_budget(budget_usd))
 }
 
-/// Read one agent node's structured answer out of a finished run.
+/// Ask every call in one round at once, and read an answer per call, in order.
 ///
-/// Two envelopes, not one, and the difference is easy to get wrong in a way
-/// nothing reports. The engine wraps a node's result as
-/// `nodes.<id>.items[0].{json, raw, text}`, and the `json` there is whatever
-/// [`crate::flows::caps::ModelCapability`] returned — this crate's own
-/// `{json, model}` pair. So the model's answer is two `json` hops down, and
-/// stopping one hop early yields `{json, model}`, which deserializes into an
-/// *empty* lane response rather than failing. That reads exactly like a
-/// reviewer that found nothing.
-fn node_answer(output: &Value, node_id: &str) -> Option<(Value, String, Usage)> {
-    let envelope = output.get("nodes")?.get(node_id)?.get("items")?.get(0)?;
-    let payload = envelope.get("json")?.get("json")?;
-
-    Some((
-        payload.get("json")?.clone(),
-        payload
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-            .to_string(),
-        payload
-            .get("usage")
-            .cloned()
-            .and_then(|usage| serde_json::from_value(usage).ok())
-            .unwrap_or_default(),
-    ))
-}
-
-/// Why a node produced no answer, as the engine recorded it.
-fn node_error(output: &Value, node_id: &str) -> Option<String> {
-    output
-        .get("nodes")?
-        .get(node_id)?
-        .get("items")?
-        .get(0)?
-        .get("json")?
-        .get("error")?
-        .get("message")?
-        .as_str()
-        .map(str::to_string)
-}
-
-/// Run one round of the council graph and read an answer per call.
+/// A reviewer that fails must not fail the round: one provider timeout would
+/// otherwise lose every other reviewer's work, and a lane that returns nothing
+/// is indistinguishable from a lane that found nothing. So a failure becomes an
+/// [`Answer`] carrying the error, and the lane reports that file unreviewed.
+///
+/// `lane` is carried for the trace only; the calls are identical across lanes.
 async fn one_round(
-    capabilities: &tinyflows::caps::Capabilities,
+    llm: &ModelCapability,
     lane: LaneId,
     calls: &[Call],
     schema: &Value,
-) -> Result<Vec<Answer>> {
-    let graph = panel::council_graph(lane, calls, schema);
+) -> Vec<Answer> {
+    one_round_review(llm, lane, calls, schema, None).await
+}
 
-    let compiled = tinyflows::compiler::compile(&graph)
-        .map_err(|e| crate::error::Error::Model(format!("council graph did not compile: {e}")))?;
-
-    let outcome = engine::run(&compiled, json!({}), capabilities)
-        .await
-        .map_err(|e| crate::error::Error::Model(e.to_string()))?;
-
-    Ok(calls
+async fn one_round_review(
+    llm: &ModelCapability,
+    lane: LaneId,
+    calls: &[Call],
+    schema: &Value,
+    repository: Option<(&dyn TreeReader, &LookupPolicy)>,
+) -> Vec<Answer> {
+    let branches: Vec<futures::future::BoxFuture<'_, Result<(ModelResponse, String)>>> = calls
         .iter()
         .map(|call| {
-            let node = panel::node_id(&call.id);
-
-            match node_answer(&outcome.output, &node) {
-                Some((value, model, usage)) => Answer {
-                    id: call.id.clone(),
-                    value: Some(value),
-                    model,
-                    error: None,
-                    looked_up: String::new(),
-                    usage,
-                },
-                None => Answer::failed(
-                    &call.id,
-                    node_error(&outcome.output, &node)
-                        .unwrap_or_else(|| "the reviewer produced no answer".into()),
-                ),
+            Box::pin(async move {
+                match repository {
+                    Some((tree, policy)) => llm.review(call, schema, tree, policy).await,
+                    None => llm
+                        .call(call, schema)
+                        .await
+                        .map(|response| (response, String::new())),
+                }
+            }) as futures::future::BoxFuture<'_, Result<(ModelResponse, String)>>
+        })
+        .collect();
+    // The live host delegates scheduling to Embed's borrowed-future primitive.
+    // Offline mocks retain a dependency-free fanout with the same result order.
+    #[cfg(feature = "harness")]
+    let results = openhuman_embed::fanout::fanout_futures(
+        branches,
+        std::num::NonZeroUsize::new(calls.len().max(1)).expect("positive reviewer concurrency"),
+    )
+    .await;
+    #[cfg(not(feature = "harness"))]
+    let results = futures::future::join_all(branches).await;
+    calls
+        .iter()
+        .zip(results)
+        .map(|(call, result)| match result {
+            Ok((response, looked_up)) => Answer {
+                id: call.id.clone(),
+                value: Some(response.value),
+                model: response.model,
+                error: None,
+                looked_up,
+                usage: response.usage,
+            },
+            Err(err) => {
+                tracing::debug!(lane = lane.as_str(), reviewer = %call.id, %err, "reviewer call failed");
+                let mut answer = Answer::failed(&call.id, err.to_string());
+                answer.usage = err.usage().unwrap_or_default();
+                answer
             }
         })
-        .collect())
+        .collect()
 }
 
 /// The questions one answer carried, capped.
@@ -198,28 +185,26 @@ fn read_questions(value: &Value) -> Vec<String> {
 /// was a request for more certainty; failing to get it leaves the reviewer
 /// exactly where it would have been without sub-agents.
 async fn answer_questions(
-    capabilities: &tinyflows::caps::Capabilities,
+    llm: &ModelCapability,
+    lane: LaneId,
     model: &str,
     questions: &[String],
     evidence: &str,
 ) -> (Vec<Answered>, Usage) {
-    let graph = subagent::answers_graph(model, questions, evidence);
-
-    let Ok(compiled) = tinyflows::compiler::compile(&graph) else {
-        return (Vec::new(), Usage::default());
-    };
-    let Ok(outcome) = engine::run(&compiled, json!({}), capabilities).await else {
-        return (Vec::new(), Usage::default());
-    };
+    let calls: Vec<Call> = questions
+        .iter()
+        .enumerate()
+        .map(|(index, question)| subagent::answer_call(model, index, question, evidence))
+        .collect();
+    let answers = one_round(llm, lane, &calls, &subagent::answer_schema()).await;
 
     let mut usage = Usage::default();
     let answered = questions
         .iter()
-        .enumerate()
-        .filter_map(|(index, question)| {
-            let (value, _, call_usage) = node_answer(&outcome.output, &subagent::node_id(index))?;
-            usage.add(call_usage);
-
+        .zip(answers)
+        .filter_map(|(question, answer)| {
+            usage.add(answer.usage);
+            let value = answer.value?;
             Some(Answered {
                 question: question.clone(),
                 answer: value
@@ -283,8 +268,8 @@ impl<'a> Asking<'a> {
 /// turn always answers the plain schema: there is genuinely no turn after it.
 ///
 /// Never returns `Err` for a single reviewer's failure — that is an [`Answer`]
-/// carrying an `error`. `Err` is reserved for the graph itself not running,
-/// which means no reviewer was asked at all.
+/// carrying an `error`. The `Result` is kept so a future failure that means no
+/// reviewer was asked at all has somewhere to go other than an empty answer.
 pub async fn ask_all_accounted(
     llm: Arc<ModelCapability>,
     lane: LaneId,
@@ -301,8 +286,12 @@ pub async fn ask_all_accounted(
         });
     }
 
-    let capabilities = crate::flows::caps::with_llm(llm, ChildGraphs::none());
-    let lookups = asking.lookups();
+    let agentic_tree = asking.lookups().filter(|_| llm.agentic_reviewers());
+    let lookups = if agentic_tree.is_some() {
+        None
+    } else {
+        asking.lookups()
+    };
     let subagent_model = asking.subagent_model;
 
     // The schema and the instruction travel together: a reviewer told it may
@@ -342,7 +331,12 @@ pub async fn ask_all_accounted(
         .iter()
         .cloned()
         .map(|mut call| {
-            call.system = system_for(&call.system, max_rounds > 0, subagent_model.is_some());
+            if agentic_tree.is_some() && subagent_model.is_none() {
+                // The agent has tool iterations inside this turn; a settling
+                // instruction would falsely tell it no further reads exist.
+            } else {
+                call.system = system_for(&call.system, max_rounds > 0, subagent_model.is_some());
+            }
             call
         })
         .collect();
@@ -370,16 +364,24 @@ pub async fn ask_all_accounted(
         }
     }
 
-    let mut answers = one_round(
-        &capabilities,
+    let mut answers = one_round_review(
+        &llm,
         lane,
         &prompts,
         &schema_for(max_rounds > 0, subagent_model.is_some()),
+        agentic_tree,
     )
-    .await?;
+    .await;
     let mut usage = Usage::default();
     for answer in &answers {
         usage.add(answer.usage);
+    }
+
+    if agentic_tree.is_some() {
+        for (prompt, answer) in prompts.iter_mut().zip(&mut answers) {
+            prompt.prompt.push_str(&answer.looked_up);
+            answer.looked_up.clear();
+        }
     }
 
     // The lookup rounds. Each reviewer that asked gets its results appended
@@ -422,32 +424,22 @@ pub async fn ask_all_accounted(
                 // The turn that asked was provisional by its own instruction,
                 // so a follow-up that fails cannot leave it standing as the
                 // verdict: the file is reported unreviewed instead.
-                answers[index] = match one_round(
-                    &capabilities,
+                let again = one_round(
+                    &llm,
                     lane,
                     std::slice::from_ref(&prompts[index]),
                     &round_schema,
                 )
-                .await
-                {
-                    Ok(again) => {
-                        for answer in &again {
-                            usage.add(answer.usage);
-                        }
-                        match again.into_iter().next() {
-                            Some(settled) if settled.value.is_some() => settled,
-                            Some(failed) => failed,
-                            None => Answer::failed(
-                                &prompts[index].id,
-                                "the reviewer produced no answer after looking things up",
-                            ),
-                        }
-                    }
-                    Err(err) => Answer::failed(
+                .await;
+                for answer in &again {
+                    usage.add(answer.usage);
+                }
+                answers[index] = again.into_iter().next().unwrap_or_else(|| {
+                    Answer::failed(
                         &prompts[index].id,
-                        format!("the follow-up turn after a lookup did not run: {err}"),
-                    ),
-                };
+                        "the reviewer produced no answer after looking things up",
+                    )
+                });
             }
         }
     }
@@ -459,11 +451,12 @@ pub async fn ask_all_accounted(
     // when the early return below would otherwise skip it entirely and leave
     // every `looked_up` empty.
     for (index, answer) in answers.iter_mut().enumerate() {
-        answer.looked_up = prompts[index]
+        let legacy_evidence = prompts[index]
             .prompt
             .strip_prefix(calls[index].prompt.as_str())
             .unwrap_or_default()
             .to_string();
+        answer.looked_up.push_str(&legacy_evidence);
     }
 
     let Some(model) = subagent_model else {
@@ -490,7 +483,7 @@ pub async fn ask_all_accounted(
         // repository" in name alone.
         let evidence = &prompts[index].prompt;
         let (answered, subagent_usage) =
-            answer_questions(&capabilities, model, &questions, evidence).await;
+            answer_questions(&llm, lane, model, &questions, evidence).await;
         usage.add(subagent_usage);
 
         // Nothing came back, so a second turn would be the same turn with the
@@ -506,19 +499,16 @@ pub async fn ask_all_accounted(
         again.system = system_for(&calls[index].system, false, false);
         again.prompt.push_str(&subagent::render(&answered));
 
-        if let Ok(round_two) =
-            one_round(&capabilities, lane, std::slice::from_ref(&again), schema).await
+        let round_two = one_round(&llm, lane, std::slice::from_ref(&again), schema).await;
+        for answer in &round_two {
+            usage.add(answer.usage);
+        }
+        if let Some(mut settled) = round_two.into_iter().next()
+            && settled.value.is_some()
         {
-            for answer in &round_two {
-                usage.add(answer.usage);
-            }
-            if let Some(mut settled) = round_two.into_iter().next()
-                && settled.value.is_some()
-            {
-                // The evidence the reviewer read travels with its final answer.
-                settled.looked_up = answers[index].looked_up.clone();
-                answers[index] = settled;
-            }
+            // The evidence the reviewer read travels with its final answer.
+            settled.looked_up = answers[index].looked_up.clone();
+            answers[index] = settled;
         }
     }
 
@@ -545,3 +535,7 @@ pub async fn ask_all(
 #[cfg(test)]
 #[path = "runner_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "runner_agentic_test.rs"]
+mod agentic_tests;
