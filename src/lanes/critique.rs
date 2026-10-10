@@ -491,7 +491,7 @@ async fn review_group(
             unanchored,
             discarded,
             &rejected,
-            findings.len(),
+            &findings,
             added_by_coverage,
         ),
         findings,
@@ -724,32 +724,23 @@ fn postable_range(raw: &RawFinding, diff: &FileDiff, resolution: Resolution) -> 
 /// are stated rather than hidden: a filter nobody can see the effect of is a
 /// filter nobody can tell is broken.
 ///
-/// The model's own prose is **dropped entirely** when falsification left
-/// nothing standing, and that is the important case. The prose is written
-/// before the filter runs, so it describes findings that no longer exist:
-/// a review once opened "One real bug: the coverage edge is never stored",
-/// reported no findings, concluded success, and approved the pull request in
-/// the same breath — the bug was a hallucination the falsifier correctly
-/// removed, and only the summary still claimed it. A lane that reports nothing
-/// must not narrate something. What replaces it is the rejection reasons,
-/// which say more than the discarded prose did.
+/// The original prose predates falsification and cannot be trusted once any
+/// finding is disproven, even when another finding survives. Replace it with
+/// the surviving titles, or the rejection reasons when none survive. This
+/// preserves observations without asking the model to rewrite its verdict.
 ///
-/// `added_by_coverage` covers the opposite mismatch: `summary` is round one's
-/// prose, written before adaptive coverage (`lanes::coverage`) ever
-/// runs, so a group round one called clean and the coverage pass then added a
-/// finding to would otherwise keep declaring itself clean while `kept` says
-/// otherwise. Folded in as a note rather than rewritten, for the same reason
-/// the other counts are — round one's own words stay round one's, and what
-/// changed after it is stated rather than silently absorbed into them.
+/// Adaptive coverage is also newer than the original prose. Its additions are
+/// counted explicitly, so a group initially called clean cannot silently keep
+/// declaring itself clean after a coverage pass adds a finding.
 fn summarise(
     summary: &str,
     unanchored: usize,
     discarded: usize,
     rejected: &[Rejection],
-    kept: usize,
+    kept: &[Finding],
     added_by_coverage: usize,
 ) -> String {
-    if kept == 0 && !rejected.is_empty() {
+    if kept.is_empty() && !rejected.is_empty() {
         let reasons: Vec<String> = rejected
             .iter()
             .map(|item| format!("{} — {}", item.title.trim(), item.reason.trim()))
@@ -762,6 +753,17 @@ fn summarise(
         );
     }
 
+    let summary = if rejected.is_empty() {
+        summary.to_string()
+    } else {
+        format!(
+            "Surviving findings: {}.",
+            kept.iter()
+                .map(|finding| finding.title.trim())
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
+    };
     let rejected = rejected.len();
     let mut notes = Vec::new();
     if unanchored > 0 {
@@ -790,7 +792,7 @@ fn summarise(
     }
 
     if notes.is_empty() {
-        return summary.to_string();
+        return summary;
     }
     format!("{summary} ({})", notes.join("; "))
 }
@@ -1499,6 +1501,66 @@ fn helper() {
             outcome.conclusion(Severity::High),
             CheckConclusion::Success,
             "the verdict was already clean; it is the summary that had to agree with it"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_partial_rejection_never_leaves_the_removed_claim_in_summary_prose() {
+        let mut false_claim = finding_quoting("let x = items[i];");
+        false_claim["title"] = json!("The budget limit cannot be exhausted");
+        false_claim["body"] = json!("The budget assertion is unreachable.");
+        let survivor = finding_quoting("println!(\"{x}\");");
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "The budget assertion is unreachable and the index may panic.",
+                "findings": [false_claim, survivor]
+            }))
+            .then(json!({"incorrect": [{"index": 1,
+                "reason": "The final output bound is four times the base bound, so the assertion is reachable."}]}));
+        let handle = model.clone();
+        let outcome = run_with(model, &config(), &diffs()).await;
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(
+            handle.calls(),
+            2,
+            "Use the existing review and falsifier calls"
+        );
+        assert!(
+            !outcome.summary.contains("budget assertion is unreachable"),
+            "A surviving finding cannot authenticate disproven original prose: {}",
+            outcome.summary
+        );
+        assert!(
+            outcome.summary.contains(&outcome.findings[0].title),
+            "Replacement prose should name the actual surviving observation: {}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn coverage_survivors_do_not_restore_disproven_initial_summary_prose() {
+        let model = MockModel::new()
+            .then(json!({"summary": "The budget assertion is unreachable.",
+                "findings": [finding_named("False budget claim", 3)]}))
+            .then(
+                json!({"incorrect": [{"index": 1, "reason": "The bound is multiplied by four."}]}),
+            )
+            .then(json!({"summary": "A separate genuine bug.",
+                "findings": [finding_named("Guard the surviving index", 30)]}))
+            .then(json!({"incorrect": []}));
+        let handle = model.clone();
+        let outcome = run_with(model, &config_with_passes(2), &large_diffs()).await;
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(handle.calls(), 4);
+        assert!(
+            !outcome.summary.contains("budget assertion is unreachable"),
+            "{}",
+            outcome.summary
+        );
+        assert!(
+            outcome.summary.contains("Guard the surviving index"),
+            "{}",
+            outcome.summary
         );
     }
 
