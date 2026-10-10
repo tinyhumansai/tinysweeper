@@ -8,13 +8,13 @@
 //! `read_before` before deciding.
 //!
 //! So a reviewer may end its turn with **lookups** instead of a verdict. Each
-//! is a read of a file range or a literal search over the tree, answered by
+//! is a file range read, literal search or bounded directory listing, answered by
 //! the [`TreeReader`] port, and the reviewer is asked again with the results
 //! appended to its evidence. The loop is host-owned: the model never holds a
 //! tool, it fills a JSON field, and the host decides what that field is worth.
 //! That keeps the `Model` port at one structured completion, keeps every turn
 //! a cassette can replay, and keeps the security boundary where it was — the
-//! port's only verbs are *read* and *search*.
+//! port's verbs only return repository evidence.
 //!
 //! # The bounds
 //!
@@ -56,7 +56,8 @@ pub fn instruction(describe: &str, policy: &LookupPolicy) -> String {
          lookups in `lookups` and stop; you will be asked again with what came back, and \
          that later turn is the one your verdict is taken from, so a verdict on this turn \
          is provisional. Ask for line ranges, not whole files; a search for `fn name` finds \
-         a definition. You may take up to {rounds} such turn(s) of {per_round} lookups each. \
+         a definition. Use `list` to discover actual file paths under a directory when the \
+         implementation's path is unknown, then read the definition. You may take up to {rounds} such turn(s) of {per_round} lookups each. \
          A doubt you could have settled with a lookup and did not is neither a finding nor \
          an all-clear. Answer without lookups only when the change calls into nothing you \
          have not already seen — a test fixture, a documentation edit, a rename.",
@@ -75,8 +76,8 @@ pub fn lookups_schema(policy: &LookupPolicy) -> Value {
             "additionalProperties": false,
             "required": ["kind", "why"],
             "properties": {
-                "kind": { "type": "string", "enum": ["read", "search"] },
-                "path": { "type": "string", "description": "For `read`: the repository-relative path." },
+                "kind": { "type": "string", "enum": ["read", "search", "list"] },
+                "path": { "type": "string", "description": "For `read`: the repository-relative file. For `list`: a relative directory or `.` for the root; at most 32 safe file paths are returned." },
                 "start": { "type": "integer", "minimum": 1, "description": "For `read`: first line, 1-based." },
                 "end": { "type": "integer", "minimum": 1, "description": "For `read`: last line, inclusive. At most 200 lines are returned." },
                 "pattern": { "type": "string", "description": "For `search`: literal text to find, such as `fn read_before`." },
@@ -128,6 +129,9 @@ fn parse_one(item: &Value) -> Option<Lookup> {
     };
     let number = |key: &str| item.get(key).and_then(Value::as_u64).map(|n| n as u32);
     match kind {
+        "list" => Some(Lookup::List {
+            path: text("path")?,
+        }),
         "read" => Some(Lookup::Read {
             path: text("path")?,
             start: number("start"),
