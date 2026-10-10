@@ -247,7 +247,7 @@ fn postable(proposal: &Proposal) -> Vec<&Finding> {
             lane.findings
                 .iter()
                 .chain(lane.overflow.iter().filter(|finding| !finding.grouped))
-                .chain(lane.noted.iter())
+                .chain(lane.noted.iter().filter(|finding| !finding.grouped))
         })
         .collect()
 }
