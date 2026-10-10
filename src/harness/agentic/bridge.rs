@@ -1,10 +1,10 @@
-//! Bounded request bridge from static Embed tools into a borrowed tree reader.
+//! Bounded request bridge from host-owned reviewer tools into a borrowed tree reader.
 
+use super::repository::{RepositoryHost, RepositoryQuery};
 use crate::config::types::LookupPolicy;
 use crate::flows::review_tree::{render, truncate_chars};
 use crate::ports::tree::{Found, Lookup, MAX_READ_LINES, MAX_SEARCH_HITS, TreeQuery, TreeReader};
 use async_trait::async_trait;
-use openhuman_embed::repository::{RepositoryHost, RepositoryQuery};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
