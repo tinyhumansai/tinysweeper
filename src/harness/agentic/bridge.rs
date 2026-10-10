@@ -121,11 +121,10 @@ pub(super) async fn dispatch(
                         if let Found::Hits {
                             hits, truncated, ..
                         } = &mut found
+                            && hits.len() > hit_limit
                         {
-                            if hits.len() > hit_limit {
-                                *truncated = true;
-                                hits.truncate(hit_limit);
-                            }
+                            *truncated = true;
+                            hits.truncate(hit_limit);
                         }
                         let display = match &lookup {
                             HostLookup::Source(lookup) => lookup.clone(),
