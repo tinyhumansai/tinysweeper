@@ -56,6 +56,15 @@ pub enum Error {
     #[error("model: {0}")]
     Model(String),
 
+    /// A refused model answer with safe accounting from paid attempts.
+    #[error("model: {message}")]
+    ModelUsage {
+        /// Refusal description without rejected provider content.
+        message: String,
+        /// Known or conservatively bounded paid usage.
+        usage: Box<crate::ports::model::Usage>,
+    },
+
     /// A lane refused to run or could not produce a verdict.
     #[error("lane {lane}: {message}")]
     Lane {
@@ -65,6 +74,19 @@ pub enum Error {
         message: String,
     },
 
+    /// A bounded operation did not finish inside its wall-clock deadline.
+    ///
+    /// Deliberately not one of the transient variants: the deadline is the
+    /// budget, and retrying a run that has already spent it only spends it
+    /// again.
+    #[error("{what} did not finish within {seconds}s")]
+    Timeout {
+        /// What was being waited on, e.g. `the review of owner/repo#12`.
+        what: String,
+        /// The deadline that elapsed, in seconds.
+        seconds: u64,
+    },
+
     /// The per-pull-request budget was exhausted before the run completed.
     #[error("budget exhausted: spent ${spent:.2} of ${limit:.2}")]
     Budget {
@@ -72,6 +94,25 @@ pub enum Error {
         spent: f64,
         /// The configured ceiling.
         limit: f64,
+    },
+
+    /// A pull request is larger than the review's deterministic input limits.
+    ///
+    /// Its own variant keeps this refusal non-transient and lets the server
+    /// explain the remedy without treating an intentional guard as a forge or
+    /// model outage.
+    #[error(
+        "pull request exceeds review limits: {changed_files} changed files (limit {max_files}), {changed_lines} changed lines (limit {max_lines})"
+    )]
+    ReviewLimit {
+        /// Files reported by the forge.
+        changed_files: usize,
+        /// Configured file ceiling.
+        max_files: usize,
+        /// Added plus deleted lines reported by the forge.
+        changed_lines: u64,
+        /// Configured changed-line ceiling.
+        max_lines: u64,
     },
 
     /// A feature required for this code path was not compiled in.
@@ -100,6 +141,26 @@ fn reset_clause(reset_at: Option<u64>) -> String {
 }
 
 impl Error {
+    /// Paid usage retained by a model refusal, when available.
+    pub fn usage(&self) -> Option<crate::ports::model::Usage> {
+        match self {
+            Self::ModelUsage { usage, .. } => Some(**usage),
+            _ => None,
+        }
+    }
+
+    /// Keep safe paid accounting when a model cannot return an answer.
+    pub fn with_usage(self, usage: crate::ports::model::Usage) -> Self {
+        let message = match self {
+            Self::Model(message) | Self::ModelUsage { message, .. } => message,
+            other => other.to_string(),
+        };
+        Self::ModelUsage {
+            message,
+            usage: Box::new(usage),
+        }
+    }
+
     /// Build a [`Error::Config`] from anything displayable.
     pub fn config(message: impl std::fmt::Display) -> Self {
         Self::Config(message.to_string())
@@ -110,6 +171,21 @@ impl Error {
         Self::Path {
             path: path.into(),
             message: message.to_string(),
+        }
+    }
+
+    /// Build a [`Error::Timeout`] for `what` after `after` elapsed.
+    ///
+    /// Rounded up, not truncated: `as_secs()` alone would report a positive
+    /// sub-second deadline — `Duration::from_millis(500)`, say — as `0s`,
+    /// which reads as "no time at all" rather than the budget that was
+    /// actually configured.
+    pub fn timeout(what: impl Into<String>, after: std::time::Duration) -> Self {
+        Self::Timeout {
+            what: what.into(),
+            seconds: after
+                .as_secs()
+                .saturating_add(u64::from(after.subsec_nanos() != 0)),
         }
     }
 

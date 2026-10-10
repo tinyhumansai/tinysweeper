@@ -81,6 +81,197 @@ fn reasoning_with_too_small_a_budget_is_rejected() {
 }
 
 #[test]
+fn a_route_ceiling_below_the_floor_is_rejected_like_the_global_one() {
+    // A route's `max_tokens` replaces the validated global for its model, so
+    // an undersized override recreates the empty-answer failure on one rung.
+    let config = parse(
+        "version = 1\n[models]\nmax_tokens = 16000\nreasoning_effort = \"high\"\n\
+         [[models.routes]]\nmodel = \"deep\"\nmax_tokens = 4000\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(
+        joined.contains("models.routes[deep].max_tokens = 4000"),
+        "{joined}"
+    );
+
+    // Zero means no wire ceiling, which budgeted reviews cannot admit.
+    let config = parse(
+        "version = 1\n[models]\nmax_tokens = 16000\nreasoning_effort = \"high\"\n\
+         [[models.routes]]\nmodel = \"deep\"\nmax_tokens = 0\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("finite output cap"), "{joined}");
+}
+
+#[test]
+fn alias_budget_rates_reject_nonfinite_and_negative_values_without_echoing_them() {
+    use crate::config::types::BudgetPriceBound;
+
+    for field in ["input", "cached", "output"] {
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -12345.6789] {
+            let mut config = parse("version = 1\n");
+            let mut rates = BudgetPriceBound {
+                input: 0.0,
+                cached: 0.0,
+                output: 1.0,
+            };
+            match field {
+                "input" => rates.input = invalid,
+                "cached" => rates.cached = invalid,
+                "output" => rates.output = invalid,
+                _ => unreachable!(),
+            }
+            config
+                .models
+                .budget_prices
+                .insert("gateway-alias".into(), rates);
+            let joined = validate::validate(&config).join("\n");
+            assert!(
+                joined.contains(&format!("models.budget_prices[gateway-alias].{field}")),
+                "{field}: {joined}"
+            );
+            assert!(!joined.contains(&invalid.to_string()), "{joined}");
+        }
+    }
+}
+
+#[test]
+fn alias_budget_output_rate_must_be_positive_but_input_can_be_free() {
+    use crate::config::types::BudgetPriceBound;
+
+    let mut config = parse("version = 1\n");
+    config.models.budget_prices.insert(
+        "gateway-alias".into(),
+        BudgetPriceBound {
+            input: 0.0,
+            cached: 0.0,
+            output: 0.0,
+        },
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(
+        joined.contains("models.budget_prices[gateway-alias].output"),
+        "{joined}"
+    );
+    config
+        .models
+        .budget_prices
+        .get_mut("gateway-alias")
+        .unwrap()
+        .output = 1.0;
+    assert!(validate::validate(&config).is_empty());
+}
+
+#[test]
+fn budgeted_routes_require_a_finite_output_cap_with_or_without_agentic_reviewers() {
+    for agentic in [false, true] {
+        let mut config = parse(
+            "version = 1\n[models]\nreasoning_effort = \"off\"\n\
+             [[models.routes]]\nmodel = \"deep\"\nmax_tokens = 0\n",
+        );
+        config.models.agentic_reviewers = agentic;
+        config.models.structured_output = StructuredOutput::Schema;
+        let joined = validate::validate(&config).join("\n");
+        assert!(
+            joined.contains("models.routes[deep].max_tokens"),
+            "{joined}"
+        );
+        assert!(joined.contains("finite output cap"), "{joined}");
+        config.models.routes[0].max_tokens = Some(16_000);
+        assert!(validate::validate(&config).is_empty());
+        config.models.routes[0].max_tokens = None;
+        assert!(validate::validate(&config).is_empty());
+    }
+}
+
+#[test]
+fn the_retired_submodules_switch_still_parses_or_says_how_to_migrate() {
+    // Shipped as a bool for one release; `false` is the empty list.
+    let config = parse("version = 1\n[retrieval]\nsubmodules = false\n");
+    assert!(config.retrieval.submodules.is_empty());
+
+    // `true` has no list equivalent; the error names the migration.
+    let dir = repo(Some("version = 1\n[retrieval]\nsubmodules = true\n"), &[]);
+    let err = load(dir.path(), None).unwrap_err().to_string();
+    assert!(err.contains("retrieval.submodules = true"), "{err}");
+    assert!(err.contains("owner/name"), "{err}");
+}
+
+#[test]
+fn a_submodule_entry_that_is_not_owner_slash_name_is_rejected() {
+    let config = parse(
+        "version = 1\n[retrieval]\nsubmodules = [\"acme/lib\", \"acme-lib\", \" acme/lib\", \
+         \"acme/lib \"]\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("`acme-lib`"), "{joined}");
+    // Stray whitespace would pass startup and then match no `.gitmodules` remote.
+    assert!(joined.contains("` acme/lib`"), "{joined}");
+    assert!(joined.contains("`acme/lib `"), "{joined}");
+    assert!(!joined.contains("`acme/lib`"), "{joined}");
+}
+
+#[test]
+fn a_model_routed_twice_is_rejected() {
+    let config = parse(
+        "version = 1\n[[models.routes]]\nmodel = \"deep\"\nmax_tokens = 0\n\
+         [[models.routes]]\nmodel = \"deep\"\norder = [\"openai/flex\"]\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("`deep` more than once"), "{joined}");
+}
+
+#[test]
+fn a_route_selector_with_stray_whitespace_is_rejected() {
+    let config = parse(
+        "version = 1\n[[models.routes]]\nmodel = \"deep \"\n[[models.routes]]\nmodel = \" deep\"\n\
+         [[models.routes]]\nmodel = \"\"\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("entry `deep ` must name"), "{joined}");
+    assert!(joined.contains("entry ` deep` must name"), "{joined}");
+    assert!(joined.contains("entry `` must name"), "{joined}");
+}
+
+#[test]
+fn an_unknown_embedding_provider_is_rejected_by_doctor_not_by_the_first_push() {
+    let config = parse(
+        "version = 1\n[embeddings]\nenabled = true\nprovider = \"lader\"\nmodel = \"vectors\"\n\
+         dimensions = 1024\napi_key_env = \"LADDER_API_KEY\"\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(
+        joined.contains("names no provider") && !joined.contains("lader"),
+        "{joined}"
+    );
+}
+
+#[test]
+fn the_ladder_embedding_provider_needs_an_address() {
+    let config = parse(
+        "version = 1\n[embeddings]\nenabled = true\nprovider = \"ladder\"\nmodel = \"vectors\"\n\
+         dimensions = 1024\napi_key_env = \"LADDER_API_KEY\"\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("needs `embeddings.base_url`"), "{joined}");
+
+    // A scheme alone is not an address.
+    let config = parse(
+        "version = 1\n[embeddings]\nenabled = true\nprovider = \"ladder\"\nmodel = \"vectors\"\n\
+         dimensions = 1024\napi_key_env = \"LADDER_API_KEY\"\nbase_url = \"http://\"\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("not a URL with a host"), "{joined}");
+
+    let config = parse(
+        "version = 1\n[embeddings]\nenabled = true\nprovider = \"ladder\"\nmodel = \"vectors\"\n\
+         dimensions = 1024\napi_key_env = \"LADDER_API_KEY\"\n\
+         base_url = \"http://host.docker.internal:6969/v1/embeddings\"\n",
+    );
+    assert!(validate::validate(&config).is_empty());
+}
+
+#[test]
 fn lowering_the_effort_does_not_satisfy_the_budget_floor() {
     // Measured at both settings: the table in `config/defaults.toml` lists
     // `low` rows for each configured model and they burn the entire allowance
@@ -141,6 +332,13 @@ fn the_built_in_defaults_are_valid() {
     let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
     let problems = validate::validate(&config);
     assert!(problems.is_empty(), "{problems:#?}");
+}
+
+#[test]
+fn review_passes_defaults_to_three_adaptive_attempts() {
+    let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
+
+    assert_eq!(config.review.passes, 3);
 }
 
 #[test]
@@ -302,12 +500,118 @@ fn strictness_actually_moves_the_gates() {
 }
 
 #[test]
-fn an_explicit_gate_overrides_the_dial() {
+fn an_explicit_gate_cannot_loosen_the_dial() {
+    // The dial is authoritative. A gate below it used to win outright, which
+    // is how every repository on `rust-library` ended up posting medium/0.6
+    // findings at "default" strictness.
     let config = parse(
         "version = 1\n[review]\nstrictness = 1\nseverity_gate = \"low\"\nconfidence_min = 0.1\n",
     );
-    assert_eq!(config.severity_gate(), Severity::Low);
-    assert_eq!(config.confidence_min(), 0.1);
+    assert_eq!(config.severity_gate(), Severity::Critical);
+    assert_eq!(config.confidence_min(), 0.85);
+}
+
+#[test]
+fn a_clamped_gate_is_reported_with_its_layer_and_effective_value() {
+    let dir = repo(
+        Some("version = 1\npreset = \"loose\"\n[review]\nconfidence_min = 0.9\n"),
+        &[(
+            "loose",
+            "version = 1\n[review]\nstrictness = 2\nseverity_gate = \"medium\"\nconfidence_min = 0.6\n",
+        )],
+    );
+    let loaded = load(dir.path(), None).expect("loads");
+    let clamped = crate::config::clamped_gates(&loaded.config, &loaded.provenance);
+
+    // Only the looser one: the repository's 0.9 tightened, which is allowed.
+    assert_eq!(clamped.len(), 1, "{clamped:#?}");
+    assert_eq!(clamped[0].key, "review.severity_gate");
+    assert_eq!(clamped[0].layer, Some(Layer::Preset));
+    assert_eq!(clamped[0].effective, "high");
+    let message = clamped[0].to_string();
+    assert!(message.contains("preset"), "{message}");
+    assert!(message.contains("medium"), "{message}");
+    assert!(message.contains("high"), "{message}");
+
+    let tight = parse("version = 1\n[review]\nseverity_gate = \"critical\"\n");
+    assert!(crate::config::clamped_gates(&tight, &Default::default()).is_empty());
+}
+
+#[test]
+fn an_explicit_gate_can_still_tighten_the_dial() {
+    let config = parse(
+        "version = 1\n[review]\nstrictness = 3\nseverity_gate = \"high\"\nconfidence_min = 0.9\n",
+    );
+    assert_eq!(config.severity_gate(), Severity::High);
+    assert_eq!(config.confidence_min(), 0.9);
+}
+
+#[test]
+fn a_preset_cannot_loosen_the_dial() {
+    // The production shape: a preset that names lower gates than the
+    // strictness it also sets, inherited by every repository on it.
+    let dir = repo(
+        Some("version = 1\npreset = \"loose\"\n"),
+        &[(
+            "loose",
+            "version = 1\n[review]\nstrictness = 2\nseverity_gate = \"medium\"\nconfidence_min = 0.6\n",
+        )],
+    );
+    let config = load(dir.path(), None).expect("loads").config;
+
+    assert_eq!(config.severity_gate(), Severity::High);
+    assert_eq!(config.confidence_min(), 0.75);
+}
+
+#[test]
+fn only_the_e2e_preset_turns_the_e2e_lane_on() {
+    // Every repository inherits the server's preset, so a preset that lists
+    // `e2e` undoes the default for all of them at once.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for name in [
+        "rust-library",
+        "security-strict",
+        "e2e-required",
+        "polyglot",
+    ] {
+        let dir = repo(
+            Some(&format!("version = 1\npreset = \"{name}\"\n")),
+            &[(
+                name,
+                &std::fs::read_to_string(root.join("presets").join(name).join("preset.toml"))
+                    .expect("read shipped preset"),
+            )],
+        );
+        with_shipped_rules(&dir);
+        let config = load(dir.path(), None).expect("loads").config;
+        assert_eq!(
+            config.enabled_lanes().contains(&LaneId::E2e),
+            name == "e2e-required",
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn no_shipped_preset_loosens_the_dial_it_sets() {
+    // Belt and braces: the clamp makes a loose preset inert, but a preset that
+    // *says* medium/0.6 while posting high/0.75 is documentation that lies.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for name in [
+        "rust-library",
+        "security-strict",
+        "e2e-required",
+        "polyglot",
+    ] {
+        let text = std::fs::read_to_string(root.join("presets").join(name).join("preset.toml"))
+            .expect("read shipped preset");
+        let table: toml::Table = text.parse().expect("parses");
+        let review = table["review"].as_table().expect("a review table");
+        assert!(
+            !review.contains_key("severity_gate") && !review.contains_key("confidence_min"),
+            "{name}: set the dial, not the gates"
+        );
+    }
 }
 
 #[test]
@@ -322,6 +626,86 @@ fn every_scaffolded_capability_is_off_by_default() {
     assert!(!config.sentry.enabled);
     assert!(!config.automerge.enabled);
     assert!(!config.preview.enabled);
+    assert!(!config.mcp.enabled);
+}
+
+#[test]
+fn an_enabled_mcp_needs_a_token_variable_and_an_organisation() {
+    let mut config = parse("version = 1\n");
+    config.mcp.enabled = true;
+    config.mcp.token_env.clear();
+    config.mcp.allowed_org.clear();
+    config.mcp.allowed_repos.clear();
+
+    let problems = validate::validate(&config).join("\n");
+    assert!(problems.contains("mcp.token_env"));
+    assert!(problems.contains("mcp.allowed_org"));
+    assert!(problems.contains("mcp.allowed_repos"));
+}
+
+#[test]
+fn the_mcp_token_setting_only_accepts_a_tinysweeper_token_variable_name() {
+    let mut config = parse("version = 1\n");
+    config.mcp.enabled = true;
+    config.mcp.token_env = "NOT_A_SECRET_VALUE".into();
+
+    assert!(
+        validate::validate(&config)
+            .join("\n")
+            .contains("TINYSWEEPER_*_TOKEN")
+    );
+}
+
+#[test]
+fn the_mcp_organisation_must_be_an_exact_github_login() {
+    let mut config = parse("version = 1\n");
+    config.mcp.enabled = true;
+
+    for invalid in ["acme ", "two words", "-acme", "acme-", "acme/org"] {
+        config.mcp.allowed_org = invalid.into();
+        assert!(
+            validate::validate(&config)
+                .join("\n")
+                .contains("mcp.allowed_org"),
+            "accepted {invalid:?}"
+        );
+    }
+
+    config.mcp.allowed_org = "tinyhumansai".into();
+    assert!(
+        !validate::validate(&config)
+            .join("\n")
+            .contains("mcp.allowed_org")
+    );
+}
+
+#[test]
+fn the_mcp_repository_allowlist_is_exact_scoped_and_unique() {
+    let mut config = parse("version = 1\n");
+    config.mcp.enabled = true;
+    config.mcp.allowed_org = "tinyhumansai".into();
+    config.mcp.allowed_repos = vec!["tinyhumansai/tinysweeper".into()];
+    assert!(
+        !validate::validate(&config)
+            .join("\n")
+            .contains("mcp.allowed_repos")
+    );
+
+    for entries in [
+        vec!["tinysweeper".into()],
+        vec!["somebody/private".into()],
+        vec![
+            "tinyhumansai/tinysweeper".into(),
+            "TinyHumansAI/TinySweeper".into(),
+        ],
+    ] {
+        config.mcp.allowed_repos = entries;
+        assert!(
+            validate::validate(&config)
+                .join("\n")
+                .contains("mcp.allowed_repos")
+        );
+    }
 }
 
 #[test]
@@ -362,6 +746,16 @@ fn stale_handling_defaults_to_marking_never_closing() {
     let dir = repo(None, &[]);
     let config = load(dir.path(), None).expect("loads").config;
     assert_eq!(config.automation.stale.days_until_close, None);
+}
+
+#[test]
+fn thread_replies_are_advised_on_by_default() {
+    let dir = repo(None, &[]);
+    let threads = load(dir.path(), None).expect("loads").config.threads;
+
+    assert!(threads.resolve_fixed);
+    assert!(threads.ask_model);
+    assert!(threads.comment_on_resolve);
 }
 
 #[test]
@@ -526,6 +920,34 @@ budget_usd_per_pr = 0.0
 }
 
 #[test]
+fn review_passes_out_of_range_is_rejected() {
+    let config = parse("version = 1\n[review]\npasses = 4\n");
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("review.passes = 4"), "{joined}");
+
+    let config = parse("version = 1\n[review]\npasses = 0\n");
+    let joined = validate::validate(&config).join("\n");
+    assert!(joined.contains("review.passes = 0"), "{joined}");
+
+    for passes in 1..=3 {
+        let config = parse(&format!("version = 1\n[review]\npasses = {passes}\n"));
+        assert!(
+            validate::validate(&config).is_empty(),
+            "passes = {passes} should be valid"
+        );
+    }
+}
+
+#[test]
+fn review_size_limits_must_be_positive() {
+    let config = parse("version = 1\n[review]\nmax_changed_files = 0\nmax_changed_lines = 0\n");
+    let joined = validate::validate(&config).join("\n");
+
+    assert!(joined.contains("review.max_changed_files = 0"), "{joined}");
+    assert!(joined.contains("review.max_changed_lines = 0"), "{joined}");
+}
+
+#[test]
 fn an_unreadable_auto_merge_glob_is_caught_before_it_can_refuse_everything() {
     // The policy fails closed on a malformed glob, which is safe but silent:
     // the operator sees a pull request that never merges and no reason why.
@@ -557,6 +979,58 @@ fn a_zero_auto_merge_cap_is_flagged_as_refusing_everything() {
         problems
             .iter()
             .any(|p| p.contains("`automerge.max_files = 0`")),
+        "{problems:#?}"
+    );
+}
+
+#[test]
+fn a_zero_grouping_cap_is_flagged_when_grouping_is_enabled() {
+    let config = parse("version = 1\n[grouping]\nenabled = true\nmax_files = 0\n");
+    let problems = validate::validate(&config);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("`grouping.max_files = 0`")),
+        "{problems:#?}"
+    );
+}
+
+#[test]
+fn a_zero_grouping_cap_is_not_flagged_when_grouping_is_disabled() {
+    // Disabled grouping never calls `grouping::group`, so a zero bound is
+    // inert — and the enabled-case error above names this key as the valid
+    // way to turn grouping off. Rejecting it here would contradict that.
+    let config = parse("version = 1\n[grouping]\nenabled = false\nmax_files = 0\n");
+    let problems = validate::validate(&config);
+    assert!(
+        !problems.iter().any(|p| p.contains("grouping.max_files")),
+        "{problems:#?}"
+    );
+}
+
+#[test]
+fn a_grouping_cap_of_one_file_is_flagged_as_forming_no_group() {
+    // `grouping::fits` rejects any component over `max_files`, so 1 rejects
+    // every group of more than one file — the same silent no-op as 0.
+    let config = parse("version = 1\n[grouping]\nenabled = true\nmax_files = 1\n");
+    let problems = validate::validate(&config);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("`grouping.max_files = 1`")),
+        "{problems:#?}"
+    );
+}
+
+#[test]
+fn a_zero_hunk_char_budget_is_flagged_as_forming_no_group() {
+    let config =
+        parse("version = 1\n[grouping]\nenabled = true\nmax_files = 4\nmax_hunk_chars = 0\n");
+    let problems = validate::validate(&config);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("`grouping.max_hunk_chars = 0`")),
         "{problems:#?}"
     );
 }
@@ -999,7 +1473,12 @@ fn the_shipped_presets_load_and_validate() {
     // The presets in this repository are user-facing documentation as much as
     // configuration; a broken one is a broken example.
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    for name in ["rust-library", "security-strict"] {
+    for name in [
+        "rust-library",
+        "security-strict",
+        "e2e-required",
+        "polyglot",
+    ] {
         let dir = repo(
             Some(&format!("version = 1\npreset = \"{name}\"\n")),
             &[(
@@ -1049,6 +1528,29 @@ fn the_shipped_security_taxonomy_is_scoped_to_the_security_lane() {
         .expect("the preset wires the security taxonomy");
     assert_eq!(entry.lanes, vec![LaneId::Security]);
     assert!(entry.instructions.contains("Do NOT report"));
+}
+
+#[test]
+fn merge_defaults_to_false_and_round_trips() {
+    // Off by default: shadowing is the table's documented behaviour, and an
+    // operator who wants a specific entry to also pick up the language
+    // document beneath it has to say so.
+    let dir = repo(
+        Some("version = 1\n[[path_instructions]]\nglob = \"**/*.rs\"\ninstructions = \"a\"\n"),
+        &[],
+    );
+    let config = load(dir.path(), None).expect("loads").config;
+    assert!(!config.path_instructions[0].merge);
+
+    let dir = repo(
+        Some(
+            "version = 1\n[[path_instructions]]\nglob = \"**/*.rs\"\n\
+             instructions = \"a\"\nmerge = true\n",
+        ),
+        &[],
+    );
+    let config = load(dir.path(), None).expect("loads").config;
+    assert!(config.path_instructions[0].merge);
 }
 
 #[test]
@@ -1256,5 +1758,39 @@ fn a_private_network_engine_needs_the_operators_say_so() {
         validate::validate(&allowed).is_empty(),
         "{:?}",
         validate::validate(&allowed)
+    );
+}
+
+#[test]
+fn agentic_reviewers_are_explicit_opt_in_and_require_strict_schemas() {
+    let config = Config::default();
+    assert!(!config.models.agentic_reviewers);
+    let mut enabled = config;
+    enabled.models.agentic_reviewers = true;
+    enabled.models.structured_output = crate::config::types::StructuredOutput::JsonObject;
+    assert!(
+        crate::config::validate::validate(&enabled)
+            .iter()
+            .any(|problem| problem.contains("agentic_reviewers"))
+    );
+}
+
+#[test]
+fn disabled_agentic_reviewers_preserve_serialized_baseline_configuration() {
+    let mut config = Config::default();
+    let default = serde_json::to_value(&config).unwrap();
+    assert!(default["models"].get("agentic_reviewers").is_none());
+    let default_toml = toml::to_string(&config).unwrap();
+    assert!(!default_toml.contains("agentic_reviewers"));
+    config.models.agentic_reviewers = true;
+    let enabled = serde_json::to_value(&config).unwrap();
+    assert_eq!(
+        enabled["models"]["agentic_reviewers"],
+        serde_json::json!(true)
+    );
+    assert!(
+        toml::to_string(&config)
+            .unwrap()
+            .contains("agentic_reviewers = true")
     );
 }

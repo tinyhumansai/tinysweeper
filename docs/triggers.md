@@ -14,8 +14,8 @@ never be told about, and how it handles the difference.
 | A draft is marked ready | `pull_request: ready_for_review` | Yes, this starts its first review workflow |
 | The title or body is edited | `pull_request: edited` | Yes |
 | A label is added or removed | `pull_request: labeled`, `unlabeled` | Yes |
-| Someone comments on the pull request | `issue_comment: created` | Yes |
-| Someone comments on a line of the diff | `pull_request_review_comment: created` | Yes |
+| Someone comments on the pull request | `issue_comment: created` | Yes, only when the comment starts with `@tinysweeper` |
+| Someone comments on a line of the diff | `pull_request_review_comment: created` | Remembered, but waits for the next code push |
 | A review is submitted | `pull_request_review: submitted` | Yes |
 | A check run finishes | `check_suite: completed` | Yes |
 | A repository's `ui-preview` job hands over its manifest | `POST /preview/sessions/{id}/finish` — not a webhook | Yes; see [modules/preview](modules/preview/README.md) |
@@ -23,7 +23,14 @@ never be told about, and how it handles the difference.
 
 `issue_comment` fires for issues *and* pull requests; the payload distinguishes
 them only by `issue.pull_request` being present. `webhook::route` filters on
-exactly that.
+exactly that. Inline review comments are different: their `created`, `edited`,
+and `deleted` deliveries never start a model review. Supported comment changes
+are still re-read into memory, so a later `pull_request: synchronize` review can
+reconcile the conversation against changed code. A maintainer can deliberately
+request an unchanged-code rerun with an `@tinysweeper` issue comment.
+Operators can also deliberately queue a full review through
+`POST /admin/reviews/{owner}/{name}`; deferring inline replies does not change
+that route.
 
 ### What memory listens to
 
@@ -70,7 +77,6 @@ event does not exist:
   only readable by querying `isResolved` on review threads through the GraphQL
   API.
 - **Adding a reaction** (👍 / 👎) to a comment. No event.
-- **Editing a review comment's body.** No event for the edit.
 
 This matters because two designed behaviours depend on that state: suppressing a
 finding the author resolved, and learning from a 👎. Both are therefore
@@ -80,8 +86,8 @@ works on any architecture, which is why this was never an argument for or
 against a server.
 
 The practical consequence: resolving a thread does not immediately re-run
-anything. The suppression takes effect on the next run, which the next push or
-comment triggers anyway.
+anything. The suppression takes effect on the next code push, or on an
+explicit `@tinysweeper` review command.
 
 ## Fork pull requests
 

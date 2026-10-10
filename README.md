@@ -211,22 +211,26 @@ money; scoring and reporting are free and offline, because a matching rule gets
 rewritten many times before it is right.
 
 ```sh
-tinysweeper eval run --record   # live, writes cassettes and proposals
-tinysweeper eval score          # free, re-reads the proposals on disk
+tinysweeper eval run --record --config src/config/defaults.toml   # live, writes cassettes
+tinysweeper eval score --config src/config/defaults.toml          # free, re-reads the proposals
 tinysweeper eval report --baseline evals/baselines/current.json
 ```
 
-`cargo test` replays the committed cassettes on every run, so a prompt change
-that nobody re-recorded fails offline and for free. See
+The corpus is recorded under the compiled-in defaults, not this repository's
+`.tinysweeper.toml` — a cassette is keyed by the model name it was recorded
+against, and the repository config names the box's ladders. `cargo test` and
+the `eval` workflow replay the committed cassettes the same way, so a prompt
+change that nobody re-recorded fails offline and for free. See
 [evals/README.md](evals/README.md) for the labelling contract — including what
 the corpus does not measure yet.
 
 ## Built on
 
-[TinyAgents](https://github.com/tinyhumansai/tinyagents), a recursive
-language-model harness for Rust, vendored at `vendor/tinyagents`. Models are
-reached through an OpenAI-compatible gateway, so OpenRouter, Moonshot and
-MiniMax are all the same code path.
+[OpenHuman](https://github.com/tinyhumansai/openhuman)'s embedding facade,
+vendored at `vendor/openhuman`: its stateless `Completer` makes every model
+call and its embedding models feed the code index. Models are reached through an
+OpenAI-compatible gateway, so OpenRouter, Moonshot and MiniMax are all the same
+code path.
 
 ## Documentation
 
@@ -235,7 +239,9 @@ MiniMax are all the same code path.
 - [AGENTS.md](AGENTS.md) — conventions for humans and agents working in this repo
 - [docs/triggers.md](docs/triggers.md) — what wakes tinysweeper up, and what emits no event at all
 - [docs/modules/server/README.md](docs/modules/server/README.md) — the server, its security boundary, and the admin API
+- [docs/modules/mcp/README.md](docs/modules/mcp/README.md) — authenticated MCP tools for repository-aware agents
 - [docs/modules/overview/README.md](docs/modules/overview/README.md) — the change map: what gets drawn, and why nothing in it comes from a model
+- [docs/modules/summary/README.md](docs/modules/summary/README.md) — the durable PR review hub, its lifecycle, structured narrative, and deterministic policy fields
 - [docs/modules/preview/README.md](docs/modules/preview/README.md) — the UI preview: the brain in the server, the hands in the repository's CI, and what crosses between them
 - [docs/modules/memory/README.md](docs/modules/memory/README.md) — the memory engine: what is remembered, what is asked, and what a rejected finding means
 - `docs/` — module documentation and design notes

@@ -8,9 +8,12 @@
 
 pub mod anchor;
 pub mod commits;
+pub mod coverage;
 pub mod critique;
 pub mod description;
+pub mod e2e;
 pub mod fanout;
+pub mod grouping;
 pub mod mechanical;
 pub mod security;
 pub mod tests;
@@ -76,10 +79,29 @@ pub struct LaneInput<'a> {
     /// `crate::memory::recall`. Volatile, suffix-only, for the same reasons as
     /// [`Self::retrieved_context`]. Empty when no engine is configured.
     pub memory_context: &'a str,
+    /// One sentence saying a value was masked out of `diffs` before this lane
+    /// ever saw it, from `crate::evidence::redact::Redactions::note`. Empty
+    /// when nothing was redacted. Volatile and placed right after the diff
+    /// in the suffix — see `crate::harness::prompt::PromptInputs::redaction_note`
+    /// — because it describes *this* diff and must never touch the cacheable
+    /// prefix.
+    pub redaction_note: &'a str,
+    /// What the `e2e` lane needs beyond the diff: the harness at head, the
+    /// check runs on it, and candidate coverage. Gathered by
+    /// `lanes::e2e::evidence::gather` only when that lane is enabled; every
+    /// other lane ignores it, and the `e2e` lane skips without it.
+    pub e2e: Option<&'a e2e::evidence::Evidence>,
     /// The reviewed tree, for a reviewer that wants to check before it
     /// answers — see `crate::flows::lookup`. `None` reviews the diff alone,
     /// which every offline golden test does.
     pub tree: Option<&'a dyn TreeReader>,
+    /// The code-graph neighbourhood already walked for this pull request's
+    /// changed files, when a graph is configured — the same walk
+    /// `crate::retrieve::expand` and `crate::app::review::change_map` read
+    /// edges from. `None` degrades `crate::lanes::grouping` to its name
+    /// heuristics alone, which is what every offline golden test does and
+    /// what a forge-only review without a graph store does too.
+    pub graph: Option<&'a crate::index::types::Neighbourhood>,
 }
 
 impl<'a> LaneInput<'a> {
@@ -94,15 +116,23 @@ impl<'a> LaneInput<'a> {
                 .then_some(self.config.models.flash.as_str()),
             tree: self.tree,
             lookup: Some(&self.config.lookup),
-            seed: None,
+            seed: &[],
         }
     }
 
     /// [`Self::asking`], for a conversation about one file: the definitions
     /// its changed lines call into are fetched before the first turn.
     pub fn asking_about(&self, diff: &'a FileDiff) -> Asking<'a> {
+        self.asking_about_group(std::slice::from_ref(diff))
+    }
+
+    /// [`Self::asking`], for a conversation about a group of related files:
+    /// the definitions every file's changed lines call into are fetched
+    /// before the first turn, so grouping a file with its test does not
+    /// regress the single-file seeding win — see `docs/modules/lanes/lookup.md`.
+    pub fn asking_about_group(&self, diffs: &'a [FileDiff]) -> Asking<'a> {
         Asking {
-            seed: Some(diff),
+            seed: diffs,
             ..self.asking()
         }
     }
@@ -132,6 +162,16 @@ impl<'a> LaneInput<'a> {
             .iter()
             .filter(|f| kinds.contains(&f.kind))
             .collect()
+    }
+
+    /// Group `paths` deterministically under `bounds`, using this input's own
+    /// diffs and graph neighbourhood — see `crate::lanes::grouping`.
+    pub fn group(
+        &self,
+        paths: &[String],
+        bounds: &crate::lanes::grouping::GroupBounds,
+    ) -> Vec<crate::lanes::grouping::FileGroup> {
+        crate::lanes::grouping::group(paths, self.diffs, self.graph, bounds)
     }
 
     /// Whether the pull request should be skipped as an unreviewed draft.
@@ -167,6 +207,23 @@ pub struct LaneOutcome {
     pub spend: Spend,
     /// Set when the lane did not apply to this pull request at all.
     pub skipped: Option<String>,
+    /// Check runs this lane is still waiting on before it can conclude.
+    ///
+    /// Only the `e2e` lane sets it. A lane with something pending concludes
+    /// `Neutral` rather than `Success` — a verdict on work that has not
+    /// finished is the verdict branch protection must not see — and the
+    /// server settles it when the named checks complete.
+    pub pending: Vec<String>,
+    /// What the lane was asked about and got no answer on.
+    ///
+    /// Paths for a per-file lane; the lane's own name for a whole-pull-request
+    /// lane whose reviewer could not be consulted. Distinct from `skipped`,
+    /// and the distinction decides a verdict: a lane with nothing to look at
+    /// has nothing to object to, but a lane whose model never answered has
+    /// nothing to *vouch for* either, and an approval is a claim about the
+    /// change. A review that consulted no model once approved a pull request
+    /// with "found nothing blocking · $0.0000 · 0 in / 0 out".
+    pub unanswered: Vec<String>,
 }
 
 impl LaneOutcome {
@@ -176,6 +233,22 @@ impl LaneOutcome {
         Self {
             summary: reason.clone(),
             skipped: Some(reason),
+            ..Self::default()
+        }
+    }
+
+    /// A whole-pull-request lane whose reviewer could not be consulted.
+    ///
+    /// Neutral like a skip — no verdict is the truth — but it names itself
+    /// as unanswered, so the proposal cannot read the silence as clean.
+    pub fn unanswered(lane: LaneId, spend: Spend) -> Self {
+        Self {
+            summary: "No reviewer could be consulted.".into(),
+            spend,
+            skipped: Some(
+                "No reviewer could be consulted; see the provider errors in the log.".into(),
+            ),
+            unanswered: vec![lane.check_name()],
             ..Self::default()
         }
     }
@@ -237,6 +310,8 @@ impl LaneOutcome {
             resolved: parsed.resolved,
             spend,
             skipped: None,
+            pending: Vec::new(),
+            unanswered: Vec::new(),
         }
     }
 
@@ -251,6 +326,9 @@ impl LaneOutcome {
         }
         if self.findings.iter().any(|f| f.severity >= fail_on) {
             return CheckConclusion::Failure;
+        }
+        if !self.pending.is_empty() {
+            return CheckConclusion::Neutral;
         }
         CheckConclusion::Success
     }
@@ -379,6 +457,9 @@ mod outcome_tests {
             applicable: None,
             late: false,
             identity: None,
+            aliases: vec![],
+            grouped: false,
+            review_pass: 1,
             corroboration: 1,
         }
     }

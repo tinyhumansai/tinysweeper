@@ -221,6 +221,7 @@ async fn a_stale_cassette_fails_the_case_rather_than_scoring_an_old_prompt() {
             instructions: "Flag any index into a slice without a bounds check.".into(),
             rules: None,
             lanes: vec![],
+            merge: false,
         });
 
     let outcome = run(
@@ -285,6 +286,32 @@ async fn the_config_digest_moves_when_the_prompt_inputs_move() {
     other_budget.models.budget_usd_per_pr = 0.5;
     assert_ne!(digest_of(&base), digest_of(&other_budget));
 
+    // A route changes the ceiling and the endpoint one tier is served at,
+    // without changing the tier's name.
+    let mut routed = base.clone();
+    routed.models.routes.push(crate::config::types::ModelRoute {
+        model: base.models.deep.clone(),
+        order: vec![],
+        allow_fallbacks: true,
+        max_tokens: Some(0),
+    });
+    assert_ne!(
+        digest_of(&base),
+        digest_of(&routed),
+        "a route's ceiling decides whether a case completes or truncates"
+    );
+    let mut repinned = routed.clone();
+    repinned.models.routes[0].order = vec!["openai/flex".into()];
+    assert_ne!(digest_of(&routed), digest_of(&repinned));
+
+    let mut fewer_rounds = base.clone();
+    fewer_rounds.lookup.rounds = 0;
+    assert_ne!(
+        digest_of(&base),
+        digest_of(&fewer_rounds),
+        "the lookup policy decides what the reviewer sees"
+    );
+
     // A path instruction's selectors decide which prompt is built even when
     // the instruction text is identical: `lanes` gates which lanes get the
     // injected instructions at all, and `rules` names the document inside them.
@@ -296,6 +323,7 @@ async fn the_config_digest_moves_when_the_prompt_inputs_move() {
             instructions: "Flag unchecked index operations.".into(),
             rules: None,
             lanes: vec![],
+            merge: false,
         });
     assert_eq!(digest_of(&with_instruction), digest_of(&with_instruction));
     let mut lanes_gated = with_instruction.clone();
@@ -304,6 +332,13 @@ async fn the_config_digest_moves_when_the_prompt_inputs_move() {
     let mut rules_named = with_instruction.clone();
     rules_named.path_instructions[0].rules = Some("rust".into());
     assert_ne!(digest_of(&with_instruction), digest_of(&rules_named));
+    let mut merged = with_instruction.clone();
+    merged.path_instructions[0].merge = true;
+    assert_ne!(
+        digest_of(&with_instruction),
+        digest_of(&merged),
+        "merge decides whether the next matching entry renders too"
+    );
 
     assert_eq!(digest_of(&base), digest_of(&config()));
 }
@@ -533,4 +568,22 @@ async fn recording_without_a_model_says_which_feature_is_missing() {
     .expect_err("cannot record with no model");
 
     assert!(err.to_string().contains("--features harness"), "{err}");
+}
+
+#[test]
+fn agentic_review_and_price_bounds_change_the_evaluation_digest() {
+    let base = config();
+    let mut agentic = base.clone();
+    agentic.models.agentic_reviewers = true;
+    assert_ne!(digest_of(&base), digest_of(&agentic));
+    let mut bounded = base.clone();
+    bounded.models.budget_prices.insert(
+        "flash".into(),
+        crate::config::types::BudgetPriceBound {
+            input: 1.0,
+            cached: 0.1,
+            output: 2.0,
+        },
+    );
+    assert_ne!(digest_of(&base), digest_of(&bounded));
 }

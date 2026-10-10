@@ -61,10 +61,18 @@ The stub will **not** load until a human fills in `provenance.evidence` and
 writes the labels — which is the point. Then:
 
 ```sh
-tinysweeper eval run --record --tree /path/to/checkout   # live, costs money, writes cassettes
-tinysweeper eval score                 # free, offline, re-reads the proposals
+tinysweeper eval run --record --tree /path/to/checkout \
+  --config src/config/defaults.toml   # live, costs money, writes cassettes
+tinysweeper eval score --config src/config/defaults.toml   # free, offline
 tinysweeper eval report --baseline evals/baselines/current.json
 ```
+
+`--config src/config/defaults.toml` on purpose: a cassette is keyed by the
+model name each call went to, and the corpus is recorded under the compiled-in
+defaults so that `cargo test`, the `eval` workflow and a run on your machine
+all replay the same tapes. This repository's own `.tinysweeper.toml` names the
+box's ladders (`flash`, `deep`) instead, which only resolve where a ladder is
+running — recorded under it, the tapes would miss everywhere else.
 
 `--tree` is a checkout of the case's head, submodules included, for the
 reviewer to look things up in; what it reads is frozen into the fixture's

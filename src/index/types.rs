@@ -50,13 +50,13 @@ impl EmbedSignature {
 
     /// The same identity, spelled the way the agent harness spells it.
     ///
-    /// tinyagents' `EmbeddingModel::signature()` returns
+    /// The harness `EmbeddingModel::signature()` returns
     /// `provider=…;model=…;dims=…`, and the provider-backed embedder is built
     /// from a model that reports exactly those three values. Two independent
     /// spellings of one identity is how a partition key quietly stops matching
     /// the space it names, so the correspondence is a method with a test on it
     /// rather than a convention. The format is duplicated here, not imported,
-    /// because this file is always compiled and tinyagents is not; the test in
+    /// because this file is always compiled and the harness is not; the test in
     /// `crate::index::provider` asserts the two strings are byte-identical.
     pub fn harness_key(&self) -> String {
         format!(
@@ -116,7 +116,7 @@ impl Embedded {
     /// The counterpart to [`Embedded::billed`], and the difference is the only
     /// interesting thing about it: this one is not an estimate.
     ///
-    /// No provider reachable through tinyagents' `EmbeddingModel` reports usage
+    /// No provider reachable through the harness `EmbeddingModel` reports usage
     /// — the trait returns `Vec<Vec<f32>>` and every adapter decodes `data` and
     /// discards the response's `usage` object — so those providers still take
     /// the estimating path. [`OpenRouterEmbedder`](crate::index::OpenRouterEmbedder)

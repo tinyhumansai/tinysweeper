@@ -44,7 +44,26 @@
 //!   repository that could set it would have the bot embed pictures from a
 //!   host of its choosing. `preview.enabled` and `preview.max_flows` are
 //!   overridable for the usual reason: they can only make a repository's
-//!   own preview smaller.
+//!   own preview smaller. `wireframe.enabled` and `wireframe.max_screens`
+//!   are overridable for the same reason: a repository may turn its own
+//!   gallery off or shrink it, never raise it past the operator's ceiling
+//!   or re-enable it once the operator switched it off. `[grouping]` sits
+//!   here too, not in the "how loud"
+//!   bucket above: `max_files` and `max_hunk_chars` are the ceiling one
+//!   conversation's combined diff may reach before falling back to
+//!   singletons, and nothing enforces a smaller one server-side — a
+//!   repository raising either arbitrarily can make one call carry a
+//!   many-file, many-thousand-character prompt no ungrouped review of the
+//!   same files would ever have sent in one request, which is a materially
+//!   different spend shape than "fewer, larger calls over the same files",
+//!   not merely a quieter review. Disabling grouping alone is not the
+//!   concern — that only forgoes the discount consolidation gives and falls
+//!   back to the pre-grouping per-file fan-out every review already paid for
+//!   — but the allow-list has no way to admit the harmless direction while
+//!   refusing the harmful one, so the whole section stays operator-only.
+//!   `review.max_changed_files` and `review.max_changed_lines` stay
+//!   operator-only for the same reason: raising either weakens the guard, and
+//!   the allow-list cannot admit only a repository's lower value.
 //! - **Not overridable — anything that puts repository prose into a prompt.**
 //!   `path_instructions` is free text injected straight into a lane's
 //!   instructions, unfenced. Repository prose reaches a prompt through exactly
@@ -82,12 +101,22 @@ use crate::ports::forge::ForgeRead;
 /// is safe. See the module documentation for the split; changing this list is a
 /// change to the security boundary in `AGENTS.md` and needs saying so in the
 /// pull request.
-pub const OVERRIDABLE_KEYS: [&str; 17] = [
+pub const OVERRIDABLE_KEYS: [&str; 27] = [
     "knowledge.extract",
     "knowledge.files",
     "labels.human_review",
     "labels.manual_only",
     "lanes.*.fail_on",
+    // `e2e` detection, specifically: where its harness lives, is squarely
+    // "how loud this repository's own review is" — the same bucket
+    // `lanes.*.fail_on` is in — not "what it spends" or "what it writes".
+    // Without these a repository documented as being able to say
+    // `lanes.e2e.paths = ["qa/**"]` (docs/modules/lanes/e2e.md,
+    // presets/e2e-required/README.md) has that setting silently dropped by
+    // this filter and reviewed under the default path table instead.
+    "lanes.e2e.missing_harness",
+    "lanes.e2e.paths",
+    "lanes.e2e.workflows",
     "paths.ignore",
     "preview.enabled",
     "preview.max_flows",
@@ -100,6 +129,13 @@ pub const OVERRIDABLE_KEYS: [&str; 17] = [
     "review.respect_agents_md",
     "review.severity_gate",
     "review.strictness",
+    "summary.enabled",
+    "summary.history_entries",
+    "summary.max_features",
+    "summary.max_tests",
+    "summary.sections",
+    "wireframe.enabled",
+    "wireframe.max_screens",
 ];
 
 /// Whether `key` is one a reviewed repository may set.
@@ -211,6 +247,19 @@ pub fn apply(base: &Config, document: &str) -> Result<(Config, Vec<String>)> {
     // after the merge rather than trusting the repository's own value.
     config.preview.enabled &= base.preview.enabled;
     config.preview.max_flows = config.preview.max_flows.min(base.preview.max_flows);
+    config.summary.enabled &= base.summary.enabled;
+    config.summary.max_features = config.summary.max_features.min(base.summary.max_features);
+    config.summary.max_tests = config.summary.max_tests.min(base.summary.max_tests);
+    config.summary.history_entries = config
+        .summary
+        .history_entries
+        .min(base.summary.history_entries);
+    config.wireframe.enabled &= base.wireframe.enabled;
+    config.wireframe.max_screens = config.wireframe.max_screens.min(base.wireframe.max_screens);
+
+    // Only what the repository layer asked for: the operator's own gates
+    // were reported when the base config loaded.
+    crate::config::warn_clamped_gates(&config, &provenance, Some(Layer::Repo));
 
     let problems = validate::validate(&config);
     if !problems.is_empty() {

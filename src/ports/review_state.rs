@@ -13,6 +13,7 @@
 use async_trait::async_trait;
 
 use crate::error::Result;
+use crate::lanes::e2e::runs::Watch;
 use crate::state::types::ReviewedState;
 
 /// Somewhere durable to keep the last review of a pull request.
@@ -23,4 +24,22 @@ pub trait ReviewStateStore: Send + Sync {
 
     /// Record what has now been reviewed under `key`.
     async fn save_state(&self, key: &str, state: &ReviewedState) -> Result<()>;
+
+    /// Clear the `e2e` watch under `key`, but only if it is still exactly
+    /// `watch` — every field, not only `head_sha`.
+    ///
+    /// The compare-and-clear `settle_e2e` needs and `load_state` +
+    /// `save_state` cannot give it: a plain reload-then-save still has a
+    /// window between the two calls in which a new review can overwrite the
+    /// whole record. Comparing the full watch, not just its `head_sha`,
+    /// matters for the same reason: a manual re-review of the *same* commit
+    /// (the `/admin/reviews` route reviews a head again on request) can save
+    /// a replacement watch with the same `head_sha` but different `jobs`,
+    /// `summary` or `failed` before this clears — matching on `head_sha`
+    /// alone would clear that newer watch too, leaving its freshly
+    /// published `Neutral` check with nothing to settle it. Returns whether
+    /// anything was cleared — `false` when there was no record, no watch, or
+    /// the watch does not match, all of which mean nothing here needed
+    /// clearing.
+    async fn clear_e2e_watch(&self, key: &str, watch: &Watch) -> Result<bool>;
 }

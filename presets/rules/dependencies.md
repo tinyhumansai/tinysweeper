@@ -4,9 +4,10 @@
 
 - A new dependency that duplicates something the project already has, or that
   the standard library covers. Name the existing one.
-- A dependency added to the always-compiled set when the feature it serves is
-  optional. In this project that breaks the offline default build, which is a
-  load-bearing invariant and not a preference.
+- A dependency added to the always-compiled set when the repository's own
+  convention (a documented feature-gating scheme, a "default build stays
+  offline/minimal" note in its contributing docs) says that class of
+  dependency belongs behind a feature instead.
 - A version requirement loosened in a way that admits a major version: `"1"` to
   `"*"`, an exact pin replaced by a range on a crate that has broken things
   before.

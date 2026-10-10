@@ -19,9 +19,18 @@ pub struct RepoId {
 
 impl RepoId {
     /// Parse `owner/name`.
+    ///
+    /// Whitespace anywhere is a refusal, not a trim: no forge names a
+    /// repository with a space in it, so `" acme/lib"` is a typo that would
+    /// otherwise pass validation and then match nothing — an allow-list
+    /// entry that silently allows nobody.
     pub fn parse(value: &str) -> Option<Self> {
         let (owner, name) = value.split_once('/')?;
-        if owner.is_empty() || name.is_empty() || name.contains('/') {
+        if owner.is_empty()
+            || name.is_empty()
+            || name.contains('/')
+            || value.chars().any(char::is_whitespace)
+        {
             return None;
         }
         Some(Self {
@@ -275,6 +284,21 @@ impl CheckConclusion {
             CheckConclusion::Failure | CheckConclusion::ActionRequired
         )
     }
+}
+
+/// The blob paths of a tree at one commit.
+///
+/// A struct rather than a bare `Vec` so the one thing a caller must not
+/// ignore — that the listing may be incomplete — travels with the paths
+/// instead of being lost in a log line. GitHub truncates a recursive tree
+/// past 100 000 entries, and an inventory built from a truncated listing is
+/// silently missing the harness it was asked to find.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreeListing {
+    /// Repository-relative blob paths, in tree order.
+    pub paths: Vec<String>,
+    /// Whether the forge cut the listing short.
+    pub truncated: bool,
 }
 
 /// A check run as it was observed on a commit.
@@ -763,7 +787,16 @@ mod tests {
 
     #[test]
     fn malformed_repo_ids_are_rejected() {
-        for bad in ["tinysweeper", "/tinysweeper", "owner/", "a/b/c", ""] {
+        for bad in [
+            "tinysweeper",
+            "/tinysweeper",
+            "owner/",
+            "a/b/c",
+            "",
+            " owner/name",
+            "owner/name ",
+            "owner/na me",
+        ] {
             assert!(RepoId::parse(bad).is_none(), "accepted `{bad}`");
         }
     }

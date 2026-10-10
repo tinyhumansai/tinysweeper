@@ -11,13 +11,44 @@
 version = 1
 
 [review]
+# `e2e` is opt-in: list it here (or use the `e2e-required` preset) to turn it
+# on. It was on by default and, wherever a harness existed, asked for an
+# end-to-end test on config flips and settings panels nobody acted on
+# (openhuman#7128, #7127, tinymemory#238). See docs/modules/lanes/e2e.md.
 lanes = ["critique", "security", "tests", "commits", "description"]
 # The one dial most repositories should touch. 1 chill, 2 default, 3 assertive.
 # `severity_gate` and `confidence_min` are deliberately absent: strictness sets
 # them, and setting them here would make the dial inert for everyone who never
 # overrode them — which is exactly the bug this replaced.
 strictness = 2
-max_comments = 20
+# The inline-comment budget for a whole pull request — not per lane, not per
+# adaptive pass, not per push. Every lane and pass of a review cycle is ranked
+# together (severity, then confidence, then council agreement) and only the
+# top of that list becomes inline conversations; the rest are listed by title
+# and location in the review hub, never dropped.
+#
+# Earlier cycles spend the same budget while their conversations stay open:
+# five unresolved threads leave no room for a sixth until one is resolved
+# (by a maintainer, the author, or `threads` closing a fixed finding). An
+# outdated thread still counts — it is still asking for attention, and
+# letting a rewrite refill the budget is how a 48-commit pull request
+# collected 115 findings when this was 20 per cycle. With `incremental`
+# off, earlier cycles are not read and every review starts from a full budget.
+#
+# One exception: a critical finding is always posted inline, budget or not.
+# It still counts against the budget and is still deduplicated, so it is never
+# repeated — but it is never demoted to a hub line because older threads are
+# open. Critical only; exempting high would make this no budget at all.
+#
+# Five, because comments that get acted on are few and severe; a reviewer
+# whose every push adds a page of them is read for a week and then ignored.
+max_comments = 5
+# Resource ceilings, checked before commit patches or model calls. These are
+# intentionally generous: ordinary large pull requests still run, while a
+# generated-code dump or repository-scale rewrite cannot consume an unbounded
+# context window. Changed lines means additions plus deletions.
+max_changed_files = 500
+max_changed_lines = 50000
 # A finding below the posting gate but at least `medium` and at least this
 # confident is still named in the check-run summary — no comment, no block.
 # Silence is the wrong shape for a boundary bug the model was two-thirds sure
@@ -26,6 +57,11 @@ note_confidence = 0.65
 incremental = true
 draft_prs = false
 respect_agents_md = true
+# Maximum adaptive review depth over the same evidence. Small groups stop
+# after round one. Qualifying groups may take up to two more looks, stopping
+# as soon as a pass adds no distinct surviving finding. Each extra pass is
+# another model call, so this remains an operator-owned ceiling.
+passes = 3
 
 # Block the merge button at this severity; "off" never blocks. A blocking review
 # has to be cleared by a human if it turns out to be wrong, so the floor sits at
@@ -50,6 +86,26 @@ max_components = 10
 max_impacted = 6
 max_links = 24
 max_paths_per_component = 12
+
+# One early pull-request comment, edited in place from review start through
+# completion. Repositories may make it shorter or turn it off, but cannot
+# raise these operator-owned presentation ceilings.
+[summary]
+enabled = true
+sections = [
+  "snapshot",
+  "changes",
+  "features",
+  "tests",
+  "findings",
+  "before_merge",
+  "flow",
+  "agent_details",
+  "run_details",
+]
+max_features = 8
+max_tests = 8
+history_entries = 5
 
 [paths]
 ignore = [
@@ -287,7 +343,28 @@ reasoning_effort = "medium"
 # model is known. GLM 5.2 and MiniMax M3 both accept `json_object`, so the
 # safety net still works.
 structured_output = "json_object"
+# Read-only tool exploration is opt-in and requires structured_output = "schema".
+agentic_reviewers = false
 budget_usd_per_pr = 1.0
+
+# Per-model routing, for a rung that should not share the pin below.
+#
+# The pin is right for the DeepSeek tiers, whose floating ids a dozen hosts
+# serve at prices spanning 4x. A rung meant for one specific endpoint — OpenAI's
+# flex tier, the surplus-capacity endpoint at half price — gets its own entry
+# here, with its own `order`, its own `allow_fallbacks`, and optionally its own
+# output ceiling. `max_tokens = 0` means no ceiling on the wire, but budgeted
+# reviews reject it: admission needs a finite output cap. Omit the override
+# to inherit `models.max_tokens`, or set a positive ceiling. A rung with a
+# route never falls to the unpinned last resort: naming the endpoint means it.
+# None by default; the deployment's `.tinysweeper.toml` is where one lives.
+#
+#   [[models.routes]]
+#   model = "openai/gpt-5.6-luna"
+#   order = ["openai/flex"]
+#   allow_fallbacks = false
+#   max_tokens = 16000
+routes = []
 
 # Pin the upstream provider, so the price this repository records is the price
 # it is charged.
@@ -409,6 +486,21 @@ max_chars = 40000
 # read one file at a time through the API and search is unavailable.
 checkout = true
 
+# Cross-file grouping for the `critique` and `security` per-file fan-out. No
+# model call: related changed files (a graph edge, or a name heuristic like a
+# file and its test) travel in one conversation instead of N isolated ones,
+# so a bug spanning them is visible to a reviewer instead of hidden by the
+# isolation clause each fanned-out conversation is given. `max_files = 4` and
+# `max_hunk_chars = 20000` are chosen to comfortably hold a file and its test,
+# or a handful of files one rename touches, while still falling back to
+# singletons well before a group would crowd out the model's attention the
+# same way the 31-file single-conversation review that motivated per-file
+# fan-out in the first place did.
+[grouping]
+enabled = true
+max_files = 4
+max_hunk_chars = 20000
+
 # The knowledge centre. `files` are read from the pull request's head commit
 # through the forge and are untrusted input — they are put through a sandboxed
 # extraction pass rather than injected. Plain filenames only: a name containing
@@ -478,11 +570,11 @@ max_chunks = 40
 graph_hops = 2
 max_graph_nodes = 60
 max_impact = 20
-# Fetch and index the repository's own submodules, same-host remotes only.
-# Off: it is a fetch to a URL the reviewed repository names. On for a
-# repository whose core library is vendored as a submodule, or the code a
-# changed line calls into can never be retrieved.
-submodules = false
+# Submodule repositories a review may read and the indexer may fetch, as
+# `owner/name`. An allow-list, not a switch: `.gitmodules` is written by the
+# pull request's author and the read token would follow it anywhere on the
+# forge. Name the vendored libraries a reviewed repository's code calls into.
+submodules = []
 
 # The memory engine: what the reviewer remembers about a repository between
 # pull requests. Off until an endpoint is named; see docs/modules/memory.
@@ -540,6 +632,14 @@ ask = "Which earlier review findings about {paths} did the maintainers reject, d
 section = "discussions"
 ask = "What was decided or explained in earlier issues and pull requests about {paths} or about {title}: problems reported, reasons given, approaches rejected? Name the issue or pull request each comes from."
 
+# Agent-facing repository questions and issue creation. The endpoint is absent
+# until enabled and its bearer is read only from `token_env`.
+[mcp]
+enabled = false
+token_env = "TINYSWEEPER_MCP_TOKEN"
+allowed_org = "tinyhumansai"
+allowed_repos = []
+
 [lanes.critique]
 model = "deep"
 fail_on = "high"
@@ -563,6 +663,20 @@ max_blob_bytes = 1048576
 [lanes.description]
 model = "scan"
 fail_on = "high"
+
+# On by default, and quiet where it has nothing to say: with
+# `missing_harness = "skip"` a repository with no e2e test files and no e2e
+# workflow gets a neutral check and no finding, so demanding an end-to-end
+# test from a repository that cannot have one — the noise the `tests` lane's
+# rules were written to avoid — never happens. Opt out by listing
+# `review.lanes` without `e2e`. `paths` and `workflows` empty means detect;
+# set, they replace the detection rather than extend it.
+[lanes.e2e]
+model = "scan"
+fail_on = "high"
+missing_harness = "skip"
+paths = []
+workflows = []
 
 # Auto-merge. Off until a repository opts in deliberately: this is the one
 # module that can put code on the default branch without a human, and a
@@ -789,15 +903,26 @@ max_steps = 25
 budget_usd = 0.50
 caption = true
 
+# ASCII wireframes of the UI screens and modals a pull request touches, read
+# from the diff alone. Independent of `[preview]`: no repository opt-in, no
+# browser, no target-repo CI. On by default, unlike `[preview]`, because it
+# costs one cheap model call and needs nothing an operator has to set up.
+[wireframe]
+enabled = true
+max_screens = 6
+max_width = 60
+max_height = 20
+
 [threads]
 # Close a conversation the review agent confirms the new code fixed.
 # The agent sees the prior finding and current diff; apply still requires an
 # outdated thread opened by tinysweeper before it writes anything.
 resolve_fixed = true
-# Ask a model whether a reply settled a finding the code did not change. Off:
-# the only evidence in that case is a comment, and comments are untrusted input.
-ask_model = false
-# Reply with the reason and the commit before resolving. On: a thread that
+# Ask a model whether a human reply settled a finding the code did not change.
+# On: replies are fenced as untrusted data and the advisory result can only
+# close an existing tinysweeper-owned thread through deterministic policy.
+ask_model = true
+# Reply with the reason and the commit once a resolve succeeds. On: a thread that
 # collapses silently reads as the bot losing interest rather than as a finding
 # somebody fixed, and the author cannot check a claim that was never made.
 comment_on_resolve = true

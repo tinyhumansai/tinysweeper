@@ -74,6 +74,14 @@ pub fn doctor(path: &Path, as_json: bool) -> Result<()> {
     Ok(())
 }
 
+/// One line per explicit gate the strictness dial overrode.
+fn gate_notes(loaded: &Loaded) -> Vec<String> {
+    config::clamped_gates(&loaded.config, &loaded.provenance)
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
 fn print_json(loaded: &Loaded) -> Result<()> {
     let provenance: serde_json::Map<String, serde_json::Value> = loaded
         .provenance
@@ -87,6 +95,7 @@ fn print_json(loaded: &Loaded) -> Result<()> {
         "config": redacted_config(&loaded.config)?,
         "provenance": provenance,
         "problems": config::validate::validate(&loaded.config),
+        "clamped_gates": gate_notes(loaded),
         "credentials": credentials(loaded),
     });
 
@@ -179,6 +188,9 @@ fn print_prose(loaded: &Loaded) {
             ""
         }
     );
+    for note in gate_notes(loaded) {
+        println!("  clamped          {note}");
+    }
     println!("  max comments     {}", config.review.max_comments);
     println!("  incremental      {}", config.review.incremental);
 
@@ -196,6 +208,29 @@ fn print_prose(loaded: &Loaded) {
                 "  (the gateway may route elsewhere)"
             } else {
                 "  (pinned)"
+            }
+        );
+    }
+    for route in &config.models.routes {
+        println!(
+            "  route            {} → {}{}{}",
+            route.model,
+            if route.order.is_empty() {
+                "gateway's choice".to_string()
+            } else {
+                route.order.join(", ")
+            },
+            if route.order.is_empty() {
+                ""
+            } else if route.allow_fallbacks {
+                "  (may route elsewhere)"
+            } else {
+                "  (pinned)"
+            },
+            match route.max_tokens {
+                Some(0) => "  no output ceiling",
+                Some(_) => "  own output ceiling",
+                None => "",
             }
         );
     }
@@ -273,12 +308,8 @@ fn print_prose(loaded: &Loaded) {
         ])
         .chain(config.models.fallback.iter().map(String::as_str))
         .collect();
-    let unpriced = crate::harness::pricing::unpriced(configured);
-    if !unpriced.is_empty() {
-        println!(
-            "  unpriced         {} (billed at the most expensive known rate)",
-            unpriced.join(", ")
-        );
+    if let Some(line) = price_line(&config.models.gateway, configured) {
+        println!("  {line}");
     }
 
     println!("\ncapabilities");
@@ -368,6 +399,33 @@ fn print_prose(loaded: &Loaded) {
 /// Which credentials this configuration needs, and whether they are present.
 ///
 /// Only presence is reported. A value never is, and never should be.
+/// The price diagnostic for the configured tiers, when there is one to give.
+///
+/// Behind a ladder the tier names are *ladders*, not model ids — `flash`,
+/// `deep` — and the price table is not where their cost comes from: the
+/// router returns the upstream body, so every call is priced by the model
+/// that answered or by the cost the marketplace reported. Calling them
+/// unpriced would send an operator hunting for table rows that must not
+/// exist. Say what they are instead.
+fn price_line(gateway: &str, configured: Vec<&str>) -> Option<String> {
+    if gateway.trim() == "ladder" {
+        let mut ladders = configured;
+        ladders.sort_unstable();
+        ladders.dedup();
+        return Some(format!(
+            "ladders          {} (priced by the model that answers each call)",
+            ladders.join(", ")
+        ));
+    }
+    let unpriced = crate::harness::pricing::unpriced(configured);
+    (!unpriced.is_empty()).then(|| {
+        format!(
+            "unpriced         {} (billed at the most expensive known rate)",
+            unpriced.join(", ")
+        )
+    })
+}
+
 fn credentials(loaded: &Loaded) -> Vec<(String, bool, &'static str)> {
     let config = &loaded.config;
     let mut wanted: Vec<(String, &'static str)> = vec![
@@ -428,6 +486,21 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join(".tinysweeper.toml"), config).expect("write");
         dir
+    }
+
+    #[test]
+    fn doctor_names_a_gate_the_dial_clamped() {
+        let dir = repo("version = 1\n[review]\nstrictness = 2\nconfidence_min = 0.5\n");
+        let loaded = config::load(dir.path(), None).expect("loads");
+
+        let notes = gate_notes(&loaded);
+        assert_eq!(notes.len(), 1, "{notes:#?}");
+        assert!(notes[0].contains("review.confidence_min"), "{}", notes[0]);
+        assert!(notes[0].contains("repo"), "{}", notes[0]);
+        assert!(notes[0].contains("0.75"), "{}", notes[0]);
+
+        let quiet = repo("version = 1\n");
+        assert!(gate_notes(&config::load(quiet.path(), None).expect("loads")).is_empty());
     }
 
     #[test]
@@ -504,6 +577,22 @@ mod tests {
         let rendered = serde_json::to_string(&redacted_config(&loaded.config).expect("redacts"))
             .expect("serialises");
         assert!(rendered.contains("OPENROUTER_API_KEY"), "{rendered}");
+    }
+
+    #[test]
+    fn ladder_aliases_are_not_reported_as_unpriced() {
+        let behind_ladder = price_line("ladder", vec!["flash", "deep", "flash"]).unwrap();
+        assert!(behind_ladder.starts_with("ladders"), "{behind_ladder}");
+        assert!(behind_ladder.contains("deep, flash"), "{behind_ladder}");
+        assert!(!behind_ladder.contains("unpriced"), "{behind_ladder}");
+
+        let direct = price_line("openrouter", vec!["flash", "deepseek/deepseek-v4-flash"]).unwrap();
+        assert!(direct.starts_with("unpriced"), "{direct}");
+        assert!(
+            direct.contains("flash") && !direct.contains("deepseek/"),
+            "{direct}"
+        );
+        assert!(price_line("openrouter", vec!["deepseek/deepseek-v4-flash"]).is_none());
     }
 
     #[test]

@@ -106,6 +106,11 @@ services:
       args:
         FEATURES: all
     command: ["serve", "--bind", "0.0.0.0:8080"]
+    # The box's own LLM ladder listens on loopback and on the docker0 gateway;
+    # this is the name a container reaches the latter by. `[models].base_url`
+    # in `.tinysweeper.toml` points at it.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       TINYSWEEPER_MONGODB_URI: mongodb://${MONGO_ROOT_USERNAME:-tinysweeper}:${MONGO_ROOT_PASSWORD}@mongod:27017/?authSource=admin&directConnection=true
       TINYSWEEPER_MONGODB_DB: tinysweeper
@@ -118,6 +123,9 @@ services:
       # needs. The others are forwarded for a deployment that overrides
       # `embeddings.provider`.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # The bearer the box's LLM ladder expects; `[models].api_key_env` names
+      # it. Embeddings still go to OpenRouter directly on the key above.
+      LADDER_API_KEY: ${LADDER_API_KEY:-}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
       COHERE_API_KEY: ${COHERE_API_KEY:-}
       # Memory is opt-in and configured in `[memory]`; only the engine's key

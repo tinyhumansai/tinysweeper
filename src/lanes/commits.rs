@@ -195,7 +195,10 @@ mod tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                redaction_note: "",
+                e2e: None,
                 tree: None,
+                graph: None,
             })
             .await
             .expect("lane runs")

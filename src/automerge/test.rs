@@ -836,6 +836,14 @@ impl crate::ports::forge::ForgeWrite for RefusingForge {
     ) -> crate::Result<()> {
         unreachable!("auto-merge leaves no reviews")
     }
+    async fn dismiss_own_approval(
+        &self,
+        _repo: &RepoId,
+        _number: u64,
+        _message: &str,
+    ) -> crate::error::Result<()> {
+        unreachable!("auto-merge withdraws no reviews")
+    }
     async fn add_labels(
         &self,
         _repo: &RepoId,

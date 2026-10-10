@@ -105,6 +105,26 @@ fn a_reported_cost_is_preferred_over_the_local_table() {
 }
 
 #[test]
+fn a_surplus_micro_dollar_cost_is_read_through_the_ladder() {
+    // The body the ladder relays from a Surplus seller: `cost: 0` from the
+    // seller's own upstream, `buyer_cost_micro` from Surplus.
+    let parsed = parse(&body(
+        &[(0, vec![0.0; 4])],
+        r#","usage":{"prompt_tokens":10,"cost":0,"is_byok":true,"buyer_cost_micro":3}"#,
+    ))
+    .expect("parses");
+    let usage = parsed.usage.expect("usage");
+    assert!((usage.charged().unwrap() - 0.000003).abs() < 1e-12);
+
+    let negative = parse(&body(
+        &[(0, vec![0.0; 4])],
+        r#","usage":{"prompt_tokens":10,"buyer_cost_micro":-3}"#,
+    ))
+    .expect("parses");
+    assert_eq!(negative.usage.expect("usage").charged(), None);
+}
+
+#[test]
 fn a_response_without_a_cost_still_uses_the_real_token_count() {
     // Tokens but no price: the count is authoritative even when the price is
     // not, so it must not fall all the way back to estimating both.
@@ -162,6 +182,125 @@ fn a_missing_key_is_a_configuration_error_naming_the_variable() {
         .expect_err("refuses");
     assert!(
         err.to_string().contains("TINYSWEEPER_ABSENT_KEY_5f3a2b1c"),
+        "{err}"
+    );
+}
+
+#[test]
+fn the_ladder_is_built_through_the_same_client_at_the_address_it_was_given() {
+    // A ladder-shaped signature: the model is a ladder name, and the width is
+    // the one every rung in it returns.
+    let ladder = EmbedSignature {
+        provider: "ladder".into(),
+        model: "vectors".into(),
+        dims: 1024,
+    };
+    let embedder = OpenRouterEmbedder::with_key(
+        ladder.clone(),
+        "unused".to_string(),
+        "http://host.docker.internal:6969/v1/embeddings",
+    )
+    .expect("builds");
+    assert_eq!(embedder.signature(), ladder);
+    assert_eq!(
+        embedder.url,
+        "http://host.docker.internal:6969/v1/embeddings"
+    );
+
+    // And the errors it raises name the provider it is, not OpenRouter.
+    let err = OpenRouterEmbedder::new(
+        ladder.clone(),
+        "TINYSWEEPER_ABSENT_KEY_5f3a2b1c",
+        "http://host.docker.internal:6969/v1/embeddings",
+    )
+    .expect_err("refuses");
+    assert!(err.to_string().contains("`ladder`"), "{err}");
+
+    // With no address it is refused at every constructor, not routed to
+    // OpenRouter's default with the ladder's key.
+    let err = OpenRouterEmbedder::with_key(ladder, "unused".to_string(), "").expect_err("refuses");
+    assert!(
+        err.to_string().contains("needs `embeddings.base_url`"),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn requests_are_paced_to_the_configured_rate() {
+    // 600 a minute is one every 100ms: three paced calls take at least 200ms
+    // between the first and the last. Zero means no pacing at all.
+    let paced = OpenRouterEmbedder::with_key(signature(4), "unused".into(), "")
+        .expect("builds")
+        .with_requests_per_minute(600);
+    let started = std::time::Instant::now();
+    paced.pace().await;
+    paced.pace().await;
+    paced.pace().await;
+    assert!(started.elapsed() >= std::time::Duration::from_millis(200));
+
+    let unpaced = OpenRouterEmbedder::with_key(signature(4), "unused".into(), "")
+        .expect("builds")
+        .with_requests_per_minute(0);
+    for _ in 0..3 {
+        unpaced.pace().await;
+    }
+    assert!(
+        unpaced.last_sent.lock().await.is_none(),
+        "no cap means nothing is timed at all"
+    );
+}
+
+#[test]
+fn a_ladder_error_names_the_ladder() {
+    let bad = parse("not json").expect_err("refused");
+    assert!(bad.to_string().contains("openrouter embeddings"));
+    let relabelled = relabel(bad, "ladder");
+    assert!(
+        relabelled
+            .to_string()
+            .starts_with("model: ladder embeddings")
+            || relabelled.to_string().contains("ladder embeddings"),
+        "{relabelled}"
+    );
+    assert!(
+        !relabelled.to_string().contains("openrouter"),
+        "{relabelled}"
+    );
+}
+
+#[test]
+fn a_provider_this_client_does_not_serve_is_refused() {
+    let voyage = EmbedSignature {
+        provider: "voyage".into(),
+        model: "voyage-code-3".into(),
+        dims: 1024,
+    };
+    let err = OpenRouterEmbedder::with_key(voyage, "unused".to_string(), "").expect_err("refuses");
+    assert!(err.to_string().contains("`voyage`"), "{err}");
+}
+
+#[test]
+fn a_ladder_without_an_address_is_refused_before_the_first_push() {
+    let config = crate::config::types::Embeddings {
+        enabled: true,
+        provider: "ladder".into(),
+        model: "vectors".into(),
+        dimensions: 1024,
+        api_key_env: "TINYSWEEPER_ABSENT_KEY_5f3a2b1c".into(),
+        base_url: String::new(),
+        ..crate::config::DEFAULTS
+            .parse::<toml::Table>()
+            .unwrap()
+            .try_into::<crate::config::types::Config>()
+            .unwrap()
+            .embeddings
+    };
+    let err = match crate::index::embedder_from_config(&config) {
+        Err(err) => err,
+        Ok(_) => panic!("a ladder with no address must be refused"),
+    };
+    assert!(
+        err.to_string().contains("needs `embeddings.base_url`"),
         "{err}"
     );
 }

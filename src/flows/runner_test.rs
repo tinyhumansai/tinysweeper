@@ -125,6 +125,107 @@ async fn no_reviewers_is_no_calls() {
 }
 
 #[tokio::test]
+async fn accounted_runs_report_only_their_own_usage() {
+    let usage = Usage {
+        input_tokens: 100,
+        output_tokens: 10,
+        cached_tokens: 80,
+        embed_tokens: 0,
+        cost_usd: 0.01,
+    };
+    let model = MockModel::always(json!({ "summary": "s", "findings": [] })).with_usage(usage);
+    let llm = lane_llm(Arc::new(model), &config(), 100.0);
+
+    let first = ask_all_accounted(
+        llm.clone(),
+        LaneId::Critique,
+        &[call("first")],
+        &schema(),
+        Asking::default(),
+    )
+    .await
+    .expect("first run succeeds");
+    let second = ask_all_accounted(
+        llm,
+        LaneId::Critique,
+        &[call("second")],
+        &schema(),
+        Asking::default(),
+    )
+    .await
+    .expect("second run succeeds");
+
+    assert_eq!(first.usage, usage);
+    assert_eq!(second.usage, usage);
+}
+
+#[tokio::test]
+async fn concurrent_accounted_runs_do_not_claim_each_others_usage() {
+    struct Together {
+        barrier: Arc<tokio::sync::Barrier>,
+        usage: Usage,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::ports::model::Model for Together {
+        async fn complete(
+            &self,
+            _request: crate::ports::model::ModelRequest,
+        ) -> crate::error::Result<crate::ports::model::ModelResponse> {
+            // Both calls must be in flight before either returns:
+            // differencing the shared capability tally would then attribute
+            // one call to both group outcomes.
+            self.barrier.wait().await;
+            Ok(crate::ports::model::ModelResponse {
+                value: json!({ "summary": "s", "findings": [] }),
+                model: "vendor/flash".into(),
+                usage: self.usage,
+            })
+        }
+    }
+
+    let usage = Usage {
+        input_tokens: 100,
+        output_tokens: 10,
+        cached_tokens: 80,
+        embed_tokens: 0,
+        cost_usd: 0.01,
+    };
+    let llm = lane_llm(
+        Arc::new(Together {
+            barrier: Arc::new(tokio::sync::Barrier::new(2)),
+            usage,
+        }),
+        &config(),
+        100.0,
+    );
+    let first_call = [call("first")];
+    let second_call = [call("second")];
+    let first_schema = schema();
+    let second_schema = schema();
+
+    let (first, second) = tokio::join!(
+        ask_all_accounted(
+            llm.clone(),
+            LaneId::Critique,
+            &first_call,
+            &first_schema,
+            Asking::default(),
+        ),
+        ask_all_accounted(
+            llm,
+            LaneId::Critique,
+            &second_call,
+            &second_schema,
+            Asking::default(),
+        )
+    );
+
+    assert_eq!(first.expect("first run succeeds").usage, usage);
+    assert_eq!(second.expect("second run succeeds").usage, usage);
+}
+
+#[tokio::test]
 async fn each_reviewer_is_asked_with_its_own_prompt() {
     let model = MockModel::always(json!({ "summary": "s", "findings": [] }));
     let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
@@ -546,7 +647,7 @@ async fn a_reviewer_that_looks_something_up_is_asked_again_with_what_it_read() {
             subagent_model: None,
             tree: Some(&tree),
             lookup: Some(&policy),
-            seed: None,
+            seed: &[],
         },
     )
     .await
@@ -591,6 +692,61 @@ async fn a_reviewer_that_looks_something_up_is_asked_again_with_what_it_read() {
 }
 
 #[tokio::test]
+async fn a_reviewer_asking_to_read_a_dotenv_file_is_told_it_is_unavailable() {
+    // The lookup loop is a second way for a secret to reach a model: a
+    // reviewer that asks to read `.env` must be refused by the tree reader
+    // itself, not merely have the answer scrubbed afterwards.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".env"), "AWS_SECRET=super-secret-value\n").unwrap();
+    let tree = crate::ports::tree::DirTree::new(dir.path());
+
+    let model = MockModel::new()
+        .then(json!({
+            "summary": "not sure yet",
+            "findings": [],
+            "lookups": [
+                { "kind": "read", "path": ".env", "start": 1, "end": 5, "why": "check config" }
+            ]
+        }))
+        .then(json!({ "summary": "settled", "findings": [] }));
+    let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
+    let policy = lookup_policy(2);
+
+    let answers = ask_all(
+        llm,
+        LaneId::Critique,
+        &[call("a")],
+        &schema(),
+        Asking {
+            subagent_model: None,
+            tree: Some(&tree),
+            lookup: Some(&policy),
+            seed: &[],
+        },
+    )
+    .await
+    .expect("runs");
+
+    let requests = model.requests();
+    let second = &requests[1];
+    let evidence = &second.messages[1].content;
+    assert!(evidence.contains("## What you looked up"), "{evidence}");
+    assert!(
+        !evidence.contains("super-secret-value"),
+        "the secret must never reach the rendered lookup block: {evidence}"
+    );
+    assert!(
+        evidence.contains("Not available"),
+        "the refusal is said, not silently empty: {evidence}"
+    );
+    assert!(
+        !answers[0].looked_up.contains("super-secret-value"),
+        "{}",
+        answers[0].looked_up
+    );
+}
+
+#[tokio::test]
 async fn the_last_permitted_round_offers_no_lookups_and_the_loop_ends() {
     // One round: the turn after the lookups answers the plain schema and is
     // not told it may look up, so a reviewer cannot ask for something no
@@ -621,7 +777,7 @@ async fn the_last_permitted_round_offers_no_lookups_and_the_loop_ends() {
             subagent_model: None,
             tree: Some(&tree),
             lookup: Some(&policy),
-            seed: None,
+            seed: &[],
         },
     )
     .await
@@ -662,7 +818,7 @@ async fn a_lookup_follow_up_that_fails_does_not_leave_the_provisional_verdict_st
             subagent_model: None,
             tree: Some(&tree),
             lookup: Some(&policy),
-            seed: None,
+            seed: &[],
         },
     )
     .await
@@ -689,7 +845,7 @@ async fn without_a_tree_the_prompt_is_the_plain_one() {
             subagent_model: None,
             tree: None,
             lookup: Some(&policy),
-            seed: None,
+            seed: &[],
         },
     )
     .await
@@ -702,4 +858,29 @@ async fn without_a_tree_the_prompt_is_the_plain_one() {
         "the one turn is the last turn, and is told so; nothing about lookups"
     );
     assert!(request.schema["properties"].is_null());
+}
+
+#[tokio::test]
+async fn a_paid_refusal_retains_answer_usage_and_capability_spend() {
+    struct Refused;
+    #[async_trait::async_trait]
+    impl Model for Refused {
+        async fn complete(&self, _: crate::ports::model::ModelRequest) -> Result<ModelResponse> {
+            Err(
+                crate::error::Error::Model("review refused".into()).with_usage(Usage {
+                    input_tokens: 36,
+                    output_tokens: 14,
+                    cost_usd: 0.01,
+                    ..Default::default()
+                }),
+            )
+        }
+    }
+    let llm = lane_llm(Arc::new(Refused), &config(), 100.0);
+    let answers = one_round(&llm, LaneId::Critique, &[call("a")], &schema()).await;
+    assert!(answers[0].value.is_none());
+    assert_eq!(answers[0].usage.input_tokens, 36);
+    assert_eq!(answers[0].usage.output_tokens, 14);
+    assert_eq!(answers[0].usage.cost_usd, 0.01);
+    assert_eq!(llm.spend().cost_usd(), 0.01);
 }

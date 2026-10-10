@@ -30,6 +30,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 
+#[path = "tree_explore.rs"]
+mod explore;
+pub use explore::TreeQuery;
+pub(crate) use explore::{paths as exploration_paths, visible_path as visible_exploration_path};
+
 /// The most lines one [`Lookup::Read`] returns.
 ///
 /// A file read whole is a prompt the model skims; a range it asked for is one
@@ -100,11 +105,11 @@ impl Lookup {
     /// Returns `(start, end)`, 1-based inclusive. Shared by every backend so a
     /// range means the same thing whichever one answers.
     pub fn read_range(start: Option<u32>, end: Option<u32>) -> (u32, u32) {
+        // Saturating: a model may answer any integer the schema admits, and
+        // `u32::MAX` as a start must clamp, not wrap the cap below it.
         let start = start.unwrap_or(1).max(1);
-        let end = end
-            .unwrap_or(start + MAX_READ_LINES - 1)
-            .max(start)
-            .min(start + MAX_READ_LINES - 1);
+        let cap = start.saturating_add(MAX_READ_LINES - 1);
+        let end = end.unwrap_or(cap).max(start).min(cap);
         (start, end)
     }
 }
@@ -177,6 +182,12 @@ pub trait TreeReader: Send + Sync {
     /// the model has to be told them.
     async fn lookup(&self, lookup: &Lookup) -> Result<Found>;
 
+    /// Answer an additional read-only query when this host supports it.
+    /// Default implementations report unavailable without reading anything.
+    async fn explore(&self, _query: &TreeQuery) -> Result<Found> {
+        Ok(explore::unavailable())
+    }
+
     /// One line describing what this reader can do, for the reviewer's
     /// instructions: whether search works, and any caveat.
     fn describe(&self) -> String;
@@ -236,6 +247,55 @@ pub fn search_lines(path: &str, content: &str, pattern: &str, hits: &mut Vec<Hit
         }
     }
     false
+}
+
+/// The refusal every [`TreeReader`] backend gives for a path
+/// [`crate::scan::is_sensitive_path`] names.
+///
+/// Shared so a `.env` file or a private key reads the same whichever backend
+/// answers it. [`Lookup::Read`] returns this instead of the content;
+/// [`Lookup::Search`] skips the path before it is ever scanned — a redacted
+/// hit would still name the path and the line, which is exactly the shape a
+/// secret's location must not reach a model.
+///
+/// Deliberately takes no path: the whole point of the guard is that the model
+/// never learns *which* sensitive file exists here, and an attacker-controlled
+/// filename has no way to inject text into a refusal reason that never quotes
+/// it.
+pub fn sensitive_path_refusal() -> Found {
+    Found::Unavailable {
+        reason: "this path is treated as a secret by its shape — an `.env` file, a private \
+                 key, or similar — and is never read into a review regardless of what it \
+                 contains"
+            .into(),
+    }
+}
+
+/// Drop any search hit inside a sensitive path from an already-produced
+/// [`Found`].
+///
+/// Used on a [`MockTree`] recorded outcome, which can predate whichever push
+/// first filtered sensitive paths out of a live search. Applied
+/// unconditionally on replay so an old cassette gets the same guard a fresh
+/// search gives: everything but [`Found::Hits`] passes through untouched,
+/// since a `Read` recorded for a sensitive path is already refused before
+/// this runs.
+fn strip_sensitive_hits(found: Found) -> Found {
+    match found {
+        Found::Hits {
+            hits,
+            truncated,
+            skipped,
+        } => Found::Hits {
+            hits: hits
+                .into_iter()
+                .filter(|hit| !crate::scan::is_sensitive_path(&hit.path))
+                .collect(),
+            truncated,
+            skipped,
+        },
+        other => other,
+    }
 }
 
 /// Whether `path` matches `glob`, or there is no glob.
@@ -299,9 +359,50 @@ impl MockTree {
 
 #[async_trait]
 impl TreeReader for MockTree {
+    async fn explore(&self, query: &TreeQuery) -> Result<Found> {
+        if !query.valid() {
+            return Ok(explore::unavailable());
+        }
+        if let TreeQuery::History { path, .. } = query
+            && crate::scan::is_sensitive_path(path)
+        {
+            return Ok(sensitive_path_refusal());
+        }
+        if let Some(found) = self.recorded.get(&query.key()) {
+            let limit = match query {
+                TreeQuery::List { limit, .. } | TreeQuery::Symbol { limit, .. } => *limit,
+                TreeQuery::History { .. } => 200,
+            };
+            return Ok(explore::bound(found.clone(), limit));
+        }
+        match query {
+            TreeQuery::List { path, limit } => Ok(explore::paths(
+                self.files.keys().cloned().collect(),
+                path,
+                *limit,
+                false,
+            )),
+            TreeQuery::Symbol { symbol, limit } => explore::symbol(self, symbol, *limit).await,
+            TreeQuery::History { .. } => Ok(explore::unavailable()),
+        }
+    }
+
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
+        // Checked before the recorded map and before `self.files`: a
+        // cassette can carry a `Lookup::Read` recorded before this guard
+        // existed, or before whichever live backend produced it filtered
+        // sensitive paths out. `DirTree`, `GitTree` and `ForgeTree` all
+        // refuse before consulting anything; a fixture standing in for one
+        // of them on replay has to refuse the same path the same way, or a
+        // cassette becomes the one place the invariant does not hold.
+        if let Lookup::Read { path, .. } = lookup
+            && crate::scan::is_sensitive_path(path)
+        {
+            return Ok(sensitive_path_refusal());
+        }
+
         if let Some(found) = self.recorded.get(&lookup.key()) {
-            return Ok(found.clone());
+            return Ok(strip_sensitive_hits(found.clone()));
         }
         // A replay answers only what was recorded. "Not found" here would be
         // a claim about the repository the fixture never made, and a model
@@ -331,7 +432,8 @@ impl TreeReader for MockTree {
                 let mut hits = Vec::new();
                 let mut truncated = false;
                 for (path, content) in &self.files {
-                    if !glob_matches(glob.as_deref(), path) {
+                    if !glob_matches(glob.as_deref(), path) || crate::scan::is_sensitive_path(path)
+                    {
                         continue;
                     }
                     if search_lines(path, content, pattern, &mut hits) {
@@ -390,6 +492,14 @@ impl<'a> RecordingTree<'a> {
 
 #[async_trait]
 impl TreeReader for RecordingTree<'_> {
+    async fn explore(&self, query: &TreeQuery) -> Result<Found> {
+        let found = RedactingTree::new(self.inner).explore(query).await?;
+        if let Ok(mut recorded) = self.recorded.lock() {
+            recorded.insert(query.key(), found.clone());
+        }
+        Ok(found)
+    }
+
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
         let found = self.inner.lookup(lookup).await?;
         if let Ok(mut recorded) = self.recorded.lock() {
@@ -401,6 +511,330 @@ impl TreeReader for RecordingTree<'_> {
     fn describe(&self) -> String {
         self.inner.describe()
     }
+}
+
+/// Masks scanner-detected credentials out of whatever `inner` answers.
+///
+/// [`sensitive_path_refusal`] refuses a whole file by *name* — `.env`, a
+/// private key — but an ordinary path like `src/config.rs` that merely
+/// gained a credential in this diff has no such guard: a `read` or `search`
+/// lookup fetches its content fresh, outside `evidence::redact::mask`
+/// entirely, and would otherwise hand back exactly the value the diff view
+/// already masked. This is the one place every backend's answer passes
+/// through before a lane sees it — wrap the final composed tree once, in
+/// `crate::app::review`, rather than teach `DirTree`, `GitTree`, `ForgeTree`
+/// and `MockTree` to each redact their own content.
+pub struct RedactingTree<'a> {
+    inner: &'a dyn TreeReader,
+    refused_paths: Vec<String>,
+}
+
+impl<'a> RedactingTree<'a> {
+    /// Redact everything `inner` answers.
+    pub fn new(inner: &'a dyn TreeReader) -> Self {
+        Self {
+            inner,
+            refused_paths: Vec::new(),
+        }
+    }
+
+    /// Also refuse head paths whose previous name was sensitive.
+    pub fn refusing_paths(inner: &'a dyn TreeReader, refused_paths: Vec<String>) -> Self {
+        Self {
+            inner,
+            refused_paths,
+        }
+    }
+}
+
+#[async_trait]
+impl TreeReader for RedactingTree<'_> {
+    async fn explore(&self, query: &TreeQuery) -> Result<Found> {
+        if !query.valid() {
+            return Ok(explore::unavailable());
+        }
+        if let TreeQuery::History { path, .. } = query
+            && (crate::scan::is_sensitive_path(path) || self.refused_paths.contains(path))
+        {
+            return Ok(sensitive_path_refusal());
+        }
+        let found = self.inner.explore(query).await?;
+        match (query, found) {
+            (
+                TreeQuery::List { limit, .. },
+                Found::Hits {
+                    mut hits,
+                    truncated,
+                    mut skipped,
+                },
+            ) => {
+                hits.retain(|hit| !self.refused_paths.contains(&hit.path));
+                skipped.retain(|path| !self.refused_paths.contains(path));
+                Ok(explore::bound(
+                    Found::Hits {
+                        hits,
+                        truncated,
+                        skipped,
+                    },
+                    *limit,
+                ))
+            }
+            (
+                TreeQuery::Symbol { limit, .. },
+                Found::Hits {
+                    hits,
+                    truncated,
+                    skipped,
+                },
+            ) => {
+                let mut safe = Vec::new();
+                for mut hit in hits {
+                    if !explore::visible_path(&hit.path) || self.refused_paths.contains(&hit.path) {
+                        continue;
+                    }
+                    let prefix = self
+                        .inner
+                        .lookup(&Lookup::Read {
+                            path: hit.path.clone(),
+                            start: Some(hit.line.saturating_sub(MAX_READ_LINES - 1)),
+                            end: Some(hit.line),
+                        })
+                        .await?;
+                    let mut state = private_key_state_before_last_line(&prefix).unwrap_or(false);
+                    hit.text = crate::scan::redact_stream_line(&hit.text, &mut state);
+                    safe.push(hit);
+                }
+                Ok(explore::bound(
+                    Found::Hits {
+                        hits: safe,
+                        truncated,
+                        skipped,
+                    },
+                    *limit,
+                ))
+            }
+            (TreeQuery::History { commit, path, .. }, found @ Found::Text { start, .. }) => {
+                let state = if start > 1 {
+                    let prefix = self
+                        .inner
+                        .explore(&TreeQuery::History {
+                            commit: commit.clone(),
+                            path: path.clone(),
+                            start: start.saturating_sub(MAX_READ_LINES).max(1),
+                            end: start - 1,
+                        })
+                        .await?;
+                    private_key_state(&prefix)
+                } else {
+                    false
+                };
+                Ok(redact_found(found, state))
+            }
+            (_, found) => Ok(redact_found(found, false)),
+        }
+    }
+
+    async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
+        if let Lookup::Read { path, .. } = lookup
+            && (crate::scan::is_sensitive_path(path)
+                || self.refused_paths.iter().any(|refused| refused == path))
+        {
+            return Ok(sensitive_path_refusal());
+        }
+        let found = self.inner.lookup(lookup).await?;
+        // A requested range can begin in the body of an otherwise ordinary
+        // source file's PEM block. Establish the state from the preceding
+        // lines before redacting the returned range, or the body has neither
+        // armour nor an assignment/rulepack shape to trigger a mask of its
+        // own. The probe is deliberately bounded by the reader's normal 200
+        // line cap: private-key PEM bodies are far shorter, and an unbounded
+        // hidden read would let one lookup silently turn into a whole-file
+        // model-adjacent operation.
+        let in_key_block = match (lookup, &found) {
+            (Lookup::Read { path, .. }, Found::Text { start, .. }) if *start > 1 => {
+                let prefix = self
+                    .inner
+                    .lookup(&Lookup::Read {
+                        path: path.clone(),
+                        start: Some(start.saturating_sub(MAX_READ_LINES)),
+                        end: Some(start - 1),
+                    })
+                    .await?;
+                match prefix {
+                    Found::Text { .. } => private_key_state(&prefix),
+                    // A backend that cannot answer the probe — a replayed
+                    // recording that never made it, a forge read that failed
+                    // — still has the range itself: a closing marker inside
+                    // it with no opening one proves the read began mid-key,
+                    // the same way a diff hunk proves it. Refusing the read
+                    // instead would blind every ranged lookup on such a
+                    // backend, and the lookups are what find the bugs.
+                    // A backend that cannot answer the probe — a replayed
+                    // recording that never made it, a forge read that failed
+                    // — still has the range itself: a closing marker inside
+                    // it with no opening one proves the read began mid-key,
+                    // the same way a diff hunk proves it. Treating the range
+                    // as key material instead would redact every seeded
+                    // definition read on such a backend, and the lookups are
+                    // what find the bugs (see `docs/modules/lanes/lookup.md`).
+                    // `a_ranged_read_with_no_probe_context_is_still_served`
+                    // pins this.
+                    _ => opens_inside_private_key(&found),
+                }
+            }
+            _ => false,
+        };
+        match found {
+            Found::Hits {
+                hits,
+                truncated,
+                skipped,
+            } => {
+                let mut redacted = Vec::with_capacity(hits.len());
+                for hit in hits {
+                    if crate::scan::is_sensitive_path(&hit.path)
+                        || self
+                            .refused_paths
+                            .iter()
+                            .any(|refused| refused == &hit.path)
+                    {
+                        continue;
+                    }
+                    let prefix = self
+                        .inner
+                        .lookup(&Lookup::Read {
+                            path: hit.path.clone(),
+                            // Keep the hit inside the 200-line probe.  `Read`
+                            // caps a range at 200 lines, so starting 200 lines
+                            // earlier silently excluded this final line.
+                            start: Some(hit.line.saturating_sub(MAX_READ_LINES - 1)),
+                            end: Some(hit.line),
+                        })
+                        .await?;
+                    // An unanswerable probe leaves the hit's own line as the
+                    // only evidence, and one line outside armour is ordinary
+                    // text; dropping the hit would hide a search result from
+                    // the reviewer over a backend limitation.
+                    // `a_search_hit_with_no_probe_context_is_still_served`
+                    // pins this.
+                    let mut state = private_key_state_before_last_line(&prefix).unwrap_or(false);
+                    redacted.push(Hit {
+                        text: crate::scan::redact_stream_line(&hit.text, &mut state),
+                        ..hit
+                    });
+                }
+                Ok(Found::Hits {
+                    hits: redacted,
+                    truncated,
+                    skipped,
+                })
+            }
+            found => Ok(redact_found(found, in_key_block)),
+        }
+    }
+
+    fn describe(&self) -> String {
+        self.inner.describe()
+    }
+
+    fn revision(&self) -> Option<String> {
+        self.inner.revision()
+    }
+}
+
+/// Apply the deterministic rulepack, entropy-assignment and private-key-body
+/// masking to a [`Found`] — the same path-independent passes
+/// [`crate::evidence::redact::mask`] applies to a fresh diff, via
+/// [`crate::scan::redact_stream_line`].
+///
+/// [`Found::Text`]'s lines are numbered `{n:>5}| {text}` by [`slice_lines`];
+/// the anchor is split off so masking only ever touches the source text.
+/// Each [`Hit`] is one line with no such prefix and no cross-line context, so
+/// a private-key marker on its own is left as-is — a boundary line alone
+/// names no secret, and a hit is never wide enough to carry an armour body.
+fn redact_found(found: Found, mut in_key_block: bool) -> Found {
+    match found {
+        Found::Text {
+            text,
+            start,
+            end,
+            total,
+        } => {
+            let mut out = String::with_capacity(text.len());
+            for (index, line) in text.split('\n').enumerate() {
+                if index > 0 {
+                    out.push('\n');
+                }
+                let (prefix, body) = match line.find("| ") {
+                    Some(offset) if offset <= 6 => line.split_at(offset + 2),
+                    _ => ("", line),
+                };
+                out.push_str(prefix);
+                out.push_str(&crate::scan::redact_stream_line(body, &mut in_key_block));
+            }
+            Found::Text {
+                text: out,
+                start,
+                end,
+                total,
+            }
+        }
+        Found::Hits { .. } => found,
+        other => other,
+    }
+}
+
+/// Whether a returned range itself proves it began inside a PEM block — a
+/// closing armour line before any opening one. See
+/// [`crate::scan::opens_inside_private_key`].
+fn opens_inside_private_key(found: &Found) -> bool {
+    let Found::Text { text, .. } = found else {
+        return false;
+    };
+    crate::scan::opens_inside_private_key(text.split('\n').map(|line| match line.find("| ") {
+        Some(offset) if offset <= 6 => &line[offset + 2..],
+        _ => line,
+    }))
+}
+
+/// Whether the final line of a preceding read leaves us inside a PEM block.
+///
+/// The probe never reaches a model, so walking it through the same stream
+/// redactor is safe and avoids duplicating the marker state machine here.
+fn private_key_state(found: &Found) -> bool {
+    let Found::Text { text, .. } = found else {
+        return false;
+    };
+    let mut in_key_block = false;
+    for line in text.split('\n') {
+        let body = match line.find("| ") {
+            Some(offset) if offset <= 6 => &line[offset + 2..],
+            _ => line,
+        };
+        let _ = crate::scan::redact_stream_line(body, &mut in_key_block);
+    }
+    in_key_block
+}
+
+/// Establish PEM state immediately before a search hit, whose own text is the
+/// final line of the bounded probe.
+fn private_key_state_before_last_line(found: &Found) -> Option<bool> {
+    let Found::Text { text, .. } = found else {
+        return None;
+    };
+    let mut state = false;
+    let mut lines = text.split('\n').peekable();
+    while let Some(line) = lines.next() {
+        if lines.peek().is_none() {
+            break;
+        }
+        let body = match line.find("| ") {
+            Some(offset) if offset <= 6 => &line[offset + 2..],
+            _ => line,
+        };
+        let _ = crate::scan::redact_stream_line(body, &mut state);
+    }
+    Some(state)
 }
 
 /// A tree on disk: a checkout, or the working directory `local-review` runs in.
@@ -477,11 +911,14 @@ impl DirTree {
                 | "build"
                 | "third_party"
         );
+        // And only for a submodule that is one on disk — a `.git` inside it,
+        // which a fetch leaves and a `.gitmodules` entry alone cannot
+        // conjure — so a declared-but-ordinary `vendor/large` stays skipped.
         let leads_to_submodule = inner.len() == rel.len()
-            && self
-                .submodules
-                .iter()
-                .any(|s| s == rel || s.starts_with(&format!("{rel}/")));
+            && self.submodules.iter().any(|s| {
+                (s == rel || s.starts_with(&format!("{rel}/")))
+                    && self.root.join(s).join(".git").exists()
+            });
         skip_dir && !leads_to_submodule
     }
 
@@ -585,23 +1022,139 @@ impl DirTree {
 
 /// The `path = ` entries of a `.gitmodules` file.
 pub fn submodule_paths(gitmodules: &str) -> Vec<String> {
-    gitmodules
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("path"))
-        .filter_map(|rest| rest.trim().strip_prefix('='))
-        .map(|p| p.trim().trim_end_matches('/').to_string())
-        // `.gitmodules` is contributor-controlled. A path that leaves the
-        // tree or names git's own directory is not a submodule anyone gets
-        // to declare, and lifting the skip list for it would be the point of
-        // declaring it.
-        .filter(|p| {
-            !p.is_empty()
-                && !p.starts_with('/')
-                && !p
-                    .split('/')
-                    .any(|c| c == ".." || c == ".git" || c.is_empty())
+    git_config_lines(gitmodules)
+        .iter()
+        .filter_map(|line| git_config_key(line.trim(), "path"))
+        .filter_map(|p| canonical_submodule_path(p.trim()))
+        // Two declarations of one directory are one directory.
+        .fold(Vec::new(), |mut paths, path| {
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+            paths
         })
-        .collect()
+}
+
+/// The value part of `line` when its key is `key` (case-insensitive, as
+/// git-config keys are), or `None`. The key must end where the `=` or the
+/// whitespace before it begins: `pathology = x` is not a `path`.
+pub fn git_config_key<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let head = line.get(..key.len())?;
+    if !head.eq_ignore_ascii_case(key) {
+        return None;
+    }
+    let rest = line[key.len()..].trim_start();
+    if rest.len() == line[key.len()..].len() && !rest.starts_with('=') {
+        // No whitespace after the key and no `=`: a longer key.
+        return None;
+    }
+    rest.strip_prefix('=')
+}
+
+/// A git-config value as git reads it: `"quoted"` up to the closing quote,
+/// ignoring what follows; unquoted up to a `#` or `;` comment; trimmed.
+///
+/// Git concatenates quoted and unquoted runs — `"libs/core"suffix` is
+/// `libs/coresuffix` — so this walks the value rather than splitting it:
+/// inside quotes everything is literal (with `\"` and `\\` escapes); outside
+/// them a `#` or `;` ends the value.
+pub fn git_config_value(raw: &str) -> String {
+    // Each character with whether it came from inside quotes, because only
+    // the unquoted whitespace at either end is git's to drop: `" vendor/x "`
+    // keeps its spaces.
+    let mut out: Vec<(char, bool)> = Vec::with_capacity(raw.len());
+    let mut quoted = false;
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        match (quoted, c) {
+            (_, '"') => quoted = !quoted,
+            // Git's escapes: `\n`, `\t`, `\b`, and a backslash before
+            // anything else (`\"`, `\\`) is that character.
+            (true, '\\') => match chars.next() {
+                Some('n') => out.push(('\n', true)),
+                Some('t') => out.push(('\t', true)),
+                Some('b') => out.push(('\u{8}', true)),
+                Some(escaped) => out.push((escaped, true)),
+                None => {}
+            },
+            (false, '#' | ';') => break,
+            // Unquoted whitespace is kept in count but spelled as spaces,
+            // which is how git reads it; quoted whitespace is kept as written.
+            (false, c) if c.is_whitespace() => out.push((' ', false)),
+            (_, c) => out.push((c, quoted)),
+        }
+    }
+    let unquoted_space = |&(c, quoted): &(char, bool)| !quoted && c.is_whitespace();
+    let start = out.iter().position(|item| !unquoted_space(item));
+    let end = out.iter().rposition(|item| !unquoted_space(item));
+    match (start, end) {
+        (Some(start), Some(end)) => out[start..=end].iter().map(|(c, _)| c).collect(),
+        _ => String::new(),
+    }
+}
+
+/// A git-config file as logical lines: a physical line ending in an
+/// unescaped `\` continues on the next one.
+pub fn git_config_lines(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    // Whether the logical line so far ends inside quotes — carried across a
+    // continuation with the escapes already accounted for, rather than
+    // recounted from the text, where `\"` would read as a delimiter.
+    let mut quoted = false;
+    for physical in text.lines() {
+        // A comment ends at the newline whatever it ends with: a `\` inside
+        // one continues nothing. Quotes are tracked across the logical line
+        // so a `#` inside them is not a comment.
+        let mut in_comment = false;
+        let mut chars = physical.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '"' if !in_comment => quoted = !quoted,
+                '\\' if quoted => {
+                    chars.next();
+                }
+                '#' | ';' if !quoted => in_comment = true,
+                _ => {}
+            }
+        }
+        let trailing_backslashes = physical.chars().rev().take_while(|c| *c == '\\').count();
+        if !in_comment && trailing_backslashes % 2 == 1 {
+            current.push_str(&physical[..physical.len() - 1]);
+            continue;
+        }
+        current.push_str(physical);
+        lines.push(std::mem::take(&mut current));
+        quoted = false;
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// The one spelling of a submodule path, or `None` for one nobody may declare.
+///
+/// Git resolves `./libs/core`, `libs//core` and `libs/./core` to the same
+/// gitlink; the selector, the manifest and the fetch all say `libs/core`.
+/// One canonical form for every reader, or the same directory is several
+/// paths and a policy applied to one of them misses the rest. `.gitmodules`
+/// is contributor-controlled: a path that leaves the tree, is absolute, or
+/// names git's own directory is refused rather than repaired.
+pub fn canonical_submodule_path(raw: &str) -> Option<String> {
+    let raw = git_config_value(raw);
+    let raw = raw.as_str();
+    if raw.is_empty() || raw.starts_with('/') || raw.contains('\\') {
+        return None;
+    }
+    let parts: Vec<&str> = raw
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect();
+    if parts.is_empty() || parts.iter().any(|part| *part == ".." || *part == ".git") {
+        return None;
+    }
+    Some(parts.join("/"))
 }
 
 /// Reject a path that could leave the tree.
@@ -615,11 +1168,42 @@ fn safe_relative(path: &str) -> bool {
 
 #[async_trait]
 impl TreeReader for DirTree {
+    async fn explore(&self, query: &TreeQuery) -> Result<Found> {
+        if !query.valid() {
+            return Ok(explore::unavailable());
+        }
+        match query {
+            TreeQuery::List { path, limit } => {
+                let mut paths = Vec::new();
+                self.walk(&self.root, &mut paths);
+                Ok(explore::paths(paths, path, *limit, false))
+            }
+            TreeQuery::Symbol { symbol, limit } => explore::symbol(self, symbol, *limit).await,
+            TreeQuery::History {
+                commit,
+                path,
+                start,
+                end,
+            } if self.revision.as_deref() == Some(commit.as_str()) => {
+                self.lookup(&Lookup::Read {
+                    path: path.clone(),
+                    start: Some(*start),
+                    end: Some(*end),
+                })
+                .await
+            }
+            TreeQuery::History { .. } => Ok(explore::unavailable()),
+        }
+    }
+
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
         Ok(match lookup {
             Lookup::Read { path, start, end } => {
                 if !safe_relative(path) || !self.within_root(path) || !self.allowed(path) {
                     return Ok(Found::NotFound);
+                }
+                if crate::scan::is_sensitive_path(path) {
+                    return Ok(sensitive_path_refusal());
                 }
                 match std::fs::read_to_string(self.root.join(path)) {
                     Ok(content) => {
@@ -648,7 +1232,8 @@ impl TreeReader for DirTree {
                 let mut hits = Vec::new();
                 let mut truncated = false;
                 for rel in paths {
-                    if !glob_matches(glob.as_deref(), &rel) {
+                    if !glob_matches(glob.as_deref(), &rel) || crate::scan::is_sensitive_path(&rel)
+                    {
                         continue;
                     }
                     let Ok(content) = std::fs::read_to_string(self.root.join(&rel)) else {
@@ -696,6 +1281,19 @@ impl<'a> ChainTree<'a> {
 
 #[async_trait]
 impl TreeReader for ChainTree<'_> {
+    async fn explore(&self, query: &TreeQuery) -> Result<Found> {
+        let mut last = Found::NotFound;
+        for reader in &self.readers {
+            let found = reader.explore(query).await?;
+            match found {
+                Found::NotFound => {}
+                Found::Unavailable { .. } => last = found,
+                answered => return Ok(answered),
+            }
+        }
+        Ok(last)
+    }
+
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
         // "Unavailable" outranks "not found" when nobody answered: one reader
         // saying the truth is unknown is not undone by a later one that could
@@ -735,6 +1333,11 @@ mod tests {
             (10, 10 + MAX_READ_LINES - 1)
         );
         assert_eq!(Lookup::read_range(Some(0), Some(3)), (1, 3));
+        assert_eq!(
+            Lookup::read_range(Some(u32::MAX), None),
+            (u32::MAX, u32::MAX),
+            "a start at the top of the range clamps rather than wrapping"
+        );
     }
 
     #[test]
@@ -810,10 +1413,461 @@ mod tests {
         );
     }
 
+    /// Regression for a tinysweeper finding on #166: the sensitive-path guard
+    /// was added only to `DirTree`. `MockTree::from_files` stands in for a
+    /// live checkout in tests and fixtures, and its `Lookup::Read` used to
+    /// serve `.env` content straight from `self.files` with no equivalent
+    /// refusal.
+    #[tokio::test]
+    async fn the_mock_refuses_to_read_a_sensitive_path_too() {
+        let tree = MockTree::from_files([(".env", "AWS_SECRET=super-secret-value")]);
+
+        let found = tree
+            .lookup(&Lookup::Read {
+                path: ".env".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+
+        let Found::Unavailable { reason } = found else {
+            panic!("a sensitive path must never be read: {found:?}")
+        };
+        assert!(reason.contains("secret"), "{reason}");
+    }
+
+    /// Regression for a Codex finding on #166: `is_sensitive_path` refuses a
+    /// whole file by *name*, but an ordinary path like `src/config.rs` that
+    /// merely gained a credential in this diff had no guard at all on a
+    /// `read` lookup — the diff view masks it, but a tree read fetches the
+    /// content fresh and would hand it straight back.
+    #[tokio::test]
+    async fn redacting_tree_masks_a_recognisable_credential_in_a_read() {
+        let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+        let inner = MockTree::from_files([(
+            "src/config.rs",
+            format!("const KEY: &str = \"{key}\";\nfn main() {{}}\n"),
+        )]);
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree
+            .lookup(&Lookup::Read {
+                path: "src/config.rs".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+
+        let Found::Text { text, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert!(!text.contains("IOSFODNN7EXAMPLE"), "{text}");
+        assert!(text.contains("const KEY"), "{text}");
+        assert!(
+            text.contains("1|"),
+            "the line-number anchor survives: {text}"
+        );
+    }
+
+    /// Pins the fallback that keeps lookups alive on a backend that cannot
+    /// answer the preceding-lines probe: a replayed recording that never made
+    /// it, a forge read that failed. The range itself carries no armour, so
+    /// it is ordinary text and is served as recorded. Refusing it, or
+    /// treating it as key material, redacts every seeded definition read in
+    /// eval replay and on a degraded forge — which is how #166 broke the
+    /// `oc-2313` corpus case twice before this test existed.
+    #[tokio::test]
+    async fn a_ranged_read_with_no_probe_context_is_still_served() {
+        let read = Lookup::Read {
+            path: "src/lib.rs".into(),
+            start: Some(40),
+            end: Some(42),
+        };
+        let inner = MockTree::from_recorded(
+            [(
+                read.key(),
+                Found::Text {
+                    text: "   40| pub fn read_before(t: u64) -> u64 {\n   41|     t.saturating_sub(1)\n   42| }".into(),
+                    start: 40,
+                    end: 42,
+                    total: 90,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree.lookup(&read).await.unwrap();
+
+        let Found::Text { text, .. } = found else {
+            panic!("a range with no armour must be served, got {found:?}")
+        };
+        assert!(text.contains("pub fn read_before"), "{text}");
+        assert!(!text.contains("redacted"), "{text}");
+    }
+
+    /// A range that provably opens mid-key — closing armour with no opening
+    /// one — is still masked without a probe, by the same lookahead a diff
+    /// hunk uses.
+    #[tokio::test]
+    async fn a_ranged_read_that_opens_mid_key_is_masked_without_a_probe() {
+        let read = Lookup::Read {
+            path: "src/keys.rs".into(),
+            start: Some(7),
+            end: Some(9),
+        };
+        let end = format!("-----END {} KEY-----", "RSA PRIVATE");
+        let inner = MockTree::from_recorded(
+            [(
+                read.key(),
+                Found::Text {
+                    text: format!("    7| MIIEowIBAAKCAQEAexamplebodyline\n    8| {end}\n    9| let after = 1;"),
+                    start: 7,
+                    end: 9,
+                    total: 20,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree.lookup(&read).await.unwrap();
+
+        let Found::Text { text, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert!(!text.contains("MIIEowIBAAKCAQEAexamplebodyline"), "{text}");
+        assert!(text.contains("let after = 1;"), "{text}");
+    }
+
+    /// Same fallback for search: a hit whose bounded context read is not
+    /// answerable is one line outside armour, and is served rather than
+    /// silently dropped.
+    #[tokio::test]
+    async fn a_search_hit_with_no_probe_context_is_still_served() {
+        let search = Lookup::Search {
+            pattern: "read_before".into(),
+            glob: None,
+        };
+        let inner = MockTree::from_recorded(
+            [(
+                search.key(),
+                Found::Hits {
+                    hits: vec![Hit {
+                        path: "src/lib.rs".into(),
+                        line: 40,
+                        text: "pub fn read_before(t: u64) -> u64 {".into(),
+                    }],
+                    truncated: false,
+                    skipped: Vec::new(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree.lookup(&search).await.unwrap();
+
+        let Found::Hits { hits, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(hits[0].text.contains("read_before"), "{hits:?}");
+    }
+
+    /// Regression for a Codex finding on #166: `redact_stream_line` used to
+    /// apply only the rulepack, so a scanner-flagged high-entropy assignment
+    /// with no vendor prefix — no `AKIA`, no `ghp_` — reached a tree read
+    /// fresh from the head, even though the identical value in the diff
+    /// itself would have been masked by `evidence::redact::mask`'s
+    /// finding-anchored fallback.
+    #[tokio::test]
+    async fn redacting_tree_masks_a_high_entropy_assignment_in_a_read() {
+        let value = format!("{}{}", "f3Kq9zR2", "mW7pL4xN8vB1cY6tH0jD5sG");
+        let inner = MockTree::from_files([(
+            "src/config.rs",
+            format!("let secret_token = \"{value}\";\nfn main() {{}}\n"),
+        )]);
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree
+            .lookup(&Lookup::Read {
+                path: "src/config.rs".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+
+        let Found::Text { text, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert!(!text.contains(&value), "{text}");
+        assert!(text.contains("let secret_token ="), "{text}");
+    }
+
+    /// Regression for the same finding, on the search path: a hit line is
+    /// exactly what a model reads back verbatim, so a credential on the same
+    /// line as a search match must not survive into it either.
+    #[tokio::test]
+    async fn redacting_tree_masks_a_recognisable_credential_in_a_search_hit() {
+        let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+        let inner = MockTree::from_files([(
+            "src/config.rs",
+            format!("const KEY: &str = \"{key}\"; // needle\n"),
+        )]);
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree
+            .lookup(&Lookup::Search {
+                pattern: "needle".into(),
+                glob: None,
+            })
+            .await
+            .unwrap();
+
+        let Found::Hits { hits, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert_eq!(hits.len(), 1, "{hits:#?}");
+        assert!(!hits[0].text.contains("IOSFODNN7EXAMPLE"), "{hits:#?}");
+        assert!(hits[0].text.contains("needle"), "{hits:#?}");
+    }
+
+    /// A private key's body carries no rulepack shape on its own lines;
+    /// `RedactingTree` has to track the armour block across the numbered
+    /// lines `slice_lines` produces, the same as `evidence::redact::mask`
+    /// does across a diff's hunk lines.
+    #[tokio::test]
+    async fn redacting_tree_masks_a_private_key_body_in_a_read() {
+        let begin = format!("-----BEGIN {}-----", "RSA PRIVATE KEY");
+        let end = format!("-----END {}-----", "RSA PRIVATE KEY");
+        let body = "MIIEowIBAAKCAQEAthisisadeadbeefexamplebodyforatestcase1234567890";
+        let inner = MockTree::from_files([("src/config.rs", format!("{begin}\n{body}\n{end}\n"))]);
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree
+            .lookup(&Lookup::Read {
+                path: "src/config.rs".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+
+        let Found::Text { text, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert!(!text.contains(body), "{text}");
+        assert!(text.contains(&begin), "{text}");
+    }
+
+    #[tokio::test]
+    async fn redacting_tree_masks_a_range_that_starts_inside_a_private_key() {
+        let begin = format!("-----BEGIN {}-----", "RSA PRIVATE KEY");
+        let end = format!("-----END {}-----", "RSA PRIVATE KEY");
+        // Short on purpose: this proves the preceding-range probe establishes
+        // PEM state instead of relying on the body-only base64 classifier.
+        let body = "short-private-key-body";
+        let inner = MockTree::from_files([("src/config.rs", format!("{begin}\n{body}\n{end}\n"))]);
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree
+            .lookup(&Lookup::Read {
+                path: "src/config.rs".into(),
+                start: Some(2),
+                end: Some(2),
+            })
+            .await
+            .unwrap();
+
+        let Found::Text { text, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert!(!text.contains(body), "{text}");
+        assert!(text.contains("<redacted"), "{text}");
+    }
+
+    /// Regression for the same finding: a `MockTree` recorded outcome
+    /// predates whichever push first wrapped its live backend in
+    /// `RedactingTree`, so a cassette can still carry a raw `Found::Text`.
+    /// The wrapper has to redact on replay too, not just a fresh read.
+    #[tokio::test]
+    async fn redacting_tree_masks_a_recorded_outcome_on_replay() {
+        let key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+        let lookup = Lookup::Read {
+            path: "src/config.rs".into(),
+            start: None,
+            end: None,
+        };
+        let recorded = Found::Text {
+            text: format!("    1| const KEY: &str = \"{key}\";"),
+            start: 1,
+            end: 1,
+            total: 1,
+        };
+        let inner = MockTree::from_recorded([(lookup.key(), recorded)].into_iter().collect());
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree.lookup(&lookup).await.unwrap();
+
+        let Found::Text { text, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert!(!text.contains("IOSFODNN7EXAMPLE"), "{text}");
+    }
+
+    /// Regression for the same finding: a `RedactingTree` still refuses a
+    /// sensitive path outright — it wraps the inner reader, and does not
+    /// replace the name-based guard with a weaker content-only one.
+    #[tokio::test]
+    async fn redacting_tree_still_refuses_a_sensitive_path() {
+        let inner = MockTree::from_files([(".env", "AWS_SECRET=super-secret-value")]);
+        let tree = RedactingTree::new(&inner);
+
+        let found = tree
+            .lookup(&Lookup::Read {
+                path: ".env".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(matches!(found, Found::Unavailable { .. }), "{found:?}");
+    }
+
+    /// Regression for the same finding: a search over `MockTree::from_files`
+    /// used to walk every file including a sensitive one, so a `.env` value
+    /// could come back as a hit — the path and the line, exactly the shape
+    /// [`sensitive_path_refusal`]'s doc says must never reach a model.
+    #[tokio::test]
+    async fn the_mock_never_returns_a_search_hit_inside_a_sensitive_path() {
+        let tree = MockTree::from_files([
+            (".env", "AWS_SECRET=needle"),
+            ("src/a.rs", "// needle, but not a secret"),
+        ]);
+
+        let found = tree
+            .lookup(&Lookup::Search {
+                pattern: "needle".into(),
+                glob: None,
+            })
+            .await
+            .unwrap();
+
+        let Found::Hits { hits, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert_eq!(hits.len(), 1, "{hits:#?}");
+        assert_eq!(hits[0].path, "src/a.rs");
+    }
+
+    /// Regression for the same finding, on the replay path: a cassette
+    /// recorded before the guard existed can carry a `Found::Hits` naming a
+    /// sensitive path, and `MockTree::from_recorded` used to hand that back
+    /// verbatim since the recorded map is consulted before anything else.
+    #[tokio::test]
+    async fn a_recorded_search_hit_inside_a_sensitive_path_is_stripped_on_replay() {
+        let key = Lookup::Search {
+            pattern: "needle".into(),
+            glob: None,
+        };
+        let recorded = Found::Hits {
+            hits: vec![
+                Hit {
+                    path: ".env".into(),
+                    line: 1,
+                    text: "AWS_SECRET=needle".into(),
+                },
+                Hit {
+                    path: "src/a.rs".into(),
+                    line: 2,
+                    text: "// needle".into(),
+                },
+            ],
+            truncated: false,
+            skipped: Vec::new(),
+        };
+        let tree = MockTree::from_recorded([(key.key(), recorded)].into_iter().collect());
+
+        let found = tree.lookup(&key).await.unwrap();
+
+        let Found::Hits { hits, .. } = found else {
+            panic!("{found:?}")
+        };
+        assert_eq!(hits.len(), 1, "{hits:#?}");
+        assert_eq!(hits[0].path, "src/a.rs");
+    }
+
     #[test]
     fn gitmodules_paths_are_parsed_and_unsafe_paths_refused() {
-        let text = "[submodule \"x\"]\n\tpath = vendor/x\n\turl = https://e/x.git\n[submodule \"y\"]\n path=vendor/y/\n";
-        assert_eq!(submodule_paths(text), vec!["vendor/x", "vendor/y"]);
+        let text = "[submodule \"x\"]\n\tpath = vendor/x\n\turl = https://e/x.git\n[submodule \"y\"]\n Path=vendor/y/\n[submodule \"x2\"]\n\tpath = ./vendor/x\n";
+        assert_eq!(
+            submodule_paths(text),
+            vec!["vendor/x", "vendor/y"],
+            "two spellings of one directory are one entry"
+        );
+        // Every spelling git resolves to one gitlink is one path here too.
+        for spelled in [
+            "./vendor/x",
+            "vendor//x",
+            "vendor/./x/",
+            "./vendor/./x//",
+            "\"vendor/x\"",
+            "\"./vendor/x/\"",
+            "vendor/x # the note git ignores",
+            "vendor/x ; and this one",
+            "\"vendor/x\" # quoted, then a note",
+            "\"vendor/\"x",
+        ] {
+            assert_eq!(
+                canonical_submodule_path(spelled).as_deref(),
+                Some("vendor/x"),
+                "{spelled}"
+            );
+        }
+        // A decoded escape is a real character in the path: a tab is a tab.
+        assert_eq!(git_config_value("\"vendor\\tcore\""), "vendor\tcore");
+        // Quoted whitespace is git's to keep; unquoted whitespace at the
+        // ends is not, and unquoted whitespace inside is kept in count.
+        assert_eq!(git_config_value("  \" vendor/x \"  "), " vendor/x ");
+        assert_eq!(git_config_value("vendor/  core\t"), "vendor/  core");
+        assert_eq!(git_config_key("path = x", "path"), Some(" x"));
+        assert_eq!(git_config_key("PATH=x", "path"), Some("x"));
+        assert_eq!(git_config_key("pathology = x", "path"), None);
+        assert_eq!(
+            git_config_lines("path = vendor/\\\nx\nurl = u\\\\\n"),
+            vec!["path = vendor/x".to_string(), "url = u\\\\".to_string()],
+            "a trailing backslash continues the line; an escaped one does not"
+        );
+        assert_eq!(
+            git_config_lines("path = a # note\\\nurl = u\n"),
+            vec!["path = a # note\\".to_string(), "url = u".to_string()],
+            "a comment ends at the newline, backslash or not"
+        );
+        // An escaped quote is not a delimiter, across a continuation too:
+        // `"libs/\"one\` + `#two\` + `bar"` is one quoted value.
+        let joined = git_config_lines("path = \"libs/\\\"one\\\n#two\\\nbar\"\n");
+        assert_eq!(joined, vec!["path = \"libs/\\\"one#twobar\"".to_string()]);
+        assert_eq!(git_config_value(&joined[0][7..]), "libs/\"one#twobar");
+        assert_eq!(git_config_value("\"vendor/x\\\"\""), "vendor/x\"");
+        for refused in [
+            "../x",
+            "vendor/../x",
+            "/vendor/x",
+            ".git",
+            "vendor/.git/x",
+            "",
+            ".",
+        ] {
+            assert_eq!(canonical_submodule_path(refused), None, "{refused}");
+        }
         assert!(!safe_relative("../etc/passwd"));
         assert!(!safe_relative("/etc/passwd"));
         assert!(safe_relative("src/lib.rs"));
@@ -823,7 +1877,7 @@ mod tests {
     async fn a_dir_tree_reads_and_keeps_vendored_submodules_searchable() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
-        std::fs::create_dir_all(dir.path().join("vendor/lib")).unwrap();
+        std::fs::create_dir_all(dir.path().join("vendor/lib/.git")).unwrap();
         std::fs::create_dir_all(dir.path().join("vendor/other")).unwrap();
         std::fs::write(
             dir.path().join(".gitmodules"),
@@ -898,6 +1952,92 @@ mod tests {
             skipped,
             vec!["vendor/empty".to_string()],
             "the unfetched submodule must be named, not silently searched as empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn dir_tree_refuses_to_read_a_dotenv_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "AWS_SECRET=super-secret-value\n").unwrap();
+
+        let tree = DirTree::new(dir.path());
+        let found = tree
+            .lookup(&Lookup::Read {
+                path: ".env".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+
+        let Found::Unavailable { reason } = found else {
+            panic!("a sensitive path must never be read: {found:?}")
+        };
+        assert!(
+            reason.contains("secret"),
+            "the reason should say why: {reason}"
+        );
+    }
+
+    /// Regression for a tinysweeper finding on #166: the refusal used to
+    /// interpolate the path it was refusing, disclosing the sensitive file's
+    /// location to the model the guard exists to keep it from — and handing
+    /// an attacker-controlled filename a way to inject text into a
+    /// model-facing reason.
+    #[tokio::test]
+    async fn the_sensitive_path_refusal_never_names_the_path() {
+        // A directory component distinctive enough that it could only appear
+        // in the reason if the path itself were interpolated into it — the
+        // doc's own generic examples ("an `.env` file") mention the shape,
+        // not this specific path, so asserting against `.env` alone would
+        // pass even with the old, path-naming behaviour.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("keys-for-prod-9f3a")).unwrap();
+        std::fs::write(
+            dir.path().join("keys-for-prod-9f3a/.env"),
+            "AWS_SECRET=super-secret-value\n",
+        )
+        .unwrap();
+        let found = DirTree::new(dir.path())
+            .lookup(&Lookup::Read {
+                path: "keys-for-prod-9f3a/.env".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+
+        let Found::Unavailable { reason } = found else {
+            panic!("a sensitive path must never be read: {found:?}")
+        };
+        assert!(!reason.contains("keys-for-prod-9f3a"), "{reason}");
+        assert!(reason.contains("secret"), "{reason}");
+    }
+
+    #[tokio::test]
+    async fn dir_tree_search_never_returns_a_hit_inside_a_sensitive_path() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "AWS_SECRET=needle\n").unwrap();
+        std::fs::write(dir.path().join("src.rs"), "let needle = 1;\n").unwrap();
+
+        let tree = DirTree::new(dir.path());
+        let found = tree
+            .lookup(&Lookup::Search {
+                pattern: "needle".into(),
+                glob: None,
+            })
+            .await
+            .unwrap();
+
+        let Found::Hits { hits, .. } = found else {
+            panic!("{found:?}")
+        };
+        let paths: Vec<&str> = hits.iter().map(|h| h.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["src.rs"],
+            "a redacted hit still leaks shape and location, so the sensitive path is \
+             skipped entirely rather than searched: {hits:?}"
         );
     }
 
@@ -981,8 +2121,9 @@ mod tests {
         let paths: Vec<&str> = hits.iter().map(|h| h.path.as_str()).collect();
         assert_eq!(
             paths,
-            vec![".env", "src/a.rs", "vendor/lib/src/b.rs"],
-            "the submodule's own target and .git are skipped"
+            vec!["src/a.rs", "vendor/lib/src/b.rs"],
+            "the submodule's own target and .git are skipped, and so is .env — a sensitive \
+             path is never searched, however the pattern matches"
         );
 
         let tracked = DirTree::new(dir.path())
@@ -1084,3 +2225,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "tree_explore_test.rs"]
+mod explore_tests;

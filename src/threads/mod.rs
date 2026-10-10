@@ -25,6 +25,13 @@
 //! - An unchanged-code thread whose only replies come from bots: two bots
 //!   replying to each other is a loop nobody is watching.
 //! - An already-resolved thread, which would otherwise be resolved forever.
+//!
+//! ## Explained once
+//!
+//! A thread that already carries our resolution note is still resolved when
+//! the policy says so, but never explained a second time. Notes from before the
+//! resolve-first ordering sit under threads whose resolve GitHub refused; once
+//! the installation has the permission, those must close, silently.
 
 pub mod advise;
 pub mod types;
@@ -32,13 +39,13 @@ pub mod types;
 use std::collections::BTreeSet;
 
 use crate::config::types::Config;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::findings::prior::{is_own_login, title_in};
-use crate::forge::types::{RepoId, ReviewThread};
+use crate::forge::types::{RepoId, ReviewThread, ThreadComment};
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 use crate::ports::model::{Model, Spend};
 
-pub use crate::threads::types::{Decision, PlannedResolve, ThreadPlan};
+pub use crate::threads::types::{ApplyReport, Decision, PlannedResolve, ThreadPlan};
 
 /// Decide what to do with one thread, from what is already known.
 ///
@@ -109,16 +116,18 @@ pub async fn plan(
     }
 
     for thread in read.review_threads(repo, number).await? {
+        let noted = thread.comments.iter().any(is_own_resolution_note);
         match decide(&thread, resolved) {
             Decision::Resolve(reason) => plan.resolve.push(PlannedResolve {
                 id: thread.id.clone(),
                 reason: reason.to_string(),
+                noted,
             }),
             Decision::Leave(_) => {}
             Decision::Ask => {
-                // Advisory, and off unless an operator turned it on. With the
-                // flag off the thread is left for a human, which is exactly the
-                // behaviour that existed before this module.
+                // Advisory and enabled by default. An operator can turn it off
+                // to leave unchanged-code conversations for a human; either
+                // way, deterministic policy still owns the eventual write.
                 let (Some(model), true) = (model, config.threads.ask_model) else {
                     continue;
                 };
@@ -128,6 +137,7 @@ pub async fn plan(
                     plan.resolve.push(PlannedResolve {
                         id: thread.id.clone(),
                         reason: "the reply explains why it is not a problem (advisory)".into(),
+                        noted,
                     });
                 }
             }
@@ -143,7 +153,46 @@ pub async fn plan(
 /// repository this will plausibly run on.
 const SHORT_SHA: usize = 7;
 
-/// The note posted in a thread just before it is resolved.
+/// The hidden marker every resolution note carries.
+///
+/// What lets the next run see that this thread was already explained. The
+/// marker alone is not trusted — see [`is_own_resolution_note`].
+pub const RESOLVED_NOTE_MARKER: &str = "<!-- tinysweeper:resolved-note -->";
+
+/// How a resolution note began before it carried [`RESOLVED_NOTE_MARKER`].
+///
+/// Those notes are still on GitHub — hundreds of them, one per push, under
+/// threads whose resolve was refused — and must count as already explained.
+const LEGACY_NOTE_PREFIX: &str = "**Resolved** — ";
+
+/// Whether `comment` is a resolution note tinysweeper itself posted.
+///
+/// Ours by author *and* by text, like every other marker check. The text test
+/// is anchored: a note opens with [`LEGACY_NOTE_PREFIX`] and, once it carries
+/// the marker, ends with it. A marker quoted anywhere else — in a reply, or in
+/// our own finding opener when the model reproduced it from the diff — is not
+/// a note, so it cannot pin a thread open and suppress the real explanation.
+fn is_own_resolution_note(comment: &ThreadComment) -> bool {
+    let body = comment.body.trim();
+    is_own_login(&comment.author)
+        && body.starts_with(LEGACY_NOTE_PREFIX)
+        && (body.ends_with(RESOLVED_NOTE_MARKER) || !body.contains(RESOLVED_NOTE_MARKER))
+}
+
+/// Whether a forge error is GitHub refusing for want of permission.
+///
+/// Matched on the rendered message because both shapes arrive as
+/// [`Error::Forge`] text: REST's `403 Resource not accessible by integration`
+/// and GraphQL's `"type":"FORBIDDEN"` entry in an otherwise-200 response.
+/// A status code alone is not matched — `403` can appear inside a node id.
+pub fn is_permission_denied(err: &Error) -> bool {
+    let message = err.to_string().to_ascii_lowercase();
+    ["not accessible by integration", "forbidden", "permission"]
+        .iter()
+        .any(|needle| message.contains(needle))
+}
+
+/// The note posted in a thread once it has been resolved.
 ///
 /// Written here, from a `&'static str` reason and a SHA, so no part of it can
 /// come from a model or from a pull request. `reason` originates in
@@ -155,7 +204,8 @@ pub fn resolution_note(reason: &str, head_sha: &str) -> String {
     format!(
         "**Resolved** — {reason}, as of `{short}`.\n\n\
          <sub>If this is wrong, reopen the conversation and say so; \
-         the finding will be re-raised on the next push if it still reproduces.</sub>"
+         the finding will be re-raised on the next push if it still reproduces.</sub>\n\n\
+         {RESOLVED_NOTE_MARKER}"
     )
 }
 
@@ -165,35 +215,55 @@ pub fn resolution_note(reason: &str, head_sha: &str) -> String {
 /// the fix landed in — the caller has already checked it against live state,
 /// so a note posted here cannot credit a commit nobody is looking at.
 ///
-/// Returns how many threads were resolved. A thread that fails is logged and
-/// the rest still run: one stale node id must not cost a pull request the whole
-/// of its housekeeping.
+/// The resolve comes **first**, and the note is posted only once it succeeded.
+/// The other order announced resolves GitHub then refused, and since nothing
+/// closed, the next push planned the same thread and announced it again — one
+/// more note per push, forever. This order can lose the explanation for a
+/// thread that did close, if the reply fails; that is the cheaper loss.
 ///
-/// The note is posted *before* the resolve, and its failure does not stop one.
-/// Both orderings lose something when the second call fails; this one loses the
-/// explanation for a thread that did close, rather than leaving a thread open
-/// under a comment announcing it was resolved.
+/// A thread the plan marks `noted` already carries our explanation, so it is
+/// resolved without a second one.
+///
+/// A thread that fails is logged and the rest still run: one stale node id
+/// must not cost a pull request the whole of its housekeeping. A *permission*
+/// refusal is different — every later resolve would be refused the same way —
+/// so it is logged once and the rest of the plan is skipped.
 pub async fn apply_plan(
     write: &dyn ForgeWrite,
     config: &Config,
     repo: &RepoId,
     plan: &ThreadPlan,
     head_sha: &str,
-) -> Result<usize> {
-    let mut resolved = 0;
-    for entry in &plan.resolve {
-        if config.threads.comment_on_resolve {
+) -> Result<ApplyReport> {
+    let mut report = ApplyReport::default();
+    for (index, entry) in plan.resolve.iter().enumerate() {
+        if let Err(err) = write.resolve_review_thread(repo, &entry.id).await {
+            report.failed += 1;
+            if is_permission_denied(&err) {
+                report.skipped = plan.resolve.len() - index - 1;
+                // A stable message an operator can alert on: the fix is the
+                // installation's `Pull requests: write` permission, not code.
+                tracing::warn!(
+                    %err,
+                    thread = %entry.id,
+                    skipped = report.skipped,
+                    "review thread resolve refused for want of permission; \
+                     skipping the rest of this run"
+                );
+                break;
+            }
+            tracing::warn!(%err, thread = %entry.id, "could not resolve a thread");
+            continue;
+        }
+        report.resolved += 1;
+        if config.threads.comment_on_resolve && !entry.noted {
             let note = resolution_note(&entry.reason, head_sha);
             if let Err(err) = write.reply_to_review_thread(repo, &entry.id, &note).await {
                 tracing::warn!(%err, thread = %entry.id, "could not explain a resolve");
             }
         }
-        match write.resolve_review_thread(repo, &entry.id).await {
-            Ok(()) => resolved += 1,
-            Err(err) => tracing::warn!(%err, thread = %entry.id, "could not resolve a thread"),
-        }
     }
-    Ok(resolved)
+    Ok(report)
 }
 
 #[cfg(test)]

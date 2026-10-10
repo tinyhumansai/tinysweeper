@@ -14,7 +14,8 @@ use async_trait::async_trait;
 use crate::error::{Error, Result};
 use crate::forge::types::{
     ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, Issue, IssueComment, PullRequest,
-    Remark, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict,
+    Remark, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict, ThreadComment,
+    TreeListing,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -54,6 +55,13 @@ pub enum Write {
         comments: Vec<ReviewComment>,
         /// Whether it blocks the merge button.
         event: ReviewEvent,
+    },
+    /// tinysweeper's own approval was withdrawn.
+    DismissApproval {
+        /// The pull request.
+        number: u64,
+        /// The reason shown on the dismissal.
+        message: String,
     },
     /// Labels were added.
     Labels {
@@ -158,6 +166,10 @@ pub struct MockState {
     pub issue_types: Vec<String>,
     /// tinysweeper's own last review state, keyed by pull request number.
     pub own_reviews: BTreeMap<u64, ReviewEvent>,
+    /// Whether reading our own review history fails, as a forge mid-outage.
+    pub own_review_state_fails: bool,
+    /// Whether withdrawing our own approval fails.
+    pub dismissals_fail: bool,
     /// Check runs, keyed by the commit they report on and then by check name.
     pub checks: BTreeMap<String, BTreeMap<String, CheckStatus>>,
     /// Reviews, oldest first, keyed by pull request number.
@@ -177,8 +189,18 @@ pub struct MockState {
     /// knowledge centre depends on: a test has to be able to prove a file was
     /// read at the pull request's head and not at some other ref.
     pub blobs: BTreeMap<String, String>,
+    /// The tree at each commit, keyed by SHA, for `tree_paths`. A commit
+    /// with no entry serves an empty, complete tree.
+    pub trees: BTreeMap<String, TreeListing>,
     /// Submodule gitlinks, keyed by [`file_key`], as `(url, commit)`.
     pub submodules: BTreeMap<String, (String, String)>,
+    /// Branch names `branch_head` answers `Ok(None)` for, instead of the
+    /// usual name-resolves-to-itself fallback — a branch that exists but
+    /// currently has no resolvable head (a rename race, say).
+    pub branches_without_head: std::collections::BTreeSet<String>,
+    /// File keys (see [`file_key`]) `file_at` answers `Err` for, instead of
+    /// its usual `Ok(Some(_))`/`Ok(None)`.
+    pub unreadable_files: std::collections::BTreeSet<String>,
 }
 
 /// The key a file's contents are stored under.
@@ -195,10 +217,31 @@ impl MockState {
         self.blobs.insert(file_key(sha, path), content.to_string());
     }
 
+    /// Serve `paths` as the complete tree at `sha`.
+    pub fn set_tree(&mut self, sha: &str, paths: &[&str]) {
+        self.trees.insert(
+            sha.to_string(),
+            TreeListing {
+                paths: paths.iter().map(|p| p.to_string()).collect(),
+                truncated: false,
+            },
+        );
+    }
+
     /// Serve a submodule gitlink at `path` for `sha`.
     pub fn set_submodule(&mut self, sha: &str, path: &str, url: &str, commit: &str) {
         self.submodules
             .insert(file_key(sha, path), (url.to_string(), commit.to_string()));
+    }
+
+    /// Make `branch_head(branch)` answer `Ok(None)` instead of resolving it.
+    pub fn set_branch_without_head(&mut self, branch: &str) {
+        self.branches_without_head.insert(branch.to_string());
+    }
+
+    /// Make `file_at(sha, path)` answer `Err` instead of its usual result.
+    pub fn set_unreadable_file(&mut self, sha: &str, path: &str) {
+        self.unreadable_files.insert(file_key(sha, path));
     }
 
     /// Report `name` on `sha`. `conclusion: None` means still running.
@@ -227,6 +270,11 @@ pub struct MockForge {
     strict_comments: bool,
     /// Whether closing a pull request is refused.
     refuse_closes: bool,
+    /// The error every thread resolve is refused with, if any.
+    refuse_resolves: Option<String>,
+    /// Errors for individual thread ids, so one stale id can fail while the
+    /// rest of a run still resolves.
+    refuse_resolve_of: Vec<(String, String)>,
 }
 
 impl MockForge {
@@ -367,6 +415,24 @@ impl MockForge {
     }
 
     /// Pretend tinysweeper already left a review of this state.
+    /// Make `dismiss_own_approval` fail.
+    pub fn failing_dismissals(self) -> Self {
+        {
+            let mut state = self.state.lock().expect("mock state lock");
+            state.dismissals_fail = true;
+        }
+        self
+    }
+
+    /// Make `own_review_state` fail, as a forge mid-outage would.
+    pub fn failing_own_review_state(self) -> Self {
+        {
+            let mut state = self.state.lock().expect("mock state lock");
+            state.own_review_state_fails = true;
+        }
+        self
+    }
+
     pub fn with_own_review(self, number: u64, event: ReviewEvent) -> Self {
         {
             let mut state = self.state.lock().expect("mock state lock");
@@ -401,6 +467,29 @@ impl MockForge {
     /// does about the comment it already posted saying the close was coming.
     pub fn refusing_closes(mut self) -> Self {
         self.refuse_closes = true;
+        self
+    }
+
+    /// Refuse every attempt to resolve a review thread, with `message`.
+    ///
+    /// The commonest production refusal is an installation without
+    /// `Pull requests: write`, which GitHub reports as `Resource not
+    /// accessible by integration`; a test passes that text to exercise the
+    /// permission path, or anything else for a one-off failure.
+    ///
+    /// A refused attempt is still recorded in `writes()`, as a refused close
+    /// is, so the log shows what was asked for. Whether it took effect is
+    /// shown by the thread's `is_resolved` state, not by the log.
+    pub fn refusing_thread_resolves(mut self, message: &str) -> Self {
+        self.refuse_resolves = Some(message.to_string());
+        self
+    }
+
+    /// Refuse attempts to resolve the single thread `thread_id`, with
+    /// `message`. Other threads resolve normally.
+    pub fn refusing_thread_resolve_of(mut self, thread_id: &str, message: &str) -> Self {
+        self.refuse_resolve_of
+            .push((thread_id.to_string(), message.to_string()));
         self
     }
 
@@ -535,12 +624,24 @@ impl ForgeRead for MockForge {
 
     async fn own_review_state(&self, _repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
         let state = self.state.lock().expect("mock state lock");
+        if state.own_review_state_fails {
+            return Err(Error::Forge("review history unavailable".into()));
+        }
         Ok(state.own_reviews.get(&number).copied())
     }
 
     async fn file_at(&self, _repo: &RepoId, path: &str, sha: &str) -> Result<Option<String>> {
         let state = self.state.lock().expect("mock state lock");
-        Ok(state.blobs.get(&file_key(sha, path)).cloned())
+        let key = file_key(sha, path);
+        if state.unreadable_files.contains(&key) {
+            return Err(Self::missing("file", 0));
+        }
+        Ok(state.blobs.get(&key).cloned())
+    }
+
+    async fn tree_paths(&self, _repo: &RepoId, sha: &str) -> Result<TreeListing> {
+        let state = self.state.lock().expect("mock state lock");
+        Ok(state.trees.get(sha).cloned().unwrap_or_default())
     }
 
     async fn submodule_at(
@@ -648,6 +749,9 @@ impl ForgeRead for MockForge {
 
     async fn branch_head(&self, _repo: &RepoId, branch: &str) -> Result<Option<String>> {
         let state = self.state.lock().expect("mock state lock");
+        if state.branches_without_head.contains(branch) {
+            return Ok(None);
+        }
         // A branch nobody registered resolves to itself, so a test that sets a
         // file at `"main"` and never thinks about revisions still works: the
         // sweep then reads at `"main"`, which is exactly where the file is.
@@ -794,7 +898,18 @@ impl ForgeWrite for MockForge {
                     comment.author = "tinysweeper[bot]".into();
                     comment
                 }));
-            state.own_reviews.insert(number, event);
+            // GitHub's semantics, so multi-push tests see what production
+            // sees: a comment leaves a standing verdict in force, and only a
+            // verdict replaces a verdict.
+            match (event, state.own_reviews.get(&number)) {
+                (
+                    ReviewEvent::Comment,
+                    Some(ReviewEvent::Approve | ReviewEvent::RequestChanges),
+                ) => {}
+                _ => {
+                    state.own_reviews.insert(number, event);
+                }
+            }
         }
         self.record(Write::Review {
             number,
@@ -802,6 +917,29 @@ impl ForgeWrite for MockForge {
             comments,
             event,
         });
+        Ok(())
+    }
+
+    async fn dismiss_own_approval(&self, _repo: &RepoId, number: u64, message: &str) -> Result<()> {
+        let standing = {
+            let mut state = self.state.lock().expect("mock state lock");
+            if state.dismissals_fail {
+                return Err(Error::Forge("dismissal refused".into()));
+            }
+            let standing = state.own_reviews.get(&number) == Some(&ReviewEvent::Approve);
+            // Recorded either way; the state only moves when the mock is
+            // allowed to write, like every other write here.
+            if standing && !self.read_only {
+                state.own_reviews.remove(&number);
+            }
+            standing
+        };
+        if standing {
+            self.record(Write::DismissApproval {
+                number,
+                message: message.to_string(),
+            });
+        }
         Ok(())
     }
 
@@ -934,6 +1072,22 @@ impl ForgeWrite for MockForge {
             thread_id: thread_id.to_string(),
             body: body.to_string(),
         });
+        // Applied to state for the same reason a resolve is: the policy skips
+        // a thread that already carries our note, and a mock that only
+        // recorded would hide a run that posted it twice.
+        if !self.read_only {
+            let mut state = self.state.lock().expect("mock state lock");
+            for threads in state.review_threads.values_mut() {
+                for thread in threads.iter_mut().filter(|t| t.id == thread_id) {
+                    thread.comments.push(ThreadComment {
+                        author: "tinysweeper[bot]".into(),
+                        body: body.to_string(),
+                        bot: true,
+                        maintainer: false,
+                    });
+                }
+            }
+        }
         Ok(())
     }
 
@@ -941,6 +1095,16 @@ impl ForgeWrite for MockForge {
         self.record(Write::ThreadResolved {
             thread_id: thread_id.to_string(),
         });
+        if let Some(message) = &self.refuse_resolves {
+            return Err(Error::Forge(message.clone()));
+        }
+        if let Some((_, message)) = self
+            .refuse_resolve_of
+            .iter()
+            .find(|(id, _)| id == thread_id)
+        {
+            return Err(Error::Forge(message.clone()));
+        }
         // Applied to state as well as recorded: the policy skips threads that
         // are already resolved, and a mock that only recorded the call would
         // hide a run that resolved the same thread twice.
@@ -975,7 +1139,6 @@ impl ForgeWrite for MockForge {
 mod tests {
     use super::*;
     use crate::forge::types::CheckConclusion;
-    use crate::forge::types::ThreadComment;
 
     fn repo() -> RepoId {
         RepoId::parse("tinyhumansai/tinysweeper").expect("parses")
@@ -1405,6 +1568,66 @@ mod tests {
             forge.review_threads(&repo(), 7).await.expect("read")[0].is_resolved,
             "a resolved thread must read back as resolved, or a second run resolves it again"
         );
+    }
+
+    #[tokio::test]
+    async fn a_refused_resolve_is_recorded_errs_and_leaves_the_thread_open() {
+        let mut state = MockState::default();
+        state.review_threads.insert(
+            7,
+            vec![ReviewThread {
+                id: "PRRT_open".into(),
+                is_resolved: false,
+                is_outdated: true,
+                resolved_by_has_write_access: false,
+                comments: Vec::new(),
+            }],
+        );
+        let forge = MockForge::with_state(state)
+            .refusing_thread_resolves("Resource not accessible by integration");
+
+        let err = forge
+            .resolve_review_thread(&repo(), "PRRT_open")
+            .await
+            .expect_err("refused");
+
+        assert!(err.to_string().contains("not accessible"), "{err}");
+        assert_eq!(
+            forge.writes(),
+            vec![Write::ThreadResolved {
+                thread_id: "PRRT_open".into()
+            }],
+            "the attempt is recorded, as a refused close is"
+        );
+        assert!(!forge.review_threads(&repo(), 7).await.expect("read")[0].is_resolved);
+    }
+
+    #[tokio::test]
+    async fn a_thread_reply_lands_in_the_thread_as_ours() {
+        let mut state = MockState::default();
+        state.review_threads.insert(
+            7,
+            vec![ReviewThread {
+                id: "PRRT_open".into(),
+                is_resolved: false,
+                is_outdated: true,
+                resolved_by_has_write_access: false,
+                comments: Vec::new(),
+            }],
+        );
+        let forge = MockForge::with_state(state);
+
+        forge
+            .reply_to_review_thread(&repo(), "PRRT_open", "noted")
+            .await
+            .expect("replies");
+
+        // A reply that only recorded would hide a run that posted the same
+        // note twice: the second run has to be able to read the first one.
+        let threads = forge.review_threads(&repo(), 7).await.expect("read");
+        let reply = threads[0].comments.last().expect("the reply is in state");
+        assert_eq!(reply.body, "noted");
+        assert!(crate::findings::prior::is_own_login(&reply.author));
     }
 
     #[tokio::test]

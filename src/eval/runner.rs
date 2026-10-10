@@ -273,6 +273,10 @@ async fn review_case(
 fn prepare(config: &Config) -> Config {
     let mut config = config.clone();
     config.review.incremental = false;
+    // The committed corpus measures review lanes. Summary generation has its
+    // own schema and cassettes; including it here would make every historical
+    // lane cassette require an unrelated trailing response.
+    config.summary.enabled = false;
     config
 }
 
@@ -438,6 +442,42 @@ pub fn digest_of(config: &Config) -> String {
     field(b"fallback\0", models.fallback.join(",").as_bytes());
     field(b"max_tokens\0", &models.max_tokens.to_le_bytes());
     field(b"reasoning_effort\0", models.reasoning_effort.as_bytes());
+    // Preserve historical one-shot digests, but never compare an agentic
+    // tool run or different physical-call admission bounds as the same run.
+    if models.agentic_reviewers {
+        field(b"agentic_reviewers\0", &[1]);
+    }
+    for (model, bound) in &models.budget_prices {
+        field(b"budget_price_model\0", model.as_bytes());
+        field(b"budget_price_input\0", &bound.input.to_le_bytes());
+        field(b"budget_price_cached\0", &bound.cached.to_le_bytes());
+        field(b"budget_price_output\0", &bound.output.to_le_bytes());
+    }
+    // A per-model route moves a score the same way the global ceiling does —
+    // a ceiling of 0 completes a review that 16k truncates — and pins the
+    // call to an endpoint with its own price. Two runs with the same tier
+    // names and different routes are not the same run. Hashed in config
+    // order: the order is what `Models::route_for` searches.
+    for route in &models.routes {
+        field(b"route\0", route.model.as_bytes());
+        field(b"route_order\0", route.order.join(",").as_bytes());
+        field(
+            b"route_allow_fallbacks\0",
+            &[u8::from(route.allow_fallbacks)],
+        );
+        field(
+            b"route_max_tokens\0",
+            format!("{:?}", route.max_tokens).as_bytes(),
+        );
+    }
+    // What a reviewer may read before it answers moves every score: the turns
+    // it takes, the evidence it sees, and the cost. Two runs under different
+    // lookup policies are not the same run.
+    let lookup = &config.lookup;
+    field(b"lookup.enabled\0", &[u8::from(lookup.enabled)]);
+    field(b"lookup.rounds\0", &[lookup.rounds]);
+    field(b"lookup.per_round\0", &[lookup.per_round]);
+    field(b"lookup.max_chars\0", &lookup.max_chars.to_le_bytes());
     // The per-PR ceiling moves a score too: exceeding it is `Error::Budget`,
     // which the runner scores as a failed case. A run configured with a $0.50
     // ceiling and one with a $50.00 ceiling are not the same run.
@@ -473,6 +513,9 @@ pub fn digest_of(config: &Config) -> String {
         if let Some(rules) = &instruction.rules {
             field(b"rules\0", rules.as_bytes());
         }
+        // `merge` decides whether the next matching entry is appended too, so
+        // the same table renders two different prompts with it on and off.
+        field(b"merge\0", &[u8::from(instruction.merge)]);
         field(
             b"lanes\0",
             instruction

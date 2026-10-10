@@ -19,25 +19,28 @@ use tokio::sync::Semaphore;
 use crate::automerge::types::Outcome;
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::forge::RepoId;
+use crate::forge::{PullRequest, RepoId};
 use crate::index::mongo::MongoIndex;
 use crate::ports::forge::ForgeRead as _;
 use crate::ports::knowledge::KnowledgeStore;
+use crate::ports::model_factory::ModelFactory;
 use crate::pr_triage::Report as PrTriageReport;
 use crate::server::admin::{self, AdminAuth};
 use crate::server::auth::AppAuth;
 use crate::server::failure;
 use crate::server::indexing::{IndexBackend, index_in_background};
 use crate::server::manual::{self, FullReviews, MergeReport, Merges, Remembers, Triages};
+use crate::server::mcp;
 use crate::server::memory::{
     BackfillStart, BackfillStatus, MemoryBackend, ingest_in_background, remember_in_background,
 };
+use crate::server::model::{GatewayModelFactory, ResolvedModels};
 use crate::server::preview::{
     self, FinishReply, FinishRequest, Previews, StartReply, StartRequest,
     StepReply as PreviewStepReply,
 };
 use crate::server::status;
-use crate::server::store::{Store, Trust};
+use crate::server::store::{LEASE_TTL, Store, Trust};
 use crate::server::webhook::{self, Action, Payload};
 
 /// How many reviews may run at once.
@@ -48,6 +51,60 @@ use crate::server::webhook::{self, Action, Payload};
 /// bill.
 const MAX_CONCURRENT_REVIEWS: usize = 4;
 
+/// How long one review may take, wall clock, from delivery to verdict.
+///
+/// Every model call is bounded on its own — the gateway client caps a unary
+/// request at ten minutes — but a review is dozens of them in sequence, across
+/// lanes, files, retries and the fallback chain, and nothing capped the sum.
+/// On 2026-09-15 `tinyhumansai/backend#1332` sat "in progress" for over two
+/// hours while holding one of the four review permits. A healthy review of a
+/// large repository finishes in single-digit minutes; this is several times
+/// that, so it only ever fires on something already broken.
+///
+/// The budget is *checked* at every phase boundary of the lease-held
+/// lifecycle — before the lease is claimed, and again before the lanes start —
+/// and *enforced* by cancellation only on the lanes themselves, in
+/// `run_lanes`. The metadata phase in between is a handful of forge calls
+/// that must not be cancelled mid-flight (a check-run POST cut off after
+/// GitHub accepted it is an orphaned check), so they are bounded per call by
+/// `forge::github::REQUEST_TIMEOUT` and the deadline is re-read once they
+/// return. See `Run::check`.
+///
+/// Strictly less than [`LEASE_TTL`] with room to spare, and that ordering is
+/// load-bearing: the lease is what stops a redelivery from reviewing the same
+/// commit twice, and a review still running when its lease expires is exactly
+/// the duplicate the lease exists to prevent. What the assertion below leaves
+/// over covers the metadata phase's per-call bounds and the publish, which
+/// has a bound of its own in [`PUBLISH_DEADLINE`].
+const REVIEW_DEADLINE: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// How long the publish after the lanes may take, wall clock.
+///
+/// A separate budget rather than the remainder of [`REVIEW_DEADLINE`], and a
+/// generous one. `apply` is a handful of sequential, non-idempotent GitHub
+/// writes, and cancelling it between two of them cannot retract what GitHub
+/// already accepted — so this must never fire on a publish that is merely
+/// slow, only on one that is stuck. Each write is capped at a minute by the
+/// forge client; a publish that needs five is already broken, and cutting it
+/// off then costs at most a partial review, which the umbrella check reports
+/// as a failure, rather than a lease that lapses under a review still holding
+/// it.
+const PUBLISH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// How long the metadata phase between the lease claim and the lanes may
+/// take at most: `open_status`, the config overlay and the default-branch
+/// read, each capped at `forge::github::REQUEST_TIMEOUT`, plus the token
+/// mint. Not enforced here — it is what the per-call bounds add up to — but
+/// counted, so the lease assertion below is about the whole lifecycle rather
+/// than the two phases that happen to have a name.
+const METADATA_ALLOWANCE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+const _: () = assert!(
+    REVIEW_DEADLINE.as_secs() + METADATA_ALLOWANCE.as_secs() + PUBLISH_DEADLINE.as_secs()
+        < LEASE_TTL.as_secs(),
+    "every phase of a lease-held review must give up before the lease does"
+);
+
 /// How many repositories may be indexed at once.
 ///
 /// Lower than the review cap and for a different reason. A review is mostly
@@ -55,6 +112,24 @@ const MAX_CONCURRENT_REVIEWS: usize = 4;
 /// thousands of embedding calls, so two of them concurrently is already the
 /// provider's rate limit and a good deal of the machine.
 const MAX_CONCURRENT_INDEXES: usize = 2;
+
+/// How long `conclude_in_flight` may spend concluding checks before giving up
+/// on the rest.
+///
+/// Compose sends `SIGKILL` ten seconds after `SIGTERM`; this leaves a margin
+/// under that for the runtime to actually unwind once `conclude_in_flight`
+/// returns. Deliberately shorter than `forge::github::REQUEST_TIMEOUT` (60s):
+/// a single stalled `update_check` must not be able to spend the whole grace
+/// period on its own and starve every other review's check behind it.
+const SHUTDOWN_CLEANUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// How many times an `e2e` settlement retries the per-pull-request lease
+/// before giving up, and how long it waits between attempts.
+///
+/// Bounded low: this is only meant to ride out a settlement that is already
+/// nearly done, not to turn a lease into a queue. See `settle_e2e_inner`.
+const LEASE_CONTENTION_RETRIES: u32 = 4;
+const LEASE_CONTENTION_BACKOFF: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// How many pull requests one manual, repository-wide review may queue.
 ///
@@ -83,6 +158,8 @@ pub struct ServerConfig {
 struct AppState {
     config: Arc<ServerConfig>,
     store: Store,
+    /// Resolved once at boot; clones share provider/runtime state across workers.
+    models: ResolvedModels,
     /// Curated knowledge documents. `None` when no retrieval database is
     /// reachable: the review still runs, without pinned context.
     knowledge: Option<Arc<dyn KnowledgeStore>>,
@@ -107,11 +184,35 @@ struct AppState {
     /// the critical section that touches it never awaits.
     preview_locks:
         Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    /// The umbrella check of every review currently running, so a shutdown
+    /// can conclude them. A deploy replaces the container, and a review that
+    /// dies with it would otherwise leave its check "in progress" until the
+    /// next push — which `automerge` reads as a review still running. Each
+    /// slot is registered when its review starts and removed when it ends;
+    /// see `conclude_in_flight`. Also carries whether new reviews are still
+    /// accepted, so shutdown can refuse one that would otherwise register
+    /// after the concluding snapshot and be orphaned exactly like the
+    /// deploy this exists to guard against.
+    in_flight: Arc<std::sync::Mutex<InFlightRegistry>>,
 }
 
 /// Run the server until the process is stopped.
 pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<()> {
+    serve_with_model_factory(config, store, auth, Arc::new(GatewayModelFactory)).await
+}
+
+/// Run with host-supplied model construction, resolving shared adapters at startup.
+///
+/// Factory errors refuse startup before the listener or background workers exist.
+/// The factory receives only deployment model configuration, never forge credentials.
+pub async fn serve_with_model_factory(
+    config: ServerConfig,
+    store: Store,
+    auth: AppAuth,
+    factory: Arc<dyn ModelFactory>,
+) -> Result<()> {
     let bind = config.bind.clone();
+    let models = ResolvedModels::resolve(factory.as_ref(), &config.config).await?;
 
     // The boot assertion. `$vectorSearch` and `$rankFusion` are stages a stock
     // `mongo:` image does not have, and an unsupported stage fails when the
@@ -171,6 +272,7 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
     let state = AppState {
         config: Arc::new(config),
         store: store.clone(),
+        models,
         knowledge: knowledge.clone(),
         auth: Arc::new(auth),
         permits: Arc::new(Semaphore::new(MAX_CONCURRENT_REVIEWS)),
@@ -178,8 +280,10 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
         memory,
         index_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_INDEXES)),
         preview_locks: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        in_flight: Arc::new(std::sync::Mutex::new(InFlightRegistry::default())),
     };
 
+    let shutdown_state = state.clone();
     let manual_state = state.clone();
     let manual_auth = admin_auth.clone();
     let preview_state = state.clone();
@@ -194,7 +298,7 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
     let mut app = Router::new()
         .route("/healthz", get(healthz))
         .route("/webhook", post(receive))
-        .with_state(state);
+        .with_state(state.clone());
 
     // Mounted only when a token is configured. An admin router without a
     // credential would be an unauthenticated write endpoint on the public
@@ -274,14 +378,148 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
         ),
     }
 
+    // MCP is a separate, least-privilege door. It is never implicitly covered
+    // by the admin token: agent clients get only the credential intended for
+    // their tools, and a missing token leaves no endpoint to probe.
+    if state.config.config.mcp.enabled {
+        let mcp_auth = mcp::McpAuth::from_env(&state.config.config.mcp.token_env)?;
+        if let Some(routes) = mcp::router(
+            mcp_auth,
+            state.config.config.mcp.allowed_org.clone(),
+            state.config.config.mcp.allowed_repos.clone(),
+            state.auth.clone(),
+            state.index.clone(),
+            state.store.clone(),
+        ) {
+            app = app.merge(routes);
+            tracing::info!("authenticated MCP is mounted at /mcp");
+        } else {
+            tracing::warn!("MCP is enabled but its token is unset; endpoint is not mounted");
+        }
+    }
+
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
         .map_err(|err| Error::Forge(format!("could not bind {bind}: {err}")))?;
 
     tracing::info!(%bind, "tinysweeper is listening");
     axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown(shutdown_state))
         .await
         .map_err(|err| Error::Forge(format!("server stopped: {err}")))
+}
+
+/// Resolve when the process has been asked to stop and is ready to.
+///
+/// `SIGTERM` is what `docker compose up` sends on a redeploy, `SIGINT` what
+/// an operator's terminal sends. Either way the answer is the same: conclude
+/// the checks of the reviews still running, *then* let axum drain. That order
+/// matters. Compose gives the process ten seconds before `SIGKILL`, and axum
+/// only returns once every open connection has finished — a preview step
+/// in flight could spend the whole grace period on its own — so anything that
+/// runs after `serve` returns may never run at all.
+async fn shutdown(state: AppState) {
+    shutdown_signal().await;
+    conclude_in_flight(&state).await;
+}
+
+/// Resolve when the process is asked to stop.
+///
+/// `SIGTERM` only exists as a signal tokio can listen for on Unix, which is
+/// the only platform this ever runs on — Compose, and every workflow in this
+/// repository, are Linux containers. `#[cfg(unix)]` still guards the import
+/// rather than depending on that: the alternative is a hard build failure on
+/// any other target, and `ctrl_c` alone is a correct, if smaller, shutdown
+/// path everywhere `tokio::signal` builds at all.
+#[cfg(unix)]
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut term = match signal(SignalKind::terminate()) {
+        Ok(term) => term,
+        Err(err) => {
+            // Without a handler the runtime would take the default action
+            // and die mid-review; waiting on `ctrl_c` alone is the best that
+            // can be done, and it is worth saying that happened.
+            tracing::error!(%err, "could not install a SIGTERM handler; a redeploy will orphan running reviews");
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        }
+    };
+
+    tokio::select! {
+        _ = term.recv() => tracing::info!("received SIGTERM; shutting down"),
+        _ = tokio::signal::ctrl_c() => tracing::info!("received SIGINT; shutting down"),
+    }
+}
+
+/// The non-Unix fallback: no `SIGTERM` to listen for, so `ctrl_c` is the
+/// whole story.
+#[cfg(not(unix))]
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
+    tracing::info!("received an interrupt; shutting down");
+}
+
+/// Conclude the umbrella check of every review still running, and stop
+/// taking new ones.
+///
+/// Taking each slot's status out is what makes this safe against the review
+/// itself: if a lane happens to finish during the grace period, its own
+/// `close_status` finds the slot empty and does nothing, so no check is
+/// concluded twice. The reviews are not cancelled here — the process exit
+/// does that, and a lane that gets a few more seconds costs nothing.
+///
+/// Flipping `accepting` off in the same locked section as the snapshot is
+/// what closes the race with `InFlight::register`: a webhook accepted while
+/// this function is still awaiting the network calls below (axum has not
+/// started draining yet — that only happens once `shutdown` returns) would
+/// otherwise be able to register a slot after the snapshot was taken, and
+/// that review would then run unwatched, with only whatever is left of the
+/// grace period before Compose's `SIGKILL` to finish and conclude its own
+/// check. Declining it here, before it opens a check, is strictly better
+/// than that — GitHub's own redelivery or the next push starts it again once
+/// the new container is up.
+async fn conclude_in_flight(state: &AppState) {
+    let slots = {
+        let mut registry = state.in_flight.lock().expect("in-flight reviews");
+        registry.accepting = false;
+        std::mem::take(&mut registry.slots)
+    };
+    if slots.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        reviews = slots.len(),
+        "shutting down with reviews in flight; concluding their checks as failed"
+    );
+    let err = Error::lane(
+        "review",
+        "tinysweeper was restarted while this review was running",
+    );
+
+    // Concurrently, and under a deadline shorter than the grace period, not
+    // a serial loop with none. `GitHubWrite`'s client already times a single
+    // request out at `forge::github::REQUEST_TIMEOUT` (60s) — longer than
+    // Compose's whole ten seconds before `SIGKILL` on its own — so closing
+    // slots one at a time could starve every review after the first behind
+    // one stalled request, leaving their checks pending regardless of how
+    // fast they themselves would have concluded. Whatever this deadline
+    // does not reach in time stays pending until the next push, the same
+    // fallback every other best-effort write in this module already relies
+    // on.
+    let closes = slots
+        .iter()
+        .map(|slot| close_status(state, slot, Conclusion::Failed(&err)));
+    if tokio::time::timeout(SHUTDOWN_CLEANUP_DEADLINE, futures::future::join_all(closes))
+        .await
+        .is_err()
+    {
+        tracing::error!(
+            reviews = slots.len(),
+            "shutdown's grace period ran out before every in-flight check could be concluded"
+        );
+    }
 }
 
 async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
@@ -455,7 +693,13 @@ async fn dispatch(state: AppState, action: Action, delivery: String, event: Stri
             installation,
         } => {
             for number in numbers {
-                tokio::spawn(handle_automerge(
+                // Two consumers of the same event, and the order matters: the
+                // `e2e` check run has to be concluded before the merge gate
+                // reads it, or a pull request whose only red job just
+                // finished would be evaluated against the `Neutral` the
+                // review left behind. `settle_e2e` publishes the terminal
+                // conclusion; the merge evaluation then sees it.
+                tokio::spawn(handle_check_completed(
                     state.clone(),
                     repo.clone(),
                     number,
@@ -464,6 +708,126 @@ async fn dispatch(state: AppState, action: Action, delivery: String, event: Stri
             }
         }
     }
+}
+
+/// A check completed on a pull request: settle the `e2e` lane if it was
+/// waiting on that check, then reconsider the merge.
+///
+/// Not gated on the *deployment's* `enabled_lanes()`: `review.lanes` is a
+/// repository override (`crate::config::remote::overlay`), so a repository
+/// can run `e2e` while the deployment default does not. Gating on the
+/// deployment list here would skip settlement for exactly that repository
+/// and leave its `tinysweeper/e2e` check `Neutral` forever. The cheap guard
+/// that actually matters — is anything being watched — lives inside
+/// `settle_e2e_inner`, keyed off the stored review state rather than config.
+async fn handle_check_completed(state: AppState, repo: String, number: u64, installation: u64) {
+    if let Err(err) = settle_e2e_inner(&state, &repo, number, installation).await {
+        // Logged and dropped, like auto-merge: the watch stays in the store,
+        // and the next completion event on the same head retries it.
+        tracing::error!(%err, %repo, number, "could not settle the e2e check run");
+    }
+    handle_automerge(state, repo, number, installation).await;
+}
+
+async fn settle_e2e_inner(
+    state: &AppState,
+    repo: &str,
+    number: u64,
+    installation: u64,
+) -> Result<()> {
+    let repo_id =
+        RepoId::parse(repo).ok_or_else(|| Error::Forge(format!("`{repo}` is not owner/name")))?;
+
+    // The cheap exit before any credential is minted: most completions land
+    // on pull requests with nothing to settle.
+    let key = crate::state::key(repo, number);
+    let watching = crate::ports::review_state::ReviewStateStore::load_state(&state.store, &key)
+        .await?
+        .is_some_and(|reviewed| reviewed.e2e.is_some());
+    if !watching {
+        return Ok(());
+    }
+
+    // Serialised with the review's own lease shape: several jobs finishing at
+    // once is the normal case, and two settlements racing would publish the
+    // same check twice.
+    //
+    // Contention is retried rather than dropped: several jobs from the same
+    // matrix typically conclude within milliseconds of each other, and the
+    // event that loses the race is often the one whose job just completed
+    // the watch. Bailing outright on that event would leave the check
+    // `Neutral` until some *other*, unrelated completion happened to retry
+    // it — not guaranteed to ever happen. A short bounded retry lets the
+    // loser re-attempt once the winner (a settlement that reads checks,
+    // possibly publishes, and releases) has had time to finish.
+    let lease = format!("{repo}#e2e-settle-{number}");
+    let mut acquired = state.store.claim_lease(&lease, "server").await?;
+    for _ in 0..LEASE_CONTENTION_RETRIES {
+        if acquired {
+            break;
+        }
+        tokio::time::sleep(LEASE_CONTENTION_BACKOFF).await;
+        acquired = state.store.claim_lease(&lease, "server").await?;
+    }
+    if !acquired {
+        tracing::debug!(%lease, "another worker is still settling this e2e check");
+        return Ok(());
+    }
+
+    let token = state.auth.installation_token(installation).await;
+    let outcome = match token {
+        Ok(token) => {
+            let read = crate::forge::github::GitHubRead::new(&token);
+            let write = crate::forge::github::GitHubWrite::new(&token);
+            match (read, write) {
+                (Ok(read), Ok(write)) => {
+                    // The repository's own policy, not the deployment
+                    // default: `lanes.e2e.fail_on` is a repository override
+                    // like `review.lanes` above, and settling against the
+                    // deployment default can publish `Success` for a job the
+                    // repository's own threshold would have failed. Read at
+                    // the pull request's base tip, on the same reasoning as
+                    // `crate::config::remote::overlay`'s other callers.
+                    let live = read.pull_request(&repo_id, number).await;
+                    match live {
+                        Ok(live) => {
+                            let overlay = crate::config::remote::overlay(
+                                &read,
+                                &repo_id,
+                                &live.base_sha,
+                                &state.config.config,
+                            )
+                            .await;
+                            crate::app::apply::settle_e2e(
+                                &read,
+                                &write,
+                                &overlay.config,
+                                &state.store,
+                                &repo_id,
+                                number,
+                            )
+                            .await
+                        }
+                        Err(err) => Err(err),
+                    }
+                }
+                (Err(err), _) | (_, Err(err)) => Err(err),
+            }
+        }
+        Err(err) => Err(err),
+    };
+
+    if let Err(err) = state.store.release_lease(&lease).await {
+        tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
+    }
+
+    match outcome? {
+        crate::app::apply::E2eSettlement::Published(conclusion) => {
+            tracing::info!(%repo, number, ?conclusion, "settled the e2e check run");
+        }
+        other => tracing::debug!(%repo, number, ?other, "e2e check run not settled"),
+    }
+    Ok(())
 }
 
 /// Re-evaluate one pull request against the auto-merge policy, off the request
@@ -647,9 +1011,7 @@ async fn triage_and_apply(
 ) -> Result<crate::issues::TriagePlan> {
     let read_token = state.auth.installation_token(installation).await?;
     let forge = crate::forge::github::GitHubRead::new(&read_token)?;
-    let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
-        &state.config.config.models,
-    )?);
+    let model = state.models.text();
 
     // The model runs against a read-only handle; the write token below is
     // minted only after it has answered. Same boundary as a review.
@@ -1203,6 +1565,10 @@ struct ReviewStatus {
     check_id: u64,
     head_sha: String,
     installation: u64,
+    /// Durable review-hub comment opened alongside the status check.
+    hub_comment_id: Option<u64>,
+    /// Last completed body, retained if this pass fails.
+    prior_hub_body: Option<String>,
 }
 
 /// Where a review's in-progress check lives between opening and concluding.
@@ -1211,6 +1577,103 @@ struct ReviewStatus {
 /// had a SHA to pin a check to, or another worker already holds the lease for
 /// this commit and owns the check that goes with it.
 type StatusSlot = Arc<std::sync::Mutex<Option<ReviewStatus>>>;
+
+/// What one review carries from `handle_review` down to the lanes.
+///
+/// The three things every attempt shares: the mode it runs in, the check it
+/// owns, and the wall-clock deadline it must beat. Bundled so a retry cannot
+/// re-derive any of them differently from the first attempt.
+struct Run {
+    mode: Mode,
+    slot: StatusSlot,
+    /// Fixed when the review is accepted, not per attempt. See `handle_review`.
+    deadline: tokio::time::Instant,
+}
+
+impl Run {
+    /// Refuse to start the next phase if the budget is already spent.
+    ///
+    /// The deadline is enforced by cancellation only where cancellation is
+    /// safe — the lanes. Everywhere else it is enforced here, at the boundary
+    /// between phases, which is what keeps a retry that arrives after a slow
+    /// failure from claiming a lease and opening a check for a review it can
+    /// no longer run.
+    fn check(&self, repo: &str, number: u64) -> Result<()> {
+        if tokio::time::Instant::now() >= self.deadline {
+            return Err(Error::timeout(
+                format!("the review of {repo}#{number}"),
+                REVIEW_DEADLINE,
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The registry behind `AppState::in_flight`.
+///
+/// `accepting` shares a lock with `slots` on purpose. `conclude_in_flight`
+/// needs to take an exact snapshot of every review it is about to conclude
+/// and refuse every registration from then on, atomically — otherwise a
+/// review could register in the gap between the snapshot and the flag being
+/// set, land on neither side, and be exactly the orphaned check this whole
+/// registry exists to prevent. One lock covering both makes that gap not
+/// exist: a registration either lands in the snapshot or observes shutdown
+/// already in progress.
+struct InFlightRegistry {
+    slots: Vec<StatusSlot>,
+    accepting: bool,
+}
+
+impl Default for InFlightRegistry {
+    fn default() -> Self {
+        Self {
+            slots: Vec::new(),
+            accepting: true,
+        }
+    }
+}
+
+/// A review's membership in `AppState::in_flight`, for as long as it runs.
+///
+/// A guard rather than a pair of calls so that every exit from
+/// `handle_review` — including an unwind — deregisters the slot. Dropping a
+/// guard removes exactly its own slot, by pointer, so two reviews finishing
+/// in either order cannot remove each other.
+struct InFlight {
+    registry: Arc<std::sync::Mutex<InFlightRegistry>>,
+    slot: StatusSlot,
+}
+
+impl InFlight {
+    /// `None` once shutdown has taken its snapshot: the caller declines the
+    /// review outright, before opening a check, rather than register a slot
+    /// nothing will ever conclude.
+    fn register(
+        registry: &Arc<std::sync::Mutex<InFlightRegistry>>,
+        slot: &StatusSlot,
+    ) -> Option<Self> {
+        let mut guard = registry.lock().expect("in-flight reviews");
+        if !guard.accepting {
+            return None;
+        }
+        guard.slots.push(slot.clone());
+        drop(guard);
+        Some(Self {
+            registry: registry.clone(),
+            slot: slot.clone(),
+        })
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.registry
+            .lock()
+            .expect("in-flight reviews")
+            .slots
+            .retain(|other| !Arc::ptr_eq(other, &self.slot));
+    }
+}
 
 /// Publish the in-progress check, and record how to conclude it.
 ///
@@ -1226,20 +1689,24 @@ type StatusSlot = Arc<std::sync::Mutex<Option<ReviewStatus>>>;
 /// property that rule protects is that *the model* never holds a write handle,
 /// and that is preserved exactly: the token is minted here, used for one
 /// request, and dropped before this function returns — it is never placed in
-/// `AppState`, never passed to `run_and_publish`, and no lane or model can
+/// `AppState`, never passed to `run_lanes`, and no lane or model can
 /// reach it. `report_failure` has always minted one on the same terms. See the
 /// pull request that introduced this for the discussion the boundary requires.
+/// Returns whether the review should go on. `false` means the process is
+/// shutting down and this check has already been concluded as failed, so
+/// running the lanes would spend model calls on a verdict nothing will
+/// publish.
 async fn open_status(
     state: &AppState,
     slot: &StatusSlot,
     repo: &RepoId,
     head_sha: &str,
     installation: u64,
-) {
+) -> bool {
     // A retry re-enters `review_inner`, so without this the second attempt
     // would open a second check and orphan the first.
     if slot.lock().expect("status slot").is_some() {
-        return;
+        return true;
     }
 
     let published = async {
@@ -1258,12 +1725,38 @@ async fn open_status(
                 check_id,
                 head_sha: head_sha.to_string(),
                 installation,
+                hub_comment_id: None,
+                prior_hub_body: None,
             });
+
+            // `conclude_in_flight`'s snapshot only concludes slots it can see
+            // at the instant it runs. This publish call was in flight for the
+            // whole time it was awaiting `installation_token`/`publish_check`
+            // above, so shutdown could have taken its snapshot — and flipped
+            // `accepting` off — before the slot held anything to conclude,
+            // leaving a fresh "in progress" check that nothing would ever
+            // revisit. Re-checking `accepting` right here, under the same
+            // registry lock `conclude_in_flight` uses, closes that gap
+            // exactly: either this observes `accepting` still true, in which
+            // case the slot is already registered and the shutdown pass that
+            // has not run yet will pick it up normally, or shutdown has
+            // already run and this concludes the check itself, immediately,
+            // rather than leave it orphaned.
+            let missed_the_snapshot = !state.in_flight.lock().expect("in-flight reviews").accepting;
+            if missed_the_snapshot {
+                let err = Error::lane(
+                    "review",
+                    "tinysweeper was restarted while this review was running",
+                );
+                close_status(state, slot, Conclusion::Failed(&err)).await;
+                return false;
+            }
         }
         Err(err) => {
             tracing::warn!(%err, %repo, "could not publish the in-progress check");
         }
     }
+    true
 }
 
 /// Conclude the in-progress check, if one was ever opened.
@@ -1277,21 +1770,46 @@ async fn close_status(state: &AppState, slot: &StatusSlot, conclusion: Conclusio
     };
 
     let check = match conclusion {
-        Conclusion::Reviewed(findings) => status::completed(&open.head_sha, findings),
+        Conclusion::Reviewed {
+            findings,
+            changes_requested,
+        } => status::completed(&open.head_sha, findings, changes_requested),
         Conclusion::NotReviewed => status::not_reviewed(&open.head_sha),
         Conclusion::Failed(err) => failure::check_run(&open.head_sha, err),
     };
 
-    let written = async {
-        use crate::ports::forge::ForgeWrite;
-        let token = state.auth.installation_token(open.installation).await?;
-        crate::forge::github::GitHubWrite::new(&token)?
-            .update_check(&open.repo, open.check_id, check)
-            .await
-    }
-    .await;
+    let hub_body = match conclusion {
+        Conclusion::Reviewed { .. } => None,
+        Conclusion::NotReviewed => Some(crate::summary::failed(
+            &open.head_sha,
+            "This pass stopped before a review could be completed.",
+            open.prior_hub_body.as_deref(),
+        )),
+        Conclusion::Failed(err) => Some(crate::summary::failed(
+            &open.head_sha,
+            &err.to_string(),
+            open.prior_hub_body.as_deref(),
+        )),
+    };
 
-    if let Err(err) = written {
+    use crate::ports::forge::ForgeWrite;
+    let write = match state
+        .auth
+        .installation_token(open.installation)
+        .await
+        .and_then(|token| crate::forge::github::GitHubWrite::new(&token))
+    {
+        Ok(write) => write,
+        Err(err) => {
+            tracing::error!(
+                %err, repo = %open.repo, check_id = open.check_id,
+                "could not authenticate to conclude the in-progress check"
+            );
+            return;
+        }
+    };
+
+    if let Err(err) = write.update_check(&open.repo, open.check_id, check).await {
         // Worth an error rather than a warning: the check is now stuck
         // in-progress, and a pending check refuses auto-merge on this commit
         // until somebody pushes again.
@@ -1300,12 +1818,151 @@ async fn close_status(state: &AppState, slot: &StatusSlot, conclusion: Conclusio
             "could not conclude the in-progress check; it will block auto-merge until the next push"
         );
     }
+    if let (Some(comment_id), Some(body)) = (open.hub_comment_id, hub_body)
+        && let Err(err) = write.update_comment(&open.repo, comment_id, &body).await
+    {
+        // The check conclusion is already durable. A comment retry must not
+        // turn that successful terminal write into a failed review attempt.
+        tracing::warn!(
+            %err, repo = %open.repo, comment_id,
+            "could not conclude the review hub; the check conclusion was preserved"
+        );
+    }
+}
+
+/// Create or migrate the durable hub before the first model call.
+async fn open_review_hub(
+    state: &AppState,
+    slot: &StatusSlot,
+    read: &dyn crate::ports::forge::ForgeRead,
+    config: &Config,
+    repo: &RepoId,
+    number: u64,
+    head_sha: &str,
+    installation: u64,
+) {
+    if !config.summary.enabled || !hub_slot_is_open(slot, head_sha) {
+        return;
+    }
+    let existing =
+        match crate::findings::prior::own_comment(read, repo, number, crate::summary::MARKER).await
+        {
+            Ok(Some(comment)) => Some(comment),
+            Ok(None) => match crate::findings::prior::own_comment(
+                read,
+                repo,
+                number,
+                crate::summary::LEGACY_MARKER,
+            )
+            .await
+            {
+                Ok(comment) => comment,
+                Err(err) => {
+                    tracing::warn!(%err, "could not discover the legacy review hub");
+                    return;
+                }
+            },
+            Err(err) => {
+                tracing::warn!(%err, "could not discover the review hub");
+                // Unknown is not absence. Creating after a transient list
+                // failure would orphan the durable hub and duplicate it on
+                // every similarly affected pass.
+                return;
+            }
+        };
+    let prior = existing.as_ref().map(|comment| comment.body.clone());
+    let body = crate::summary::in_progress(head_sha, prior.as_deref());
+    let written = async {
+        use crate::ports::forge::ForgeWrite;
+        let token = state.auth.installation_token(installation).await?;
+        let write = crate::forge::github::GitHubWrite::new(&token)?;
+        // Discovery and authentication both await. Shutdown may have removed
+        // the slot while either was running, so do not start a comment write
+        // for a review that has already concluded.
+        if !hub_slot_is_open(slot, head_sha) {
+            return Ok(None);
+        }
+        match existing.and_then(|comment| comment.id) {
+            Some(id) => {
+                write.update_comment(repo, id, &body).await?;
+                Ok(Some(id))
+            }
+            None => write.create_comment(repo, number, &body).await.map(Some),
+        }
+    }
+    .await;
+    match written {
+        Ok(Some(id)) => {
+            let attached = if let Some(open) = slot.lock().expect("status slot").as_mut()
+                && open.head_sha == head_sha
+            {
+                open.hub_comment_id = Some(id);
+                open.prior_hub_body = prior.clone();
+                true
+            } else {
+                false
+            };
+            if !attached {
+                // The network write and shutdown raced. The conclusion could
+                // not see this ID, so settle the comment here instead of
+                // leaving a permanent "Reviewing" report behind.
+                let terminal = crate::summary::failed(
+                    head_sha,
+                    "This pass ended while the review hub was being published.",
+                    prior.as_deref(),
+                );
+                let reconciled = async {
+                    use crate::ports::forge::ForgeWrite;
+                    let token = state.auth.installation_token(installation).await?;
+                    crate::forge::github::GitHubWrite::new(&token)?
+                        .update_comment(repo, id, &terminal)
+                        .await
+                }
+                .await;
+                if let Err(err) = reconciled {
+                    tracing::warn!(%err, comment_id = id, "could not reconcile a review hub published during shutdown");
+                }
+                return;
+            }
+            let key = crate::state::key(&repo.to_string(), number);
+            if let Ok(current) =
+                crate::ports::review_state::ReviewStateStore::load_state(&state.store, &key).await
+            {
+                let mut current = current.unwrap_or_default();
+                current.hub_comment_id = Some(id);
+                if let Err(err) = crate::ports::review_state::ReviewStateStore::save_state(
+                    &state.store,
+                    &key,
+                    &current,
+                )
+                .await
+                {
+                    tracing::warn!(%err, "could not persist the review-hub comment id");
+                }
+            }
+        }
+        Ok(None) => {}
+        Err(err) => tracing::warn!(%err, "could not publish the in-progress review hub"),
+    }
+}
+
+fn hub_slot_is_open(slot: &StatusSlot, head_sha: &str) -> bool {
+    slot.lock()
+        .expect("status slot")
+        .as_ref()
+        .is_some_and(|open| open.head_sha == head_sha && open.hub_comment_id.is_none())
 }
 
 /// How a review ended, for the umbrella check.
 enum Conclusion<'a> {
-    /// The lanes ran. Carries the finding count, for the title.
-    Reviewed(usize),
+    /// The lanes ran.
+    Reviewed {
+        /// The finding count, for the title.
+        findings: usize,
+        /// Whether the published review requested changes, so the check
+        /// cannot show a pass beside that verdict.
+        changes_requested: bool,
+    },
     /// The run stopped deliberately, without reviewing anything.
     ///
     /// Reachable when a check was already opened and the run *then* declined —
@@ -1334,10 +1991,61 @@ async fn handle_review(
     delivery: Option<String>,
 ) {
     let slot: StatusSlot = Arc::new(std::sync::Mutex::new(None));
+    let Some(_registered) = InFlight::register(&state.in_flight, &slot) else {
+        // Shutdown has already taken its concluding snapshot: no check has
+        // been opened yet, so there is nothing to conclude. Declining here,
+        // before `review_inner` does any work, is what keeps this review off
+        // the leftover-grace-period path — see `conclude_in_flight`.
+        tracing::info!(%repo, number, "declining to start a review: shutting down");
+        // The claim still has to be released on this path like every other:
+        // `dispatch` already persisted it before calling in here, and leaving
+        // it held would make `claim_delivery` refuse GitHub's own redelivery
+        // of the same webhook forever, with no other trigger left to review
+        // this commit until the next push.
+        if let Some(delivery) = delivery
+            && let Err(release) = state.store.release_delivery(&delivery).await
+        {
+            tracing::error!(%release, %delivery, "could not release the declined delivery claim");
+        }
+        return;
+    };
+
+    // The permit is taken here, before the clock starts, and held across
+    // every attempt. Queueing behind the other reviews is not time this
+    // review spent, and counting it would let a delivery that merely waited
+    // its turn "time out" without ever running — and then, having no SHA of
+    // its own, report that failure against whatever head is live by then.
+    // Holding it across retries also keeps a retry from going to the back of
+    // the queue behind reviews that arrived while it was failing.
+    let permit = match state.permits.clone().acquire_owned().await {
+        Ok(permit) => permit,
+        Err(err) => {
+            // Unreachable in practice — nothing closes the pool — but a
+            // terminal path all the same, and a terminal path releases its
+            // delivery claim so a redelivery is not refused forever.
+            tracing::error!(%err, %repo, number, "the review permit pool is closed");
+            if let Some(delivery) = delivery
+                && let Err(release) = state.store.release_delivery(&delivery).await
+            {
+                tracing::error!(%release, %delivery, "could not release the delivery claim");
+            }
+            return;
+        }
+    };
+
+    // One deadline for the whole review, retries included. A per-attempt
+    // deadline would let three transient failures late in the run stretch a
+    // single pull request to three times the budget, all under one check that
+    // has said "reviewing" the entire time.
+    let run = Run {
+        mode,
+        slot: slot.clone(),
+        deadline: tokio::time::Instant::now() + REVIEW_DEADLINE,
+    };
 
     let mut attempt = 1;
     let err = loop {
-        match review_inner(&state, &repo, number, &author, installation, mode, &slot).await {
+        match review_inner(&state, &repo, number, &author, installation, &run).await {
             Ok(findings) => {
                 // Usually there is nothing to close: a run that declines — a
                 // blocked contributor, a draft, a lease another worker holds —
@@ -1346,9 +2054,16 @@ async fn handle_review(
                 // where it is not: an earlier attempt opened the check and this
                 // one declined.
                 let conclusion = match findings {
-                    Some(findings) => Conclusion::Reviewed(findings),
+                    Some((findings, changes_requested)) => Conclusion::Reviewed {
+                        findings,
+                        changes_requested,
+                    },
                     None => Conclusion::NotReviewed,
                 };
+                // The review is over; concluding the check is one GitHub
+                // write that should not hold a review slot against other
+                // pull requests.
+                drop(permit);
                 close_status(&state, &slot, conclusion).await;
                 return;
             }
@@ -1356,7 +2071,19 @@ async fn handle_review(
                 // The lease is released inside `review_inner` on every path,
                 // including this one, so a retry re-claims it rather than
                 // colliding with itself and returning a silent `Ok`.
-                if attempt < failure::MAX_ATTEMPTS && failure::is_transient(&err) {
+                //
+                // Bounded by `run.deadline` too, not just `MAX_ATTEMPTS`: the
+                // backoff sleep between attempts is outside `run_lanes`'
+                // `timeout_at`, so without this check a run already out of
+                // budget would sleep anyway and try again, spending more of
+                // the `LEASE_TTL` margin on a review that has already missed
+                // its window. `Instant::now() >= run.deadline` is the same
+                // "refuse late rather than cancel mid-flight" rule the
+                // non-idempotent writes elsewhere in this function use — a
+                // sleep is trivially safe to just not start.
+                let deadline_spent = tokio::time::Instant::now() >= run.deadline;
+                if !deadline_spent && attempt < failure::MAX_ATTEMPTS && failure::is_transient(&err)
+                {
                     let wait = failure::backoff_ms(attempt);
                     tracing::warn!(
                         %err, %repo, number, attempt, wait_ms = wait,
@@ -1371,6 +2098,10 @@ async fn handle_review(
         }
     };
 
+    // The review is over; the failure report below is a GitHub write that
+    // should not hold a review slot against other pull requests.
+    drop(permit);
+
     tracing::error!(%err, %repo, number, attempts = attempt, "review failed");
 
     // Two ways to report the same thing, and which one applies depends on how
@@ -1379,8 +2110,14 @@ async fn handle_review(
     // and refuse auto-merge forever. If the review died before it had a SHA,
     // there is nothing to conclude and the failure has to open its own check.
     let opened = slot.lock().expect("status slot").is_some();
+    // An empty slot after shutdown's snapshot means shutdown concluded this
+    // review's check already; a fresh failure check on top of it would be a
+    // duplicate, not a report.
+    let shutting_down = !state.in_flight.lock().expect("in-flight reviews").accepting;
     if opened {
         close_status(&state, &slot, Conclusion::Failed(&err)).await;
+    } else if shutting_down {
+        tracing::info!(%repo, number, "not reporting a failure shutdown already concluded");
     } else if let Err(report) = report_failure(&state, &repo, number, installation, &err).await {
         // Reporting is best-effort by necessity: the most likely reason it
         // fails is the same forge outage that failed the review. Log both, so
@@ -1445,9 +2182,8 @@ async fn review_inner(
     number: u64,
     author: &str,
     installation: u64,
-    mode: Mode,
-    slot: &StatusSlot,
-) -> Result<Option<usize>> {
+    run: &Run,
+) -> Result<Option<(usize, bool)>> {
     let who = state.store.contributor(author).await?;
     if who.trust == Trust::Blocked {
         tracing::info!(%author, "blocked contributor; not reviewing");
@@ -1456,16 +2192,6 @@ async fn review_inner(
 
     let repo_id =
         RepoId::parse(repo).ok_or_else(|| Error::Forge(format!("`{repo}` is not owner/name")))?;
-
-    // The lease is keyed on the head SHA, so two deliveries for the same push
-    // cannot both review it, while a *new* push takes a fresh lease and
-    // proceeds.
-    let permit = state
-        .permits
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|err| Error::Forge(err.to_string()))?;
 
     let read_token = state.auth.review_read_token(installation).await?;
     let forge = crate::forge::github::GitHubRead::new(&read_token)?;
@@ -1508,10 +2234,14 @@ async fn review_inner(
         ));
     }
 
+    // Nothing lease-held starts on a spent budget. Before this point the run
+    // has only read metadata and holds nothing another worker could want.
+    run.check(repo, number)?;
+
     // A manual review deliberately takes a lease of its own: the operator asked
     // for this run *because* the ordinary one already happened, so sharing the
     // webhook path's key would make the button a silent no-op.
-    let lease = match mode {
+    let lease = match run.mode {
         Mode::Incremental => format!("{repo}#{number}@{}", pull_request.head_sha),
         Mode::Full => format!("{repo}#{number}@{}!full", pull_request.head_sha),
     };
@@ -1529,104 +2259,206 @@ async fn review_inner(
     // Still early: everything above is metadata reads, and every model call is
     // below. A contributor sees the check appear seconds after pushing, not
     // minutes.
-    open_status(state, slot, &repo_id, &pull_request.head_sha, installation).await;
-
-    // `AssertUnwindSafe` + `catch_unwind` so a panic inside a lane still
-    // reaches the release below. Without it the `?` on the outcome is not the
-    // only way out — an unwind skips everything — and the lease survives the
-    // worker that took it.
-    // The reviewed repository's own policy, read through the forge because
-    // there is no checkout here. Without this every repository is reviewed
-    // under the *deployment's* `.tinysweeper.toml`, which is tinysweeper's own.
-    // Read at the base branch's tip rather than the head: a config is acted on
-    // deterministically, so reading it from the branch under review would let a
-    // pull request grade its own exam. See `crate::config::remote`.
-    let overlay = crate::config::remote::overlay(
-        &forge,
-        &repo_id,
-        &pull_request.base_sha,
-        &state.config.config,
-    )
-    .await;
-    if let Some(source) = &overlay.source {
-        tracing::info!(%repo, source, "reviewing under the repository's own configuration");
-    }
-
-    // Memory is fed from the *base* tip, not the head: what the repository
-    // has committed to, not what this pull request proposes. See
-    // `server::memory`. Spawned only now, under `overlay.config` rather than
-    // the deployment's own, so a repository's own `paths.ignore` — which is
-    // repository-overridable — is honored before anything from an excluded
-    // path is persisted into the engine.
     //
-    // Skipped entirely when the overlay could not be read or applied:
-    // `overlay.config` is then only a fallback, not the repository's actual
-    // policy, and ingesting under it risks persisting paths the repository
-    // excludes. A later delivery for the same base tip that successfully
-    // loads the real overlay still ingests normally — this delivery just
-    // does not, rather than ingesting under a policy that might be wrong.
-    //
-    // And only from the default branch. Memory is repository-wide, so a
-    // pull request against a release branch must not replace `main`'s
-    // snapshot, and an older base must not roll the memory backwards; the
-    // ingest forgets a section before rewriting it, so either would.
-    if overlay.unavailable {
-        tracing::warn!(
-            %repo,
-            "skipping memory ingestion: the repository's own configuration could not be read"
-        );
-    } else if let Some(backend) = &state.memory {
-        let default_branch = {
-            use crate::ports::forge::ForgeRead;
-            forge.default_branch(&repo_id).await
-        };
-        match default_branch {
-            Ok(branch) if branch == pull_request.base_ref => {
-                tokio::spawn(ingest_in_background(
-                    backend.clone(),
-                    Arc::new(overlay.config.clone()),
-                    state.index_permits.clone(),
-                    repo_id.clone(),
-                    pull_request.base_sha.clone(),
-                    read_token.clone(),
-                ));
+    // Deliberately *not* under `run.deadline`, and neither is anything else
+    // between here and `run_lanes`. The deadline is a cancellation, and
+    // cancelling a check-run POST after GitHub accepted it orphans the check
+    // this function exists to conclude. The forge calls here are bounded on
+    // their own by `forge::github::REQUEST_TIMEOUT`, which is what the margin
+    // between `REVIEW_DEADLINE` and `LEASE_TTL` is for.
+    let outcome = {
+        let go_on = open_status(
+            state,
+            &run.slot,
+            &repo_id,
+            &pull_request.head_sha,
+            installation,
+        )
+        .await;
+        if !go_on {
+            // Declined, not failed: the check is already concluded as
+            // failed, and an `Err` here would have `handle_review` post a
+            // second one. The lease goes back like any other outcome; the
+            // next push, or the manual review the check points at, reviews
+            // this commit properly.
+            tracing::info!(%repo, number, "shutting down; not starting this review");
+            if let Err(err) = state.store.release_lease(&lease).await {
+                tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
             }
-            Ok(branch) => tracing::debug!(
-                %repo,
-                base = %pull_request.base_ref,
-                default = %branch,
-                "skipping memory ingestion: the base is not the default branch"
-            ),
-            Err(err) => tracing::warn!(
-                %repo,
-                %err,
-                "skipping memory ingestion: could not read the default branch"
-            ),
+            return Ok(None);
         }
-    }
 
-    let outcome = std::panic::AssertUnwindSafe(run_and_publish(
-        state,
-        &overlay.config,
-        &repo_id,
-        number,
-        installation,
-        &forge,
-        &read_token,
-        mode,
-    ))
-    .catch_unwind()
-    .await
-    .unwrap_or_else(|_| Err(Error::lane("review", "the review panicked")));
+        // `AssertUnwindSafe` + `catch_unwind` so a panic inside a lane still
+        // reaches the release below. Without it the `?` on the outcome is not
+        // the only way out — an unwind skips everything — and the lease
+        // survives the worker that took it.
+        // The reviewed repository's own policy, read through the forge
+        // because there is no checkout here. Without this every repository is
+        // reviewed under the *deployment's* `.tinysweeper.toml`, which is
+        // tinysweeper's own. Read at the base branch's tip rather than the
+        // head: a config is acted on deterministically, so reading it from
+        // the branch under review would let a pull request grade its own
+        // exam. See `crate::config::remote`.
+        let overlay = crate::config::remote::overlay(
+            &forge,
+            &repo_id,
+            &pull_request.base_sha,
+            &state.config.config,
+        )
+        .await;
+        if let Some(source) = &overlay.source {
+            tracing::info!(%repo, source, "reviewing under the repository's own configuration");
+        }
 
-    // Released regardless of how the review went. The TTL in the store is the
-    // backstop for the cases this cannot cover — a kill, or a lost machine.
-    if let Err(err) = state.store.release_lease(&lease).await {
-        tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
-    }
-    drop(permit);
+        // The lease is owned and repository policy is known. Publish the hub
+        // now, before any model call, so it stays an early timeline reference.
+        if !review_is_kill_switched(&overlay.config, &pull_request) {
+            open_review_hub(
+                state,
+                &run.slot,
+                &forge,
+                &overlay.config,
+                &repo_id,
+                number,
+                &pull_request.head_sha,
+                installation,
+            )
+            .await;
+        }
 
-    let proposal = outcome?;
+        // Memory is fed from the *base* tip, not the head: what the
+        // repository has committed to, not what this pull request proposes.
+        // See `server::memory`. Spawned only now, under `overlay.config`
+        // rather than the deployment's own, so a repository's own
+        // `paths.ignore` — which is repository-overridable — is honored
+        // before anything from an excluded path is persisted into the
+        // engine.
+        //
+        // Skipped entirely when the overlay could not be read or applied:
+        // `overlay.config` is then only a fallback, not the repository's
+        // actual policy, and ingesting under it risks persisting paths the
+        // repository excludes. A later delivery for the same base tip that
+        // successfully loads the real overlay still ingests normally — this
+        // delivery just does not, rather than ingesting under a policy that
+        // might be wrong.
+        //
+        // And only from the default branch. Memory is repository-wide, so a
+        // pull request against a release branch must not replace `main`'s
+        // snapshot, and an older base must not roll the memory backwards; the
+        // ingest forgets a section before rewriting it, so either would.
+        if overlay.unavailable {
+            tracing::warn!(
+                %repo,
+                "skipping memory ingestion: the repository's own configuration could not be read"
+            );
+        } else if let Some(backend) = &state.memory {
+            let default_branch = {
+                use crate::ports::forge::ForgeRead;
+                forge.default_branch(&repo_id).await
+            };
+            match default_branch {
+                Ok(branch) if branch == pull_request.base_ref => {
+                    tokio::spawn(ingest_in_background(
+                        backend.clone(),
+                        Arc::new(overlay.config.clone()),
+                        state.index_permits.clone(),
+                        repo_id.clone(),
+                        pull_request.base_sha.clone(),
+                        read_token.clone(),
+                    ));
+                }
+                Ok(branch) => tracing::debug!(
+                    %repo,
+                    base = %pull_request.base_ref,
+                    default = %branch,
+                    "skipping memory ingestion: the base is not the default branch"
+                ),
+                Err(err) => tracing::warn!(
+                    %repo,
+                    %err,
+                    "skipping memory ingestion: could not read the default branch"
+                ),
+            }
+        }
+
+        // `AssertUnwindSafe` + `catch_unwind` so a panic inside a lane still
+        // reaches the release below. Without it the `?` on the outcome is not
+        // the only way out — an unwind skips everything — and the lease
+        // survives the worker that took it. The boundary check first: the
+        // metadata phase above was bounded per call, not by the deadline, so
+        // this is where a budget it exhausted is noticed.
+        let lanes = match run.check(repo, number) {
+            Ok(()) => std::panic::AssertUnwindSafe(run_lanes(
+                state,
+                &overlay.config,
+                &repo_id,
+                number,
+                &forge,
+                &read_token,
+                run,
+            ))
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|_| Err(Error::lane("review", "the review panicked"))),
+            Err(spent) => Err(spent),
+        };
+
+        // The publish runs under its own, separate budget rather than the
+        // remainder of `run.deadline`: a review that used all of its time in
+        // the lanes still gets a full window to publish, because cancelling
+        // `apply` between two of its non-idempotent writes leaves a
+        // permanently partial review, and that must only ever happen to a
+        // publish that is stuck. See `PUBLISH_DEADLINE`. The write token is
+        // minted only now, after every model call has returned — the
+        // boundary in `AGENTS.md`.
+        let outcome = match lanes {
+            Ok((config, proposal)) => {
+                // `AssertUnwindSafe` + `catch_unwind` here too, same reason as
+                // around `run_lanes`: without it a panic inside `apply` skips
+                // `release_lease` below and escapes
+                // `handle_review` entirely, deregistering the `InFlight` slot
+                // on the way out (`Drop` always runs) without ever concluding
+                // its check — a lease held until `LEASE_TTL` and a check stuck
+                // "in progress" forever, which is exactly what this whole
+                // umbrella-check mechanism exists to prevent.
+                let publish = std::panic::AssertUnwindSafe(async {
+                    let write_token = state.auth.installation_token(installation).await?;
+                    let write = crate::forge::github::GitHubWrite::new(&write_token)?;
+                    crate::app::apply(&forge, &write, &config, &proposal, Some(&state.store)).await
+                })
+                .catch_unwind();
+                tokio::time::timeout(PUBLISH_DEADLINE, publish)
+                    .await
+                    .map_err(|_elapsed| {
+                        Error::timeout(
+                            format!("publishing the review of {repo}#{number}"),
+                            PUBLISH_DEADLINE,
+                        )
+                    })
+                    .and_then(|published| {
+                        published
+                            .unwrap_or_else(|_| Err(Error::lane("review", "publishing panicked")))
+                    })
+                    .map(|()| {
+                        let changes_requested =
+                            crate::app::apply::requests_changes(&config, &proposal);
+                        (proposal, changes_requested)
+                    })
+            }
+            Err(err) => Err(err),
+        };
+
+        // Released regardless of how the review went. The TTL in the store is
+        // the backstop for the cases this cannot cover — a kill, or a lost
+        // machine.
+        if let Err(err) = state.store.release_lease(&lease).await {
+            tracing::error!(%err, %lease, "could not release the lease; it will expire on its own");
+        }
+
+        outcome
+    };
+
+    let (proposal, changes_requested) = outcome?;
     let findings = proposal.findings().count();
     state.store.record_review(author, findings as u64).await?;
 
@@ -1650,33 +2482,42 @@ async fn review_inner(
         installation,
     ));
 
-    Ok(Some(findings))
+    Ok(Some((findings, changes_requested)))
 }
 
-/// Run the review and publish it.
+fn review_is_kill_switched(config: &Config, pull_request: &PullRequest) -> bool {
+    [&config.labels.human_review, &config.labels.manual_only]
+        .into_iter()
+        .any(|label| !label.is_empty() && pull_request.labels.contains(label))
+}
+
+/// Run the checkout and the lanes under the deadline, and hand back what they
+/// produced for `review_inner` to publish uncancelled.
 ///
 /// `config` is the *effective* config for this repository — the deployment's,
 /// with the reviewed repository's own allow-listed keys laid over it. The model
 /// gateway and the index are still built from the deployment's config, because
 /// model choice, credentials and the index partition key are not things a
-/// reviewed repository may set.
-#[allow(clippy::too_many_arguments)]
-async fn run_and_publish(
+/// reviewed repository may set. The config handed back is that one with the
+/// run's mode layered on, so the publish applies the same policy the lanes
+/// ran under.
+///
+/// Holds no write credential: nothing in here runs after a model call has
+/// returned, so nothing in here may mint one.
+async fn run_lanes(
     state: &AppState,
     config: &Config,
     repo: &RepoId,
     number: u64,
-    installation: u64,
     forge: &crate::forge::github::GitHubRead,
     read_token: &str,
-    mode: Mode,
-) -> Result<crate::app::Proposal> {
-    let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
-        &state.config.config.models,
-    )?);
+    run: &Run,
+) -> Result<(Config, crate::app::Proposal)> {
+    let model = state.models.text();
 
-    // The model runs against a read-only handle. The write token is minted
-    // below, after this returns — same boundary as the workflow, same reason.
+    // The model runs against a read-only handle. The write token is minted by
+    // the caller, after this returns — same boundary as the workflow, same
+    // reason.
     // The store doubles as the review-state cache: it is what lets the next
     // push replay this run's evidence verbatim and pay cache prices for it.
     // Dedupe does not depend on it — that reads the markers off the pull
@@ -1697,72 +2538,85 @@ async fn run_and_publish(
     // same policy with no memory, not the deployment's policy instead.
     let recaller = state.memory.as_ref().map(|backend| backend.recaller());
 
-    let config = config_for(config, mode);
+    let config = config_for(config, run.mode);
 
-    // The tree the reviewers may look things up in. A shallow checkout of
-    // the head when `[lookup].checkout` allows it — one commit, no history,
-    // no hooks, the same fetch the indexer makes — so search works and a
-    // read costs no API call; the forge reader behind it for what a shallow
-    // checkout lacks, such as a submodule that was not fetched. Read-only
-    // either way: the token here is the review-read one the forge already
-    // holds, and the checkout is deleted with the review.
-    let checkout = if config.lookup.enabled && config.lookup.checkout {
-        let head = forge.pull_request(repo, number).await?.head_sha;
-        match crate::indexer::fetch::Checkout::fetch(
-            &super::indexing::git_host(),
-            &repo.to_string(),
-            &head,
-            read_token,
+    // The deadline bounds the checkout and the lanes — everything that can
+    // take minutes and nothing that must not be cut short. `timeout_at` drops
+    // the inner future when it elapses, which cancels every model call in
+    // flight. The checkout sits inside it so that a deadline already in the
+    // past — a retry after a slow failure — resolves at once, before a clone
+    // is even started, which is the intended way of refusing the retry.
+    let review = async {
+        // The tree the reviewers may look things up in. A shallow checkout of
+        // the head when `[lookup].checkout` allows it — one commit, no history,
+        // no hooks, the same fetch the indexer makes — so search works and a
+        // read costs no API call; the forge reader behind it for what a shallow
+        // checkout lacks, such as a submodule that was not fetched. Read-only
+        // either way: the token here is the review-read one the forge already
+        // holds, and the checkout is deleted with the review.
+        let checkout = if config.lookup.enabled && config.lookup.checkout {
+            let head = forge.pull_request(repo, number).await?.head_sha;
+            match crate::indexer::fetch::Checkout::fetch(
+                &super::indexing::git_host(),
+                &repo.to_string(),
+                &head,
+                read_token,
+            )
+            .await
+            {
+                Ok(checkout) => {
+                    if !config.retrieval.submodules.is_empty()
+                        && let Err(err) = checkout
+                            .fetch_submodules(
+                                &super::indexing::git_host(),
+                                read_token,
+                                &config.retrieval.submodules,
+                            )
+                            .await
+                    {
+                        tracing::warn!(%repo, %err, "submodules not fetched for the review's tree");
+                    }
+                    Some(checkout)
+                }
+                Err(err) => {
+                    tracing::warn!(%repo, %err, "no checkout for the review; lookups read through the forge");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        // The review chains the forge reader behind whatever it is given, so a
+        // path the shallow checkout lacks — a submodule that was not fetched —
+        // is still read through the API.
+        let dir_tree = checkout
+            .as_ref()
+            .map(|c| crate::ports::tree::DirTree::new(c.path()).at_revision(c.revision()));
+        let tree = dir_tree
+            .as_ref()
+            .map(|dir| dir as &dyn crate::ports::tree::TreeReader);
+
+        crate::app::review::review_with_tree(
+            forge,
+            model,
+            &config,
+            repo,
+            number,
+            Some(&state.store),
+            state.knowledge.as_deref(),
+            retriever.as_ref(),
+            recaller.as_ref(),
+            tree,
         )
         .await
-        {
-            Ok(checkout) => {
-                if config.retrieval.submodules
-                    && let Err(err) = checkout
-                        .fetch_submodules(&super::indexing::git_host(), read_token)
-                        .await
-                {
-                    tracing::warn!(%repo, %err, "submodules not fetched for the review's tree");
-                }
-                Some(checkout)
-            }
-            Err(err) => {
-                tracing::warn!(%repo, %err, "no checkout for the review; lookups read through the forge");
-                None
-            }
-        }
-    } else {
-        None
     };
-    // The review chains the forge reader behind whatever it is given, so a
-    // path the shallow checkout lacks — a submodule that was not fetched —
-    // is still read through the API.
-    let dir_tree = checkout
-        .as_ref()
-        .map(|c| crate::ports::tree::DirTree::new(c.path()).at_revision(c.revision()));
-    let tree = dir_tree
-        .as_ref()
-        .map(|dir| dir as &dyn crate::ports::tree::TreeReader);
+    let proposal = tokio::time::timeout_at(run.deadline, review)
+        .await
+        .map_err(|_elapsed| {
+            Error::timeout(format!("the review of {repo}#{number}"), REVIEW_DEADLINE)
+        })??;
 
-    let proposal = crate::app::review::review_with_tree(
-        forge,
-        model,
-        &config,
-        repo,
-        number,
-        Some(&state.store),
-        state.knowledge.as_deref(),
-        retriever.as_ref(),
-        recaller.as_ref(),
-        tree,
-    )
-    .await?;
-
-    let write_token = state.auth.installation_token(installation).await?;
-    let write = crate::forge::github::GitHubWrite::new(&write_token)?;
-    crate::app::apply(forge, &write, &config, &proposal, Some(&state.store)).await?;
-
-    Ok(proposal)
+    Ok((config.into_owned(), proposal))
 }
 
 /// The UI preview routes' way into the brain.
@@ -1859,9 +2713,7 @@ impl Previews for PreviewDispatch {
 
         let files = forge.changed_files(&repo, request.pull_request).await?;
         let diffs = crate::evidence::diff::parse_changed_files(&files);
-        let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
-            &effective.models,
-        )?);
+        let model = self.state.models.text();
         let plan = crate::preview::plan::plan(
             &crate::preview::plan::PlanInputs {
                 diffs: &diffs,
@@ -1974,9 +2826,7 @@ impl Previews for PreviewDispatch {
                 spend: Default::default(),
             }
         } else {
-            let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
-                &config.models,
-            )?);
+            let model = self.state.models.text();
             crate::preview::step::next(
                 &crate::preview::step::StepContext {
                     flow: &flow,
@@ -2039,23 +2889,7 @@ impl Previews for PreviewDispatch {
                 .iter()
                 .map(|(id, state)| (id.clone(), state.clone()))
                 .collect();
-            let (model, model_id, vision): (Arc<dyn crate::ports::model::Model>, &str, bool) =
-                match config.model_for_vision() {
-                    Some(vision) => (
-                        Arc::new(crate::harness::openrouter::GatewayModel::for_vision(
-                            &config.models,
-                        )?),
-                        vision,
-                        true,
-                    ),
-                    None => (
-                        Arc::new(crate::harness::openrouter::GatewayModel::from_config(
-                            &config.models,
-                        )?),
-                        config.model_for_workload(crate::config::types::Workload::Preview),
-                        false,
-                    ),
-                };
+            let (model, model_id, vision) = self.state.models.caption(config);
             let spend = crate::preview::caption::caption(
                 &mut gallery,
                 &crate::preview::caption::CaptionInputs {
@@ -2152,6 +2986,110 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_review_past_its_deadline_fails_as_a_timeout_and_is_not_retried() {
+        // The shape `run_lanes` relies on: a deadline already in the
+        // past resolves immediately, so a retry that arrives after the budget
+        // is spent is refused instead of starting another twenty minutes.
+        let now = tokio::time::Instant::now();
+        let deadline = now
+            .checked_sub(std::time::Duration::from_secs(1))
+            .unwrap_or(now);
+
+        let outcome = tokio::time::timeout_at(deadline, std::future::pending::<()>())
+            .await
+            .map_err(|_| Error::timeout("the review of o/r#1", REVIEW_DEADLINE));
+        let err = outcome.expect_err("a spent deadline must not wait");
+        assert!(
+            matches!(err, Error::Timeout { seconds, .. } if seconds == REVIEW_DEADLINE.as_secs())
+        );
+        assert!(
+            !failure::is_transient(&err),
+            "retrying a timed-out review would spend the whole budget again"
+        );
+
+        // What a contributor reads: the check names the review and the budget
+        // it missed, not a generic "something timed out".
+        let check = failure::check_run("abc123", &err);
+        assert_eq!(check.title, "The review ran out of time");
+        assert!(
+            check
+                .summary
+                .contains("the review of o/r#1 did not finish within 900s"),
+            "summary was: {}",
+            check.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn a_phase_boundary_refuses_a_spent_budget_and_passes_a_live_one() {
+        // The lease claim and the lanes both consult this before starting.
+        // A spent budget must stop the run *before* it holds anything, and
+        // must surface as the same non-transient timeout the lanes report.
+        let slot: StatusSlot = Arc::new(std::sync::Mutex::new(None));
+        let now = tokio::time::Instant::now();
+        let spent = Run {
+            mode: Mode::Incremental,
+            slot: slot.clone(),
+            deadline: now
+                .checked_sub(std::time::Duration::from_secs(1))
+                .unwrap_or(now),
+        };
+        let err = spent
+            .check("o/r", 7)
+            .expect_err("a spent budget must refuse");
+        assert!(matches!(err, Error::Timeout { ref what, .. } if what == "the review of o/r#7"));
+        assert!(!failure::is_transient(&err));
+
+        let live = Run {
+            mode: Mode::Incremental,
+            slot,
+            deadline: now + REVIEW_DEADLINE,
+        };
+        assert!(
+            live.check("o/r", 7).is_ok(),
+            "a live budget must not refuse"
+        );
+    }
+
+    #[test]
+    fn an_in_flight_review_is_listed_until_it_ends_and_only_removes_itself() {
+        let registry = Arc::new(std::sync::Mutex::new(InFlightRegistry::default()));
+        let first: StatusSlot = Arc::new(std::sync::Mutex::new(None));
+        let second: StatusSlot = Arc::new(std::sync::Mutex::new(None));
+
+        let a = InFlight::register(&registry, &first).expect("accepting");
+        let b = InFlight::register(&registry, &second).expect("accepting");
+        assert_eq!(registry.lock().unwrap().slots.len(), 2);
+
+        // Finishing in the other order from registration must remove exactly
+        // the finished review, by identity, not whichever came first.
+        drop(a);
+        let left = registry.lock().unwrap();
+        assert_eq!(left.slots.len(), 1);
+        assert!(Arc::ptr_eq(&left.slots[0], &second));
+        drop(left);
+
+        drop(b);
+        assert!(registry.lock().unwrap().slots.is_empty());
+    }
+
+    #[test]
+    fn a_review_declines_to_register_once_shutdown_has_taken_its_snapshot() {
+        // The race this closes: a webhook accepted while `conclude_in_flight`
+        // is still awaiting its network calls must not be able to land a slot
+        // after the snapshot — it would then run unwatched by any shutdown
+        // pass. Flipping `accepting` and taking the snapshot under the same
+        // lock is what makes that impossible; this asserts the caller's half
+        // of that contract.
+        let registry = Arc::new(std::sync::Mutex::new(InFlightRegistry::default()));
+        registry.lock().unwrap().accepting = false;
+
+        let slot: StatusSlot = Arc::new(std::sync::Mutex::new(None));
+        assert!(InFlight::register(&registry, &slot).is_none());
+        assert!(registry.lock().unwrap().slots.is_empty());
+    }
+
     #[test]
     fn a_full_review_turns_the_incremental_path_off_and_changes_nothing_else() {
         // This is the whole of what "full" means. `review.incremental` gates
@@ -2175,5 +3113,18 @@ mod tests {
             incremental.review.incremental,
             "the webhook path must be untouched"
         );
+    }
+
+    #[test]
+    fn kill_switch_labels_prevent_the_early_hub_write() {
+        let mut config = Config::default();
+        config.labels.human_review = "human-review".into();
+        let pull_request = PullRequest {
+            labels: vec![config.labels.human_review.clone()],
+            ..PullRequest::default()
+        };
+
+        assert!(review_is_kill_switched(&config, &pull_request));
+        assert!(!review_is_kill_switched(&config, &PullRequest::default()));
     }
 }

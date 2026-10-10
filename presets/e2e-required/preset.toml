@@ -1,0 +1,31 @@
+version = 1
+
+# For repositories with an end-to-end suite worth holding changes to. The
+# `e2e` lane is off by default; this preset turns it on, makes a tree with no
+# harness a finding rather than a skip, and adds the lane's rule document.
+# See docs/modules/lanes/e2e.md.
+
+[review]
+lanes = ["critique", "security", "tests", "commits", "description", "e2e"]
+strictness = 2
+incremental = true
+draft_prs = false
+respect_agents_md = true
+
+# Scoped to the e2e lane: its rule document is precision there and one more
+# subject every other reviewer could form an opinion about anywhere else.
+[[path_instructions]]
+glob = "**/*"
+rules = "e2e"
+lanes = ["e2e"]
+
+[lanes.e2e]
+model = "scan"
+fail_on = "high"
+# A repository on this preset has said it has a harness. If the tree at head
+# has none, that is worth one finding rather than a silent skip.
+missing_harness = "require"
+# Empty means detect e2e tests and jobs from paths, names and steps. Set them
+# when the detection guesses wrong; each replaces the detection it overrides.
+paths = []
+workflows = []

@@ -11,6 +11,10 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// A lane: one agent, one narrow job, one GitHub check run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -25,16 +29,20 @@ pub enum LaneId {
     Commits,
     /// Whether the pull request body matches what the diff does.
     Description,
+    /// Whether changed behaviour is reachable by an end-to-end test, and
+    /// whether the repository's own end-to-end jobs ran on the head.
+    E2e,
 }
 
 impl LaneId {
     /// Every lane, in the order they are reported.
-    pub const ALL: [LaneId; 5] = [
+    pub const ALL: [LaneId; 6] = [
         LaneId::Critique,
         LaneId::Security,
         LaneId::Tests,
         LaneId::Commits,
         LaneId::Description,
+        LaneId::E2e,
     ];
 
     /// The lane's stable id, as written in config and in check-run names.
@@ -45,6 +53,7 @@ impl LaneId {
             LaneId::Tests => "tests",
             LaneId::Commits => "commits",
             LaneId::Description => "description",
+            LaneId::E2e => "e2e",
         }
     }
 
@@ -234,18 +243,24 @@ pub struct Config {
     /// The long-lived memory engine: what the reviewer remembers about a
     /// repository between pull requests.
     pub memory: Memory,
+    /// Model Context Protocol access for repository-aware agents.
+    pub mcp: Mcp,
     /// Per-lane overrides, keyed by lane id.
     pub lanes: BTreeMap<String, Lane>,
     /// Several reviewers on one lane's evidence.
     pub council: Council,
     /// What a reviewer may look up in the tree before it answers.
     pub lookup: LookupPolicy,
+    /// Deterministic cross-file grouping for the per-file fan-out.
+    pub grouping: Grouping,
     /// Auto-merge policy.
     pub automerge: AutoMerge,
     /// Review-thread resolution.
     pub threads: Threads,
     /// The change-map comment.
     pub overview: Overview,
+    /// The durable pull-request review hub.
+    pub summary: Summary,
     /// Issue triage.
     pub issues: Issues,
     /// Pull request triage: the duplicate and superseded sweep.
@@ -256,6 +271,26 @@ pub struct Config {
     pub sentry: Sentry,
     /// UI previews: flows, annotated screenshots and clips on a pull request.
     pub preview: Preview,
+    /// ASCII wireframes of the UI screens and modals a pull request touches.
+    pub wireframe: Wireframe,
+}
+
+/// The public, agent-facing MCP surface.
+///
+/// The bearer itself deliberately stays in the environment. Repository config
+/// can enable a service, but must never become a place a contributor can put a
+/// credential the server will honour.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Mcp {
+    /// Mount the authenticated MCP endpoint.
+    pub enabled: bool,
+    /// Environment variable containing its bearer token.
+    pub token_env: String,
+    /// Organisation whose installed repositories this endpoint may access.
+    pub allowed_org: String,
+    /// Exact `owner/name` repositories exposed through the endpoint.
+    pub allowed_repos: Vec<String>,
 }
 
 /// Review behaviour and the gates that keep it quiet.
@@ -270,14 +305,34 @@ pub struct Review {
     /// [`Config::confidence_min`]. It was inert for a while: documented as the
     /// dial, validated for range, and read by nothing.
     pub strictness: u8,
-    /// Post findings at or above this severity. Overrides what `strictness`
-    /// would choose; leave it unset unless you need to.
+    /// Post findings at or above this severity. Can only make the gate
+    /// `strictness` chose *stricter*; a value below it is ignored. Leave it
+    /// unset unless you need to.
     pub severity_gate: Option<String>,
-    /// Drop findings the model is less sure about than this. Overrides what
-    /// `strictness` would choose.
+    /// Drop findings the model is less sure about than this. Like
+    /// `severity_gate`, it can only raise what `strictness` would choose.
     pub confidence_min: Option<f64>,
-    /// Hard cap on posted comments per pull request.
+    /// The inline-comment budget for the whole pull request.
+    ///
+    /// Spent across every lane and adaptive pass of a review, ranked
+    /// globally, and by every earlier finding whose conversation is still
+    /// open (`PriorReview::open_findings`). Findings over budget are listed in
+    /// the review hub rather than posted. Co-located observations share one
+    /// thread and therefore count once; grouping preserves every observation
+    /// inside that thread before this cap is applied.
     pub max_comments: usize,
+    /// Most files one pull request may change before review is refused.
+    ///
+    /// This is an operator-side resource guard, not a prompt-shaping hint. It
+    /// is checked before commit patches or model context are fetched, and a
+    /// reviewed repository cannot override it through remote configuration.
+    pub max_changed_files: usize,
+    /// Most added plus deleted lines one pull request may contain.
+    ///
+    /// Counting both sides keeps a deletion-only rewrite bounded too. Like
+    /// [`Self::max_changed_files`], this is enforced before expensive review
+    /// work and remains under the deployment operator's control.
+    pub max_changed_lines: u64,
     /// Keep a finding that misses the posting gate visible in the check-run
     /// summary when it is at least `medium` and the model is at least this
     /// sure of it.
@@ -294,6 +349,15 @@ pub struct Review {
     pub draft_prs: bool,
     /// Treat each changed path's ancestor `AGENTS.md` files as review policy.
     pub respect_agents_md: bool,
+    /// Maximum adaptive review depth over the same evidence: `1` is round one
+    /// alone, `2` permits one coverage pass (`lanes::coverage`), and `3`
+    /// permits a second fed the cumulative confirmed list. Extra passes stop
+    /// as soon as one adds no distinct surviving finding. Not in
+    /// [`crate::config::remote::OVERRIDABLE_KEYS`] —
+    /// each pass above one is another model call per unit over the line
+    /// threshold, and that is the operator's money to spend, not a reviewed
+    /// repository's.
+    pub passes: u8,
     /// Block the merge button when a finding reaches this severity.
     ///
     /// `"off"` never blocks. Anything else names the severity floor. Blocking
@@ -327,13 +391,13 @@ pub struct Threads {
     pub resolve_fixed: bool,
     /// Ask a model whether a reply settled a finding the code did not change.
     ///
-    /// **Off by default, and deliberately.** This is the one case no
-    /// fingerprint can decide, so the only evidence is a comment somebody wrote
-    /// — and a comment is untrusted input. The verdict stays advisory even when
-    /// this is on: it feeds a plan that deterministic code executes, and it can
-    /// only ever close a thread tinysweeper itself opened.
+    /// On by default. This is the one case no fingerprint can decide, so the
+    /// only evidence is a comment somebody wrote — and that comment is
+    /// untrusted input. The verdict stays advisory: it feeds a plan that
+    /// deterministic code executes, and it can only ever close a thread
+    /// tinysweeper itself opened.
     pub ask_model: bool,
-    /// Say why, in the thread, before resolving it.
+    /// Say why, in the thread, once it has been resolved.
     ///
     /// On by default. A conversation that collapses with no reply is indexed
     /// by GitHub as resolved and by the author as unexplained: the objection
@@ -366,6 +430,68 @@ pub struct Overview {
     pub max_links: usize,
     /// Retained for configuration compatibility; change flows list no paths.
     pub max_paths_per_component: usize,
+}
+
+/// Sections available in the durable review hub.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SummarySection {
+    /// Compact change and finding counts.
+    Snapshot,
+    /// Behavioral explanation of the change.
+    Changes,
+    /// Named user- or system-visible behaviors.
+    Features,
+    /// Tests mapped to behavior.
+    Tests,
+    /// Active, noted, resolved, and pending findings.
+    Findings,
+    /// Deterministic work remaining before merge.
+    BeforeMerge,
+    /// The optional Mermaid behavior flow.
+    Flow,
+    /// Per-lane reasoning and evidence.
+    AgentDetails,
+    /// Usage, models, changed surface, and pass history.
+    RunDetails,
+}
+
+/// Presentation policy for the durable review hub.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Summary {
+    /// Whether the durable hub is created and maintained.
+    pub enabled: bool,
+    /// Optional sections, in render order.
+    pub sections: Vec<SummarySection>,
+    /// Maximum generated feature entries displayed.
+    pub max_features: usize,
+    /// Maximum generated test entries displayed.
+    pub max_tests: usize,
+    /// Maximum completed review passes retained in the comment.
+    pub history_entries: usize,
+}
+
+impl Default for Summary {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            sections: vec![
+                SummarySection::Snapshot,
+                SummarySection::Changes,
+                SummarySection::Features,
+                SummarySection::Tests,
+                SummarySection::Findings,
+                SummarySection::BeforeMerge,
+                SummarySection::Flow,
+                SummarySection::AgentDetails,
+                SummarySection::RunDetails,
+            ],
+            max_features: 8,
+            max_tests: 8,
+            history_entries: 5,
+        }
+    }
 }
 
 /// Which paths are reviewed at all.
@@ -405,6 +531,19 @@ pub struct PathInstruction {
     /// more subject each of those reviewers can form an opinion about. Scoping
     /// is what makes a long document — a security taxonomy, say — affordable.
     pub lanes: Vec<LaneId>,
+    /// Keep looking for a second, broader match instead of stopping here.
+    ///
+    /// Off by default: shadowing is the understood, documented behaviour of
+    /// this table, and most entries want it — a `.github/workflows/**` entry
+    /// has no business also picking up whatever generic rule sits below it.
+    /// This exists for the narrower case of an entry that wants *both* its own
+    /// rule **and** the language document beneath it — a `src/ports/**` entry
+    /// with port-shaped advice that would otherwise have to duplicate
+    /// `rust.md` to keep it. Set it there instead: the next matching entry
+    /// (lane-scoped exactly as the first-match search is) is appended after
+    /// this one's instructions, specific first. One level only — a merge entry
+    /// found as that second match does not itself keep looking.
+    pub merge: bool,
 }
 
 /// Review-cache behaviour. See `docs/modules/cache/README.md`.
@@ -483,6 +622,52 @@ pub struct ProviderRouting {
     /// are routed unpinned, quietly: the price `harness::pricing` records for
     /// them is the one they are billed at.
     pub unpinned_vendors: Vec<String>,
+}
+
+impl Models {
+    /// The per-model route for `model`, if one is configured.
+    pub fn route_for(&self, model: &str) -> Option<&ModelRoute> {
+        self.routes.iter().find(|r| r.model == model)
+    }
+
+    /// The output ceiling for one call to `model`; `0` is no ceiling.
+    pub fn max_tokens_for(&self, model: &str) -> u32 {
+        self.route_for(model)
+            .and_then(|r| r.max_tokens)
+            .unwrap_or(self.max_tokens)
+    }
+}
+
+/// Routing for one model id, overriding the ladder-wide pin.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ModelRoute {
+    /// The model id this applies to, exactly as written in a tier.
+    pub model: String,
+    /// Providers to try, in order. Empty leaves routing to the gateway.
+    pub order: Vec<String>,
+    /// Whether the gateway may fall outside `order`. `false` makes the pin a
+    /// hard constraint, which is the point of naming an endpoint.
+    pub allow_fallbacks: bool,
+    /// Output ceiling for this rung. `0` sends no ceiling at all: the model
+    /// answers at the length it needs and a cut-off is the provider's own
+    /// limit. Budgeted reviews reject `0` because admission needs a finite
+    /// output cap. Absent inherits `models.max_tokens`.
+    pub max_tokens: Option<u32>,
+}
+
+impl ModelRoute {
+    /// The routing this rung asks for.
+    pub fn routing(&self) -> ProviderRouting {
+        ProviderRouting {
+            order: self.order.clone(),
+            allow_fallbacks: self.allow_fallbacks,
+            // A rung that names its endpoint means it: no quiet reroute to a
+            // price nobody chose.
+            last_resort_unpinned: false,
+            unpinned_vendors: Vec::new(),
+        }
+    }
 }
 
 impl Default for ProviderRouting {
@@ -593,11 +778,21 @@ pub struct Models {
     /// Optional, and `None` by default: the captions then describe a flow
     /// from its transcript alone, which is the honest degradation. Never a
     /// fallback for a text tier and never given one — see
-    /// `harness::openrouter::GatewayModel::for_vision` for why a vision call
+    /// `harness::embed::GatewayModel::for_vision` for why a vision call
     /// must not share the review ladder.
     pub vision: Option<String>,
     /// Which upstream providers the gateway may serve these models from.
     pub provider: ProviderRouting,
+    /// Per-model routing that overrides `provider` and `max_tokens` for one
+    /// rung of the ladder.
+    ///
+    /// The one pin above is right for the DeepSeek tiers, whose floating ids
+    /// a dozen hosts serve at prices spanning 4x. A rung that should go to
+    /// one specific endpoint — OpenAI's flex tier, the surplus-capacity
+    /// endpoint at half price — and be left to answer at whatever length it
+    /// needs gets its own entry here rather than a global setting that would
+    /// apply to every other rung too.
+    pub routes: Vec<ModelRoute>,
     /// Cap on tokens generated per model call.
     ///
     /// Reasoning is billed against this same ceiling, so a thinking-heavy model
@@ -616,8 +811,30 @@ pub struct Models {
     /// can be answered by any model in it and a prompt that carries its own
     /// schema has to be built before the answering model is known.
     pub structured_output: StructuredOutput,
+    /// Opt into read-only agent tool exploration for council reviewers.
+    /// Disabled until scripted and live evaluation establish parity.
+    #[serde(skip_serializing_if = "is_false")]
+    pub agentic_reviewers: bool,
     /// Hard USD ceiling for a single pull request's review.
     pub budget_usd_per_pr: f64,
+    /// Operator-verified upper rates for gateway aliases, in USD per million
+    /// tokens. Each bound must cover every provider and fallback behind the
+    /// alias, including long-context pricing. Empty preserves config digests.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub budget_prices: BTreeMap<String, BudgetPriceBound>,
+}
+
+/// Explicit admission rates for an alias without a public model price row.
+/// These reserve spend; they do not force a provider's actual billing rate.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetPriceBound {
+    /// Maximum price of uncached input, in USD per million tokens; finite and nonnegative.
+    pub input: f64,
+    /// Maximum price of cached input, in USD per million tokens; finite and nonnegative.
+    pub cached: f64,
+    /// Maximum price of output, in USD per million tokens; finite and strictly positive.
+    pub output: f64,
 }
 
 /// The knowledge centre: curated documents, and rules read out of the
@@ -780,17 +997,48 @@ pub struct Retrieval {
     /// paths above a diff read as noise rather than as a warning. `0` turns the
     /// block off.
     pub max_impact: usize,
-    /// Fetch and index the repository's own git submodules.
+    /// The submodule repositories a review may read and the indexer may
+    /// fetch, as `owner/name`.
     ///
-    /// Off by default because it is a network fetch to a URL the reviewed
-    /// repository names in `.gitmodules`. Only submodules whose remote is on
-    /// the forge's own host are fetched — the read token is sent as a header
-    /// on every git request, and it must not reach any other host — and the
-    /// walk then indexes them despite `vendor/` being skipped otherwise. Turn
-    /// it on for a repository whose core library is a vendored submodule:
-    /// without it, the definition a changed line calls into cannot be
-    /// retrieved.
-    pub submodules: bool,
+    /// Empty by default, and an allow-list rather than a switch on purpose:
+    /// `.gitmodules` is written by whoever opened the pull request and can
+    /// name any repository on the forge, and the installation's read token
+    /// would follow it — into a private sibling under the same owner as
+    /// readily as into a public library. Same host is not authorization and
+    /// neither is same owner; the operator naming the repository is. A
+    /// submodule whose remote is not listed here is neither fetched nor
+    /// read, and the reviewer is told the path is unavailable.
+    ///
+    /// This was a `bool` for one release — `true` meant "follow same-host
+    /// remotes" — and configs written then still parse: `false` is the empty
+    /// list, and `true` is refused with the migration spelled out rather
+    /// than with a type error, because there is no list that means what
+    /// `true` meant and guessing one would be the authorization decision
+    /// this field exists to put in the operator's hands.
+    #[serde(deserialize_with = "submodule_list")]
+    pub submodules: Vec<String>,
+}
+
+/// `retrieval.submodules`: a list of `owner/name`, or the retired boolean.
+fn submodule_list<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Either {
+        List(Vec<String>),
+        Switch(bool),
+    }
+    match Either::deserialize(deserializer)? {
+        Either::List(list) => Ok(list),
+        Either::Switch(false) => Ok(Vec::new()),
+        Either::Switch(true) => Err(serde::de::Error::custom(
+            "`retrieval.submodules = true` is no longer a setting: list the submodule \
+             repositories a review may read, as `submodules = [\"owner/name\", ...]` — \
+             same host is not authorization, so nothing is followed by default",
+        )),
+    }
 }
 
 /// The long-lived memory of a repository, and how a review consults it.
@@ -940,11 +1188,16 @@ pub enum Workload {
     KnowledgeExtraction,
     /// Judging whether a reply settled a review thread (`src/threads`).
     ThreadReview,
+    /// Producing the narrative fields of the durable review hub.
+    Summary,
     /// Planning and driving a UI preview session (`src/preview`).
     ///
     /// Cheap on purpose: a driving turn reads an accessibility snapshot and
     /// picks a click, and there may be a hundred of them per pull request.
     Preview,
+    /// Drawing ASCII wireframes of the UI screens a diff touches
+    /// (`src/wireframe`).
+    Wireframe,
 }
 
 /// Several reviewers on one lane's evidence.
@@ -1021,6 +1274,38 @@ impl Default for LookupPolicy {
     }
 }
 
+/// Deterministic cross-file grouping for `critique` and `security`'s per-file
+/// fan-out. No model call: two changed files are grouped by a graph edge or a
+/// name heuristic, so a bug that spans them — a caller and its callee, a
+/// function and its test — is visible to one reviewer instead of hidden
+/// between two conversations each told to ignore the other. See
+/// `crate::lanes::grouping` and `docs/modules/lanes/README.md`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Grouping {
+    /// Whether related changed files are reviewed together at all.
+    pub enabled: bool,
+    /// How many files one group may hold. A component larger than this falls
+    /// back to reviewing every one of its files alone — never a partial
+    /// group — because a conversation is a bet that grouping makes the review
+    /// better, and a bet with this many files or this much diff in it is not
+    /// worth making.
+    pub max_files: usize,
+    /// How many characters of rendered hunks one group may hold, summed
+    /// across every file in it. The same fallback as `max_files` applies.
+    pub max_hunk_chars: usize,
+}
+
+impl Default for Grouping {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_files: 4,
+            max_hunk_chars: 20_000,
+        }
+    }
+}
+
 /// One reviewer in the council.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -1052,6 +1337,17 @@ pub struct Lane {
     pub secret_rulepack: Option<String>,
     /// `commits` only: flag any committed blob larger than this.
     pub max_blob_bytes: Option<u64>,
+    /// `e2e` only: what to do when the tree has no end-to-end harness at
+    /// all. `skip` (the default) says so and stops; `require` raises one
+    /// finding asking for one.
+    pub missing_harness: Option<String>,
+    /// `e2e` only: globs naming the end-to-end test files. Empty means the
+    /// built-in path table; set, it replaces that table.
+    pub paths: Vec<String>,
+    /// `e2e` only: workflow or job names that count as end-to-end jobs.
+    /// Empty means detect them from their names and steps; set, it replaces
+    /// the detection.
+    pub workflows: Vec<String>,
 }
 
 /// Auto-merge policy. Deterministic: no model output reaches this.
@@ -1336,6 +1632,24 @@ pub struct Preview {
     pub caption: bool,
 }
 
+/// ASCII wireframes of the UI screens and modals a pull request touches.
+///
+/// One model call over the diff, independent end to end of [`Preview`]: no
+/// browser, no target-repo CI, no dependency on whether a repository has
+/// opted into `actions/ui-preview`. See `docs/modules/wireframe/README.md`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Wireframe {
+    /// Whether the gallery comment is published at all.
+    pub enabled: bool,
+    /// How many screens one pull request gets, at most.
+    pub max_screens: usize,
+    /// How wide one wireframe may be, in characters.
+    pub max_width: usize,
+    /// How tall one wireframe may be, in lines.
+    pub max_height: usize,
+}
+
 /// Sentry issue promotion: unresolved Sentry issues become GitHub issues,
 /// deduplicated, PII-scrubbed, and linked back.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1449,20 +1763,33 @@ impl Config {
 
     /// The severity at or above which findings are posted.
     ///
-    /// From `strictness` unless the repository set it explicitly.
+    /// The dial's gate, raised by an explicit `severity_gate` and never
+    /// lowered by one. Tighten-only on purpose, whichever layer set the key:
+    /// the merge records provenance for `doctor` but the effective config does
+    /// not carry it, and "a preset may not loosen, a repository may" would
+    /// still let the operator's own `.tinysweeper.toml` — the repo layer for
+    /// every reviewed repository — loosen everyone at once. That is exactly
+    /// what `rust-library`'s `medium`/0.6 did while the dial read "default".
+    /// Anyone who wants more findings turns the dial to 3; that is what it is
+    /// for, and it is one key `doctor` can explain.
     pub fn severity_gate(&self) -> Severity {
+        let dial = self.strictness().severity;
         self.review
             .severity_gate
             .as_deref()
             .and_then(Severity::parse)
-            .unwrap_or_else(|| self.strictness().severity)
+            .map_or(dial, |explicit| explicit.max(dial))
     }
 
     /// The confidence a finding needs before it is posted.
+    ///
+    /// Tighten-only against the dial, for the reason on
+    /// [`Self::severity_gate`].
     pub fn confidence_min(&self) -> f64 {
+        let dial = self.strictness().confidence;
         self.review
             .confidence_min
-            .unwrap_or_else(|| self.strictness().confidence)
+            .map_or(dial, |explicit| explicit.max(dial))
     }
 
     /// The gates `review.strictness` implies.
@@ -1532,7 +1859,9 @@ impl Config {
             | Workload::Falsify
             | Workload::KnowledgeExtraction
             | Workload::ThreadReview
-            | Workload::Preview => &self.models.scan,
+            | Workload::Summary
+            | Workload::Preview
+            | Workload::Wireframe => &self.models.scan,
         }
     }
 
@@ -1583,6 +1912,16 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_alias_budget_prices_deserialize_without_changing_empty_defaults() {
+        let configured = serde_json::json!({
+            "budget_prices": {"deep": {"input": 0.20, "cached": 0.02, "output": 1.20}}
+        });
+        assert!(serde_json::from_value::<Models>(configured).is_ok());
+        let defaults = serde_json::to_value(Models::default()).unwrap();
+        assert!(defaults.get("budget_prices").is_none());
+    }
 
     #[test]
     fn lane_ids_round_trip_through_their_string_form() {
@@ -1664,6 +2003,24 @@ mod tests {
             },
         );
         assert_eq!(config.model_for(LaneId::Critique), "expensive-model");
+    }
+
+    #[test]
+    fn the_e2e_lane_is_off_by_default_and_opts_in_by_listing() {
+        // Off by default: with a harness present it asked for an end-to-end
+        // test on config flips and settings panels, which nobody acted on. A
+        // repository that wants it lists it in `review.lanes` (or uses the
+        // `e2e-required` preset), and nothing else has to be set.
+        let defaults: Config = crate::config::DEFAULTS
+            .parse::<toml::Table>()
+            .unwrap()
+            .try_into()
+            .unwrap();
+        assert!(!defaults.enabled_lanes().contains(&LaneId::E2e));
+
+        let mut opted_in = defaults.clone();
+        opted_in.review.lanes.push("e2e".into());
+        assert!(opted_in.enabled_lanes().contains(&LaneId::E2e));
     }
 
     #[test]

@@ -15,12 +15,25 @@ use crate::evidence::diff::truncate_patch;
 use crate::forge::types::{
     ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, FileStatus, Issue, IssueComment,
     MAX_CHECK_IMAGES, PullRequest, Remark, RemarkKind, RepoId, ReviewComment, ReviewEvent,
-    ReviewThread, ReviewVerdict, ThreadComment,
+    ReviewThread, ReviewVerdict, ThreadComment, TreeListing,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
+/// Bounds every GitHub call this client makes. Nothing else does: `octocrab`
+/// leaves connect and read timeouts unset by default, so without this a
+/// stalled socket blocks forever. That matters beyond one slow request —
+/// `server::routes` holds a review's lease across several of these calls
+/// before and after the model phase it bounds with `REVIEW_DEADLINE`, and the
+/// margin between that deadline and `LEASE_TTL` is the budget for exactly
+/// this: metadata reads, the checkout, and the publish. A single hung call
+/// otherwise eats that margin and lets the lease expire while the review is
+/// still the one holding it.
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 fn client(token: &str) -> Result<Octocrab> {
     Octocrab::builder()
+        .set_connect_timeout(Some(REQUEST_TIMEOUT))
+        .set_read_timeout(Some(REQUEST_TIMEOUT))
         .personal_token(token.to_string())
         .build()
         .map_err(|err| Error::Forge(format!("could not build a GitHub client: {err}")))
@@ -449,6 +462,34 @@ fn graphql_errors(raw: &serde_json::Value, what: &str) -> Result<()> {
 /// because absence is what both readers treat as innocent. So exhausting the
 /// bound with a full page is an error rather than a truncation: the caller
 /// refuses instead of merging on a history it only partly read.
+/// Every review on a pull request, raw, oldest first, all pages.
+///
+/// Our own verdict can be anywhere in the history — a long-lived pull
+/// request with a chatty bot passes a hundred reviews — and both readers of
+/// it decide what stands from the *last* one, so a truncated list is the one
+/// thing they must never see. A free function because both the read and the
+/// write half need it, each over its own client.
+async fn all_reviews_raw(
+    client: &Octocrab,
+    repo: &RepoId,
+    number: u64,
+) -> Result<Vec<serde_json::Value>> {
+    read_all_pages(
+        |page| async move {
+            let route = format!(
+                "/repos/{}/{}/pulls/{number}/reviews?per_page={PER_PAGE}&page={page}",
+                repo.owner, repo.name
+            );
+            client.get(route, None::<&()>).await.map_err(api)
+        },
+        |raw| raw.as_array(),
+        |items| items.to_vec(),
+        MAX_REVIEW_PAGES,
+        "the review history for this pull request",
+    )
+    .await
+}
+
 async fn read_all_pages<T, F, Fut>(
     fetch: F,
     items_of: impl Fn(&serde_json::Value) -> Option<&Vec<serde_json::Value>>,
@@ -752,6 +793,19 @@ pub struct GitHubRead {
 }
 
 impl GitHubRead {
+    /// Resolve GitHub's canonical spelling for a repository.
+    ///
+    /// GitHub routes ignore case while the code-index partition key does not,
+    /// so agent-facing repository ids are canonicalised before any search.
+    pub async fn canonical_repo(&self, repo: &RepoId) -> Result<RepoId> {
+        let route = format!("/repos/{}/{}", repo.owner, repo.name);
+        let raw: serde_json::Value = self.client.get(route, None::<&()>).await.map_err(api)?;
+        raw["full_name"]
+            .as_str()
+            .and_then(RepoId::parse)
+            .ok_or_else(|| Error::Forge("repository lookup returned no usable full_name".into()))
+    }
+
     /// Turn a forge error into [`Error::RateLimited`] when that is what it
     /// is, asking `/rate_limit` — which GitHub does not count against the
     /// budget — when the primary limit resets. Any other error is returned
@@ -861,15 +915,7 @@ impl GitHubRead {
     /// than as zero: `scan::blobs` treats `None` as "unknown", where a zero
     /// would silently mean "safely small".
     async fn blob_sizes(&self, repo: &RepoId, sha: &str) -> HashMap<String, u64> {
-        let route = format!(
-            "/repos/{}/{}/git/trees/{}?recursive=1",
-            repo.owner, repo.name, sha
-        );
-
-        // Raw route and `serde_json::Value`, matching `commits` above:
-        // octocrab has no typed model for the git-tree response, and the three
-        // fields wanted here are stable.
-        let raw: serde_json::Value = match self.client.get(&route, None::<&()>).await {
+        let raw = match self.raw_tree(repo, sha).await {
             Ok(raw) => raw,
             Err(err) => {
                 // Not fatal to the review. Sizes are an enrichment, and failing
@@ -888,6 +934,38 @@ impl GitHubRead {
         }
 
         Self::sizes_from_tree(&raw)
+    }
+
+    /// One recursive git-tree request at `sha`, shared by the two readers
+    /// that want the whole revision at once.
+    ///
+    /// Raw route and `serde_json::Value`, matching `commits` above: octocrab
+    /// has no typed model for the git-tree response, and the fields wanted
+    /// here are stable.
+    async fn raw_tree(&self, repo: &RepoId, sha: &str) -> Result<serde_json::Value> {
+        let route = format!(
+            "/repos/{}/{}/git/trees/{}?recursive=1",
+            repo.owner, repo.name, sha
+        );
+        self.client.get(&route, None::<&()>).await.map_err(api)
+    }
+
+    /// The blob paths, split out from the request so it can be tested offline.
+    fn paths_from_tree(raw: &serde_json::Value) -> TreeListing {
+        let paths = raw["tree"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            // Directories are `tree` entries; only a blob is a path a test or
+            // a workflow can live at. Submodules (`commit`) are not part of
+            // this tree either.
+            .filter(|entry| entry["type"].as_str() == Some("blob"))
+            .filter_map(|entry| entry["path"].as_str().map(str::to_string))
+            .collect();
+        TreeListing {
+            paths,
+            truncated: raw["truncated"].as_bool().unwrap_or(false),
+        }
     }
 
     /// The size map, split out from the request so it can be tested offline.
@@ -1527,33 +1605,8 @@ impl ForgeRead for GitHubRead {
     }
 
     async fn own_review_state(&self, repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
-        let route = format!(
-            "/repos/{}/{}/pulls/{number}/reviews?per_page=100",
-            repo.owner, repo.name
-        );
-        let raw: serde_json::Value = self.client.get(route, None::<&()>).await.map_err(api)?;
-
-        // Only our own reviews, latest last. GitHub keeps every review in this
-        // list, so the state that matters is the final one we left — an earlier
-        // block followed by our own approval is not a block.
-        Ok(raw.as_array().and_then(|reviews| {
-            reviews
-                .iter()
-                .filter(|r| {
-                    // Exact rather than `starts_with`, which would have counted
-                    // a review left by an account called `tinysweeper-anything`
-                    // as our own. See `findings::prior::is_own_login`.
-                    let login = r["user"]["login"].as_str().unwrap_or_default();
-                    crate::findings::prior::is_own_login(login)
-                })
-                .filter_map(|r| match r["state"].as_str() {
-                    Some("CHANGES_REQUESTED") => Some(ReviewEvent::RequestChanges),
-                    Some("APPROVED") => Some(ReviewEvent::Approve),
-                    Some("COMMENTED") => Some(ReviewEvent::Comment),
-                    _ => None,
-                })
-                .next_back()
-        }))
+        let reviews = all_reviews_raw(&self.client, repo, number).await?;
+        Ok(own_review_state_of(reviews.iter()))
     }
 
     async fn file_at(&self, repo: &RepoId, path: &str, sha: &str) -> Result<Option<String>> {
@@ -1586,6 +1639,13 @@ impl ForgeRead for GitHubRead {
             .into_iter()
             .next()
             .and_then(|item| item.decoded_content()))
+    }
+
+    async fn tree_paths(&self, repo: &RepoId, sha: &str) -> Result<TreeListing> {
+        // One recursive call rather than a walk: GitHub answers the whole tree
+        // in a single response and says when it could not, which is the only
+        // shape under which a listing can be honest about being incomplete.
+        Ok(Self::paths_from_tree(&self.raw_tree(repo, sha).await?))
     }
 
     async fn submodule_at(
@@ -1681,10 +1741,20 @@ impl ForgeRead for GitHubRead {
     }
 
     async fn search_issues(&self, repo: &RepoId, query: &str) -> Result<Vec<Issue>> {
-        // `repo:` is prepended here rather than trusted from the caller, so a
-        // query can only ever narrow the search inside one repository and
-        // never widen it into somebody else's.
-        let scoped = format!("repo:{}/{} {}", repo.owner, repo.name, query.trim());
+        // Callers exposing GitHub's query language to untrusted input must
+        // reject scope qualifiers first. The MCP tool does so before reaching
+        // this shared adapter; internal callers retain the full search syntax.
+        let scoped = format!(
+            "repo:{}/{} is:issue {}",
+            repo.owner,
+            repo.name,
+            query.trim()
+        );
+        if scoped.len() > 256 {
+            return Err(Error::Forge(
+                "issue search exceeds GitHub's 256-byte query limit".into(),
+            ));
+        }
 
         let page = self
             .client
@@ -1818,6 +1888,23 @@ impl ForgeWrite for GitHubWrite {
 
         let route = format!("/repos/{}/{}/pulls/{number}/reviews", repo.owner, repo.name);
         let _: serde_json::Value = self.client.post(route, Some(&review)).await.map_err(api)?;
+        Ok(())
+    }
+
+    async fn dismiss_own_approval(&self, repo: &RepoId, number: u64, message: &str) -> Result<()> {
+        let reviews = all_reviews_raw(&self.client, repo, number).await?;
+        // The approval that stands is the last verdict we left, if it was one.
+        // An approval followed by our own changes request is not standing,
+        // and dismissing it would be dismissing history.
+        let Some(id) = own_standing_approval_id(reviews.iter()) else {
+            return Ok(());
+        };
+        let route = format!(
+            "/repos/{}/{}/pulls/{number}/reviews/{id}/dismissals",
+            repo.owner, repo.name
+        );
+        let body = serde_json::json!({ "message": message });
+        let _: serde_json::Value = self.client.put(route, Some(&body)).await.map_err(api)?;
         Ok(())
     }
 
@@ -1967,6 +2054,66 @@ impl ForgeWrite for GitHubWrite {
 ///
 /// Split out of `create_review` so the wire format is a pure, testable
 /// function — the HTTP call itself can't run the offline suite.
+/// The verdict that stands from a list of reviews, ours only, oldest first.
+///
+/// The one that matters is the last *verdict* we left — an earlier block
+/// followed by our own approval is not a block. A `COMMENTED` review is not
+/// a verdict: GitHub leaves a standing changes request in force under any
+/// number of comments, so reading the latest comment as "the state" would
+/// make the block invisible to the code whose job is to clear it. That is
+/// exactly what a review nobody answered posts — a comment saying it could
+/// not review — and the clean push after the outage must still see the
+/// block it has to lift. Only when we have never left a verdict at all does
+/// a comment count, as "we have reviewed this before".
+fn own_review_state_of<'a>(
+    reviews: impl Iterator<Item = &'a serde_json::Value>,
+) -> Option<ReviewEvent> {
+    let mut last_verdict = None;
+    let mut commented = false;
+    for review in reviews.filter(|r| {
+        // Exact rather than `starts_with`, which would have counted a review
+        // left by an account called `tinysweeper-anything` as our own. See
+        // `findings::prior::is_own_login`.
+        let login = r["user"]["login"].as_str().unwrap_or_default();
+        crate::findings::prior::is_own_login(login)
+    }) {
+        match review["state"].as_str() {
+            Some("CHANGES_REQUESTED") => last_verdict = Some(ReviewEvent::RequestChanges),
+            Some("APPROVED") => last_verdict = Some(ReviewEvent::Approve),
+            // A dismissed review — by a human, or by us withdrawing an
+            // approval for a push nobody answered — is no longer a verdict,
+            // and reading it as one would stop the next clean push from
+            // approving: `apply` skips an approval it believes already stands.
+            Some("DISMISSED") => {
+                last_verdict = None;
+                commented = true;
+            }
+            Some("COMMENTED") => commented = true,
+            _ => {}
+        }
+    }
+    last_verdict.or(commented.then_some(ReviewEvent::Comment))
+}
+
+/// The id of our own approval that is currently in force, from reviews
+/// oldest first: the last verdict we left, when that verdict was an approval.
+fn own_standing_approval_id<'a>(
+    reviews: impl Iterator<Item = &'a serde_json::Value>,
+) -> Option<u64> {
+    let mut standing = None;
+    for review in reviews.filter(|r| {
+        let login = r["user"]["login"].as_str().unwrap_or_default();
+        crate::findings::prior::is_own_login(login)
+    }) {
+        match review["state"].as_str() {
+            Some("APPROVED") => standing = review["id"].as_u64(),
+            Some("CHANGES_REQUESTED") | Some("DISMISSED") => standing = None,
+            _ => {}
+        }
+    }
+    standing
+}
+
 fn review_comment_payload(c: &ReviewComment) -> serde_json::Value {
     // Every finding here is anchored to a line the diff actually touches (see
     // `anchored_in_diff`), always on the head revision. GitHub defaults `side`
@@ -2277,6 +2424,28 @@ mod tests {
         assert_eq!(sizes.get("src/main.rs"), None);
     }
 
+    #[test]
+    fn tree_paths_keep_blobs_only_and_carry_the_truncation_flag() {
+        let tree = json!({
+            "truncated": true,
+            "tree": [
+                {"path": "e2e", "type": "tree"},
+                {"path": "e2e/login.spec.ts", "type": "blob", "size": 120},
+                {"path": "vendor/openhuman", "type": "commit"},
+                {"path": ".github/workflows/e2e.yml", "type": "blob", "size": 300}
+            ]
+        });
+        let listing = GitHubRead::paths_from_tree(&tree);
+        assert_eq!(
+            listing.paths,
+            vec!["e2e/login.spec.ts", ".github/workflows/e2e.yml"]
+        );
+        assert!(
+            listing.truncated,
+            "a truncated tree must say so, not read as complete"
+        );
+    }
+
     /// A verdict, built without going near the wire format.
     fn verdict(reviewer: &str, state: ReviewEvent) -> ReviewVerdict {
         ReviewVerdict {
@@ -2284,6 +2453,65 @@ mod tests {
             bot: false,
             state,
         }
+    }
+
+    #[test]
+    fn the_standing_approval_is_the_last_verdict_when_that_was_an_approval() {
+        let own = |id: u64, state: &str| serde_json::json!({ "id": id, "user": { "login": "tinysweeper[bot]" }, "state": state });
+        assert_eq!(
+            own_standing_approval_id([own(1, "APPROVED"), own(2, "COMMENTED")].iter()),
+            Some(1),
+            "a comment after an approval leaves it standing"
+        );
+        assert_eq!(
+            own_standing_approval_id([own(1, "APPROVED"), own(2, "CHANGES_REQUESTED")].iter()),
+            None,
+            "an approval we ourselves superseded is not standing"
+        );
+        assert_eq!(
+            own_standing_approval_id([own(1, "APPROVED"), own(2, "DISMISSED")].iter()),
+            None
+        );
+        let theirs =
+            serde_json::json!({ "id": 9, "user": { "login": "someone" }, "state": "APPROVED" });
+        assert_eq!(own_standing_approval_id([theirs].iter()), None);
+    }
+
+    #[test]
+    fn a_comment_after_our_own_block_leaves_the_block_standing() {
+        // What a review nobody answered posts is a comment. GitHub keeps the
+        // changes request in force under it, and so must we, or the clean
+        // push after the outage never sees the block it has to clear.
+        let own = |state: &str| serde_json::json!({ "user": { "login": "tinysweeper[bot]" }, "state": state });
+        let reviews = [own("CHANGES_REQUESTED"), own("COMMENTED")];
+        assert_eq!(
+            own_review_state_of(reviews.iter()),
+            Some(ReviewEvent::RequestChanges)
+        );
+
+        let cleared = [own("CHANGES_REQUESTED"), own("APPROVED"), own("COMMENTED")];
+        assert_eq!(
+            own_review_state_of(cleared.iter()),
+            Some(ReviewEvent::Approve)
+        );
+
+        let only_comments = [own("COMMENTED")];
+        assert_eq!(
+            own_review_state_of(only_comments.iter()),
+            Some(ReviewEvent::Comment)
+        );
+
+        // Our approval, withdrawn: not a verdict any more, so the next clean
+        // push approves rather than believing an approval stands.
+        let withdrawn = [own("APPROVED"), own("DISMISSED"), own("COMMENTED")];
+        assert_eq!(
+            own_review_state_of(withdrawn.iter()),
+            Some(ReviewEvent::Comment)
+        );
+
+        let theirs =
+            [serde_json::json!({ "user": { "login": "someone" }, "state": "CHANGES_REQUESTED" })];
+        assert_eq!(own_review_state_of(theirs.iter()), None);
     }
 
     #[test]

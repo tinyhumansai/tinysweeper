@@ -28,7 +28,9 @@ pub mod auth;
 pub mod failure;
 pub mod indexing;
 pub mod manual;
+pub mod mcp;
 pub mod memory;
+pub mod model;
 pub mod preview;
 pub mod routes;
 pub mod status;
@@ -39,5 +41,5 @@ pub mod webhook;
 
 pub use crate::server::admin::AdminAuth;
 pub use crate::server::indexing::IndexBackend;
-pub use crate::server::routes::{ServerConfig, serve};
+pub use crate::server::routes::{ServerConfig, serve, serve_with_model_factory};
 pub use crate::server::store::{Contributor, Store, Trust};

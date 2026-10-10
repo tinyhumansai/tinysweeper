@@ -14,6 +14,7 @@ That boundary is enforced by the type system rather than by discipline.
 | `tests` | `tinysweeper/tests` | Whether changed behaviour is covered | — |
 | `commits` | `tinysweeper/commits` | What entered the history — **no model call** | `secret`, `blob`, `junk` |
 | `description` | `tinysweeper/description` | Title and body against the diff | — |
+| `e2e` | `tinysweeper/e2e` | Whether changed behaviour is reachable end to end, and whether the repository's e2e jobs ran on the head | — |
 
 The scanner-kind column is a **partition, not an overlap**. Each deterministic
 finding has exactly one owning lane, because two lanes discussing one match
@@ -70,13 +71,22 @@ does not take it back out.
 
 `lanes::anchor` holds the two rules, and the difference between them matters:
 
-- **Strict** (`critique`, `security`, `tests`) — a finding must sit on a line
+- **Strict** (`critique`, `security`, `tests`, `e2e`) — a finding must sit on a line
   this pull request changed, or it is dropped and counted into the summary.
   A comment on unrelated code is the fastest way to lose a team's trust.
 - **Demote** (`commits`, `description`) — the subject is a commit message or a
   missing body, which has no line at all. The bad anchor is removed rather than
   the finding, and `apply` renders it in the check-run summary instead of as an
   inline comment.
+
+  This rule governs the *model's* findings; it does not reach `e2e`'s
+  deterministic ones. `e2e-not-triggered` and `e2e-failed`
+  (`src/lanes/e2e/runs.rs`) are built by code, not returned from
+  `LaneResponse`, so they never pass through `LaneOutcome::from_response` and
+  are neither dropped nor demoted — `e2e-not-triggered` anchors on the
+  workflow's `paths:` line when there is one, `e2e-failed` carries no line at
+  all, and both are always rendered in the summary regardless of whether that
+  line changed. See `docs/modules/lanes/e2e.md`.
 
 ## Per-file fan-out
 
@@ -141,6 +151,52 @@ no model call — which changed files are worth one and in what order:
 `tests`, `commits` and `description` are pull-request-scoped. Their subject is a
 relationship between files, and a reviewer shown one file cannot see it.
 
+## Grouping
+
+Isolation cuts both ways. Telling every conversation to ignore every other file
+stops N reviewers reporting one cross-file problem N times, and it also hides a
+bug that only shows up by reading two files together: a caller changed in `a.rs`
+while its callee changed in `b.rs`, or a function and the test that exercises
+it. Neither ungrouped conversation ever sees both halves.
+
+`lanes::grouping` decides — deterministically, **no model call** — which of a
+lane's changed files travel together in one conversation instead. Two files are
+grouped when:
+
+- the code graph has a `Calls`, `References`, `Tests`, `Imports` or `Extends`
+  edge between a symbol in one and a symbol in the other, read off the same
+  neighbourhood `graph::impact` and `overview` already walk for the changed
+  set — no second query; or
+- a name heuristic matches with no graph at all: a file and its test
+  (`foo.rs`/`foo_test.rs`, `test_foo.py`, `foo.test.ts`, `FooTest.java`), a
+  pair of locale files (`messages.en.json`/`messages.fr.json`, or `i18n/en.json`
+  next to `i18n/fr.json`), or a component and its co-located stylesheet
+  (`Button.tsx`/`Button.module.css`).
+
+A grouped conversation is handed every file's diff and one isolation clause
+naming all of them — see `harness::prompt::isolation_clause` — and its lookup
+seeding (`flows::lookup::Ledger::seed`) reads the definitions every file's
+changed lines call into, not just the first file's, so grouping a file with its
+test does not regress the seeding that found the boundary bug on
+opencompany#2313 (see [`lookup.md`](lookup.md)). A finding is placed against
+whichever file in the group it actually names; one naming a path outside the
+group is discarded exactly like a file the pull request never touched.
+
+**A component over `[grouping].max_files` or `max_hunk_chars` falls back to
+singletons — every one of its files reviewed alone, never a partial group.**
+Grouping is a bet that one conversation reviews a handful of related files
+better than several isolated ones; a bet with too many files or too much diff
+in it is the same failure per-file fan-out exists to prevent in the first
+place — the first few files read closely, the rest an afterthought — so it is
+not made at all. `max_files = 4` and `max_hunk_chars = 20000` are chosen to
+comfortably hold a file and its test, or the few files one rename touches,
+while catching that case well before it does.
+
+`[grouping].enabled = false` disables grouping entirely and returns to the
+plain one-conversation-per-file fan-out, byte-identical to the prompts sent
+before grouping existed, which is what keeps an operator's prompt cache and any
+recorded eval cassette valid across the change.
+
 ## Below the gate, above notice
 
 A finding that misses the posting gate but is at least `medium` and at least
@@ -149,13 +205,74 @@ a look* — never a comment, never a block, never counted toward the
 conclusion. The gate exists so a half-sure reviewer does not block a merge;
 it was also the reason a correct `medium/0.61` boundary bug reached nobody.
 
+## Coverage pass
+
+`review.passes = 3` ships as the maximum adaptive depth. Small groups still
+take exactly one pass. For qualifying groups, `critique` and `security`
+each ask their group's first council reviewer — index `0`, never the whole
+council again — up to two more times after round one's own findings are placed
+(and, for `critique`, falsified), told plainly what it already found and
+asked to look for what a first pass misses. `lanes::coverage` builds that
+call; see its module doc for why anchoring the answer is left to the caller
+rather than done once in that module.
+
+This is recall, not verification — the opposite direction from
+`src/falsify`, which asks "is this correct" of a reviewer that saw less than
+the first one did. Asking the *same* reviewer to look again, told what it
+already said, is cheap enough to offer at all because it reuses round one's
+own prompt prefix, evidence and `flows::runner::ask_all` entry point for
+each extra call.
+
+Two things keep it from being a second council for every unit:
+
+- **A line gate.** `COVERAGE_PASS_MIN_LINES` (40, one constant per lane) has
+  to be cleared by the *group's* own changed lines before the second prompt
+  is even built. A rename or a one-line fix never pays for a call it cannot
+  use.
+- **Dedupe before falsify.** A new finding that `council::agree::corroborates`
+  a round-one finding, or shares its `Finding::fingerprint`, is dropped before
+  anything else runs against it — `critique`'s falsify call included, which
+  is why that call is free when a coverage pass finds nothing new.
+
+At the default ceiling, the second coverage pass is told about everything the
+first found in addition to round one's own list. An empty, failed, malformed,
+entirely duplicate, unplaceable, or fully filtered pass stops the loop rather
+than paying for the next one.
+
+Each qualifying group emits one structured telemetry event after it stops.
+`passes_attempted` and `new_findings_per_pass` both begin with round one, then
+list every adaptive attempt; `stop_reason` distinguishes reaching the ceiling
+from an empty, failed, unplaceable, duplicate, or filtered response.
+`input_tokens`, `output_tokens`, `cached_tokens`, and `cost_usd` are summed from
+the model responses made by that group rather than inferred from the lane-wide
+spend tally, which is shared by concurrently reviewed groups.
+`model_elapsed_ms` is the accumulated model wait while `elapsed_ms` measures
+the whole adaptive sequence.
+`review.passes` is not in `config::remote::OVERRIDABLE_KEYS`: each pass above
+one is another model call per qualifying unit, and that is the operator's
+money, exactly like the per-pull-request budget in `[models]`.
+
 ## Rule documents
 
 Per-path review rules live under `presets/rules/` as data, selected by the
 ordered `path_instructions` table — **first match wins**, so a Rust file's
-reviewer never sees the workflow rules. Roughly half of each document is the
-"do NOT report" list; that half is where the precision comes from. See
+reviewer never sees the workflow rules. An entry can opt out of that with
+`merge = true`, which also takes the next matching entry — one level only — so
+a specific entry (`src/ports/**`) can keep the broader language document
+(`rust.md`) beneath it instead of duplicating it. Roughly half of each document
+is the "do NOT report" list; that half is where the precision comes from. See
 `presets/rules/README.md`.
+
+## The `e2e` lane is quiet without a harness, and settles later
+
+It owns end-to-end coverage and whether the repository's own e2e jobs ran on
+the head — the concern the `tests` rule document deliberately excludes. It is
+off by default: opt in by listing `e2e` in `review.lanes`. Once on, it skips,
+with no model call, on a repository that has no e2e harness;
+`presets/e2e-required/` turns it on and turns that skip into a finding. Its harness inventory, trigger analysis and job states are decided in code
+before any model call, and a job still running when the review finishes
+leaves the check `neutral` until the server settles it on the job's
+completion. See [e2e.md](e2e.md).
 
 ## Adding a lane
 

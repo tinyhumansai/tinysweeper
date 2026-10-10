@@ -1,0 +1,17 @@
+{
+  "key": "b0c9f2251808c15e",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 6706,
+    "output_tokens": 104,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00060207112
+  },
+  "value": {
+    "findings": [],
+    "summary": "The additional coverage pass found no omitted actionable security defects."
+  }
+}

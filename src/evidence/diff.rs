@@ -291,7 +291,9 @@ pub fn render(diffs: &[FileDiff]) -> String {
         if diff.hunks.is_empty() {
             continue;
         }
-        let _ = writeln!(out, "--- {}", diff.path);
+        // Paths are model-facing evidence too: a credential can be embedded
+        // in a filename even when no hunk line repeats it.
+        let _ = writeln!(out, "--- {}", crate::scan::scrub(&diff.path));
         for hunk in &diff.hunks {
             let _ = writeln!(
                 out,

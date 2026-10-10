@@ -14,10 +14,11 @@
 use async_trait::async_trait;
 
 use crate::automerge::policy::MergeApproved;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::forge::types::{
     ChangedFile, CheckRun, CheckStatus, Commit, Issue, IssueComment, PullRequest,
     PullRequestContext, Remark, RepoId, ReviewComment, ReviewEvent, ReviewThread, ReviewVerdict,
+    TreeListing,
 };
 
 /// How many commits of a range get their patch fetched.
@@ -104,6 +105,21 @@ pub trait ForgeRead: Send + Sync {
     /// applying another tree's policy — and would let a push land new policy
     /// between the review starting and the file being read.
     async fn file_at(&self, repo: &RepoId, path: &str, sha: &str) -> Result<Option<String>>;
+
+    /// Every path in the tree at a commit, in tree order.
+    ///
+    /// Pinned to a commit for the same reason [`file_at`](Self::file_at) is:
+    /// the `e2e` lane classifies this tree as the harness the pull request is
+    /// judged against, and a listing at a moving ref could describe a tree the
+    /// diff was never applied to. Directories are omitted; only blobs are
+    /// paths a test or a workflow can live at.
+    ///
+    /// The listing may be **truncated** on a very large repository. The
+    /// adapter reports that through [`TreeListing::truncated`] rather than by
+    /// erroring, because "the harness could not be fully inventoried" is a
+    /// sentence the lane can say honestly, and an error would cost the whole
+    /// review.
+    async fn tree_paths(&self, repo: &RepoId, sha: &str) -> Result<TreeListing>;
 
     /// The git host this forge serves, for resolving submodule remotes.
     ///
@@ -224,6 +240,39 @@ pub trait ForgeRead: Send + Sync {
     /// Default-implemented in terms of the calls above so an adapter only has
     /// to override it when the forge offers something cheaper.
     async fn pull_request_context(&self, repo: &RepoId, number: u64) -> Result<PullRequestContext> {
+        self.pull_request_context_bounded(repo, number, usize::MAX, u64::MAX)
+            .await
+    }
+
+    /// Fetch a pull request context only when its changed-file input is within
+    /// both review resource ceilings.
+    ///
+    /// The pull request and its file summaries are deliberately fetched
+    /// first. A refusal therefore happens before the per-commit patch calls,
+    /// comments, repository tree reads, or any model-facing work that the
+    /// application performs after this boundary.
+    async fn pull_request_context_bounded(
+        &self,
+        repo: &RepoId,
+        number: u64,
+        max_files: usize,
+        max_lines: u64,
+    ) -> Result<PullRequestContext> {
+        let pull_request = self.pull_request(repo, number).await?;
+        let files = self.changed_files(repo, number).await?;
+        let changed_lines = files.iter().fold(0_u64, |total, file| {
+            total.saturating_add(file.additions.saturating_add(file.deletions))
+        });
+
+        if files.len() > max_files || changed_lines > max_lines {
+            return Err(Error::ReviewLimit {
+                changed_files: files.len(),
+                max_files,
+                changed_lines,
+                max_lines,
+            });
+        }
+
         let mut commits = self.commits(repo, number).await?;
 
         // One request per commit, so the count is capped rather than left to
@@ -235,8 +284,8 @@ pub trait ForgeRead: Send + Sync {
         }
 
         Ok(PullRequestContext {
-            pull_request: self.pull_request(repo, number).await?,
-            files: self.changed_files(repo, number).await?,
+            pull_request,
+            files,
             commits,
             comments: self.comments(repo, number).await?,
             checks: Default::default(),
@@ -290,6 +339,17 @@ pub trait ForgeWrite: Send + Sync {
         comments: Vec<ReviewComment>,
         event: ReviewEvent,
     ) -> Result<()>;
+
+    /// Withdraw tinysweeper's own standing approval on a pull request, if
+    /// there is one, with `message` as the reason GitHub shows.
+    ///
+    /// A comment does not withdraw an approval — the forge keeps the last
+    /// *verdict* in force under any number of comments — so a review that
+    /// could not vouch for a new push has to say so with this, or a
+    /// repository that does not dismiss stale approvals merges the push on
+    /// the strength of what the bot said about an earlier one. Nothing to
+    /// withdraw is not an error.
+    async fn dismiss_own_approval(&self, repo: &RepoId, number: u64, message: &str) -> Result<()>;
 
     /// Add labels to an issue or pull request.
     async fn add_labels(&self, repo: &RepoId, number: u64, labels: &[String]) -> Result<()>;

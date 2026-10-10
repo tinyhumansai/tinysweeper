@@ -26,8 +26,9 @@ use crate::error::{Error, Result};
 
 pub use crate::config::merge::{Layer, Provenance};
 pub use crate::config::types::{
-    AutoMerge, Automation, Cache, Config, IssueClose, Issues, Labeler, Labels, Lane, LaneId,
+    AutoMerge, Automation, Cache, Config, IssueClose, Issues, Labeler, Labels, Lane, LaneId, Mcp,
     MergeMethod, ModelRef, Models, PathInstruction, Paths, Review, Sentry, Severity, Stale,
+    Summary, SummarySection,
 };
 
 /// The built-in defaults, compiled in so a repository with no config at all
@@ -61,6 +62,73 @@ pub struct Loaded {
     pub source: Option<PathBuf>,
     /// The preset file that was merged, if the config named one.
     pub preset_source: Option<PathBuf>,
+}
+
+/// An explicit posting gate the strictness dial overrode because it was looser.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClampedGate {
+    /// The dotted key, `review.severity_gate` or `review.confidence_min`.
+    pub key: &'static str,
+    /// What the layer asked for.
+    pub configured: String,
+    /// What the review actually uses.
+    pub effective: String,
+    /// The layer that set the key, when provenance knows it.
+    pub layer: Option<Layer>,
+}
+
+impl std::fmt::Display for ClampedGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let layer = self.layer.map_or("an unknown", Layer::as_str);
+        write!(
+            f,
+            "`{} = {}` from the {layer} layer is looser than `review.strictness` \
+             allows; the dial is authoritative, so the effective value is {}",
+            self.key, self.configured, self.effective
+        )
+    }
+}
+
+/// Every explicit gate looser than the strictness dial, and so ignored.
+///
+/// Reported rather than silently clamped: a setting that reads as applied and
+/// is not is the worst failure a config file has (see `validate`). Not a
+/// validation problem, because refusing a config over a key that now merely
+/// does nothing would cost a review rather than a comment.
+pub fn clamped_gates(config: &Config, provenance: &Provenance) -> Vec<ClampedGate> {
+    let dial = types::Strictness::for_level(config.review.strictness);
+    let mut clamped = Vec::new();
+    if let Some(configured) = config.review.severity_gate.as_deref()
+        && let Some(severity) = types::Severity::parse(configured)
+        && severity < dial.severity
+    {
+        clamped.push(ClampedGate {
+            key: "review.severity_gate",
+            configured: format!("\"{configured}\""),
+            effective: config.severity_gate().to_string(),
+            layer: provenance.get("review.severity_gate"),
+        });
+    }
+    if let Some(configured) = config.review.confidence_min
+        && configured < dial.confidence
+    {
+        clamped.push(ClampedGate {
+            key: "review.confidence_min",
+            configured: configured.to_string(),
+            effective: config.confidence_min().to_string(),
+            layer: provenance.get("review.confidence_min"),
+        });
+    }
+    clamped
+}
+
+/// Log each clamped gate once, at warn, as the config is loaded.
+pub(crate) fn warn_clamped_gates(config: &Config, provenance: &Provenance, only: Option<Layer>) {
+    for gate in clamped_gates(config, provenance) {
+        if only.is_none_or(|layer| gate.layer == Some(layer)) {
+            tracing::warn!(key = gate.key, layer = ?gate.layer, "{gate}");
+        }
+    }
 }
 
 /// Find a config file at or under `path`.
@@ -153,6 +221,7 @@ pub fn load(root: &Path, explicit: Option<&Path>) -> Result<Loaded> {
     })?;
 
     load_rule_documents(root, &mut config)?;
+    warn_clamped_gates(&config, &provenance, None);
 
     Ok(Loaded {
         config,
@@ -220,6 +289,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
         ["memory", "questions"] => "memory.questions.*".to_owned(),
         ["council", "agents"] => "council.agents.*".to_owned(),
         ["sentry", "route"] => "sentry.route.*".to_owned(),
+        ["models", "routes"] => "models.routes.*".to_owned(),
         _ => parts.join("."),
     };
     match path.as_str() {
@@ -236,17 +306,21 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "embeddings",
             "retrieval",
             "memory",
+            "mcp",
             "lanes",
             "council",
             "lookup",
+            "grouping",
             "automerge",
             "threads",
             "overview",
+            "summary",
             "issues",
             "pr_triage",
             "automation",
             "sentry",
             "preview",
+            "wireframe",
         ]),
         "review" => Some(&[
             "lanes",
@@ -254,12 +328,15 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "severity_gate",
             "confidence_min",
             "max_comments",
+            "max_changed_files",
+            "max_changed_lines",
             "note_confidence",
             "incremental",
             "draft_prs",
             "respect_agents_md",
             "request_changes_at",
             "approve_when_clean",
+            "passes",
         ]),
         "threads" => Some(&["resolve_fixed", "ask_model", "comment_on_resolve"]),
         "overview" => Some(&[
@@ -269,8 +346,15 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "max_links",
             "max_paths_per_component",
         ]),
+        "summary" => Some(&[
+            "enabled",
+            "sections",
+            "max_features",
+            "max_tests",
+            "history_entries",
+        ]),
         "paths" => Some(&["ignore"]),
-        "path_instructions.*" => Some(&["glob", "instructions", "rules", "lanes"]),
+        "path_instructions.*" => Some(&["glob", "instructions", "rules", "lanes", "merge"]),
         "cache" => Some(&["enabled", "semantic", "max_age_days"]),
         "labels" => Some(&["human_review", "manual_only"]),
         "models" => Some(&[
@@ -285,8 +369,13 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "max_tokens",
             "reasoning_effort",
             "structured_output",
+            "agentic_reviewers",
+            "budget_prices",
             "budget_usd_per_pr",
+            "routes",
         ]),
+        "models.budget_prices" => None,
+        "models.routes.*" => Some(&["model", "order", "allow_fallbacks", "max_tokens"]),
         "models.provider" => Some(&[
             "order",
             "allow_fallbacks",
@@ -344,12 +433,22 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "answer_model",
             "query_terms",
         ]),
+        "mcp" => Some(&["enabled", "token_env", "allowed_org", "allowed_repos"]),
         "memory.questions.*" => Some(&["section", "ask"]),
         "lanes" => Some(&[]),
-        "lanes.*" => Some(&["model", "fail_on", "secret_rulepack", "max_blob_bytes"]),
+        "lanes.*" => Some(&[
+            "model",
+            "fail_on",
+            "secret_rulepack",
+            "max_blob_bytes",
+            "missing_harness",
+            "paths",
+            "workflows",
+        ]),
         "council" => Some(&["enabled", "corroboration", "subagents", "agents"]),
         "council.agents.*" => Some(&["id", "lanes", "model", "persona"]),
         "lookup" => Some(&["enabled", "rounds", "per_round", "max_chars", "checkout"]),
+        "grouping" => Some(&["enabled", "max_files", "max_hunk_chars"]),
         "automerge" => Some(&[
             "enabled",
             "require_checks",
@@ -452,6 +551,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "budget_usd",
             "caption",
         ]),
+        "wireframe" => Some(&["enabled", "max_screens", "max_width", "max_height"]),
         _ => Some(&[]),
     }
 }

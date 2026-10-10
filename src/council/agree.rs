@@ -24,11 +24,13 @@
 //! A rule id is as much free text on the second run as it is on the second
 //! reviewer, and the objection above always applied to both.
 //!
-//! [`crate::findings::prior::PriorReview::covers`] is the same looseness
-//! applied across pushes, sharing [`LINE_TOLERANCE`] with this module. It is
-//! deliberately *not* the same function: this one requires the same lane and
-//! groups two live findings, that one ignores the lane and compares a live
-//! finding against a comment already on GitHub.
+//! [`crate::findings::prior::PriorReview::covers_anchor`] applies related
+//! positional evidence across pushes and shares [`LINE_TOLERANCE`] with this
+//! module. It is deliberately *not* the same function: this one groups two
+//! live findings, while that one also requires a matching title before a live
+//! finding can be suppressed by a comment already on GitHub. Both require the
+//! same lane; cross-lane co-location preserves each identity in a shared
+//! published thread instead.
 
 use crate::findings::types::Finding;
 

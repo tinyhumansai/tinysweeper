@@ -219,12 +219,20 @@ pub fn rule_line(rule: &str) -> String {
         Some((head, rest)) if !head.trim().is_empty() && !rest.trim().is_empty() => {
             format!(
                 "**[RULE] {}**: {}",
-                escape_cell(head.trim()),
+                escape_emphasis(head.trim()),
                 escape_cell(rest.trim())
             )
         }
-        _ => format!("**[RULE] {}**", escape_cell(rule)),
+        _ => format!("**[RULE] {}**", escape_emphasis(rule)),
     }
+}
+
+/// Escape model-authored text placed inside a Markdown emphasis run.
+pub fn escape_emphasis(text: &str) -> String {
+    escape_html(text)
+        .replace('\\', "\\\\")
+        .replace('*', "\\*")
+        .replace('_', "\\_")
 }
 
 /// A `<summary>` renders as HTML, so a stray tag in a title would break out of
@@ -418,6 +426,9 @@ mod tests {
             applicable: None,
             late: false,
             identity: None,
+            aliases: vec![],
+            grouped: false,
+            review_pass: 1,
             corroboration: 1,
         }
     }
@@ -761,11 +772,12 @@ mod cost_table_tests {
         // The rule used to sit inside backticks, which neutralised any markup
         // in it. Emphasising the head means it is rendered, so a stray tag
         // would escape into the page and mangle everything after it.
-        let rendered = rule_line("<script>x</script>: and <b>more</b>");
+        let rendered = rule_line("<script>**x**</script>: and <b>more</b>");
 
         assert!(!rendered.contains("<script>"), "{rendered}");
         assert!(!rendered.contains("<b>"), "{rendered}");
         assert!(rendered.contains("&lt;script&gt;"), "{rendered}");
+        assert!(rendered.contains("\\*\\*x\\*\\*"), "{rendered}");
     }
 
     #[test]

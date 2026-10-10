@@ -26,11 +26,15 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_review(config, &mut problems);
     validate_paths(config, &mut problems);
     validate_models(config, &mut problems);
+    validate_submodules(config, &mut problems);
     validate_knowledge(config, &mut problems);
     validate_embeddings(config, &mut problems);
     validate_retrieval(config, &mut problems);
     validate_memory(config, &mut problems);
+    validate_mcp(config, &mut problems);
     validate_overview(config, &mut problems);
+    validate_summary(config, &mut problems);
+    validate_grouping(config, &mut problems);
     validate_lanes(config, &mut problems);
     validate_council(config, &mut problems);
     validate_automerge(config, &mut problems);
@@ -41,6 +45,70 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_preview(config, &mut problems);
 
     problems
+}
+
+fn validate_mcp(config: &Config, problems: &mut Vec<String>) {
+    if !config.mcp.enabled {
+        return;
+    }
+    if config.mcp.token_env.trim().is_empty() {
+        problems.push(
+            "`mcp.token_env` is empty; it must name the environment variable holding the MCP bearer"
+                .into(),
+        );
+    } else if !config.mcp.token_env.starts_with("TINYSWEEPER_")
+        || !config.mcp.token_env.ends_with("_TOKEN")
+        || !config
+            .mcp
+            .token_env
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    {
+        problems.push(
+            "`mcp.token_env` must be an uppercase `TINYSWEEPER_*_TOKEN` environment variable name; never put the bearer in the config file"
+                .into(),
+        );
+    }
+    let org = &config.mcp.allowed_org;
+    if !valid_github_login(org) {
+        problems.push("`mcp.allowed_org` must be one plausible GitHub organisation login".into());
+    }
+    if config.mcp.allowed_repos.is_empty() {
+        problems.push(
+            "`mcp.allowed_repos` is empty; list every owner/name repository the MCP endpoint may expose"
+                .into(),
+        );
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for raw in &config.mcp.allowed_repos {
+        let Some(repo) = RepoId::parse(raw) else {
+            problems.push(format!(
+                "`mcp.allowed_repos` contains invalid repository `{raw}`; expected owner/name"
+            ));
+            continue;
+        };
+        if !repo.owner.eq_ignore_ascii_case(org) {
+            problems.push(format!(
+                "`mcp.allowed_repos` entry `{raw}` is outside `mcp.allowed_org`"
+            ));
+        }
+        let normalized = raw.to_ascii_lowercase();
+        if !seen.insert(normalized) {
+            problems.push(format!(
+                "`mcp.allowed_repos` contains duplicate repository `{raw}`"
+            ));
+        }
+    }
+}
+
+fn valid_github_login(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 39
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
 fn validate_version(config: &Config, problems: &mut Vec<String>) {
@@ -123,6 +191,27 @@ fn validate_review(config: &Config, problems: &mut Vec<String>) {
                 .into(),
         );
     }
+
+    if review.max_changed_files == 0 {
+        problems.push(
+            "`review.max_changed_files = 0` would refuse every non-empty pull request; set it above zero"
+                .into(),
+        );
+    }
+
+    if review.max_changed_lines == 0 {
+        problems.push(
+            "`review.max_changed_lines = 0` would refuse every pull request that changes code; set it above zero"
+                .into(),
+        );
+    }
+
+    if !(1..=3).contains(&review.passes) {
+        problems.push(format!(
+            "`review.passes = {}` is out of range; expected a maximum adaptive depth from 1 through 3",
+            review.passes
+        ));
+    }
 }
 
 fn validate_paths(config: &Config, problems: &mut Vec<String>) {
@@ -153,6 +242,13 @@ fn validate_paths(config: &Config, problems: &mut Vec<String>) {
 
 fn validate_models(config: &Config, problems: &mut Vec<String>) {
     let models = &config.models;
+    if models.agentic_reviewers
+        && models.structured_output != crate::config::types::StructuredOutput::Schema
+    {
+        problems.push(
+            "`models.agentic_reviewers` requires `models.structured_output = \"schema\"`".into(),
+        );
+    }
 
     if models.base_url.trim().is_empty() {
         problems.push("`models.base_url` is empty".into());
@@ -228,6 +324,60 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
         ));
     }
 
+    // One route per model. Every reader of the list takes the first match —
+    // `routing_for`, `call_until_complete`, `Models::route_for` — so a second
+    // entry for the same model is not an override, it is ignored, while
+    // `doctor` prints both as if they applied.
+    let mut seen = std::collections::BTreeSet::new();
+    for route in &models.routes {
+        // Matched by exact string everywhere, so `"deep "` is a route for
+        // nobody that `doctor` would still print.
+        if route.model.is_empty() || route.model.trim() != route.model {
+            problems.push(format!(
+                "`models.routes` entry `{}` must name a model exactly, with no surrounding \
+                 whitespace",
+                route.model
+            ));
+        }
+        if !seen.insert(route.model.as_str()) {
+            problems.push(format!(
+                "`models.routes` names `{}` more than once; only the first entry would apply, \
+                 so merge them into one",
+                route.model
+            ));
+        }
+    }
+
+    // A route's ceiling replaces the global one for its model, so the same
+    // floor applies to it — a nonzero override below it recreates exactly the
+    // failure the check above exists for, on one rung. Zero means "no
+    // ceiling" on the wire, which cannot bound spend for any review lane.
+    for route in &models.routes {
+        if route.max_tokens == Some(0) {
+            problems.push(format!(
+                "`models.routes[{}].max_tokens = 0` removes the output ceiling; budgeted \
+                 reviews require a finite output cap. Set a positive cap or omit the override \
+                 to inherit `models.max_tokens`",
+                route.model,
+            ));
+        }
+        if let Some(cap) = route.max_tokens
+            && cap != 0
+            && cap < REASONING_FLOOR
+            && models.reasoning_effort.trim() != "off"
+            && !models.reasoning_effort.trim().is_empty()
+        {
+            problems.push(format!(
+                "`models.routes[{}].max_tokens = {cap}` is too small with \
+                 `models.reasoning_effort = \"{}\"`: reasoning is billed against the same \
+                 ceiling as the answer. Raise it to at least {REASONING_FLOOR}, or set \
+                 `models.reasoning_effort = \"off\"`",
+                route.model,
+                models.reasoning_effort.trim(),
+            ));
+        }
+    }
+
     // `!is_finite()` catches nan and inf, which sail straight through a
     // `<= 0.0` comparison and would disable the spend ceiling entirely.
     if !models.budget_usd_per_pr.is_finite() || models.budget_usd_per_pr <= 0.0 {
@@ -235,6 +385,23 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
             "`models.budget_usd_per_pr = {}` must be a finite number above zero; it is the hard ceiling for one pull request",
             models.budget_usd_per_pr
         ));
+    }
+
+    // Invalid rates make admission arithmetic meaningless. Name only the
+    // alias and field so diagnostics never echo operator-supplied rates.
+    for (alias, bound) in &models.budget_prices {
+        for (field, rate) in [("input", bound.input), ("cached", bound.cached)] {
+            if !rate.is_finite() || rate < 0.0 {
+                problems.push(format!(
+                    "`models.budget_prices[{alias}].{field}` must be finite and nonnegative"
+                ));
+            }
+        }
+        if !bound.output.is_finite() || bound.output <= 0.0 {
+            problems.push(format!(
+                "`models.budget_prices[{alias}].output` must be finite and strictly positive"
+            ));
+        }
     }
 }
 
@@ -391,15 +558,63 @@ fn validate_embeddings(config: &Config, problems: &mut Vec<String>) {
         );
     }
 
+    // The closed set `index::embedder_from_config` and `ProviderEmbedder`
+    // know between them. A name outside it fails at construction anyway,
+    // but that is on the first push; `doctor` is where a typo belongs.
+    const PROVIDERS: [&str; 7] = [
+        "voyage",
+        "openai",
+        "cohere",
+        "ollama",
+        "mock",
+        "openrouter",
+        "ladder",
+    ];
+    let provider = embeddings.provider.trim();
+    if !provider.is_empty() && !PROVIDERS.contains(&provider) {
+        // The value is not echoed; this text reaches a check-run summary.
+        problems.push(format!(
+            "`embeddings.provider` names no provider this build knows; one of {}",
+            PROVIDERS.join(", ")
+        ));
+    }
+
+    // The ladder has no default address: it is on this box, wherever the
+    // operator put it, and a blank URL would be a connection error on the
+    // first push rather than a line in `doctor`.
+    if embeddings.provider.trim() == "ladder" && embeddings.base_url.trim().is_empty() {
+        problems.push(
+            "`embeddings.provider = \"ladder\"` needs `embeddings.base_url`: the ladder's \
+             `/v1/embeddings` on this box, e.g. `http://host.docker.internal:6969/v1/embeddings`"
+                .into(),
+        );
+    }
+
+    if embeddings.provider.trim() == "ladder"
+        && !embeddings.base_url.trim().is_empty()
+        && !url::Url::parse(embeddings.base_url.trim()).is_ok_and(|url| url.host_str().is_some())
+    {
+        // The value is not echoed: a malformed URL is where a pasted
+        // credential ends up, and this text reaches a check-run summary.
+        problems.push(
+            "`embeddings.base_url` is not a URL with a host; the ladder's `/v1/embeddings` on \
+             this box looks like `http://host.docker.internal:6969/v1/embeddings`"
+                .into(),
+        );
+    }
+
     if !embeddings.base_url.trim().is_empty()
         && !embeddings.base_url.starts_with("http://")
         && !embeddings.base_url.starts_with("https://")
     {
-        problems.push(format!(
-            "`embeddings.base_url = \"{}\"` is not an http(s) URL; leave it empty for the \
-             provider's own default",
-            embeddings.base_url
-        ));
+        // Not echoed, for the same reason as the ladder check above: this
+        // text reaches a check-run summary, and a malformed URL is where a
+        // pasted credential ends up.
+        problems.push(
+            "`embeddings.base_url` is not an http(s) URL; leave it empty for the provider's \
+             own default"
+                .into(),
+        );
     }
 
     if embeddings.batch == 0 {
@@ -525,6 +740,56 @@ fn validate_overview(config: &Config, problems: &mut Vec<String>) {
     }
 }
 
+fn validate_summary(config: &Config, problems: &mut Vec<String>) {
+    let summary = &config.summary;
+    if !summary.enabled {
+        return;
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for section in &summary.sections {
+        let name = format!("{section:?}");
+        if !seen.insert(name.clone()) {
+            problems.push(format!(
+                "`summary.sections` contains `{name}` more than once"
+            ));
+        }
+    }
+}
+
+fn validate_grouping(config: &Config, problems: &mut Vec<String>) {
+    // Disabled grouping never calls `grouping::group`, so a zero bound here
+    // is inert rather than contradictory — and the error below names exactly
+    // this key as the valid way to turn grouping off. Mirrors
+    // `validate_overview`'s early return for its own inactive feature.
+    if !config.grouping.enabled {
+        return;
+    }
+
+    // `grouping::fits` rejects any component whose file count exceeds
+    // `max_files`, so `max_files < 2` rejects every group of more than one
+    // file and singletons are all `group` ever produces — indistinguishable
+    // from grouping being off, but paying the union-find and the confusion
+    // of a config that claims to be on.
+    if config.grouping.max_files < 2 {
+        problems.push(format!(
+            "`grouping.max_files = {}` would group nothing; set it to at least 2 or set \
+             `grouping.enabled = false`",
+            config.grouping.max_files
+        ));
+    }
+
+    // `fits` also rejects any component whose total rendered hunk length
+    // exceeds `max_hunk_chars`, so a zero here rejects every non-empty
+    // group just as surely as `max_files < 2` does.
+    if config.grouping.max_hunk_chars == 0 {
+        problems.push(
+            "`grouping.max_hunk_chars = 0` would group nothing; set it above zero or set \
+             `grouping.enabled = false`"
+                .into(),
+        );
+    }
+}
+
 fn validate_lanes(config: &Config, problems: &mut Vec<String>) {
     for (name, lane) in &config.lanes {
         let Some(lane_id) = LaneId::parse(name) else {
@@ -572,6 +837,40 @@ fn validate_lanes(config: &Config, problems: &mut Vec<String>) {
             problems.push(format!(
                 "`lanes.{name}.max_blob_bytes = 0` would flag every committed file"
             ));
+        }
+
+        if lane_id != LaneId::E2e {
+            if lane.missing_harness.is_some() {
+                problems.push(format!(
+                    "`lanes.{name}.missing_harness` applies only to the `e2e` lane"
+                ));
+            }
+            if !lane.paths.is_empty() {
+                problems.push(format!(
+                    "`lanes.{name}.paths` applies only to the `e2e` lane"
+                ));
+            }
+            if !lane.workflows.is_empty() {
+                problems.push(format!(
+                    "`lanes.{name}.workflows` applies only to the `e2e` lane"
+                ));
+            }
+        }
+
+        if let Some(policy) = &lane.missing_harness
+            && !matches!(policy.as_str(), "skip" | "require")
+        {
+            problems.push(format!(
+                "`lanes.{name}.missing_harness = \"{policy}\"` is not a policy; expected `skip` or `require`"
+            ));
+        }
+
+        for glob in &lane.paths {
+            if globset::Glob::new(glob).is_err() {
+                problems.push(format!(
+                    "`lanes.{name}.paths` contains an invalid glob `{glob}`"
+                ));
+            }
         }
     }
 }
@@ -930,6 +1229,22 @@ fn validate_preview(config: &Config, problems: &mut Vec<String>) {
                 .into(),
         ),
         None => {}
+    }
+}
+
+/// Every `retrieval.submodules` entry must be an `owner/name` the forge can
+/// resolve. A misspelt one is not a weaker allow-list, it is a missing one:
+/// `Checkout::fetch_submodules` and `ForgeTree::allowing` drop what they
+/// cannot parse, and the operator who listed `acme-lib` would be told the
+/// submodule is unavailable while `doctor` called the config fine.
+fn validate_submodules(config: &Config, problems: &mut Vec<String>) {
+    for entry in &config.retrieval.submodules {
+        if crate::forge::types::RepoId::parse(entry).is_none() {
+            problems.push(format!(
+                "`retrieval.submodules` entry `{entry}` is not `owner/name`; a submodule the \
+                 forge cannot resolve is one nothing reads"
+            ));
+        }
     }
 }
 

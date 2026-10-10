@@ -89,6 +89,13 @@ pub struct Indexer<'a> {
     group: usize,
     budget_usd: Option<f64>,
     holder: String,
+    /// Directories whose absent paths are deleted before anything is
+    /// embedded: the submodules this checkout did not fetch. See
+    /// [`Indexer::revoking`].
+    revoked: Vec<String>,
+    /// Directories whose absent paths are *kept*: submodules the checkout
+    /// should have but a fetch failed to bring. See [`Indexer::missing`].
+    missing: Vec<String>,
 }
 
 impl<'a> Indexer<'a> {
@@ -109,7 +116,40 @@ impl<'a> Indexer<'a> {
             group: DEFAULT_GROUP,
             budget_usd: None,
             holder: format!("pid-{}", std::process::id()),
+            revoked: Vec::new(),
+            missing: Vec::new(),
         })
+    }
+
+    /// Name the submodule directories a fetch failed to bring this time.
+    ///
+    /// The opposite of [`Indexer::revoking`]. These are allowed, and absent
+    /// only because the network or the token failed today; their paths are
+    /// left out of the run's removal step so the index keeps serving what it
+    /// had, and the run does not claim the revision, so the next delivery at
+    /// the same head fetches and indexes them rather than believing the index
+    /// is fresh without them.
+    pub fn missing(mut self, submodule_dirs: Vec<String>) -> Self {
+        self.missing = dirs_of(submodule_dirs);
+        self
+    }
+
+    /// Name the submodule directories this checkout did not fetch.
+    ///
+    /// A path the manifest knows under one of these is deleted *before* the
+    /// embedding pass rather than after it. Ordinary removals keep their
+    /// place at the end — write before delete, so a rename whose new path
+    /// cannot be embedded still has its old one — but a path under an
+    /// unfetched submodule has no replacement coming, and the reason it is
+    /// unfetched is usually that the operator took the repository off
+    /// `retrieval.submodules`. That is a revocation, and a review querying
+    /// this index while the rebuild is still embedding, or after it stops on
+    /// budget, must not be handed that repository's code. Only paths absent
+    /// from the checkout are touched: a `.gitmodules` entry naming a
+    /// directory that is really on disk names nothing that is gone.
+    pub fn revoking(mut self, submodule_dirs: Vec<String>) -> Self {
+        self.revoked = dirs_of(submodule_dirs);
+        self
     }
 
     /// Use a caller-configured file selector — normally one built from
@@ -190,23 +230,15 @@ impl<'a> Indexer<'a> {
 
         let selection = self.selector.walk(root)?;
         // Anything the manifest knows about that the walk no longer sees has
-        // been deleted or newly ignored, and its chunks have to go.
-        let seen: BTreeSet<&String> = selection.selected.iter().collect();
-        let removed: Vec<String> = self
-            .manifest
-            .paths(repo_id, &signature)
-            .await?
-            .into_iter()
-            .filter(|path| !seen.contains(path))
-            .collect();
-
+        // been deleted or newly ignored, and its chunks have to go. Which
+        // paths the manifest knows is read under the claim — see `Removed`.
         self.guarded(
             repo_id,
             revision,
             root,
             selection.selected,
             selection.skipped,
-            removed,
+            Removed::NotSeenByTheWalk,
         )
         .await
     }
@@ -258,7 +290,7 @@ impl<'a> Indexer<'a> {
             root,
             selection.selected,
             selection.skipped,
-            removed,
+            Removed::These(removed),
         )
         .await
     }
@@ -271,7 +303,7 @@ impl<'a> Indexer<'a> {
         root: &Path,
         selected: Vec<String>,
         skipped: Vec<SkippedFile>,
-        removed: Vec<String>,
+        removed: Removed,
     ) -> Result<IndexOutcome> {
         let signature = self.embedder.signature();
         let lease = match self
@@ -290,23 +322,138 @@ impl<'a> Indexer<'a> {
             }
         };
 
+        // The count this run starts from, read under the claim: read before
+        // it, a worker finishing at that moment could settle a newer count
+        // that this run would then overwrite with its stale baseline plus
+        // its own deltas. Read after the writes it would be the same number
+        // — nothing but `release` moves it — but under the claim, before the
+        // run, is the reading nobody has to think about. A read that fails
+        // releases the claim, or every later delivery requeues against a
+        // lease nobody holds until its TTL.
+        let state = match self.manifest.state(repo_id, &signature).await {
+            Ok(state) => state,
+            Err(err) => return Err(self.release_failed(&lease, err).await),
+        };
+        let before = state.chunks;
+        // Read under the claim for the same reason: a worker under the old
+        // policy confirming a submodule's files between a read before the
+        // claim and the claim itself would leave those paths out of the
+        // removal set, and the policy that revoked them settled as fresh.
+        let removed = match removed {
+            // A changed-path list names what a push touched, which is not
+            // where a revocation lives: a revoked submodule's rows are under
+            // paths no push mentions. With a revocation in force the
+            // manifest is asked for them as well.
+            Removed::These(mut paths) => {
+                if !self.revoked.is_empty() {
+                    let known = match self.manifest.paths(repo_id, &signature).await {
+                        Ok(known) => known,
+                        Err(err) => return Err(self.release_failed(&lease, err).await),
+                    };
+                    let seen: BTreeSet<&String> = selected.iter().collect();
+                    for path in known {
+                        if !seen.contains(&path)
+                            && !paths.contains(&path)
+                            && self
+                                .revoked
+                                .iter()
+                                .any(|dir| path.starts_with(dir.as_str()))
+                        {
+                            paths.push(path);
+                        }
+                    }
+                }
+                paths
+            }
+            Removed::NotSeenByTheWalk => {
+                let seen: BTreeSet<&String> = selected.iter().collect();
+                match self.manifest.paths(repo_id, &signature).await {
+                    Ok(known) => known
+                        .into_iter()
+                        .filter(|path| !seen.contains(path))
+                        .collect(),
+                    Err(err) => return Err(self.release_failed(&lease, err).await),
+                }
+            }
+        };
+
+        let mut report = IndexReport {
+            skipped,
+            // Decided under the claim, from the record this run starts from:
+            // a run that never completed — cold, budget, a missing
+            // submodule, or one that failed part-way — leaves either no
+            // revision or a failed state, and either means the graph is
+            // owed a whole rebuild rather than an incremental one keyed on
+            // a `changed` list that the incomplete run already confirmed.
+            // Not the state: `claim` has just set it to `Indexing`. A record
+            // that never completed has no revision; one whose last run failed
+            // still carries that run's message (a completed run clears it).
+            rebuild_graph: state.revision.is_none() || state.message.is_some(),
+            // A previous run that could not account for what it confirmed
+            // said so; this run settles from a recount, not from deltas. So
+            // does the first run to complete after any that did not: what an
+            // incomplete run confirmed is reused, not re-counted, and a
+            // running total that started from nothing would stay at nothing.
+            recount: state.revision.is_none()
+                || state.message.as_deref().is_some_and(|message| {
+                    message.contains(crate::indexer::types::COUNT_UNCERTAIN)
+                }),
+            ..IndexReport::default()
+        };
         let outcome = self
-            .run(repo_id, &signature, root, selected, skipped, removed)
+            .run(repo_id, &signature, root, selected, removed, &mut report)
             .await;
 
         // Released on both paths. A claim only released on success is a claim a
         // crashed run holds until its TTL expires, and every push in between is
         // requeued for nothing.
         match outcome {
-            Ok(report) => {
-                self.settle(&lease, &signature, repo_id, revision, &report)
-                    .await?;
+            Ok(()) => {
+                let chunks = if report.recount {
+                    match self.recount(repo_id, &signature).await {
+                        Ok(chunks) => chunks,
+                        // The recount is the one read that decides the count,
+                        // so a failure there keeps the marker for the next
+                        // claimant — and releases the claim, or nobody is.
+                        Err(err) => {
+                            let settled = Settled::Failed {
+                                message: format!(
+                                    "{err} {}",
+                                    crate::indexer::types::COUNT_UNCERTAIN
+                                ),
+                                chunks: None,
+                            };
+                            if let Err(nested) = self.manifest.release(&lease, &settled).await {
+                                tracing::warn!(error = %nested, "could not release the index claim");
+                            }
+                            return Err(err);
+                        }
+                    }
+                } else {
+                    before
+                        .saturating_add(report.upserted)
+                        .saturating_sub(report.deleted)
+                };
+                self.settle(&lease, chunks, revision, &report).await?;
                 Ok(IndexOutcome::Indexed(report))
             }
             Err(err) => {
-                let settled = Settled::Failed {
-                    message: err.to_string(),
+                // What the run wrote and deleted before it failed is on disk
+                // whatever the error says; the count on record must say so
+                // too, or the next run inherits a total for chunks that are
+                // not there. A run that could not tell what it confirmed
+                // says so in its message, and the next run recounts.
+                let chunks = (report.upserted != 0 || report.deleted != 0).then(|| {
+                    before
+                        .saturating_add(report.upserted)
+                        .saturating_sub(report.deleted)
+                });
+                let message = if report.recount {
+                    format!("{err} {}", crate::indexer::types::COUNT_UNCERTAIN)
+                } else {
+                    err.to_string()
                 };
+                let settled = Settled::Failed { message, chunks };
                 // A release failure must not mask the error that caused it.
                 if let Err(nested) = self.manifest.release(&lease, &settled).await {
                     tracing::warn!(error = %nested, "could not release the index claim");
@@ -316,28 +463,61 @@ impl<'a> Indexer<'a> {
         }
     }
 
+    /// Release a claim for a run that failed before it wrote anything,
+    /// handing the error back to return.
+    async fn release_failed(&self, lease: &IndexLease, err: Error) -> Error {
+        let settled = Settled::Failed {
+            message: err.to_string(),
+            chunks: None,
+        };
+        if let Err(nested) = self.manifest.release(lease, &settled).await {
+            tracing::warn!(error = %nested, "could not release the index claim");
+        }
+        err
+    }
+
+    /// The repository's counted rows, from the manifest rather than from a
+    /// running total: every confirmed id, plus every confirmation's pending
+    /// set. One repository-wide read, spent only after a run that could not
+    /// account for itself.
+    async fn recount(&self, repo_id: &str, signature: &EmbedSignature) -> Result<u64> {
+        let paths = self.manifest.paths(repo_id, signature).await?;
+        let mut total = 0_u64;
+        // In batches: a monorepo's path list in one `$in` is a query the
+        // store may refuse outright, and a recount that can never run is a
+        // repository that can never settle.
+        for batch in paths.chunks(RECOUNT_BATCH) {
+            let files = self.manifest.indexed(repo_id, signature, batch).await?;
+            total += files
+                .iter()
+                .map(|file| {
+                    file.chunks.len() as u64
+                        + if file.pending_is_stale {
+                            file.pending.len() as u64
+                        } else {
+                            0
+                        }
+                })
+                .sum::<u64>();
+        }
+        Ok(total)
+    }
+
     async fn settle(
         &self,
         lease: &IndexLease,
-        signature: &EmbedSignature,
-        repo_id: &str,
+        chunks: u64,
         revision: &str,
         report: &IndexReport,
     ) -> Result<()> {
-        let chunks = self
-            .manifest
-            .state(repo_id, signature)
-            .await?
-            .chunks
-            .saturating_add(report.upserted)
-            .saturating_sub(report.deleted);
         self.manifest
             .release(
                 lease,
                 &Settled::Done {
                     // A partial run must not claim the revision: saying so would
                     // make the next push skip the work that was never finished.
-                    revision: (!report.budget_exhausted).then(|| revision.to_string()),
+                    revision: (!report.budget_exhausted && report.unfetched.is_empty())
+                        .then(|| revision.to_string()),
                     chunks,
                     usage: report.usage,
                 },
@@ -351,29 +531,132 @@ impl<'a> Indexer<'a> {
         signature: &EmbedSignature,
         root: &Path,
         selected: Vec<String>,
-        skipped: Vec<SkippedFile>,
         removed: Vec<String>,
-    ) -> Result<IndexReport> {
-        let mut report = IndexReport {
-            skipped,
-            ..IndexReport::default()
-        };
+        report: &mut IndexReport,
+    ) -> Result<()> {
+        // Revocations first, everything else after the writes. See
+        // [`Indexer::revoking`] for why the two kinds of removal are ordered
+        // differently.
+        //
+        // Only the *rows* go early. The manifest keeps the paths until the
+        // run's own removal step below, so a run that fails between here and
+        // there leaves them discoverable: the next full walk finds them
+        // absent again, deletes nothing (already gone), and carries them in
+        // `removed` to the graph sync that only an `Indexed` outcome reaches.
+        // Forgetting them here would make that graph cleanup unreachable.
+        //
+        // A path under a submodule that merely failed to fetch is not removed
+        // at all: it is absent from this checkout, not from the repository.
+        // See [`Indexer::missing`].
+        let under =
+            |dirs: &[String], path: &String| dirs.iter().any(|dir| path.starts_with(dir.as_str()));
+        //
+        // Revocation wins a tie. `.gitmodules` is the contributor's, and two
+        // entries for one path — one allow-listed whose fetch failed, one not
+        // allow-listed — would otherwise let the "missing" reading keep rows
+        // the operator revoked.
+        let (_missing, removed): (Vec<String>, Vec<String>) = removed
+            .into_iter()
+            .partition(|path| under(&self.missing, path) && !under(&self.revoked, path));
+        // Named whether or not the index held anything under them: a cold
+        // repository, or a submodule allow-listed today, has no old rows to
+        // keep — and still must not have its head claimed as indexed.
+        report.unfetched = self
+            .missing
+            .iter()
+            // A directory the operator revoked — or anything under one — is
+            // not one the run is waiting on, whatever a second `.gitmodules`
+            // entry says.
+            .filter(|dir| {
+                !self
+                    .revoked
+                    .iter()
+                    .any(|revoked| dir.starts_with(revoked.as_str()))
+            })
+            .map(|dir| dir.trim_end_matches('/').to_string())
+            .collect();
+        let revoked: Vec<String> = removed
+            .iter()
+            .filter(|path| under(&self.revoked, path))
+            .cloned()
+            .collect();
+        if !revoked.is_empty() {
+            self.remove_rows(repo_id, signature, &revoked, report)
+                .await?;
+        }
 
         for group in selected.chunks(self.group) {
             if report.budget_exhausted {
                 break;
             }
-            self.index_group(repo_id, signature, root, group, &mut report)
+            self.index_group(repo_id, signature, root, group, report)
                 .await?;
         }
 
+        // Rows a revocation already deleted are deleted again here for
+        // nothing, and forgotten for the first time. The count comes from the
+        // manifest, not from the store's tally of rows it deleted: the store
+        // also holds rows an earlier attempt wrote and never confirmed, which
+        // were never counted and must not be subtracted.
         if !removed.is_empty() {
-            report.deleted += self.index.delete_paths(repo_id, &removed).await?;
+            self.remove_rows(repo_id, signature, &removed, report)
+                .await?;
             self.manifest.forget(repo_id, signature, &removed).await?;
             report.removed = removed;
         }
 
-        Ok(report)
+        Ok(())
+    }
+
+    /// Delete every row under `paths`, counting the *counted* ones into the
+    /// report.
+    ///
+    /// Two deletes, for two different questions. The number `RepoIndex::chunks`
+    /// tracks is confirmed rows, so the decrement is the confirmed ids the
+    /// manifest has on record — deleted by id, so the store answers how many
+    /// of *those* it removed, which is zero when an earlier attempt already
+    /// removed them and the run that would have forgotten them failed. Then
+    /// the path sweep, uncounted, for rows an earlier attempt wrote and never
+    /// confirmed: they exist, they were never added to the count, and they
+    /// must not be subtracted from it.
+    ///
+    /// The count lands in the report between the two, so a sweep the store
+    /// refuses still leaves the first delete — which happened — on record
+    /// for the failed run to settle.
+    async fn remove_rows(
+        &self,
+        repo_id: &str,
+        signature: &EmbedSignature,
+        paths: &[String],
+        report: &mut IndexReport,
+    ) -> Result<()> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        // Confirmed ids, and the ids a *confirmation* left pending: the old
+        // rows of a replacement whose delete never ran are still in the
+        // store and still in the count, and go by id like the rest. An
+        // intent's pending ids are the opposite — about to be written, never
+        // counted — and are left to the uncounted sweep.
+        let confirmed: Vec<String> = self
+            .manifest
+            .indexed(repo_id, signature, paths)
+            .await?
+            .into_iter()
+            .flat_map(|file| {
+                let stale = if file.pending_is_stale {
+                    file.pending
+                } else {
+                    Vec::new()
+                };
+                file.chunks.into_iter().chain(stale)
+            })
+            .collect();
+        if !confirmed.is_empty() {
+            report.deleted += self.index.delete_chunks(repo_id, &confirmed).await?;
+        }
+        self.index.delete_paths(repo_id, paths).await?;
+        Ok(())
     }
 
     async fn index_group(
@@ -440,7 +723,6 @@ impl<'a> Indexer<'a> {
                 "a confirmed chunk disappeared before its vector could be reused".into(),
             ));
         }
-        report.upserted += relocated;
 
         let queue: Vec<(usize, &Chunk)> = work
             .iter()
@@ -455,6 +737,13 @@ impl<'a> Indexer<'a> {
             last_position[*file] = Some(position);
         }
 
+        // Rows go into the store as they are written, but into the *count*
+        // only when their file is confirmed below. An unconfirmed file is
+        // re-embedded by the next run, and `upsert` reports a replacement as
+        // a write, so counting here would count a chunk once per attempt: a
+        // run cut off by the budget, or one that failed after its first
+        // batch, would leave the total inflated for good.
+        let mut written_per_file = vec![0_u64; work.len()];
         let mut written = 0_usize;
         for (start, end) in batch_bounds(&queue, self.batch, self.max_batch_tokens) {
             let batch = &queue[start..end];
@@ -491,7 +780,10 @@ impl<'a> Indexer<'a> {
                     vector,
                 })
                 .collect();
-            report.upserted += self.index.upsert(signature, &embedded).await?;
+            self.index.upsert(signature, &embedded).await?;
+            for (file, _) in batch {
+                written_per_file[*file] += 1;
+            }
             written += batch.len();
         }
 
@@ -503,6 +795,22 @@ impl<'a> Indexer<'a> {
             None => true,
         };
 
+        // Orphans first — rows an earlier intent may have written and never
+        // confirmed, now superseded. Deleted before the confirmation is
+        // recorded, because the confirmation does not carry them: a delete
+        // that fails here leaves the intent on record, where they are still
+        // listed, and the next run finds them again. Never counted, never
+        // subtracted.
+        let orphans: Vec<String> = work
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| finished(*index))
+            .flat_map(|(_, file)| file.orphans.clone())
+            .collect();
+        if !orphans.is_empty() {
+            self.index.delete_chunks(repo_id, &orphans).await?;
+        }
+
         // Step 4: confirm only the files whose every chunk actually landed. A
         // file cut off by the budget keeps its old confirmed set, so the next
         // run embeds what this one did not.
@@ -512,7 +820,50 @@ impl<'a> Indexer<'a> {
             .filter(|(index, _)| finished(*index))
             .map(|(_, file)| file.confirmation())
             .collect();
-        self.manifest.record(repo_id, signature, &complete).await?;
+        let recorded = self.manifest.record(repo_id, signature, &complete).await;
+        // Counted per file that is *on record* as confirmed, not per file this
+        // run meant to confirm. A manifest that writes its rows one at a time
+        // can fail part-way, and the files it did write are confirmed for
+        // good: the retry sees them unchanged and never counts them. So on a
+        // failure the manifest is asked which ones landed, those are counted,
+        // and only then does the error go up to settle with them.
+        let counted: Vec<usize> = match &recorded {
+            Ok(()) => work
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| finished(*index))
+                .map(|(index, _)| index)
+                .collect(),
+            Err(_) => {
+                let paths: Vec<String> = complete.iter().map(|file| file.path.clone()).collect();
+                let landed = match self.manifest.indexed(repo_id, signature, &paths).await {
+                    Ok(landed) => landed,
+                    Err(read_err) => {
+                        // The same incident, twice. Which confirmations
+                        // landed is now unknowable here, so the count is
+                        // marked as such and the next run recounts from the
+                        // manifest instead of trusting a delta.
+                        report.recount = true;
+                        return Err(read_err);
+                    }
+                };
+                work.iter()
+                    .enumerate()
+                    .filter(|(index, file)| {
+                        finished(*index)
+                            && landed.iter().any(|on_record| {
+                                on_record.path == file.path && on_record.chunks == file.ids
+                            })
+                    })
+                    .map(|(index, _)| index)
+                    .collect()
+            }
+        };
+        report.upserted += counted
+            .iter()
+            .map(|&index| written_per_file[index] + work[index].to_relocate.len() as u64)
+            .sum::<u64>();
+        recorded?;
 
         // Step 5: and only now is anything deleted.
         let stale: Vec<String> = work
@@ -535,6 +886,31 @@ impl<'a> Indexer<'a> {
         self.manifest.record(repo_id, signature, &finalized).await?;
         Ok(())
     }
+}
+
+/// Directory prefixes, one per directory, from however they were spelled.
+fn dirs_of(dirs: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = dirs
+        .into_iter()
+        .map(|dir| format!("{}/", dir.trim_matches('/')))
+        .filter(|dir| dir != "/")
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// How many paths one recount lookup asks the manifest for at a time.
+const RECOUNT_BATCH: usize = 500;
+
+/// Which paths a run removes.
+///
+/// A changed-path run names them; a full walk asks the manifest, and asks
+/// it under the claim rather than before, so nothing another worker confirms
+/// in between is missed.
+enum Removed {
+    These(Vec<String>),
+    NotSeenByTheWalk,
 }
 
 /// Split `queue` into `[start, end)` batches that respect both ceilings.
@@ -588,14 +964,28 @@ struct FileWork {
     to_embed: Vec<Chunk>,
     to_relocate: Vec<(String, Chunk)>,
     stale: Vec<String>,
+    /// Ids an earlier run *intended* and never confirmed, now superseded:
+    /// rows that may or may not exist, and were never counted. Deleted with
+    /// the stale ones, but never subtracted.
+    orphans: Vec<String>,
     previous: Vec<String>,
     reused: u64,
 }
 
 impl FileWork {
     fn new(path: String, chunks: Vec<Chunk>, previous: Option<&IndexedFile>) -> Self {
+        // Every counted row on record: the confirmed set, and a
+        // confirmation's pending set (old rows of a replacement whose delete
+        // never ran — in the index, in the count). An intent's pending set is
+        // not here: those rows were never counted.
         let confirmed: BTreeSet<String> = previous
-            .map(|file| file.chunks.iter().cloned().collect())
+            .map(|file| {
+                let mut ids: BTreeSet<String> = file.chunks.iter().cloned().collect();
+                if file.pending_is_stale {
+                    ids.extend(file.pending.iter().cloned());
+                }
+                ids
+            })
             .unwrap_or_default();
         let by_hash: std::collections::BTreeMap<String, String> = confirmed
             .iter()
@@ -625,11 +1015,23 @@ impl FileWork {
         }
         let reused = ids.len().saturating_sub(to_embed.len()) as u64;
 
-        let stale: Vec<String> = previous
-            .map(IndexedFile::every_id)
-            .unwrap_or_default()
-            .into_iter()
+        // Counted rows that this content supersedes: the confirmed set, and
+        // a confirmation's pending set (the old rows of a replacement whose
+        // delete never ran). An intent's pending set is the other thing —
+        // rows that may have been written and were never counted — and goes
+        // in `orphans`, to be deleted without being subtracted.
+        let uncounted: Vec<String> = match previous {
+            Some(file) if !file.pending_is_stale => file.pending.clone(),
+            _ => Vec::new(),
+        };
+        let stale: Vec<String> = confirmed
+            .iter()
             .filter(|id| !fresh.contains(id))
+            .cloned()
+            .collect();
+        let orphans: Vec<String> = uncounted
+            .into_iter()
+            .filter(|id| !fresh.contains(id) && !stale.contains(id))
             .collect();
 
         Self {
@@ -639,6 +1041,7 @@ impl FileWork {
             to_embed,
             to_relocate,
             stale,
+            orphans,
             reused,
         }
     }
@@ -657,20 +1060,27 @@ impl FileWork {
     fn intent(&self) -> IndexedFile {
         let mut pending = self.ids.clone();
         pending.extend(self.stale.iter().cloned());
+        pending.extend(self.orphans.iter().cloned());
         pending.sort();
         pending.dedup();
         IndexedFile {
             path: self.path.clone(),
             chunks: self.previous.clone(),
             pending,
+            pending_is_stale: false,
         }
     }
 
+    /// The record after the writes landed: the new ids confirmed, the old
+    /// counted ids pending their delete. Orphans are not carried — they were
+    /// deleted before this record was written, and carrying them as stale
+    /// would have a later removal subtract rows it never added.
     fn confirmation(&self) -> IndexedFile {
         IndexedFile {
             path: self.path.clone(),
             chunks: self.ids.clone(),
             pending: self.stale.clone(),
+            pending_is_stale: true,
         }
     }
 

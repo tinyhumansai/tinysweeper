@@ -257,6 +257,34 @@ async fn an_index_behind_the_head_commit_still_retrieves_but_admits_it_is_behind
 }
 
 #[tokio::test]
+async fn an_index_recorded_under_the_submodule_policy_is_fresh_under_the_same_policy() {
+    // The server records `<sha>+submodules:<digest>` when an allow-list is
+    // set. Compared against the bare head, every allow-listed repository
+    // would be stale forever, and every review would carry a false
+    // out-of-date notice.
+    let index = index_with(&[("src/caller.rs", 1, 6, "fn checkout() { settle(); }")]).await;
+    let embedder = embedder();
+    let mut config = config();
+    config.retrieval.submodules = vec!["o/lib".into()];
+    let recorded = crate::indexer::types::indexed_revision(HEAD, &config.retrieval.submodules);
+    let manifest = manifest_at(Some(&recorded), 1).await;
+
+    let (context, _) = Retriever::new(&embedder, &index)
+        .with_manifest(&manifest)
+        .retrieve(&config, REPO, "Charge on settle", HEAD, &callee_diff())
+        .await;
+    assert_eq!(context.status, RetrievalStatus::Ready);
+
+    // And a changed policy at the same head is stale, which is the point.
+    config.retrieval.submodules = vec!["o/other".into()];
+    let (context, _) = Retriever::new(&embedder, &index)
+        .with_manifest(&manifest)
+        .retrieve(&config, REPO, "Charge on settle", HEAD, &callee_diff())
+        .await;
+    assert!(matches!(context.status, RetrievalStatus::Stale { .. }));
+}
+
+#[tokio::test]
 async fn no_manifest_means_no_freshness_claim_rather_than_a_false_alarm() {
     // A missing record is not evidence of staleness. Reporting one anyway
     // trains an operator to ignore the notice.

@@ -8,7 +8,7 @@
 //! still matches. A review of a commit nobody is looking at any more is worse
 //! than no review — it reports on code that has already been replaced.
 
-use crate::app::review::Proposal;
+use crate::app::review::{PROPOSAL_VERSION, Proposal};
 use crate::config::types::{Config, Severity};
 use crate::error::{Error, Result};
 use crate::evidence::diff::{FileDiff, parse_file_patch};
@@ -16,6 +16,57 @@ use crate::forge::types::{ChangedFile, CheckRun, RepoId, ReviewComment, ReviewEv
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 use crate::ports::review_state::ReviewStateStore;
 use crate::{MARKER_PREFIX, VERSION};
+
+/// A fully decided MCP issue creation.
+#[cfg(feature = "serve")]
+pub struct McpIssuePlan {
+    /// Repository already canonicalised and authorised by the planner.
+    pub repo: RepoId,
+    /// GitHub App installation covering the repository.
+    pub installation: u64,
+    /// Final issue title.
+    pub title: String,
+    /// Final template-aware, enriched body.
+    pub body: String,
+    /// Labels requested by the authenticated caller.
+    pub labels: Vec<String>,
+}
+
+/// Which side of the GitHub create request an MCP apply failure occurred on.
+#[cfg(feature = "serve")]
+#[derive(Debug, thiserror::Error)]
+pub enum McpIssueApplyError {
+    /// No create request was sent, so the caller may safely release its claim.
+    #[error("{0}")]
+    BeforeWrite(Error),
+    /// A create request was attempted and may have succeeded despite the error.
+    #[error("{0}")]
+    Ambiguous(Error),
+}
+
+/// Mint the write credential and execute one previously decided MCP issue plan.
+#[cfg(feature = "serve")]
+pub async fn apply_mcp_issue(
+    auth: &crate::server::auth::AppAuth,
+    plan: &McpIssuePlan,
+) -> std::result::Result<u64, McpIssueApplyError> {
+    let token = auth
+        .installation_token(plan.installation)
+        .await
+        .map_err(McpIssueApplyError::BeforeWrite)?;
+    let write =
+        crate::forge::github::GitHubWrite::new(&token).map_err(McpIssueApplyError::BeforeWrite)?;
+    execute_mcp_issue(&write, plan)
+        .await
+        .map_err(McpIssueApplyError::Ambiguous)
+}
+
+#[cfg(feature = "serve")]
+async fn execute_mcp_issue(write: &dyn ForgeWrite, plan: &McpIssuePlan) -> Result<u64> {
+    write
+        .create_issue(&plan.repo, &plan.title, &plan.body, &plan.labels)
+        .await
+}
 
 /// Publish a proposal.
 ///
@@ -76,7 +127,7 @@ pub async fn apply(
     // verdict a stale objection blocks the merge button until a human dismisses
     // it by hand — and it is how an approval that already stands avoids being
     // restated on every push.
-    let previous = own_review_state(read, &repo, proposal.number).await;
+    let (previous, previous_known) = own_review_state(read, &repo, proposal.number).await;
     let event = review_event(config, proposal, previous, live.draft);
     // Every lane is expected to leave an unpostable finding without a line,
     // but `apply` is the final boundary before GitHub sees it. One invalid
@@ -86,7 +137,7 @@ pub async fn apply(
     let comments = inline_comments(proposal, &files);
     let posted: std::collections::BTreeSet<String> = comments
         .iter()
-        .filter_map(|comment| fingerprint(&comment.body))
+        .flat_map(|comment| fingerprints(&comment.body))
         .collect();
     let unanchored: Vec<&crate::findings::types::Finding> = proposal
         .findings()
@@ -105,7 +156,7 @@ pub async fn apply(
     // suppress a later one.
     let newly_posted: Vec<String> = comments
         .iter()
-        .filter_map(|comment| fingerprint(&comment.body))
+        .flat_map(|comment| fingerprints(&comment.body))
         .collect();
 
     // Submit a review if:
@@ -125,10 +176,55 @@ pub async fn apply(
         && previous == Some(ReviewEvent::Approve)
         && comments.is_empty();
 
+    // A push this review could not vouch for — a model that never answered,
+    // a file the forge withheld — cannot leave an earlier approval standing
+    // over it: a comment does not withdraw one, and a repository that does
+    // not dismiss stale approvals would merge this push on the strength of
+    // what was said about the last. So the standing approval is withdrawn,
+    // with the reason, and the comment below repeats it.
+    //
+    // Only when the verdict is a comment. A changes request supersedes the
+    // approval on its own, and an approval is a fresh one. Attempted also
+    // when the lookup could not say what stands — a failed read of our own
+    // history must not become the approval's shield — and best effort: a
+    // dismissal that fails is logged, and the comment saying this is not an
+    // approval still goes out, rather than nothing at all.
+    let unvouched = !proposal.complete() && proposal.skipped.is_none();
+    let mut withdrawal_failed = None;
+    if unvouched
+        && event == ReviewEvent::Comment
+        && (previous == Some(ReviewEvent::Approve) || !previous_known)
+        && let Err(err) = write
+            .dismiss_own_approval(
+                &repo,
+                proposal.number,
+                "tinysweeper could not review the latest push, so its earlier approval no \
+                 longer speaks for this pull request.",
+            )
+            .await
+    {
+        // Remembered, not swallowed: the comment below still goes out, so a
+        // reader sees why, and then the run fails — an approval that may
+        // still stand over a push nobody reviewed is not a success, and the
+        // failure lands on the pull request as a blocking check.
+        tracing::warn!(%err, number = proposal.number, "could not withdraw the standing approval");
+        withdrawal_failed = Some(err);
+    }
+
+    // A push the model never answered is submitted too, as the comment: the
+    // lane checks say "did not review", but a reader of the conversation
+    // sees only that the bot said nothing, which on a clean-looking pull
+    // request reads as an all-clear. A file the forge withheld is not a
+    // reason to comment: it is a property of the pull request, it recurs on
+    // every push, and every lane's check already names it — the dismissal
+    // above is what a standing approval needed. A kill-switched one is
+    // nothing at all: nobody asked.
+    let must_say = !proposal.answered() || proposal.version != PROPOSAL_VERSION;
     if !redundant_approval
         && (!comments.is_empty()
             || event == ReviewEvent::Approve
-            || event == ReviewEvent::RequestChanges)
+            || event == ReviewEvent::RequestChanges
+            || must_say)
     {
         write
             .create_review(
@@ -163,8 +259,16 @@ pub async fn apply(
     // Best effort, and last-but-one on purpose. It is the only thing published
     // here that nobody is gated on, so a failure to draw it must not cost the
     // verdict that was already posted above.
-    if let Err(err) = publish_overview(read, write, config, proposal).await {
-        tracing::warn!(%err, "could not publish the change map");
+    if let Err(err) = publish_review_hub(read, write, config, proposal, store).await {
+        tracing::warn!(%err, "could not publish the durable review hub");
+    }
+
+    // The wireframe gallery: its own comment, for the same reason it is not
+    // folded into the review hub — a screen-by-screen ASCII gallery can be
+    // the bulkiest thing this bot posts, and burying it in the narrative
+    // summary is how nobody scrolls to it. Best effort, same as the hub.
+    if let Err(err) = publish_wireframe(read, write, proposal).await {
+        tracing::warn!(%err, "could not publish the UI wireframe gallery");
     }
 
     // Triage last, and against `live` rather than a second fetch: the labels
@@ -178,7 +282,12 @@ pub async fn apply(
         tracing::info!(number = proposal.number, ?added, "triaged");
     }
 
-    Ok(())
+    // Everything that could be published was; now the one thing that could
+    // not be undone is reported as the failure it is.
+    match withdrawal_failed {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
 }
 
 /// Post or update the change-map comment.
@@ -190,21 +299,17 @@ pub async fn apply(
 /// Writes nothing at all when the map has no relationship worth explaining:
 /// disconnected names are not a flow, and a comment containing only those
 /// names is noise with a picture in it.
-async fn publish_overview(
+async fn publish_review_hub(
     read: &dyn ForgeRead,
     write: &dyn ForgeWrite,
     config: &Config,
     proposal: &Proposal,
+    store: Option<&dyn ReviewStateStore>,
 ) -> Result<()> {
-    if !config.overview.enabled {
+    if !config.summary.enabled || proposal.skipped.is_some() {
         return Ok(());
     }
-    let Some(map) = &proposal.overview else {
-        return Ok(());
-    };
-    let Some(body) = crate::overview::comment(map) else {
-        return Ok(());
-    };
+    let body = crate::summary::render(config, proposal);
 
     let repo = RepoId::parse(&proposal.repo)
         .ok_or_else(|| Error::Forge(format!("`{}` is not owner/name", proposal.repo)))?;
@@ -213,17 +318,129 @@ async fn publish_overview(
     // new one. That is the harmless direction to be wrong in: a duplicate
     // comment is noise, whereas editing the wrong comment destroys someone's
     // words.
-    let existing =
-        crate::findings::prior::own_comment(read, &repo, proposal.number, crate::overview::MARKER)
-            .await?
-            .and_then(|comment| comment.id);
-
-    match existing {
-        Some(id) => write.update_comment(&repo, id, &body).await,
-        None => write
-            .create_comment(&repo, proposal.number, &body)
+    let state_key = crate::state::key(&proposal.repo, proposal.number);
+    let remembered_id = match store {
+        Some(store) => store
+            .load_state(&state_key)
             .await
-            .map(|_| ()),
+            .ok()
+            .flatten()
+            .and_then(|state| state.hub_comment_id),
+        None => None,
+    };
+    // State is a lookup hint, not authority to edit an arbitrary comment.
+    // Re-discovery authenticates both the bot author and marker before any
+    // update; a stale or corrupted stored id can therefore never redirect the
+    // write onto somebody else's comment.
+    let discovered = discover_review_hub(read, &repo, proposal.number).await?;
+    let existing = match remembered_id {
+        Some(id) if discovered == Some(id) => Some(id),
+        Some(id) => {
+            tracing::warn!(
+                comment_id = id,
+                "stored review-hub id was not authenticated; using discovery"
+            );
+            discovered
+        }
+        None => discovered,
+    };
+
+    let id = match existing {
+        Some(id) => {
+            write.update_comment(&repo, id, &body).await?;
+            id
+        }
+        None => write.create_comment(&repo, proposal.number, &body).await?,
+    };
+    if let Some(store) = store
+        && let Ok(Some(mut state)) = store.load_state(&state_key).await
+    {
+        state.hub_comment_id = Some(id);
+        if let Err(err) = store.save_state(&state_key, &state).await {
+            tracing::warn!(%err, "could not persist the review-hub comment id");
+        }
+    }
+    Ok(())
+}
+
+async fn discover_review_hub(
+    read: &dyn ForgeRead,
+    repo: &RepoId,
+    number: u64,
+) -> Result<Option<u64>> {
+    let current =
+        crate::findings::prior::own_comment(read, repo, number, crate::summary::MARKER).await?;
+    match current.and_then(|comment| comment.id) {
+        Some(id) => Ok(Some(id)),
+        None => Ok(crate::findings::prior::own_comment(
+            read,
+            repo,
+            number,
+            crate::summary::LEGACY_MARKER,
+        )
+        .await?
+        .and_then(|comment| comment.id)),
+    }
+}
+
+/// Post or update the wireframe gallery comment.
+///
+/// One comment per pull request, found by its marker and edited in place —
+/// the same discipline as [`publish_review_hub`], and for the same reason: a
+/// fresh gallery per push turns the pull request into a scroll of wireframes
+/// that stopped being the current ones several pushes ago.
+///
+/// `Ok(())` with nothing written when the proposal carries no set (the
+/// feature was off, or predates the field), or when the set has no screens.
+async fn publish_wireframe(
+    read: &dyn ForgeRead,
+    write: &dyn ForgeWrite,
+    proposal: &Proposal,
+) -> Result<()> {
+    let Some(set) = &proposal.wireframe else {
+        return Ok(());
+    };
+    let Some(body) = crate::wireframe::render::comment(set) else {
+        return Ok(());
+    };
+    let repo = RepoId::parse(&proposal.repo)
+        .ok_or_else(|| Error::Forge(format!("`{}` is not owner/name", proposal.repo)))?;
+    let existing = crate::findings::prior::own_comment(
+        read,
+        &repo,
+        proposal.number,
+        crate::wireframe::render::MARKER,
+    )
+    .await?
+    .and_then(|comment| comment.id);
+    match existing {
+        Some(id) => write.update_comment(&repo, id, &body).await?,
+        None => {
+            write.create_comment(&repo, proposal.number, &body).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether this proposal draws a Changes Requested review.
+///
+/// The one predicate both the submitted review and the umbrella
+/// `tinysweeper/review` check read, so the two cannot disagree.
+///
+/// Blocking needs BOTH a failing lane and a finding severe enough to justify
+/// it. The lane conclusion alone is not enough: `fail_on` and
+/// `request_changes_at` are independent knobs, so a lane configured to fail
+/// on medium must still be able to fail a check without also blocking the
+/// merge when the merge gate is set to high. Reading only the conclusion
+/// made `request_changes_at` inert.
+///
+/// The severity is read from the lane's findings rather than the surviving
+/// comments, so a recurred problem whose comment was deduped away still
+/// blocks — being already visible is not being fixed.
+pub fn requests_changes(config: &Config, proposal: &Proposal) -> bool {
+    match config.request_changes_at() {
+        Some(threshold) => proposal.blocked() && proposal.has_severity_at_or_above(threshold),
+        None => false,
     }
 }
 
@@ -236,21 +453,7 @@ fn review_event(
     previous: Option<ReviewEvent>,
     draft: bool,
 ) -> ReviewEvent {
-    // Blocking needs BOTH a failing lane and a finding severe enough to justify
-    // it. The lane conclusion alone is not enough: `fail_on` and
-    // `request_changes_at` are independent knobs, so a lane configured to fail
-    // on medium must still be able to fail a check without also blocking the
-    // merge when the merge gate is set to high. Reading only the conclusion
-    // here made `request_changes_at` inert.
-    //
-    // The severity is read from the lane's findings rather than the surviving
-    // comments, so a recurred problem whose comment was deduped away still
-    // blocks — being already visible is not being fixed.
-    let blocks = match config.request_changes_at() {
-        Some(threshold) => proposal.blocked() && proposal.has_severity_at_or_above(threshold),
-        None => false,
-    };
-    if blocks {
+    if requests_changes(config, proposal) {
         return ReviewEvent::RequestChanges;
     }
 
@@ -284,7 +487,14 @@ fn review_event(
     // Deliberately not gated on `draft`. Refusing to *endorse* a draft is not
     // the same as refusing to *unblock* one, and conflating them would strand
     // every draft that was ever blocked.
-    if previous == Some(ReviewEvent::RequestChanges) {
+    //
+    // Gated on the review being complete, though. "Clean now" is only a
+    // finding when somebody looked at everything: a push during a provider
+    // outage comes back with every lane unanswered and nothing blocking, and
+    // a push whose largest file the forge withheld may be hiding the very
+    // thing objected to. Clearing the block on either would let a gap in
+    // the review approve what a review had objected to.
+    if previous == Some(ReviewEvent::RequestChanges) && proposal.complete() {
         return ReviewEvent::Approve;
     }
 
@@ -295,15 +505,141 @@ fn review_event(
 ///
 /// Read from the forge rather than remembered, so it stays correct across a
 /// restart, a redeploy, and a human dismissing the review by hand.
-async fn own_review_state(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Option<ReviewEvent> {
+///
+/// The second value says whether the answer is known: `(None, false)` is a
+/// lookup that failed, which is not the same as having never reviewed.
+async fn own_review_state(
+    read: &dyn ForgeRead,
+    repo: &RepoId,
+    number: u64,
+) -> (Option<ReviewEvent>, bool) {
     match read.own_review_state(repo, number).await {
-        Ok(state) => state,
+        Ok(state) => (state, true),
         Err(err) => {
             // Failing closed here would mean never clearing a block. Failing
-            // open at worst re-states a verdict that already stands.
+            // open at worst re-states a verdict that already stands — except
+            // for the one caller that must fail closed, which reads the flag.
             tracing::warn!(%err, "could not read the previous review state");
-            None
+            (None, false)
         }
+    }
+}
+
+/// What settling the `e2e` check run amounted to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum E2eSettlement {
+    /// No review left that lane waiting on anything.
+    NothingWatched,
+    /// The pull request has moved on; the next review starts a new watch.
+    HeadMoved,
+    /// At least one watched job has not concluded.
+    StillPending,
+    /// The check run was concluded and the watch cleared.
+    Published(crate::forge::types::CheckConclusion),
+}
+
+/// Conclude the `e2e` check run once the jobs it was waiting on have spoken.
+///
+/// The second half of that lane's verdict, and the reason this lives here:
+/// the review decided everything it could — the harness, the coverage, the
+/// jobs that would never run — and recorded what it was still waiting on in
+/// `ReviewedState::e2e`. This function executes that recorded plan and
+/// nothing else. No model is consulted; the decision is
+/// `lanes::e2e::runs::settle`, arithmetic over the check runs the forge
+/// holds, and the only write is the one check run the review already
+/// published as `Neutral`.
+///
+/// Called on every `check_run`/`check_suite` completion the server sees for
+/// the pull request, so the cheap exits come first: no watch, wrong head, or
+/// a job still running each cost at most two reads.
+pub async fn settle_e2e(
+    read: &dyn ForgeRead,
+    write: &dyn ForgeWrite,
+    config: &Config,
+    store: &dyn ReviewStateStore,
+    repo: &RepoId,
+    number: u64,
+) -> Result<E2eSettlement> {
+    use crate::config::types::LaneId;
+
+    let key = crate::state::key(&repo.to_string(), number);
+    let Some(state) = store.load_state(&key).await? else {
+        return Ok(E2eSettlement::NothingWatched);
+    };
+    let Some(watch) = state.e2e else {
+        return Ok(E2eSettlement::NothingWatched);
+    };
+
+    let live = read.pull_request(repo, number).await?;
+    if live.head_sha != watch.head_sha {
+        // Not cleared: the review of the new head rewrites the whole record,
+        // and clearing here would race it.
+        return Ok(E2eSettlement::HeadMoved);
+    }
+
+    let checks = read.check_runs(repo, &watch.head_sha).await?;
+    let Some(settled) =
+        crate::lanes::e2e::runs::settle(&watch, &checks, config.fail_on(LaneId::E2e))
+    else {
+        return Ok(E2eSettlement::StillPending);
+    };
+
+    write
+        .publish_check(
+            repo,
+            CheckRun {
+                name: LaneId::E2e.check_name(),
+                head_sha: watch.head_sha.clone(),
+                conclusion: Some(settled.conclusion),
+                title: match settled.conclusion {
+                    crate::forge::types::CheckConclusion::Failure => {
+                        "An end-to-end job did not pass".into()
+                    }
+                    _ => "End-to-end jobs concluded".into(),
+                },
+                summary: crate::findings::render::lane_summary(
+                    &settled.summary,
+                    &[],
+                    VERSION,
+                    true,
+                ),
+                images: vec![],
+            },
+        )
+        .await?;
+
+    // Cleared only after the write succeeded: a failed publish leaves the
+    // watch in place so the next completion event retries it.
+    //
+    // `clear_e2e_watch` rather than a reload-then-`save_state`: the store
+    // applies the condition ("still exactly this watch") and the write
+    // together, so a new review's `save_state` landing in the gap between
+    // this call's own `load_state` above and now cannot be discarded by an
+    // unconditional write-back the way reloading-and-saving still could —
+    // see its doc comment on `ReviewStateStore`.
+    if let Err(err) = store.clear_e2e_watch(&key, &watch).await {
+        tracing::warn!(%err, "could not clear the e2e watch; the next completion will republish");
+    }
+    Ok(E2eSettlement::Published(settled.conclusion))
+}
+
+/// `text` as a Markdown code span that `text` cannot break out of.
+///
+/// Paths here are the contributor's: a filename with a backtick would close
+/// the span and write Markdown into a review the bot signs. The span is
+/// fenced with one more backtick than the longest run inside, which is how
+/// CommonMark spells a literal backtick, and control characters — a newline
+/// ends a span — are dropped.
+fn code_span(text: &str) -> String {
+    let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+    let longest = clean.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(longest + 1);
+    if clean.contains('`') {
+        // A space each side is what lets a span begin or end with a backtick;
+        // CommonMark strips exactly one from each end.
+        format!("{fence} {clean} {fence}")
+    } else {
+        format!("{fence}{clean}{fence}")
     }
 }
 
@@ -384,12 +720,30 @@ fn identity(finding: &crate::findings::types::Finding) -> String {
 /// The marker is the durable representation written to GitHub, so using it
 /// here keeps state recording tied to the exact comments that survived the
 /// final diff-anchor validation.
-fn fingerprint(body: &str) -> Option<String> {
-    let marker = format!("<!-- {MARKER_PREFIX}fp=");
-    body.split_once(&marker)
-        .and_then(|(_, rest)| rest.split_once(" -->"))
-        .map(|(value, _)| value.to_string())
-        .filter(|value| !value.is_empty())
+fn fingerprints(body: &str) -> Vec<String> {
+    crate::findings::prior::fingerprints_in(body)
+}
+
+/// Alias identities immediately precede the authoritative final fingerprint.
+/// Keeping the markers adjacent lets the reader reject marker-shaped text a
+/// model may have placed in the finding body.
+fn alias_marker(finding: &crate::findings::types::Finding) -> String {
+    let aliases: Vec<&str> = finding
+        .aliases
+        .iter()
+        .map(String::as_str)
+        .filter(|alias| {
+            alias.len() == 16
+                && alias
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+        .collect();
+    if aliases.is_empty() {
+        String::new()
+    } else {
+        format!("<!-- {MARKER_PREFIX}fps={} -->", aliases.join(","))
+    }
 }
 
 fn review_body(
@@ -406,8 +760,10 @@ fn review_body(
 
     let mut body = match event {
         ReviewEvent::RequestChanges => {
+            // Overflow counts toward the verdict's worst severity: a high
+            // finding the budget moved to the hub is still what blocks.
             let worst = proposal
-                .findings()
+                .reported()
                 .map(|f| f.severity)
                 .max()
                 .unwrap_or(Severity::Low);
@@ -427,6 +783,27 @@ fn review_body(
                 .to_string()
         }
         ReviewEvent::Approve => "tinysweeper found nothing blocking. Approving.".to_string(),
+        // Not approving a clean-looking review is a decision, and the reader
+        // deserves the reason: silence here reads as an all-clear.
+        ReviewEvent::Comment if blocking == 0 && !proposal.complete() => {
+            let unanswered = proposal.unanswered();
+            let shown: Vec<&str> = unanswered.iter().copied().take(8).collect();
+            let more = unanswered.len().saturating_sub(shown.len());
+            format!(
+                "tinysweeper found nothing blocking, but could not review everything, so this \
+                 is not an approval: {}{}.",
+                shown
+                    .iter()
+                    .map(|name| code_span(name))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                if more > 0 {
+                    format!(" and {more} more")
+                } else {
+                    String::new()
+                }
+            )
+        }
         ReviewEvent::Comment if blocking == 0 => "tinysweeper found nothing blocking.".to_string(),
         ReviewEvent::Comment => format!("tinysweeper: {blocking} lane(s) blocking."),
     };
@@ -439,6 +816,32 @@ fn review_body(
                 finding.title, finding.path, finding.rule, finding.body
             ));
         }
+    }
+
+    // Over-budget findings are named here as well as in the hub. The hub is
+    // best-effort (it is skipped when summaries are disabled, and a failed
+    // update is only logged), while the review body is always submitted, so a
+    // blocking finding that did not fit the budget is never only in a place
+    // that might not be written.
+    let over: Vec<&crate::findings::types::Finding> = proposal.overflowed().collect();
+    if !over.is_empty() {
+        body.push_str(
+            "\n\n### Over the comment budget\n\nNot posted inline; listed here so none is lost.\n",
+        );
+        for finding in over {
+            let line = finding
+                .line
+                .map(|line| format!(":{line}"))
+                .unwrap_or_default();
+            body.push_str(&format!(
+                "\n- **{}** {} (`{}{}`)",
+                finding.severity,
+                crate::summary::render::md(&finding.title),
+                crate::summary::render::md(&finding.path),
+                line
+            ));
+        }
+        body.push('\n');
     }
 
     // The full token breakdown goes in the body deliberately. Cache hit rate is
@@ -476,19 +879,13 @@ fn inline_comments(proposal: &Proposal, files: &[ChangedFile]) -> Vec<ReviewComm
     proposal
         .findings()
         .filter_map(|finding| {
-            let line = finding.line?;
             // A suggestion block replaces exactly the lines the comment is
             // anchored to, so carrying one *changes the anchor*: it widens to
             // the span the replacement covers. Without a suggestion the comment
             // stays a single-line pin, which is what a reader wants — a
             // multi-line highlight for a one-sentence remark is noise.
-            let (start_line, line) = match &finding.applicable {
-                Some(suggestion) if suggestion.start_line < suggestion.end_line => {
-                    (Some(suggestion.start_line), suggestion.end_line)
-                }
-                Some(suggestion) => (None, suggestion.end_line),
-                None => (None, line),
-            };
+            let (start, line) = finding.published_range()?;
+            let start_line = (start < line).then_some(start);
             let start = start_line.unwrap_or(line);
             if !diffs
                 .get(finding.path.as_str())
@@ -505,7 +902,14 @@ fn inline_comments(proposal: &Proposal, files: &[ChangedFile]) -> Vec<ReviewComm
             let suggestion = finding
                 .applicable
                 .as_ref()
-                .map(|s| format!("\n\n```suggestion\n{}\n```", s.replacement))
+                .map(|s| {
+                    let label = if finding.aliases.is_empty() {
+                        ""
+                    } else {
+                        "\n\n**Suggested change for the opening observation**"
+                    };
+                    format!("{label}\n\n```suggestion\n{}\n```", s.replacement)
+                })
                 .unwrap_or_default();
             Some(ReviewComment {
                 path: finding.path.clone(),
@@ -534,16 +938,17 @@ fn inline_comments(proposal: &Proposal, files: &[ChangedFile]) -> Vec<ReviewComm
                 // a reader has to have been told why before being offered the
                 // button.
                 body: format!(
-                    "{}  {}\n\n**{}**\n\n{}{}\n\n{} · <!-- {MARKER_PREFIX}fp={} -->",
+                    "{}  {}\n\n**{}**\n\n{}{}\n\n{} · {}<!-- {MARKER_PREFIX}fp={} -->",
                     crate::findings::render::priority_badge(finding.severity),
                     crate::findings::render::lane_confidence_badge(
                         finding.lane,
                         finding.confidence
                     ),
-                    finding.title,
+                    crate::findings::render::escape_emphasis(&finding.title),
                     finding.body,
                     suggestion,
                     crate::findings::render::rule_line(&finding.rule),
+                    alias_marker(finding),
                     // The identity review stamped, over the code this finding
                     // anchors to. Recomputing it here from the title — as this
                     // once did — makes the marker depend on the model's
@@ -556,6 +961,18 @@ fn inline_comments(proposal: &Proposal, files: &[ChangedFile]) -> Vec<ReviewComm
         .collect()
 }
 
+/// Render inline comments for review-flow tests in the read-only half.
+///
+/// Keeping the test on the production renderer is what proves aliases survive
+/// the complete render/load boundary rather than two isolated helper tests.
+#[cfg(test)]
+pub(crate) fn test_inline_comments(
+    proposal: &Proposal,
+    files: &[ChangedFile],
+) -> Vec<ReviewComment> {
+    inline_comments(proposal, files)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,6 +981,31 @@ mod tests {
     use crate::findings::types::Finding;
     use crate::forge::types::{ChangedFile, CheckConclusion, IssueComment, PullRequest};
     use crate::forge::{MockForge, MockState, Write};
+
+    #[cfg(feature = "serve")]
+    #[tokio::test]
+    async fn applying_an_mcp_issue_plan_performs_exactly_its_write() {
+        let forge = MockForge::new();
+        let plan = McpIssuePlan {
+            repo: RepoId::parse("acme/widget").unwrap(),
+            installation: 7,
+            title: "Parser can loop".into(),
+            body: "Reproduction and code context.".into(),
+            labels: vec!["bug".into()],
+        };
+
+        let number = execute_mcp_issue(&forge, &plan).await.expect("applies");
+
+        assert_eq!(number, 1);
+        assert_eq!(
+            forge.writes(),
+            vec![Write::IssueCreated {
+                title: plan.title,
+                body: plan.body,
+                labels: plan.labels,
+            }]
+        );
+    }
 
     fn config() -> Config {
         crate::config::DEFAULTS
@@ -576,9 +1018,13 @@ mod tests {
     fn proposal(head: &str, findings: Vec<Finding>) -> Proposal {
         let highest_severity = findings.iter().map(|finding| finding.severity).max();
         Proposal {
+            summary: None,
+            prior_findings: vec![],
             overview: None,
+            wireframe: None,
             unreviewed: vec![],
-            version: 1,
+            skipped: None,
+            version: crate::app::review::PROPOSAL_VERSION,
             repo: "tinyhumansai/tinysweeper".into(),
             number: 7,
             head_sha: head.into(),
@@ -594,10 +1040,13 @@ mod tests {
                 findings,
                 noted: Vec::new(),
                 resolved: vec![],
+                pending: vec![],
                 deduped: 0,
                 highest_severity,
                 usage: Default::default(),
                 models: vec![],
+                unanswered: vec![],
+                overflow: vec![],
             }],
             cost_usd: 0.01,
             input_tokens: 10_000,
@@ -607,6 +1056,341 @@ mod tests {
             models: vec!["moonshotai/kimi-k3".into()],
             threads: Default::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn settling_the_e2e_check_waits_for_the_watched_jobs_then_publishes_once() {
+        use crate::lanes::e2e::runs::Watch;
+        use crate::state::memory::MemoryState;
+        use crate::state::types::ReviewedState;
+
+        let repo = RepoId::parse("tinyhumansai/tinysweeper").unwrap();
+        let mut state = MockState::default();
+        state.pull_requests.insert(
+            7,
+            PullRequest {
+                number: 7,
+                head_sha: "abc123".into(),
+                ..PullRequest::default()
+            },
+        );
+        state.set_check("abc123", "playwright", None);
+        let forge = MockForge::with_state(state.clone());
+        let store = MemoryState::new();
+        store
+            .save_state(
+                &crate::state::key("tinyhumansai/tinysweeper", 7),
+                &ReviewedState {
+                    head_sha: "abc123".into(),
+                    e2e: Some(Watch {
+                        head_sha: "abc123".into(),
+                        jobs: vec!["playwright".into()],
+                        summary: "Coverage looks complete.".into(),
+                        failed: false,
+                        generation: "gen-1".into(),
+                    }),
+                    ..ReviewedState::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let settled = settle_e2e(&forge, &forge, &config(), &store, &repo, 7)
+            .await
+            .expect("settles");
+        assert_eq!(settled, E2eSettlement::StillPending);
+        assert!(
+            forge.writes().is_empty(),
+            "nothing published while a job runs"
+        );
+
+        state.set_check("abc123", "playwright", Some(CheckConclusion::Failure));
+        let forge = MockForge::with_state(state.clone());
+        let settled = settle_e2e(&forge, &forge, &config(), &store, &repo, 7)
+            .await
+            .expect("settles");
+        assert_eq!(settled, E2eSettlement::Published(CheckConclusion::Failure));
+        let checks = forge.checks();
+        let check = checks
+            .get("tinysweeper/e2e")
+            .expect("the e2e check was published");
+        assert_eq!(check.head_sha, "abc123");
+        assert_eq!(check.conclusion, Some(CheckConclusion::Failure));
+        assert!(
+            check.summary.contains("`playwright`: **failure**"),
+            "{}",
+            check.summary
+        );
+        assert!(
+            check.summary.contains("Coverage looks complete."),
+            "{}",
+            check.summary
+        );
+
+        // The watch is cleared, so the next completion event does nothing.
+        let forge = MockForge::with_state(state);
+        let settled = settle_e2e(&forge, &forge, &config(), &store, &repo, 7)
+            .await
+            .expect("settles");
+        assert_eq!(settled, E2eSettlement::NothingWatched);
+        assert!(forge.writes().is_empty());
+    }
+
+    #[tokio::test]
+    async fn clearing_the_watch_does_not_discard_a_review_that_landed_concurrently() {
+        // The race `clear_e2e_watch` exists to close: `settle_e2e` reads the
+        // `abc123` watch, and — in the window before its own write-back — a
+        // review of a *newer* push saves its own state: a new head, new
+        // fingerprints, and its own watch. A reload-then-unconditional
+        // `save_state` at that point would overwrite the new record with the
+        // stale one, minus `e2e`. Exercised directly against the store
+        // rather than through the full `settle_e2e` flow, which has no seam
+        // to inject a concurrent write at that exact point; this is exactly
+        // the call `settle_e2e`'s write-back makes.
+        use crate::lanes::e2e::runs::Watch;
+        use crate::state::memory::MemoryState;
+        use crate::state::types::ReviewedState;
+
+        let store = MemoryState::new();
+        let key = crate::state::key("tinyhumansai/tinysweeper", 7);
+        let original_watch = Watch {
+            head_sha: "abc123".into(),
+            jobs: vec!["playwright".into()],
+            summary: String::new(),
+            failed: false,
+            generation: "gen-1".into(),
+        };
+        store
+            .save_state(
+                &key,
+                &ReviewedState {
+                    head_sha: "abc123".into(),
+                    e2e: Some(original_watch.clone()),
+                    ..ReviewedState::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        // The concurrent write: a review of a newer push landed between
+        // `settle_e2e`'s `load_state` (which read the `abc123` watch above)
+        // and now.
+        let concurrent = ReviewedState {
+            head_sha: "newer".into(),
+            fingerprints: vec!["fresh-finding".into()],
+            e2e: Some(Watch {
+                head_sha: "newer".into(),
+                jobs: vec!["playwright".into()],
+                summary: "Newer review's summary.".into(),
+                failed: false,
+                generation: "gen-2".into(),
+            }),
+            ..ReviewedState::default()
+        };
+        store.save_state(&key, &concurrent).await.unwrap();
+
+        // `settle_e2e` finishes settling the `abc123` watch it read earlier
+        // and tries to clear it.
+        let cleared = store.clear_e2e_watch(&key, &original_watch).await.unwrap();
+        assert!(
+            !cleared,
+            "the stored watch is for `newer` now, not `abc123`; nothing should match"
+        );
+
+        let after = store.load_state(&key).await.unwrap().expect("still there");
+        assert_eq!(
+            after, concurrent,
+            "the concurrent review's state must survive intact"
+        );
+    }
+
+    #[tokio::test]
+    async fn clearing_the_watch_does_not_discard_a_same_head_re_review() {
+        // The narrower case `head_sha`-only comparison missed: a manual
+        // re-review of the *same* commit (the `/admin/reviews` route can
+        // trigger one) saves a replacement watch with the same `head_sha`
+        // but different `jobs`/`summary`/`failed`. `clear_e2e_watch` must
+        // compare the whole watch, not just the head it is for.
+        use crate::lanes::e2e::runs::Watch;
+        use crate::state::memory::MemoryState;
+        use crate::state::types::ReviewedState;
+
+        let store = MemoryState::new();
+        let key = crate::state::key("tinyhumansai/tinysweeper", 7);
+        let stale_watch = Watch {
+            head_sha: "abc123".into(),
+            jobs: vec!["playwright".into()],
+            summary: "First pass.".into(),
+            failed: false,
+            generation: "gen-1".into(),
+        };
+        store
+            .save_state(
+                &key,
+                &ReviewedState {
+                    head_sha: "abc123".into(),
+                    e2e: Some(stale_watch.clone()),
+                    ..ReviewedState::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        // A manual re-review of the same head lands a different watch —
+        // same `head_sha`, different `jobs` (a second job was added to the
+        // e2e-required config in the meantime, say) — before the first
+        // settlement's clear runs.
+        let re_reviewed = ReviewedState {
+            head_sha: "abc123".into(),
+            e2e: Some(Watch {
+                head_sha: "abc123".into(),
+                jobs: vec!["playwright".into(), "cypress".into()],
+                summary: "Second pass.".into(),
+                failed: false,
+                generation: "gen-2".into(),
+            }),
+            ..ReviewedState::default()
+        };
+        store.save_state(&key, &re_reviewed).await.unwrap();
+
+        let cleared = store.clear_e2e_watch(&key, &stale_watch).await.unwrap();
+        assert!(
+            !cleared,
+            "the stored watch differs (jobs, summary) even though the head is the same"
+        );
+
+        let after = store.load_state(&key).await.unwrap().expect("still there");
+        assert_eq!(
+            after, re_reviewed,
+            "the re-review's watch must survive intact"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_byte_identical_re_review_still_gets_its_own_generation() {
+        // The case content alone cannot distinguish: a same-head manual
+        // re-review that changes nothing substantive (same jobs, same
+        // summary, same verdict) still produces a *new* watch. Without
+        // `generation`, that new watch would compare equal to the old one
+        // `settle_e2e` is settling and would be cleared right out from under
+        // it, even though nothing about the content differs to warn anyone.
+        use crate::lanes::e2e::runs::Watch;
+        use crate::state::memory::MemoryState;
+        use crate::state::types::ReviewedState;
+
+        let store = MemoryState::new();
+        let key = crate::state::key("tinyhumansai/tinysweeper", 7);
+        let old_watch = Watch {
+            head_sha: "abc123".into(),
+            jobs: vec!["playwright".into()],
+            summary: "Coverage looks complete.".into(),
+            failed: false,
+            generation: "gen-1".into(),
+        };
+        store
+            .save_state(
+                &key,
+                &ReviewedState {
+                    head_sha: "abc123".into(),
+                    e2e: Some(old_watch.clone()),
+                    ..ReviewedState::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        // The re-review's watch: every field but `generation` is identical.
+        let re_reviewed = ReviewedState {
+            head_sha: "abc123".into(),
+            e2e: Some(Watch {
+                generation: "gen-2".into(),
+                ..old_watch.clone()
+            }),
+            ..ReviewedState::default()
+        };
+        store.save_state(&key, &re_reviewed).await.unwrap();
+
+        let cleared = store.clear_e2e_watch(&key, &old_watch).await.unwrap();
+        assert!(
+            !cleared,
+            "the stored watch is `gen-2`, not the `gen-1` this call was settling, \
+             even though every other field is identical"
+        );
+
+        let after = store.load_state(&key).await.unwrap().expect("still there");
+        assert_eq!(
+            after, re_reviewed,
+            "the re-review's watch must survive intact"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_moved_head_leaves_the_watch_for_the_next_review_to_replace() {
+        use crate::lanes::e2e::runs::Watch;
+        use crate::state::memory::MemoryState;
+        use crate::state::types::ReviewedState;
+
+        let repo = RepoId::parse("tinyhumansai/tinysweeper").unwrap();
+        let mut state = MockState::default();
+        state.pull_requests.insert(
+            7,
+            PullRequest {
+                number: 7,
+                head_sha: "newer".into(),
+                ..PullRequest::default()
+            },
+        );
+        state.set_check("older", "playwright", Some(CheckConclusion::Success));
+        let forge = MockForge::with_state(state);
+        let store = MemoryState::new();
+        let key = crate::state::key("tinyhumansai/tinysweeper", 7);
+        store
+            .save_state(
+                &key,
+                &ReviewedState {
+                    head_sha: "older".into(),
+                    e2e: Some(Watch {
+                        head_sha: "older".into(),
+                        jobs: vec!["playwright".into()],
+                        summary: String::new(),
+                        failed: false,
+                        generation: "gen-1".into(),
+                    }),
+                    ..ReviewedState::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let settled = settle_e2e(&forge, &forge, &config(), &store, &repo, 7)
+            .await
+            .expect("settles");
+        assert_eq!(settled, E2eSettlement::HeadMoved);
+        assert!(
+            forge.writes().is_empty(),
+            "a stale verdict is never published"
+        );
+        assert!(
+            store.load_state(&key).await.unwrap().unwrap().e2e.is_some(),
+            "the new head's review replaces the record; nothing is cleared here"
+        );
+    }
+
+    #[test]
+    fn an_over_budget_finding_is_named_in_the_review_body() {
+        // The hub is best-effort and is skipped when summaries are disabled, so
+        // an over-budget finding must also be named in the review body, which
+        // is always submitted.
+        let mut over = finding();
+        over.title = "Over budget finding".into();
+        let mut proposal = proposal("abc123", vec![]);
+        proposal.lanes[0].overflow.push(over);
+
+        let body = review_body(&proposal, ReviewEvent::Comment, None, &[]);
+
+        assert!(body.contains("### Over the comment budget"), "{body}");
+        assert!(body.contains("Over budget finding"), "{body}");
+        assert!(body.contains("src/main\\.rs:2"), "{body}");
     }
 
     fn finding() -> Finding {
@@ -624,6 +1408,9 @@ mod tests {
             applicable: None,
             late: false,
             identity: None,
+            aliases: vec![],
+            grouped: false,
+            review_pass: 1,
             corroboration: 1,
         }
     }
@@ -743,6 +1530,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_grouped_comment_publishes_and_records_every_identity() {
+        let forge = forge("abc123");
+        let store = crate::state::memory::MemoryState::default();
+        let key = crate::state::key("tinyhumansai/tinysweeper", 7);
+        store
+            .save_state(
+                &key,
+                &crate::state::types::ReviewedState {
+                    head_sha: "abc123".into(),
+                    ..crate::state::types::ReviewedState::default()
+                },
+            )
+            .await
+            .unwrap();
+        let mut grouped = finding();
+        grouped.identity = Some("0123456789abcdef".into());
+        grouped.aliases = vec!["1111111111111111".into(), "2222222222222222".into()];
+
+        apply(
+            &forge,
+            &forge,
+            &config(),
+            &proposal("abc123", vec![grouped]),
+            Some(&store),
+        )
+        .await
+        .expect("applies");
+
+        let body = forge
+            .writes()
+            .into_iter()
+            .find_map(|write| match write {
+                Write::Review { comments, .. } => comments.into_iter().next().map(|c| c.body),
+                _ => None,
+            })
+            .expect("an inline comment");
+        assert_eq!(
+            fingerprints(&body),
+            vec!["0123456789abcdef", "1111111111111111", "2222222222222222"]
+        );
+        let recorded = store.load_state(&key).await.unwrap().unwrap();
+        for identity in fingerprints(&body) {
+            assert!(
+                recorded.fingerprints.contains(&identity),
+                "missing {identity}"
+            );
+        }
+    }
+
+    #[test]
+    fn requests_changes_agrees_with_the_submitted_verdict() {
+        // `tinysweeper/review` is concluded from this predicate. When it and
+        // the review disagreed, the check showed a pass beside a Changes
+        // Requested review.
+        let config = config();
+        let blocking = proposal("abc123", vec![finding()]);
+        assert!(requests_changes(&config, &blocking));
+        assert_eq!(
+            review_event(&config, &blocking, None, false),
+            ReviewEvent::RequestChanges
+        );
+
+        let clean = proposal("abc123", vec![]);
+        assert!(!requests_changes(&config, &clean));
+        assert_ne!(
+            review_event(&config, &clean, None, false),
+            ReviewEvent::RequestChanges
+        );
+    }
+
+    #[tokio::test]
     async fn an_out_of_diff_anchor_is_kept_in_the_review_body_but_not_posted_inline() {
         let forge = forge("abc123");
         let mut invalid = finding();
@@ -822,6 +1680,7 @@ mod tests {
     #[tokio::test]
     async fn an_applicable_suggestion_becomes_a_commit_button_over_its_own_span() {
         let mut f = finding();
+        f.aliases.push("1111111111111111".into());
         f.applicable = Some(crate::findings::types::Suggestion {
             start_line: 2,
             end_line: 4,
@@ -855,6 +1714,13 @@ mod tests {
                 .body
                 .contains("```suggestion\n    if let Some(x) = items.get(i) {"),
             "{}",
+            comment.body
+        );
+        assert!(
+            comment
+                .body
+                .contains("Suggested change for the opening observation"),
+            "a shared thread must say which rationale its commit button addresses: {}",
             comment.body
         );
         // Before the footer, so the reader has the reason before the button.
@@ -1154,6 +2020,235 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_review_nobody_answered_is_not_approved() {
+        // The production case, 2026-09-15: every model call 403'd on an
+        // exhausted gateway budget, every lane came back Neutral with "could
+        // not be reviewed", nothing blocked — and the bot posted "found
+        // nothing blocking. Approving. $0.0000 · 0 in / 0 out". Neutral does
+        // not block, so the only thing standing between that and an approval
+        // is the lane saying what it never got an answer on.
+        let mut unanswered = proposal("abc123", vec![]);
+        for lane in &mut unanswered.lanes {
+            lane.conclusion = CheckConclusion::Neutral;
+            lane.summary = "Reviewed 0 files; 0 findings. 1 file could not be reviewed.".into();
+            lane.unanswered = vec!["src/lib.rs".into()];
+        }
+        assert!(!unanswered.blocked());
+        assert!(!unanswered.complete());
+
+        let forge = forge("abc123");
+        apply(&forge, &forge, &config(), &unanswered, None)
+            .await
+            .expect("applies");
+
+        let (body, event) = review_of(&forge).expect("a verdict is posted");
+        assert_ne!(event, ReviewEvent::Approve, "{body}");
+        assert_ne!(event, ReviewEvent::RequestChanges, "{body}");
+        assert!(
+            body.contains("not an approval") && body.contains("`src/lib.rs`"),
+            "the reader is told why: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_review_nobody_answered_does_not_clear_an_earlier_block() {
+        // The other direction of the same outage: the last review requested
+        // changes, the next push finds every model call failing. "Clean now"
+        // is not a finding when nobody looked, so the block stands — and the
+        // comment says why rather than leaving the author to guess.
+        let mut unanswered = proposal("abc123", vec![]);
+        for lane in &mut unanswered.lanes {
+            lane.conclusion = CheckConclusion::Neutral;
+            lane.unanswered = vec!["src/lib.rs".into()];
+        }
+
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::RequestChanges);
+        apply(&forge, &forge, &config(), &unanswered, None)
+            .await
+            .expect("applies");
+
+        let (body, event) = review_of(&forge).expect("a verdict is posted");
+        assert_ne!(
+            event,
+            ReviewEvent::Approve,
+            "an outage must not clear a block: {body}"
+        );
+        assert!(body.contains("not an approval"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_review_nobody_answered_withdraws_the_approval_that_stood_before_it() {
+        // GitHub keeps an approval in force under any number of comments, so
+        // the comment alone would leave the bot vouching for a push it never
+        // read. The approval is dismissed, with the reason.
+        let mut unanswered = proposal("abc123", vec![]);
+        for lane in &mut unanswered.lanes {
+            lane.conclusion = CheckConclusion::Neutral;
+            lane.unanswered = vec!["src/lib.rs".into()];
+        }
+
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::Approve);
+        apply(&forge, &forge, &config(), &unanswered, None)
+            .await
+            .expect("applies");
+
+        let dismissed = forge.writes().into_iter().find_map(|w| match w {
+            Write::DismissApproval { message, .. } => Some(message),
+            _ => None,
+        });
+        let message = dismissed.expect("the standing approval is withdrawn");
+        assert!(message.contains("could not review"), "{message}");
+        let (body, event) = review_of(&forge).expect("and the reason is posted");
+        assert_ne!(event, ReviewEvent::Approve, "{body}");
+
+        // A clean push that *was* answered dismisses nothing.
+        let answered = self::tests::forge("abc123").with_own_review(7, ReviewEvent::Approve);
+        apply(
+            &answered,
+            &answered,
+            &config(),
+            &proposal("abc123", vec![]),
+            None,
+        )
+        .await
+        .expect("applies");
+        assert!(
+            !answered
+                .writes()
+                .iter()
+                .any(|w| matches!(w, Write::DismissApproval { .. })),
+            "nothing to withdraw from a review that answered"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_review_dismisses_even_when_its_own_history_cannot_be_read() {
+        // A failed lookup of our own past verdicts must not shield an
+        // approval that may be standing: the dismissal is attempted anyway,
+        // and is a no-op when nothing stands.
+        let mut unanswered = proposal("abc123", vec![]);
+        for lane in &mut unanswered.lanes {
+            lane.conclusion = CheckConclusion::Neutral;
+            lane.unanswered = vec!["src/lib.rs".into()];
+        }
+        let forge = forge("abc123")
+            .with_own_review(7, ReviewEvent::Approve)
+            .failing_own_review_state();
+        apply(&forge, &forge, &config(), &unanswered, None)
+            .await
+            .expect("applies");
+        assert!(
+            forge
+                .writes()
+                .iter()
+                .any(|w| matches!(w, Write::DismissApproval { .. })),
+            "the dismissal is attempted when the history is unreadable"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_kill_switched_pull_request_is_neither_approved_nor_commented_on() {
+        // Every lane skipped, nothing unreviewed, nothing unanswered: clean
+        // by every other measure, and the one review nobody asked for.
+        let mut skipped = proposal("abc123", vec![]);
+        for lane in &mut skipped.lanes {
+            lane.conclusion = CheckConclusion::Neutral;
+            lane.summary = "Skipped: `do-not-review` is applied.".into();
+        }
+        skipped.skipped = Some("`do-not-review` is applied".into());
+        assert!(!skipped.complete());
+
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::Approve);
+        apply(&forge, &forge, &config(), &skipped, None)
+            .await
+            .expect("applies");
+        assert!(review_of(&forge).is_none(), "nobody asked for a verdict");
+        assert!(
+            !forge
+                .writes()
+                .iter()
+                .any(|w| matches!(w, Write::DismissApproval { .. })),
+            "and nothing is withdrawn for it either"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_blocking_verdict_is_posted_without_a_dismissal_first() {
+        // A changes request supersedes the approval by itself; a dismissal
+        // call in front of it is one more thing that can fail before the
+        // verdict that matters is posted.
+        let mut mixed = proposal("abc123", vec![finding()]);
+        // The lane blocks on one file and got no answer on another.
+        mixed.lanes[0].unanswered = vec!["src/other.rs".into()];
+        assert!(!mixed.complete());
+        let forge = forge("abc123").with_own_review(7, ReviewEvent::Approve);
+        apply(&forge, &forge, &config(), &mixed, None)
+            .await
+            .expect("applies");
+        let (_, event) = review_of(&forge).expect("the block is posted");
+        assert_eq!(event, ReviewEvent::RequestChanges);
+        assert!(
+            !forge
+                .writes()
+                .iter()
+                .any(|w| matches!(w, Write::DismissApproval { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_version_one_proposal_is_never_approved() {
+        // Written by a `review` that did not record what went unanswered:
+        // its silence is not an answer, so it can post but not endorse.
+        let mut legacy = proposal("abc123", vec![]);
+        legacy.version = 1;
+        assert!(!legacy.complete());
+        let mut newer = proposal("abc123", vec![]);
+        newer.version = crate::app::review::PROPOSAL_VERSION + 1;
+        assert!(
+            !newer.complete(),
+            "nor is one this binary cannot fully read"
+        );
+
+        let forge = forge("abc123");
+        apply(&forge, &forge, &config(), &legacy, None)
+            .await
+            .expect("applies");
+        if let Some((body, event)) = review_of(&forge) {
+            assert_ne!(event, ReviewEvent::Approve, "{body}");
+        }
+    }
+
+    #[test]
+    fn a_contributor_path_cannot_break_out_of_its_code_span() {
+        assert_eq!(code_span("src/lib.rs"), "`src/lib.rs`");
+        let hostile = "x`.rs` **bold**\n# heading";
+        let rendered = code_span(hostile);
+        assert!(rendered.starts_with("`` "), "{rendered}");
+        assert!(!rendered.contains('\n'), "{rendered}");
+        assert!(rendered.ends_with(" ``"), "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn a_withdrawal_that_fails_still_posts_the_reason_and_then_fails_the_run() {
+        let mut unanswered = proposal("abc123", vec![]);
+        for lane in &mut unanswered.lanes {
+            lane.conclusion = CheckConclusion::Neutral;
+            lane.unanswered = vec!["src/lib.rs".into()];
+        }
+        let forge = forge("abc123")
+            .with_own_review(7, ReviewEvent::Approve)
+            .failing_dismissals();
+        let outcome = apply(&forge, &forge, &config(), &unanswered, None).await;
+        let (body, event) = review_of(&forge).expect("the reason is still posted");
+        assert_ne!(event, ReviewEvent::Approve, "{body}");
+        assert!(body.contains("not an approval"), "{body}");
+        assert!(
+            outcome.is_err(),
+            "an approval that may still stand over an unreviewed push is not a success"
+        );
+    }
+
+    #[tokio::test]
     async fn unread_files_do_not_block_either() {
         // The other half. Refusing to approve is not the same as objecting: we
         // do not know there is a problem, only that we did not look, and
@@ -1320,7 +2415,7 @@ mod tests {
             .into_iter()
             .filter(|write| match write {
                 Write::Comment { body, .. } | Write::CommentUpdate { body, .. } => {
-                    body.contains(crate::overview::MARKER)
+                    body.contains(crate::summary::MARKER)
                 }
                 _ => false,
             })
@@ -1422,10 +2517,10 @@ mod tests {
             .await
             .expect("applies");
 
+        let comments = overview_comments(&forge);
+        assert_eq!(comments.len(), 1, "{:#?}", forge.writes());
         assert!(
-            overview_comments(&forge).is_empty(),
-            "{:#?}",
-            forge.writes()
+            matches!(&comments[0], Write::Comment { body, .. } if !body.contains("```mermaid"))
         );
     }
 
@@ -1458,7 +2553,11 @@ mod tests {
             .await
             .expect("applies");
 
-        assert!(overview_comments(&forge).is_empty());
+        assert_eq!(
+            overview_comments(&forge).len(),
+            1,
+            "the hub exists without a flow"
+        );
         assert!(!forge.checks().is_empty(), "the verdict still went out");
     }
 
@@ -1501,6 +2600,7 @@ mod tests {
             resolve: vec![crate::threads::PlannedResolve {
                 id: "PRRT_1".into(),
                 reason: "the finding no longer reproduces on the new code".into(),
+                noted: false,
             }],
         };
 
@@ -1530,6 +2630,7 @@ mod tests {
             resolve: vec![crate::threads::PlannedResolve {
                 id: "PRRT_1".into(),
                 reason: "stale".into(),
+                noted: false,
             }],
         };
 

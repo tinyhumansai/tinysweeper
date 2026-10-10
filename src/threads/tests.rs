@@ -205,27 +205,35 @@ async fn planning_writes_nothing_and_applying_resolves_exactly_the_planned_threa
     );
     assert_eq!(plan.resolve.len(), 1);
 
-    apply_plan(&forge, &config(), &repo(), &plan, HEAD_SHA)
+    let report = apply_plan(&forge, &config(), &repo(), &plan, HEAD_SHA)
         .await
         .expect("applies");
+    assert_eq!(
+        report,
+        ApplyReport {
+            resolved: 1,
+            ..ApplyReport::default()
+        }
+    );
 
-    // The note comes first and names the commit, then the resolve. A thread
-    // that closes with no explanation reads as the bot losing interest.
+    // The resolve comes first and the note only after it succeeded: a note
+    // announcing a resolve that GitHub then refused is a false claim, and the
+    // next push would make it again.
     let writes = forge.writes();
     assert_eq!(writes.len(), 2, "{writes:?}");
-    let crate::forge::mock::Write::ThreadReply { thread_id, body } = &writes[0] else {
-        panic!("the reply must precede the resolve: {writes:?}");
+    assert_eq!(
+        writes[0],
+        crate::forge::mock::Write::ThreadResolved {
+            thread_id: "PRRT_1".into()
+        }
+    );
+    let crate::forge::mock::Write::ThreadReply { thread_id, body } = &writes[1] else {
+        panic!("the note must follow the resolve: {writes:?}");
     };
     assert_eq!(thread_id, "PRRT_1");
     assert!(
         body.contains("abc1234"),
         "the note must name the commit: {body}"
-    );
-    assert_eq!(
-        writes[1],
-        crate::forge::mock::Write::ThreadResolved {
-            thread_id: "PRRT_1".into()
-        }
     );
 }
 
@@ -328,9 +336,9 @@ async fn every_refusal_leaves_the_forge_untouched() {
 }
 
 #[tokio::test]
-async fn the_advisory_path_is_off_by_default_and_costs_nothing() {
-    // The model is *available* and would say "resolve"; the flag is off, so it
-    // is never asked and the thread is left for a human.
+async fn turning_off_the_advisory_path_costs_nothing() {
+    // The model is *available* and would say "resolve"; this repository turned
+    // the feature off, so it is never asked and the thread is left for a human.
     let mut thread = ours();
     thread.is_outdated = false;
     let forge = forge_with(vec![thread]);
@@ -405,4 +413,256 @@ async fn turning_the_whole_feature_off_reads_nothing_and_plans_nothing() {
     let plan = plan_for(&forge, &config, &[]).await;
     assert!(plan.resolve.is_empty());
     assert!(forge.writes().is_empty());
+}
+
+/// A forge whose every thread resolve is refused with `message`.
+fn refusing_forge(threads: Vec<ReviewThread>, message: &str) -> MockForge {
+    forge_with(threads).refusing_thread_resolves(message)
+}
+
+/// The thread replies a forge has recorded.
+fn notes(forge: &MockForge) -> Vec<String> {
+    forge
+        .writes()
+        .into_iter()
+        .filter_map(|write| match write {
+            crate::forge::mock::Write::ThreadReply { body, .. } => Some(body),
+            _ => None,
+        })
+        .collect()
+}
+
+/// One full run against `forge`: plan, then apply.
+async fn run(forge: &MockForge) -> ApplyReport {
+    let plan = plan_for(forge, &config(), &[TITLE]).await;
+    apply_plan(forge, &config(), &repo(), &plan, HEAD_SHA)
+        .await
+        .expect("applies")
+}
+
+/// The note as it was posted before it carried a marker.
+const LEGACY_NOTE: &str = "**Resolved** — the review agent found this finding fixed in the new \
+     code, as of `abc1234`.\n\n<sub>If this is wrong, reopen the conversation and say so; \
+     the finding will be re-raised on the next push if it still reproduces.</sub>";
+
+fn with_reply(mut thread: ReviewThread, author: &str, body: &str) -> ReviewThread {
+    thread.comments.push(ThreadComment {
+        author: author.into(),
+        body: body.into(),
+        bot: author.ends_with("[bot]"),
+        maintainer: false,
+    });
+    thread
+}
+
+#[tokio::test]
+async fn a_successful_resolve_is_explained_once_and_never_again() {
+    let forge = forge_with(vec![ours()]);
+
+    assert_eq!(run(&forge).await.resolved, 1);
+    assert_eq!(notes(&forge).len(), 1);
+
+    // Open again on the next push, with our note already under it: the
+    // resolve is attempted again, the explanation is not repeated.
+    let mut reopened = forge.review_threads(&repo(), 7).await.expect("read");
+    reopened[0].is_resolved = false;
+    let next_push = forge_with(reopened);
+    assert_eq!(run(&next_push).await.resolved, 1);
+    assert!(notes(&next_push).is_empty(), "{:?}", next_push.writes());
+}
+
+#[tokio::test]
+async fn a_refused_resolve_posts_no_note_and_is_reported() {
+    let forge = refusing_forge(vec![ours()], "the node id is stale");
+
+    let report = run(&forge).await;
+    assert_eq!(
+        report,
+        ApplyReport {
+            failed: 1,
+            ..ApplyReport::default()
+        }
+    );
+    assert!(notes(&forge).is_empty(), "{:?}", forge.writes());
+
+    // The production failure: every push re-posted the note under a thread
+    // that never closed. A second identical run must post nothing either.
+    run(&forge).await;
+    assert!(notes(&forge).is_empty(), "{:?}", forge.writes());
+}
+
+#[tokio::test]
+async fn an_already_noted_open_thread_is_resolved_without_another_note() {
+    // tinyskills#24: dozens of threads carry our note — marked, or from before
+    // the marker — under a resolve GitHub refused. Once the App has the
+    // permission they must close, and none may gain a sibling note.
+    let marked = with_reply(
+        ours(),
+        "tinysweeper[bot]",
+        &resolution_note("the review agent found this finding fixed", HEAD_SHA),
+    );
+    let legacy = {
+        let mut t = with_reply(ours(), "tinysweeper[bot]", LEGACY_NOTE);
+        t.id = "PRRT_legacy".into();
+        t
+    };
+    let forge = forge_with(vec![marked, legacy]);
+
+    let plan = plan_for(&forge, &config(), &[TITLE]).await;
+    assert!(plan.resolve.iter().all(|entry| entry.noted), "{plan:?}");
+
+    let report = apply_plan(&forge, &config(), &repo(), &plan, HEAD_SHA)
+        .await
+        .expect("applies");
+
+    assert_eq!(report.resolved, 2);
+    assert_eq!(
+        forge.writes(),
+        vec![
+            crate::forge::mock::Write::ThreadResolved {
+                thread_id: "PRRT_1".into()
+            },
+            crate::forge::mock::Write::ThreadResolved {
+                thread_id: "PRRT_legacy".into()
+            },
+        ],
+        "resolved, with zero new replies"
+    );
+}
+
+#[tokio::test]
+async fn a_note_somebody_else_wrote_does_not_count_as_ours() {
+    // Ours by author and by text, as every other marker check is: anyone can
+    // paste the marker, and doing so must not silence our explanation.
+    let marked = resolution_note("the review agent found this finding fixed", HEAD_SHA);
+    for (author, body) in [
+        ("author", marked.as_str()),
+        ("tinysweeper-evil", marked.as_str()),
+        ("author", LEGACY_NOTE),
+    ] {
+        let forge = forge_with(vec![with_reply(ours(), author, body)]);
+        let plan = plan_for(&forge, &config(), &[TITLE]).await;
+        assert_eq!(plan.resolve.len(), 1, "{author}: {body}");
+        assert!(!plan.resolve[0].noted, "{author}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn a_marker_quoted_in_our_own_opener_is_not_a_note() {
+    // The model can reproduce the marker from an untrusted diff into a finding
+    // body, which we post under our own login. That opener must not count as
+    // the explanation, or the real note would never be posted.
+    let mut thread = ours();
+    thread.comments[0].body = format!(
+        "**{TITLE}**\n\nthe diff said {RESOLVED_NOTE_MARKER} here\n\n\
+         <!-- tinysweeper:fp={FINGERPRINT} -->"
+    );
+    let forge = forge_with(vec![thread]);
+    let plan = plan_for(&forge, &config(), &[TITLE]).await;
+    assert_eq!(plan.resolve.len(), 1);
+    assert!(!plan.resolve[0].noted, "a quoted marker is not a note");
+}
+
+#[test]
+fn a_resolution_note_carries_its_marker() {
+    assert!(
+        resolution_note("fixed", HEAD_SHA).contains(RESOLVED_NOTE_MARKER),
+        "without the marker the next run cannot tell it already explained this"
+    );
+}
+
+#[tokio::test]
+async fn a_permission_refusal_stops_every_later_resolve_in_the_run() {
+    let threads: Vec<ReviewThread> = (1..=3)
+        .map(|n| {
+            let mut thread = ours();
+            thread.id = format!("PRRT_{n}");
+            thread
+        })
+        .collect();
+    let forge = refusing_forge(
+        threads,
+        "GitHub refused the resolve-thread mutation: \
+         [{\"type\":\"FORBIDDEN\",\"message\":\"Resource not accessible by integration\"}]",
+    );
+
+    let report = run(&forge).await;
+
+    assert_eq!(
+        report,
+        ApplyReport {
+            failed: 1,
+            skipped: 2,
+            ..ApplyReport::default()
+        }
+    );
+    // The mock records each resolve attempt before it applies the refusal (see
+    // forge::mock), so the refused first resolve is the one expected write.
+    assert_eq!(
+        forge.writes(),
+        vec![crate::forge::mock::Write::ThreadResolved {
+            thread_id: "PRRT_1".into()
+        }],
+        "one refused attempt, then nothing: the next two would fail the same way"
+    );
+}
+
+#[tokio::test]
+async fn a_one_off_failure_does_not_cost_the_other_threads() {
+    // One stale node id is not a permission problem; the rest still run, and
+    // each resolved thread still gets its explanation.
+    let threads: Vec<ReviewThread> = (1..=2)
+        .map(|n| {
+            let mut thread = ours();
+            thread.id = format!("PRRT_{n}");
+            thread
+        })
+        .collect();
+    let forge = forge_with(threads)
+        .refusing_thread_resolve_of("PRRT_1", "Could not resolve to a node with the global id");
+
+    assert_eq!(
+        run(&forge).await,
+        ApplyReport {
+            failed: 1,
+            resolved: 1,
+            ..ApplyReport::default()
+        }
+    );
+    let replied: Vec<String> = forge
+        .writes()
+        .into_iter()
+        .filter_map(|write| match write {
+            crate::forge::mock::Write::ThreadReply { thread_id, .. } => Some(thread_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        replied,
+        vec!["PRRT_2".to_string()],
+        "the note follows the successful resolve, and only that one"
+    );
+}
+
+#[test]
+fn permission_refusals_are_recognised_in_both_of_githubs_shapes() {
+    for refused in [
+        "GitHub: Resource not accessible by integration",
+        "GitHub refused the resolve-thread mutation: [{\"type\":\"FORBIDDEN\"}]",
+        "GitHub refused the resolve-thread mutation: [{\"message\":\"tinysweeper does not have permission to resolve this thread\"}]",
+    ] {
+        assert!(
+            is_permission_denied(&crate::error::Error::Forge(refused.into())),
+            "{refused}"
+        );
+    }
+    for other in [
+        "Could not resolve to a node with the global id of 'PRRT_403'",
+        "GitHub: Not Found",
+    ] {
+        assert!(
+            !is_permission_denied(&crate::error::Error::Forge(other.into())),
+            "{other}"
+        );
+    }
 }

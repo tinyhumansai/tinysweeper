@@ -156,7 +156,10 @@ mod tests {
 
     fn proposal(highest: Option<Severity>) -> Proposal {
         Proposal {
+            summary: None,
+            prior_findings: vec![],
             overview: None,
+            wireframe: None,
             threads: Default::default(),
             version: 1,
             repo: "tinyhumansai/tinysweeper".into(),
@@ -174,10 +177,13 @@ mod tests {
                 findings: vec![],
                 noted: vec![],
                 resolved: vec![],
+                pending: vec![],
                 deduped: 0,
                 highest_severity: highest,
                 usage: Default::default(),
                 models: vec![],
+                unanswered: vec![],
+                overflow: vec![],
             }],
             cost_usd: 0.0,
             input_tokens: 0,
@@ -186,6 +192,7 @@ mod tests {
             embed_tokens: 0,
             models: vec![],
             unreviewed: vec![],
+            skipped: None,
         }
     }
 

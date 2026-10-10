@@ -78,6 +78,12 @@ pub const PRICES: &[(&str, f64)] = &[
     ("openrouter:qwen/qwen3-embedding-8b", 0.01),
     ("openrouter:qwen/qwen3-embedding-4b", 0.02),
     ("openrouter:baai/bge-m3", 0.01),
+    // The box's LLM ladder: `vectors` is a ladder whose every rung is a
+    // 1024-wide BGE-M3, priced at that rate. Here as well as in
+    // `harness::pricing` because this table is the *pre-call* check — an
+    // unpriced model estimates at zero, and a zero estimate never trips the
+    // budget before the request goes out.
+    ("ladder:vectors", 0.01),
     ("openrouter:google/gemini-embedding-001", 0.15),
 ];
 

@@ -66,13 +66,18 @@ fn finding(path: &str, line: u64, title: &str, body: &str) -> Finding {
         applicable: None,
         late: false,
         identity: Some("abcd1234".into()),
+        aliases: vec![],
+        grouped: false,
+        review_pass: 1,
         corroboration: 1,
     }
 }
 
 fn proposal(findings: Vec<Finding>) -> Proposal {
     Proposal {
-        version: 1,
+        summary: None,
+        prior_findings: vec![],
+        version: crate::app::review::PROPOSAL_VERSION,
         repo: "tinyhumansai/tinysweeper".into(),
         number: 1,
         head_sha: "a".repeat(40),
@@ -84,12 +89,16 @@ fn proposal(findings: Vec<Finding>) -> Proposal {
             findings,
             noted: Vec::new(),
             resolved: vec![],
+            pending: vec![],
             deduped: 0,
             highest_severity: None,
             usage: Usage::default(),
             models: vec!["z-ai/glm-5.2".into()],
+            unanswered: vec![],
+            overflow: vec![],
         }],
         unreviewed: vec![],
+        skipped: None,
         cost_usd: 0.004,
         input_tokens: 1000,
         output_tokens: 100,
@@ -97,6 +106,7 @@ fn proposal(findings: Vec<Finding>) -> Proposal {
         embed_tokens: 0,
         models: vec!["z-ai/glm-5.2".into()],
         overview: None,
+        wireframe: None,
         threads: Default::default(),
     }
 }

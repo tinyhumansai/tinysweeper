@@ -24,6 +24,29 @@ erasing the rest. **Arrays replace wholesale** — appending would make an
 inherited entry impossible to remove, and silent accumulation is worse than
 re-listing.
 
+## The strictness dial is authoritative
+
+`review.strictness` sets the posting gates (`Strictness::for_level`), and an
+explicit `review.severity_gate` or `review.confidence_min` can only make them
+**stricter**. `Config::severity_gate` and `Config::confidence_min` take the
+stricter of the two, whichever layer set the explicit key.
+
+This replaced "an explicit gate overrides the dial", which let a preset loosen
+every repository on it behind the dial's back: `rust-library` set
+`medium`/0.6 under `strictness = 2`, and every repository inheriting the
+server's `preset = "rust-library"` posted medium findings while the dial read
+"default — high-severity findings the model is confident about". Clamping only
+the preset layer would not have been enough — the operator's own config is the
+repository layer for every reviewed repository — so the rule is the same for
+all of them: to see more, turn the dial to 3 and lower or remove any explicit gate that remains stricter. A looser explicit value is not a
+validation error, because refusing an existing config over a key that now
+merely does nothing would cost a review rather than a comment; it is inert,
+and said so: `config::clamped_gates` names each clamped key, the layer that
+set it and the effective value. `tinysweeper doctor` prints it (and
+`doctor --json` carries it as `clamped_gates`), and loading the config logs it
+once at `warn` — for the server's remote overlay, only for keys the
+repository layer set, since the operator's own were reported at base load.
+
 ## Why validation collects everything
 
 `validate::validate` returns a `Vec<String>`, never an early `Err`. Someone
@@ -58,6 +81,21 @@ gates and a `FallbackPolicy`; tinysweeper picks its tier before the `Model`
 port, in the default build, where tinyagents is not linked at all. The place it
 would pay for itself is `GatewayModel`'s hand-rolled fallback chain, on the
 feature-gated side of the port.
+
+## Review budget admission
+
+Every review lane reserves spend against `models.budget_usd_per_pr`, including
+ordinary and agentic reviewers. A route's `max_tokens = 0` still means no output
+ceiling on the wire, but validation rejects it because admission requires a
+finite output cap. Set a positive cap or omit the route override to inherit
+`models.max_tokens`. With reasoning enabled, the existing 12000-token floor
+also applies.
+
+`models.budget_prices` supplies operator-verified upper rates for gateway
+aliases, in USD per million tokens. Each bound must cover all providers and
+fallbacks behind the alias, including long-context pricing. Input and cached
+input rates must be finite and nonnegative; the output rate must be finite and
+strictly positive. Validation names the alias and field without echoing rates.
 
 ## `[embeddings]` is a partition key, not a call setting
 
@@ -117,7 +155,7 @@ is dropped and logged.
 | Not overridable | `[automerge]`, `[issues]`, `[automation]`, `[sentry]` | Write actions against the operator's installation. A repository that could enable auto-merge from a branch could merge that branch. |
 | Not overridable | `[lookup]`, `retrieval.submodules` | Every lookup round is a model call the operator pays for, and a checkout or a submodule fetch is a network request with the operator's read token on it. |
 | Not overridable | `[memory]` | Names the engine the operator's reviewer talks to and the variable its key lives in. A repository that could point memory elsewhere could feed the reviewer a memory of its choosing. |
-| Not overridable | `review.request_changes_at`, `review.approve_when_clean` | The verdict controls: whether a finding blocks the merge button, and whether the bot's approval can satisfy a branch protection rule. |
+| Not overridable | `review.request_changes_at`, `review.approve_when_clean`, `review.max_changed_files`, `review.max_changed_lines` | The verdict controls decide whether the bot blocks or approves. The size ceilings bound operator resources before model work; a reviewed repository may lower neither today, because the remote allow-list cannot express lower-only overrides safely. |
 | Not overridable | `path_instructions` | Free text injected unfenced into a lane's instructions. Repository prose reaches a prompt through exactly one door — the sandboxed extraction in `crate::knowledge` — and this must not become a second. |
 | Not overridable | `preset`, `version` | A preset is read from the *server's* filesystem and may set any key at all, so honouring one named by the reviewed repository would make every exclusion above reachable in one line. |
 
@@ -135,3 +173,9 @@ result that fails validation all cost the repository its own settings and none
 of them cost it the review. Failing would hand any contributor a way to break
 the bot by committing one broken line. Validation is all-or-nothing — a
 half-applied override is a configuration no layer ever wrote.
+
+`models.agentic_reviewers` is an explicit opt-in, false by default. It requires
+`models.structured_output = "schema"` and uses the existing lookup-policy bounds.
+The disabled flag is omitted from serialized configuration to preserve existing
+evaluation digests. See [agentic reviewers](../harness/AGENTIC-REVIEWERS.md) before
+enabling it.

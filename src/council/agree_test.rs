@@ -17,6 +17,9 @@ fn finding(path: &str, line: Option<u64>, rule: &str) -> Finding {
         suggestion: None,
         late: false,
         identity: None,
+        aliases: vec![],
+        grouped: false,
+        review_pass: 1,
         applicable: None,
         corroboration: 1,
     }

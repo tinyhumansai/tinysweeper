@@ -1,0 +1,17 @@
+{
+  "key": "486ceff09c0f1b02",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 5677,
+    "output_tokens": 301,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00054677532
+  },
+  "value": {
+    "findings": [],
+    "summary": "The additional coverage pass found no omitted actionable defects."
+  }
+}

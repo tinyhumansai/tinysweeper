@@ -24,6 +24,7 @@ use mongodb::{Collection, IndexModel};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::lanes::e2e::runs::Watch;
 use crate::preview::session::Session as PreviewSession;
 use crate::state::types::ReviewedState;
 
@@ -262,7 +263,7 @@ impl Store {
         let Some(document) = found else {
             return Ok(None);
         };
-        bson::from_document::<PreviewSession>(document)
+        bson::deserialize_from_document::<PreviewSession>(document)
             .map(Some)
             .map_err(|err| Error::Forge(format!("unreadable preview session: {err}")))
     }
@@ -273,7 +274,7 @@ impl Store {
     /// save so a session in use never expires underneath itself.
     pub async fn save_preview_session(&self, session: &PreviewSession) -> Result<()> {
         let mut document =
-            bson::to_document(session).map_err(|err| Error::Forge(err.to_string()))?;
+            bson::serialize_to_document(session).map_err(|err| Error::Forge(err.to_string()))?;
         document.insert("updated", bson::DateTime::now());
         self.preview_sessions
             .update_one(doc! { "_id": &session.id }, doc! { "$set": document })
@@ -304,7 +305,7 @@ impl Store {
 
     /// Set a contributor's trust, with a note explaining why.
     pub async fn set_trust(&self, login: &str, trust: Trust, note: Option<&str>) -> Result<()> {
-        let trust = bson::to_bson(&trust).map_err(|err| Error::Forge(err.to_string()))?;
+        let trust = bson::serialize_to_bson(&trust).map_err(|err| Error::Forge(err.to_string()))?;
         self.contributors
             .update_one(
                 doc! { "_id": login },
@@ -446,7 +447,7 @@ impl crate::ports::review_state::ReviewStateStore for Store {
         let Some(document) = found else {
             return Ok(None);
         };
-        match bson::from_document::<ReviewedState>(document) {
+        match bson::deserialize_from_document::<ReviewedState>(document) {
             Ok(state) => Ok(Some(state)),
             Err(err) => {
                 tracing::warn!(%err, %key, "unreadable review state; reviewing from scratch");
@@ -456,7 +457,8 @@ impl crate::ports::review_state::ReviewStateStore for Store {
     }
 
     async fn save_state(&self, key: &str, state: &ReviewedState) -> Result<()> {
-        let mut document = bson::to_document(state).map_err(|err| Error::Forge(err.to_string()))?;
+        let mut document =
+            bson::serialize_to_document(state).map_err(|err| Error::Forge(err.to_string()))?;
         // `updated` is what the TTL index above watches, and it is written on
         // every save so an actively-reviewed pull request never expires
         // underneath itself.
@@ -468,6 +470,63 @@ impl crate::ports::review_state::ReviewStateStore for Store {
             .await
             .map_err(|err| Error::Forge(err.to_string()))?;
         Ok(())
+    }
+
+    async fn clear_e2e_watch(&self, key: &str, watch: &Watch) -> Result<bool> {
+        // The filter carries the condition, not a read-then-write: Mongo
+        // only matches (and only then applies the `$unset`) a document whose
+        // `e2e` sub-document is still exactly this one, atomically. A
+        // concurrent `save_state` for a new review — a new head, a new
+        // watch or none — either lands entirely before this filter is
+        // evaluated (this then matches nothing, `matched_count == 0`) or
+        // entirely after (this then clears the *old* record a moment before
+        // the new one overwrites it anyway); either way nothing the new
+        // review wrote is lost, which a reload-then-unconditional-
+        // `save_state` cannot promise.
+        //
+        // Every field matched individually by its dotted path, not the
+        // whole `e2e` sub-document matched as one value: a document written
+        // before `generation` existed has no `generation` key in storage at
+        // all, but deserializes to `Watch { generation: String::new(), .. }`
+        // through `#[serde(default)]`. Matching the whole reserialized
+        // document against that stored shape would never succeed — Mongo's
+        // document equality requires the same set of keys, and the legacy
+        // document is missing one — leaving every watch saved before this
+        // migration permanently unclearable, republishing its terminal
+        // check on every later completion event forever. The `generation`
+        // path is therefore matched with `$exists: false` (the legacy
+        // shape) or equals `""`, alongside equals `watch.generation` (the
+        // ordinary case).
+        //
+        // The other fields, not only `head_sha`: a manual re-review of the
+        // same commit (`/admin/reviews`) can save a replacement watch with
+        // the same `head_sha` but different `jobs`/`summary`/`failed`
+        // before this runs, and matching on `head_sha` alone would clear
+        // that newer watch too.
+        let generation_filter = if watch.generation.is_empty() {
+            doc! { "$or": [
+                { "e2e.generation": { "$exists": false } },
+                { "e2e.generation": "" },
+            ] }
+        } else {
+            doc! { "e2e.generation": &watch.generation }
+        };
+        let jobs =
+            bson::serialize_to_bson(&watch.jobs).map_err(|err| Error::Forge(err.to_string()))?;
+        let mut filter = doc! {
+            "_id": key,
+            "e2e.head_sha": &watch.head_sha,
+            "e2e.jobs": jobs,
+            "e2e.summary": &watch.summary,
+            "e2e.failed": watch.failed,
+        };
+        filter.extend(generation_filter);
+        let result = self
+            .review_state
+            .update_one(filter, doc! { "$unset": { "e2e": "" } })
+            .await
+            .map_err(|err| Error::Forge(err.to_string()))?;
+        Ok(result.matched_count > 0)
     }
 }
 
@@ -624,6 +683,108 @@ mod tests {
         }
     );
 
+    store_test!(
+        clear_e2e_watch_matches_and_clears_the_exact_watch,
+        |store| async move {
+            use crate::ports::review_state::ReviewStateStore;
+
+            let key = "tinyhumansai/tinysweeper#7";
+            let watch = Watch {
+                head_sha: "abc123".into(),
+                jobs: vec!["playwright".into()],
+                summary: "Coverage looks complete.".into(),
+                failed: false,
+                generation: "gen-1".into(),
+            };
+            store
+                .save_state(
+                    key,
+                    &ReviewedState {
+                        head_sha: "abc123".into(),
+                        e2e: Some(watch.clone()),
+                        ..ReviewedState::default()
+                    },
+                )
+                .await
+                .expect("saves");
+
+            // A watch with a different generation does not match, even
+            // though every other field is identical.
+            let wrong_generation = Watch {
+                generation: "gen-2".into(),
+                ..watch.clone()
+            };
+            assert!(
+                !store
+                    .clear_e2e_watch(key, &wrong_generation)
+                    .await
+                    .expect("clears"),
+                "a different generation must not match"
+            );
+
+            assert!(
+                store.clear_e2e_watch(key, &watch).await.expect("clears"),
+                "the exact watch must match and clear"
+            );
+            let after = store.load_state(key).await.expect("loads");
+            assert_eq!(after.unwrap().e2e, None);
+        }
+    );
+
+    store_test!(
+        clear_e2e_watch_matches_a_legacy_record_with_no_generation_field,
+        |store| async move {
+            use crate::ports::review_state::ReviewStateStore;
+
+            // Simulates a document written before `generation` existed:
+            // inserted directly, bypassing `save_state` (which would always
+            // stamp a `Watch` built by this binary's own code, never one
+            // missing the field). Mongo document equality on the whole `e2e`
+            // sub-document would never match this shape against a freshly
+            // reserialized `Watch { generation: String::new(), .. }` — the
+            // set of keys differs — which is exactly the bug this test
+            // guards against regressing.
+            let key = "tinyhumansai/tinysweeper#8";
+            let legacy = doc! {
+                "_id": key,
+                "head_sha": "abc123",
+                "evidence": "",
+                "fingerprints": [],
+                "titles": [],
+                "severities": {},
+                "e2e": {
+                    "head_sha": "abc123",
+                    "jobs": ["playwright"],
+                    "summary": "Coverage looks complete.",
+                    "failed": false,
+                },
+            };
+            store
+                .review_state
+                .insert_one(legacy)
+                .await
+                .expect("inserts the legacy document directly");
+
+            // Loaded back, `#[serde(default)]` fills `generation` with an
+            // empty string — the same value a freshly built `Watch` for a
+            // legacy record would carry.
+            let loaded = store.load_state(key).await.expect("loads").unwrap();
+            let legacy_watch = loaded.e2e.expect("has a watch");
+            assert_eq!(legacy_watch.generation, "");
+
+            assert!(
+                store
+                    .clear_e2e_watch(key, &legacy_watch)
+                    .await
+                    .expect("clears"),
+                "a legacy record with no `generation` key must still match \
+                 and clear against a watch whose `generation` is empty"
+            );
+            let after = store.load_state(key).await.expect("loads");
+            assert_eq!(after.unwrap().e2e, None);
+        }
+    );
+
     // Pure logic, no database needed — these always run.
 
     #[test]
@@ -644,8 +805,8 @@ mod tests {
     #[test]
     fn trust_round_trips_through_bson() {
         for trust in [Trust::Unknown, Trust::Allowed, Trust::Blocked] {
-            let encoded = bson::to_bson(&trust).expect("encodes");
-            let decoded: Trust = bson::from_bson(encoded).expect("decodes");
+            let encoded = bson::serialize_to_bson(&trust).expect("encodes");
+            let decoded: Trust = bson::deserialize_from_bson(encoded).expect("decodes");
             assert_eq!(decoded, trust);
         }
     }

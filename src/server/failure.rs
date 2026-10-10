@@ -122,8 +122,11 @@ pub fn check_run(head_sha: &str, err: &Error) -> CheckRun {
 fn title_for(err: &Error) -> &'static str {
     match err {
         Error::Model(_) => "The review could not reach a model",
+        Error::ModelUsage { .. } => "The model could not produce a valid review",
         Error::Forge(_) => "The review could not read the pull request",
         Error::Budget { .. } => "The review ran out of budget",
+        Error::Timeout { .. } => "The review ran out of time",
+        Error::ReviewLimit { .. } => "The pull request is too large to review safely",
         Error::Config(_) | Error::ConfigNotFound(_) => "The review is misconfigured",
         _ => "The review could not run",
     }
@@ -142,6 +145,10 @@ fn summary_for(err: &Error) -> String {
              credit, a per-key daily cap, or a provider outage — check the gateway's key \
              status before re-running."
         }
+        Error::ModelUsage { .. } => {
+            "Paid model attempts did not produce a valid review. Check the configured response schema \
+             and repository lookup limits before re-running."
+        }
         Error::Forge(_) => {
             "GitHub rejected a read the review depends on. If this persists, check the app \
              installation's permissions on this repository."
@@ -149,6 +156,18 @@ fn summary_for(err: &Error) -> String {
         Error::Budget { .. } => {
             "The per-pull-request spend ceiling was reached before the lanes finished. Raise \
              `models.budget_usd_per_pr`, or narrow what this pull request changes."
+        }
+        Error::Timeout { .. } => {
+            "The review did not finish inside its wall-clock deadline — the checkout, the \
+             lanes, or both. That is usually a model gateway answering very slowly, a large \
+             checkout, or an unusually large diff — check the gateway's latency before \
+             re-running, or narrow what this pull request changes."
+        }
+        Error::ReviewLimit { .. } => {
+            "The pull request exceeds the deployment's changed-file or changed-line safety \
+             ceiling. Split it into smaller pull requests, or ask the tinysweeper operator to \
+             raise `review.max_changed_files` or `review.max_changed_lines` if this change is \
+             intentionally reviewable as one unit."
         }
         _ => "Re-run the review once the underlying problem is fixed.",
     };
@@ -206,6 +225,18 @@ mod tests {
     }
 
     #[test]
+    fn a_timed_out_review_is_reported_as_such_and_never_retried() {
+        // A deadline is a budget: retrying a run that spent it would spend it
+        // again, under a check that has said "reviewing" the whole time.
+        let err = Error::timeout("the review of o/r#1", std::time::Duration::from_secs(1200));
+        assert!(!is_transient(&err));
+        let check = check_run("abc123", &err);
+        assert_eq!(check.title, "The review ran out of time");
+        assert!(check.summary.contains("did not finish within 1200s"));
+        assert!(check.conclusion.is_some_and(CheckConclusion::blocks));
+    }
+
+    #[test]
     fn the_summary_says_it_is_not_a_verdict_on_the_code() {
         // A red check with no disclaimer reads as an accusation against the
         // contributor for something tinysweeper never even looked at.
@@ -259,6 +290,12 @@ mod tests {
             limit: 4.0
         }));
         assert!(!is_transient(&Error::Config("bad preset".into())));
+        assert!(!is_transient(&Error::ReviewLimit {
+            changed_files: 501,
+            max_files: 500,
+            changed_lines: 1,
+            max_lines: 50_000,
+        }));
         assert!(!is_transient(&Error::lane("critique", "no verdict")));
     }
 
@@ -284,5 +321,17 @@ mod tests {
             title_for(&Error::Model("x".into())),
             title_for(&Error::Forge("y".into()))
         );
+
+        let too_large = Error::ReviewLimit {
+            changed_files: 501,
+            max_files: 500,
+            changed_lines: 50_001,
+            max_lines: 50_000,
+        };
+        assert_eq!(
+            title_for(&too_large),
+            "The pull request is too large to review safely"
+        );
+        assert!(summary_for(&too_large).contains("review.max_changed_lines"));
     }
 }

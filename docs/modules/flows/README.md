@@ -1,31 +1,40 @@
-# `flows` — lane orchestration as a graph
+# `flows` — how a lane's reviewers are asked
 
-Every model-calling lane runs as a [tinyflows] `WorkflowGraph` rather than as
-hand-written concurrency. This document is why, and what the shape buys.
-
-[tinyflows]: https://github.com/tinyhumansai/tinyflows
+Every model-calling lane asks its reviewers through `flows::runner`: one
+structured call per reviewer, all at once, under one shared budget. This
+document is why, and what the shape buys.
 
 ## The change in one line
 
-A lane's reviewers stopped running one after another. They run as a graph — all
-at once, with the budget enforced somewhere that does not require serialising
-them — and a reviewer may now ask the codebase a question instead of guessing.
+A lane's reviewers stopped running one after another. They run concurrently —
+with the budget enforced somewhere that does not require serialising them — and
+a reviewer may ask the codebase a question instead of guessing.
+
+This used to be expressed as [tinyflows] graphs. Every graph was the same flat
+shape — a trigger, one `agent` node per call, a merge barrier — so they are now
+Embed borrowed-future fan-out when `harness` is enabled, with a pure-future
+offline mock path. This removed a dependency, a JSON
+envelope that had to be read two `json` hops deep, and a set of refusing
+capability stubs the engine required. Nothing about what runs or in what order
+changed; the golden tests and the lane tests pass unchanged.
+
+[tinyflows]: https://github.com/tinyhumansai/tinyflows
 
 ## What runs
 
 `src/council` decides **who** reviews — agents, personas, and what becomes of
-their findings. This module is **how they run**: one `agent` node per reviewer,
-concurrent, joined by a merge barrier.
+their findings. This module is **how they run**: one call per reviewer, concurrent, joined
+before anything is read.
 
 ```
-  evidence ─┬─ agent: reviewer-a ─┐
-            ├─ agent: reviewer-b ─┼─ merge ─► one answer per reviewer
-            └─ agent: reviewer-c ─┘
+  evidence ─┬─ reviewer-a ─┐
+            ├─ reviewer-b ─┼─ join ─► one answer per reviewer
+            └─ reviewer-c ─┘
 ```
 
 Placement, merging and removal stay where they were — in the lane, in
 `council::merge`, and in `falsify` respectively. Those are the steps the golden
-tests pin, and moving them into a graph would buy nothing and cost the tests.
+tests pin.
 
 ## What is deliberately absent: a verification round
 
@@ -62,12 +71,12 @@ Cost is shaped rather than merely capped:
 
 ### The depth bound is structural, not a counter
 
-Exactly one level. `subagent::answers_graph` contains a trigger and `agent`
-nodes, nothing else, and `caps::ChildGraphs` is populated only with graphs this
-crate builds. A sub-agent has no `sub_workflow` node to reach for and no
-registry entry it could name if it had one. A depth integer threaded through the
-run is a bound a future edit deletes by accident; this one cannot compile a
-recursion into existence.
+Exactly one level. A sub-agent is a single call built by
+`subagent::answer_call`, answering `subagent::answer_schema` — which has no
+`questions` key and no `lookups` key. A sub-agent therefore has nothing it
+could ask with and no turn after its answer to ask on. A depth integer threaded
+through the run is a bound a future edit deletes by accident; this one is a
+property of the schema, and `subagent_test` pins it.
 
 ### Two couplings that fail silently if broken
 
@@ -94,29 +103,47 @@ the repository". The turn prompts say what each turn may do: the settling
 turn alone is told it is the last. See
 [`docs/modules/lanes/lookup.md`](../lanes/lookup.md).
 
-## What the graph is *not* allowed to do
+## What a reviewer is *not* able to do
 
-`caps.rs` is as much about refusal as wiring. `tools`, `http` and `code` are
-supplied as implementations that deny every call with an error naming the
-invariant from `AGENTS.md`; `shell` and `memory` are absent entirely. A graph
-that grows a `code` node fails on its first run with the reason, rather than
-quietly executing contributor code.
+One-shot calls declare no tools. With `models.agentic_reviewers` enabled,
+council reviewers use an isolated Embed agent with `Access::readonly()`,
+`HostOnly` tools and untrusted input. The host installs only bounded,
+redacted repository reads through `TreeReader`; no shell, network, workspace
+write or delegation tool is installed. GitHub write credentials stay in the
+existing apply modules. See the [agentic contract](../harness/AGENTIC-REVIEWERS.md).
 
 ## Where the budget lives
 
-In `caps::ModelCapability`, checked before each call. This is what let the
-per-file fan-out become concurrent again: the previous design serialised every
-file *precisely because* spend is only known once a call returns, so there was
-nowhere else to enforce a ceiling. One capability object sees every call in a
-lane, so it can refuse one however many are in flight.
+`caps::ModelCapability` retains lane accounting and shares one Embed budget
+ledger with its model capability. Embed reserves bounded input, output and
+cost before every physical dispatch, including retries and tool turns;
+concurrent calls cannot each admit against the same remaining funds.
+Unknown cost or interrupted requests retain their reservation. Gateway alias
+prices require explicit operator bounds, and budgeted calls require a finite
+output cap; local admission cannot constrain a provider's eventual bill.
+
+One call here is one changed file **or one file group** — `lanes::grouping`
+decides which, before any of this runs, with no model call of its own. A file
+and its test grouped into one conversation is one call charged against the
+budget instead of two, at the cost of one prompt carrying both diffs; a
+component too large to bet on falls back to the ungrouped count exactly. Either
+way this module counts calls the same way — it has no notion of a "file"
+beneath a `Call`, only the id and the prompt it was given.
+
+The default maximum `review.passes = 3` adds up to two more calls per qualifying
+group — adaptive coverage passes (`lanes::coverage`) that ask one reviewer
+rather than the whole council and stop when a pass adds nothing distinct — and
+each goes through the same `ModelCapability`, so
+it counts against the same budget as everything else here. See "Coverage
+pass" in `docs/modules/lanes/README.md`.
 
 ## Files
 
 | file | role |
 |---|---|
-| `caps.rs` | the capability seam, budget, spend tally, and every refusal |
-| `panel.rs` | one `agent` node per reviewer, and the fan-in barrier |
-| `subagent.rs` | the child graph, the question schema, and the depth bound |
+| `caps.rs` | the lane's one capability: the model call, budget and spend tally |
+| `panel.rs` | the `Call` each reviewer makes, and the per-file concurrency cap |
+| `subagent.rs` | the sub-agent call, the question schema, and the depth bound |
 | `lookup.rs` | the lookup loop: seeding, the `lookups` schema, gathering, the budget |
 | `runner.rs` | runs the rounds — lookups, then questions, then the settling turn — and returns one answer per reviewer |
 
@@ -136,3 +163,11 @@ when they break:
   runner never exceeds one; the test asserts it reached the reviewer count.
 - **Cost shape** for sub-agents is pinned by call count: one call when nothing
   is asked, and `1 + MAX_QUESTIONS_PER_REVIEWER + 1` when the cap is exceeded.
+
+## Opt-in agent exploration
+
+With `models.agentic_reviewers = true` and an enabled lookup policy, the first
+council turn uses Embed's HostOnly repository tools. It skips definition seeding
+and the JSON lookup loop; captured redacted reads still reach `Answer.looked_up`,
+host questions and falsification. The default remains the existing lookup loop.
+See [permissions, lifetime and accounting](../harness/AGENTIC-REVIEWERS.md).

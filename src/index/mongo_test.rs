@@ -32,6 +32,12 @@ fn signature() -> EmbedSignature {
 // --- pure: always run, no server -----------------------------------------
 
 #[test]
+fn stored_documents_use_the_mongodb_driver_bson_type() {
+    let document: mongodb::bson::Document = doc! { "trust": "allowed" };
+    assert_eq!(document.get_str("trust").expect("stored trust"), "allowed");
+}
+
+#[test]
 fn a_vector_is_stored_as_float32_bindata_not_an_array_of_doubles() {
     // Four bytes per dimension against eight plus per-element overhead. On a
     // 1024-dimension index this field is most of the document.

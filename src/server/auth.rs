@@ -39,6 +39,14 @@ struct TokenResponse {
     expires_at: String,
 }
 
+/// Bounds every request this client makes — the app JWT exchange and every
+/// installation-token mint. Deliberately the same value as
+/// `forge::github::REQUEST_TIMEOUT`: both clients sit on the same critical
+/// path (a review permit held while either one is in flight), so one being
+/// bounded and the other not would just move the "holds a permit forever"
+/// failure from one client to the other.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
 #[derive(Debug, Clone)]
 struct CachedToken {
     token: String,
@@ -90,8 +98,18 @@ impl AppAuth {
             app_id: app_id.into(),
             key,
             cache: Arc::new(Mutex::new(HashMap::new())),
+            // `reqwest` waits forever by default. `installation_token` runs
+            // while `server::routes` holds one of `MAX_CONCURRENT_REVIEWS`
+            // permits and before `run.deadline` starts bounding anything, so
+            // an unset timeout here means a cold token exchange that never
+            // completes can hold that permit forever — a handful of those
+            // exhausts every review slot the server has, permanently, with
+            // no `Error::Timeout` ever firing to explain why. Matches
+            // `forge::github::REQUEST_TIMEOUT`, the same bound the rest of
+            // the GitHub traffic already runs under.
             http: reqwest::Client::builder()
                 .user_agent("tinysweeper")
+                .timeout(REQUEST_TIMEOUT)
                 .build()
                 .map_err(|err| Error::Forge(err.to_string()))?,
         })

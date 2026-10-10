@@ -32,6 +32,7 @@
 //! is deliberately still one conversation.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 
@@ -46,10 +47,11 @@ use crate::flows::panel::Call;
 use crate::flows::runner;
 use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema::{self, RawFinding};
-use crate::lanes::fanout::{FileReview, per_file};
+use crate::lanes::fanout::{FileReview, per_unit};
+use crate::lanes::grouping::{FileGroup, GroupBounds};
 use crate::lanes::mechanical;
 use crate::lanes::{Lane, LaneInput, LaneOutcome, reviewer_responses};
-use crate::ports::model::{Model, Spend};
+use crate::ports::model::{Model, Spend, Usage};
 use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
 
 /// The correctness lane.
@@ -119,9 +121,33 @@ impl Lane for Critique {
             .collect();
 
         let changed_paths = input.changed_paths();
+        // No model call: groups related changed files so a bug spanning them
+        // — a caller and its callee, a function and its test — is visible to
+        // one reviewer instead of hidden by the isolation clause each
+        // ungrouped conversation is given. Off, or a component too large to
+        // bet on, falls back to exactly the singleton fan-out this lane ran
+        // before grouping existed — see `lanes::grouping`.
+        let groups: Vec<FileGroup> = if input.config.grouping.enabled {
+            input.group(
+                &paths,
+                &GroupBounds {
+                    max_files: input.config.grouping.max_files,
+                    max_hunk_chars: input.config.grouping.max_hunk_chars,
+                },
+            )
+        } else {
+            paths
+                .iter()
+                .map(|path| FileGroup {
+                    label: path.clone(),
+                    paths: vec![path.clone()],
+                })
+                .collect()
+        };
+
         // One capability for the whole lane, so the pull-request budget is
         // enforced across every file and every reviewer at once. That is what
-        // lets the files run concurrently: this lane reviewed them one at a
+        // lets the groups run concurrently: this lane reviewed them one at a
         // time only because spend is known after a call returns, and there was
         // nowhere else to check it.
         let llm = runner::lane_llm(
@@ -130,19 +156,24 @@ impl Lane for Critique {
             input.config.models.budget_usd_per_pr,
         );
 
-        let outcome = per_file(&paths, |path| {
-            let llm = llm.clone();
-            let input = &input;
-            let changed_paths = &changed_paths;
-            async move {
-                let diff = input
-                    .diffs
-                    .iter()
-                    .find(|d| d.path == path)
-                    .expect("the path came from the diff list");
-                review_file(llm, input, changed_paths, diff).await
-            }
-        })
+        let outcome = per_unit(
+            &groups,
+            |group| group.label.clone(),
+            |group| group.paths.clone(),
+            |group| {
+                let llm = llm.clone();
+                let input = &input;
+                let changed_paths = &changed_paths;
+                async move {
+                    let group_diffs: Vec<FileDiff> = group
+                        .paths
+                        .iter()
+                        .filter_map(|path| input.diffs.iter().find(|d| &d.path == path).cloned())
+                        .collect();
+                    review_group(llm, input, changed_paths, &group.paths, &group_diffs).await
+                }
+            },
+        )
         .await;
 
         // The graph's own calls are tallied inside the capability, which is the
@@ -163,31 +194,49 @@ impl Lane for Critique {
     }
 }
 
-/// Review one file, in a conversation that knows about no other file.
+/// Review one group of related changed files, in a conversation that knows
+/// about no file outside it.
+///
+/// `group_paths` and `group_diffs` are the same files in the same order;
+/// kept apart because a finding is placed against the one `FileDiff` whose
+/// path it names (see [`place`]), while the prompt layer wants the plain
+/// path list. A group of one file is the pre-grouping case, byte-identical to
+/// it: one path, one diff, the same isolation clause text.
 ///
 /// Positioning (step 4) and falsification (step 5) both run here rather than
 /// once over the folded result, because both want *the evidence this
-/// conversation was shown* and that is now one file's diff. Falsification is
-/// also free for the common file: `Falsifier::filter` makes no call when there
-/// is nothing to filter, so the number of falsify calls is the number of files
-/// that actually produced a finding.
-async fn review_file(
+/// conversation was shown* and that is now this group's diffs.
+/// Falsification is also free for the common case of nothing to report:
+/// `Falsifier::filter` makes no call when there is nothing to filter, so the
+/// number of falsify calls is the number of groups that actually produced a
+/// finding.
+async fn review_group(
     llm: std::sync::Arc<crate::flows::caps::ModelCapability>,
     input: &LaneInput<'_>,
     changed_paths: &[String],
-    diff: &FileDiff,
+    group_paths: &[String],
+    group_diffs: &[FileDiff],
 ) -> Result<FileReview> {
     let config: &Config = input.config;
-    let evidence = replay::render(std::slice::from_ref(diff));
+    let evidence = replay::render(group_diffs);
     let reviewers = council::reviewers(config, LaneId::Critique);
+    let redaction_note = redaction_note(&evidence);
 
-    // Every reviewer at once, as one graph. `ask_all` returns one answer per
+    // Every reviewer at once, as one concurrent round. `ask_all` returns one answer per
     // reviewer in the order asked, and reports a reviewer it could not reach
     // rather than failing the council for it.
     let calls: Vec<Call> = reviewers
         .iter()
         .map(|reviewer| {
-            let built = build_prompt(input, changed_paths, diff, &evidence, reviewer);
+            let inputs = prompt_inputs(
+                input,
+                changed_paths,
+                group_paths,
+                &evidence,
+                reviewer,
+                &redaction_note,
+            );
+            let built = prompt::build(&inputs);
             Call {
                 id: reviewer.id.to_string(),
                 model: reviewer.model.to_string(),
@@ -198,14 +247,17 @@ async fn review_file(
         })
         .collect();
 
-    let answers = runner::ask_all(
+    let round_one = runner::ask_all_accounted(
         llm.clone(),
         LaneId::Critique,
         &calls,
         &schema::json_schema(),
-        input.asking_about(diff),
+        input.asking_about_group(group_diffs),
     )
     .await?;
+    let round_one_usage = round_one.usage;
+    let round_one_elapsed = round_one.elapsed;
+    let answers = round_one.answers;
 
     let responses = reviewer_responses(LaneId::Critique, &reviewers, &answers)?;
     let mut spend = Spend::default();
@@ -223,7 +275,15 @@ async fn review_file(
         spend.note(&response.model);
         looked_up.push_str(&response.looked_up);
 
-        let asked = match place(llm.clone(), input, diff, &evidence, response.response).await {
+        let asked = match place(
+            llm.clone(),
+            input,
+            group_diffs,
+            &evidence,
+            response.response,
+        )
+        .await
+        {
             Ok(asked) => asked,
             Err(err) if reviewers.len() > 1 => {
                 tracing::warn!(agent = response.id, %err, "a council reviewer failed");
@@ -248,7 +308,7 @@ async fn review_file(
     if per_reviewer.is_empty() {
         return Err(crate::error::Error::lane(
             "critique",
-            format!("every reviewer failed on {}", diff.path),
+            format!("every reviewer failed on {}", group_paths.join(" + ")),
         ));
     }
 
@@ -269,21 +329,197 @@ async fn review_file(
         .await;
     spend.merge(filtered.spend);
 
+    let mut findings = filtered.findings;
+    let mut rejected = filtered.rejected;
+
+    // Adaptive coverage passes. Gated on the group's own size, not the whole
+    // pull request's — a lane fans out per group, so a two-line group must
+    // not build a second prompt just because the change elsewhere is large.
+    let mut added_by_coverage = 0usize;
+    if config.review.passes > 1 && changed_lines(group_diffs) >= COVERAGE_PASS_MIN_LINES {
+        // Fed cumulatively: the second coverage pass (pass 3) is told about
+        // everything round one *and* the first coverage pass found, so it
+        // does not rediscover the first pass's own additions.
+        let mut confirmed = findings.clone();
+        let mut metrics = crate::lanes::coverage::Metrics::start(
+            round_one_usage,
+            round_one_elapsed,
+            findings.len(),
+        );
+
+        for pass_index in 1..config.review.passes {
+            let reviewer = &reviewers[0];
+            let confirmed_lines = crate::lanes::coverage::confirmed_lines(&confirmed);
+            let base_inputs = prompt_inputs(
+                input,
+                changed_paths,
+                group_paths,
+                &evidence,
+                reviewer,
+                &redaction_note,
+            );
+            let built = prompt::build(&PromptInputs {
+                confirmed_this_round: &confirmed_lines,
+                coverage_pass: true,
+                ..base_inputs
+            });
+
+            let coverage = match crate::lanes::coverage::coverage_pass(
+                llm.clone(),
+                LaneId::Critique,
+                reviewer,
+                &built,
+                &schema::json_schema(),
+                "tinysweeper_critique",
+                input.asking_about_group(group_diffs),
+            )
+            .await
+            {
+                Ok(coverage) => coverage,
+                Err(err) => {
+                    tracing::warn!(%err, "an adaptive review pass failed");
+                    // No per-call usage is observable when the round itself
+                    // fails to return an outcome; count the attempt without
+                    // attributing concurrent groups' shared lane spend to it.
+                    metrics.record(Usage::default(), Duration::ZERO, 0);
+                    metrics.stop(crate::lanes::coverage::StopReason::Failed);
+                    break;
+                }
+            };
+            let coverage_usage = coverage.usage;
+            let coverage_elapsed = coverage.elapsed;
+            spend.merge(coverage.spend);
+            looked_up.push_str(&coverage.looked_up);
+
+            // No answer this round: nothing new to place, and a round that
+            // could not be reached is not evidence a further one would fare
+            // better, so stop rather than pay for another.
+            let Some(response) = coverage.response else {
+                metrics.record(coverage_usage, coverage_elapsed, 0);
+                metrics.stop(crate::lanes::coverage::StopReason::Failed);
+                break;
+            };
+
+            // A coverage response that quotes more than `place` can relocate
+            // within its budget fails placement even though parsing already
+            // succeeded, which the malformed-response handling above does not
+            // cover. This pass is optional on top of round one, so a failure
+            // here is no additional coverage result, not a reason to discard
+            // every finding round one already produced and falsified.
+            let asked = match place(llm.clone(), input, group_diffs, &evidence, response).await {
+                Ok(asked) => asked,
+                Err(err) => {
+                    tracing::warn!(%err, "a coverage pass failed to place its findings");
+                    metrics.record(coverage_usage, coverage_elapsed, 0);
+                    metrics.stop(crate::lanes::coverage::StopReason::PlacementFailure);
+                    break;
+                }
+            };
+            spend.merge(asked.spend);
+            unanchored += asked.unanchored;
+            discarded += asked.discarded;
+
+            // Drop anything that is really a round-one finding said again.
+            // `corroborates` catches the common paraphrase on the same lines;
+            // the fingerprint catches an exact repeat the reviewer quoted
+            // differently. Both are computed here rather than trusted from
+            // the model, which has no channel to report "this is the same
+            // one" and no reason to be honest about it if it did.
+            let had_proposals = !asked.findings.is_empty();
+            let new_findings: Vec<Finding> = asked
+                .findings
+                .into_iter()
+                .filter(|candidate| {
+                    let candidate_fp = candidate.fingerprint(
+                        &crate::findings::anchor::anchor_context(candidate, group_diffs),
+                    );
+                    !confirmed.iter().any(|prior| {
+                        council::agree::corroborates(candidate, prior)
+                            || candidate_fp
+                                == prior.fingerprint(&crate::findings::anchor::anchor_context(
+                                    prior,
+                                    group_diffs,
+                                ))
+                    })
+                })
+                .collect();
+
+            // Nothing new: a further pass over the same evidence would not
+            // find more either, so stop rather than pay for one.
+            if new_findings.is_empty() {
+                metrics.record(coverage_usage, coverage_elapsed, 0);
+                metrics.stop(if had_proposals {
+                    crate::lanes::coverage::StopReason::Duplicate
+                } else {
+                    crate::lanes::coverage::StopReason::Empty
+                });
+                break;
+            }
+
+            // Falsify only what this pass added — free when empty, and it
+            // never re-judges what round one's own pass already kept.
+            let mut new_filtered = Falsifier::new(llm.model().as_ref(), config)
+                .filter_with(LaneId::Critique, new_findings, &evidence, &looked_up)
+                .await;
+            for finding in &mut new_filtered.findings {
+                finding.review_pass = pass_index + 1;
+            }
+            spend.merge(new_filtered.spend);
+            rejected.extend(new_filtered.rejected);
+
+            if new_filtered.findings.is_empty() {
+                metrics.record(coverage_usage, coverage_elapsed, 0);
+                metrics.stop(crate::lanes::coverage::StopReason::NonSurviving);
+                break;
+            }
+
+            metrics.record(
+                coverage_usage,
+                coverage_elapsed,
+                new_filtered.findings.len(),
+            );
+            added_by_coverage += new_filtered.findings.len();
+            confirmed.extend(new_filtered.findings.clone());
+            findings.extend(new_filtered.findings);
+        }
+        metrics.emit(LaneId::Critique, group_paths);
+    }
+
     Ok(FileReview {
         summary: summarise(
             summary.trim(),
             unanchored,
             discarded,
-            &filtered.rejected,
-            filtered.findings.len(),
+            &rejected,
+            findings.len(),
+            added_by_coverage,
         ),
-        findings: filtered.findings,
+        findings,
         resolved,
         spend,
     })
 }
 
-/// What one reviewer said about one file.
+/// Minimum changed lines a group needs before adaptive coverage passes
+/// (`review.passes > 1`) are worth their extra calls.
+///
+/// Not configurable: a repository that wants coverage passes at all is opting
+/// into the per-pass cost already, and a second dial here would only let it
+/// re-enable the noise this threshold exists to avoid on the two-line groups
+/// that make up most pull requests. 40 is comfortably above what a rename or a
+/// one-line fix touches, and comfortably below what a group large enough to
+/// need a second reviewer look would be.
+const COVERAGE_PASS_MIN_LINES: usize = 40;
+
+/// How many lines this group's diffs changed, summed across every file in it.
+fn changed_lines(group_diffs: &[FileDiff]) -> usize {
+    group_diffs
+        .iter()
+        .map(|diff| diff.changed_lines.len())
+        .sum()
+}
+
+/// What one reviewer said about one group.
 struct Asked {
     summary: String,
     resolved: Vec<String>,
@@ -293,44 +529,79 @@ struct Asked {
     discarded: usize,
 }
 
-/// Build one reviewer's prompt for one file.
+/// Build one reviewer's prompt inputs for one group.
 ///
-/// Split from [`place`] so every reviewer's prompt is assembled before any call
-/// is made: the graph asks them all at once, and a builder that ran inside the
-/// call would serialise them again.
-fn build_prompt<'a>(
+/// Round one and adaptive passes both start from this complete context, then
+/// adaptive review changes only its coverage-specific fields. Keeping the
+/// shared layers here prevents later passes from silently losing policy or
+/// evidence when a new prompt input is added.
+fn prompt_inputs<'a>(
     input: &'a LaneInput<'_>,
     changed_paths: &'a [String],
-    diff: &'a FileDiff,
+    group_paths: &'a [String],
     evidence: &'a str,
     reviewer: &council::Reviewer<'_>,
-) -> prompt::Prompt {
+    redaction_note: &'a str,
+) -> PromptInputs<'a> {
     let config: &Config = input.config;
-
-    prompt::build(&PromptInputs {
+    PromptInputs {
         repo_policy: input.repo_policy,
         extracted_rules: input.extracted_rules,
         prior_findings: input.prior_findings,
         new_evidence: evidence,
-        // Every path the pull request touched, not just this one. This selects
-        // which `path_instructions` are injected, and narrowing it to the focus
-        // file would silently drop the rules for every other changed path from
-        // a prefix all N conversations otherwise share — losing the cache as
-        // well as the rules.
+        // Every path the pull request touched, not just this group's.
+        // `path_instructions` always selects repository overrides from
+        // `changed_paths`, never from `focus_paths` below: a path-specific
+        // rule for a file outside this group is still a rule about a file the
+        // pull request touched, and a grouped conversation must see it even
+        // though it may only report findings inside its own group.
         changed_paths,
-        focus_path: Some(&diff.path),
+        focus_paths: group_paths,
         persona: reviewer.persona,
         retrieved_context: input.retrieved_context,
         memory_context: input.memory_context,
+        redaction_note,
         ..PromptInputs::new(LaneId::Critique, config)
-    })
+    }
 }
 
-/// Place what one reviewer said against the file it reviewed.
+/// Explain the redaction markers present in one group's rendered evidence.
+fn redaction_note(evidence: &str) -> String {
+    // Critique prompts see only this group's rendered diffs. Derive the note
+    // from that evidence so a clean group is never told about a credential
+    // removed from a different group's file. Only complete markers emitted by
+    // `scan::redact` count; diff text may contain the prefix literally.
+    let redacted = evidence
+        .split("<redacted, ")
+        .skip(1)
+        .filter(|suffix| {
+            suffix.split_once(" chars>").is_some_and(|(count, _)| {
+                !count.is_empty() && count.bytes().all(|b| b.is_ascii_digit())
+            })
+        })
+        .count();
+    if redacted == 0 {
+        "".to_string()
+    } else {
+        let value = if redacted == 1 { "value" } else { "values" };
+        format!(
+            "{redacted} credential {value} were removed from this diff before you saw it and appear as `<redacted, N chars>`; the lines are real, only the values are gone — never ask for or guess them."
+        )
+    }
+}
+
+/// Place what one reviewer said against the group file it names.
+///
+/// Resolved against the `FileDiff` in `group_diffs` whose path equals the
+/// finding's own `path` — never the first file of the group. A path outside
+/// the group is discarded exactly like a file the pull request never touched:
+/// the isolation clause told this conversation it owns only these files, and
+/// honouring a finding about anything else is what `focus_paths` exists to
+/// prevent (see `harness::prompt::isolation_clause`).
 async fn place(
     llm: std::sync::Arc<crate::flows::caps::ModelCapability>,
     input: &LaneInput<'_>,
-    diff: &FileDiff,
+    group_diffs: &[FileDiff],
     evidence: &str,
     parsed: schema::LaneResponse,
 ) -> Result<Asked> {
@@ -347,16 +618,17 @@ async fn place(
     let mut discarded = 0usize;
 
     for raw in parsed.findings {
-        // Any file but this conversation's own is dropped. That is stricter
-        // than the whole-diff lane's rule — which only required the pull
-        // request to have touched the file — and it has to be: N reviewers
-        // each reporting the same cross-file problem is what `focus_path`
-        // exists to prevent, and honouring an off-file finding here would
-        // undo it.
-        if raw.path != diff.path {
+        // Resolved against the group file whose path it names. A path outside
+        // the group — including one this pull request touched, in a different
+        // conversation — is dropped exactly as a whole-diff lane would drop a
+        // path it never touched. That is stricter than "the pull request
+        // touched this somewhere", and it has to be: N reviewers each
+        // reporting the same cross-file problem is what `focus_paths` exists
+        // to prevent, and honouring an off-group finding here would undo it.
+        let Some(diff) = group_diffs.iter().find(|d| d.path == raw.path) else {
             discarded += 1;
             continue;
-        }
+        };
 
         // Budget check: relocation can make one model call per unresolvable
         // finding, so enforce the limit inside the loop before escalating to
@@ -408,7 +680,7 @@ async fn place(
     }
 
     // Falsification is deliberately *not* here: it runs once over the merged
-    // set in `review_file`, because a reject-only filter given more inputs in
+    // set in `review_group`, because a reject-only filter given more inputs in
     // one pass has identical semantics at a fraction of the calls.
     Ok(Asked {
         summary: parsed.summary,
@@ -461,12 +733,21 @@ fn postable_range(raw: &RawFinding, diff: &FileDiff, resolution: Resolution) -> 
 /// removed, and only the summary still claimed it. A lane that reports nothing
 /// must not narrate something. What replaces it is the rejection reasons,
 /// which say more than the discarded prose did.
+///
+/// `added_by_coverage` covers the opposite mismatch: `summary` is round one's
+/// prose, written before adaptive coverage (`lanes::coverage`) ever
+/// runs, so a group round one called clean and the coverage pass then added a
+/// finding to would otherwise keep declaring itself clean while `kept` says
+/// otherwise. Folded in as a note rather than rewritten, for the same reason
+/// the other counts are — round one's own words stay round one's, and what
+/// changed after it is stated rather than silently absorbed into them.
 fn summarise(
     summary: &str,
     unanchored: usize,
     discarded: usize,
     rejected: &[Rejection],
     kept: usize,
+    added_by_coverage: usize,
 ) -> String {
     if kept == 0 && !rejected.is_empty() {
         let reasons: Vec<String> = rejected
@@ -501,6 +782,12 @@ fn summarise(
             plural(rejected)
         ));
     }
+    if added_by_coverage > 0 {
+        notes.push(format!(
+            "{added_by_coverage} finding{} added by a second pass",
+            plural(added_by_coverage)
+        ));
+    }
 
     if notes.is_empty() {
         return summary.to_string();
@@ -515,7 +802,7 @@ fn plural(count: usize) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::types::{Config, Severity};
+    use crate::config::types::{Config, PathInstruction, Severity};
     use crate::evidence::diff::parse_file_patch;
     use crate::forge::types::CheckConclusion;
     use crate::forge::types::PullRequest;
@@ -524,11 +811,15 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn config() -> Config {
-        crate::config::DEFAULTS
+        let mut config: Config = crate::config::DEFAULTS
             .parse::<toml::Table>()
             .unwrap()
             .try_into()
-            .unwrap()
+            .unwrap();
+        // Most tests exercise one review turn. Adaptive-pass tests opt in
+        // explicitly through `config_with_passes`.
+        config.review.passes = 1;
+        config
     }
 
     const PATCH: &str =
@@ -585,7 +876,10 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                redaction_note: "",
+                e2e: None,
                 tree: None,
+                graph: None,
             })
             .await
             .expect("lane runs")
@@ -744,6 +1038,437 @@ fn helper() {
             outcome.summary.contains("the diff bounds-checks `i` above"),
             "the rejection reason replaces the prose it disproved: {}",
             outcome.summary
+        );
+    }
+
+    /// How many changed lines a group needs to clear [`COVERAGE_PASS_MIN_LINES`].
+    const LARGE_LINES: usize = COVERAGE_PASS_MIN_LINES;
+
+    /// A synthetic patch whose group is large enough for a coverage pass to
+    /// run at all — `diffs()` is deliberately two lines, so every coverage
+    /// pass test needs its own, bigger fixture.
+    fn large_patch() -> String {
+        let mut patch = String::from("@@ -1,2 +1,42 @@\n fn main() {\n");
+        for i in 0..LARGE_LINES {
+            patch.push_str(&format!("+    let x{i} = {i};\n"));
+        }
+        patch.push_str(" }\n");
+        patch
+    }
+
+    fn large_diffs() -> Vec<FileDiff> {
+        vec![parse_file_patch("src/large.rs", &large_patch())]
+    }
+
+    /// A finding quoting one of `large_diffs`'s added lines, named and titled
+    /// by the caller so round one and a coverage pass can be told apart.
+    fn finding_named(title: &str, index: usize) -> serde_json::Value {
+        finding_named_with_rule(title, index, "unchecked-index")
+    }
+
+    /// [`finding_named`], with its own rule id — for a corroboration test that
+    /// must not also match on [`Finding::fingerprint`], which hashes the rule.
+    fn finding_named_with_rule(title: &str, index: usize, rule: &str) -> serde_json::Value {
+        json!({
+            "path": "src/large.rs",
+            "existing_code": format!("let x{index} = {index};"),
+            "rule": rule,
+            "title": title,
+            "body": "detail.",
+            "severity": "high",
+            "confidence": 0.9
+        })
+    }
+
+    fn config_with_passes(passes: u8) -> Config {
+        let mut config = config();
+        config.review.passes = passes;
+        config
+    }
+
+    /// A finding on `large_diffs`'s file whose quote matches nothing there,
+    /// forcing `place` to spend a relocation call on it — the shape a
+    /// coverage response takes when it names findings the relocation budget
+    /// cannot all afford.
+    fn finding_hopeless(title: &str, quote: &str) -> serde_json::Value {
+        json!({
+            "path": "src/large.rs",
+            "existing_code": quote,
+            "rule": "unchecked-index",
+            "title": title,
+            "body": "detail.",
+            "severity": "high",
+            "confidence": 0.9
+        })
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_is_not_run_below_the_line_threshold() {
+        // `diffs()` is two lines, well under the threshold — passes = 2 must
+        // not build a second prompt over it.
+        let model = MockModel::new().then(json!({
+            "summary": "Nothing to report.",
+            "findings": []
+        }));
+        let handle = model.clone();
+
+        run_with(model, &config_with_passes(2), &diffs()).await;
+
+        assert_eq!(handle.calls(), 1, "no coverage call should have been made");
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_runs_once_more_above_the_threshold() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({"summary": "…", "findings": []}));
+        let handle = model.clone();
+
+        run_with(model, &config_with_passes(2), &large_diffs()).await;
+
+        assert_eq!(
+            handle.calls(),
+            3,
+            "round one's review, round one's falsify, and the coverage pass"
+        );
+        let coverage_request = handle
+            .requests()
+            .last()
+            .expect("the coverage pass made a request")
+            .messages
+            .iter()
+            .map(|m| m.content.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(coverage_request.contains("## What you already found"));
+        assert!(coverage_request.contains("Guard the first index"));
+    }
+
+    #[tokio::test]
+    async fn adaptive_requests_keep_path_rules_and_redaction_guidance() {
+        let mut config = config_with_passes(2);
+        config.path_instructions = vec![
+            PathInstruction {
+                glob: "src/large.rs".into(),
+                instructions: "Check every index against the collection length.".into(),
+                rules: None,
+                lanes: vec![LaneId::Critique],
+                merge: false,
+            },
+            PathInstruction {
+                glob: "docs/**".into(),
+                instructions: "This unrelated rule must stay out of the request.".into(),
+                rules: None,
+                lanes: vec![LaneId::Critique],
+                merge: false,
+            },
+        ];
+        let patch = large_patch().replace(
+            "+    let x0 = 0;",
+            "+    let x0 = \"<redacted, 12 chars>\";",
+        );
+        let diffs = vec![parse_file_patch("src/large.rs", &patch)];
+        let model = MockModel::new()
+            .then(json!({"summary": "Nothing to report.", "findings": []}))
+            .then(json!({"summary": "Nothing further.", "findings": []}));
+        let handle = model.clone();
+
+        run_with(model, &config, &diffs).await;
+
+        let requests = handle.requests();
+        assert_eq!(requests.len(), 2);
+        for request in &requests {
+            let prompt = request
+                .messages
+                .iter()
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                prompt.contains("Check every index against the collection length."),
+                "{prompt}"
+            );
+            assert!(
+                !prompt.contains("This unrelated rule must stay out of the request."),
+                "{prompt}"
+            );
+            assert!(prompt.contains("never ask for or guess them"), "{prompt}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_finding_that_corroborates_round_one_is_dropped() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({
+                "summary": "…",
+                // One line over, a different rule id and a different-sounding
+                // title: neither the fingerprint nor the wording matches, but
+                // the anchored range overlaps within `agree::LINE_TOLERANCE`,
+                // which is what `corroborates` — not the fingerprint check —
+                // has to catch.
+                "findings": [finding_named_with_rule(
+                    "Bounds-check x4 before use",
+                    4,
+                    "missing-bounds-check"
+                )]
+            }));
+
+        let outcome = run_with(model, &config_with_passes(2), &large_diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(outcome.findings[0].title, "Guard the first index");
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_finding_on_a_new_line_survives_and_is_falsified() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the second index", 30)]
+            }))
+            .then(json!({
+                "incorrect": [{"index": 1, "reason": "x30 is never dereferenced"}]
+            }));
+
+        let outcome = run_with(model, &config_with_passes(2), &large_diffs()).await;
+
+        assert_eq!(
+            outcome.findings.len(),
+            1,
+            "the disproved coverage-pass finding must not survive"
+        );
+        assert_eq!(outcome.findings[0].title, "Guard the first index");
+    }
+
+    #[tokio::test]
+    async fn a_coverage_finding_updates_a_clean_round_one_summary() {
+        // Round one's own prose is frozen before the coverage pass ever runs.
+        // If round one found nothing and the coverage pass then adds a
+        // surviving finding, the summary must say so rather than keep
+        // reading "Nothing to report." while `findings` says otherwise.
+        let model = MockModel::new()
+            .then(json!({"summary": "Nothing to report.", "findings": []}))
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the second index", 30)]
+            }))
+            .then(json!({"incorrect": []}));
+
+        let outcome = run_with(model, &config_with_passes(2), &large_diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
+        assert!(
+            outcome.summary.contains("1 finding added by a second pass"),
+            "{}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn passes_1_never_makes_a_second_call() {
+        let model = MockModel::new().then(json!({
+            "summary": "Nothing to report.",
+            "findings": []
+        }));
+        let handle = model.clone();
+
+        // Exercise the operator's explicit one-pass setting; production ships
+        // with a maximum adaptive depth of three.
+        run_with(model, &config(), &large_diffs()).await;
+
+        assert_eq!(handle.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_coverage_pass_with_zero_new_findings_makes_no_extra_falsify_call() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({"summary": "Nothing further.", "findings": []}));
+        let handle = model.clone();
+
+        run_with(model, &config_with_passes(2), &large_diffs()).await;
+
+        assert_eq!(
+            handle.calls(),
+            3,
+            "an empty coverage answer must not falsify anything"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_third_pass_is_skipped_when_the_second_added_nothing() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({"summary": "Nothing further.", "findings": []}));
+        let handle = model.clone();
+
+        run_with(model, &config_with_passes(3), &large_diffs()).await;
+
+        assert_eq!(
+            handle.calls(),
+            3,
+            "the second coverage pass added nothing, so a third must not run"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_new_second_pass_finding_unlocks_the_third_pass() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the second index", 20)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({"summary": "Nothing further.", "findings": []}));
+        let handle = model.clone();
+
+        let outcome = run_with(model, &config_with_passes(3), &large_diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 2, "{:#?}", outcome.findings);
+        assert_eq!(
+            outcome
+                .findings
+                .iter()
+                .map(|finding| finding.review_pass)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(
+            handle.calls(),
+            5,
+            "review/falsify, second-pass review/falsify, then pass three"
+        );
+        let requests = handle.requests();
+        let third_request = requests.last().unwrap();
+        let prompt = third_request
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(prompt.contains("Guard the first index"), "{prompt}");
+        assert!(prompt.contains("Guard the second index"), "{prompt}");
+    }
+
+    #[tokio::test]
+    async fn a_malformed_third_pass_keeps_findings_from_both_earlier_passes() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the second index", 20)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({"summary": "…", "findings": [{"rule": "broken"}]}));
+
+        let outcome = run_with(model, &config_with_passes(3), &large_diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 2, "{:#?}", outcome.findings);
+    }
+
+    #[tokio::test]
+    async fn a_failed_coverage_pass_keeps_round_ones_findings() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then_error("provider unavailable");
+        let handle = model.clone();
+
+        let outcome = run_with(model, &config_with_passes(3), &large_diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
+        assert_eq!(handle.calls(), 3, "failure must stop before pass three");
+    }
+
+    #[tokio::test]
+    async fn a_coverage_placement_failure_preserves_round_one_findings() {
+        // A coverage response with more unresolvable quotes than the
+        // relocation budget affords must not lose round one's own, already
+        // falsified finding — placement failing on this optional pass is no
+        // additional coverage result, not a reason to fail the whole group.
+        //
+        // Round one's review call and the coverage pass's own review call are
+        // routed through the lane capability, so they alone count against
+        // `budget_usd_per_pr` (0.02 for both). Relocation calls go straight to
+        // the model port and are bounded only by `place`'s own tally, so the
+        // budget is set just above what round one and the coverage review
+        // spend, and three hopeless quotes are enough to cross it on the
+        // fourth relocation attempt.
+        let mut config = config_with_passes(2);
+        config.models.budget_usd_per_pr = 0.025;
+
+        let model = MockModel::new()
+            .with_usage(crate::ports::model::Usage {
+                cost_usd: 0.01,
+                ..crate::ports::model::Usage::default()
+            })
+            .then(json!({
+                "summary": "…",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({
+                "summary": "…",
+                "findings": [
+                    finding_hopeless("Guard the second index", "a snippet nowhere in the diff"),
+                    finding_hopeless("Guard the third index", "another snippet nowhere in it"),
+                    finding_hopeless("Guard the fourth index", "yet another absent snippet"),
+                    finding_hopeless("Guard the fifth index", "and one more absent snippet"),
+                ]
+            }))
+            .then(json!({"existing_code": "let x0 = 0;"}))
+            .then(json!({"existing_code": "let x1 = 1;"}))
+            .then(json!({"existing_code": "let x2 = 2;"}));
+        let handle = model.clone();
+
+        let outcome = run_with(model, &config, &large_diffs()).await;
+
+        assert_eq!(
+            outcome.findings.len(),
+            1,
+            "round one's finding must survive a coverage placement failure"
+        );
+        assert_eq!(outcome.findings[0].title, "Guard the first index");
+        assert_eq!(
+            handle.calls(),
+            6,
+            "round one's review and falsify, the coverage review, and the \
+             three relocation calls the budget afforded before the fourth \
+             finding tripped it"
         );
     }
 
@@ -946,7 +1671,10 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                redaction_note: "",
+                e2e: None,
                 tree: None,
+                graph: None,
             })
             .await
             .expect("runs");
@@ -1004,7 +1732,10 @@ fn helper() {
                 prior_findings: &["Close the socket on the error path".to_string()],
                 retrieved_context: "",
                 memory_context: "",
+                redaction_note: "",
+                e2e: None,
                 tree: None,
+                graph: None,
             })
             .await
             .expect("runs");
@@ -1061,7 +1792,10 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                redaction_note: "",
+                e2e: None,
                 tree: None,
+                graph: None,
             })
             .await
             .expect("runs");
@@ -1108,7 +1842,10 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                redaction_note: "",
+                e2e: None,
                 tree: None,
+                graph: None,
             })
             .await
             .expect("the failure is isolated, not propagated");
@@ -1247,7 +1984,10 @@ fn helper() {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                redaction_note: "",
+                e2e: None,
                 tree: None,
+                graph: None,
             })
             .await
             .expect("runs");
@@ -1278,5 +2018,122 @@ fn helper() {
             outcome.resolved,
             vec!["Guard the index before dereferencing"]
         );
+    }
+
+    // --- grouping -----------------------------------------------------------
+
+    /// A file and its underscore test sibling: grouped by name alone, with no
+    /// graph, by `lanes::grouping`.
+    fn grouped_diffs() -> Vec<FileDiff> {
+        vec![
+            parse_file_patch(
+                "src/widget.rs",
+                "@@ -1,1 +1,2 @@\n fn widget() {}\n+    let w = items[i];\n",
+            ),
+            parse_file_patch(
+                "src/widget_test.rs",
+                "@@ -1,1 +1,2 @@\n fn widget_test() {}\n+    let t = cases[j];\n",
+            ),
+        ]
+    }
+
+    #[tokio::test]
+    async fn grouping_reduces_call_count_for_a_file_and_its_test() {
+        let model = MockModel::silent();
+        run_with(model.clone(), &config(), &grouped_diffs()).await;
+
+        assert_eq!(
+            model.calls(),
+            1,
+            "one conversation for the file and its test, not two"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_isolation_clause_names_every_file_in_the_group() {
+        let model = MockModel::silent();
+        run_with(model.clone(), &config(), &grouped_diffs()).await;
+
+        let system = &model.requests()[0].messages[0].content;
+        assert!(system.contains("These files only"), "{system}");
+        // Fenced as untrusted data, one path per line, not backtick-wrapped
+        // prose — see `harness::prompt::isolation_clause`'s group arm.
+        assert!(system.contains("src/widget.rs"), "{system}");
+        assert!(system.contains("src/widget_test.rs"), "{system}");
+        assert!(system.contains("untrusted"), "{system}");
+    }
+
+    #[tokio::test]
+    async fn a_grouped_finding_anchors_to_the_file_it_names_not_the_first_file_in_the_group() {
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [{
+                "path": "src/widget_test.rs",
+                "existing_code": "let t = cases[j];",
+                "rule": "unchecked-index",
+                "title": "Guard the index before dereferencing",
+                "body": "`j` is never bounds-checked.",
+                "severity": "high", "confidence": 0.9
+            }]
+        }));
+        let outcome = run_with(model, &config(), &grouped_diffs()).await;
+
+        assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
+        assert_eq!(outcome.findings[0].path, "src/widget_test.rs");
+        assert_eq!(
+            outcome.findings[0].line,
+            Some(2),
+            "anchored against its own file's diff, not the group's first file"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_finding_naming_a_path_outside_the_group_is_discarded_like_an_untouched_file() {
+        let model = MockModel::new().then(json!({
+            "summary": "…",
+            "findings": [{
+                "path": "src/elsewhere.rs",
+                "existing_code": "let w = items[i];",
+                "rule": "r", "title": "t", "body": "b",
+                "severity": "high", "confidence": 0.9
+            }]
+        }));
+        let outcome = run_with(model, &config(), &grouped_diffs()).await;
+
+        assert!(outcome.findings.is_empty());
+        assert!(
+            outcome.summary.contains("did not change"),
+            "{}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn grouping_disabled_falls_back_to_per_file_fanout() {
+        let mut config = config();
+        config.grouping.enabled = false;
+        let model = MockModel::silent();
+        run_with(model.clone(), &config, &grouped_diffs()).await;
+
+        let requests = model.requests();
+        assert_eq!(
+            requests.len(),
+            2,
+            "grouping off is the plain one-conversation-per-file fan-out"
+        );
+
+        // Byte-identical to the pre-grouping single-file prompt: the same
+        // isolation clause text, naming only that file, with no group
+        // language at all — a cassette or a provider's cached prefix from
+        // before grouping existed must still match.
+        for (request, path) in requests.iter().zip(["src/widget.rs", "src/widget_test.rs"]) {
+            let system = &request.messages[0].content;
+            assert!(system.contains("## One file only"), "{system}");
+            assert!(
+                system.contains(&format!("The file is `{path}`.")),
+                "{system}"
+            );
+            assert!(!system.contains("These files only"), "{system}");
+        }
     }
 }

@@ -93,10 +93,11 @@ impl Lane for Tests {
             changed_paths: &changed_paths,
             retrieved_context: input.retrieved_context,
             memory_context: input.memory_context,
+            redaction_note: input.redaction_note,
             ..PromptInputs::new(LaneId::Tests, input.config)
         });
 
-        // Every reviewer at once, as one graph. With no council configured
+        // Every reviewer at once, as one concurrent round. With no council configured
         // this is the single default reviewer on the lane's own model, so the
         // shape of a solo run and a council run is one code path rather than
         // two that drift.
@@ -140,14 +141,7 @@ impl Lane for Tests {
             Anchoring::Strict,
             input.config.council.corroboration,
         ) else {
-            return Ok(LaneOutcome {
-                summary: "No reviewer could be consulted.".into(),
-                spend: llm.spend(),
-                skipped: Some(
-                    "No reviewer could be consulted; see the provider errors in the log.".into(),
-                ),
-                ..LaneOutcome::default()
-            });
+            return Ok(LaneOutcome::unanswered(LaneId::Tests, llm.spend()));
         };
 
         outcome.spend.merge(llm.spend());
@@ -396,7 +390,10 @@ mod lane_tests {
                 prior_findings: &[],
                 retrieved_context: "",
                 memory_context: "",
+                redaction_note: "",
+                e2e: None,
                 tree: None,
+                graph: None,
             })
             .await
             .expect("lane runs")

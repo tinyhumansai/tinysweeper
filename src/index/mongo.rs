@@ -106,7 +106,7 @@ const MAX_LEXICAL_TERMS: usize = 300;
 /// Two separate concerns, and conflating them broke one of them:
 ///
 /// **Counting.** The analyzer splits on punctuation, so one whitespace-separated
-/// word can be several clauses — `src/harness/openrouter.rs` is one word and
+/// word can be several clauses — `src/harness/embed.rs` is one word and
 /// three or four tokens. Counting words would let a path-heavy query pass a
 /// cap of 300 and still overrun the 1024 clause limit.
 ///
@@ -781,7 +781,7 @@ fn node_document(node: &GraphNode) -> Document {
     doc! {
         "repo_id": &node.repo_id,
         "node_id": &node.id,
-        "kind": bson::to_bson(&node.kind).unwrap_or(Bson::Null),
+        "kind": bson::serialize_to_bson(&node.kind).unwrap_or(Bson::Null),
         "path": &node.path,
         "symbol": node.symbol.as_deref(),
         "lang": node.lang.as_deref(),
@@ -794,7 +794,7 @@ fn node_from_document(document: &Document) -> GraphNode {
         repo_id: document.get_str("repo_id").unwrap_or_default().to_string(),
         kind: document
             .get("kind")
-            .and_then(|kind| bson::from_bson(kind.clone()).ok())
+            .and_then(|kind| bson::deserialize_from_bson(kind.clone()).ok())
             .unwrap_or(NodeKind::File),
         path: document.get_str("path").unwrap_or_default().to_string(),
         symbol: document.get_str("symbol").ok().map(str::to_string),
@@ -807,7 +807,7 @@ fn edge_document(edge: &GraphEdge) -> Document {
         "repo_id": &edge.repo_id,
         "from": &edge.from,
         "to": &edge.to,
-        "kind": bson::to_bson(&edge.kind).unwrap_or(Bson::Null),
+        "kind": bson::serialize_to_bson(&edge.kind).unwrap_or(Bson::Null),
         "path": &edge.path,
     }
 }
@@ -817,7 +817,7 @@ fn edge_from_document(document: &Document) -> Option<GraphEdge> {
         repo_id: document.get_str("repo_id").ok()?.to_string(),
         from: document.get_str("from").ok()?.to_string(),
         to: document.get_str("to").ok()?.to_string(),
-        kind: bson::from_bson(document.get("kind")?.clone()).ok()?,
+        kind: bson::deserialize_from_bson(document.get("kind")?.clone()).ok()?,
         path: document.get_str("path").unwrap_or_default().to_string(),
     })
 }
@@ -969,7 +969,7 @@ impl GraphStore for MongoGraphStore {
         // single digits by every caller, so this is a handful of queries.
         let kinds: Vec<Bson> = kinds
             .iter()
-            .filter_map(|kind| bson::to_bson(kind).ok())
+            .filter_map(|kind| bson::serialize_to_bson(kind).ok())
             .collect();
 
         let mut reached: BTreeSet<String> = seeds.iter().cloned().collect();

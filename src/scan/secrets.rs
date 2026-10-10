@@ -156,8 +156,160 @@ const PEM_MARKERS: &[(&str, &str)] = &[
         "an OpenSSH private key",
     ),
     ("-----BEGIN PGP PRIVATE KEY BLOCK-----", "a PGP private key"),
+    (
+        "-----BEGIN ENCRYPTED PRIVATE KEY-----",
+        "an encrypted private key",
+    ),
     ("-----BEGIN PRIVATE KEY-----", "a private key"),
 ];
+
+/// Whether `text` opens a private-key PEM block.
+///
+/// The marker line itself names a key type, not the key — masking it would
+/// hide nothing sensitive. What has to be masked is everything between this
+/// line and [`is_private_key_end`]: the base64 body is the actual secret, and
+/// it carries no vendor prefix or assignment shape for the rulepack or the
+/// entropy heuristic to anchor on. [`crate::evidence::redact::mask`] uses this
+/// to mask that body wholesale, line by line, regardless of which scanner (if
+/// any) flagged the line individually.
+pub fn is_private_key_begin(text: &str) -> bool {
+    PEM_MARKERS.iter().any(|(marker, _)| text.contains(marker))
+}
+
+/// Whether `text` closes a private-key PEM block opened by
+/// [`is_private_key_begin`].
+pub fn is_private_key_end(text: &str) -> bool {
+    // Do not let prose such as `-----END not a PRIVATE KEY-----` terminate
+    // armour.  Only the PEM delimiter itself changes the stream state.
+    text.contains("-----END RSA PRIVATE KEY-----")
+        || text.contains("-----END DSA PRIVATE KEY-----")
+        || text.contains("-----END EC PRIVATE KEY-----")
+        || text.contains("-----END OPENSSH PRIVATE KEY-----")
+        || text.contains("-----END PGP PRIVATE KEY BLOCK-----")
+        || text.contains("-----END ENCRYPTED PRIVATE KEY-----")
+        || text.contains("-----END PRIVATE KEY-----")
+}
+
+/// Redact one line of a stream that must be walked line by line while
+/// tracking a private-key PEM block across lines — `in_key_block` is the
+/// caller's state, read and updated in place.
+///
+/// `line` must already have any positional prefix — a rendered diff's
+/// `{n:>5} {marker}`, a tree read's `{n:>5}| ` — split off: this only ever
+/// runs the rulepack, entropy-assignment or private-key-body masking over
+/// text a scanner could actually match, never the anchor before it. Shared by
+/// every caller that needs the same path-independent passes
+/// [`crate::evidence::redact::mask`] applies to a fresh diff, over text that
+/// is not a [`crate::evidence::diff::FileDiff`]:
+/// [`crate::evidence::redact::scrub_rendered`] for evidence a previous review
+/// cycle persisted, and [`crate::ports::tree`]'s lookup redaction for content
+/// a tree backend read fresh outside the diff entirely.
+pub fn redact_stream_line(line: &str, in_key_block: &mut bool) -> String {
+    if let Some(marker) = PEM_MARKERS
+        .iter()
+        .map(|(marker, _)| *marker)
+        .find(|marker| line.contains(marker))
+    {
+        // A malformed serialization can place both armour markers on one
+        // physical line. It is still redacted as key material, but must not
+        // make unrelated later lines look like its body.
+        *in_key_block = !is_private_key_end(line);
+        // Armour is metadata, but either side of it can contain key material
+        // when malformed input packs a key onto the marker's physical line.
+        return redact_pem_marker_line(line, marker);
+    }
+    if *in_key_block {
+        if is_private_key_end(line) {
+            *in_key_block = false;
+            // The armour itself is safe to retain, but a malformed marker can
+            // have arbitrary credential text appended after it.
+            return line
+                .find("-----END")
+                .and_then(|start| {
+                    line[start + 5..]
+                        .find("-----")
+                        .map(|end| start + 5 + end + 5)
+                })
+                .map_or_else(
+                    || redact_line(line),
+                    |end| {
+                        let start = line.find("-----END").expect("end marker was found above");
+                        redact_pem_marker_line(line, &line[start..end])
+                    },
+                );
+        }
+        return if line.trim().is_empty() {
+            line.to_string()
+        } else {
+            // PEM armour establishes that every non-empty body line is key
+            // material, irrespective of whether a generic secret rule sees it.
+            format!("<redacted, {} chars>", line.trim().chars().count())
+        };
+    }
+    // Outside armour a line is ordinary text, however base64-shaped it looks:
+    // a bare commit hash, a path, a long identifier on its own line all share
+    // the PEM alphabet. Callers that may start mid-key establish the state
+    // first — `evidence::redact` by looking ahead for a closing marker in the
+    // same hunk, `ports::tree` by probing the lines before a ranged read.
+    redact_line(line)
+}
+
+/// Whether a run of lines opens inside a private key: a closing armour line
+/// appears before any opening one.
+///
+/// A diff hunk or a ranged read can begin in the middle of a key, with the
+/// `BEGIN` line in omitted context. The `END` line that follows is specific
+/// enough to prove it; the body's shape alone is not, since ordinary source
+/// is full of base64-alphabet lines.
+pub fn opens_inside_private_key<'a>(lines: impl IntoIterator<Item = &'a str>) -> bool {
+    for line in lines {
+        if is_private_key_begin(line) {
+            return false;
+        }
+        if is_private_key_end(line) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Preserve a PEM armour marker while applying normal redaction to text that
+/// follows it on the same line.
+fn redact_pem_marker_line(line: &str, marker: &str) -> String {
+    let Some(start) = line.find(marker) else {
+        return redact_line(line);
+    };
+    let end = start + marker.len();
+    let before = &line[..start];
+    // An assignment's name is useful, safe context; its partial value before
+    // an inline marker is not. Preserve only the name and delimiter.
+    let before = before.rfind('=').map_or_else(
+        || redact(before),
+        |equal| format!("{}{}", &before[..=equal], redact(&before[equal + 1..])),
+    );
+    let suffix = &line[end..];
+    let suffix = if suffix.trim().is_empty() {
+        suffix.to_string()
+    } else {
+        format!("<redacted, {} chars>", suffix.trim().chars().count())
+    };
+    format!("{}{}{}", before, marker, suffix)
+}
+
+/// Whether one unarmoured line has the shape of private-key PEM body data.
+///
+/// Diff hunks and ranged tree reads do not always include an armour boundary.
+/// Standard PEM wraps base64 at 64 characters; accepting a conservative
+/// minimum of 16 catches short terminal fragments while leaving ordinary
+/// source lines readable. A false positive only withholds opaque encoded data
+/// from a model, which is the safe side of this security boundary.
+pub fn is_private_key_body(text: &str) -> bool {
+    let body = text.trim();
+    body.len() >= 16
+        && body
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
+}
 
 /// Variable names that make a high-entropy value on the right-hand side
 /// suspicious.
@@ -313,10 +465,59 @@ pub fn scan_added_lines<'a>(
 /// in a finding body — and scanner findings being carefully redacted counts for
 /// nothing if the critique lane prints the value two comments later.
 ///
-/// Only the deterministic rulepack is applied. The entropy heuristic is far too
-/// eager to run over prose: it would mangle every hash, identifier and base64
-/// example a review legitimately needs to quote.
+/// This is [`redact_line`] under another name — see that function for what it
+/// applies, including the entropy-assignment pass.
 pub fn scrub(text: &str) -> String {
+    let mut in_key_block = false;
+    text.split_inclusive('\n')
+        .map(|line| match line.strip_suffix("\r\n") {
+            Some(body) => format!("{}\r\n", redact_scrub_line(body, &mut in_key_block)),
+            None => match line.strip_suffix('\n') {
+                Some(body) => format!("{}\n", redact_scrub_line(body, &mut in_key_block)),
+                None => redact_scrub_line(line, &mut in_key_block),
+            },
+        })
+        .collect()
+}
+
+/// Stateful scrub for whole strings. Unlike a diff hunk or a ranged tree
+/// read, a generic title/body has no reason to treat a long opaque word as a
+/// boundary-less PEM fragment; that fallback would redact ordinary prose.
+fn redact_scrub_line(line: &str, in_key_block: &mut bool) -> String {
+    if *in_key_block || is_private_key_begin(line) {
+        redact_stream_line(line, in_key_block)
+    } else {
+        redact_line(line)
+    }
+}
+
+/// Replace every recognised credential in one line with a redacted hint.
+///
+/// Two independent passes, mirroring [`scan_added_lines`]'s two layers so a
+/// value masked in a diff is masked exactly the same way wherever else this
+/// module's callers read the same text:
+///
+/// 1. The deterministic **rulepack** ([`next_credential`]) — a known vendor
+///    shape, matched regardless of context.
+/// 2. The **entropy-assignment heuristic** ([`secret_assignment`] plus
+///    [`is_opaque_token`], a length floor and [`shannon_entropy`]) — a
+///    `secret_token = "<opaque value>"` shape the rulepack cannot see. Unlike
+///    [`scan_added_lines`], this runs unconditionally rather than only on
+///    lines a `Finding` already named: every caller of this function —
+///    [`crate::evidence::redact::mask`]'s per-line fallback,
+///    [`redact_stream_line`], `scrub`, and every tree read, extraction or
+///    PR-metadata scrub that funnels through one of those — reads a line the
+///    scanner never anchored a finding to in the first place, so the mask has
+///    to reach the same conclusion the entropy check would, on sight, not by
+///    consulting a finding list that does not exist at this call site.
+///
+/// This is deliberately the *only* place either pass is implemented: every
+/// caller in this crate that needs to mask free-standing text — a tree read,
+/// an extracted instruction file, a PR title or body, a rendered diff being
+/// replayed — goes through this function (directly, or through [`scrub`] or
+/// [`redact_stream_line`]) rather than re-implementing either pass at the call
+/// site, so a rulepack or heuristic change only has to be made once.
+pub fn redact_line(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
 
@@ -334,7 +535,45 @@ pub fn scrub(text: &str) -> String {
         }
     }
 
-    out
+    mask_entropy_assignment(&out).unwrap_or(out)
+}
+
+/// Mask the value of a high-entropy secret-shaped assignment that carries no
+/// rulepack prefix — `secret_token = "<opaque value>"` — using the same
+/// guardrails as [`scan_added_lines`]'s entropy branch: an assignment to a
+/// [`SECRET_NAMES`]-shaped name, a value that reads as one opaque token
+/// ([`is_opaque_token`]) rather than a placeholder ([`looks_like_placeholder`]),
+/// long enough and disordered enough ([`shannon_entropy`]) to be a credential
+/// rather than an identifier.
+///
+/// Returns `None` when nothing qualifies, so [`redact_line`] can fall back to
+/// its already-rulepack-masked text unchanged instead of allocating a second
+/// copy on the common case.
+fn mask_entropy_assignment(text: &str) -> Option<String> {
+    if text.len() > MAX_HEURISTIC_LINE {
+        return None;
+    }
+    let (_, value) = secret_assignment(text)?;
+    if looks_like_placeholder(value) || !is_opaque_token(value) || value.len() < 20 {
+        return None;
+    }
+    if shannon_entropy(value) < ENTROPY_THRESHOLD {
+        return None;
+    }
+
+    // `value` is a sub-slice of `text` produced entirely by trimming, so this
+    // offset always lands on a valid char boundary; a `text.find(value)`
+    // lookup would instead mask the *first* occurrence of that exact
+    // substring, which is wrong when the same value appears earlier in the
+    // line for an unrelated reason.
+    let offset = value.as_ptr() as usize - text.as_ptr() as usize;
+    let end = offset + value.len();
+    Some(format!(
+        "{}{}{}",
+        &text[..offset],
+        redact(value),
+        &text[end..]
+    ))
 }
 
 /// Byte offset and length of the first rulepack match in `text`.
@@ -608,6 +847,23 @@ mod tests {
         assert!(findings[0].detail.contains("force-push alone does not"));
     }
 
+    /// Regression for a tinysweeper finding on #166: an encrypted PKCS#8 key's
+    /// armour reads `ENCRYPTED PRIVATE KEY`, not `PRIVATE KEY`, and none of
+    /// `PEM_MARKERS`' other entries are a substring of it — it used to pass
+    /// the scanner, and with it `evidence::redact::mask`'s private-key-body
+    /// pass, entirely.
+    #[test]
+    fn an_encrypted_private_key_armour_is_recognised_too() {
+        // Split so this file's own diff does not carry a literal, contiguous
+        // armour marker — see `token`'s note above.
+        let marker = format!("-----BEGIN {}-----", "ENCRYPTED PRIVATE KEY");
+        let findings = scan("deploy/key.pem", &marker);
+
+        assert_eq!(findings.len(), 1, "{findings:#?}");
+        assert_eq!(findings[0].rule, "private-key");
+        assert!(is_private_key_begin(&marker));
+    }
+
     #[test]
     fn a_high_entropy_assignment_to_a_secret_name_is_flagged_at_high_not_critical() {
         let value = token("f3Kq9zR2", "mW7pL4xN8vB1cY6tH0jD5sG");
@@ -731,10 +987,60 @@ mod tests {
 
     #[test]
     fn scrubbing_leaves_ordinary_prose_alone() {
-        // The entropy heuristic is deliberately not applied here: it would
-        // mangle every hash and identifier a review legitimately quotes.
+        // `redact_line`'s entropy pass only ever fires on an assignment to a
+        // secret-shaped name (`secret_assignment`); this sentence has neither
+        // an `=`/`:` nor a name from `SECRET_NAMES`, so it survives untouched
+        // even though `d5f1c3e8a9b04c7e` alone would score above threshold.
         let prose = "Consider `items.get(i)` instead; the checksum d5f1c3e8a9b04c7e is fine.";
         assert_eq!(scrub(prose), prose);
+    }
+
+    /// Regression for a Codex finding on #166: `scan::scrub` (PR title/body),
+    /// `redact_stream_line` (tree reads, instruction-file extraction, e2e
+    /// candidates) and `evidence::redact::scrub_rendered` (replayed evidence)
+    /// all funnel through `redact_line`, but it used to apply only the
+    /// rulepack — an entropy-flagged assignment with no vendor prefix reached
+    /// every one of those consumers unmasked because none of them carries a
+    /// `Finding` list to anchor a fallback on the way `evidence::redact::mask`
+    /// does for a fresh diff. Fixing `redact_line` itself, the one function
+    /// every one of those helpers calls, closes all four at once instead of
+    /// teaching each call site its own copy of the heuristic.
+    #[test]
+    fn redact_line_masks_a_high_entropy_assignment_with_no_finding_to_anchor_on() {
+        let value = token("f3Kq9zR2", "mW7pL4xN8vB1cY6tH0jD5sG");
+        let line = format!("let secret_token = \"{value}\";");
+
+        let scrubbed = scrub(&line);
+        assert!(!scrubbed.contains(&value), "{scrubbed}");
+        assert!(scrubbed.contains("let secret_token ="), "{scrubbed}");
+
+        let mut in_key_block = false;
+        let streamed = redact_stream_line(&line, &mut in_key_block);
+        assert!(!streamed.contains(&value), "{streamed}");
+        assert!(!in_key_block);
+    }
+
+    #[test]
+    fn scrubbing_masks_each_line_of_a_multiline_body() {
+        let value = token("f3Kq9zR2", "mW7pL4xN8vB1cY6tH0jD5sG");
+        let body = format!("secret_token = \"{value}\"\r\nThis line follows it.\n");
+
+        let scrubbed = scrub(&body);
+
+        assert!(!scrubbed.contains(&value), "{scrubbed}");
+        assert_eq!(scrubbed.lines().count(), 2, "{scrubbed}");
+        assert!(scrubbed.contains("This line follows it."), "{scrubbed}");
+        assert!(scrubbed.starts_with("secret_token ="), "{scrubbed}");
+        assert!(scrubbed.contains("\r\n"), "{scrubbed:?}");
+    }
+
+    #[test]
+    fn redact_line_leaves_an_assignment_with_an_ordinary_identifier_value_alone() {
+        // Guards against the entropy pass becoming the same kind of hole the
+        // rulepack has to avoid: a low-entropy, non-opaque or placeholder
+        // value assigned to a secret-shaped name must not be masked away.
+        let line = "let secret_token = \"changeme\";";
+        assert_eq!(redact_line(line), line);
     }
 
     #[test]

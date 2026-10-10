@@ -43,6 +43,14 @@ merged. Neither method has a default implementation — an adapter that forgot t
 answer would report "no checks", and a caller that cannot see a red check is
 worse off than one that cannot see any.
 
+## Nested repository reads
+
+`ForgeTree` follows nested submodules at each immediate parent's recorded
+gitlink. Every repository along the path must appear in the operator's
+`retrieval.submodules` allowlist. Cycles and chains beyond 16 levels are denied;
+denials identify the full path. Checkout-based indexing applies the same policy
+and refuses symlink paths before fetching a nested repository.
+
 ## `MockForge` is not a stub
 
 It backs the entire test suite *and* `--dry-run` in production. Because it

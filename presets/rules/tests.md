@@ -37,5 +37,8 @@ You are reading tests, not running them. Judge whether each one could fail.
   helper that hides what a test asserts is the worse outcome.
 - The absence of an integration or end-to-end test, unless the repository's own
   policy asks for one.
+- Tests for behaviour this pull request does not implement — a dependency's
+  behaviour, a service in another repository, code the diff only calls. Ask for
+  tests of what this change does, here.
 - A branch that cannot regress silently — an `unreachable!`, an exhaustiveness
   arm the compiler enforces, a match on an enum the compiler already checks.
