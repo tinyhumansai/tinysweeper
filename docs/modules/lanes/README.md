@@ -217,8 +217,8 @@ call; see its module doc for why anchoring the answer is left to the caller
 rather than done once in that module.
 
 This is recall, not verification — the opposite direction from
-`src/falsify`, which rejects only claims the supplied evidence disproves. Asking the *same* reviewer to look again, told what it
-already said, is cheap enough to offer at all because it reuses round one's
+`src/falsify`, which rejects only claims the supplied evidence disproves.
+Asking the *same* reviewer to look again, told what it already said, is cheap enough to offer at all because it reuses round one's
 own prompt prefix, evidence and `flows::runner::ask_all` entry point for
 each extra call.
 

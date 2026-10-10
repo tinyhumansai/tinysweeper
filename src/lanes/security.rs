@@ -12,7 +12,9 @@
 //!    about one fact.
 //! 2. The model then looks for what a scanner cannot see: untrusted input
 //!    reaching a dangerous sink, an authorisation check that moved, a new
-//!    subprocess or deserialization site.
+//!    subprocess or deserialization site. Strictly anchored model proposals
+//!    are falsified against the diff and repository evidence they looked up,
+//!    before the scanner facts are merged back unchanged.
 //!
 //! A model verdict never *removes* a scanner finding. Adjudication adds
 //! context; it does not get to overrule a deterministic match, because the
@@ -382,6 +384,7 @@ async fn review_group(
             let coverage_usage = coverage.usage;
             let coverage_elapsed = coverage.elapsed;
             spend.merge(coverage.spend);
+            looked_up.push('\n');
             looked_up.push_str(&coverage.looked_up);
 
             let Some(response) = coverage.response else {
