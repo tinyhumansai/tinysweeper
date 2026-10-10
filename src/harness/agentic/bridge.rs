@@ -6,7 +6,7 @@ use crate::ports::tree::{Found, Lookup, MAX_READ_LINES, MAX_SEARCH_HITS, TreeQue
 use async_trait::async_trait;
 use openhuman_embed::repository::{RepositoryHost, RepositoryQuery};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
 use tokio::sync::{mpsc, oneshot};
@@ -49,18 +49,60 @@ pub(super) fn channel() -> (
     )
 }
 
+/// A review's lookup allowance survives provider fallbacks and failed turns.
+pub(crate) struct LookupBudget {
+    max_queries: usize,
+    max_chars: usize,
+    used: Mutex<LookupUsage>,
+}
+#[derive(Default)]
+struct LookupUsage {
+    queries: usize,
+    chars: usize,
+}
+impl LookupBudget {
+    pub(crate) fn new(policy: &LookupPolicy) -> Arc<Self> {
+        Arc::new(Self {
+            max_queries: usize::from(policy.rounds) * usize::from(policy.per_round),
+            max_chars: policy.max_chars,
+            used: Mutex::new(LookupUsage::default()),
+        })
+    }
+
+    fn admit_query(&self) -> bool {
+        let mut used = self.used.lock().unwrap_or_else(|error| error.into_inner());
+        if used.queries >= self.max_queries || used.chars >= self.max_chars {
+            return false;
+        }
+        // Failed and cancelled reads still consume their query allowance.
+        used.queries += 1;
+        true
+    }
+
+    fn bound_result(&self, mut text: String) -> Reply {
+        let mut used = self.used.lock().unwrap_or_else(|error| error.into_inner());
+        let remaining = self.max_chars.saturating_sub(used.chars);
+        if remaining == 0 {
+            return Err("repository lookup budget exhausted".into());
+        }
+        // Atomically charge the scrubbed text so overlapping dispatchers cannot
+        // each expose the same remaining character allowance.
+        truncate_chars(&mut text, remaining);
+        used.chars += text.chars().count();
+        Ok(text)
+    }
+}
+
 /// Drive only host repository requests; Embed owns the model/tool turn loop.
 pub(super) async fn dispatch(
     tree: &dyn TreeReader,
     policy: &LookupPolicy,
     mut received: mpsc::Receiver<Query>,
     successful: Arc<AtomicUsize>,
+    budget: Arc<LookupBudget>,
 ) {
     let redacted = crate::ports::tree::RedactingTree::new(tree);
     let tree: &dyn TreeReader = &redacted;
-    let max_queries = usize::from(policy.rounds) * usize::from(policy.per_round);
-    let mut queries = 0;
-    let mut chars = 0;
     enum HostLookup {
         Source(Lookup),
         Explore(TreeQuery),
@@ -108,10 +150,9 @@ pub(super) async fn dispatch(
             })),
         };
         let result = if let Some(lookup) = lookup {
-            if !policy.enabled || queries >= max_queries || chars >= policy.max_chars {
+            if !policy.enabled || !budget.admit_query() {
                 Err("repository lookup budget exhausted".into())
             } else {
-                queries += 1;
                 let found = match &lookup {
                     HostLookup::Source(lookup) => tree.lookup(lookup).await,
                     HostLookup::Explore(query) => tree.explore(query).await,
@@ -144,9 +185,7 @@ pub(super) async fn dispatch(
                         if let HostLookup::Explore(TreeQuery::History { commit, .. }) = &lookup {
                             text.insert_str(0, &format!("Historical snapshot {commit}:\n"));
                         }
-                        truncate_chars(&mut text, policy.max_chars.saturating_sub(chars));
-                        chars += text.chars().count();
-                        Ok(text)
+                        budget.bound_result(text)
                     }
                     _ => Err("repository lookup unavailable".into()),
                 }
@@ -166,6 +205,82 @@ mod tests {
     use super::*;
     use crate::ports::tree::MockTree;
 
+    async fn assert_fallback_refuses_after_first_bridge(policy: LookupPolicy) {
+        struct CountingTree {
+            reads: AtomicUsize,
+        }
+        #[async_trait]
+        impl TreeReader for CountingTree {
+            async fn lookup(&self, _: &Lookup) -> crate::error::Result<Found> {
+                self.reads.fetch_add(1, Ordering::Relaxed);
+                Ok(Found::Text {
+                    text: "-----BEGIN RSA PRIVATE KEY-----\nopaqueprivatebody\n-----END RSA PRIVATE KEY-----".into(),
+                    start: 1,
+                    end: 3,
+                    total: 3,
+                })
+            }
+            fn describe(&self) -> String {
+                "counted review snapshot".into()
+            }
+        }
+        let tree = CountingTree {
+            reads: AtomicUsize::new(0),
+        };
+        let budget = LookupBudget::new(&policy);
+        for attempt in 0..2 {
+            let (host, received, successful) = channel();
+            let dispatched = dispatch(&tree, &policy, received, successful.clone(), budget.clone());
+            let queried = host.query(RepositoryQuery::Read {
+                path: "config.rs".into(),
+                start_line: 1,
+                end_line: 3,
+            });
+            let result = tokio::select! {
+                result = queried => result,
+                () = dispatched => panic!("bridge closed unexpectedly"),
+            };
+            if attempt == 0 {
+                let text = result.unwrap();
+                assert!(!text.contains("opaqueprivatebody"));
+                assert_eq!(successful.load(Ordering::Relaxed), 1);
+            } else {
+                assert!(
+                    result.is_err(),
+                    "fallback must retain the first attempt's lookup allowance"
+                );
+                assert_eq!(successful.load(Ordering::Relaxed), 0);
+            }
+        }
+        assert_eq!(
+            tree.reads.load(Ordering::Relaxed),
+            1,
+            "exhausted fallback must not read source"
+        );
+    }
+
+    #[tokio::test]
+    async fn fallback_bridges_share_the_review_query_limit() {
+        assert_fallback_refuses_after_first_bridge(LookupPolicy {
+            rounds: 1,
+            per_round: 1,
+            max_chars: 200,
+            ..LookupPolicy::default()
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn fallback_bridges_share_the_review_character_limit() {
+        assert_fallback_refuses_after_first_bridge(LookupPolicy {
+            rounds: 1,
+            per_round: 2,
+            max_chars: 1,
+            ..LookupPolicy::default()
+        })
+        .await;
+    }
+
     #[tokio::test]
     async fn ranges_starting_inside_private_keys_use_the_existing_prefix_redactor() {
         let tree = MockTree::from_files([(
@@ -174,7 +289,13 @@ mod tests {
         )]);
         let policy = LookupPolicy::default();
         let (host, received, successful) = channel();
-        let dispatched = dispatch(&tree, &policy, received, successful);
+        let dispatched = dispatch(
+            &tree,
+            &policy,
+            received,
+            successful,
+            LookupBudget::new(&policy),
+        );
         let queried = async {
             host.query(RepositoryQuery::Read {
                 path: "src/config.rs".into(),
@@ -199,7 +320,13 @@ mod tests {
             ..LookupPolicy::default()
         };
         let (host, received, successful) = channel();
-        let dispatched = dispatch(&tree, &policy, received, successful.clone());
+        let dispatched = dispatch(
+            &tree,
+            &policy,
+            received,
+            successful.clone(),
+            LookupBudget::new(&policy),
+        );
         let queried = async {
             let unsupported = host
                 .query(RepositoryQuery::GitShow {
@@ -258,7 +385,13 @@ mod tests {
         }
         let (host, received, successful) = channel();
         let policy = LookupPolicy::default();
-        let dispatched = dispatch(&Sensitive, &policy, received, successful);
+        let dispatched = dispatch(
+            &Sensitive,
+            &policy,
+            received,
+            successful,
+            LookupBudget::new(&policy),
+        );
         let queried = async {
             host.query(RepositoryQuery::Read {
                 path: ".env".into(),
