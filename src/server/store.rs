@@ -263,7 +263,7 @@ impl Store {
         let Some(document) = found else {
             return Ok(None);
         };
-        bson::from_document::<PreviewSession>(document)
+        bson::deserialize_from_document::<PreviewSession>(document)
             .map(Some)
             .map_err(|err| Error::Forge(format!("unreadable preview session: {err}")))
     }
@@ -274,7 +274,7 @@ impl Store {
     /// save so a session in use never expires underneath itself.
     pub async fn save_preview_session(&self, session: &PreviewSession) -> Result<()> {
         let mut document =
-            bson::to_document(session).map_err(|err| Error::Forge(err.to_string()))?;
+            bson::serialize_to_document(session).map_err(|err| Error::Forge(err.to_string()))?;
         document.insert("updated", bson::DateTime::now());
         self.preview_sessions
             .update_one(doc! { "_id": &session.id }, doc! { "$set": document })
@@ -305,7 +305,7 @@ impl Store {
 
     /// Set a contributor's trust, with a note explaining why.
     pub async fn set_trust(&self, login: &str, trust: Trust, note: Option<&str>) -> Result<()> {
-        let trust = bson::to_bson(&trust).map_err(|err| Error::Forge(err.to_string()))?;
+        let trust = bson::serialize_to_bson(&trust).map_err(|err| Error::Forge(err.to_string()))?;
         self.contributors
             .update_one(
                 doc! { "_id": login },
@@ -447,7 +447,7 @@ impl crate::ports::review_state::ReviewStateStore for Store {
         let Some(document) = found else {
             return Ok(None);
         };
-        match bson::from_document::<ReviewedState>(document) {
+        match bson::deserialize_from_document::<ReviewedState>(document) {
             Ok(state) => Ok(Some(state)),
             Err(err) => {
                 tracing::warn!(%err, %key, "unreadable review state; reviewing from scratch");
@@ -457,7 +457,8 @@ impl crate::ports::review_state::ReviewStateStore for Store {
     }
 
     async fn save_state(&self, key: &str, state: &ReviewedState) -> Result<()> {
-        let mut document = bson::to_document(state).map_err(|err| Error::Forge(err.to_string()))?;
+        let mut document =
+            bson::serialize_to_document(state).map_err(|err| Error::Forge(err.to_string()))?;
         // `updated` is what the TTL index above watches, and it is written on
         // every save so an actively-reviewed pull request never expires
         // underneath itself.
@@ -510,7 +511,8 @@ impl crate::ports::review_state::ReviewStateStore for Store {
         } else {
             doc! { "e2e.generation": &watch.generation }
         };
-        let jobs = bson::to_bson(&watch.jobs).map_err(|err| Error::Forge(err.to_string()))?;
+        let jobs =
+            bson::serialize_to_bson(&watch.jobs).map_err(|err| Error::Forge(err.to_string()))?;
         let mut filter = doc! {
             "_id": key,
             "e2e.head_sha": &watch.head_sha,
@@ -803,8 +805,8 @@ mod tests {
     #[test]
     fn trust_round_trips_through_bson() {
         for trust in [Trust::Unknown, Trust::Allowed, Trust::Blocked] {
-            let encoded = bson::to_bson(&trust).expect("encodes");
-            let decoded: Trust = bson::from_bson(encoded).expect("decodes");
+            let encoded = bson::serialize_to_bson(&trust).expect("encodes");
+            let decoded: Trust = bson::deserialize_from_bson(encoded).expect("decodes");
             assert_eq!(decoded, trust);
         }
     }
