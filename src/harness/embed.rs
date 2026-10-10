@@ -34,6 +34,7 @@ use crate::ports::model::{
 #[derive(Clone)]
 pub struct GatewayModel {
     budget: Option<openhuman_embed::budget::Budget>,
+    budget_prices: std::collections::BTreeMap<String, crate::config::types::BudgetPriceBound>,
     agentic_reviewers: bool,
     api_key: String,
     base_url: String,
@@ -245,6 +246,7 @@ impl GatewayModel {
         Self {
             api_key,
             budget: None,
+            budget_prices: models.budget_prices.clone(),
             agentic_reviewers: models.agentic_reviewers,
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
@@ -340,7 +342,12 @@ impl GatewayModel {
             // route. Smaller attempts retain their original wire caps; the
             // shared ledger settles their reported spend after each response.
             bound.max_tokens = (base != 0).then(|| *truncation_ladder(base).last().unwrap());
-            completer = completer.budget(crate::harness::budget::call(ledger, &bound, 0)?);
+            completer = completer.budget(crate::harness::budget::call(
+                ledger,
+                &bound,
+                0,
+                &self.budget_prices,
+            )?);
         }
         let rung = CompletionRung::new(completer, model)
             .provider_options(options)
@@ -493,6 +500,7 @@ impl GatewayModel {
                     (policy.max_chars as u64)
                         .saturating_mul(12)
                         .saturating_add(32768),
+                    &self.budget_prices,
                 )
             })
             .transpose()?;
@@ -625,6 +633,7 @@ mod tests {
             routes: Vec::new(),
             max_tokens: 100,
             budget_usd_per_pr: 1.0,
+            budget_prices: Default::default(),
         }
     }
 
@@ -802,6 +811,7 @@ mod tests {
         }];
         let gateway = GatewayModel {
             budget: None,
+            budget_prices: Default::default(),
             agentic_reviewers: false,
             api_key: "unused".into(),
             base_url: models.base_url.clone(),
@@ -846,6 +856,7 @@ mod tests {
         }];
         let mut gateway = GatewayModel {
             budget: None,
+            budget_prices: Default::default(),
             agentic_reviewers: false,
             api_key: "unused".into(),
             base_url: models.base_url.clone(),
@@ -1000,6 +1011,7 @@ mod tests {
             langfuse: None,
             agentic_reviewers: false,
             budget: None,
+            budget_prices: Default::default(),
         };
         let rendered = format!("{model:?}");
         assert!(!rendered.contains("sk-secret-value"), "{rendered}");
@@ -1052,6 +1064,7 @@ mod tests {
         // error, then builds the gateway directly for the positive case.
         let gateway = GatewayModel {
             budget: None,
+            budget_prices: Default::default(),
             agentic_reviewers: false,
             api_key: "unused".into(),
             base_url: models.base_url.clone(),

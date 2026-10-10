@@ -80,13 +80,26 @@ order = []
 allow_fallbacks = true
 last_resort_unpinned = false
 
-# The deep ladder answers at whatever length it needs: luna's reasoning was
-# taking more than half of the 16k default on a 300-line refactor, and a
-# cut-off there costs a file's review to save a fraction of a cent. No pin —
-# the ladder routes — only the ceiling is lifted.
+# Admission prices are operator-verified upper bounds in USD per million
+# tokens, covering every alias rung/seller and long-context pricing. Reverify
+# these whenever the gateway's route list or provider prices change. They do
+# not constrain provider billing; excess actual spend stops subsequent calls.
+# Verified 2026-10-10 against the mounted ladder routes and public price catalog.
+[models.budget_prices.flash]
+input = 2.5
+cached = 2.5
+output = 2.5
+
+[models.budget_prices.deep]
+input = 0.4
+cached = 0.4
+output = 1.8
+
+# A finite output cap is required to reserve paid inference before dispatch.
+# Deep used to be uncapped; use 16k initially, with bounded retries to 64k.
 [[models.routes]]
 model = "deep"
-max_tokens = 0
+max_tokens = 16000
 
 # Retrieval on, through the ladder like every other model call. `vectors` is
 # the ladder's embeddings ladder — every rung in it is a 1024-wide BGE-M3, so

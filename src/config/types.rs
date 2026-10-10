@@ -812,6 +812,24 @@ pub struct Models {
     pub agentic_reviewers: bool,
     /// Hard USD ceiling for a single pull request's review.
     pub budget_usd_per_pr: f64,
+    /// Operator-verified upper rates for gateway aliases, in USD per million
+    /// tokens. Each bound must cover every provider and fallback behind the
+    /// alias, including long-context pricing. Empty preserves config digests.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub budget_prices: BTreeMap<String, BudgetPriceBound>,
+}
+
+/// Explicit admission rates for an alias without a public model price row.
+/// These reserve spend; they do not force a provider's actual billing rate.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetPriceBound {
+    /// Maximum price of uncached input, in USD per million tokens.
+    pub input: f64,
+    /// Maximum price of cached input, in USD per million tokens.
+    pub cached: f64,
+    /// Maximum price of output, in USD per million tokens.
+    pub output: f64,
 }
 
 /// The knowledge centre: curated documents, and rules read out of the
@@ -1876,6 +1894,16 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_alias_budget_prices_deserialize_without_changing_empty_defaults() {
+        let configured = serde_json::json!({
+            "budget_prices": {"deep": {"input": 0.20, "cached": 0.02, "output": 1.20}}
+        });
+        assert!(serde_json::from_value::<Models>(configured).is_ok());
+        let defaults = serde_json::to_value(Models::default()).unwrap();
+        assert!(defaults.get("budget_prices").is_none());
+    }
 
     #[test]
     fn lane_ids_round_trip_through_their_string_form() {

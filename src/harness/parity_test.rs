@@ -43,6 +43,7 @@ fn models(base_url: &str) -> Models {
         reasoning_effort: "high".into(),
         structured_output: StructuredOutput::Schema,
         budget_usd_per_pr: 1.0,
+        budget_prices: Default::default(),
     }
 }
 
@@ -288,6 +289,33 @@ async fn truncated_attempts_are_included_in_returned_usage_and_cost() {
     assert_eq!(response.usage.cached_tokens, 200);
     assert!((response.usage.cost_usd - 0.0042).abs() < 1e-12);
     assert_eq!(gateway.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn configured_alias_prices_allow_budgeted_truncation_retries() {
+    let gateway = FakeGateway::start(vec![
+        Reply::completion("vendor/deep", r#"{"summary":"Lo"#, "length", usage()),
+        Reply::completion("vendor/deep", ANSWER, "stop", usage()),
+    ])
+    .await;
+    let mut models = models(&gateway.base_url);
+    models.budget_prices.insert(
+        "deep".into(),
+        crate::config::types::BudgetPriceBound {
+            input: 0.4,
+            cached: 0.4,
+            output: 1.8,
+        },
+    );
+    let model = adapter(&models).scoped_budget(1.0).unwrap();
+    let response = model.complete(request("deep")).await.unwrap();
+    assert_eq!(response.usage.input_tokens, 240);
+    assert!((response.usage.cost_usd - 0.0042).abs() < 1e-12);
+    let requests = gateway.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0]["model"], "deep");
+    assert_eq!(requests[0]["max_tokens"], 1000);
+    assert_eq!(requests[1]["max_tokens"], 2000);
 }
 
 #[tokio::test]
