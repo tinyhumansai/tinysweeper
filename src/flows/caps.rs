@@ -112,7 +112,8 @@ impl ModelCapability {
         tree: &dyn crate::ports::tree::TreeReader,
         policy: &crate::config::types::LookupPolicy,
     ) -> Result<(ModelResponse, String)> {
-        let recorded = super::review_tree::RecordedTree::new(tree, policy.max_chars);
+        let redacted = crate::ports::tree::RedactingTree::new(tree);
+        let recorded = super::review_tree::RecordedTree::new(&redacted, policy.max_chars);
         let response = self
             .call_inner(call, schema, Some((&recorded, policy)))
             .await?;
@@ -162,7 +163,8 @@ impl ModelCapability {
                 if self.models.agentic_reviewers
                     && policy.enabled
                     && policy.rounds > 0
-                    && policy.per_round > 0 =>
+                    && policy.per_round > 0
+                    && policy.max_chars > 0 =>
             {
                 self.model.review(request, tree, policy).await?
             }
@@ -269,6 +271,57 @@ mod tests {
             .unwrap();
         assert_eq!(response.value, json!("completion"));
         assert!(evidence.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_review_range_inside_private_key_material_is_redacted_before_capture() {
+        struct MidKey;
+        #[async_trait::async_trait]
+        impl Model for MidKey {
+            async fn complete(&self, _: ModelRequest) -> Result<ModelResponse> {
+                unreachable!()
+            }
+            async fn review(
+                &self,
+                _: ModelRequest,
+                tree: &dyn crate::ports::tree::TreeReader,
+                _: &crate::config::types::LookupPolicy,
+            ) -> Result<ModelResponse> {
+                let found = tree
+                    .lookup(&crate::ports::tree::Lookup::Read {
+                        path: "src/config.rs".into(),
+                        start: Some(2),
+                        end: Some(2),
+                    })
+                    .await?;
+                let crate::ports::tree::Found::Text { text, .. } = found else {
+                    panic!("source")
+                };
+                assert!(!text.contains("opaqueprivatebody"));
+                Ok(ModelResponse {
+                    value: json!({}),
+                    model: "fixture".into(),
+                    usage: Usage::default(),
+                })
+            }
+        }
+        let mut config = models();
+        config.agentic_reviewers = true;
+        let cap = ModelCapability::new(Arc::new(MidKey), config);
+        let tree = crate::ports::tree::MockTree::from_files([(
+            "src/config.rs",
+            "-----BEGIN RSA PRIVATE KEY-----\nopaqueprivatebody\n-----END RSA PRIVATE KEY-----",
+        )]);
+        let (_, evidence) = cap
+            .review(
+                &call("fixture"),
+                &json!({}),
+                &tree,
+                &crate::config::types::LookupPolicy::default(),
+            )
+            .await
+            .unwrap();
+        assert!(!evidence.contains("opaqueprivatebody"));
     }
 
     struct ScopedModel {

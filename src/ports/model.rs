@@ -201,6 +201,8 @@ pub trait Model: Send + Sync {
 
     /// Review against a borrowed read-only repository. Offline models retain
     /// their completion behavior; live adapters may supply bounded tools.
+    /// Implementations must enforce the lookup policy and redact repository
+    /// data before it enters any provider request.
     async fn review(
         &self,
         request: ModelRequest,
