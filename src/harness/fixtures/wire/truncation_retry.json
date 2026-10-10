@@ -240,11 +240,11 @@
   "response": {
     "model": "vendor/deep",
     "usage": {
-      "cached_tokens": 100,
-      "cost_usd": 0.0021,
+      "cached_tokens": 200,
+      "cost_usd": 0.0042,
       "embed_tokens": 0,
-      "input_tokens": 120,
-      "output_tokens": 30
+      "input_tokens": 240,
+      "output_tokens": 60
     },
     "value": {
       "findings": [],

@@ -20,7 +20,7 @@ use crate::ports::model::{Message, Model, ModelRequest, ModelResponse};
 
 /// The adapter under test, built against `base_url` with a fixed key.
 fn adapter(models: &Models) -> Box<dyn Model> {
-    Box::new(crate::harness::openrouter::GatewayModel::with_key(
+    Box::new(crate::harness::embed::GatewayModel::with_key(
         models,
         "sk-parity".to_string(),
     ))
@@ -28,6 +28,7 @@ fn adapter(models: &Models) -> Box<dyn Model> {
 
 fn models(base_url: &str) -> Models {
     Models {
+        agentic_reviewers: false,
         gateway: "openrouter".into(),
         base_url: base_url.into(),
         api_key_env: "UNUSED".into(),
@@ -185,14 +186,34 @@ async fn json_object_mode_carries_the_schema_in_the_prompt() {
             ..models(url)
         },
         request("vendor/deep"),
-        vec![Reply::completion(
-            "vendor/deep",
-            &format!("{ANSWER}\nDone."),
-            "stop",
-            usage(),
-        )],
+        vec![Reply::completion("vendor/deep", ANSWER, "stop", usage())],
     )
     .await;
+}
+
+#[tokio::test]
+async fn json_object_answers_with_trailing_prose_are_refused() {
+    let gateway = FakeGateway::start(vec![Reply::completion(
+        "vendor/deep",
+        &format!("{ANSWER}\nDone."),
+        "stop",
+        usage(),
+    )])
+    .await;
+    let models = Models {
+        structured_output: StructuredOutput::JsonObject,
+        ..models(&gateway.base_url)
+    };
+    let error = adapter(&models)
+        .complete(request("vendor/deep"))
+        .await
+        .expect_err("the complete terminal answer must be JSON");
+    assert!(error.to_string().contains("InvalidJson"), "{error}");
+    assert_eq!(gateway.requests().len(), 1);
+    assert_eq!(
+        gateway.requests()[0]["response_format"]["type"],
+        "json_object"
+    );
 }
 
 #[tokio::test]
@@ -249,6 +270,24 @@ async fn truncation_retries_at_a_doubled_ceiling() {
         ],
     )
     .await;
+}
+
+#[tokio::test]
+async fn truncated_attempts_are_included_in_returned_usage_and_cost() {
+    let gateway = FakeGateway::start(vec![
+        Reply::completion("vendor/deep", r#"{"summary":"Lo"#, "length", usage()),
+        Reply::completion("vendor/deep", ANSWER, "stop", usage()),
+    ])
+    .await;
+    let response = adapter(&models(&gateway.base_url))
+        .complete(request("vendor/deep"))
+        .await
+        .unwrap();
+    assert_eq!(response.usage.input_tokens, 240);
+    assert_eq!(response.usage.output_tokens, 60);
+    assert_eq!(response.usage.cached_tokens, 200);
+    assert!((response.usage.cost_usd - 0.0042).abs() < 1e-12);
+    assert_eq!(gateway.requests().len(), 2);
 }
 
 #[tokio::test]
