@@ -760,6 +760,10 @@ pub struct Models {
     pub base_url: String,
     /// Environment variable holding the API key. Never the key itself.
     pub api_key_env: String,
+    /// Positive deadline in milliseconds for each physical completion request.
+    /// Absent uses 120,000 ms. A stalled route can then fall back without
+    /// consuming the whole review deadline; cancellation remains terminal.
+    pub request_timeout_ms: Option<u64>,
     /// The cheap, high-volume tier.
     pub scan: String,
     /// The expensive tier used for deep review.

@@ -242,6 +242,9 @@ fn validate_paths(config: &Config, problems: &mut Vec<String>) {
 
 fn validate_models(config: &Config, problems: &mut Vec<String>) {
     let models = &config.models;
+    if models.request_timeout_ms == Some(0) {
+        problems.push("`models.request_timeout_ms` must be positive".into());
+    }
     if models.agentic_reviewers
         && models.structured_output != crate::config::types::StructuredOutput::Schema
     {

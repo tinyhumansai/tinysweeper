@@ -151,6 +151,8 @@ manual_only = "tinysweeper:manual-only"
 gateway = "openrouter"
 base_url = "https://openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
+# Bound each paid HTTP request while allowing the ladder to try its next route.
+request_timeout_ms = 120000
 # Both tiers on one model, and the tiering kept rather than collapsed.
 #
 # DeepSeek V4 Flash, chosen for price: $0.14/$0.28 per M against the V4 Pro

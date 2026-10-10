@@ -133,6 +133,13 @@ drifts every time a provider reprices, which is why it is no longer what
 `models.budget_usd_per_pr` — a hard stop on a real bill — is enforced against.
 An unknown model warns rather than silently pricing at zero.
 
+Physical completion requests default to a 120-second deadline, configurable with
+positive `models.request_timeout_ms`. Each route gets its own transport deadline,
+so a stalled route can fall back to a healthy route. Cancellation and the whole
+review deadline remain terminal. A timed-out paid call retains its conservative
+budget reservation because its actual charge is unknown. Agent reviewers retain
+their separate 60-second turn deadline.
+
 Scoped monetary ledgers queue paid work serially. Model clones sharing a ledger
 share admission, while a fresh scoped budget has its own queue. Each completion
 ladder or agent reviewer waits for the previous invocation to settle before
