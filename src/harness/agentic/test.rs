@@ -367,3 +367,67 @@ fn unknown_failure_accounting_does_not_include_concurrent_reviewers() {
     let unmetered = ReviewFailure::unknown(Error::Model("failed".into()), None, estimate);
     assert_eq!(*unmetered.usage.unwrap(), estimate);
 }
+
+#[tokio::test]
+async fn concurrent_affordable_agent_reviews_wait_for_reservations_to_settle() {
+    use crate::ports::model::Model;
+    let _guard = TEST_LOCK.lock().await;
+    let lookup = Reply {
+        status: 200,
+        body: json!({
+            "id":"lookup", "object":"chat.completion", "model":"deep",
+            "choices":[{"index":0,"message":{"role":"assistant","content":null,
+                "tool_calls":[{"id":"read","type":"function","function":{
+                    "name":"repo_read","arguments":json!({"path":"src/lib.rs","start_line":1,"end_line":1}).to_string()
+                }}]},"finish_reason":"tool_calls"}],
+            "usage":{"prompt_tokens":5,"completion_tokens":2,"cost":0.001}
+        }),
+    };
+    let answer = Reply::completion(
+        "deep",
+        r#"{"summary":"checked"}"#,
+        "stop",
+        json!({"prompt_tokens":5,"completion_tokens":2,"cost":0.0021}),
+    );
+    // Each reviewer must successfully read source before its final answer.
+    // Admission spans both paid turns, including the borrowed tool dispatch.
+    let gateway = FakeGateway::start(vec![lookup.clone(), answer.clone(), lookup, answer]).await;
+    let mut models = crate::config::types::Models {
+        agentic_reviewers: true,
+        base_url: gateway.base_url.clone(),
+        ..Default::default()
+    };
+    models.budget_prices.insert(
+        "deep".into(),
+        crate::config::types::BudgetPriceBound {
+            input: 0.0,
+            cached: 0.0,
+            output: 600.0,
+        },
+    );
+    let model = crate::harness::embed::GatewayModel::with_key(&models, "fixture".into())
+        .scoped_budget(1.0)
+        .unwrap();
+    let request = ModelRequest {
+        model: "deep".into(),
+        messages: vec![
+            Message::system("Review."),
+            Message::user("Review src/lib.rs."),
+        ],
+        schema: json!({"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}),
+        schema_name: "review".into(),
+        max_tokens: 1000,
+    };
+    let tree = MockTree::from_files([("src/lib.rs", "pub fn f() {}")]);
+    let policy = LookupPolicy::default();
+    let (first, second) = tokio::join!(
+        model.review(request.clone(), &tree, &policy),
+        model.review(request, &tree, &policy),
+    );
+    let first = first.expect("first affordable reviewer");
+    let second = second.expect("second affordable reviewer waits for settlement");
+    assert_eq!(first.value["summary"], "checked");
+    assert_eq!(second.value["summary"], "checked");
+    assert!((first.usage.cost_usd + second.usage.cost_usd - 0.0062).abs() < 1e-12);
+    assert_eq!(gateway.requests().len(), 4);
+}

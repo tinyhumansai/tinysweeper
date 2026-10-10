@@ -159,9 +159,12 @@ impl OpenRouterEmbedder {
     /// wire format can be tested apart from each other.
     async fn post(&self, texts: &[String]) -> Result<EmbeddingsResponse> {
         self.pace().await;
+        // Gateways otherwise choose the model's default vector length, which
+        // may differ from the dimension recorded in our index signature.
         let body = serde_json::json!({
             "model": self.signature.model,
             "input": texts,
+            "dimensions": self.signature.dims,
         });
 
         let response = self

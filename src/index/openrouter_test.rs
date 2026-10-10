@@ -1,11 +1,8 @@
-//! Wire-format tests for the OpenRouter embeddings client.
+//! Offline request and response tests for the OpenRouter embeddings client.
 //!
-//! These are offline. They exercise the part that goes wrong quietly — reading
-//! the response — rather than the part that goes wrong loudly. A malformed
-//! request fails on the first call and somebody notices; a response decoded in
-//! the wrong order produces an index where every chunk is filed under its
-//! neighbour's vector, retrieval that is confidently irrelevant, and no error
-//! anywhere.
+//! Requests must declare the dimension in the index signature. Response rows
+//! must retain their input order: filing chunks under another chunk’s vector
+//! makes retrieval confidently irrelevant without producing an error.
 
 use super::*;
 
@@ -331,4 +328,26 @@ async fn live_embeddings_report_real_usage() {
     assert_eq!(embedded.vectors[0].len(), 1536);
     assert!(embedded.usage.embed_tokens > 0, "no token count reported");
     assert!(embedded.usage.cost_usd > 0.0, "no cost reported");
+}
+
+#[tokio::test]
+async fn embedding_requests_send_the_configured_dimension_to_the_gateway() {
+    use crate::harness::fake_gateway::{FakeGateway, Reply};
+    let gateway = FakeGateway::start(vec![Reply {
+        status: 200,
+        body: serde_json::json!({"data": [{"index": 0, "embedding": [0.1, 0.2]}]}),
+    }])
+    .await;
+    let embedder = OpenRouterEmbedder::with_key(
+        signature(2),
+        "test-key".into(),
+        &format!("{}/embeddings", gateway.base_url),
+    )
+    .unwrap();
+    let result = embedder.embed(&["dimension probe".into()]).await.unwrap();
+    assert_eq!(result.vectors, vec![vec![0.1, 0.2]]);
+    let requests = gateway.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["dimensions"], 2);
+    assert_eq!(requests[0]["input"], serde_json::json!(["dimension probe"]));
 }
