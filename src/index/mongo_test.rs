@@ -33,8 +33,9 @@ fn signature() -> EmbedSignature {
 
 #[test]
 fn stored_documents_use_the_mongodb_driver_bson_type() {
-    let document: mongodb::bson::Document = doc! { "trust": "allowed" };
-    assert_eq!(document.get_str("trust").expect("stored trust"), "allowed");
+    let node = GraphNode::symbol("o/r", "src/a.rs", "alpha");
+    let document: mongodb::bson::Document = node_document(&node);
+    assert_eq!(node_from_document(&document), node);
 }
 
 #[test]

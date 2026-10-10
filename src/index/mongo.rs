@@ -921,16 +921,17 @@ impl GraphStore for MongoGraphStore {
         if paths.is_empty() {
             return Ok(0);
         }
-        let endpoint_filters: Vec<Document> = paths
-            .iter()
-            .flat_map(|path| {
-                let pattern = Regex {
-                    pattern: format!("^{}(?:#|$)", regex_escape(path)),
-                    options: String::new(),
-                };
-                [doc! { "from": pattern.clone() }, doc! { "to": pattern }]
-            })
-            .collect();
+        let mut endpoint_filters = Vec::with_capacity(paths.len().saturating_mul(2));
+        for path in paths {
+            let pattern = Regex {
+                pattern: format!("^{}(?:#|$)", regex_escape(path))
+                    .try_into()
+                    .map_err(|err: bson::error::Error| Error::Forge(err.to_string()))?,
+                options: bson::raw::cstr!("").into(),
+            };
+            endpoint_filters.push(doc! { "from": pattern.clone() });
+            endpoint_filters.push(doc! { "to": pattern });
+        }
         let edge_filter = doc! {
             "repo_id": repo_id,
             "$or": [
