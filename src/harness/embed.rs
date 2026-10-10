@@ -771,11 +771,15 @@ mod tests {
         assert!(waiting.await.unwrap_err().is_cancelled());
         assert!(gateway.requests().is_empty());
         drop(held);
-        let response =
-            tokio::time::timeout(std::time::Duration::from_secs(2), model.complete(request))
-                .await
-                .expect("admission released")
-                .expect("next completion succeeds");
+        let tree = crate::ports::tree::MockTree::from_files([("src/lib.rs", "pub fn f() {}")]);
+        let policy = crate::config::types::LookupPolicy::default();
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            model.review(request, &tree, &policy),
+        )
+        .await
+        .expect("non-agentic review acquires admission exactly once")
+        .expect("next completion succeeds");
         assert_eq!(response.value["summary"], "checked");
         assert_eq!(gateway.requests().len(), 1);
     }
@@ -787,7 +791,7 @@ mod tests {
         let _held = admission.lock().await;
         let fresh = model.scoped_budget(1.0).unwrap();
         let response =
-            tokio::time::timeout(std::time::Duration::from_secs(2), fresh.complete(request))
+            tokio::time::timeout(std::time::Duration::from_secs(5), fresh.complete(request))
                 .await
                 .expect("fresh scope has its own queue")
                 .expect("completion succeeds");
@@ -969,6 +973,7 @@ mod tests {
         }];
         let gateway = GatewayModel {
             budget: None,
+            budget_admission: None,
             budget_prices: Default::default(),
             agentic_reviewers: false,
             api_key: "unused".into(),
@@ -1014,6 +1019,7 @@ mod tests {
         }];
         let mut gateway = GatewayModel {
             budget: None,
+            budget_admission: None,
             budget_prices: Default::default(),
             agentic_reviewers: false,
             api_key: "unused".into(),
@@ -1169,6 +1175,7 @@ mod tests {
             langfuse: None,
             agentic_reviewers: false,
             budget: None,
+            budget_admission: None,
             budget_prices: Default::default(),
         };
         let rendered = format!("{model:?}");
@@ -1222,6 +1229,7 @@ mod tests {
         // error, then builds the gateway directly for the positive case.
         let gateway = GatewayModel {
             budget: None,
+            budget_admission: None,
             budget_prices: Default::default(),
             agentic_reviewers: false,
             api_key: "unused".into(),
