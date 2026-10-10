@@ -31,10 +31,25 @@ Rewriting that prompt into "check each finding" is the one change to this module
 that no test other than the prompt assertion would catch, and it would silently
 gut the review.
 
+## Security scope
+
+A true generic request for behavior tests is not a security vulnerability. The
+security filter therefore reports scope separately from factual `incorrect`:
+`in_scope`, `out_of_scope`, or `uncertain`, with the attacker-controlled input,
+dangerous operation or trust boundary, security impact, and reason the finding
+actually claims. It does not invent an exploit path or require verification of
+a vulnerability whose context is outside the supplied evidence.
+
+Only a unique, valid `out_of_scope` assessment with a nonempty reason and all
+three attack-chain fields explicitly empty removes an observation. Missing,
+duplicate, uncertain, contradictory, or malformed assessments keep it. A test
+request exercising an identified exploit remains in scope. The critique and
+commits request protocols remain unchanged; scanner facts never enter this call.
+
 ## Two hard properties
 
-**It rejects only.** The response schema has one field: a list of indices, with
-a reason each. There is no channel through which a finding can come back
+**It rejects only.** Factual falsification returns indices with a reason each.
+Security adds a separate indexed scope assessment in the same call. There is no channel through which a finding can come back
 altered, re-scored, merged or invented. A filter that can rewrite what it
 filters is a second reviewer nobody gated.
 

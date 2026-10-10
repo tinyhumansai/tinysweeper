@@ -211,7 +211,7 @@ it was also the reason a correct `medium/0.61` boundary bug reached nobody.
 take exactly one pass. For qualifying groups, `critique` and `security`
 each ask their group's first council reviewer — index `0`, never the whole
 council again — up to two more times after round one's own findings are placed
-and model proposals falsified, told plainly what it already found and
+and model proposals falsified (including explicit security-scope rejection), told plainly what it already found and
 asked to look for what a first pass misses. `lanes::coverage` builds that
 call; see its module doc for why anchoring the answer is left to the caller
 rather than done once in that module.

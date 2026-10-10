@@ -1289,6 +1289,28 @@ mod tests {
             "{outcome:?}"
         );
     }
+    #[tokio::test]
+    async fn a_true_test_coverage_proposal_is_not_a_security_finding() {
+        let model = MockModel::new()
+            .then(json!({"summary":"Add focused tests for the behavior change.", "findings":[{
+                "path":"src/handler.rs", "line":2, "rule":"repository-rule",
+                "title":"Add focused tests for the round behavior change",
+                "body":"The complete diff changes behavior without focused tests; add coverage for the new behavior.",
+                "severity":"medium", "confidence":0.99}]}))
+            .then(json!({"incorrect":[], "security_scope":[{
+                "index":1, "verdict":"out_of_scope", "attacker_input":"",
+                "dangerous_operation":"", "security_impact":"",
+                "reason":"This asks for generic behavior coverage, with no claimed attacker path or security impact."}]}));
+        let outcome = run_with(model, &config(), &diffs(), &[workflow_finding()]).await;
+        assert_eq!(outcome.findings.len(), 1, "{outcome:?}");
+        assert_eq!(outcome.findings[0].rule, "workflow-write-all");
+        assert!(
+            !outcome.summary.contains("Add focused tests"),
+            "{}",
+            outcome.summary
+        );
+    }
+
     fn unsupported_proposal() -> serde_json::Value {
         json!({"path":"src/handler.rs","line":2,"rule":"temporary-borrow",
             "title":"Keep the temporary alive","body":"This temporary borrow cannot compile.",
@@ -1365,6 +1387,23 @@ mod tests {
             "{}",
             outcome.summary
         );
+    }
+
+    #[tokio::test]
+    async fn out_of_scope_coverage_proposals_do_not_unlock_another_pass() {
+        let mut proposal = finding_at_line("Add focused tests for round behavior", 5);
+        proposal["body"] =
+            json!("The behavior changed without focused tests; add generic behavior coverage.");
+        let model = MockModel::new()
+            .then(json!({"summary":"Nothing to report.", "findings":[]}))
+            .then(json!({"summary":"Add focused tests.", "findings":[proposal]}))
+            .then(json!({"incorrect":[], "security_scope":[{
+                "index":1, "verdict":"out_of_scope", "attacker_input":"",
+                "dangerous_operation":"", "security_impact":"",
+                "reason":"Generic behavior-test coverage asserts no security exploit."}]}));
+        let outcome = run_with(model.clone(), &config_with_passes(3), &large_diffs(), &[]).await;
+        assert!(outcome.findings.is_empty(), "{outcome:?}");
+        assert_eq!(model.requests().len(), 3);
     }
 
     #[tokio::test]
