@@ -15,6 +15,8 @@
 use std::sync::Arc;
 
 use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 
 use crate::config::types::{LaneId, LookupPolicy};
 use crate::error::Result;
@@ -22,7 +24,7 @@ use crate::flows::caps::ModelCapability;
 use crate::flows::lookup;
 use crate::flows::panel::Call;
 use crate::flows::subagent::{self, Answered};
-use crate::ports::model::{Model, Usage};
+use crate::ports::model::{Model, ModelResponse, Usage};
 use crate::ports::tree::{Lookup, TreeReader};
 
 /// What one reviewer said, or why it said nothing.
@@ -109,16 +111,30 @@ async fn one_round_review(
     schema: &Value,
     repository: Option<(&dyn TreeReader, &LookupPolicy)>,
 ) -> Vec<Answer> {
-    let results = futures::future::join_all(calls.iter().map(|call| async move {
-        match repository {
-            Some((tree, policy)) => llm.review(call, schema, tree, policy).await,
-            None => llm
-                .call(call, schema)
-                .await
-                .map(|response| (response, String::new())),
-        }
-    }))
+    let branches: Vec<futures::future::BoxFuture<'_, Result<(ModelResponse, String)>>> = calls
+        .iter()
+        .map(|call| {
+            Box::pin(async move {
+                match repository {
+                    Some((tree, policy)) => llm.review(call, schema, tree, policy).await,
+                    None => llm
+                        .call(call, schema)
+                        .await
+                        .map(|response| (response, String::new())),
+                }
+            }) as futures::future::BoxFuture<'_, Result<(ModelResponse, String)>>
+        })
+        .collect();
+    // The live host delegates scheduling to Embed's borrowed-future primitive.
+    // Offline mocks retain a dependency-free fanout with the same result order.
+    #[cfg(feature = "harness")]
+    let results = openhuman_embed::fanout::fanout_futures(
+        branches,
+        std::num::NonZeroUsize::new(calls.len().max(1)).expect("positive reviewer concurrency"),
+    )
     .await;
+    #[cfg(not(feature = "harness"))]
+    let results = futures::future::join_all(branches).await;
     calls
         .iter()
         .zip(results)

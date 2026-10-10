@@ -3,6 +3,7 @@
 use std::sync::Mutex;
 
 use super::*;
+use crate::config::types::Models;
 use crate::harness::MockModel;
 use crate::ports::model_factory::StaticModelFactory;
 

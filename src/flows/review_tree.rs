@@ -1,7 +1,7 @@
 //! Bounded, redacted evidence captured from agent-requested repository reads.
 
 use crate::error::Result;
-use crate::ports::tree::{Found, Lookup, TreeReader};
+use crate::ports::tree::{Found, Lookup, TreeQuery, TreeReader};
 use async_trait::async_trait;
 use std::sync::Mutex;
 
@@ -57,19 +57,9 @@ impl<'a> RecordedTree<'a> {
             max_chars,
         }
     }
-    pub(crate) fn evidence(&self) -> String {
-        self.evidence
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-    }
-}
-#[async_trait]
-impl TreeReader for RecordedTree<'_> {
-    async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
-        let found = self.inner.lookup(lookup).await?;
+    fn capture(&self, rendered: String, found: &Found) {
         if matches!(found, Found::Text { .. } | Found::Hits { .. }) {
-            let mut rendered = render(lookup, &found);
+            let mut rendered = rendered;
             let mut evidence = self.evidence.lock().unwrap_or_else(|e| e.into_inner());
             let remaining = self.max_chars.saturating_sub(evidence.chars().count());
             let fence = crate::harness::prompt::fence_for(&rendered);
@@ -84,6 +74,42 @@ impl TreeReader for RecordedTree<'_> {
                 evidence.push_str(&footer);
             }
         }
+    }
+    pub(crate) fn evidence(&self) -> String {
+        self.evidence
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+}
+#[async_trait]
+impl TreeReader for RecordedTree<'_> {
+    async fn explore(&self, query: &TreeQuery) -> Result<Found> {
+        let found = self.inner.explore(query).await?;
+        let display = match query {
+            TreeQuery::History {
+                path, start, end, ..
+            } => Lookup::Read {
+                path: path.clone(),
+                start: Some(*start),
+                end: Some(*end),
+            },
+            _ => Lookup::Search {
+                pattern: "repository exploration".into(),
+                glob: None,
+            },
+        };
+        let mut rendered = render(&display, &found);
+        if let TreeQuery::History { commit, .. } = query {
+            rendered.insert_str(0, &format!("Historical snapshot {commit}:\n"));
+        }
+        self.capture(rendered, &found);
+        Ok(found)
+    }
+
+    async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
+        let found = self.inner.lookup(lookup).await?;
+        self.capture(render(lookup, &found), &found);
         Ok(found)
     }
     fn describe(&self) -> String {

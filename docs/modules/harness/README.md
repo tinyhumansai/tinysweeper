@@ -6,15 +6,20 @@ the two implementations of that port — `MockModel` for tests, `GatewayModel`
 behind the `harness` feature for the real thing — plus the prompt assembly and
 schema that every lane shares.
 
+## Shared host construction
+
+`harness::factory::GatewayModelFactory` implements the always-compiled
+`ports::model_factory::ModelFactory` port for text and vision adapters. The CLI
+and server use that same construction seam. A host can inject
+`StaticModelFactory` to reuse offline model handles without credentials.
+
 ## The transport: OpenHuman's `Completer`
 
 `GatewayModel` makes each call through `openhuman_embed::complete::Completer`:
 one stateless, structured completion against the configured OpenAI-compatible
-`base_url`. Not an OpenHuman agent turn, deliberately. A turn runs a
-prompt-injection guard that would reject the adversarial diffs a review exists
-to read, can call tools, and may fall back to another model without saying so.
-A completion has no tools, no session and no fallback, so "the model never
-acts" holds by construction: it only ever answers a schema.
+`base_url`. Council reviewers can instead opt into bounded read-only agent
+exploration with `models.agentic_reviewers`; see [agentic reviewers](AGENTIC-REVIEWERS.md).
+The default remains stateless completion, with no tools or session.
 
 The request bodies this sends are pinned by `harness::parity_test`, which drives
 the adapter against a loopback fake gateway (`harness::fake_gateway`) and

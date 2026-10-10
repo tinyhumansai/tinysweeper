@@ -12,7 +12,8 @@ a reviewer may ask the codebase a question instead of guessing.
 
 This used to be expressed as [tinyflows] graphs. Every graph was the same flat
 shape — a trigger, one `agent` node per call, a merge barrier — so they are now
-plain futures (`futures::future::join_all`), which removed a dependency, a JSON
+Embed borrowed-future fan-out when `harness` is enabled, with a pure-future
+offline mock path. This removed a dependency, a JSON
 envelope that had to be read two `json` hops deep, and a set of refusing
 capability stubs the engine required. Nothing about what runs or in what order
 changed; the golden tests and the lane tests pass unchanged.
@@ -160,3 +161,11 @@ when they break:
   runner never exceeds one; the test asserts it reached the reviewer count.
 - **Cost shape** for sub-agents is pinned by call count: one call when nothing
   is asked, and `1 + MAX_QUESTIONS_PER_REVIEWER + 1` when the cap is exceeded.
+
+## Opt-in agent exploration
+
+With `models.agentic_reviewers = true` and an enabled lookup policy, the first
+council turn uses Embed's HostOnly repository tools. It skips definition seeding
+and the JSON lookup loop; captured redacted reads still reach `Answer.looked_up`,
+host questions and falsification. The default remains the existing lookup loop.
+See [permissions, lifetime and accounting](../harness/AGENTIC-REVIEWERS.md).

@@ -1,32 +1,17 @@
 //! Deployment-owned model resolution and reuse, behind the `serve` feature.
 //!
-//! Provider construction lives here rather than in route workers. The resolved
+//! Adapter resolution lives here rather than in route workers. The resolved
 //! handles share one deployment policy; repository overlays cannot change it.
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
+pub use crate::harness::factory::GatewayModelFactory;
 
 use crate::config::Config;
-use crate::config::types::{Models, Workload};
+use crate::config::types::Workload;
 use crate::error::Result;
 use crate::ports::model::Model;
 use crate::ports::model_factory::{ModelFactory, ModelPurpose};
-
-/// The server's default OpenHuman-backed gateway factory.
-#[derive(Debug, Default)]
-pub struct GatewayModelFactory;
-
-#[async_trait]
-impl ModelFactory for GatewayModelFactory {
-    async fn create(&self, models: &Models, purpose: ModelPurpose) -> Result<Arc<dyn Model>> {
-        let model = match purpose {
-            ModelPurpose::Text => crate::harness::openrouter::GatewayModel::from_config(models)?,
-            ModelPurpose::Vision => crate::harness::openrouter::GatewayModel::for_vision(models)?,
-        };
-        Ok(Arc::new(model))
-    }
-}
 
 /// The adapters shared by the server and every cloned worker state.
 #[derive(Clone)]
