@@ -1807,3 +1807,20 @@ fn deployment_retrieval_uses_the_served_embedding_space_and_reachable_memory_hos
     assert!(deployment.memory.allow_private_http);
     assert!(include_str!("../../docker-compose.yml").contains("host.docker.internal:host-gateway"));
 }
+
+#[test]
+fn physical_request_deadlines_default_to_two_minutes_and_accept_positive_overrides() {
+    let default = parse("version = 1");
+    assert_eq!(default.models.request_timeout_ms, Some(120_000));
+    let custom = parse("version = 1\n[models]\nrequest_timeout_ms = 250");
+    assert_eq!(custom.models.request_timeout_ms, Some(250));
+    assert!(validate::validate(&custom).is_empty());
+}
+
+#[test]
+fn a_zero_physical_request_deadline_is_rejected() {
+    let config = parse("version = 1\n[models]\nrequest_timeout_ms = 0");
+    assert!(validate::validate(&config).iter().any(|problem| {
+        problem.contains("models.request_timeout_ms") && problem.contains("positive")
+    }));
+}

@@ -41,6 +41,7 @@ pub struct GatewayModel {
     base_url: String,
     fallbacks: Vec<String>,
     reasoning_effort: String,
+    request_timeout_ms: u64,
     provider: ProviderRouting,
     routes: Vec<crate::config::types::ModelRoute>,
     structured_output: StructuredOutput,
@@ -254,6 +255,7 @@ impl GatewayModel {
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
+            request_timeout_ms: models.request_timeout_ms.unwrap_or(120_000),
             provider: models.provider.clone(),
             routes: models.routes.clone(),
             structured_output: models.structured_output,
@@ -313,7 +315,9 @@ impl GatewayModel {
             .iter()
             .map(wire_message)
             .collect();
-        CompletionRequest::new(&request.model, messages).response_format(format)
+        CompletionRequest::new(&request.model, messages)
+            .timeout_ms(self.request_timeout_ms)
+            .response_format(format)
     }
 
     /// Configure one route; the owner ladder handles every physical dispatch.
@@ -706,6 +710,7 @@ mod tests {
             gateway: "openrouter".into(),
             base_url: "https://openrouter.ai/api/v1".into(),
             api_key_env: "TINYSWEEPER_TEST_KEY_ABSENT".into(),
+            request_timeout_ms: None,
             scan: "a".into(),
             deep: "b".into(),
             flash: "c".into(),
@@ -981,6 +986,7 @@ mod tests {
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
+            request_timeout_ms: models.request_timeout_ms.unwrap_or(120_000),
             provider: models.provider.clone(),
             routes: models.routes.clone(),
             structured_output: models.structured_output,
@@ -1027,6 +1033,7 @@ mod tests {
             base_url: models.base_url.clone(),
             fallbacks: vec!["c".into()],
             reasoning_effort: models.reasoning_effort.clone(),
+            request_timeout_ms: models.request_timeout_ms.unwrap_or(120_000),
             provider: models.provider.clone(),
             routes: models.routes.clone(),
             structured_output: models.structured_output,
@@ -1175,6 +1182,7 @@ mod tests {
             routes: Vec::new(),
             langfuse: None,
             agentic_reviewers: false,
+            request_timeout_ms: 120_000,
             budget: None,
             budget_admission: None,
             budget_prices: Default::default(),
@@ -1237,6 +1245,7 @@ mod tests {
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
             reasoning_effort: models.reasoning_effort.clone(),
+            request_timeout_ms: models.request_timeout_ms.unwrap_or(120_000),
             provider: models.provider.clone(),
             routes: models.routes.clone(),
             structured_output: models.structured_output,

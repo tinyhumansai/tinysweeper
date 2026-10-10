@@ -68,6 +68,17 @@ impl FakeGateway {
     /// Start a gateway that assigns each HTTP request with complete headers
     /// the next reply in `script`, or a `500` once the script runs out.
     pub async fn start(script: Vec<Reply>) -> Self {
+        Self::start_script(script, false).await
+    }
+
+    /// Record the first request without answering until its client closes.
+    /// Subsequent requests consume normal scripted replies, allowing tests to
+    /// prove physical transport deadlines and fallback without a real gateway.
+    pub async fn start_with_stalled_first_reply(script: Vec<Reply>) -> Self {
+        Self::start_script(script, true).await
+    }
+
+    async fn start_script(script: Vec<Reply>, stall_first: bool) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind loopback");
@@ -101,6 +112,13 @@ impl FakeGateway {
                         return;
                     };
                     recorded.lock().unwrap().push((sequence, body));
+                    if stall_first && sequence == 0 {
+                        // Observe client cancellation so the fixture reaps
+                        // this connection when its transport deadline fires.
+                        let mut closed = [0u8; 1];
+                        let _ = stream.read(&mut closed).await;
+                        return;
+                    }
                     let payload = reply.body.to_string();
                     let response = format!(
                         "HTTP/1.1 {} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",

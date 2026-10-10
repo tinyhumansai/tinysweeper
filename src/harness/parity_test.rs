@@ -32,6 +32,7 @@ fn models(base_url: &str) -> Models {
         gateway: "openrouter".into(),
         base_url: base_url.into(),
         api_key_env: "UNUSED".into(),
+        request_timeout_ms: None,
         scan: "vendor/scan".into(),
         deep: "vendor/deep".into(),
         flash: "vendor/flash".into(),
@@ -525,4 +526,122 @@ async fn queued_completions_still_stop_before_dispatching_past_the_hard_budget()
         2,
         "the denied call never reaches the provider"
     );
+}
+
+#[tokio::test]
+async fn a_stalled_physical_route_times_out_and_the_next_route_answers() {
+    let gateway = FakeGateway::start_with_stalled_first_reply(vec![
+        Reply::completion("primary", ANSWER, "stop", usage()),
+        Reply::completion("fallback", ANSWER, "stop", usage()),
+    ])
+    .await;
+    let mut models = models(&gateway.base_url);
+    models.request_timeout_ms = Some(250);
+    models.fallback = vec!["fallback".into()];
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        adapter(&models).complete(request("primary")),
+    )
+    .await
+    .expect("a stalled physical call releases the route before the review deadline")
+    .expect("the healthy fallback answers");
+    assert_eq!(response.model, "fallback");
+    assert_eq!(response.value["summary"], "Looks fine.");
+    let requests = gateway.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0]["model"], "primary");
+    assert_eq!(requests[1]["model"], "fallback");
+    assert!(
+        requests.iter().all(|body| body.get("timeout_ms").is_none()),
+        "a client-side deadline must not be sent as a gateway body option"
+    );
+}
+
+#[tokio::test]
+async fn a_timed_out_paid_route_retains_its_unknown_charge_reservation() {
+    let gateway = FakeGateway::start_with_stalled_first_reply(vec![
+        Reply::completion("primary", ANSWER, "stop", usage()),
+        Reply::completion("fallback", ANSWER, "stop", usage()),
+    ])
+    .await;
+    let mut models = models(&gateway.base_url);
+    models.request_timeout_ms = Some(250);
+    models.fallback = vec!["fallback".into()];
+    for (name, output) in [("primary", 150.0), ("fallback", 50.0)] {
+        models.budget_prices.insert(
+            name.into(),
+            crate::config::types::BudgetPriceBound {
+                input: 0.0,
+                cached: 0.0,
+                output,
+            },
+        );
+    }
+    let model = adapter(&models).scoped_budget(1.0).unwrap();
+    let answer = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        model.complete(request("primary")),
+    )
+    .await
+    .expect("physical timeout reaches fallback")
+    .expect("$0.60 unknown charge plus $0.20 fallback bound fits");
+    assert_eq!(answer.model, "fallback");
+    let second = model.complete(request("primary")).await;
+    assert!(
+        second.is_err(),
+        "unknown $0.60 charge cannot be refunded to admit another $0.60 bound"
+    );
+    assert_eq!(gateway.requests().len(), 2, "denied work never dispatches");
+}
+
+#[tokio::test]
+async fn canceling_a_stalled_call_is_terminal_and_releases_paid_admission() {
+    let gateway = FakeGateway::start_with_stalled_first_reply(vec![
+        Reply::completion("primary", ANSWER, "stop", usage()),
+        Reply::completion("fallback", ANSWER, "stop", usage()),
+    ])
+    .await;
+    let mut models = models(&gateway.base_url);
+    models.request_timeout_ms = Some(60_000);
+    models.fallback = vec!["fallback".into()];
+    for (name, output) in [("primary", 150.0), ("fallback", 50.0)] {
+        models.budget_prices.insert(
+            name.into(),
+            crate::config::types::BudgetPriceBound {
+                input: 0.0,
+                cached: 0.0,
+                output,
+            },
+        );
+    }
+    let model: std::sync::Arc<dyn Model> = adapter(&models).scoped_budget(1.0).unwrap();
+    let running = model.clone();
+    let task = tokio::spawn(async move { running.complete(request("primary")).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while gateway.requests().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("primary request dispatched before cancellation");
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert_eq!(
+        gateway.requests().len(),
+        1,
+        "cancellation never starts fallback"
+    );
+    let answer = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        model.complete(request("fallback")),
+    )
+    .await
+    .expect("dropping the call releases admission")
+    .expect("remaining budget admits $0.20 fallback bound");
+    assert_eq!(answer.model, "fallback");
+    assert!(
+        model.complete(request("primary")).await.is_err(),
+        "cancellation preserves the unknown $0.60 charge"
+    );
+    assert_eq!(gateway.requests().len(), 2);
 }
