@@ -21,7 +21,12 @@
 //!   every finding survives. A noise filter that can silence a review by
 //!   failing is worse than no noise filter.
 //!
-//! Cheap tier, one call per lane.
+//! Cheap tier, one call per lane. There is deliberately no deterministic
+//! pre-pass over symbol names: a textual "this symbol is defined" check cannot
+//! tell a real definition from a comment, a string, a deleted file, or a
+//! same-named symbol in another module, and a rejection made on that basis
+//! silences a real defect. The model is the only rejecter, and it is told to
+//! reject only on proof from the diff.
 
 pub mod types;
 
@@ -67,6 +72,18 @@ impl<'a> Falsifier<'a> {
     /// evidence the reviewer had; it still may only reject, and only on
     /// proof.
     pub async fn filter_with(
+        &self,
+        lane: LaneId,
+        findings: Vec<Finding>,
+        rendered_diff: &str,
+        looked_up: &str,
+    ) -> FalsifyOutcome {
+        self.ask_model(lane, findings, rendered_diff, looked_up)
+            .await
+    }
+
+    /// The model half of [`Self::filter_with`]: one call, rejecting by index.
+    async fn ask_model(
         &self,
         lane: LaneId,
         findings: Vec<Finding>,

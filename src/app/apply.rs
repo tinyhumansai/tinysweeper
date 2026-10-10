@@ -422,6 +422,28 @@ async fn publish_wireframe(
     Ok(())
 }
 
+/// Whether this proposal draws a Changes Requested review.
+///
+/// The one predicate both the submitted review and the umbrella
+/// `tinysweeper/review` check read, so the two cannot disagree.
+///
+/// Blocking needs BOTH a failing lane and a finding severe enough to justify
+/// it. The lane conclusion alone is not enough: `fail_on` and
+/// `request_changes_at` are independent knobs, so a lane configured to fail
+/// on medium must still be able to fail a check without also blocking the
+/// merge when the merge gate is set to high. Reading only the conclusion
+/// made `request_changes_at` inert.
+///
+/// The severity is read from the lane's findings rather than the surviving
+/// comments, so a recurred problem whose comment was deduped away still
+/// blocks — being already visible is not being fixed.
+pub fn requests_changes(config: &Config, proposal: &Proposal) -> bool {
+    match config.request_changes_at() {
+        Some(threshold) => proposal.blocked() && proposal.has_severity_at_or_above(threshold),
+        None => false,
+    }
+}
+
 /// Decide how to submit the review.
 ///
 /// `previous` is tinysweeper's own last verdict on this pull request, if any.
@@ -431,21 +453,7 @@ fn review_event(
     previous: Option<ReviewEvent>,
     draft: bool,
 ) -> ReviewEvent {
-    // Blocking needs BOTH a failing lane and a finding severe enough to justify
-    // it. The lane conclusion alone is not enough: `fail_on` and
-    // `request_changes_at` are independent knobs, so a lane configured to fail
-    // on medium must still be able to fail a check without also blocking the
-    // merge when the merge gate is set to high. Reading only the conclusion
-    // here made `request_changes_at` inert.
-    //
-    // The severity is read from the lane's findings rather than the surviving
-    // comments, so a recurred problem whose comment was deduped away still
-    // blocks — being already visible is not being fixed.
-    let blocks = match config.request_changes_at() {
-        Some(threshold) => proposal.blocked() && proposal.has_severity_at_or_above(threshold),
-        None => false,
-    };
-    if blocks {
+    if requests_changes(config, proposal) {
         return ReviewEvent::RequestChanges;
     }
 
@@ -1523,6 +1531,27 @@ mod tests {
                 "missing {identity}"
             );
         }
+    }
+
+    #[test]
+    fn requests_changes_agrees_with_the_submitted_verdict() {
+        // `tinysweeper/review` is concluded from this predicate. When it and
+        // the review disagreed, the check showed a pass beside a Changes
+        // Requested review.
+        let config = config();
+        let blocking = proposal("abc123", vec![finding()]);
+        assert!(requests_changes(&config, &blocking));
+        assert_eq!(
+            review_event(&config, &blocking, None, false),
+            ReviewEvent::RequestChanges
+        );
+
+        let clean = proposal("abc123", vec![]);
+        assert!(!requests_changes(&config, &clean));
+        assert_ne!(
+            review_event(&config, &clean, None, false),
+            ReviewEvent::RequestChanges
+        );
     }
 
     #[tokio::test]

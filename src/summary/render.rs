@@ -54,12 +54,17 @@ pub fn render(config: &Config, proposal: &Proposal) -> String {
     let _ = writeln!(body, "{}\n", md(executive));
     let _ = writeln!(body, "**State:** {}  ", state(proposal));
     let _ = writeln!(body, "**Priority:** {}  ", priority(proposal));
-    let _ = writeln!(body, "**Reviewed head:** `{}`", short(&proposal.head_sha));
-    let _ = writeln!(
-        body,
-        "**Updated:** {} (Unix time)",
-        summary.updated_at_epoch
-    );
+    let _ = write!(body, "**Reviewed head:** `{}`", short(&proposal.head_sha));
+    // Zero is "never stamped" — a proposal written before the field existed —
+    // and rendering it would date the review to 1970.
+    if summary.updated_at_epoch > 0 {
+        let _ = write!(
+            body,
+            "  \n**Updated:** {}",
+            iso8601_utc(summary.updated_at_epoch)
+        );
+    }
+    body.push('\n');
 
     for section in &config.summary.sections {
         match section {
@@ -123,13 +128,26 @@ fn snapshot(out: &mut String, proposal: &Proposal, summary: &ReviewSummary) {
     let _ = writeln!(out, "**Test assessment:** {assessment}");
 }
 
+/// The complete "no summary" texts earlier versions stored in `changes`, each
+/// matched whole. A stored summary is carried forward from push to push, so
+/// these keep arriving long after the code that wrote them is gone; a prefix
+/// match would also swallow a real, supported summary that merely begins the
+/// same way.
+const LEGACY_UNSUPPORTED_CHANGES: [&str; 2] = [
+    "No supported behavioral explanation was produced.",
+    "The review could not produce a supported behavioral summary; inspect the cited changed surface and lane details below.",
+];
+
+/// "What changed", or nothing at all when no supported summary exists. A
+/// line saying the summary failed tells the reader nothing the absence of the
+/// section does not, and it was on most pull requests.
 fn changes(out: &mut String, summary: &ReviewSummary) {
-    out.push_str("\n## What changed\n\n");
-    if summary.changes.trim().is_empty() {
-        out.push_str("No supported behavioral explanation was produced.");
-    } else {
-        out.push_str(&md(summary.changes.trim()));
+    let changes = summary.changes.trim();
+    if changes.is_empty() || LEGACY_UNSUPPORTED_CHANGES.contains(&changes) {
+        return;
     }
+    out.push_str("\n## What changed\n\n");
+    out.push_str(&md(changes));
     out.push('\n');
 }
 
@@ -425,11 +443,15 @@ fn run_details(out: &mut String, proposal: &Proposal, summary: &ReviewSummary) {
         for pass in &summary.history {
             let _ = writeln!(
                 out,
-                "| `{}` | {} | {} (at {}) |",
+                "| `{}` | {} | {}{} |",
                 short(&pass.head_sha),
                 md(&pass.state),
                 md(&pass.summary),
-                pass.reviewed_at_epoch,
+                if pass.reviewed_at_epoch > 0 {
+                    format!(" (at {})", iso8601_utc(pass.reviewed_at_epoch))
+                } else {
+                    String::new()
+                },
             );
         }
     }
@@ -493,6 +515,30 @@ fn counts(proposal: &Proposal) -> (usize, usize, usize, usize) {
             + proposal.unreviewed.len(),
     )
 }
+/// Seconds since the Unix epoch as `YYYY-MM-DDTHH:MM:SSZ`.
+///
+/// Hand-rolled rather than a date crate for one field: Howard Hinnant's
+/// civil-from-days, exact for every date a review will carry.
+fn iso8601_utc(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3_600,
+        (rem % 3_600) / 60,
+        rem % 60
+    )
+}
+
 fn short(sha: &str) -> &str {
     sha.get(..sha.len().min(12)).unwrap_or(sha)
 }
@@ -622,5 +668,155 @@ mod tests {
 
         assert!(rendered.contains("Address carried finding"));
         assert!(!rendered.contains("## Before merge\n\nNone."));
+    }
+
+    #[test]
+    fn the_update_time_renders_as_iso_8601_utc_never_raw_epoch_seconds() {
+        let mut config = Config::default();
+        config.summary.sections = vec![SummarySection::RunDetails];
+        let rendered = render(
+            &config,
+            &proposal(
+                ReviewSummary {
+                    updated_at_epoch: 1_791_459_570,
+                    history: vec![crate::summary::types::ReviewPass {
+                        head_sha: "abcdef1234567890".into(),
+                        reviewed_at_epoch: 951_782_400,
+                        ..Default::default()
+                    }],
+                    ..ReviewSummary::default()
+                },
+                &[],
+            ),
+        );
+
+        assert!(
+            rendered.contains("**Updated:** 2026-10-08T11:39:30Z"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("2000-02-29T00:00:00Z"), "{rendered}");
+        assert!(!rendered.contains("1791459570"), "{rendered}");
+        assert!(!rendered.contains("951782400"), "{rendered}");
+        assert!(!rendered.contains("Unix time"), "{rendered}");
+    }
+
+    #[test]
+    fn an_unknown_update_time_is_omitted_rather_than_dated_1970() {
+        let rendered = render(&Config::default(), &proposal(ReviewSummary::default(), &[]));
+        assert!(!rendered.contains("**Updated:**"), "{rendered}");
+        assert!(!rendered.contains("1970"), "{rendered}");
+    }
+
+    #[test]
+    fn what_changed_is_omitted_when_no_summary_could_be_produced() {
+        let mut config = Config::default();
+        config.summary.sections = vec![SummarySection::Changes];
+        for failed in [
+            "",
+            "No supported behavioral explanation was produced.",
+            "The review could not produce a supported behavioral summary; inspect the cited \
+             changed surface and lane details below.",
+        ] {
+            let rendered = render(
+                &config,
+                &proposal(
+                    ReviewSummary {
+                        changes: failed.into(),
+                        ..ReviewSummary::default()
+                    },
+                    &[],
+                ),
+            );
+            assert!(!rendered.contains("What changed"), "{rendered}");
+            assert!(!rendered.contains("could not produce"), "{rendered}");
+            assert!(!rendered.contains("No supported behavioral"), "{rendered}");
+        }
+
+        let rendered = render(
+            &config,
+            &proposal(
+                ReviewSummary {
+                    changes: "The hub is edited in place.".into(),
+                    ..ReviewSummary::default()
+                },
+                &[],
+            ),
+        );
+        assert!(
+            rendered.contains("## What changed\n\nThe hub is edited in place"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn a_grouped_observation_is_still_listed_in_the_hub_findings() {
+        // A co-located observation is no longer nested into the primary inline
+        // comment, so the hub's findings list is where the author reads it.
+        let finding = |title: &str, grouped: bool| {
+            json!({
+                "lane": "security",
+                "severity": "high",
+                "confidence": 0.9,
+                "path": "src/hub.rs",
+                "line": 2,
+                "end_line": null,
+                "rule": "rule",
+                "title": title,
+                "body": "Body text.",
+                "suggestion": null,
+                "applicable": null,
+                "late": false,
+                "identity": null,
+                "aliases": [],
+                "grouped": grouped,
+                "review_pass": 1,
+                "corroboration": 1,
+            })
+        };
+        let proposal: Proposal = serde_json::from_value(json!({
+            "version": crate::app::review::PROPOSAL_VERSION,
+            "repo": "acme/widget",
+            "number": 1,
+            "head_sha": "abcdef1234567890",
+            "lanes": [{
+                "lane": "security",
+                "check_name": "tinysweeper/security",
+                "conclusion": "neutral",
+                "summary": "Reviewed.",
+                "findings": [finding("Primary finding", false), finding("Grouped observation", true)],
+            }],
+            "summary": ReviewSummary::default(),
+            "prior_findings": [],
+            "cost_usd": 0.0,
+            "cached_tokens": 0
+        }))
+        .expect("proposal");
+
+        let rendered = render(&Config::default(), &proposal);
+        assert!(rendered.contains("Primary finding"), "{rendered}");
+        assert!(rendered.contains("Grouped observation"), "{rendered}");
+    }
+
+    #[test]
+    fn a_supported_summary_that_only_begins_like_a_legacy_one_is_kept() {
+        let mut config = Config::default();
+        config.summary.sections = vec![SummarySection::Changes];
+        let rendered = render(
+            &config,
+            &proposal(
+                ReviewSummary {
+                    changes: "No supported behavioral explanation was produced. The \
+                              implementation nevertheless adds a retry to the sync loop."
+                        .into(),
+                    ..ReviewSummary::default()
+                },
+                &[],
+            ),
+        );
+        assert!(rendered.contains("## What changed"), "{rendered}");
+        assert!(
+            rendered.contains("adds a retry to the sync loop"),
+            "{rendered}"
+        );
     }
 }

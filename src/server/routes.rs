@@ -1753,13 +1753,16 @@ async fn close_status(state: &AppState, slot: &StatusSlot, conclusion: Conclusio
     };
 
     let check = match conclusion {
-        Conclusion::Reviewed(findings) => status::completed(&open.head_sha, findings),
+        Conclusion::Reviewed {
+            findings,
+            changes_requested,
+        } => status::completed(&open.head_sha, findings, changes_requested),
         Conclusion::NotReviewed => status::not_reviewed(&open.head_sha),
         Conclusion::Failed(err) => failure::check_run(&open.head_sha, err),
     };
 
     let hub_body = match conclusion {
-        Conclusion::Reviewed(_) => None,
+        Conclusion::Reviewed { .. } => None,
         Conclusion::NotReviewed => Some(crate::summary::failed(
             &open.head_sha,
             "This pass stopped before a review could be completed.",
@@ -1935,8 +1938,14 @@ fn hub_slot_is_open(slot: &StatusSlot, head_sha: &str) -> bool {
 
 /// How a review ended, for the umbrella check.
 enum Conclusion<'a> {
-    /// The lanes ran. Carries the finding count, for the title.
-    Reviewed(usize),
+    /// The lanes ran.
+    Reviewed {
+        /// The finding count, for the title.
+        findings: usize,
+        /// Whether the published review requested changes, so the check
+        /// cannot show a pass beside that verdict.
+        changes_requested: bool,
+    },
     /// The run stopped deliberately, without reviewing anything.
     ///
     /// Reachable when a check was already opened and the run *then* declined —
@@ -2028,7 +2037,10 @@ async fn handle_review(
                 // where it is not: an earlier attempt opened the check and this
                 // one declined.
                 let conclusion = match findings {
-                    Some(findings) => Conclusion::Reviewed(findings),
+                    Some((findings, changes_requested)) => Conclusion::Reviewed {
+                        findings,
+                        changes_requested,
+                    },
                     None => Conclusion::NotReviewed,
                 };
                 // The review is over; concluding the check is one GitHub
@@ -2154,7 +2166,7 @@ async fn review_inner(
     author: &str,
     installation: u64,
     run: &Run,
-) -> Result<Option<usize>> {
+) -> Result<Option<(usize, bool)>> {
     let who = state.store.contributor(author).await?;
     if who.trust == Trust::Blocked {
         tracing::info!(%author, "blocked contributor; not reviewing");
@@ -2410,7 +2422,11 @@ async fn review_inner(
                         published
                             .unwrap_or_else(|_| Err(Error::lane("review", "publishing panicked")))
                     })
-                    .map(|()| proposal)
+                    .map(|()| {
+                        let changes_requested =
+                            crate::app::apply::requests_changes(&config, &proposal);
+                        (proposal, changes_requested)
+                    })
             }
             Err(err) => Err(err),
         };
@@ -2425,7 +2441,7 @@ async fn review_inner(
         outcome
     };
 
-    let proposal = outcome?;
+    let (proposal, changes_requested) = outcome?;
     let findings = proposal.findings().count();
     state.store.record_review(author, findings as u64).await?;
 
@@ -2449,7 +2465,7 @@ async fn review_inner(
         installation,
     ));
 
-    Ok(Some(findings))
+    Ok(Some((findings, changes_requested)))
 }
 
 fn review_is_kill_switched(config: &Config, pull_request: &PullRequest) -> bool {
