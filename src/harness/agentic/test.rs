@@ -372,21 +372,26 @@ fn unknown_failure_accounting_does_not_include_concurrent_reviewers() {
 async fn concurrent_affordable_agent_reviews_wait_for_reservations_to_settle() {
     use crate::ports::model::Model;
     let _guard = TEST_LOCK.lock().await;
-    let gateway = FakeGateway::start(vec![
-        Reply::completion(
-            "deep",
-            r#"{"summary":"checked"}"#,
-            "stop",
-            json!({"prompt_tokens":5,"completion_tokens":2,"cost":0.0021}),
-        ),
-        Reply::completion(
-            "deep",
-            r#"{"summary":"checked"}"#,
-            "stop",
-            json!({"prompt_tokens":5,"completion_tokens":2,"cost":0.0021}),
-        ),
-    ])
-    .await;
+    let lookup = Reply {
+        status: 200,
+        body: json!({
+            "id":"lookup", "object":"chat.completion", "model":"deep",
+            "choices":[{"index":0,"message":{"role":"assistant","content":null,
+                "tool_calls":[{"id":"read","type":"function","function":{
+                    "name":"repo_read","arguments":json!({"path":"src/lib.rs","start_line":1,"end_line":1}).to_string()
+                }}]},"finish_reason":"tool_calls"}],
+            "usage":{"prompt_tokens":5,"completion_tokens":2,"cost":0.001}
+        }),
+    };
+    let answer = Reply::completion(
+        "deep",
+        r#"{"summary":"checked"}"#,
+        "stop",
+        json!({"prompt_tokens":5,"completion_tokens":2,"cost":0.0021}),
+    );
+    // Each reviewer must successfully read source before its final answer.
+    // Admission spans both paid turns, including the borrowed tool dispatch.
+    let gateway = FakeGateway::start(vec![lookup.clone(), answer.clone(), lookup, answer]).await;
     let mut models = crate::config::types::Models {
         agentic_reviewers: true,
         base_url: gateway.base_url.clone(),
@@ -423,5 +428,6 @@ async fn concurrent_affordable_agent_reviews_wait_for_reservations_to_settle() {
     let second = second.expect("second affordable reviewer waits for settlement");
     assert_eq!(first.value["summary"], "checked");
     assert_eq!(second.value["summary"], "checked");
-    assert_eq!(gateway.requests().len(), 2);
+    assert!((first.usage.cost_usd + second.usage.cost_usd - 0.0062).abs() < 1e-12);
+    assert_eq!(gateway.requests().len(), 4);
 }
