@@ -31,7 +31,8 @@ workspace write, MCP, memory or delegation tool is exposed. Completion requires
 at least one successful supported repository lookup; denied tools do not count.
 
 The existing lookup policy limits each reviewer to `rounds * per_round` host
-queries and `max_chars` of scrubbed source. Reads retain the 200-line port cap,
+queries and `max_chars` of scrubbed source across primary, fallback and unpinned
+attempts. Failed or cancelled reads also consume the query allowance. Reads retain the 200-line port cap,
 search and symbol results retain the 30-hit cap, and listings allow 200 paths.
 All query attempts consume the host query allowance, including unavailable ones.
 Sensitive paths, scanner-shaped credentials and PEM bodies are scrubbed before
@@ -65,6 +66,11 @@ for its current `flash` and `deep` routes and caps the formerly uncapped deep
 route at 16,000 tokens. Operators must reverify every reachable seller and
 long-context tier when changing routes or prices; admission bounds cannot
 constrain a provider's eventual bill.
+
+Failed attempts retain safe billed usage, even when no reviewer returns a valid
+answer. The lane spend tally and failed answer include these totals. Unknown
+failures use an isolated attempt ledger, so concurrent reviewers cannot inflate
+one another's accounting; unmetered failures retain a bounded estimate.
 
 The response attributes usage to the provider's reported answering model.
 Missing cost uses the existing model-price estimate and the conservative
