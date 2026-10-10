@@ -1353,6 +1353,7 @@ mod tests {
         genuine["line"] = json!(3);
         genuine["rule"] = json!("shell-injection");
         genuine["title"] = json!("Avoid request-derived shell commands");
+        genuine["body"] = json!("The request cmd parameter reaches sh -c without validation.");
         let model = MockModel::new()
             .then(json!({"summary":"The temporary borrow cannot compile.", "findings":[unsupported_proposal(),genuine]}))
             .then(disprove_first());
