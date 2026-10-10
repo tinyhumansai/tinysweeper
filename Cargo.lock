@@ -4838,7 +4838,7 @@ dependencies = [
 
 [[package]]
 name = "tinychannels-bus"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4859,7 +4859,7 @@ dependencies = [
 
 [[package]]
 name = "tinychannels-runtime"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5124,7 +5124,7 @@ dependencies = [
 
 [[package]]
 name = "tinymemory-api"
-version = "1.27.1"
+version = "1.27.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5137,7 +5137,7 @@ dependencies = [
 
 [[package]]
 name = "tinymemory-integrations"
-version = "1.27.1"
+version = "1.27.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5160,7 +5160,7 @@ dependencies = [
 
 [[package]]
 name = "tinymemory-tools"
-version = "1.27.1"
+version = "1.27.2"
 dependencies = [
  "chrono",
  "futures",
@@ -6668,7 +6668,7 @@ version = "0.3.1"
 
 [[patch.unused]]
 name = "tinychannels"
-version = "0.1.12"
+version = "0.1.13"
 
 [[patch.unused]]
 name = "tinyflows"
