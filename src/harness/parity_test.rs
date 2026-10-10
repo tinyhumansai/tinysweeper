@@ -590,7 +590,7 @@ async fn canceling_a_stalled_call_is_terminal_and_releases_paid_admission() {
             },
         );
     }
-    let model: std::sync::Arc<dyn Model> = adapter(&models).scoped_budget(1.0).unwrap().into();
+    let model: std::sync::Arc<dyn Model> = adapter(&models).scoped_budget(1.0).unwrap();
     let running = model.clone();
     let task = tokio::spawn(async move { running.complete(request("primary")).await });
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
