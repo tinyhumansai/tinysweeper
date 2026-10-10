@@ -101,18 +101,19 @@ output = 1.8
 model = "deep"
 max_tokens = 16000
 
-# Retrieval on, through the ladder like every other model call. `vectors` is
-# the ladder's embeddings ladder — every rung in it is a 1024-wide BGE-M3, so
-# failover never changes the width — reached at its OpenAI-shaped
-# `/v1/embeddings` on this box. The three signature fields below are the index
-# partition key: change any of them and the vectors already written stop
+# Retrieval uses the embedding route served by the production ladder.
+# `vectors-oai3` returns text-embedding-3-large at 1024 dimensions; it is a
+# separate space from BGE-M3 (`vectors`), which this box does not serve.
+# Naming the space in the signature partitions existing indexes so a model
+# change re-indexes rather than mixing incompatible vectors. The three
+# signature fields below are the index partition key: change any of them and the vectors already written stop
 # matching, which is why they live here rather than in the environment, and
 # why moving here from `openrouter:openai/text-embedding-3-small:1536` means
 # each repository re-indexes on its next push.
 [embeddings]
 enabled = true
 provider = "ladder"
-model = "vectors"
+model = "vectors-oai3"
 dimensions = 1024
 api_key_env = "LADDER_API_KEY"
 base_url = "http://host.docker.internal:6969/v1/embeddings"
@@ -131,13 +132,14 @@ submodules = [
 ]
 
 # The memory engine: the CortexDB the production box already runs, shared
-# with the other services on it and reached over the box's own Docker
-# network — which is why plain HTTP is allowed here. Enabling it makes the
-# server refuse to boot without CORTEX_API_KEY, so a local `serve` needs the
+# with the other services on it. Cortex publishes port 3141 on the Docker
+# host gateway; it is on a separate network, so its container name does not
+# resolve here. Compose maps host.docker.internal to that gateway.
+# Enabling it makes the server refuse to boot without CORTEX_API_KEY, so a local `serve` needs the
 # key in the environment (the compose file forwards it).
 [memory]
 enabled = true
-endpoint = "http://cortexdb:3141"
+endpoint = "http://host.docker.internal:3141"
 allow_private_http = true
 # The engine's own default answer tier is `reasoning`, measured at a minute
 # per grounded answer — longer than a review waits. `flash` answered the
