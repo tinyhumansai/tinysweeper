@@ -191,4 +191,4 @@ tinychannels = { path = "vendor/openhuman/vendor/tinychannels" }
 
 [package.metadata.openhuman]
 repository = "https://github.com/tinyhumansai/openhuman"
-rev = "56216969aa9bb135e33a114a115a95ee9a6a7d59"
+rev = "eb749c13d8a53364b5dc51f84f33a37138fe7c5a"
