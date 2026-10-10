@@ -66,6 +66,11 @@ known.
 
 ## The output ceiling, and what happens when an answer hits it
 
+`models.reasoning_effort = "gateway"` omits provider-specific reasoning controls.
+Use it with a relay that chooses the protocol and reasoning policy for each
+route; `off` still explicitly disables reasoning, and other effort levels are
+forwarded as before.
+
 `models.max_tokens` is a ceiling on *generated* tokens, and the hidden reasoning
 channel is billed against the same allowance. Two failures follow from that, and
 they look nothing alike:

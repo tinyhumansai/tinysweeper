@@ -57,13 +57,14 @@ impl std::fmt::Debug for GatewayModel {
     }
 }
 
-/// The `reasoning` block sent with every request.
+/// Provider-specific reasoning controls, or an empty object for a relay policy.
 ///
 /// `"off"` disables it outright rather than asking for the lowest effort: a
 /// model that must think is better served by a deployment that says so, and
 /// "off" is the setting that rescues one whose reasoning eats the answer.
 fn reasoning_options(effort: &str) -> serde_json::Value {
     match effort.trim() {
+        "gateway" => json!({}),
         "off" | "" => json!({ "reasoning": { "enabled": false } }),
         effort => json!({ "reasoning": { "effort": effort } }),
     }
