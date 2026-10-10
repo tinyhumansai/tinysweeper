@@ -40,7 +40,10 @@ use tokio::sync::OnceCell;
 use crate::error::Result;
 use crate::forge::types::RepoId;
 use crate::ports::forge::ForgeRead;
-use crate::ports::tree::{Found, Lookup, TreeReader, sensitive_path_refusal, slice_lines};
+use crate::ports::tree::{
+    Found, Hit, Lookup, TreeQuery, TreeReader, exploration_paths, sensitive_path_refusal,
+    slice_lines, visible_exploration_path,
+};
 
 /// One submodule the superproject declares.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,6 +209,84 @@ impl<'a> ForgeTree<'a> {
 
 #[async_trait]
 impl TreeReader for ForgeTree<'_> {
+    async fn explore(&self, query: &TreeQuery) -> Result<Found> {
+        if !query.valid() {
+            return Ok(Found::Unavailable {
+                reason: "invalid repository query".into(),
+            });
+        }
+        match query {
+            TreeQuery::List { path, limit } => {
+                let listing = self.forge.tree_paths(&self.repo, &self.sha).await?;
+                Ok(exploration_paths(
+                    listing.paths,
+                    path,
+                    *limit,
+                    listing.truncated,
+                ))
+            }
+            TreeQuery::Symbol { symbol, limit } => {
+                let listing = self.forge.tree_paths(&self.repo, &self.sha).await?;
+                let mut paths: Vec<_> = listing
+                    .paths
+                    .into_iter()
+                    .filter(|path| visible_exploration_path(path))
+                    .collect();
+                paths.sort();
+                // Forge-only exploration must not silently issue one HTTP read
+                // for every file in a large repository. Checkout search is broader.
+                let mut truncated = listing.truncated || paths.len() > 32;
+                let mut hits = Vec::new();
+                'files: for path in paths.into_iter().take(32) {
+                    let Read::Content(content) = self.read(&path).await? else {
+                        continue;
+                    };
+                    // Scrub the complete fetched file before selecting hits so
+                    // a symbol inside PEM material cannot omit its marker context.
+                    let safe = crate::evidence::redact::scrub_rendered(&content);
+                    for (line, text) in safe.lines().enumerate() {
+                        if text.contains(symbol) {
+                            if hits.len()
+                                >= (*limit as usize).min(crate::ports::tree::MAX_SEARCH_HITS)
+                            {
+                                truncated = true;
+                                break 'files;
+                            }
+                            hits.push(Hit {
+                                path: path.clone(),
+                                line: u32::try_from(line + 1).unwrap_or(u32::MAX),
+                                text: text.to_owned(),
+                            });
+                        }
+                    }
+                }
+                Ok(Found::Hits {
+                    hits,
+                    truncated,
+                    skipped: Vec::new(),
+                })
+            }
+            TreeQuery::History {
+                commit,
+                path,
+                start,
+                end,
+            } => {
+                if !visible_exploration_path(path) {
+                    return Ok(sensitive_path_refusal());
+                }
+                Ok(match self.forge.file_at(&self.repo, path, commit).await? {
+                    Some(content) => slice_lines(
+                        &crate::evidence::redact::scrub_rendered(&content),
+                        *start,
+                        *end,
+                    ),
+                    None => Found::NotFound,
+                })
+            }
+        }
+    }
+
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
         match lookup {
             Lookup::Read { path, start, end } => {
@@ -453,5 +534,62 @@ mod tests {
             matches!(found, Found::Text { .. }),
             "listed, so read: {found:?}"
         );
+    }
+    #[tokio::test]
+    async fn exploration_reads_snapshot_symbols_and_immutable_history_without_sensitive_paths() {
+        let old = "a".repeat(40);
+        let secret = format!("AKIA{}", "IOSFODNN7EXAMPLE");
+        let mut state = MockState::default();
+        state.set_tree("head", &["src/a.rs", ".env"]);
+        state.set_file(
+            "head",
+            "src/a.rs",
+            &format!("pub fn cursor() {{}}\nconst KEY: &str = \"{secret}\";"),
+        );
+        state.set_file("head", ".env", "cursor PASSWORD=hidden");
+        state.set_file(&old, "src/a.rs", &format!("old cursor {secret}"));
+        let forge = MockForge::with_state(state);
+        let tree = ForgeTree::new(&forge, repo(), "head", "github.com");
+        let list = tree
+            .explore(&TreeQuery::List {
+                path: ".".into(),
+                limit: 10,
+            })
+            .await
+            .unwrap();
+        assert!(
+            matches!(list, Found::Hits { hits, .. } if hits.len() == 1 && hits[0].path == "src/a.rs")
+        );
+        let symbols = tree
+            .explore(&TreeQuery::Symbol {
+                symbol: "cursor".into(),
+                limit: 10,
+            })
+            .await
+            .unwrap();
+        assert!(
+            matches!(symbols, Found::Hits { hits, .. } if hits.len() == 1 && hits[0].text == "pub fn cursor() {}")
+        );
+        let history = tree
+            .explore(&TreeQuery::History {
+                commit: old,
+                path: "src/a.rs".into(),
+                start: 1,
+                end: 1,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(&history, Found::Text { text, .. } if text.contains("old cursor")));
+        assert!(!format!("{history:?}").contains(&secret));
+        let invalid = tree
+            .explore(&TreeQuery::History {
+                commit: "main".into(),
+                path: "src/a.rs".into(),
+                start: 1,
+                end: 1,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(invalid, Found::Unavailable { .. }));
     }
 }
