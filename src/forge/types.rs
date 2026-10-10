@@ -487,6 +487,19 @@ impl ReviewEvent {
     }
 }
 
+/// Tinysweeper's own standing verdict and the commit it actually reviewed.
+///
+/// Later advisory comments do not replace a decisive verdict's commit. Missing
+/// commit metadata remains unknown rather than inheriting the current PR head.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnReview {
+    /// The standing verdict, or an advisory comment when no verdict stands.
+    pub event: ReviewEvent,
+    /// The commit attached to that review by the forge, when available.
+    #[serde(default)]
+    pub head_sha: Option<String>,
+}
+
 /// One review someone left on a pull request.
 ///
 /// Reported in the order the reviews were submitted, so the caller can fold

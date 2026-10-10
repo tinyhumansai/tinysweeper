@@ -14,8 +14,8 @@ use crate::error::{Error, Result};
 use crate::evidence::diff::truncate_patch;
 use crate::forge::types::{
     ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, FileStatus, Issue, IssueComment,
-    MAX_CHECK_IMAGES, PullRequest, Remark, RemarkKind, RepoId, ReviewComment, ReviewEvent,
-    ReviewThread, ReviewVerdict, ThreadComment, TreeListing,
+    MAX_CHECK_IMAGES, OwnReview, PullRequest, Remark, RemarkKind, RepoId, ReviewComment,
+    ReviewEvent, ReviewThread, ReviewVerdict, ThreadComment, TreeListing,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -1604,7 +1604,7 @@ impl ForgeRead for GitHubRead {
         Ok(resolve_write_access(parsed, &write_access))
     }
 
-    async fn own_review_state(&self, repo: &RepoId, number: u64) -> Result<Option<ReviewEvent>> {
+    async fn own_review_state(&self, repo: &RepoId, number: u64) -> Result<Option<OwnReview>> {
         let reviews = all_reviews_raw(&self.client, repo, number).await?;
         Ok(own_review_state_of(reviews.iter()))
     }
@@ -2067,32 +2067,35 @@ impl ForgeWrite for GitHubWrite {
 /// a comment count, as "we have reviewed this before".
 fn own_review_state_of<'a>(
     reviews: impl Iterator<Item = &'a serde_json::Value>,
-) -> Option<ReviewEvent> {
+) -> Option<OwnReview> {
     let mut last_verdict = None;
-    let mut commented = false;
+    let mut last_comment = None;
     for review in reviews.filter(|r| {
-        // Exact rather than `starts_with`, which would have counted a review
-        // left by an account called `tinysweeper-anything` as our own. See
-        // `findings::prior::is_own_login`.
+        // Trust only our exact app identity, never a lookalike prefix.
         let login = r["user"]["login"].as_str().unwrap_or_default();
         crate::findings::prior::is_own_login(login)
     }) {
+        // GitHub attaches the reviewed commit to this same response. Never
+        // substitute the PR's current head or a later comment's commit.
+        let metadata = |event| OwnReview {
+            event,
+            head_sha: review["commit_id"]
+                .as_str()
+                .filter(|head| !head.trim().is_empty())
+                .map(str::to_owned),
+        };
         match review["state"].as_str() {
-            Some("CHANGES_REQUESTED") => last_verdict = Some(ReviewEvent::RequestChanges),
-            Some("APPROVED") => last_verdict = Some(ReviewEvent::Approve),
-            // A dismissed review — by a human, or by us withdrawing an
-            // approval for a push nobody answered — is no longer a verdict,
-            // and reading it as one would stop the next clean push from
-            // approving: `apply` skips an approval it believes already stands.
+            Some("CHANGES_REQUESTED") => last_verdict = Some(metadata(ReviewEvent::RequestChanges)),
+            Some("APPROVED") => last_verdict = Some(metadata(ReviewEvent::Approve)),
             Some("DISMISSED") => {
                 last_verdict = None;
-                commented = true;
+                last_comment = Some(metadata(ReviewEvent::Comment));
             }
-            Some("COMMENTED") => commented = true,
+            Some("COMMENTED") => last_comment = Some(metadata(ReviewEvent::Comment)),
             _ => {}
         }
     }
-    last_verdict.or(commented.then_some(ReviewEvent::Comment))
+    last_verdict.or(last_comment)
 }
 
 /// The id of our own approval that is currently in force, from reviews
@@ -2485,19 +2488,19 @@ mod tests {
         let own = |state: &str| serde_json::json!({ "user": { "login": "tinysweeper[bot]" }, "state": state });
         let reviews = [own("CHANGES_REQUESTED"), own("COMMENTED")];
         assert_eq!(
-            own_review_state_of(reviews.iter()),
+            own_review_state_of(reviews.iter()).map(|review| review.event),
             Some(ReviewEvent::RequestChanges)
         );
 
         let cleared = [own("CHANGES_REQUESTED"), own("APPROVED"), own("COMMENTED")];
         assert_eq!(
-            own_review_state_of(cleared.iter()),
+            own_review_state_of(cleared.iter()).map(|review| review.event),
             Some(ReviewEvent::Approve)
         );
 
         let only_comments = [own("COMMENTED")];
         assert_eq!(
-            own_review_state_of(only_comments.iter()),
+            own_review_state_of(only_comments.iter()).map(|review| review.event),
             Some(ReviewEvent::Comment)
         );
 
@@ -2505,13 +2508,46 @@ mod tests {
         // push approves rather than believing an approval stands.
         let withdrawn = [own("APPROVED"), own("DISMISSED"), own("COMMENTED")];
         assert_eq!(
-            own_review_state_of(withdrawn.iter()),
+            own_review_state_of(withdrawn.iter()).map(|review| review.event),
             Some(ReviewEvent::Comment)
         );
 
         let theirs =
             [serde_json::json!({ "user": { "login": "someone" }, "state": "CHANGES_REQUESTED" })];
-        assert_eq!(own_review_state_of(theirs.iter()), None);
+        assert_eq!(
+            own_review_state_of(theirs.iter()).map(|review| review.event),
+            None
+        );
+    }
+
+    #[test]
+    fn own_review_metadata_keeps_the_verdict_commit_after_later_comments() {
+        let reviews = [
+            serde_json::json!({"user":{"login":"tinysweeper[bot]"},
+                "state":"APPROVED","commit_id":"reviewed-head"}),
+            serde_json::json!({"user":{"login":"tinysweeper[bot]"},
+                "state":"COMMENTED","commit_id":"later-head"}),
+        ];
+        let metadata = own_review_state_of(reviews.iter()).expect("our approval stands");
+        assert_eq!(metadata.head_sha.as_deref(), Some("reviewed-head"));
+        assert_eq!(metadata.event, ReviewEvent::Approve);
+    }
+
+    #[test]
+    fn missing_or_malformed_review_commits_remain_unknown() {
+        for commit in [
+            serde_json::Value::Null,
+            serde_json::json!(42),
+            serde_json::json!(""),
+        ] {
+            let reviews = [serde_json::json!({"user":{"login":"tinysweeper[bot]"},
+                "state":"APPROVED","commit_id":commit})];
+            let own = own_review_state_of(reviews.iter()).expect("the verdict remains known");
+            assert_eq!(own.event, ReviewEvent::Approve);
+            assert_eq!(own.head_sha, None);
+        }
+        let reviews = [serde_json::json!({"user":{"login":"tinysweeper[bot]"},"state":"APPROVED"})];
+        assert_eq!(own_review_state_of(reviews.iter()).unwrap().head_sha, None);
     }
 
     #[test]
