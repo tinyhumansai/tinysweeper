@@ -23,6 +23,7 @@ use crate::forge::{PullRequest, RepoId};
 use crate::index::mongo::MongoIndex;
 use crate::ports::forge::ForgeRead as _;
 use crate::ports::knowledge::KnowledgeStore;
+use crate::ports::model_factory::ModelFactory;
 use crate::pr_triage::Report as PrTriageReport;
 use crate::server::admin::{self, AdminAuth};
 use crate::server::auth::AppAuth;
@@ -33,6 +34,7 @@ use crate::server::mcp;
 use crate::server::memory::{
     BackfillStart, BackfillStatus, MemoryBackend, ingest_in_background, remember_in_background,
 };
+use crate::server::model::{GatewayModelFactory, ResolvedModels};
 use crate::server::preview::{
     self, FinishReply, FinishRequest, Previews, StartReply, StartRequest,
     StepReply as PreviewStepReply,
@@ -156,6 +158,8 @@ pub struct ServerConfig {
 struct AppState {
     config: Arc<ServerConfig>,
     store: Store,
+    /// Resolved once at boot; clones share provider/runtime state across workers.
+    models: ResolvedModels,
     /// Curated knowledge documents. `None` when no retrieval database is
     /// reachable: the review still runs, without pinned context.
     knowledge: Option<Arc<dyn KnowledgeStore>>,
@@ -194,7 +198,21 @@ struct AppState {
 
 /// Run the server until the process is stopped.
 pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<()> {
+    serve_with_model_factory(config, store, auth, Arc::new(GatewayModelFactory)).await
+}
+
+/// Run with host-supplied model construction, resolving shared adapters at startup.
+///
+/// Factory errors refuse startup before the listener or background workers exist.
+/// The factory receives only deployment model configuration, never forge credentials.
+pub async fn serve_with_model_factory(
+    config: ServerConfig,
+    store: Store,
+    auth: AppAuth,
+    factory: Arc<dyn ModelFactory>,
+) -> Result<()> {
     let bind = config.bind.clone();
+    let models = ResolvedModels::resolve(factory.as_ref(), &config.config).await?;
 
     // The boot assertion. `$vectorSearch` and `$rankFusion` are stages a stock
     // `mongo:` image does not have, and an unsupported stage fails when the
@@ -254,6 +272,7 @@ pub async fn serve(config: ServerConfig, store: Store, auth: AppAuth) -> Result<
     let state = AppState {
         config: Arc::new(config),
         store: store.clone(),
+        models,
         knowledge: knowledge.clone(),
         auth: Arc::new(auth),
         permits: Arc::new(Semaphore::new(MAX_CONCURRENT_REVIEWS)),
@@ -992,9 +1011,7 @@ async fn triage_and_apply(
 ) -> Result<crate::issues::TriagePlan> {
     let read_token = state.auth.installation_token(installation).await?;
     let forge = crate::forge::github::GitHubRead::new(&read_token)?;
-    let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
-        &state.config.config.models,
-    )?);
+    let model = state.models.text();
 
     // The model runs against a read-only handle; the write token below is
     // minted only after it has answered. Same boundary as a review.
@@ -2480,9 +2497,7 @@ async fn run_lanes(
     read_token: &str,
     run: &Run,
 ) -> Result<(Config, crate::app::Proposal)> {
-    let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
-        &state.config.config.models,
-    )?);
+    let model = state.models.text();
 
     // The model runs against a read-only handle. The write token is minted by
     // the caller, after this returns — same boundary as the workflow, same
@@ -2682,9 +2697,7 @@ impl Previews for PreviewDispatch {
 
         let files = forge.changed_files(&repo, request.pull_request).await?;
         let diffs = crate::evidence::diff::parse_changed_files(&files);
-        let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
-            &effective.models,
-        )?);
+        let model = self.state.models.text();
         let plan = crate::preview::plan::plan(
             &crate::preview::plan::PlanInputs {
                 diffs: &diffs,
@@ -2797,9 +2810,7 @@ impl Previews for PreviewDispatch {
                 spend: Default::default(),
             }
         } else {
-            let model = Arc::new(crate::harness::openrouter::GatewayModel::from_config(
-                &config.models,
-            )?);
+            let model = self.state.models.text();
             crate::preview::step::next(
                 &crate::preview::step::StepContext {
                     flow: &flow,
@@ -2862,23 +2873,7 @@ impl Previews for PreviewDispatch {
                 .iter()
                 .map(|(id, state)| (id.clone(), state.clone()))
                 .collect();
-            let (model, model_id, vision): (Arc<dyn crate::ports::model::Model>, &str, bool) =
-                match config.model_for_vision() {
-                    Some(vision) => (
-                        Arc::new(crate::harness::openrouter::GatewayModel::for_vision(
-                            &config.models,
-                        )?),
-                        vision,
-                        true,
-                    ),
-                    None => (
-                        Arc::new(crate::harness::openrouter::GatewayModel::from_config(
-                            &config.models,
-                        )?),
-                        config.model_for_workload(crate::config::types::Workload::Preview),
-                        false,
-                    ),
-                };
+            let (model, model_id, vision) = self.state.models.caption(config);
             let spend = crate::preview::caption::caption(
                 &mut gallery,
                 &crate::preview::caption::CaptionInputs {
