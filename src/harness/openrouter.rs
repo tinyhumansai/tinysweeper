@@ -341,11 +341,19 @@ impl GatewayModel {
             completion = completion.max_tokens(cap);
         }
 
-        let response = self
-            .completer()
-            .complete(completion)
-            .await
-            .map_err(|err| Error::Model(format!("{model}: {err}")))?;
+        let response = match self.completer().complete(completion).await {
+            Ok(response) => response,
+            Err(openhuman_embed::CoreError::StructuredOutput { failure, .. })
+                if failure.reason == openhuman_embed::structured::StructuredFailureReason::Truncated =>
+            {
+                let totals = failure.usage.unwrap_or_default();
+                return Ok(CallOutcome::Truncated {
+                    output_tokens: totals.output_tokens,
+                    reasoning_tokens: totals.reasoning_tokens,
+                });
+            }
+            Err(error) => return Err(Error::Model(format!("{model}: {error}"))),
+        };
 
         let totals = response.usage.clone().unwrap_or_default();
         let finish_reason = response.finish_reason.clone().unwrap_or_default();
