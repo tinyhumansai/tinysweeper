@@ -44,6 +44,9 @@ Flag any widening of `permissions`, any unpinned third-party action, and any
 step that interpolates untrusted context into a shell.
 """
 
+# Embed requires TLS for bearer credentials outside loopback. The private
+# nginx listener on port 7443 uses the existing server certificate; Compose
+# resolves its certificate hostname to the Docker host gateway.
 # Every model call goes through this box's LLM ladder, not to OpenRouter
 # directly. The ladder (`llm-ladder-router`, config in the workspace repo's
 # `ladder/config.toml`, installed by `ladder-up`) prices each rung against the
@@ -68,7 +71,7 @@ step that interpolates untrusted context into a shell.
 # "unpinned" call to the ladder is the same call.
 [models]
 gateway = "ladder"
-base_url = "http://host.docker.internal:6969/v1"
+base_url = "https://sweeper.tinyhumans.ai:7443/v1"
 api_key_env = "LADDER_API_KEY"
 scan = "flash"
 flash = "flash"
@@ -116,7 +119,7 @@ provider = "ladder"
 model = "vectors-oai3"
 dimensions = 1024
 api_key_env = "LADDER_API_KEY"
-base_url = "http://host.docker.internal:6969/v1/embeddings"
+base_url = "https://sweeper.tinyhumans.ai:7443/v1/embeddings"
 
 # The vendored libraries the reviewed repositories call into. A review may
 # read these submodules and the indexer fetches them; anything else named in
