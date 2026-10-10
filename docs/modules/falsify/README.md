@@ -65,7 +65,7 @@ dropped, and a claim it cannot disprove reaches the author.
 
 ## Which lanes run it
 
-`critique`, and `commits`. The `commits` lane was added after issue #47, where
+`critique`, `security`, and `commits`. The `commits` lane was added after issue #47, where
 it read a loaded phrase in a commit subject and reported a privilege escalation
 that the commit's patch plainly did not make — a claim the evidence disproves,
 which is precisely what this pass is for. Its "diff" there is the rendered
@@ -75,6 +75,11 @@ than rejected for being absent from a patch.
 The pass runs on the lane's **model** findings only. Scanner findings are merged
 in afterwards and are never shown to the filter: a committed key found by a
 regular expression is not up for a model's opinion.
+
+Security filters strictly anchored model proposals from both the initial review
+and adaptive coverage passes, with the repository evidence those reviewers
+looked up. A coverage pass whose new proposals are all disproved stops rather
+than unlocking another pass. Filter errors still keep every model proposal.
 
 ## The summary has to agree with the verdict
 
@@ -91,12 +96,16 @@ replaces the prose with the rejection reasons whenever nothing survived —
 they say more than the discarded prose did, and they cannot contradict the
 verdict. Covered by `a_summary_never_asserts_a_bug_the_falsifier_removed`.
 
+Security replaces its initial prose whenever any proposal is rejected, including
+when other proposals survive. The replacement states only the surviving model
+finding count; scanner findings remain independent and are merged afterwards.
+
 ## Cost
 
-One call per file for a lane that fans out, otherwise one call per lane, on the
+One call per nonempty proposal batch, including new coverage proposals, on the
 cheap tier `Config::model_for_workload(Workload::Falsify)` resolves to, skipped entirely when the lane
-produced no findings. It sees the rendered diff and the findings, and nothing
-else of the run: no repository policy, no prior findings, no pull request
+produced no findings. It sees the rendered diff, the findings, and repository
+evidence the reviewer looked up: no repository policy, no prior findings, no pull request
 description. Both inputs are fenced with `harness::prompt::push_fenced` — the
 lane model read attacker-controlled text before writing those titles, so a
 finding body is no more trustworthy than the diff that produced it.
