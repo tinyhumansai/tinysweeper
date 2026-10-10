@@ -514,13 +514,15 @@ async fn queued_completions_still_stop_before_dispatching_past_the_hard_budget()
         model.complete(request("deep")),
         model.complete(request("deep")),
     );
-    let total = first.expect("first call fits").usage.cost_usd
-        + second
-            .expect("second call fits after settlement")
-            .usage
-            .cost_usd;
+    let outcomes = [first, second, third];
+    assert_eq!(outcomes.iter().filter(|result| result.is_ok()).count(), 2);
+    assert_eq!(outcomes.iter().filter(|result| result.is_err()).count(), 1);
+    let total: f64 = outcomes
+        .into_iter()
+        .filter_map(Result::ok)
+        .map(|response| response.usage.cost_usd)
+        .sum();
     assert!((total - 0.8).abs() < 1e-12);
-    assert!(third.is_err(), "remaining $0.20 cannot admit a $0.60 bound");
     assert_eq!(
         gateway.requests().len(),
         2,
@@ -644,4 +646,58 @@ async fn canceling_a_stalled_call_is_terminal_and_releases_paid_admission() {
         "cancellation preserves the unknown $0.60 charge"
     );
     assert_eq!(gateway.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn fitting_paid_calls_dispatch_together_while_excess_capacity_waits() {
+    let (gateway, replies) = FakeGateway::start_paused(vec![
+        Reply::completion("deep", ANSWER, "stop", usage()),
+        Reply::completion("deep", ANSWER, "stop", usage()),
+        Reply::completion("deep", ANSWER, "stop", usage()),
+    ])
+    .await;
+    let mut models = models(&gateway.base_url);
+    models.budget_prices.insert(
+        "deep".into(),
+        crate::config::types::BudgetPriceBound {
+            input: 0.0,
+            cached: 0.0,
+            output: 100.0,
+        },
+    );
+    let model = adapter(&models).scoped_budget(1.0).unwrap();
+    let mut tasks = Vec::new();
+    for _ in 0..3 {
+        let model = model.clone();
+        tasks.push(tokio::spawn(async move {
+            model.complete(request("deep")).await
+        }));
+    }
+    // Two $0.40 bounds fit. Neither response is available, so reaching two
+    // requests proves admission is per physical call rather than per ladder.
+    let fitting = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while gateway.requests().len() < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    if fitting.is_err() {
+        for task in &tasks {
+            task.abort();
+        }
+        replies.add_permits(3);
+    }
+    fitting.expect("both fitting reservations dispatch before either settles");
+    assert_eq!(
+        gateway.requests().len(),
+        2,
+        "third $0.40 bound cannot dispatch against outstanding $0.80"
+    );
+    replies.add_permits(3);
+    for task in tasks {
+        task.await
+            .unwrap()
+            .expect("affordable work completes after settlement");
+    }
+    assert_eq!(gateway.requests().len(), 3);
 }

@@ -34,7 +34,6 @@ use crate::ports::model::{
 #[derive(Clone)]
 pub struct GatewayModel {
     budget: Option<openhuman_embed::budget::Budget>,
-    budget_admission: Option<Arc<tokio::sync::Mutex<()>>>,
     budget_prices: std::collections::BTreeMap<String, crate::config::types::BudgetPriceBound>,
     agentic_reviewers: bool,
     api_key: String,
@@ -249,7 +248,6 @@ impl GatewayModel {
         Self {
             api_key,
             budget: None,
-            budget_admission: None,
             budget_prices: models.budget_prices.clone(),
             agentic_reviewers: models.agentic_reviewers,
             base_url: models.base_url.clone(),
@@ -363,10 +361,6 @@ impl GatewayModel {
     }
 
     async fn complete_ladder(&self, request: &ModelRequest) -> Result<ModelResponse> {
-        // Reserve only after the preceding paid call settles. Fan-out must not
-        // turn temporary worst-case reservations into a permanent refusal of
-        // cheap work. Dropping the future releases admission on cancellation.
-        let _admission = self.admit_paid_work().await;
         let completion = self.completion_request(request);
         let mut ladder = CompletionLadder::new(self.completion_rung(
             &request.model,
@@ -494,14 +488,6 @@ impl GatewayModel {
         })
     }
 
-    /// Serial admission for one monetary ledger; unscoped calls do not queue.
-    async fn admit_paid_work(&self) -> Option<tokio::sync::MutexGuard<'_, ()>> {
-        match &self.budget_admission {
-            Some(admission) => Some(admission.lock().await),
-            None => None,
-        }
-    }
-
     /// Run one isolated reviewer on its effective model route.
     async fn agentic_attempt(
         &self,
@@ -610,8 +596,7 @@ impl Model for GatewayModel {
     fn scoped_budget(&self, budget_usd: f64) -> Option<Arc<dyn Model>> {
         let mut model = self.clone();
         model.budget = Some(crate::harness::budget::ledger(budget_usd));
-        // Clones share a ledger and its queue; a fresh scope shares neither.
-        model.budget_admission = Some(Arc::new(tokio::sync::Mutex::new(())));
+        // Clones share atomic reservation capacity; a fresh scope is isolated.
         Some(Arc::new(model))
     }
 
@@ -629,10 +614,8 @@ impl Model for GatewayModel {
         {
             return self.complete(request).await;
         }
-        // Acquire after the complete fallback above: acquiring twice would
-        // deadlock non-agentic reviews. Hold admission across tools and route
-        // fallbacks so every paid turn belongs to this reviewer alone.
-        let _admission = self.admit_paid_work().await;
+        // Paid turns share atomic reservation capacity through their child
+        // ledgers; tool allowance remains scoped to this review and its routes.
         let lookup_budget = crate::harness::agentic::LookupBudget::new(policy);
         let mut last = None;
         let mut prior = Usage::default();
@@ -749,7 +732,6 @@ mod tests {
         );
         let mut model = GatewayModel::with_key(&config, "fixture".into());
         model.budget = Some(crate::harness::budget::ledger(1.0));
-        model.budget_admission = Some(Arc::new(tokio::sync::Mutex::new(())));
         let request = ModelRequest {
             model: "b".into(),
             messages: vec![
@@ -766,8 +748,13 @@ mod tests {
     #[tokio::test]
     async fn cancelled_queued_completion_does_not_hold_admission_or_dispatch() {
         let (model, gateway, request) = admission_fixture().await;
-        let admission = model.budget_admission.as_ref().unwrap().clone();
-        let held = admission.lock().await;
+        let ledger = model.budget.as_ref().unwrap();
+        let held = ledger
+            .reserve(openhuman_embed::budget::Spend {
+                tokens: 0,
+                cost_micros: 1_000_000,
+            })
+            .unwrap();
         let waiting_model = model.clone();
         let waiting_request = request.clone();
         let waiting = tokio::spawn(async move { waiting_model.complete(waiting_request).await });
@@ -776,7 +763,17 @@ mod tests {
         waiting.abort();
         assert!(waiting.await.unwrap_err().is_cancelled());
         assert!(gateway.requests().is_empty());
-        drop(held);
+        assert!(
+            ledger.refusal().is_none(),
+            "temporary waiting must not poison the shared ledger"
+        );
+        assert_eq!(ledger.snapshot().reserved.cost_micros, 1_000_000);
+        assert_eq!(
+            ledger.snapshot().spent.cost_micros,
+            0,
+            "canceled waiter charges nothing"
+        );
+        held.settle(Default::default());
         let tree = crate::ports::tree::MockTree::from_files([("src/lib.rs", "pub fn f() {}")]);
         let policy = crate::config::types::LookupPolicy::default();
         let response = tokio::time::timeout(
@@ -784,7 +781,7 @@ mod tests {
             model.review(request, &tree, &policy),
         )
         .await
-        .expect("non-agentic review acquires admission exactly once")
+        .expect("non-agentic review waits only for physical capacity")
         .expect("next completion succeeds");
         assert_eq!(response.value["summary"], "checked");
         assert_eq!(gateway.requests().len(), 1);
@@ -793,13 +790,20 @@ mod tests {
     #[tokio::test]
     async fn a_fresh_budget_scope_does_not_wait_for_its_parents_admission() {
         let (model, gateway, request) = admission_fixture().await;
-        let admission = model.budget_admission.as_ref().unwrap().clone();
-        let _held = admission.lock().await;
+        let _held = model
+            .budget
+            .as_ref()
+            .unwrap()
+            .reserve(openhuman_embed::budget::Spend {
+                tokens: 0,
+                cost_micros: 1_000_000,
+            })
+            .unwrap();
         let fresh = model.scoped_budget(1.0).unwrap();
         let response =
             tokio::time::timeout(std::time::Duration::from_secs(5), fresh.complete(request))
                 .await
-                .expect("fresh scope has its own queue")
+                .expect("fresh scope has independent reservation capacity")
                 .expect("completion succeeds");
         assert_eq!(response.value["summary"], "checked");
         assert_eq!(gateway.requests().len(), 1);
@@ -979,7 +983,6 @@ mod tests {
         }];
         let gateway = GatewayModel {
             budget: None,
-            budget_admission: None,
             budget_prices: Default::default(),
             agentic_reviewers: false,
             api_key: "unused".into(),
@@ -1026,7 +1029,6 @@ mod tests {
         }];
         let mut gateway = GatewayModel {
             budget: None,
-            budget_admission: None,
             budget_prices: Default::default(),
             agentic_reviewers: false,
             api_key: "unused".into(),
@@ -1184,7 +1186,6 @@ mod tests {
             agentic_reviewers: false,
             request_timeout_ms: 120_000,
             budget: None,
-            budget_admission: None,
             budget_prices: Default::default(),
         };
         let rendered = format!("{model:?}");
@@ -1238,7 +1239,6 @@ mod tests {
         // error, then builds the gateway directly for the positive case.
         let gateway = GatewayModel {
             budget: None,
-            budget_admission: None,
             budget_prices: Default::default(),
             agentic_reviewers: false,
             api_key: "unused".into(),
