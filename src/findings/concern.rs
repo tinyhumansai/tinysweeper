@@ -229,27 +229,31 @@ fn numbers(title: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// Whether a title negates itself: any negation word, before stopwords are
-/// dropped from the word sets.
+/// Compose explicit negation with the direction of a negative imperative.
+///
+/// "Disable validation" and "Do not disable validation" ask for opposite
+/// changes. Repeated words within either category do not invert the direction
+/// again, and contractions are read whole rather than counting their fragments.
 fn negates(title: &str) -> bool {
-    // "Can't" splits into "can" and "t", so contractions are read whole first.
     let lower = title.to_ascii_lowercase().replace('\u{2019}', "'");
-    lower.contains("n't")
-        || title
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .any(|word| NEGATIONS.contains(&word.to_ascii_lowercase().as_str()))
+    let words: Vec<_> = lower
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '\'')
+        .collect();
+    let explicit = words
+        .iter()
+        .any(|word| word.ends_with("n't") || NEGATORS.contains(word));
+    let imperative = words.iter().any(|word| NEGATIVE_IMPERATIVES.contains(word));
+    explicit ^ imperative
 }
 
-/// Words that turn a request into its opposite: negators, and negative
-/// imperatives. "Avoid logging secrets" and "Reject empty values" ask for the
-/// opposite of "Allow logging secrets" and "Allow empty values", although the
-/// titles share their content words.
-const NEGATIONS: &[&str] = &[
-    "not", "no", "nor", "never", "neither", "cannot", "don", "doesn", "didn", "isn", "aren",
-    "wasn", "won", "shouldn", "wouldn", "couldn", "avoid", "avoids", "avoiding", "reject",
-    "rejects", "forbid", "forbids", "disable", "disables", "remove", "removes", "deny", "denies",
-    "block", "blocks", "prevent", "prevents", "ban", "bans", "skip", "skips", "drop", "drops",
-    "refuse", "refuses", "stop", "stops",
+/// Explicit negation, considered separately from the verb's direction.
+const NEGATORS: &[&str] = &["not", "no", "nor", "never", "neither", "cannot"];
+
+/// Verbs requesting removal, prevention or rejection rather than allowance.
+const NEGATIVE_IMPERATIVES: &[&str] = &[
+    "avoid", "avoids", "avoiding", "reject", "rejects", "forbid", "forbids", "disable", "disables",
+    "remove", "removes", "deny", "denies", "block", "blocks", "prevent", "prevents", "ban", "bans",
+    "skip", "skips", "drop", "drops", "refuse", "refuses", "stop", "stops",
 ];
 
 /// Size of the intersection over size of the union; zero for two empty sets.

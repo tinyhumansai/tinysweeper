@@ -1838,7 +1838,7 @@ fn group_co_located_findings(lanes: &mut [LaneProposal]) {
             ((distinct_source || both_unplaced) && co_located(&left.finding, &right.finding))
                 // One concern in different words, from any lane or pass —
                 // including one pass repeating itself. The thread stays
-                // lossless: every rationale is kept.
+                // lossless: every rationale stays in its lane summary.
                 || concerns[member].same_as(&concerns[index])
         };
         match clusters
@@ -1904,7 +1904,7 @@ fn group_co_located_findings(lanes: &mut [LaneProposal]) {
 /// Evidence that two lane observations belong in one conversation.
 ///
 /// Placed findings may be different bugs on the same statement; grouping is
-/// still lossless because both rationales remain in the thread. Unplaced
+/// still lossless because both rationales remain in their summaries. Unplaced
 /// findings have no positional evidence, so they require the same non-empty
 /// rule identifier.
 fn co_located(left: &Finding, right: &Finding) -> bool {
@@ -2575,8 +2575,11 @@ mod tests {
             .expect("the visibility concern survives");
         assert_eq!(visible.lane, LaneId::Security, "highest severity opens");
         assert_eq!(visible.confidence, 0.95, "and keeps the highest confidence");
-        assert!(visible.body.contains("Additional `tests` observation"));
-        assert!(visible.body.contains("Additional `e2e` observation"));
+        assert!(!visible.body.contains("Additional `tests` observation"));
+        assert!(!visible.body.contains("Additional `e2e` observation"));
+        assert_eq!(lanes[1].findings[0].title, visible.title);
+        assert!(lanes[1].findings[0].body.contains("hidden element"));
+        assert!(lanes[2].findings[0].body.contains("zero-size check"));
         assert_eq!(
             visible.aliases,
             vec!["2222222222222222", "3333333333333333"]
@@ -2594,7 +2597,7 @@ mod tests {
         let mut lanes = visible_and_helpers();
 
         group_co_located_findings(&mut lanes);
-        cap_proposal_findings(&mut lanes, 2);
+        cap_proposal_findings(&mut lanes, 2, &|_| true);
 
         let titles: Vec<&str> = published(&lanes)
             .iter()
@@ -2696,7 +2699,7 @@ mod tests {
     }
 
     #[test]
-    fn a_repeat_in_the_sibling_test_file_is_grouped_and_says_where() {
+    fn a_repeat_in_the_sibling_test_file_retains_its_own_summary_location() {
         let title = "Test the write-again-without-actor fallback the change promises";
         let mut source = grouped_finding(LaneId::Security, title, 154, "1111111111111111");
         source.path = "crates/core/src/config/schema/memory.rs".into();
@@ -2716,13 +2719,14 @@ mod tests {
 
         let published = published(&lanes);
         assert_eq!(published.len(), 1);
-        assert!(
-            published[0]
-                .body
-                .contains("crates/core/src/config/schema/memory\\_tests.rs:260"),
-            "{}",
-            published[0].body
+        assert_eq!(published[0].aliases, vec!["2222222222222222"]);
+        assert!(!published[0].body.contains("Raised at"));
+        assert!(lanes[1].findings[0].grouped);
+        assert_eq!(
+            lanes[1].findings[0].path,
+            "crates/core/src/config/schema/memory_tests.rs"
         );
+        assert_eq!(lanes[1].findings[0].line, Some(260));
     }
 
     #[test]
@@ -2765,7 +2769,9 @@ mod tests {
             .filter(|finding| !finding.grouped)
             .collect();
         assert_eq!(published.len(), 1);
-        assert!(published[0].body.contains("Second pass"));
+        assert!(!published[0].body.contains("Additional"));
+        assert_eq!(lanes[0].findings[1].title, "Second pass");
+        assert_eq!(lanes[0].findings[1].review_pass, 2);
         assert_eq!(published[0].aliases, vec!["1111111111111111"]);
     }
 
