@@ -117,7 +117,7 @@ Two honesty caveats, both deliberate:
   shipping a tokenizer per provider to price a call already made.
 - A model with no price on file costs zero and logs a warning, rather than being
   given an invented rate that would make a budget check meaningless. Same rule
-  as `harness::openrouter`.
+  as `harness::embed`.
 
 `Indexer::with_budget` stops at a batch boundary and reports
 `IndexReport::budget_exhausted`. It does not fail and does not discard what it

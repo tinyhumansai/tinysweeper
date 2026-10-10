@@ -336,7 +336,7 @@ struct UsageWire {
 impl UsageWire {
     /// What the gateway says it charged, in dollars, when it says so.
     ///
-    /// Surplus first, for the reason `harness::openrouter::gateway_cost`
+    /// Surplus first, for the reason `harness::embed::gateway_cost`
     /// gives: a seller there can relay an OpenRouter-shaped `cost: 0` beside
     /// the `buyer_cost_micro` Surplus actually bills. A negative or
     /// non-finite figure is disbelieved rather than credited to the budget.

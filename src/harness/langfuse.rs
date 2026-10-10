@@ -20,24 +20,13 @@ use serde_json::{Value, json};
 
 use openhuman_embed::complete::{CompletionObserver, CompletionTrace};
 
-/// How the exporter authenticates.
-#[derive(Clone)]
-enum Auth {
-    Basic {
-        public_key: String,
-        secret_key: String,
-    },
-    Bearer {
-        token: String,
-    },
-}
+use openhuman_embed::observe::langfuse::{LangfuseAuth as Auth, LangfuseClient};
 
 /// Sends each completion to Langfuse.
 #[derive(Clone)]
 pub struct LangfuseExporter {
-    client: reqwest::Client,
+    client: LangfuseClient,
     endpoint: String,
-    auth: Auth,
     environment: Option<String>,
 }
 
@@ -83,11 +72,11 @@ impl LangfuseExporter {
                 );
                 return None;
             };
-            return Some(Self::new(
+            return Self::new(
                 normalize(&proxy, "/telemetry/langfuse/ingestion"),
                 Auth::Bearer { token },
                 environment,
-            ));
+            );
         }
         let names = [
             "LANGFUSE_BASE_URL",
@@ -96,14 +85,14 @@ impl LangfuseExporter {
         ];
         let values: Vec<Option<String>> = names.iter().map(|name| env(name)).collect();
         match values.as_slice() {
-            [Some(base), Some(public_key), Some(secret_key)] => Some(Self::new(
+            [Some(base), Some(public_key), Some(secret_key)] => Self::new(
                 normalize(base, "/api/public/ingestion"),
                 Auth::Basic {
                     public_key: public_key.clone(),
                     secret_key: secret_key.clone(),
                 },
                 environment,
-            )),
+            ),
             _ if values.iter().any(Option::is_some) => {
                 tracing::warn!(
                     "Langfuse is partly configured (need LANGFUSE_BASE_URL, LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY); export is off"
@@ -114,34 +103,24 @@ impl LangfuseExporter {
         }
     }
 
-    fn new(endpoint: String, auth: Auth, environment: Option<String>) -> Self {
-        Self {
-            client: reqwest::Client::new(),
-            endpoint,
-            auth,
-            environment,
-        }
+    fn new(endpoint: String, auth: Auth, environment: Option<String>) -> Option<Self> {
+        let client = LangfuseClient::new(endpoint.clone(), auth).ok()?;
+        Some(Self { client, endpoint, environment })
     }
 
     async fn send(&self, payload: Value) {
-        let request = self.client.post(&self.endpoint).json(&payload);
-        let request = match &self.auth {
-            Auth::Basic {
-                public_key,
-                secret_key,
-            } => request.basic_auth(public_key, Some(secret_key)),
-            Auth::Bearer { token } => request.bearer_auth(token),
-        };
-        match request.send().await {
-            // 207 is Langfuse's per-item report; anything else non-2xx is a
-            // rejected batch.
-            Ok(response) if response.status().is_success() => {}
-            Ok(response) => {
-                tracing::warn!(status = %response.status(), "Langfuse rejected a model-call trace");
-            }
-            Err(err) => tracing::warn!(%err, "could not export model call to Langfuse"),
+        if self.client.send_batch(payload).await.is_err() {
+            tracing::warn!("could not export model trace to Langfuse");
         }
     }
+
+    pub(super) fn enqueue(&self, payload: Value) {
+        let exporter = self.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move { exporter.send(payload).await });
+        }
+    }
+
 }
 
 /// The ingestion batch for one completion: a trace and its generation.
@@ -156,20 +135,6 @@ pub(crate) fn ingestion_batch(
         .unwrap_or_default()
         .as_millis() as i64;
     let start_ms = end_ms - trace.latency.as_millis() as i64;
-    let iso = |ms: i64| {
-        let secs = ms.div_euclid(1000);
-        let millis = ms.rem_euclid(1000);
-        // RFC 3339 without a date crate: days from the epoch, then civil date.
-        let days = secs.div_euclid(86_400);
-        let rem = secs.rem_euclid(86_400);
-        let (y, m, d) = civil_from_days(days);
-        format!(
-            "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{millis:03}Z",
-            rem / 3600,
-            (rem % 3600) / 60,
-            rem % 60
-        )
-    };
     let request = trace.request;
     let (output, usage, model, level, status) = match trace.outcome {
         Ok(response) => (
@@ -235,6 +200,20 @@ pub(crate) fn ingestion_batch(
             {"id": format!("{trace_id}-gen"), "timestamp": iso(end_ms), "type": "generation-create", "body": generation},
         ]
     })
+}
+
+fn epoch_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default().as_millis() as i64
+}
+
+fn iso(ms: i64) -> String {
+    let secs = ms.div_euclid(1000);
+    let millis = ms.rem_euclid(1000);
+    let (year, month, day) = civil_from_days(secs.div_euclid(86_400));
+    let rem = secs.rem_euclid(86_400);
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{millis:03}Z",
+        rem / 3600, (rem % 3600) / 60, rem % 60)
 }
 
 /// Howard Hinnant's days-to-civil algorithm.
@@ -369,3 +348,6 @@ mod tests {
         assert_eq!(civil_from_days(19_782), (2024, 2, 29));
     }
 }
+
+#[path = "langfuse_turn.rs"]
+mod turns;

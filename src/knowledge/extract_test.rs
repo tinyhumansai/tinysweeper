@@ -534,7 +534,7 @@ async fn the_live_extractor_reads_our_own_agents_md() {
         .expect("the compiled defaults parse")
         .try_into()
         .expect("the compiled defaults deserialize");
-    let model = crate::harness::openrouter::GatewayModel::from_config(&config.models)
+    let model = crate::harness::embed::GatewayModel::from_config(&config.models)
         .expect("the gateway builds");
     let forge = forge_with("AGENTS.md", &own_agents_md());
 

@@ -2,10 +2,10 @@
 # Assert that the two places naming the OpenHuman commit agree, and that this
 # crate's `[patch]` tables still mirror OpenHuman's own.
 #
-# - `Cargo.toml` pins the git `openhuman-embed` dependency at a `rev`;
+# - `Cargo.toml` pins the OpenHuman source in package metadata;
 # - the `vendor/openhuman` submodule records a commit, which the `[patch]` in
 #   `Cargo.toml` actually builds against. (`Cargo.lock` cannot carry the rev:
-#   a patched package is locked as a path, with no source.)
+#   a path package is locked with no source.)
 #
 # The patch makes every build here use the submodule, so a rev that drifted from
 # it would be silently ignored locally and only bite whoever builds without the
@@ -21,29 +21,25 @@ fail() {
   exit 1
 }
 
-rev=$(sed -n 's/^openhuman-embed = { git = "https:\/\/github.com\/tinyhumansai\/openhuman", rev = "\([0-9a-f]*\)".*/\1/p' Cargo.toml)
+rev=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["metadata"]["openhuman"]["rev"])')
 [ -n "$rev" ] || fail "could not read the openhuman-embed rev from Cargo.toml"
 
 sub=$(git ls-tree HEAD vendor/openhuman | awk '{print $3}')
 [ -n "$sub" ] || fail "vendor/openhuman is not a submodule at HEAD"
 [ "$rev" = "$sub" ] || fail "Cargo.toml pins openhuman-embed at $rev but vendor/openhuman records $sub"
 
-# Every crate OpenHuman patches from the tinytools and tinyinference sources
-# must be patched here too (crates-io entries for features this crate does not
-# enable are deliberately left out; see the comment above the tables).
-patched_names() {
-  awk -v table="$2" '
-    /^\[patch/ { in_table = index($0, table) > 0; next }
-    /^\[/ { in_table = 0 }
-    in_table && /^[a-z0-9_-]+ = / { print $1 }
-  ' "$1" | sort
-}
-for table in 'tinyhumansai/tinytools' 'tinyhumansai/tinyinference'; do
-  theirs=$(patched_names vendor/openhuman/Cargo.toml "$table")
-  ours=$(patched_names Cargo.toml "$table")
-  [ "$theirs" = "$ours" ] || fail "the [patch] table for $table differs from vendor/openhuman/Cargo.toml:
-ours:   $(echo $ours)
-theirs: $(echo $theirs)"
-done
+# Compare every upstream patch, including optional feature dependencies.
+python3 - <<'CHECK'
+import pathlib
+import tomllib
+root = tomllib.loads(pathlib.Path("Cargo.toml").read_text())
+upstream = tomllib.loads(pathlib.Path("vendor/openhuman/Cargo.toml").read_text())
+for source, packages in upstream.get("patch", {}).items():
+    ours = root.get("patch", {}).get(source, {})
+    expected = {name: {"path": "vendor/openhuman/" + spec["path"]}
+                for name, spec in packages.items()}
+    if ours != expected:
+        raise SystemExit(f"assert-openhuman-pin: patch table differs: {source}")
+CHECK
 
 echo "assert-openhuman-pin: openhuman-embed $rev"

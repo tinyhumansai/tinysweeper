@@ -56,7 +56,7 @@ retrieval rather than a fault — into a startup error naming both keys.
 ## The real provider
 
 `ProviderEmbedder` is a thin adapter over the `EmbeddingModel`s OpenHuman re-exports, exactly
-as `harness::openrouter::GatewayModel` is over its completion provider: the
+as `harness::embed::GatewayModel` is over its completion provider: the
 harness owns the transport, the process-global rate limiter and the
 `Retry-After` backoff, and this crate owns the signature and the bill. Which
 provider is built comes from `[embeddings]` in the configuration — `voyage`,

@@ -2,7 +2,7 @@
 //!
 //! A thin adapter over the `EmbeddingModel`s OpenHuman re-exports
 //! (`openhuman_embed::embeddings`), exactly parallel to
-//! `crate::harness::openrouter::GatewayModel` over its completion provider: the
+//! `crate::harness::embed::GatewayModel` over its completion provider: the
 //! harness owns the transport, the rate limiter and the `Retry-After` backoff,
 //! and this file owns the two things tinysweeper cares about that the harness
 //! has no opinion on — the **signature** and the **bill**.
