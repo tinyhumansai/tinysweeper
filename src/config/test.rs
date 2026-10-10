@@ -1586,3 +1586,23 @@ fn agentic_reviewers_are_explicit_opt_in_and_require_strict_schemas() {
             .any(|problem| problem.contains("agentic_reviewers"))
     );
 }
+
+#[test]
+fn disabled_agentic_reviewers_preserve_serialized_baseline_configuration() {
+    let mut config = Config::default();
+    let default = serde_json::to_value(&config).unwrap();
+    assert!(default["models"].get("agentic_reviewers").is_none());
+    let default_toml = toml::to_string(&config).unwrap();
+    assert!(!default_toml.contains("agentic_reviewers"));
+    config.models.agentic_reviewers = true;
+    let enabled = serde_json::to_value(&config).unwrap();
+    assert_eq!(
+        enabled["models"]["agentic_reviewers"],
+        serde_json::json!(true)
+    );
+    assert!(
+        toml::to_string(&config)
+            .unwrap()
+            .contains("agentic_reviewers = true")
+    );
+}

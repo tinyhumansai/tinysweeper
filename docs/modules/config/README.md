@@ -135,3 +135,9 @@ result that fails validation all cost the repository its own settings and none
 of them cost it the review. Failing would hand any contributor a way to break
 the bot by committing one broken line. Validation is all-or-nothing — a
 half-applied override is a configuration no layer ever wrote.
+
+`models.agentic_reviewers` is an explicit opt-in, false by default. It requires
+`models.structured_output = "schema"` and uses the existing lookup-policy bounds.
+The disabled flag is omitted from serialized configuration to preserve existing
+evaluation digests. See [agentic reviewers](../harness/AGENTIC-REVIEWERS.md) before
+enabling it.

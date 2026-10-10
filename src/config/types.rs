@@ -11,6 +11,10 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// A lane: one agent, one narrow job, one GitHub check run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -769,7 +773,7 @@ pub struct Models {
     /// Optional, and `None` by default: the captions then describe a flow
     /// from its transcript alone, which is the honest degradation. Never a
     /// fallback for a text tier and never given one — see
-    /// `harness::openrouter::GatewayModel::for_vision` for why a vision call
+    /// `harness::embed::GatewayModel::for_vision` for why a vision call
     /// must not share the review ladder.
     pub vision: Option<String>,
     /// Which upstream providers the gateway may serve these models from.
@@ -804,6 +808,7 @@ pub struct Models {
     pub structured_output: StructuredOutput,
     /// Opt into read-only agent tool exploration for council reviewers.
     /// Disabled until scripted and live evaluation establish parity.
+    #[serde(skip_serializing_if = "is_false")]
     pub agentic_reviewers: bool,
     /// Hard USD ceiling for a single pull request's review.
     pub budget_usd_per_pr: f64,
