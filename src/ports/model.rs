@@ -2,7 +2,7 @@
 //!
 //! Lanes never talk to a provider SDK. They describe what they want — messages,
 //! a JSON schema the answer must satisfy, a token ceiling — and get back either
-//! a parsed value or an error. That keeps tinyagents (and its HTTP client) out
+//! a parsed value or an error. That keeps the harness (and its HTTP client) out
 //! of the default build, and it makes every lane testable against a canned
 //! response.
 //!
@@ -26,7 +26,7 @@ pub struct Message {
     ///
     /// Only ever populated on a [`Role::User`] message: the OpenAI-compatible
     /// wire format has no image part on a system or assistant message, and
-    /// tinyinference refuses to translate one there. Empty for every lane —
+    /// the OpenAI-compatible wire has no image part there. Empty for every lane —
     /// a review reads a diff, not a picture — and non-empty only for the UI
     /// preview's captions, which look at the screenshots they describe.
     pub images: Vec<String>,

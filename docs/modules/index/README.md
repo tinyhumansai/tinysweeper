@@ -14,7 +14,7 @@ changes", the knowledge base for "what did we already decide".
 | --- | --- |
 | `types.rs` | `Chunk`, `EmbeddedChunk`, `ScoredChunk`, `HybridQuery`, `EmbedSignature`, `GraphNode`, `GraphEdge`, `Neighbourhood`, `KnowledgeDoc`, `KnowledgeScope` |
 | `mock.rs` | `MockEmbedder`, `MockChunkIndex`, `MockGraphStore`, `MockKnowledgeStore` — always compiled |
-| `provider.rs` | `ProviderEmbedder` — the real embedder over tinyagents. Behind `harness` |
+| `provider.rs` | `ProviderEmbedder` — the real embedder over `openhuman_embed::embeddings`. Behind `harness` |
 | `mongo.rs` | `MongoIndex` and the four MongoDB adapters. Behind `serve` |
 
 The ports themselves are in `src/ports/{embed,index,graph,knowledge}.rs`.
@@ -45,7 +45,7 @@ trait for the same reason: an embedder that could not name itself would let a
 model swap go unnoticed.
 
 The provider-backed embedder has to make that correspondence hold against a
-second spelling of the same idea. tinyagents' `EmbeddingModel::signature()`
+second spelling of the same idea. the harness `EmbeddingModel::signature()`
 returns `provider=…;model=…;dims=…`; `EmbedSignature::harness_key()` is the same
 string, with a test asserting they are byte-identical, and
 `ProviderEmbedder::new` refuses to construct when the configured signature and
@@ -55,7 +55,7 @@ retrieval rather than a fault — into a startup error naming both keys.
 
 ## The real provider
 
-`ProviderEmbedder` is a thin adapter over tinyagents' `EmbeddingModel`, exactly
+`ProviderEmbedder` is a thin adapter over the `EmbeddingModel`s OpenHuman re-exports, exactly
 as `harness::openrouter::GatewayModel` is over its completion provider: the
 harness owns the transport, the process-global rate limiter and the
 `Retry-After` backoff, and this crate owns the signature and the bill. Which
@@ -188,10 +188,10 @@ report what they billed in the body. `ladder` is the box's own LLM ladder
 (`llm-ladder-router`), whose `vectors` ladder is a set of same-width rungs it
 fails over between; it has no default address, so `embeddings.base_url` must
 name its `/v1/embeddings` and validation refuses a blank one. Everything else
-goes through `index/provider.rs`, which wraps tinyagents' `EmbeddingModel` and
+goes through `index/provider.rs`, which wraps the harness `EmbeddingModel` and
 its Voyage / OpenAI / Cohere / Ollama adapters.
 
-The split exists for one reason: tinyagents' `EmbeddingModel::embed` returns a
+The split exists for one reason: the harness `EmbeddingModel::embed` returns a
 bare `Vec<Vec<f32>>`, and every adapter behind it decodes the response and
 discards the `usage` object. OpenRouter sends one carrying both `prompt_tokens`
 and the `cost` it charged, and indexing a repository is the largest token count

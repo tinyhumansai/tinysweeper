@@ -1,31 +1,39 @@
-# `flows` — lane orchestration as a graph
+# `flows` — how a lane's reviewers are asked
 
-Every model-calling lane runs as a [tinyflows] `WorkflowGraph` rather than as
-hand-written concurrency. This document is why, and what the shape buys.
-
-[tinyflows]: https://github.com/tinyhumansai/tinyflows
+Every model-calling lane asks its reviewers through `flows::runner`: one
+structured call per reviewer, all at once, under one shared budget. This
+document is why, and what the shape buys.
 
 ## The change in one line
 
-A lane's reviewers stopped running one after another. They run as a graph — all
-at once, with the budget enforced somewhere that does not require serialising
-them — and a reviewer may now ask the codebase a question instead of guessing.
+A lane's reviewers stopped running one after another. They run concurrently —
+with the budget enforced somewhere that does not require serialising them — and
+a reviewer may ask the codebase a question instead of guessing.
+
+This used to be expressed as [tinyflows] graphs. Every graph was the same flat
+shape — a trigger, one `agent` node per call, a merge barrier — so they are now
+plain futures (`futures::future::join_all`), which removed a dependency, a JSON
+envelope that had to be read two `json` hops deep, and a set of refusing
+capability stubs the engine required. Nothing about what runs or in what order
+changed; the golden tests and the lane tests pass unchanged.
+
+[tinyflows]: https://github.com/tinyhumansai/tinyflows
 
 ## What runs
 
 `src/council` decides **who** reviews — agents, personas, and what becomes of
-their findings. This module is **how they run**: one `agent` node per reviewer,
-concurrent, joined by a merge barrier.
+their findings. This module is **how they run**: one call per reviewer, concurrent, joined
+before anything is read.
 
 ```
-  evidence ─┬─ agent: reviewer-a ─┐
-            ├─ agent: reviewer-b ─┼─ merge ─► one answer per reviewer
-            └─ agent: reviewer-c ─┘
+  evidence ─┬─ reviewer-a ─┐
+            ├─ reviewer-b ─┼─ join ─► one answer per reviewer
+            └─ reviewer-c ─┘
 ```
 
 Placement, merging and removal stay where they were — in the lane, in
 `council::merge`, and in `falsify` respectively. Those are the steps the golden
-tests pin, and moving them into a graph would buy nothing and cost the tests.
+tests pin.
 
 ## What is deliberately absent: a verification round
 
@@ -62,12 +70,12 @@ Cost is shaped rather than merely capped:
 
 ### The depth bound is structural, not a counter
 
-Exactly one level. `subagent::answers_graph` contains a trigger and `agent`
-nodes, nothing else, and `caps::ChildGraphs` is populated only with graphs this
-crate builds. A sub-agent has no `sub_workflow` node to reach for and no
-registry entry it could name if it had one. A depth integer threaded through the
-run is a bound a future edit deletes by accident; this one cannot compile a
-recursion into existence.
+Exactly one level. A sub-agent is a single call built by
+`subagent::answer_call`, answering `subagent::answer_schema` — which has no
+`questions` key and no `lookups` key. A sub-agent therefore has nothing it
+could ask with and no turn after its answer to ask on. A depth integer threaded
+through the run is a bound a future edit deletes by accident; this one is a
+property of the schema, and `subagent_test` pins it.
 
 ### Two couplings that fail silently if broken
 
@@ -94,13 +102,14 @@ the repository". The turn prompts say what each turn may do: the settling
 turn alone is told it is the last. See
 [`docs/modules/lanes/lookup.md`](../lanes/lookup.md).
 
-## What the graph is *not* allowed to do
+## What a reviewer is *not* able to do
 
-`caps.rs` is as much about refusal as wiring. `tools`, `http` and `code` are
-supplied as implementations that deny every call with an error naming the
-invariant from `AGENTS.md`; `shell` and `memory` are absent entirely. A graph
-that grows a `code` node fails on its first run with the reason, rather than
-quietly executing contributor code.
+A reviewer's only capability is answering a schema. There is no tool, HTTP,
+code or shell path in `flows` for it to reach — not refused at run time, but
+absent: a `Call` is a system prompt, an evidence suffix and a schema name, and
+the model it reaches is a stateless completion (`harness::openrouter`, over
+OpenHuman's `Completer`) that declares no tools. Repository reads a reviewer
+asks for are performed by the host, through the read-only `TreeReader` port.
 
 ## Where the budget lives
 
@@ -129,9 +138,9 @@ pass" in `docs/modules/lanes/README.md`.
 
 | file | role |
 |---|---|
-| `caps.rs` | the capability seam, budget, spend tally, and every refusal |
-| `panel.rs` | one `agent` node per reviewer, and the fan-in barrier |
-| `subagent.rs` | the child graph, the question schema, and the depth bound |
+| `caps.rs` | the lane's one capability: the model call, budget and spend tally |
+| `panel.rs` | the `Call` each reviewer makes, and the per-file concurrency cap |
+| `subagent.rs` | the sub-agent call, the question schema, and the depth bound |
 | `lookup.rs` | the lookup loop: seeding, the `lookups` schema, gathering, the budget |
 | `runner.rs` | runs the rounds — lookups, then questions, then the settling turn — and returns one answer per reviewer |
 

@@ -277,7 +277,7 @@ async fn review_group(
     };
     let built = prompt::build(&base_inputs);
 
-    // Every reviewer at once, as one graph. With no council configured this is
+    // Every reviewer at once, as one concurrent round. With no council configured this is
     // the single default reviewer on the lane's own model, so a solo run and a
     // council run are one code path.
     let reviewers = council::reviewers(config, LaneId::Security);

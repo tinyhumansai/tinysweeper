@@ -1,23 +1,25 @@
 //! The real model, behind the `harness` feature.
 //!
-//! A thin adapter over tinyagents' OpenAI-compatible provider. OpenRouter,
+//! A thin adapter over OpenHuman's stateless [`Completer`]: one structured
+//! completion per call against an OpenAI-compatible gateway. OpenRouter,
 //! Moonshot and MiniMax all speak the same wire format, so pointing `base_url`
 //! elsewhere is the whole of "switching provider" — there is no second code
 //! path to maintain and no provider-specific SDK in the tree.
+//!
+//! `Completer` rather than an OpenHuman agent turn, deliberately: a turn runs a
+//! prompt-injection guard that would reject the adversarial diffs a review
+//! exists to read, offers tools, and may fall back to another model silently.
+//! A completion does none of that — the model only ever sees data and answers
+//! in JSON, which is what keeps "the model never acts" true.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::json;
-use tinyagents::context::{RunConfig, RunContext};
-use tinyagents::events::EventSink;
-use tinyagents::runtime::{AgentHarness, PayloadCapture, RunPolicy};
-use tinyagents::{
-    HarnessEventJournal, InMemoryEventJournal, JournalSink, LangfuseClient, LangfuseTraceConfig,
+use openhuman_embed::Route;
+use openhuman_embed::complete::{
+    ChatMessage, Completer, CompletionObserver, CompletionRequest, ResponseFormat,
 };
-use tinyinference::message::{ContentBlock, ImageRef, Message as TaMessage, UserMessage};
-use tinyinference::model::ResponseFormat;
-use tinyinference::providers::openai::OpenAiModel;
+use serde_json::json;
 
 use crate::config::types::{Models, ProviderRouting, StructuredOutput};
 use crate::error::{Error, Result};
@@ -38,7 +40,7 @@ pub struct GatewayModel {
     provider: ProviderRouting,
     routes: Vec<crate::config::types::ModelRoute>,
     structured_output: StructuredOutput,
-    langfuse: Option<LangfuseClient>,
+    langfuse: Option<Arc<dyn CompletionObserver>>,
 }
 
 impl std::fmt::Debug for GatewayModel {
@@ -121,7 +123,7 @@ fn provider_options(effort: &str, routing: &ProviderRouting) -> serde_json::Valu
 /// The cost the gateway says it charged, when it says so.
 ///
 /// Read out of the raw response body rather than the parsed usage, because the
-/// OpenAI wire shape tinyagents parses has no cost field — this one is
+/// OpenAI wire shape has no cost field — this one is
 /// OpenRouter's extension, returned because [`provider_options`] asked for it.
 /// `None` means the gateway reported nothing and the estimate stands.
 fn gateway_cost(raw: Option<&serde_json::Value>) -> Option<f64> {
@@ -174,6 +176,24 @@ fn answered_model(raw: Option<&serde_json::Value>) -> Option<&str> {
     (!model.is_empty()).then_some(model)
 }
 
+/// One crate message as the completion API wants it.
+///
+/// Images ride on user messages only: the OpenAI-compatible format has no
+/// image part for the other roles. `Message::user_with_images` is the only
+/// constructor that sets images, so the other arms never see any.
+fn wire_message(m: &CrateMessage) -> ChatMessage {
+    match m.role {
+        Role::System => ChatMessage::system(&m.content),
+        Role::Assistant => ChatMessage::assistant(&m.content),
+        Role::User => m
+            .images
+            .iter()
+            .fold(ChatMessage::user(&m.content), |message, url| {
+                message.with_image(url.clone())
+            }),
+    }
+}
+
 /// The conversation as it goes on the wire, including anything the structured
 /// output mode has to say.
 ///
@@ -182,33 +202,6 @@ fn answered_model(raw: Option<&serde_json::Value>) -> Option<&str> {
 /// if this function stops appending the schema the model is left describing a
 /// contract nobody gave it — and that failure looks like a quality regression
 /// rather than a bug, which is exactly the kind that survives a review.
-/// One crate message as tinyinference wants it.
-///
-/// Images become content parts on a user message and nowhere else: the
-/// OpenAI-compatible format has no image part for the other roles, and
-/// tinyinference's converter rejects one rather than dropping it silently.
-/// `Message::user_with_images` is the only constructor that sets images, so
-/// the other arms never see any — but if one did, ignoring it would send a
-/// caption request with no picture, and this arm is written so that cannot
-/// happen without a compile error naming it.
-fn wire_message(m: &CrateMessage) -> TaMessage {
-    match m.role {
-        Role::System => TaMessage::system(&m.content),
-        Role::Assistant => TaMessage::assistant(&m.content),
-        Role::User if m.images.is_empty() => TaMessage::user(&m.content),
-        Role::User => {
-            let mut content = vec![ContentBlock::Text(m.content.clone())];
-            content.extend(m.images.iter().map(|url| {
-                ContentBlock::Image(ImageRef {
-                    url: url.clone(),
-                    mime_type: Some("image/png".to_string()),
-                })
-            }));
-            TaMessage::User(UserMessage { content })
-        }
-    }
-}
-
 fn wire_messages(request: &ModelRequest, mode: StructuredOutput) -> Vec<CrateMessage> {
     let mut messages = request.messages.clone();
     // Appended as its own system message rather than folded into the lane
@@ -238,7 +231,16 @@ impl GatewayModel {
             ))
         })?;
 
-        Ok(Self {
+        Ok(Self::with_key(models, api_key))
+    }
+
+    /// Build from the `[models]` config with the key already in hand.
+    ///
+    /// For tests that drive the adapter against a fake gateway: reading the
+    /// key from a variable they would have to set means mutating the process
+    /// environment, which races every other test in the binary.
+    pub(crate) fn with_key(models: &Models, api_key: String) -> Self {
+        Self {
             api_key,
             base_url: models.base_url.clone(),
             fallbacks: models.fallback.clone(),
@@ -247,7 +249,7 @@ impl GatewayModel {
             routes: models.routes.clone(),
             structured_output: models.structured_output,
             langfuse: langfuse_client(),
-        })
+        }
     }
 
     /// A gateway for calls that carry images.
@@ -272,67 +274,21 @@ impl GatewayModel {
         Ok(gateway)
     }
 
-    fn harness(&self, model: &str, routing: &ProviderRouting) -> Result<AgentHarness<()>> {
-        let provider = OpenAiModel::new(&self.api_key)
-            .with_base_url(&self.base_url)
-            .with_model(model)
-            // Reasoning, at the configured effort.
-            //
-            // This was hard-disabled, and the reason is worth keeping because
-            // it is a real hazard rather than a preference: reasoning is billed
-            // against the same `max_tokens` as the answer, so a model that
-            // thinks too much spends the whole budget and returns **empty**
-            // content. Measured on `kimi-k3` with a 49k-token prompt:
-            // finish_reason `length`, all 8000 completion tokens consumed, 17k
-            // characters of reasoning, nothing left to answer with — and every
-            // review then fell back to a weaker model, silently. Capping it
-            // with `reasoning: {max_tokens: N}` did not hold; that model
-            // ignored the cap and ran to 37k characters.
-            //
-            // It was turned on again on the strength of a measurement — 416
-            // reasoning tokens on `deepseek-v4-pro` at `high` — and that
-            // measurement was taken on a toy prompt. Re-measured against a
-            // 23k-token diff, the same model at the same setting and the same
-            // 8000-token ceiling spends **8000** reasoning tokens and returns
-            // empty content. So this is not a hazard that belonged to `kimi-k3`
-            // and went away; it is a property of reasoning sharing the budget,
-            // and every thinking model has it.
-            //
-            // Two findings from that re-measurement are load-bearing here:
-            //
-            // - **`low` is not a smaller `high`.** Both configured models burn
-            //   the entire allowance at either setting. This key selects a
-            //   *style* of thinking, never an amount, so it cannot be used to
-            //   bound spend. Only `"off"` bounds it.
-            // - **The failure is bimodal.** There is no setting at which the
-            //   model thinks a little and answers a little: either reasoning
-            //   fits and the answer is whole, or reasoning takes everything and
-            //   `finish_reason` is `length` with nothing to parse.
-            //
-            // What keeps it working today is `models.max_tokens`, raised to
-            // 16000, not this key. Anyone lowering that number should read the
-            // table in `config/defaults.toml` first.
-            //
-            // `models.reasoning_effort = "off"` restores the old behaviour for
-            // a deployment that puts a thinking-heavy model back.
-            //
-            // The `provider` pin rides in the same object; see
-            // [`provider_options`] for why they are merged rather than set
-            // separately.
-            .with_default_provider_options(provider_options(&self.reasoning_effort, routing))
+    /// The completer for one call, carrying this deployment's key and base
+    /// URL and the gateway attribution headers.
+    fn completer(&self) -> Completer {
+        let completer = Completer::new(Route::openai_compatible(&self.base_url, &self.api_key))
             // Identifies us to OpenRouter, which is how per-application usage
             // shows up separately in their dashboard.
-            .with_header(
+            .header(
                 "HTTP-Referer",
                 "https://github.com/tinyhumansai/tinysweeper",
             )
-            .with_header("X-Title", "tinysweeper");
-
-        let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness
-            .register_model("gateway", Arc::new(provider))
-            .set_default_model("gateway");
-        Ok(harness)
+            .header("X-Title", "tinysweeper");
+        match &self.langfuse {
+            Some(observer) => completer.observer(observer.clone()),
+            None => completer,
+        }
     }
 
     async fn call(
@@ -342,95 +298,58 @@ impl GatewayModel {
         cap: u32,
         routing: &ProviderRouting,
     ) -> Result<CallOutcome> {
-        let mut harness = self.harness(model, routing)?;
         // Who enforces the schema. These two arms are one decision, not two
         // independent settings: `JsonObject` asks the provider for *some* JSON
         // and therefore has to carry the schema in the prompt itself, and the
-        // prompt half is added below. Changing one arm without the other either
-        // sends a schema nobody reads or asks for a shape nobody described.
+        // prompt half is added by `wire_messages`. Changing one arm without the
+        // other either sends a schema nobody reads or asks for a shape nobody
+        // described.
         let response_format = match self.structured_output {
-            StructuredOutput::Schema => {
-                ResponseFormat::json_schema(&request.schema_name, request.schema.clone())
-            }
+            StructuredOutput::Schema => ResponseFormat::JsonSchema {
+                name: request.schema_name.clone(),
+                schema: request.schema.clone(),
+            },
             StructuredOutput::JsonObject => ResponseFormat::JsonObject,
         };
-        harness.with_policy(RunPolicy {
-            default_response_format: Some(response_format),
-            capture: if self.langfuse.is_some() {
-                PayloadCapture {
-                    model_io: true,
-                    tool_io: false,
-                }
-            } else {
-                PayloadCapture::default()
-            },
-            ..RunPolicy::default()
-        });
-
-        let messages: Vec<TaMessage> = wire_messages(request, self.structured_output)
+        let messages: Vec<ChatMessage> = wire_messages(request, self.structured_output)
             .iter()
             .map(wire_message)
             .collect();
 
-        // `invoke` rather than `invoke_default`, because the run configuration
-        // is where the output ceiling lives — see [`run_config`].
-        let run_config = run_config(cap);
-        let run_id = run_config.run_id.clone();
-        let (journal, journal_sink) = self
-            .langfuse
-            .as_ref()
-            .map(|_| {
-                let journal = Arc::new(InMemoryEventJournal::new());
-                let sink = Arc::new(JournalSink::new(journal.clone(), run_id.clone()));
-                (journal, sink)
-            })
-            .unzip();
-        let events = EventSink::new();
-        if let Some(sink) = &journal_sink {
-            events.subscribe(sink.clone());
-        }
-        let result = harness
-            .invoke_in_context(
-                &(),
-                RunContext::new(run_config, ()).with_events(events),
-                messages,
-            )
-            .await;
-
-        if let (Some(journal), Some(sink), Some(client)) =
-            (journal, journal_sink, self.langfuse.as_ref())
-        {
-            sink.flush();
-            match journal.read_from(run_id.as_str(), 0).await {
-                Ok(observations) if !observations.is_empty() => {
-                    if let Err(err) = client
-                        .send_observations(
-                            LangfuseTraceConfig {
-                                name: Some("tinysweeper model call".to_string()),
-                                environment: std::env::var("LANGFUSE_ENVIRONMENT").ok(),
-                                ..Default::default()
-                            },
-                            &observations,
-                        )
-                        .await
-                    {
-                        tracing::warn!(%err, "could not export model call to Langfuse");
-                    }
-                }
-                Ok(_) => {}
-                Err(err) => tracing::warn!(%err, "could not read Langfuse observations"),
-            }
+        // Reasoning, at the configured effort, and the `provider` pin, in one
+        // object; see [`provider_options`] for why they are merged.
+        //
+        // Reasoning was hard-disabled once, and the reason is a real hazard
+        // rather than a preference: reasoning is billed against the same
+        // `max_tokens` as the answer, so a model that thinks too much spends
+        // the whole budget and returns **empty** content (measured on
+        // `kimi-k3` with a 49k-token prompt, and again on `deepseek-v4-pro` at
+        // `high` against a 23k-token diff). `low` is not a smaller `high` —
+        // the key selects a style of thinking, never an amount — and the
+        // failure is bimodal: reasoning fits and the answer is whole, or it
+        // takes everything and `finish_reason` is `length`. What keeps it
+        // working is `models.max_tokens` (16000) and the truncation ladder
+        // below, not this key; `models.reasoning_effort = "off"` restores the
+        // old behaviour for a thinking-heavy model.
+        let mut completion = CompletionRequest::new(model, messages)
+            .response_format(response_format)
+            .provider_options(provider_options(&self.reasoning_effort, routing));
+        // `config::validate` rejects `max_tokens = 0`, but a `Config` built in
+        // code can carry it, and forwarding a zero cap asks the provider for
+        // an empty answer on every lane. Leave the ceiling off instead.
+        if cap != 0 {
+            completion = completion.max_tokens(cap);
         }
 
-        let run = result.map_err(|err| Error::Model(format!("{model}: {err}")))?;
+        let response = self
+            .completer()
+            .complete(completion)
+            .await
+            .map_err(|err| Error::Model(format!("{model}: {err}")))?;
 
-        let totals = run.usage.usage;
-        let finish_reason = run
-            .final_response
-            .as_ref()
-            .and_then(|response| response.finish_reason.clone())
-            .unwrap_or_default();
-        let raw = run.final_response.as_ref().and_then(|r| r.raw.as_ref());
+        let totals = response.usage.clone().unwrap_or_default();
+        let finish_reason = response.finish_reason.clone().unwrap_or_default();
+        let raw = response.raw.as_ref();
         let reported_cost = gateway_cost(raw);
         let answered = answered_model(raw).unwrap_or(model);
 
@@ -443,7 +362,7 @@ impl GatewayModel {
             answered,
             cap,
             input_tokens = totals.input_tokens,
-            cached_tokens = totals.cache_read_tokens,
+            cached_tokens = totals.cached_tokens,
             output_tokens = totals.output_tokens,
             reasoning_tokens = totals.reasoning_tokens,
             finish_reason = %finish_reason,
@@ -454,12 +373,13 @@ impl GatewayModel {
         // Truncation, reported rather than repaired.
         //
         // `finish_reason == "length"` means the answer was cut off at the
-        // ceiling. The harness recovers the *empty* case on its own, but the
-        // expensive case is the partial one: its repair ladder closes the
-        // unterminated JSON, so a findings array cut off after two entries
-        // parses cleanly and reads exactly like a review that found two things.
-        // Returning `Truncated` instead sends the call back up to `complete`,
-        // which retries with a larger ceiling before anything is published.
+        // ceiling. A partial findings array must never be published as if it
+        // were the whole review, so `Truncated` sends the call back up to
+        // `complete`, which retries with a larger ceiling first. Checked before
+        // any parsing on purpose: the tinyagents harness this replaced
+        // "repaired" the unterminated JSON and then failed schema validation on
+        // it, so this ladder never ran and a cut-off answer fell through to the
+        // fallback models instead.
         if finish_reason == "length" {
             return Ok(CallOutcome::Truncated {
                 output_tokens: totals.output_tokens,
@@ -484,32 +404,28 @@ impl GatewayModel {
         // prose posts nonsense the first time a model phrases something
         // differently.
         //
-        // `run.structured` is populated only when the harness was given a schema
-        // to extract against, which is the `schema` mode. Under `json_object`
-        // there is no schema on the wire, so the harness has nothing to extract
-        // with and leaves it empty — the answer arrives as the run's text. That
-        // is *not* a licence to parse prose: `serde_json::from_str` either
-        // yields a JSON value or fails, and `schema::parse` downstream rejects
-        // any value of the wrong shape. Both modes end at the same guarantee;
-        // only the enforcer differs.
-        let value = match (run.structured.clone(), self.structured_output) {
-            (Some(value), _) => value,
-            (None, StructuredOutput::JsonObject) => {
-                let text = run.text().unwrap_or_default();
-                first_json_value(model, text.trim())?
-            }
+        // Under `schema` the completer has already parsed the reply as JSON;
+        // `None` means the provider ignored the schema and answered with
+        // something that is not JSON at all. Under `json_object` the reply is
+        // read from its text, tolerating trailing prose (see
+        // [`first_json_value`]). Neither is a licence to parse prose:
+        // `schema::parse` downstream rejects any value of the wrong shape, so
+        // both modes end at the same guarantee and only the enforcer differs.
+        let value = match (response.structured.clone(), self.structured_output) {
+            (Some(value), StructuredOutput::Schema) => value,
             (None, StructuredOutput::Schema) => {
                 return Err(Error::Model(format!(
                     "{model} returned no structured output; the response did not satisfy the \
                      schema"
                 )));
             }
+            (_, StructuredOutput::JsonObject) => first_json_value(model, response.text.trim())?,
         };
 
         let usage = Usage {
             input_tokens: totals.input_tokens,
             output_tokens: totals.output_tokens,
-            cached_tokens: totals.cache_read_tokens,
+            cached_tokens: totals.cached_tokens,
             embed_tokens: 0,
             // What the gateway says it charged, when it says — the rate table is
             // a fallback for a gateway that reports nothing, not the preferred
@@ -522,7 +438,7 @@ impl GatewayModel {
                 pricing::completion_cost(
                     answered,
                     totals.input_tokens,
-                    totals.cache_read_tokens,
+                    totals.cached_tokens,
                     totals.output_tokens,
                 )
             }),
@@ -640,7 +556,7 @@ const MAX_TRUNCATION_RETRIES: u32 = 2;
 
 /// The output ceilings one model is tried at, in order.
 ///
-/// A zero base means "no ceiling" (see [`run_config`]): there is nothing to
+/// A zero base means "no ceiling" (it is not forwarded): there is nothing to
 /// double, and a truncation at that point is the provider's own limit rather
 /// than ours, so the ladder is a single rung and the failure is reported
 /// straight away.
@@ -669,57 +585,13 @@ enum CallOutcome {
     },
 }
 
-/// The run this call is made from, carrying the configured output ceiling.
-///
-/// `models.max_tokens` reaches the provider as the run's per-turn output cap
-/// rather than as a field on the request: the agent loop builds the provider
-/// request itself, and `RunConfig::max_turn_output_tokens` is the documented
-/// hook it applies before dispatching. Setting it on a request we do not own
-/// would be discarded — which is exactly what used to happen to this setting.
-///
-/// The loop lowers, never raises: it takes the minimum of this cap and any cap
-/// the request already carries, and its truncated-empty retry may still grow
-/// the budget from here. Both are wanted — the ceiling is protection against a
-/// runaway answer, not a demand for one.
-/// The run id is unique per call, and stays that way across the truncation
-/// ladder: each rung is its own Langfuse trace, so a retry at a larger ceiling
-/// is visible as a retry rather than overwriting the attempt that was cut off.
-fn run_config(cap: u32) -> RunConfig {
-    static NEXT_RUN_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    let run_id = NEXT_RUN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let config = RunConfig::new(format!("tinysweeper-lane-{run_id}"));
-    // `config::validate` rejects `max_tokens = 0`, but a `Config` built in code
-    // can carry it, and forwarding a zero cap asks the provider for an empty
-    // answer on every lane. Leave the ceiling off rather than guarantee failure.
-    if cap == 0 {
-        return config;
-    }
-    config.with_max_turn_output_tokens(cap)
-}
-
-/// Build the direct Langfuse exporter only when its complete environment
-/// configuration is present. A deployment without telemetry keeps the
-/// existing offline and non-networking behaviour; malformed telemetry config
-/// is reported and never prevents a review from running.
-fn langfuse_client() -> Option<LangfuseClient> {
-    let configured = [
-        "LANGFUSE_BASE_URL",
-        "LANGFUSE_PUBLIC_KEY",
-        "LANGFUSE_SECRET_KEY",
-    ]
-    .iter()
-    .any(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()));
-    if !configured {
-        return None;
-    }
-
-    match LangfuseClient::from_env() {
-        Ok(client) => Some(client),
-        Err(err) => {
-            tracing::warn!(%err, "Langfuse telemetry is configured but unusable; continuing without it");
-            None
-        }
-    }
+/// The Langfuse exporter, when the environment configures one. A deployment
+/// without telemetry keeps the existing offline and non-networking behaviour;
+/// malformed telemetry config is reported and never prevents a review from
+/// running.
+fn langfuse_client() -> Option<Arc<dyn CompletionObserver>> {
+    crate::harness::langfuse::LangfuseExporter::from_env()
+        .map(|exporter| Arc::new(exporter) as Arc<dyn CompletionObserver>)
 }
 
 impl GatewayModel {
@@ -842,17 +714,9 @@ mod tests {
             "what changed?",
             vec!["https://cdn.example/a.png".into()],
         ));
-        let TaMessage::User(user) = wired else {
-            panic!("a user message stays a user message");
-        };
-        assert_eq!(user.content.len(), 2);
-        assert_eq!(user.content[0], ContentBlock::Text("what changed?".into()));
         assert_eq!(
-            user.content[1],
-            ContentBlock::Image(ImageRef {
-                url: "https://cdn.example/a.png".into(),
-                mime_type: Some("image/png".into()),
-            })
+            wired,
+            ChatMessage::user("what changed?").with_image("https://cdn.example/a.png")
         );
     }
 
@@ -862,7 +726,7 @@ mod tests {
         // recorded cassette was made from; images must not change it.
         assert_eq!(
             wire_message(&CrateMessage::user("plain")),
-            TaMessage::user("plain")
+            ChatMessage::user("plain")
         );
     }
 
@@ -1117,28 +981,6 @@ mod tests {
         assert!(
             text.to_lowercase().contains("json"),
             "DeepSeek's JSON mode requires the literal word in the prompt"
-        );
-    }
-
-    #[test]
-    fn the_configured_ceiling_reaches_the_run_the_provider_is_called_from() {
-        // `models.max_tokens` was accepted, validated, documented as the
-        // ceiling on a response — and then dropped on the floor, so the
-        // provider's own default decided how long an answer could get.
-        assert_eq!(
-            run_config(request(4_096).max_tokens).max_turn_output_tokens,
-            Some(4_096)
-        );
-    }
-
-    #[test]
-    fn a_zero_ceiling_is_not_forwarded() {
-        // `config::validate` rejects `max_tokens = 0`, but a `Config` built in
-        // code can still carry it, and asking a provider for zero output tokens
-        // turns a configuration mistake into an empty answer on every lane.
-        assert_eq!(
-            run_config(request(0).max_tokens).max_turn_output_tokens,
-            None
         );
     }
 

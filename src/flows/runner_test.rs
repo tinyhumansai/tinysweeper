@@ -4,6 +4,7 @@ use super::*;
 use crate::config::types::Config;
 use crate::harness::mock::MockModel;
 use crate::ports::model::Usage;
+use serde_json::json;
 
 fn config() -> Config {
     crate::config::DEFAULTS
@@ -33,7 +34,7 @@ async fn ask(model: MockModel, ids: &[&str], budget: f64) -> Vec<Answer> {
 
     ask_all(llm, LaneId::Critique, &calls, &schema(), Asking::default())
         .await
-        .expect("the graph runs")
+        .expect("the round runs")
 }
 
 #[tokio::test]
@@ -247,8 +248,9 @@ async fn each_reviewer_is_asked_with_its_own_prompt() {
 
 #[tokio::test]
 async fn a_reviewer_id_that_is_not_a_legal_node_id_still_gets_its_answer() {
-    // Agent ids are operator config. If `panel::node_id` and the lookup ever
-    // disagree the answer is silently lost and the reviewer reads as failed.
+    // Agent ids are operator config, and the answer is matched back to its
+    // reviewer by position, never by a sanitised id: an id that had to be
+    // rewritten to be carried must still come back verbatim.
     let awkward = Call {
         id: "security-focused reviewer!".into(),
         ..call("ignored")
@@ -276,7 +278,7 @@ async fn a_reviewer_id_that_is_not_a_legal_node_id_still_gets_its_answer() {
 
 #[tokio::test]
 async fn reviewers_run_concurrently_rather_than_one_after_another() {
-    // The claim the graph exists to make good on. A council multiplies calls by
+    // The claim the runner exists to make good on. A council multiplies calls by
     // the number of agents, and run serially that multiplies wall clock too —
     // which is what the per-file loop used to do, because a budget could only
     // be checked once a call had returned.
@@ -372,7 +374,7 @@ async fn ask_with_subagents(model: MockModel, ids: &[&str]) -> Vec<Answer> {
         },
     )
     .await
-    .expect("the graph runs")
+    .expect("the round runs")
 }
 
 #[tokio::test]

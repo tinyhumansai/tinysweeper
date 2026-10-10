@@ -52,7 +52,7 @@ prefix across different threads, and a hostile reply that never reaches it.
 
 The layering is what a provider needs to serve the prefix from cache. Whether it
 is actually served that way is a separate question: OpenRouter's Kimi and MiniMax
-routes need explicit `cache_control` breakpoints, which `vendor/tinyagents` does
+routes need explicit `cache_control` breakpoints, which the vendored harness does
 not send today, so the measured hit rate is currently near zero. The structure is
 correct and the benefit is pending that upstream change.
 

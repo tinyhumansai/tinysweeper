@@ -42,7 +42,7 @@ pub use crate::index::mongo::{MongoIndex, VECTOR_SEARCH_UNAVAILABLE};
 ///
 /// A free function rather than a constructor on either type because the two
 /// implementations do not share a base: `openrouter` is a direct HTTP client
-/// (it keeps the `usage` block that tinyagents' `EmbeddingModel` throws away),
+/// (it keeps the `usage` block that the harness `EmbeddingModel` throws away),
 /// and everything else goes through that trait. Callers want an `Embedder`,
 /// not to know which.
 ///

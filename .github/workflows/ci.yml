@@ -25,7 +25,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-          submodules: true
+          submodules: recursive
+
+      # The OpenHuman pin lives in two places (the Cargo.toml rev and the
+      # submodule pointer) and its [patch] tables mirror OpenHuman's own;
+      # drift between them builds a different tree than anyone tested.
+      - name: Verify the OpenHuman pin
+        run: scripts/assert-openhuman-pin.sh
 
       # Cheap step whose only job is to name a stale lockfile clearly, before a
       # confusing failure deeper in the build.
@@ -53,12 +59,14 @@ jobs:
   rust-gated:
     name: Rust (harness, github)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The harness links the OpenHuman core, a large crate; a cold cache spends
+    # most of this budget compiling it once per profile.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-          submodules: true
+          submodules: recursive
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -133,7 +141,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-          submodules: true
+          submodules: recursive
 
       - uses: docker/setup-buildx-action@v4
 
@@ -158,7 +166,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-          submodules: true
+          submodules: recursive
 
       - uses: docker/setup-buildx-action@v3
 

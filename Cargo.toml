@@ -1,7 +1,12 @@
 # This checkout is a single package. Keeping an empty workspace root prevents
 # Cargo from inheriting the superproject workspace that owns `worktrees/`, while
 # still allowing the vendored dependencies to retain their own workspaces.
+#
+# `vendor` is excluded because a path dependency under the workspace root is
+# otherwise adopted as a member, and OpenHuman's crates then try to inherit
+# `workspace.package` fields from this manifest instead of their own.
 [workspace]
+exclude = ["vendor", "worktrees"]
 
 [package]
 name = "tinysweeper"
@@ -11,7 +16,7 @@ license = "GPL-3.0-only"
 repository = "https://github.com/tinyhumansai/tinysweeper"
 description = "A GitHub review bot that fans a pull request out across independently-gated check runs."
 readme = "README.md"
-keywords = ["github", "code-review", "agents", "tinyagents", "bot"]
+keywords = ["github", "code-review", "agents", "openhuman", "bot"]
 categories = ["development-tools", "command-line-utilities"]
 # Examples are declared explicitly so credential-needing smoke tests never
 # build in CI. See examples/ and the [[example]] blocks at the bottom.
@@ -57,21 +62,16 @@ tree-sitter-ruby = "0.23"
 tree-sitter-rust = "0.24"
 tree-sitter-typescript = "0.23"
 
-# --- optional: the agent harness ---
-# tinyagents unconditionally links reqwest, so it is gated even though it is
-# central to the product. The `Model` port and `MockModel` compile without it;
-# only `harness::model::TinyAgentsModel` needs it.
-tinyagents = { package = "tinyagents-harness", git = "https://github.com/tinyhumansai/tinyagents.git", rev = "44afb2e6884690a59eb43e268a09868a9852c410", optional = true }
-tinyinference = { git = "https://github.com/tinyhumansai/tinyagents.git", rev = "44afb2e6884690a59eb43e268a09868a9852c410", optional = true }
-
-# --- the orchestration graph ---
-# Not optional, and that is the point: with default features tinyflows links no
-# HTTP client (its `reqwest` is gated behind `chrome-extension`/`host-caps`,
-# neither of which is enabled), so lane orchestration compiles and is tested in
-# the offline default build. Every outside-world call it makes goes through a
-# capability trait this crate implements in `src/flows/caps.rs`, so the model
-# still reaches the network through exactly one adapter.
-tinyflows = { git = "https://github.com/tinyhumansai/tinyflows.git", rev = "3276dd10bf0367b30223abf726e3e878d44036fb", default-features = false }
+# --- optional: the model harness ---
+# OpenHuman's embedding facade: stateless structured completions
+# (`complete::Completer`) and the embedding models. It links reqwest and the
+# whole OpenHuman core, so it is gated even though it is central to the
+# product. The `Model` and `Embedder` ports and their mocks compile without it.
+#
+# Resolved onto the `vendor/openhuman` submodule by the `[patch]` tables at the
+# bottom of this file; the rev here, the submodule pointer and the lock file
+# must agree, which `scripts/assert-openhuman-pin.sh` checks.
+openhuman-embed = { git = "https://github.com/tinyhumansai/openhuman", rev = "28ebb9985505cf79b3a9e8b933eae10504876015", default-features = false, optional = true }
 
 # --- optional: the webhook server ---
 # Reversed an earlier decision to go Actions-only. The arguments that changed
@@ -103,9 +103,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # Offline by default: mock forge, mock model, deterministic scanners. This is
 # what CI's first job builds and what `cargo test` runs against.
 default = ["treesitter"]
-# The tinyagents-backed model provider (OpenRouter / Moonshot / MiniMax, all
-# one OpenAI-compatible code path).
-harness = ["dep:tinyagents", "dep:tinyinference", "dep:reqwest"]
+# The OpenHuman-backed model and embedding providers (OpenRouter / Moonshot /
+# MiniMax, all one OpenAI-compatible code path).
+harness = ["dep:openhuman-embed", "dep:reqwest"]
 # The real GitHub adapter behind the `Forge` port.
 github = ["dep:octocrab", "dep:reqwest"]
 # The CortexDB adapter behind the `Memory` port. The whole memory layer —
@@ -157,3 +157,35 @@ required-features = ["serve"]
 [[example]]
 name = "memory_review"
 required-features = ["cortex"]
+
+# Resolve the git `openhuman-embed` above onto the vendored submodule, and
+# mirror OpenHuman's own `[patch]` tables with their paths rewritten under
+# `vendor/openhuman/`. Cargo ignores a dependency's `[patch]` sections, so
+# without these the core would resolve its tinyinference/tinyflows crates
+# from different sources than OpenHuman builds and tests against. Keep them
+# in step with `vendor/openhuman/Cargo.toml` on every pin bump. Its
+# `tinyflows` and `tinychannels` crates-io patches are left out: they serve
+# only the core's `flows` and `channels` features, which this crate does not
+# enable, and an unused patch is a cargo warning on every build.
+[patch."https://github.com/tinyhumansai/openhuman"]
+openhuman-embed = { path = "vendor/openhuman/crates/openhuman-embed" }
+
+[patch."https://github.com/tinyhumansai/tinytools"]
+tinytools = { path = "vendor/openhuman/vendor/tinyagents/vendor/tinytools/crates/tinytools" }
+tinytools-agent = { path = "vendor/openhuman/vendor/tinyagents/vendor/tinytools/crates/tinytools-agent" }
+
+[patch."https://github.com/tinyhumansai/tinyinference"]
+tinyinference-core = { path = "vendor/openhuman/vendor/tinyagents/vendor/tinyinference/crates/tinyinference-core" }
+tinyinference-embeddings = { path = "vendor/openhuman/vendor/tinyagents/vendor/tinyinference/crates/tinyinference-embeddings" }
+tinyinference-llm = { path = "vendor/openhuman/vendor/tinyagents/vendor/tinyinference/crates/tinyinference-llm" }
+tinyinference-local = { path = "vendor/openhuman/vendor/tinyagents/vendor/tinyinference/crates/tinyinference-local" }
+tinyinference-providers = { path = "vendor/openhuman/vendor/tinyagents/vendor/tinyinference/crates/tinyinference-providers" }
+tinyinference-voice = { path = "vendor/openhuman/vendor/tinyagents/vendor/tinyinference/crates/tinyinference-voice" }
+
+[patch.crates-io]
+tinyinference-core = { path = "vendor/openhuman/vendor/tinyagents/vendor/tinyinference/crates/tinyinference-core" }
+tinyinference-embeddings = { path = "vendor/openhuman/vendor/tinyagents/vendor/tinyinference/crates/tinyinference-embeddings" }
+tinyinference-llm = { path = "vendor/openhuman/vendor/tinyagents/vendor/tinyinference/crates/tinyinference-llm" }
+tinyinference-local = { path = "vendor/openhuman/vendor/tinyagents/vendor/tinyinference/crates/tinyinference-local" }
+tinyinference-providers = { path = "vendor/openhuman/vendor/tinyagents/vendor/tinyinference/crates/tinyinference-providers" }
+tinyinference-voice = { path = "vendor/openhuman/vendor/tinyagents/vendor/tinyinference/crates/tinyinference-voice" }
