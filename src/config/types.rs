@@ -799,11 +799,13 @@ pub struct Models {
     /// can spend the whole budget and return empty content — see
     /// `reasoning_effort`.
     pub max_tokens: u32,
-    /// How hard the model should think: `off`, `low`, `medium`, `high`.
+    /// How hard the model should think: `off`, `low`, `medium`, `high`, or `gateway`.
     ///
     /// `off` disables reasoning outright. It is the setting that rescues a
     /// deployment whose model reasons past `max_tokens` and answers with
     /// nothing, which is a real failure this repository has measured.
+    /// `gateway` omits the provider-specific reasoning block so a relay can
+    /// choose the settings and protocol for each model it routes to.
     pub reasoning_effort: String,
     /// Who enforces the response schema — see [`StructuredOutput`].
     ///

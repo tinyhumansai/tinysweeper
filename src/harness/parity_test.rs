@@ -435,3 +435,27 @@ async fn a_zero_ceiling_is_not_forwarded() {
         .unwrap();
     assert!(gateway.requests()[0].get("max_tokens").is_none());
 }
+
+#[tokio::test]
+async fn gateway_reasoning_policy_omits_provider_specific_controls() {
+    let gateway = FakeGateway::start(vec![Reply::completion(
+        "vendor/deep",
+        ANSWER,
+        "stop",
+        usage(),
+    )])
+    .await;
+    let mut models = models(&gateway.base_url);
+    models.reasoning_effort = "gateway".into();
+    let response = adapter(&models)
+        .complete(request("vendor/deep"))
+        .await
+        .unwrap();
+    assert_eq!(response.value["summary"], "Looks fine.");
+    let requests = gateway.requests();
+    assert!(
+        requests[0].get("reasoning").is_none(),
+        "a gateway owns each route's reasoning protocol"
+    );
+    assert_eq!(requests[0]["usage"], json!({"include": true}));
+}
