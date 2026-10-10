@@ -19,6 +19,7 @@ use crate::error::{Error, Result};
 use crate::evidence::diff::{FileDiff, parse_changed_files};
 use crate::evidence::replay;
 use crate::findings::anchor;
+use crate::findings::concern::Concern;
 use crate::findings::prior::{self, PriorReview};
 use crate::findings::types::Finding;
 use crate::forge::types::{CheckConclusion, PullRequestContext, RepoId};
@@ -1504,18 +1505,13 @@ fn already_posted(finding: &Finding, continuity: &Continuity<'_>) -> bool {
         || continuity
             .suppressed
             .contains(&finding.fingerprint(&finding.title))
-        // Same lane, same file, **same title**, within a few lines of a comment
-        // that is already there. Weaker evidence than a fingerprint, so it is
-        // asked last.
-        //
-        // The title is what stops this deleting a finding: position says two
-        // findings are in the same place, not that they are the same finding,
-        // and two defects a few lines apart in one function are ordinary. The
-        // rest is the same narrowness — it needs both findings placed on a line,
-        // a comment whose title or lane cannot be read anchors nothing, and the
-        // anchors come off the live pull request rather than the state store, so
-        // a comment a maintainer deleted stops suppressing anything.
-        || continuity.prior.covers_anchor(finding)
+        // The same concern in other words: nearby and similar, or anywhere in
+        // the file (or its test sibling) and near-identical, from any lane,
+        // and held to the nearby bar anywhere in the file when a maintainer
+        // already declined it. Weaker evidence than a fingerprint, so it is
+        // asked last; two different defects in one function survive because
+        // they say different things. See `crate::findings::concern`.
+        || continuity.prior.repeats_concern(finding)
 }
 
 /// The prior findings this cycle did not report as fixed, plus what it raised.
@@ -1749,7 +1745,7 @@ fn lane_proposal(
 
     let mut summary = outcome_summary;
     if deduped > 0 {
-        summary = format!("{summary} ({deduped} already reported on an earlier push)");
+        summary = format!("{summary} ({deduped} already raised on this pull request)");
     }
     // A concern raised before, neither fixed nor repeated, has to stay visible.
     // Silence about it would read as agreement that it is gone.
@@ -1821,35 +1817,36 @@ fn group_co_located_findings(lanes: &mut [LaneProposal]) {
         );
     }
 
+    let concerns: Vec<Concern> = all
+        .iter()
+        .map(|located| Concern::of(&located.finding))
+        .collect();
+    // Complete linkage: a finding joins a cluster only when it repeats every
+    // member, and clusters are never merged. Matching any one member let a
+    // finding bridge two distinct concerns (A repeats B, B repeats C, A does
+    // not repeat C) into one thread, hiding C behind A and spending a single
+    // comment-cap slot on both.
     let mut clusters: Vec<Vec<usize>> = Vec::new();
     for index in 0..all.len() {
-        let matching: Vec<usize> = clusters
+        let repeats = |member: usize| {
+            let left = &all[member];
+            let right = &all[index];
+            let distinct_source = left.lane_index != right.lane_index
+                || left.finding.review_pass != right.finding.review_pass;
+            let both_unplaced =
+                anchor_range(&left.finding).is_none() && anchor_range(&right.finding).is_none();
+            ((distinct_source || both_unplaced) && co_located(&left.finding, &right.finding))
+                // One concern in different words, from any lane or pass —
+                // including one pass repeating itself. The thread stays
+                // lossless: every rationale stays in its lane summary.
+                || concerns[member].same_as(&concerns[index])
+        };
+        match clusters
             .iter()
-            .enumerate()
-            .filter_map(|(cluster_index, cluster)| {
-                cluster
-                    .iter()
-                    .any(|member| {
-                        let left = &all[*member];
-                        let right = &all[index];
-                        let distinct_source = left.lane_index != right.lane_index
-                            || left.finding.review_pass != right.finding.review_pass;
-                        let both_unplaced = anchor_range(&left.finding).is_none()
-                            && anchor_range(&right.finding).is_none();
-                        (distinct_source || both_unplaced)
-                            && co_located(&left.finding, &right.finding)
-                    })
-                    .then_some(cluster_index)
-            })
-            .collect();
-        if let Some(&first) = matching.first() {
-            clusters[first].push(index);
-            for other in matching.into_iter().skip(1).rev() {
-                let members = clusters.remove(other);
-                clusters[first].extend(members);
-            }
-        } else {
-            clusters.push(vec![index]);
+            .position(|cluster| cluster.iter().all(|member| repeats(*member)))
+        {
+            Some(position) => clusters[position].push(index),
+            None => clusters.push(vec![index]),
         }
     }
 
@@ -1907,7 +1904,7 @@ fn group_co_located_findings(lanes: &mut [LaneProposal]) {
 /// Evidence that two lane observations belong in one conversation.
 ///
 /// Placed findings may be different bugs on the same statement; grouping is
-/// still lossless because both rationales remain in the thread. Unplaced
+/// still lossless because both rationales remain in their summaries. Unplaced
 /// findings have no positional evidence, so they require the same non-empty
 /// rule identifier.
 fn co_located(left: &Finding, right: &Finding) -> bool {
@@ -1967,6 +1964,9 @@ fn merge_observation(primary: &mut Finding, observation: Finding) {
     );
     primary.aliases.sort();
     primary.aliases.dedup();
+    // The opener already has the highest severity, but a lower-severity
+    // lane may have been surer. Other rationales remain in their lane summary.
+    primary.confidence = primary.confidence.max(observation.confidence);
 }
 
 /// Whether `apply` can post `finding` as an inline conversation on the live diff.
@@ -2500,10 +2500,249 @@ mod tests {
         );
     }
 
+    /// `openhuman#7079`: one concern from three lanes on three adjacent lines,
+    /// and a different concern about the same helper.
+    fn visible_and_helpers() -> Vec<LaneProposal> {
+        let spec = "app/test/e2e/specs/onboarding-modes.spec.ts";
+        let visible = "Require visible elements before clicking";
+        let at = |lane: LaneId, line: u64, identity: &str, rule: &str, body: &str| {
+            let mut finding = grouped_finding(lane, visible, line, identity);
+            finding.path = spec.into();
+            finding.rule = rule.into();
+            finding.body = body.into();
+            finding
+        };
+        let security = at(
+            LaneId::Security,
+            23,
+            "1111111111111111",
+            "e2e-interaction-validity",
+            "This helper treats any non-disabled matching element as clickable and invokes `element.click()` without checking visibility or layout.",
+        );
+        let mut tests = at(
+            LaneId::Tests,
+            25,
+            "2222222222222222",
+            "click-without-visibility",
+            "The click helper only checks that the element exists and is not disabled; a hidden element still reports a successful click.",
+        );
+        tests.confidence = 0.95;
+        let e2e = at(
+            LaneId::E2e,
+            24,
+            "3333333333333333",
+            "invisible-click",
+            "The rewrite dropped the zero-size check, so a mounted-but-hidden control now counts as clicked.",
+        );
+        // Off line 24 on purpose: cross-lane findings on one line already
+        // share a thread by position, and this one must stand on its words.
+        let mut helpers = at(
+            LaneId::Tests,
+            27,
+            "4444444444444444",
+            "e2e-raw-element-types",
+            "The spec uses `document.querySelector<HTMLElement>` casts directly; E2E code must use the shared element-helpers module.",
+        );
+        helpers.title = "Use element-helpers instead of raw platform element types".into();
+        let mut tests_lane = grouped_lane(LaneId::Tests, tests);
+        tests_lane.findings.push(helpers);
+        vec![
+            grouped_lane(LaneId::Security, security),
+            tests_lane,
+            grouped_lane(LaneId::E2e, e2e),
+        ]
+    }
+
+    fn published(lanes: &[LaneProposal]) -> Vec<&Finding> {
+        lanes
+            .iter()
+            .flat_map(|lane| &lane.findings)
+            .filter(|finding| !finding.grouped)
+            .collect()
+    }
+
+    #[test]
+    fn one_concern_from_three_lanes_on_adjacent_lines_is_one_thread() {
+        let mut lanes = visible_and_helpers();
+
+        group_co_located_findings(&mut lanes);
+
+        let published = published(&lanes);
+        assert_eq!(published.len(), 2, "one per concern: {published:#?}");
+        let visible = published
+            .iter()
+            .find(|finding| finding.title.starts_with("Require visible"))
+            .expect("the visibility concern survives");
+        assert_eq!(visible.lane, LaneId::Security, "highest severity opens");
+        assert_eq!(visible.confidence, 0.95, "and keeps the highest confidence");
+        assert!(!visible.body.contains("Additional `tests` observation"));
+        assert!(!visible.body.contains("Additional `e2e` observation"));
+        assert_eq!(lanes[1].findings[0].title, visible.title);
+        assert!(lanes[1].findings[0].body.contains("hidden element"));
+        assert!(lanes[2].findings[0].body.contains("zero-size check"));
+        assert_eq!(
+            visible.aliases,
+            vec!["2222222222222222", "3333333333333333"]
+        );
+        assert!(
+            published
+                .iter()
+                .any(|finding| finding.title.starts_with("Use element-helpers")),
+            "a different concern on the same helper must survive"
+        );
+    }
+
+    #[test]
+    fn grouping_by_concern_happens_before_the_cap() {
+        let mut lanes = visible_and_helpers();
+
+        group_co_located_findings(&mut lanes);
+        cap_proposal_findings(&mut lanes, 2, &|_| true);
+
+        let titles: Vec<&str> = published(&lanes)
+            .iter()
+            .map(|finding| finding.title.as_str())
+            .collect();
+        assert_eq!(titles.len(), 2);
+        assert!(
+            titles
+                .iter()
+                .any(|title| title.starts_with("Use element-helpers")),
+            "the repeats must not spend the slots: {titles:?}"
+        );
+    }
+
+    #[test]
+    fn one_pass_repeating_itself_is_one_thread() {
+        // `openhuman#7127`: the security lane posted "Drive the
+        // learn_from_tasks switch…" twice on line 1254 in one review.
+        let first = grouped_finding(
+            LaneId::Security,
+            "Drive the learn_from_tasks switch and forget button through a running app",
+            1254,
+            "1111111111111111",
+        );
+        let second = grouped_finding(
+            LaneId::Security,
+            "Drive the learn_from_tasks switch and forget button through a running app",
+            1254,
+            "2222222222222222",
+        );
+        let mut lane = grouped_lane(LaneId::Security, first);
+        lane.findings.push(second);
+        let mut lanes = vec![lane];
+
+        group_co_located_findings(&mut lanes);
+
+        assert_eq!(published(&lanes).len(), 1);
+    }
+
+    #[test]
+    fn a_finding_cannot_bridge_two_distinct_concerns_into_one_thread() {
+        // A overlaps B on line 12 and B overlaps C on line 14, but A and C do
+        // not overlap. Linking through B would publish one thread for three
+        // findings and hide C behind A; each concern keeps its own thread.
+        let spanning = |lane: LaneId, title: &str, start: u64, end: u64, id: &str| {
+            let mut finding = grouped_finding(lane, title, start, id);
+            // A published span comes from the applicable suggestion.
+            finding.applicable = Some(crate::findings::types::Suggestion {
+                start_line: start,
+                end_line: end,
+                replacement: String::new(),
+            });
+            finding.body = String::new();
+            finding
+        };
+        let a = spanning(LaneId::Critique, "Alpha", 10, 12, "1111111111111111");
+        let b = spanning(LaneId::Security, "Bravo", 12, 14, "2222222222222222");
+        let c = spanning(LaneId::Tests, "Charlie", 14, 16, "3333333333333333");
+        let mut lanes = vec![
+            grouped_lane(LaneId::Critique, a),
+            grouped_lane(LaneId::Security, b),
+            grouped_lane(LaneId::Tests, c),
+        ];
+
+        group_co_located_findings(&mut lanes);
+
+        let threads = published(&lanes);
+        assert_eq!(threads.len(), 2, "A and B are one thread; C stands alone");
+        assert!(!lanes[2].findings[0].grouped, "C is not grouped behind A");
+    }
+
+    #[test]
+    fn contradictory_guidance_on_one_wording_is_two_threads() {
+        // Two lanes, two lines apart, opposite instructions in the same words.
+        // Lossless grouping must not fold them into one thread: the second
+        // would be published as a repeat of a request it reverses.
+        let mut allow = grouped_finding(
+            LaneId::Critique,
+            "Allow empty values in the parser",
+            10,
+            "1111111111111111",
+        );
+        allow.body = String::new();
+        let mut deny = grouped_finding(
+            LaneId::Security,
+            "Do not allow empty values in the parser",
+            12,
+            "2222222222222222",
+        );
+        deny.body = String::new();
+        let mut lanes = vec![
+            grouped_lane(LaneId::Critique, allow),
+            grouped_lane(LaneId::Security, deny),
+        ];
+
+        group_co_located_findings(&mut lanes);
+
+        assert_eq!(published(&lanes).len(), 2);
+    }
+
+    #[test]
+    fn a_repeat_in_the_sibling_test_file_retains_its_own_summary_location() {
+        let title = "Test the write-again-without-actor fallback the change promises";
+        let mut source = grouped_finding(LaneId::Security, title, 154, "1111111111111111");
+        source.path = "crates/core/src/config/schema/memory.rs".into();
+        let mut test = grouped_finding(
+            LaneId::Critique,
+            "Test the write-again-without-actor fallback",
+            260,
+            "2222222222222222",
+        );
+        test.path = "crates/core/src/config/schema/memory_tests.rs".into();
+        let mut lanes = vec![
+            grouped_lane(LaneId::Security, source),
+            grouped_lane(LaneId::Critique, test),
+        ];
+
+        group_co_located_findings(&mut lanes);
+
+        let published = published(&lanes);
+        assert_eq!(published.len(), 1);
+        assert_eq!(published[0].aliases, vec!["2222222222222222"]);
+        assert!(!published[0].body.contains("Raised at"));
+        assert!(lanes[1].findings[0].grouped);
+        assert_eq!(
+            lanes[1].findings[0].path,
+            "crates/core/src/config/schema/memory_tests.rs"
+        );
+        assert_eq!(lanes[1].findings[0].line, Some(260));
+    }
+
     #[test]
     fn one_pass_can_still_report_two_defects_at_the_same_location() {
-        let first = grouped_finding(LaneId::Critique, "First defect", 42, "1111111111111111");
-        let second = grouped_finding(LaneId::Critique, "Second defect", 43, "2222222222222222");
+        let first = grouped_finding(
+            LaneId::Critique,
+            "Guard the index before dereferencing",
+            42,
+            "1111111111111111",
+        );
+        let second = grouped_finding(
+            LaneId::Critique,
+            "Close the file handle on the error path",
+            43,
+            "2222222222222222",
+        );
         let mut lane = grouped_lane(LaneId::Critique, first);
         lane.findings.push(second);
         let mut lanes = vec![lane];
@@ -2530,14 +2769,26 @@ mod tests {
             .filter(|finding| !finding.grouped)
             .collect();
         assert_eq!(published.len(), 1);
-        assert!(published[0].body.contains("Second pass"));
+        assert!(!published[0].body.contains("Additional"));
+        assert_eq!(lanes[0].findings[1].title, "Second pass");
+        assert_eq!(lanes[0].findings[1].review_pass, 2);
         assert_eq!(published[0].aliases, vec!["1111111111111111"]);
     }
 
     #[test]
     fn nearby_non_overlapping_ranges_remain_separate() {
-        let first = grouped_finding(LaneId::Critique, "Line forty-two", 42, "1111111111111111");
-        let second = grouped_finding(LaneId::Security, "Line forty-three", 43, "2222222222222222");
+        let first = grouped_finding(
+            LaneId::Critique,
+            "Guard the index before dereferencing",
+            42,
+            "1111111111111111",
+        );
+        let second = grouped_finding(
+            LaneId::Security,
+            "Close the file handle on the error path",
+            43,
+            "2222222222222222",
+        );
         let mut lanes = vec![
             grouped_lane(LaneId::Critique, first),
             grouped_lane(LaneId::Security, second),
@@ -2557,9 +2808,24 @@ mod tests {
 
     #[test]
     fn a_non_suggestion_end_line_does_not_widen_the_published_anchor() {
-        let first = grouped_finding(LaneId::Critique, "First edge", 40, "1111111111111111");
-        let second = grouped_finding(LaneId::Security, "Other edge", 42, "2222222222222222");
-        let mut bridge = grouped_finding(LaneId::Tests, "Whole region", 40, "3333333333333333");
+        let first = grouped_finding(
+            LaneId::Critique,
+            "Guard the index before dereferencing",
+            40,
+            "1111111111111111",
+        );
+        let second = grouped_finding(
+            LaneId::Security,
+            "Escape the shell argument",
+            42,
+            "2222222222222222",
+        );
+        let mut bridge = grouped_finding(
+            LaneId::Tests,
+            "Cover the retry loop with a test",
+            40,
+            "3333333333333333",
+        );
         bridge.end_line = Some(42);
         let mut lanes = vec![
             grouped_lane(LaneId::Critique, first),
@@ -2755,6 +3021,81 @@ mod tests {
                 titles: &[],
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn a_concern_posted_under_another_rule_is_not_posted_again() {
+        // The whole cycle. A review posts a comment; the forge then holds that
+        // comment as ours; a later review raises the same concern under a
+        // different rule name. The fingerprint is keyed on the rule, so only the
+        // concern check can stop the repeat.
+        let mut config = config();
+        config.review.lanes = vec!["critique".into()];
+        let first = MockModel::always(json!({
+            "summary": "Reviewed.",
+            "findings": [{
+                "path": "src/main.rs", "line": 2,
+                "rule": "unchecked-index", "title": "Guard the index",
+                "body": "The index is used without a bounds check.",
+                "severity": "high", "confidence": 0.9
+            }]
+        }));
+        let mut first_state = MockState::default();
+        first_state.pull_requests.insert(7, forge_pr());
+        first_state.files.insert(7, vec![rust_file()]);
+        let posted = review(
+            &MockForge::with_state(first_state.clone()),
+            Arc::new(first),
+            &config,
+            &repo(),
+            7,
+        )
+        .await
+        .expect("reviews");
+        assert_eq!(posted.findings().count(), 1);
+
+        let mut comments = crate::app::apply::test_inline_comments(&posted, &[rust_file()]);
+        assert_eq!(comments.len(), 1);
+        comments[0].author = "tinysweeper[bot]".into();
+        let mut state = first_state;
+        state.review_comments.insert(7, comments);
+
+        let second = MockModel::always(json!({
+            "summary": "Reviewed.",
+            "findings": [{
+                "path": "src/main.rs", "line": 2,
+                "rule": "bounds-check", "title": "Guard the index",
+                "body": "Nothing checks the index before it is read.",
+                "severity": "high", "confidence": 0.9
+            }, {
+                "path": "src/main.rs", "line": 2,
+                "rule": "style", "title": "Rename this binding",
+                "body": "The name says nothing about the item.",
+                "severity": "high", "confidence": 0.9
+            }]
+        }));
+        let proposal = review(
+            &MockForge::with_state(state),
+            Arc::new(second),
+            &config,
+            &repo(),
+            7,
+        )
+        .await
+        .expect("reviews");
+
+        let titles: Vec<&str> = proposal.findings().map(|f| f.title.as_str()).collect();
+        assert_eq!(titles, vec!["Rename this binding"]);
+    }
+
+    fn forge_pr() -> PullRequest {
+        PullRequest {
+            number: 7,
+            title: "feat: something".into(),
+            body: "Adds an index into the item list, guarded by the caller.".into(),
+            head_sha: "abc123".into(),
+            ..PullRequest::default()
+        }
     }
 
     fn repo() -> RepoId {
