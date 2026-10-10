@@ -16,7 +16,7 @@ pub mod embed;
 #[cfg(feature = "harness")]
 pub mod factory;
 #[cfg(all(test, feature = "harness"))]
-mod fake_gateway;
+pub(crate) mod fake_gateway;
 #[cfg(feature = "harness")]
 pub mod langfuse;
 pub mod mock;
