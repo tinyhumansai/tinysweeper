@@ -30,7 +30,9 @@
   rev, the submodule pointer and the `[patch]` tables in step —
   `scripts/assert-openhuman-pin.sh` checks these and the actual checkout.
   TinySweeper uses Embed's structured completions, embeddings and opt-in
-  read-only review agents. Lane concurrency uses Embed's borrowed fan-out
+  read-only agents. Reviewer prompts, repository tools and their policies
+  belong in `src/harness/agentic/`, keeping Embed application-neutral.
+  Lane concurrency uses Embed's borrowed fan-out
   with a pure-future offline path in `src/flows/`; see
   `docs/modules/flows/README.md`.
 - `docs/modules/<module>/README.md` — one document per `src/` module.

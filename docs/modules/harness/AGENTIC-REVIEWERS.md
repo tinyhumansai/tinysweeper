@@ -13,8 +13,9 @@ port. An absent tree or disabled lookup policy also uses completion. The default
 `Model::review` delegates to `complete`, so offline fixtures remain unchanged.
 
 The runner skips automatic definition pre-bundling and its JSON lookup loop
-for an agentic council turn. Embed owns the inference/tool loop. The host only
-drives a bounded channel of repository queries alongside that turn; the tree
+for an agentic council turn. Embed owns the inference/tool loop. TinySweeper owns the reviewer prompts, the five repository tools, their argument
+validation and untrusted-data envelopes. It drives a bounded channel of repository
+queries alongside the neutral Embed turn; the tree
 stays borrowed and never enters a static tool object or detached task.
 
 ## Permissions and bounds
@@ -36,7 +37,7 @@ attempts. Failed or cancelled reads also consume the query allowance. Reads reta
 search and symbol results retain the 30-hit cap, and listings allow 200 paths.
 All query attempts consume the host query allowance, including unavailable ones.
 Sensitive paths, scanner-shaped credentials and PEM bodies are scrubbed before
-character bounds and before results reach Embed's untrusted-data envelope.
+character bounds and before TinySweeper wraps results in its untrusted-data envelope.
 Host errors use generic messages so provider or repository diagnostics cannot
 leak secrets into prompts.
 
@@ -77,3 +78,14 @@ Missing cost uses the existing model-price estimate and the conservative
 unknown-model ceiling; missing model or usage is an error. Scripted gateway
 checks exercise tool advertisement/refusal, redaction, strict schemas, model
 attribution, spending and agent cleanup without provider credentials.
+
+## Ownership
+
+OpenHuman Embed supplies application-neutral agents, host-tool registration,
+structured answers, routing, cancellation, observers and spending ledgers. It
+contains no TinySweeper repository tools or review schema.
+
+`src/harness/agentic/repository/` owns the `RepositoryHost`/`RepositoryQuery`
+contract, tool schemas, lexical validation, redaction and result envelopes.
+`bridge.rs` binds these tools to borrowed snapshots and the reviewer lookup
+allowance. See [repository tools](REPOSITORY-TOOLS.md) for the local contract.
