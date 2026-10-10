@@ -105,7 +105,11 @@ impl LangfuseExporter {
 
     fn new(endpoint: String, auth: Auth, environment: Option<String>) -> Option<Self> {
         let client = LangfuseClient::new(endpoint.clone(), auth).ok()?;
-        Some(Self { client, endpoint, environment })
+        Some(Self {
+            client,
+            endpoint,
+            environment,
+        })
     }
 
     async fn send(&self, payload: Value) {
@@ -120,7 +124,6 @@ impl LangfuseExporter {
             handle.spawn(async move { exporter.send(payload).await });
         }
     }
-
 }
 
 /// The ingestion batch for one completion: a trace and its generation.
@@ -203,8 +206,10 @@ pub(crate) fn ingestion_batch(
 }
 
 fn epoch_ms() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default().as_millis() as i64
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
 }
 
 fn iso(ms: i64) -> String {
@@ -212,8 +217,12 @@ fn iso(ms: i64) -> String {
     let millis = ms.rem_euclid(1000);
     let (year, month, day) = civil_from_days(secs.div_euclid(86_400));
     let rem = secs.rem_euclid(86_400);
-    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{millis:03}Z",
-        rem / 3600, (rem % 3600) / 60, rem % 60)
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{millis:03}Z",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
 }
 
 /// Howard Hinnant's days-to-civil algorithm.

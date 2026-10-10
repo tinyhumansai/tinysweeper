@@ -105,20 +105,22 @@ turn alone is told it is the last. See
 
 ## What a reviewer is *not* able to do
 
-A reviewer's only capability is answering a schema. There is no tool, HTTP,
-code or shell path in `flows` for it to reach — not refused at run time, but
-absent: a `Call` is a system prompt, an evidence suffix and a schema name, and
-the model it reaches is a stateless completion (`harness::openrouter`, over
-OpenHuman's `Completer`) that declares no tools. Repository reads a reviewer
-asks for are performed by the host, through the read-only `TreeReader` port.
+One-shot calls declare no tools. With `models.agentic_reviewers` enabled,
+council reviewers use an isolated Embed agent with `Access::readonly()`,
+`HostOnly` tools and untrusted input. The host installs only bounded,
+redacted repository reads through `TreeReader`; no shell, network, workspace
+write or delegation tool is installed. GitHub write credentials stay in the
+existing apply modules. See the [agentic contract](../harness/AGENTIC-REVIEWERS.md).
 
 ## Where the budget lives
 
-In `caps::ModelCapability`, checked before each call. This is what let the
-per-file fan-out become concurrent again: the previous design serialised every
-file *precisely because* spend is only known once a call returns, so there was
-nowhere else to enforce a ceiling. One capability object sees every call in a
-lane, so it can refuse one however many are in flight.
+`caps::ModelCapability` retains lane accounting and shares one Embed budget
+ledger with its model capability. Embed reserves bounded input, output and
+cost before every physical dispatch, including retries and tool turns;
+concurrent calls cannot each admit against the same remaining funds.
+Unknown cost or interrupted requests retain their reservation. Gateway alias
+prices require explicit operator bounds, and budgeted calls require a finite
+output cap; local admission cannot constrain a provider's eventual bill.
 
 One call here is one changed file **or one file group** — `lanes::grouping`
 decides which, before any of this runs, with no model call of its own. A file

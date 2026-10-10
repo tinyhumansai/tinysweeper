@@ -5,6 +5,8 @@ read-only repository through OpenHuman Embed agents. It remains **false by
 default** until scripted evaluations and credentialed real-PR comparisons
 establish finding, cost and latency parity. Enable `models.structured_output =
 "schema"` alongside it; configuration validation rejects JSON-object mode.
+Authenticated agent routes require HTTPS or a loopback HTTP endpoint. The
+repository's Docker-host HTTP gateway needs a TLS proxy before agentic rollout.
 
 One-shot calls, preview captions, MockModel and Cassette retain the completion
 port. An absent tree or disabled lookup policy also uses completion. The default
@@ -55,6 +57,14 @@ capability scopes once from the host's model and replaces that scope when a lane
 share is applied. Direct positioning/falsification calls receive that same
 scoped model. The agent helper accepts the adapter's ledger and per-call
 reservation bounds; it creates no process-wide spending budget.
+
+Budgeted gateway aliases need explicit `models.budget_prices.<alias>` input,
+cached and output rates in dollars per million tokens. Output caps must be
+positive. The checked-in gateway configuration supplies conservative bounds
+for its current `flash` and `deep` routes and caps the formerly uncapped deep
+route at 16,000 tokens. Operators must reverify every reachable seller and
+long-context tier when changing routes or prices; admission bounds cannot
+constrain a provider's eventual bill.
 
 The response attributes usage to the provider's reported answering model.
 Missing cost uses the existing model-price estimate and the conservative
