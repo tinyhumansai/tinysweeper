@@ -133,6 +133,15 @@ drifts every time a provider reprices, which is why it is no longer what
 `models.budget_usd_per_pr` — a hard stop on a real bill — is enforced against.
 An unknown model warns rather than silently pricing at zero.
 
+Scoped monetary ledgers queue paid work serially. Model clones sharing a ledger
+share admission, while a fresh scoped budget has its own queue. Each completion
+ladder or agent reviewer waits for the previous invocation to settle before
+reserving its worst-case call bound. This keeps affordable parallel lane work
+from failing merely because outstanding bounds temporarily exceed the limit.
+Cancellation releases queue admission; Embed retains responsibility for the
+reservation and any paid work. Unscoped calls remain concurrent. The conservative
+queue trades lane latency for reliable admission without raising the hard budget.
+
 Reasoning tokens are *not* separately priced: OpenRouter bills them as output
 tokens and reports them inside `output_tokens`, so they are already in the cost.
 They are logged on their own because they are what the output ceiling is

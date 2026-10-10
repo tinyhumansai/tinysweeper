@@ -367,3 +367,61 @@ fn unknown_failure_accounting_does_not_include_concurrent_reviewers() {
     let unmetered = ReviewFailure::unknown(Error::Model("failed".into()), None, estimate);
     assert_eq!(*unmetered.usage.unwrap(), estimate);
 }
+
+#[tokio::test]
+async fn concurrent_affordable_agent_reviews_wait_for_reservations_to_settle() {
+    use crate::ports::model::Model;
+    let _guard = TEST_LOCK.lock().await;
+    let gateway = FakeGateway::start(vec![
+        Reply::completion(
+            "deep",
+            r#"{"summary":"checked"}"#,
+            "stop",
+            json!({"prompt_tokens":5,"completion_tokens":2,"cost":0.0021}),
+        ),
+        Reply::completion(
+            "deep",
+            r#"{"summary":"checked"}"#,
+            "stop",
+            json!({"prompt_tokens":5,"completion_tokens":2,"cost":0.0021}),
+        ),
+    ])
+    .await;
+    let mut models = crate::config::types::Models {
+        agentic_reviewers: true,
+        base_url: gateway.base_url.clone(),
+        ..Default::default()
+    };
+    models.budget_prices.insert(
+        "deep".into(),
+        crate::config::types::BudgetPriceBound {
+            input: 0.0,
+            cached: 0.0,
+            output: 600.0,
+        },
+    );
+    let model = crate::harness::embed::GatewayModel::with_key(&models, "fixture".into())
+        .scoped_budget(1.0)
+        .unwrap();
+    let request = ModelRequest {
+        model: "deep".into(),
+        messages: vec![
+            Message::system("Review."),
+            Message::user("Review src/lib.rs."),
+        ],
+        schema: json!({"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}),
+        schema_name: "review".into(),
+        max_tokens: 1000,
+    };
+    let tree = MockTree::from_files([("src/lib.rs", "pub fn f() {}")]);
+    let policy = LookupPolicy::default();
+    let (first, second) = tokio::join!(
+        model.review(request.clone(), &tree, &policy),
+        model.review(request, &tree, &policy),
+    );
+    let first = first.expect("first affordable reviewer");
+    let second = second.expect("second affordable reviewer waits for settlement");
+    assert_eq!(first.value["summary"], "checked");
+    assert_eq!(second.value["summary"], "checked");
+    assert_eq!(gateway.requests().len(), 2);
+}
