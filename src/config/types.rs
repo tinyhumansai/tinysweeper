@@ -393,7 +393,7 @@ pub struct Threads {
     /// deterministic code executes, and it can only ever close a thread
     /// tinysweeper itself opened.
     pub ask_model: bool,
-    /// Say why, in the thread, before resolving it.
+    /// Say why, in the thread, once it has been resolved.
     ///
     /// On by default. A conversation that collapses with no reply is indexed
     /// by GitHub as resolved and by the author as unexplained: the objection
