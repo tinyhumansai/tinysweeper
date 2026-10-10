@@ -209,7 +209,7 @@ fn tests(out: &mut String, proposal: &Proposal, summary: &ReviewSummary) {
 
 fn carried_findings(out: &mut String, proposal: &Proposal) {
     let current_titles: std::collections::BTreeSet<&str> = proposal
-        .findings()
+        .reported()
         .map(|finding| finding.title.as_str())
         .collect();
     let carried: Vec<_> = proposal
@@ -225,17 +225,52 @@ fn carried_findings(out: &mut String, proposal: &Proposal) {
     }
 }
 
+/// Findings that qualified but did not fit the inline-comment budget.
+///
+/// Compact on purpose — one line, title and location — because the budget
+/// exists to keep the conversation list short, and a long paragraph per
+/// overflowed finding would rebuild the wall of text here instead.
+fn over_budget(out: &mut String, proposal: &Proposal) {
+    let over: Vec<_> = proposal.overflowed().collect();
+    if over.is_empty() {
+        return;
+    }
+    let _ = writeln!(
+        out,
+        "\n**Over the comment budget** — {} more, not posted inline\n",
+        over.len()
+    );
+    for finding in over {
+        let _ = writeln!(
+            out,
+            "- {} · {} — {} (`{}{}`)",
+            severity(finding.severity),
+            finding.lane,
+            md(&finding.title),
+            md(&finding.path),
+            finding
+                .line
+                .map(|line| format!(":{line}"))
+                .unwrap_or_default()
+        );
+    }
+}
+
 fn findings(out: &mut String, proposal: &Proposal) {
     out.push_str("\n## Findings\n\n");
     let current_titles: std::collections::BTreeSet<&str> = proposal
-        .findings()
+        .reported()
         .map(|finding| finding.title.as_str())
         .collect();
     let has_carried = proposal
         .prior_findings
         .iter()
         .any(|title| !current_titles.contains(title.as_str()));
-    if proposal.findings().next().is_none() && !has_carried {
+    // Only what `over_budget` will actually list counts: a grouped overflow
+    // entry is not rendered there, so suppressing the empty state for it
+    // would leave the section blank with no reason given.
+    let has_over = proposal.overflowed().next().is_some();
+    if proposal.findings().next().is_none() && !has_carried && !has_over {
         out.push_str("No active actionable findings.\n");
     }
     for lane in &proposal.lanes {
@@ -256,6 +291,7 @@ fn findings(out: &mut String, proposal: &Proposal) {
         }
     }
     carried_findings(out, proposal);
+    over_budget(out, proposal);
     let noted: Vec<_> = proposal
         .lanes
         .iter()
@@ -310,7 +346,7 @@ fn before_merge(out: &mut String, proposal: &Proposal) {
     out.push_str("\n## Before merge\n\n");
     let mut any = false;
     let current_titles: std::collections::BTreeSet<&str> = proposal
-        .findings()
+        .reported()
         .map(|finding| finding.title.as_str())
         .collect();
     for title in proposal
@@ -322,7 +358,11 @@ fn before_merge(out: &mut String, proposal: &Proposal) {
         let _ = writeln!(out, "- [ ] Address carried finding **{}**.", md(title));
     }
     for lane in &proposal.lanes {
-        for finding in &lane.findings {
+        for finding in lane
+            .findings
+            .iter()
+            .chain(lane.overflow.iter().filter(|finding| !finding.grouped))
+        {
             if finding.severity >= Severity::High {
                 any = true;
                 let _ = writeln!(
@@ -490,7 +530,7 @@ fn severity(severity: Severity) -> &'static str {
 }
 fn counts(proposal: &Proposal) -> (usize, usize, usize, usize) {
     let current_titles: std::collections::BTreeSet<&str> = proposal
-        .findings()
+        .reported()
         .map(|finding| finding.title.as_str())
         .collect();
     let carried = proposal
@@ -502,7 +542,17 @@ fn counts(proposal: &Proposal) -> (usize, usize, usize, usize) {
         proposal
             .lanes
             .iter()
-            .map(|lane| lane.findings.len())
+            .map(|lane| {
+                lane.findings
+                    .iter()
+                    .filter(|finding| !finding.grouped)
+                    .count()
+                    + lane
+                        .overflow
+                        .iter()
+                        .filter(|finding| !finding.grouped)
+                        .count()
+            })
             .sum::<usize>()
             + carried,
         proposal.lanes.iter().map(|lane| lane.noted.len()).sum(),
@@ -550,7 +600,7 @@ fn concise(body: &str) -> String {
         .take(180)
         .collect()
 }
-fn md(text: &str) -> String {
+pub(crate) fn md(text: &str) -> String {
     let mut escaped = String::with_capacity(text.len());
     for character in text.chars() {
         match character {

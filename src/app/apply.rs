@@ -760,8 +760,10 @@ fn review_body(
 
     let mut body = match event {
         ReviewEvent::RequestChanges => {
+            // Overflow counts toward the verdict's worst severity: a high
+            // finding the budget moved to the hub is still what blocks.
             let worst = proposal
-                .findings()
+                .reported()
                 .map(|f| f.severity)
                 .max()
                 .unwrap_or(Severity::Low);
@@ -814,6 +816,32 @@ fn review_body(
                 finding.title, finding.path, finding.rule, finding.body
             ));
         }
+    }
+
+    // Over-budget findings are named here as well as in the hub. The hub is
+    // best-effort (it is skipped when summaries are disabled, and a failed
+    // update is only logged), while the review body is always submitted, so a
+    // blocking finding that did not fit the budget is never only in a place
+    // that might not be written.
+    let over: Vec<&crate::findings::types::Finding> = proposal.overflowed().collect();
+    if !over.is_empty() {
+        body.push_str(
+            "\n\n### Over the comment budget\n\nNot posted inline; listed here so none is lost.\n",
+        );
+        for finding in over {
+            let line = finding
+                .line
+                .map(|line| format!(":{line}"))
+                .unwrap_or_default();
+            body.push_str(&format!(
+                "\n- **{}** {} (`{}{}`)",
+                finding.severity,
+                crate::summary::render::md(&finding.title),
+                crate::summary::render::md(&finding.path),
+                line
+            ));
+        }
+        body.push('\n');
     }
 
     // The full token breakdown goes in the body deliberately. Cache hit rate is
@@ -1018,6 +1046,7 @@ mod tests {
                 usage: Default::default(),
                 models: vec![],
                 unanswered: vec![],
+                overflow: vec![],
             }],
             cost_usd: 0.01,
             input_tokens: 10_000,
@@ -1345,6 +1374,23 @@ mod tests {
             store.load_state(&key).await.unwrap().unwrap().e2e.is_some(),
             "the new head's review replaces the record; nothing is cleared here"
         );
+    }
+
+    #[test]
+    fn an_over_budget_finding_is_named_in_the_review_body() {
+        // The hub is best-effort and is skipped when summaries are disabled, so
+        // an over-budget finding must also be named in the review body, which
+        // is always submitted.
+        let mut over = finding();
+        over.title = "Over budget finding".into();
+        let mut proposal = proposal("abc123", vec![]);
+        proposal.lanes[0].overflow.push(over);
+
+        let body = review_body(&proposal, ReviewEvent::Comment, None, &[]);
+
+        assert!(body.contains("### Over the comment budget"), "{body}");
+        assert!(body.contains("Over budget finding"), "{body}");
+        assert!(body.contains("src/main\\.rs:2"), "{body}");
     }
 
     fn finding() -> Finding {

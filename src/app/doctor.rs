@@ -74,6 +74,14 @@ pub fn doctor(path: &Path, as_json: bool) -> Result<()> {
     Ok(())
 }
 
+/// One line per explicit gate the strictness dial overrode.
+fn gate_notes(loaded: &Loaded) -> Vec<String> {
+    config::clamped_gates(&loaded.config, &loaded.provenance)
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
 fn print_json(loaded: &Loaded) -> Result<()> {
     let provenance: serde_json::Map<String, serde_json::Value> = loaded
         .provenance
@@ -87,6 +95,7 @@ fn print_json(loaded: &Loaded) -> Result<()> {
         "config": redacted_config(&loaded.config)?,
         "provenance": provenance,
         "problems": config::validate::validate(&loaded.config),
+        "clamped_gates": gate_notes(loaded),
         "credentials": credentials(loaded),
     });
 
@@ -179,6 +188,9 @@ fn print_prose(loaded: &Loaded) {
             ""
         }
     );
+    for note in gate_notes(loaded) {
+        println!("  clamped          {note}");
+    }
     println!("  max comments     {}", config.review.max_comments);
     println!("  incremental      {}", config.review.incremental);
 
@@ -474,6 +486,21 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join(".tinysweeper.toml"), config).expect("write");
         dir
+    }
+
+    #[test]
+    fn doctor_names_a_gate_the_dial_clamped() {
+        let dir = repo("version = 1\n[review]\nstrictness = 2\nconfidence_min = 0.5\n");
+        let loaded = config::load(dir.path(), None).expect("loads");
+
+        let notes = gate_notes(&loaded);
+        assert_eq!(notes.len(), 1, "{notes:#?}");
+        assert!(notes[0].contains("review.confidence_min"), "{}", notes[0]);
+        assert!(notes[0].contains("repo"), "{}", notes[0]);
+        assert!(notes[0].contains("0.75"), "{}", notes[0]);
+
+        let quiet = repo("version = 1\n");
+        assert!(gate_notes(&config::load(quiet.path(), None).expect("loads")).is_empty());
     }
 
     #[test]
