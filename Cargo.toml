@@ -88,8 +88,11 @@ hmac = { version = "0.13", optional = true }
 # first signature if neither backend feature is chosen, and a panic on the
 # first webhook is a bad way to discover a build flag.
 jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"], optional = true }
-mongodb = { version = "3", optional = true }
-bson = { version = "2", optional = true }
+# Keep the driver and direct BSON dependency on the same major version.
+# compat-3-0-0 implicitly selects BSON 2, so opt into the modern compatibility
+# feature and retain the driver's TLS and DNS defaults explicitly.
+mongodb = { version = "3.3", default-features = false, features = ["compat-3-3-0", "bson-3", "rustls-tls", "dns-resolver"], optional = true }
+bson = { version = "3", features = ["serde"], optional = true }
 subtle = { version = "2", optional = true }
 # Used by the indexer to hold one shallow checkout while it is read. A
 # dev-dependency already, so this adds nothing to the lock file — it becomes a
