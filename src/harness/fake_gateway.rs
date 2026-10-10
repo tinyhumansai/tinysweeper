@@ -65,8 +65,8 @@ impl Drop for FakeGateway {
 }
 
 impl FakeGateway {
-    /// Start a gateway that assigns each accepted connection the next reply in
-    /// `script`, and with a `500` once the script runs out.
+    /// Start a gateway that assigns each HTTP request with complete headers
+    /// the next reply in `script`, or a `500` once the script runs out.
     pub async fn start(script: Vec<Reply>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -81,8 +81,13 @@ impl FakeGateway {
                 let Ok((mut stream, _)) = listener.accept().await else {
                     return;
                 };
-                // Assign before reading a body so a delayed first sender cannot
-                // steal a later request's scripted reply or reorder the log.
+                // Provider transports may open and close probe connections.
+                // Only HTTP requests consume replies; reserve after headers so
+                // a delayed body cannot steal a later request's scripted reply.
+                let Some((buffer, header_end, length)) = read_request_head(&mut stream).await
+                else {
+                    continue;
+                };
                 let sequence = next_sequence;
                 next_sequence += 1;
                 let reply = script
@@ -90,7 +95,9 @@ impl FakeGateway {
                     .unwrap_or_else(|| Reply::error(500, "script exhausted"));
                 let recorded = recorded.clone();
                 tokio::spawn(async move {
-                    let Some(body) = read_request_body(&mut stream).await else {
+                    let Some(body) =
+                        read_request_body(&mut stream, buffer, header_end, length).await
+                    else {
                         return;
                     };
                     recorded.lock().unwrap().push((sequence, body));
@@ -113,7 +120,7 @@ impl FakeGateway {
         }
     }
 
-    /// Every request body received so far, in arrival order.
+    /// Every request body received so far, ordered by HTTP header arrival.
     pub fn requests(&self) -> Vec<Value> {
         let mut received = self.requests.lock().unwrap().clone();
         received.sort_by_key(|(sequence, _)| *sequence);
@@ -121,8 +128,8 @@ impl FakeGateway {
     }
 }
 
-/// Read one HTTP/1.1 request and return its JSON body.
-async fn read_request_body(stream: &mut tokio::net::TcpStream) -> Option<Value> {
+/// Read HTTP headers before assigning a reply, ignoring closed probe sockets.
+async fn read_request_head(stream: &mut tokio::net::TcpStream) -> Option<(Vec<u8>, usize, usize)> {
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 8192];
     let header_end = loop {
@@ -140,6 +147,17 @@ async fn read_request_body(stream: &mut tokio::net::TcpStream) -> Option<Value> 
         .lines()
         .find_map(|line| line.strip_prefix("content-length:"))
         .and_then(|value| value.trim().parse().ok())?;
+    Some((buffer, header_end, length))
+}
+
+/// Finish a validated HTTP request and decode its JSON body.
+async fn read_request_body(
+    stream: &mut tokio::net::TcpStream,
+    mut buffer: Vec<u8>,
+    header_end: usize,
+    length: usize,
+) -> Option<Value> {
+    let mut chunk = [0u8; 8192];
     while buffer.len() < header_end + length {
         let read = stream.read(&mut chunk).await.ok()?;
         if read == 0 {
@@ -195,4 +213,33 @@ async fn scripted_replies_follow_connection_order_even_when_the_first_body_is_de
         gateway.requests(),
         vec![serde_json::json!({"id":1}), serde_json::json!({"id":2})]
     );
+}
+
+#[tokio::test]
+async fn empty_transport_probes_do_not_consume_scripted_replies() {
+    use tokio::net::TcpStream;
+    let gateway = FakeGateway::start(vec![Reply::error(401, "first")]).await;
+    let address = gateway
+        .base_url
+        .trim_start_matches("http://")
+        .trim_end_matches("/v1");
+    for _ in 0..2 {
+        let probe = TcpStream::connect(address).await.unwrap();
+        drop(probe);
+    }
+    let mut request = TcpStream::connect(address).await.unwrap();
+    request
+        .write_all(b"POST /v1 HTTP/1.1\r\ncontent-length: 8\r\n\r\n{\"id\":1}")
+        .await
+        .unwrap();
+    let mut reply = String::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        request.read_to_string(&mut reply),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(reply.starts_with("HTTP/1.1 401"), "{reply}");
+    assert_eq!(gateway.requests(), vec![serde_json::json!({"id":1})]);
 }
