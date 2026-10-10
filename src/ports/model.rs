@@ -27,8 +27,7 @@ pub struct Message {
     /// Images shown alongside the text, as URLs the provider fetches.
     ///
     /// Only ever populated on a [`Role::User`] message: the OpenAI-compatible
-    /// wire format has no image part on a system or assistant message, and
-    /// the OpenAI-compatible wire has no image part there. Empty for every lane —
+    /// wire format has no image part on a system or assistant message. Empty for every lane —
     /// a review reads a diff, not a picture — and non-empty only for the UI
     /// preview's captions, which look at the screenshots they describe.
     pub images: Vec<String>,

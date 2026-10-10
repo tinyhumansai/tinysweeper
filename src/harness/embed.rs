@@ -380,7 +380,7 @@ impl GatewayModel {
             // Keep the operator's actionable ceiling diagnostic when every
             // bounded attempt is cut off. Other refusal types retain their
             // owner error instead of being interpreted from message text.
-            if let Some(attempt) = error.attempts.last()
+            let refusal = if let Some(attempt) = error.attempts.last()
                 && matches!(attempt.finish_reason.as_deref(), Some("length" | "max_tokens" | "MAX_TOKENS"))
             {
                 let model = &attempt.requested_model;
@@ -399,6 +399,28 @@ impl GatewayModel {
                 ))
             } else {
                 Error::Model(error.to_string())
+            };
+            // Structured refusals can arrive after several billed dispatches.
+            // Preserve their safe owner metadata for lane and budget accounting,
+            // pricing omitted charges against the model that actually answered.
+            if let Some(totals) = error.total_usage {
+                let cost_usd = error.attempts.iter().filter_map(|attempt| {
+                    let usage = attempt.usage.as_ref()?;
+                    let model = attempt.answered_model.as_deref()
+                        .unwrap_or(&attempt.requested_model);
+                    Some(usage.cost_usd.unwrap_or_else(|| pricing::completion_cost(
+                        model, usage.input_tokens, usage.cached_tokens, usage.output_tokens,
+                    )))
+                }).sum();
+                refusal.with_usage(Usage {
+                    input_tokens: totals.input_tokens,
+                    output_tokens: totals.output_tokens,
+                    cached_tokens: totals.cached_tokens,
+                    embed_tokens: 0,
+                    cost_usd,
+                })
+            } else {
+                refusal
             }
         })?;
         let response = result.response;

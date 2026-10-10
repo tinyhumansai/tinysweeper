@@ -45,7 +45,7 @@ trait for the same reason: an embedder that could not name itself would let a
 model swap go unnoticed.
 
 The provider-backed embedder has to make that correspondence hold against a
-second spelling of the same idea. the harness `EmbeddingModel::signature()`
+second spelling of the same idea. The harness `EmbeddingModel::signature()`
 returns `provider=…;model=…;dims=…`; `EmbedSignature::harness_key()` is the same
 string, with a test asserting they are byte-identical, and
 `ProviderEmbedder::new` refuses to construct when the configured signature and

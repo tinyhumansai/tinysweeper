@@ -651,7 +651,8 @@ pub struct ModelRoute {
     pub allow_fallbacks: bool,
     /// Output ceiling for this rung. `0` sends no ceiling at all: the model
     /// answers at the length it needs and a cut-off is the provider's own
-    /// limit. Absent inherits `models.max_tokens`.
+    /// limit. Budgeted reviews reject `0` because admission needs a finite
+    /// output cap. Absent inherits `models.max_tokens`.
     pub max_tokens: Option<u32>,
 }
 
@@ -828,11 +829,11 @@ pub struct Models {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BudgetPriceBound {
-    /// Maximum price of uncached input, in USD per million tokens.
+    /// Maximum price of uncached input, in USD per million tokens; finite and nonnegative.
     pub input: f64,
-    /// Maximum price of cached input, in USD per million tokens.
+    /// Maximum price of cached input, in USD per million tokens; finite and nonnegative.
     pub cached: f64,
-    /// Maximum price of output, in USD per million tokens.
+    /// Maximum price of output, in USD per million tokens; finite and strictly positive.
     pub output: f64,
 }
 

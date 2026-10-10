@@ -29,12 +29,12 @@
             "additionalProperties": false,
             "properties": {
               "findings": {
-                "description": "Problems introduced by this pull request. An empty array is a valid and common answer; do not pad it.",
+                "description": "Each entry must be a reportable defect this pull request introduces: code that fails or misbehaves for a concrete, reachable input, a regression in behaviour this change touches, or a violation of a quoted AGENTS.md or CLAUDE.md rule. Never style or naming, lint or formatting nits, pre-existing issues in unchanged code, speculative security without an attacker-controlled input path, tests for behaviour outside this pull request or repository, or a restatement of the diff. A change the diff shows will not compile, or breaks a test it touches, is a reportable defect. An empty array is a valid and common answer; do not pad it. Prefer zero findings to weak ones.",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
                     "body": {
-                      "description": "What is wrong, why it matters, and what to do. Markdown.",
+                      "description": "What is wrong, why it matters, and what to do. Markdown. Name the concrete, reachable input or the caller that triggers the defect; for a repository-rule violation, quote the rule's text word for word.",
                       "type": "string"
                     },
                     "confidence": {
@@ -153,12 +153,12 @@
             "additionalProperties": false,
             "properties": {
               "findings": {
-                "description": "Problems introduced by this pull request. An empty array is a valid and common answer; do not pad it.",
+                "description": "Each entry must be a reportable defect this pull request introduces: code that fails or misbehaves for a concrete, reachable input, a regression in behaviour this change touches, or a violation of a quoted AGENTS.md or CLAUDE.md rule. Never style or naming, lint or formatting nits, pre-existing issues in unchanged code, speculative security without an attacker-controlled input path, tests for behaviour outside this pull request or repository, or a restatement of the diff. A change the diff shows will not compile, or breaks a test it touches, is a reportable defect. An empty array is a valid and common answer; do not pad it. Prefer zero findings to weak ones.",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
                     "body": {
-                      "description": "What is wrong, why it matters, and what to do. Markdown.",
+                      "description": "What is wrong, why it matters, and what to do. Markdown. Name the concrete, reachable input or the caller that triggers the defect; for a repository-rule violation, quote the rule's text word for word.",
                       "type": "string"
                     },
                     "confidence": {
@@ -271,12 +271,12 @@
             "additionalProperties": false,
             "properties": {
               "findings": {
-                "description": "Problems introduced by this pull request. An empty array is a valid and common answer; do not pad it.",
+                "description": "Each entry must be a reportable defect this pull request introduces: code that fails or misbehaves for a concrete, reachable input, a regression in behaviour this change touches, or a violation of a quoted AGENTS.md or CLAUDE.md rule. Never style or naming, lint or formatting nits, pre-existing issues in unchanged code, speculative security without an attacker-controlled input path, tests for behaviour outside this pull request or repository, or a restatement of the diff. A change the diff shows will not compile, or breaks a test it touches, is a reportable defect. An empty array is a valid and common answer; do not pad it. Prefer zero findings to weak ones.",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
                     "body": {
-                      "description": "What is wrong, why it matters, and what to do. Markdown.",
+                      "description": "What is wrong, why it matters, and what to do. Markdown. Name the concrete, reachable input or the caller that triggers the defect; for a repository-rule violation, quote the rule's text word for word.",
                       "type": "string"
                     },
                     "confidence": {
@@ -378,7 +378,8 @@
     },
     "value": {
       "findings": [],
-      "summary": "Looks fine."
+      "summary": "Looks fine.",
+      "resolved": []
     }
   }
 }

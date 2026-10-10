@@ -82,6 +82,21 @@ port, in the default build, where tinyagents is not linked at all. The place it
 would pay for itself is `GatewayModel`'s hand-rolled fallback chain, on the
 feature-gated side of the port.
 
+## Review budget admission
+
+Every review lane reserves spend against `models.budget_usd_per_pr`, including
+ordinary and agentic reviewers. A route's `max_tokens = 0` still means no output
+ceiling on the wire, but validation rejects it because admission requires a
+finite output cap. Set a positive cap or omit the route override to inherit
+`models.max_tokens`. With reasoning enabled, the existing 12000-token floor
+also applies.
+
+`models.budget_prices` supplies operator-verified upper rates for gateway
+aliases, in USD per million tokens. Each bound must cover all providers and
+fallbacks behind the alias, including long-context pricing. Input and cached
+input rates must be finite and nonnegative; the output rate must be finite and
+strictly positive. Validation names the alias and field without echoing rates.
+
 ## `[embeddings]` is a partition key, not a call setting
 
 `provider`, `model` and `dimensions` are not three more fields like

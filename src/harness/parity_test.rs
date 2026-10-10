@@ -60,7 +60,7 @@ fn request(model: &str) -> ModelRequest {
     }
 }
 
-const ANSWER: &str = r#"{"summary":"Looks fine.","findings":[]}"#;
+const ANSWER: &str = r#"{"summary":"Looks fine.","findings":[],"resolved":[]}"#;
 
 fn usage() -> Value {
     json!({
@@ -289,6 +289,65 @@ async fn truncated_attempts_are_included_in_returned_usage_and_cost() {
     assert_eq!(response.usage.cached_tokens, 200);
     assert!((response.usage.cost_usd - 0.0042).abs() < 1e-12);
     assert_eq!(gateway.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn exhausted_truncation_retains_paid_usage_and_ceiling_diagnostic() {
+    let gateway = FakeGateway::start(
+        (0..3)
+            .map(|_| Reply::completion("vendor/deep", r#"{"summary":"Lo"#, "length", usage()))
+            .collect(),
+    )
+    .await;
+    let error = adapter(&models(&gateway.base_url))
+        .complete(request("vendor/deep"))
+        .await
+        .unwrap_err();
+    let paid = error
+        .usage()
+        .expect("paid truncated attempts must be retained");
+    assert_eq!(paid.input_tokens, 360);
+    assert_eq!(paid.output_tokens, 90);
+    assert_eq!(paid.cached_tokens, 300);
+    assert!((paid.cost_usd - 0.0063).abs() < 1e-12);
+    assert_eq!(
+        error.to_string(),
+        "model: vendor/deep ran out of output tokens at 4000 (30 generated, 10 of them reasoning); the answer was cut off. Raise `models.max_tokens` (currently 1000) or lower `models.reasoning_effort`."
+    );
+    assert_eq!(gateway.requests().len(), 3);
+}
+
+#[tokio::test]
+async fn exhausted_fallback_retains_paid_attempts_from_every_route() {
+    let gateway = FakeGateway::start(vec![
+        Reply::completion("vendor/deep", r#"{"summary":"Lo"#, "length", usage()),
+        Reply::error(404, "No endpoints found"),
+        Reply::completion(
+            "deepseek/deepseek-v4-flash",
+            r#"{"summary":"Lo"#,
+            "length",
+            json!({"prompt_tokens": 120, "completion_tokens": 30,
+                "prompt_tokens_details": {"cached_tokens": 100}}),
+        ),
+        Reply::error(404, "No endpoints found"),
+    ])
+    .await;
+    let mut models = models(&gateway.base_url);
+    models.fallback = vec!["vendor/flash".into()];
+    let error = adapter(&models)
+        .complete(request("vendor/deep"))
+        .await
+        .unwrap_err();
+    let paid = error
+        .usage()
+        .expect("paid fallback attempts must be retained");
+    assert_eq!(paid.input_tokens, 240);
+    assert_eq!(paid.output_tokens, 60);
+    assert_eq!(paid.cached_tokens, 200);
+    let expected = 0.0021
+        + crate::harness::pricing::completion_cost("deepseek/deepseek-v4-flash", 120, 100, 30);
+    assert!((paid.cost_usd - expected).abs() < 1e-12);
+    assert_eq!(gateway.requests().len(), 4);
 }
 
 #[tokio::test]

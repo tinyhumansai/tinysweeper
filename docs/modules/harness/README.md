@@ -79,10 +79,11 @@ they look nothing alike:
 
 `GatewayModel::call_until_complete` handles both. The finish reason is checked
 before anything is parsed, and a `length` finish is never turned into findings: the call is retried against the same model with a
-doubled ceiling, twice, so the last attempt runs at 4x `models.max_tokens`. A
+doubled ceiling, twice, so the last attempt runs at 4x the configured ceiling
+(`models.routes[model].max_tokens` when present, otherwise `models.max_tokens`). A
 rung that is never reached costs nothing — tokens are billed as produced, so the
 ladder is headroom rather than spend. An answer that still does not fit fails the
-call with an error naming `models.max_tokens` and reporting how much of the
+call with an error naming the applicable ceiling setting and reporting how much of the
 budget went to reasoning, and only then does the fallback chain take over.
 
 This ladder did not actually run under the tinyagents harness: in `schema` mode
@@ -104,9 +105,9 @@ Two places, for two different questions, and neither is a third log file:
   `LANGFUSE_SECRET_KEY` are set (see the README), or through the TinyHumans
   proxy with `TINYHUMANS_LANGFUSE_PROXY_URL` / `TINYHUMANS_AUTH_TOKEN`.
   `harness::langfuse` is a `CompletionObserver`: each call is exported as its
-  own trace and generation with the prompt, the model's answer, usage and cost,
-  which is what answers "what did the model actually see" for a review that has
-  already been published. Every rung of the truncation ladder is its own call
+  own trace and generation with model attribution, timing, usage and cost.
+  Prompts, answers and provider error text are omitted so repository secrets
+  cannot reach telemetry. Every rung of the truncation ladder is its own call
   and so its own trace: a retry at a larger ceiling appears as a retry rather
   than overwriting the attempt that was cut off. Export is fire-and-forget and
   never fails a review.

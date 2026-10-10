@@ -26,7 +26,7 @@ fn config(provider: &str, model: &str, dims: usize) -> Embeddings {
 
 #[test]
 fn our_signature_and_the_harness_signature_describe_the_same_space() {
-    // The correspondence the index partition depends on. the embedding model writes
+    // The correspondence the index partition depends on. The embedding model writes
     // `provider=…;model=…;dims=…`; if `EmbedSignature::harness_key` ever drifts
     // from it, the two sides are naming spaces by different rules and a model
     // swap stops being detectable.

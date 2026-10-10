@@ -351,8 +351,16 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
     // A route's ceiling replaces the global one for its model, so the same
     // floor applies to it — a nonzero override below it recreates exactly the
     // failure the check above exists for, on one rung. Zero means "no
-    // ceiling" and is exempt.
+    // ceiling" on the wire, which cannot bound spend for any review lane.
     for route in &models.routes {
+        if route.max_tokens == Some(0) {
+            problems.push(format!(
+                "`models.routes[{}].max_tokens = 0` removes the output ceiling; budgeted \
+                 reviews require a finite output cap. Set a positive cap or omit the override \
+                 to inherit `models.max_tokens`",
+                route.model,
+            ));
+        }
         if let Some(cap) = route.max_tokens
             && cap != 0
             && cap < REASONING_FLOOR
@@ -362,8 +370,8 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
             problems.push(format!(
                 "`models.routes[{}].max_tokens = {cap}` is too small with \
                  `models.reasoning_effort = \"{}\"`: reasoning is billed against the same \
-                 ceiling as the answer. Raise it to at least {REASONING_FLOOR}, set it to 0 \
-                 for no ceiling, or set `models.reasoning_effort = \"off\"`",
+                 ceiling as the answer. Raise it to at least {REASONING_FLOOR}, or set \
+                 `models.reasoning_effort = \"off\"`",
                 route.model,
                 models.reasoning_effort.trim(),
             ));
@@ -377,6 +385,23 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
             "`models.budget_usd_per_pr = {}` must be a finite number above zero; it is the hard ceiling for one pull request",
             models.budget_usd_per_pr
         ));
+    }
+
+    // Invalid rates make admission arithmetic meaningless. Name only the
+    // alias and field so diagnostics never echo operator-supplied rates.
+    for (alias, bound) in &models.budget_prices {
+        for (field, rate) in [("input", bound.input), ("cached", bound.cached)] {
+            if !rate.is_finite() || rate < 0.0 {
+                problems.push(format!(
+                    "`models.budget_prices[{alias}].{field}` must be finite and nonnegative"
+                ));
+            }
+        }
+        if !bound.output.is_finite() || bound.output <= 0.0 {
+            problems.push(format!(
+                "`models.budget_prices[{alias}].output` must be finite and strictly positive"
+            ));
+        }
     }
 }
 

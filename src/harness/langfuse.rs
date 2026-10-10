@@ -1,6 +1,6 @@
 //! Langfuse export for model calls, behind the `harness` feature.
 //!
-//! One trace and one `generation-create` per [`Completer`] call, sent to
+//! One metadata-only trace and `generation-create` per [`Completer`] call, sent to
 //! Langfuse's `/api/public/ingestion` batch API. Configured entirely from the
 //! environment, with the same variables the tinyagents exporter read, so a
 //! deployment's telemetry survives the harness change untouched:
@@ -113,7 +113,16 @@ impl LangfuseExporter {
     }
 
     async fn send(&self, payload: Value) {
-        if self.client.send_batch(payload).await.is_err() {
+        // Bound the task as well as the HTTP request: a stalled telemetry
+        // service must not retain one export task per physical model call.
+        if !matches!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                self.client.send_batch(payload),
+            )
+            .await,
+            Ok(Ok(_))
+        ) {
             tracing::warn!("could not export model trace to Langfuse");
         }
     }
@@ -139,9 +148,11 @@ pub(crate) fn ingestion_batch(
         .as_millis() as i64;
     let start_ms = end_ms - trace.latency.as_millis() as i64;
     let request = trace.request;
-    let (output, usage, model, level, status) = match trace.outcome {
+    // Review text and provider errors can contain repository secrets. Export
+    // only bounded operational metadata, without cloning/serializing payloads
+    // on the synchronous observer callback.
+    let (usage, model, level, status) = match trace.outcome {
         Ok(response) => (
-            json!(response.text),
             response.usage.as_ref().map(|usage| {
                 json!({
                     "input": usage.input_tokens,
@@ -158,12 +169,11 @@ pub(crate) fn ingestion_batch(
             "DEFAULT",
             None,
         ),
-        Err(err) => (
-            Value::Null,
+        Err(_) => (
             None,
             request.model.clone(),
             "ERROR",
-            Some(err.to_string()),
+            Some("completion failed"),
         ),
     };
     let metadata = json!({
@@ -178,8 +188,6 @@ pub(crate) fn ingestion_batch(
         "model": model,
         "startTime": iso(start_ms),
         "endTime": iso(end_ms),
-        "input": request.messages,
-        "output": output,
         "level": level,
         "metadata": metadata,
     });
@@ -313,6 +321,65 @@ mod tests {
     }
 
     #[test]
+    fn completion_telemetry_omits_prompt_response_and_provider_error_content() {
+        let private = "private-review-content";
+        let request = CompletionRequest::new("model", vec![ChatMessage::user(private)]);
+        let mut response = response();
+        response.text = private.into();
+        response.raw = Some(json!({"private": private}));
+        let error = openhuman_embed::CoreError::Rpc {
+            method: "openhuman.complete",
+            message: private.into(),
+        };
+        for outcome in [Ok(&response), Err(&error)] {
+            let trace = CompletionTrace {
+                request: &request,
+                outcome,
+                latency: Duration::ZERO,
+            };
+            let batch = ingestion_batch(&trace, None, "private-test", UNIX_EPOCH);
+            assert!(!batch.to_string().contains(private));
+            let generation = &batch["batch"][1]["body"];
+            assert!(generation.get("input").is_none());
+            assert!(generation.get("output").is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unresponsive_telemetry_server_cannot_retain_export_tasks() {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let exporter = LangfuseExporter::new(
+            endpoint,
+            Auth::Basic {
+                public_key: "public".into(),
+                secret_key: "secret".into(),
+            },
+            None,
+        )
+        .unwrap();
+        let (started, received) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 8192];
+            assert!(socket.read(&mut buffer).await.unwrap() > 0);
+            started.send(()).unwrap();
+            std::future::pending::<()>().await;
+            drop(socket);
+        });
+        let delivery = tokio::spawn(async move { exporter.send(json!({"batch":[]})).await });
+        tokio::time::timeout(Duration::from_secs(5), received)
+            .await
+            .unwrap()
+            .unwrap();
+        let settled = tokio::time::timeout(Duration::from_secs(15), delivery).await;
+        server.abort();
+        assert!(settled.is_ok(), "a stalled server retained the export task");
+        settled.unwrap().unwrap();
+    }
+
+    #[test]
     fn a_failed_call_is_an_error_level_generation() {
         let request = CompletionRequest::new("m", vec![ChatMessage::user("hi")]);
         let err = openhuman_embed::CoreError::Rpc {
@@ -327,12 +394,7 @@ mod tests {
         let batch = ingestion_batch(&trace, None, "t2", UNIX_EPOCH);
         let generation = &batch["batch"][1]["body"];
         assert_eq!(generation["level"], "ERROR");
-        assert!(
-            generation["statusMessage"]
-                .as_str()
-                .unwrap()
-                .contains("boom")
-        );
+        assert_eq!(generation["statusMessage"], "completion failed");
         assert!(batch["batch"][0]["body"].get("environment").is_none());
     }
 

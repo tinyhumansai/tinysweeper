@@ -28,10 +28,11 @@
 - `vendor/openhuman` — the model harness, as a git submodule (recursive). Never
   edit it here; change it upstream and bump the pin, keeping the `Cargo.toml`
   rev, the submodule pointer and the `[patch]` tables in step —
-  `scripts/assert-openhuman-pin.sh` checks all three. tinysweeper uses only
-  `openhuman_embed::complete` (stateless structured completions) and
-  `openhuman_embed::embeddings`; lane concurrency, the panel and sub-agents are
-  plain futures in `src/flows/`, see `docs/modules/flows/README.md`.
+  `scripts/assert-openhuman-pin.sh` checks these and the actual checkout.
+  TinySweeper uses Embed's structured completions, embeddings and opt-in
+  read-only review agents. Lane concurrency uses Embed's borrowed fan-out
+  with a pure-future offline path in `src/flows/`; see
+  `docs/modules/flows/README.md`.
 - `docs/modules/<module>/README.md` — one document per `src/` module.
 - `examples/` — declared explicitly in `Cargo.toml` with `required-features`, so
   credential-needing smoke tests never build in CI.
