@@ -435,3 +435,70 @@ async fn a_zero_ceiling_is_not_forwarded() {
         .unwrap();
     assert!(gateway.requests()[0].get("max_tokens").is_none());
 }
+
+#[tokio::test]
+async fn concurrent_affordable_completions_wait_for_reservations_to_settle() {
+    let gateway = FakeGateway::start(vec![
+        Reply::completion("deep", ANSWER, "stop", usage()),
+        Reply::completion("deep", ANSWER, "stop", usage()),
+    ])
+    .await;
+    let mut models = models(&gateway.base_url);
+    // Each 4x truncation bound reserves $0.60, but each successful answer
+    // costs $0.0021. Together they fit the actual $1 budget, not its temporary
+    // worst-case reservations.
+    models.budget_prices.insert(
+        "deep".into(),
+        crate::config::types::BudgetPriceBound {
+            input: 0.0,
+            cached: 0.0,
+            output: 150.0,
+        },
+    );
+    let model = adapter(&models).scoped_budget(1.0).unwrap();
+    let (first, second) = tokio::join!(
+        model.complete(request("deep")),
+        model.complete(request("deep")),
+    );
+    let first = first.expect("first affordable completion");
+    let second = second.expect("concurrent affordable completion waits for settlement");
+    assert!((first.usage.cost_usd + second.usage.cost_usd - 0.0042).abs() < 1e-12);
+    assert_eq!(gateway.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn queued_completions_still_stop_before_dispatching_past_the_hard_budget() {
+    let paid_usage = json!({"prompt_tokens":120,"completion_tokens":30,"cost":0.4});
+    let gateway = FakeGateway::start(vec![
+        Reply::completion("deep", ANSWER, "stop", paid_usage.clone()),
+        Reply::completion("deep", ANSWER, "stop", paid_usage),
+    ])
+    .await;
+    let mut models = models(&gateway.base_url);
+    models.budget_prices.insert(
+        "deep".into(),
+        crate::config::types::BudgetPriceBound {
+            input: 0.0,
+            cached: 0.0,
+            output: 150.0,
+        },
+    );
+    let model = adapter(&models).scoped_budget(1.0).unwrap();
+    let (first, second, third) = tokio::join!(
+        model.complete(request("deep")),
+        model.complete(request("deep")),
+        model.complete(request("deep")),
+    );
+    let total = first.expect("first call fits").usage.cost_usd
+        + second
+            .expect("second call fits after settlement")
+            .usage
+            .cost_usd;
+    assert!((total - 0.8).abs() < 1e-12);
+    assert!(third.is_err(), "remaining $0.20 cannot admit a $0.60 bound");
+    assert_eq!(
+        gateway.requests().len(),
+        2,
+        "the denied call never reaches the provider"
+    );
+}
