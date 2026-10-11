@@ -46,6 +46,12 @@ built over a read handle. The model still holds no tool: it fills a `lookups`
 field in its JSON answer, the host answers it, and the host decides what the
 field is worth.
 
+Each turn returns exactly one JSON object. A lookup request has a provisional
+summary and an empty findings list; the verdict follows after the host returns
+the evidence. The lookup-enabled schema uses that same contract rather than
+the finished-review instructions used by a single-turn response. Malformed or
+concatenated JSON replies remain failures, never best-effort verdicts.
+
 A missing file is evidence only about that path. Reviewers can list the
 containing directory to discover alternate implementations before reading
 them. Listing uses the same round, per-round and character budgets as other
