@@ -282,12 +282,14 @@ impl GatewayModel {
             .collect();
         CompletionRequest::new(&request.model, messages)
             .timeout_ms(self.request_timeout_ms)
-            // JSON-only gateways can still return malformed text. Give that mode
-            // one owner-managed repair; schema mode keeps its ceiling-doubling
-            // truncation ladder without an extra same-ceiling dispatch.
-            .structured_retries(u8::from(
-                self.structured_output == StructuredOutput::JsonObject,
-            ))
+            // Some gateways repeat concatenated JSON on the first repair. Bound
+            // JSON mode to two owner-managed repairs while keeping strict
+            // parsing, paid admission and the schema-mode truncation ladder.
+            .structured_retries(if self.structured_output == StructuredOutput::JsonObject {
+                2
+            } else {
+                0
+            })
             .response_format(format)
     }
 
@@ -717,6 +719,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_second_malformed_repair_recovers_without_losing_any_paid_charge() {
+        use crate::harness::fake_gateway::{FakeGateway, Reply};
+        let (mut model, _, request) = admission_fixture().await;
+        let gateway = FakeGateway::start(vec![
+            Reply::completion(
+                "b",
+                r#"{"summary":"provisional"}{"summary":"provisional"}"#,
+                "stop",
+                json!({"prompt_tokens":5,"completion_tokens":2,"cost":0.125}),
+            ),
+            Reply::completion(
+                "b",
+                r#"{"summary":"still invalid"}{"summary":"still invalid"}"#,
+                "stop",
+                json!({"prompt_tokens":7,"completion_tokens":3,"cost":0.25}),
+            ),
+            Reply::completion(
+                "b",
+                r#"{"summary":"checked"}"#,
+                "stop",
+                json!({"prompt_tokens":11,"completion_tokens":4,"cost":0.5}),
+            ),
+        ])
+        .await;
+        model.base_url = gateway.base_url.clone();
+        model.budget_prices.get_mut("b").unwrap().output = 5000.0;
+        model.budget = Some(crate::harness::budget::ledger(10.0));
+        model.structured_output = StructuredOutput::JsonObject;
+        let response = model
+            .complete(request)
+            .await
+            .expect("a second bounded repair recovers duplicated JSON");
+        assert_eq!(response.value["summary"], "checked");
+        assert_eq!(gateway.requests().len(), 3);
+        assert_eq!(response.usage.input_tokens, 23);
+        assert_eq!(response.usage.output_tokens, 9);
+        assert_eq!(
+            response.usage.cost_usd, 0.875,
+            "all three paid answers must be reported"
+        );
+        let snapshot = model.budget.as_ref().unwrap().snapshot();
+        assert_eq!(snapshot.spent.cost_micros, 875_000);
+        assert_eq!(snapshot.reserved.cost_micros, 0);
+    }
+
+    #[tokio::test]
     async fn malformed_json_is_repaired_once_and_every_paid_dispatch_is_counted() {
         use crate::harness::fake_gateway::{FakeGateway, Reply};
         let (mut model, _, request) = admission_fixture().await;
@@ -757,7 +805,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn json_object_truncation_repairs_once_before_growing_the_ceiling() {
+    async fn json_object_truncation_repairs_twice_before_growing_the_ceiling() {
         use crate::harness::fake_gateway::{FakeGateway, Reply};
         let (mut model, _, request) = admission_fixture().await;
         let gateway = FakeGateway::start(vec![
@@ -772,6 +820,12 @@ mod tests {
                 "{still truncated",
                 "length",
                 json!({"prompt_tokens":7,"completion_tokens":3,"cost":0.25}),
+            ),
+            Reply::completion(
+                "b",
+                "{still truncated again",
+                "length",
+                json!({"prompt_tokens":5,"completion_tokens":2,"cost":0.125}),
             ),
             Reply::completion(
                 "b",
@@ -790,13 +844,13 @@ mod tests {
             .await
             .expect("bounded owner ladder recovers truncation");
         let requests = gateway.requests();
-        assert_eq!(requests.len(), 3);
+        assert_eq!(requests.len(), 4);
         assert_eq!(
             requests
                 .iter()
                 .map(|r| r["max_tokens"].as_u64().unwrap())
                 .collect::<Vec<_>>(),
-            vec![100, 100, 200]
+            vec![100, 100, 100, 200]
         );
         assert_eq!(
             requests[1]["messages"].as_array().unwrap().len(),
@@ -804,20 +858,20 @@ mod tests {
             "repair adds an owner instruction"
         );
         assert_eq!(
-            requests[2]["messages"].as_array().unwrap().len(),
+            requests[3]["messages"].as_array().unwrap().len(),
             requests[0]["messages"].as_array().unwrap().len(),
             "a new ceiling starts from the immutable prompt"
         );
-        assert_eq!(response.usage.input_tokens, 17);
-        assert_eq!(response.usage.output_tokens, 7);
-        assert_eq!(response.usage.cost_usd, 0.5);
+        assert_eq!(response.usage.input_tokens, 22);
+        assert_eq!(response.usage.output_tokens, 9);
+        assert_eq!(response.usage.cost_usd, 0.625);
         let snapshot = model.budget.as_ref().unwrap().snapshot();
-        assert_eq!(snapshot.spent.cost_micros, 500_000);
+        assert_eq!(snapshot.spent.cost_micros, 625_000);
         assert_eq!(snapshot.reserved.cost_micros, 0);
     }
 
     #[tokio::test]
-    async fn persistent_malformed_json_stops_after_one_repair_and_retains_paid_usage() {
+    async fn persistent_malformed_json_stops_after_two_repairs_and_retains_paid_usage() {
         use crate::harness::fake_gateway::{FakeGateway, Reply};
         let (mut model, _, request) = admission_fixture().await;
         let gateway = FakeGateway::start(vec![
@@ -833,6 +887,12 @@ mod tests {
                 "stop",
                 json!({"prompt_tokens":7,"completion_tokens":3,"cost":0.25}),
             ),
+            Reply::completion(
+                "b",
+                "{broken a third time",
+                "stop",
+                json!({"prompt_tokens":11,"completion_tokens":4,"cost":0.5}),
+            ),
         ])
         .await;
         model.base_url = gateway.base_url.clone();
@@ -844,15 +904,15 @@ mod tests {
             .await
             .expect_err("no third dispatch or fabricated verdict");
         assert!(error.to_string().contains("InvalidJson"), "{error}");
-        assert_eq!(gateway.requests().len(), 2);
+        assert_eq!(gateway.requests().len(), 3);
         let usage = error
             .usage()
             .expect("failed paid attempts retain accounting");
-        assert_eq!(usage.input_tokens, 12);
-        assert_eq!(usage.output_tokens, 5);
-        assert_eq!(usage.cost_usd, 0.375);
+        assert_eq!(usage.input_tokens, 23);
+        assert_eq!(usage.output_tokens, 9);
+        assert_eq!(usage.cost_usd, 0.875);
         let snapshot = model.budget.as_ref().unwrap().snapshot();
-        assert_eq!(snapshot.spent.cost_micros, 375_000);
+        assert_eq!(snapshot.spent.cost_micros, 875_000);
         assert_eq!(snapshot.reserved.cost_micros, 0);
     }
 

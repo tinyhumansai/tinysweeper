@@ -196,7 +196,7 @@ async fn json_object_mode_carries_the_schema_in_the_prompt() {
 #[tokio::test]
 async fn json_object_answers_with_trailing_prose_are_refused() {
     let invalid = Reply::completion("vendor/deep", &format!("{ANSWER}\nDone."), "stop", usage());
-    let gateway = FakeGateway::start(vec![invalid.clone(), invalid]).await;
+    let gateway = FakeGateway::start(vec![invalid.clone(), invalid.clone(), invalid]).await;
     let models = Models {
         structured_output: StructuredOutput::JsonObject,
         ..models(&gateway.base_url)
@@ -206,7 +206,7 @@ async fn json_object_answers_with_trailing_prose_are_refused() {
         .await
         .expect_err("the complete terminal answer must be JSON");
     assert!(error.to_string().contains("InvalidJson"), "{error}");
-    assert_eq!(gateway.requests().len(), 2);
+    assert_eq!(gateway.requests().len(), 3);
     assert_eq!(
         gateway.requests()[0]["response_format"]["type"],
         "json_object"
