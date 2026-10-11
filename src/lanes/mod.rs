@@ -243,10 +243,11 @@ impl LaneOutcome {
     /// as unanswered, so the proposal cannot read the silence as clean.
     pub fn unanswered(lane: LaneId, spend: Spend) -> Self {
         Self {
-            summary: "No reviewer could be consulted.".into(),
+            summary: "No reviewer produced a usable response.".into(),
             spend,
             skipped: Some(
-                "No reviewer could be consulted; see the provider errors in the log.".into(),
+                "No reviewer produced a usable response; see the reviewer errors in the log."
+                    .into(),
             ),
             unanswered: vec![lane.check_name()],
             ..Self::default()
@@ -352,9 +353,9 @@ pub struct ReviewerResponse {
 
 /// Decode every usable council response, consistently across lanes.
 ///
-/// A member failure never discards its peers. A malformed solo response remains
-/// fatal, while a malformed council member is treated like a failed member;
-/// callers retain the policy decision for the no-usable-response case.
+/// A member failure never discards its peers. A malformed response is treated
+/// like a failed member even for a solo reviewer; callers retain the policy
+/// decision for the no-usable-response case and account for charged work.
 pub fn reviewer_responses(
     lane: LaneId,
     reviewers: &[Reviewer<'_>],
@@ -366,18 +367,17 @@ pub fn reviewer_responses(
             tracing::warn!(
                 agent = reviewer.id,
                 err = answer.error.as_deref().unwrap_or("no answer"),
-                "a council reviewer failed"
+                "a reviewer returned an unusable response"
             );
             continue;
         };
 
         let response = match crate::harness::schema::parse(lane, value) {
             Ok(response) => response,
-            Err(err) if reviewers.len() > 1 => {
-                tracing::warn!(agent = reviewer.id, %err, "a council reviewer failed");
+            Err(err) => {
+                tracing::warn!(agent = reviewer.id, %err, "a reviewer returned an unusable response");
                 continue;
             }
-            Err(err) => return Err(err),
         };
 
         responses.push(ReviewerResponse {

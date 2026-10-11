@@ -96,6 +96,8 @@ pub struct Finding {
     #[serde(default)]
     pub aliases: Vec<String>,
     /// Whether this observation is published inside another finding's thread.
+    /// For a below-gate summary note, another note displays the same concern;
+    /// the original remains in the proposal for audit without becoming inline.
     ///
     /// It remains in its lane for the check-run evidence and conclusion, but
     /// [`crate::app::review::Proposal::findings`] omits it from the inline

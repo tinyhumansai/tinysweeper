@@ -302,6 +302,38 @@ mod tests {
             .expect("lane runs")
     }
 
+    #[tokio::test]
+    async fn a_malformed_solo_description_is_unanswered_and_keeps_its_charge() {
+        let model = MockModel::new()
+            .then(json!({"summary":"An incomplete structured response.",
+                "findings":[{"path":"docker-compose.yml"}]}))
+            .with_usage(crate::ports::model::Usage {
+                input_tokens: 6995,
+                output_tokens: 182,
+                cost_usd: 0.000068,
+                ..Default::default()
+            });
+        let outcome = run_with(
+            model.clone(),
+            &pull_request("An end-to-end deployment change."),
+            &diffs(),
+        )
+        .await;
+        assert!(outcome.findings.is_empty());
+        assert_eq!(outcome.unanswered, vec![LaneId::Description.check_name()]);
+        assert_eq!(
+            outcome.conclusion(crate::config::types::Severity::High),
+            crate::forge::types::CheckConclusion::Neutral
+        );
+        assert_eq!(outcome.spend.usage.input_tokens, 6995);
+        assert_eq!(outcome.spend.cost_usd(), 0.000068);
+        assert_eq!(
+            model.calls(),
+            1,
+            "Containment must not dispatch another paid call."
+        );
+    }
+
     // --- golden test -------------------------------------------------------
 
     #[tokio::test]
