@@ -1,0 +1,17 @@
+{
+  "key": "bde67e6b87b302ba",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 26484,
+    "output_tokens": 7141,
+    "cached_tokens": 12148,
+    "embed_tokens": 0,
+    "cost_usd": 0.015555629143999999
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds four model price entries to the `MODEL_PRICES` table and four tests that verify pricing behavior and defaults coverage. All cost calculations in the new tests check out against the table values, and the test logic is sound. The comments use \"fails closed\" loosely where `completion_cost` actually charges the ceiling rate, but the code behavior is correct and consistent with the module's own documentation, so this is not a defect."
+  }
+}

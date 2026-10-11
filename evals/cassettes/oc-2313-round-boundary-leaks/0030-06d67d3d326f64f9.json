@@ -1,0 +1,28 @@
+{
+  "key": "06d67d3d326f64f9",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 57412,
+    "output_tokens": 7089,
+    "cached_tokens": 48257,
+    "embed_tokens": 0,
+    "cost_usd": 0.01744952036
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The comment above this code asserts the invariant \"committing after a subset would charge a threshold nobody spent\" — i.e., `next_state` must be taken up only after every turn in the round is durably appended, not part-way through. No test in the diff pins this. Every test fixture updated by this PR (`deliberation_test.rs`, `moves_test.rs`, `test.rs`) sets `round_start: tinyhivemind_hive::Sequence(u64::MAX)`, which is the width-1 degenerate case: the round has one turn, so committing inside or outside the loop is behaviourally identical. A regression that moves `state = *next_state` inside the `for turn in round` loop would not fail any existing test. The same gap covers the pinboard bound `Some(turn.round_start)` a few lines above, whose comment claims a round-mate's `!pin` must not reach a peer's prompt — at width 1 with `u64::MAX` the bound withholds nothing, so no test would catch its removal. The repository rule requires maintaining at least 80% coverage for meaningful library behavior; the multi-turn round path — the core behavioural change of this PR — has zero coverage.",
+        "confidence": 0.82,
+        "existing_code": "            state = *next_state;\n            turns = turns.saturating_add(round_len);",
+        "path": "crates/opencompany-core/src/hivemind/episode.rs",
+        "rule": "untested-stated-invariant",
+        "severity": "medium",
+        "suggestion": null,
+        "title": "Pin the round-level commit-once invariant with a multi-turn test"
+      }
+    ],
+    "summary": "The diff is mostly a mechanical import-path migration (`openhuman_core::openhuman` → `openhuman_core`) driven by a Cargo.toml path change, plus a behavioural change in the hivemind episode host loop that now processes rounds of turns instead of single turns. The round handling commits state once after all turns and bounds the pinboard at `round_start`, but no test in the diff exercises a multi-turn round — every fixture uses `round_start: Sequence(u64::MAX)`, the degenerate width-1 case where the new invariants are vacuously true."
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "key": "131ea5dc717fb40e",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 18015,
+    "output_tokens": 780,
+    "cached_tokens": 7649,
+    "embed_tokens": 0,
+    "cost_usd": 0.003689442832
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "src/config",
+        "pattern": "struct Models",
+        "why": "Check whether Models has a reasoning_effort field — without it the code in this diff won't compile."
+      },
+      {
+        "kind": "search",
+        "path": "src/config",
+        "pattern": "reasoning_effort",
+        "why": "Confirm reasoning_effort exists on Models so from_config and the test compile."
+      }
+    ]
+  }
+}

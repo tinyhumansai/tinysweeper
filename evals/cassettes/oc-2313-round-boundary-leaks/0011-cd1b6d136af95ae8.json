@@ -1,0 +1,17 @@
+{
+  "key": "cd1b6d136af95ae8",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 9044,
+    "output_tokens": 484,
+    "cached_tokens": 3987,
+    "embed_tokens": 0,
+    "cost_usd": 0.0019207665759999998
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change repaths the `openhuman_core` dependency from the vendored workspace root to `vendor/openhuman/crates/openhuman-core`. I was unable to verify that the new path contains a Cargo package named `openhuman`, as the repository lookups returned no usable data for that location, but without concrete evidence of a wrong path I have no reportable finding."
+  }
+}

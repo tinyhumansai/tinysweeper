@@ -1,0 +1,27 @@
+{
+  "key": "c042bac1311b310f",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 8345,
+    "output_tokens": 181,
+    "cached_tokens": 3008,
+    "embed_tokens": 0,
+    "cost_usd": 0.001610873104
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "list",
+        "path": "vendor/openhuman",
+        "why": "Verify whether the new dependency path ../../vendor/openhuman/crates/openhuman-core exists in the repo, and whether a Cargo.toml sits at the old path too."
+      },
+      {
+        "kind": "list",
+        "path": "vendor/openhuman/crates",
+        "why": "Confirm openhuman-core crate directory exists under the new path."
+      }
+    ]
+  }
+}

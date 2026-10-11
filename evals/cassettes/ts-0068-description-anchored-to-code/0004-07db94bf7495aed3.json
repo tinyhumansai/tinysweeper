@@ -1,0 +1,38 @@
+{
+  "key": "07db94bf7495aed3",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4750,
+    "output_tokens": 557,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004843664
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The doc comment lists exactly four valid values: `off`, `low`, `medium`, `high`. Storing them as a `String` means any arbitrary string compiles and will be passed to the model, which may reject it or silently ignore it. The rest of the config struct uses typed fields (`u32`, `f64`, `Vec<String>`); a `String` here stands out as untyped and will produce silent failures at runtime. Fix: define an enum or use a constants set, and validate on deserialization.",
+        "confidence": 0.95,
+        "existing_code": "    pub reasoning_effort: String,",
+        "path": "src/config/types.rs",
+        "rule": "untyped-config-field",
+        "severity": "high",
+        "suggestion": null,
+        "title": "Use an enum or constant set for reasoning_effort instead of String"
+      },
+      {
+        "body": "The doc comment for `reasoning_effort` promises four values (`off`, `low`, `medium`, `high`) but the field itself is an unvalidated `String`. A value like `\"Off\"` (capitalised), `\"auto\"`, or a typo will be silently accepted and passed to the model, likely producing a runtime error that the caller cannot diagnose from the config. This is a concrete, reachable input: any user-supplied config file or CLI argument that sets `reasoning_effort` to a string not in the documented set will compile and run, then fail. The doc comment also says `off` \"is the setting that rescues a deployment whose model reasons past `max_tokens`\", which implies this is a load-bearing feature that the user must be able to rely on — silent acceptance of an invalid value defeats that reliability.",
+        "confidence": 0.95,
+        "existing_code": "    pub reasoning_effort: String,",
+        "path": "src/config/types.rs",
+        "rule": "unvalidated-enum-value",
+        "severity": "high",
+        "suggestion": null,
+        "title": "Validate reasoning_effort against the documented values"
+      }
+    ],
+    "summary": "Adds a `reasoning_effort` field as a plain `String` without validation, which is both a regression against the existing typed pattern and an omission of the documented enum values. The diff itself shows the two issues: a raw string where a typed enum or constant set is expected, and no validation that the value is one of the four documented choices."
+  }
+}

@@ -124,13 +124,10 @@ impl Lane for Description {
             LaneId::Description,
             &calls,
             &schema::json_schema(),
-            // No lookups: the subject is the title and body against the
-            // diff, and a reviewer reading the tree to judge prose is one
-            // spending calls on the wrong question.
-            runner::Asking {
-                tree: None,
-                ..input.asking()
-            },
+            // A title/body claim can depend on an unchanged guard. Use the
+            // existing bounded read-only lookup flow to verify that context;
+            // the lane's findings remain about the description, not inline code.
+            input.asking(),
         )
         .await?;
 
@@ -522,3 +519,7 @@ mod tests {
         assert!(!rendered.contains("IOSFODNN7EXAMPLE"), "{rendered}");
     }
 }
+
+#[cfg(test)]
+#[path = "description_lookup_test.rs"]
+mod lookup_tests;

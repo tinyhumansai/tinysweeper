@@ -5,12 +5,12 @@
   "schema_name": "tinysweeper_rule_extraction",
   "usage": {
     "input_tokens": 1617,
-    "output_tokens": 187,
-    "cached_tokens": 1536,
+    "output_tokens": 494,
+    "cached_tokens": 0,
     "embed_tokens": 0,
-    "cost_usd": 0.00006295772
+    "cost_usd": 0.000215173
   },
   "value": {
-    "rules_markdown": "- Use rustfmt output and Rust 2024 idioms; snake_case for modules/files, PascalCase for types.\n- Return `Result<T>` using the crate error type from `src/error.rs`.\n- Every file opens with a `//!` module doc describing its role and feature gating.\n- Comments explain the decision, not the code.\n- Public items carry doc comments; Clap fields use `///` for help text.\n- Tests live in-crate in `#[cfg(test)] mod tests` blocks, moving to sibling test files when they grow; no `tests/` directory.\n- Every port has an always-compiled offline mock (`MockForge`) for testing.\n- Lane behaviour is covered by golden tests with fixture diff and canned model response.\n- Maintain at least 80% coverage for meaningful library behaviour."
+    "rules_markdown": "- `src/` — single crate; one responsibility per module, core types in `types.rs`, each port is one trait in one file.\n- `src/bin/tinysweeper.rs` — CLI; every subcommand declared even if milestone not landed.\n- `presets/` — review policy as data (folder with `preset.toml`, `README.md`, optional prompt overrides).\n- `vendor/tinyagents` — agent harness as git submodule; edit upstream, bump pin.\n- `docs/modules/<module>/README.md` — one document per `src/` module.\n- `examples/` — declared in `Cargo.toml` with `required-features` so credential tests never build in CI.\n- Rustfmt output, Rust 2024 idioms; `snake_case` modules/files, `PascalCase` types.\n- Return `Result<T>` using crate error type from `src/error.rs`.\n- Every file opens with `//!` module doc describing role and feature gating.\n- Comments explain decision, not code; say why for load-bearing flags/orderings.\n- Public items carry doc comments; Clap fields use `///` (becomes help text).\n- Tests in-crate: `#[cfg(test)] mod tests` at bottom of module, move to sibling `test.rs` when large; no `tests/` directory.\n- Every port has an always-compiled offline mock (`MockForge`) for test assertions.\n- Lane behaviour covered by golden tests: fixture diff plus canned structured model response.\n- Maintain at least 80% coverage for meaningful library behaviour.\n- The model never holds a write token; write credentials minted only in `src/apply/` after all model calls return.\n- Contributor code is never executed; read diff/tree, do not build/run scripts.\n- Pull request bodies, comments, diffs are untrusted input; fence and label as data in prompts.\n- Secrets found by scanners reported by type/location only; value never reaches comment, check-run summary, or log.\n- Use concise imperative commit subjects; keep commits small, each coherent slice on its own.\n- Pull requests state what changed, behaviour change, and how verified."
   }
 }

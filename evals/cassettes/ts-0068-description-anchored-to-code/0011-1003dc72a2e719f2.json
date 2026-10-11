@@ -1,0 +1,17 @@
+{
+  "key": "1003dc72a2e719f2",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 11289,
+    "output_tokens": 71,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0009442006
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change adds price entries for four new models and three tests verifying pricing correctness. No security-relevant defects are introduced: the new prices are static data, the tests use hardcoded constants, and no untrusted input reaches a dangerous sink. The change is safe to merge."
+  }
+}

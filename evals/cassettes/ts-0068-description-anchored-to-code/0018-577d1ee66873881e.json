@@ -1,0 +1,17 @@
+{
+  "key": "577d1ee66873881e",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 18103,
+    "output_tokens": 927,
+    "cached_tokens": 7762,
+    "embed_tokens": 0,
+    "cost_usd": 0.003923054576
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a configurable `reasoning_effort` field to `GatewayModel`, replacing the previously hard-coded reasoning disable with a `reasoning_options` function that passes the configured effort through to OpenRouter. The logic, tests, and debug implementation all look sound; no defects found."
+  }
+}

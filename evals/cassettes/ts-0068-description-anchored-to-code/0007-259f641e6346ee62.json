@@ -1,0 +1,35 @@
+{
+  "key": "259f641e6346ee62",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 23570,
+    "output_tokens": 3658,
+    "cached_tokens": 10090,
+    "embed_tokens": 0,
+    "cost_usd": 0.009461601759999999
+  },
+  "value": {
+    "lookups": [
+      {
+        "glob": "src/config/**/*.rs",
+        "kind": "search",
+        "pattern": "struct Config",
+        "why": "Verify that Config has a models field with scan, deep, and fallback, which the new test every_model_the_defaults_select_has_a_price accesses."
+      },
+      {
+        "glob": "src/config/**/*.rs",
+        "kind": "search",
+        "pattern": "DEFAULTS",
+        "why": "Verify that crate::config::DEFAULTS exists and is a &str suitable for .parse::<toml::Table>()."
+      },
+      {
+        "glob": "src/config/**/*.rs",
+        "kind": "search",
+        "pattern": "struct Models",
+        "why": "Verify the Models struct has scan, deep (String) and fallback (Vec<String>) fields the test iterates over."
+      }
+    ]
+  }
+}

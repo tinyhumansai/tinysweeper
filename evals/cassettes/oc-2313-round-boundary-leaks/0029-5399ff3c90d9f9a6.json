@@ -1,0 +1,43 @@
+{
+  "key": "5399ff3c90d9f9a6",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 52453,
+    "output_tokens": 6175,
+    "cached_tokens": 19877,
+    "embed_tokens": 0,
+    "cost_usd": 0.018544300776
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core/src",
+        "pattern": "fn read_pinboard",
+        "why": "To see the signature and understand what the last parameter (the round bound) does — whether it withholds pins above the bound, and whether the new `Some(turn.round_start)` is correct."
+      },
+      {
+        "kind": "search",
+        "path": "vendor/tinyhivemind",
+        "pattern": "struct HiveStep",
+        "why": "To see the definition of HiveStep::Speak and understand the new `turns` and `next_state` fields, and the `round_start` field on each turn."
+      },
+      {
+        "kind": "search",
+        "path": "crates/opencompany-core/src/hivemind",
+        "pattern": "round_start",
+        "why": "To find whether any test exercises a round with width > 1 or verifies the pinboard round bound, which the diff comments claim as an invariant."
+      },
+      {
+        "kind": "search",
+        "path": "vendor/tinyhivemind",
+        "pattern": "round_width",
+        "why": "To understand how the library sets round_start for multi-turn rounds, which determines whether the host's bound is correct."
+      }
+    ],
+    "summary": "The PR repackages a vendored dependency (flattening the `openhuman_core::openhuman::` path to `openhuman_core::`) and refactors the hivemind episode loop from single-turn steps to multi-turn rounds, committing `next_state` once after every turn in a round is durable and bounding the pinboard read at `round_start`. I need to verify how `read_pinboard` uses the new bound and whether the `HiveStep::Speak` round fields are exercised by any test."
+  }
+}

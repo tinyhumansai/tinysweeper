@@ -1,0 +1,17 @@
+{
+  "key": "94a4dbad6fb699dd",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 13065,
+    "output_tokens": 409,
+    "cached_tokens": 5673,
+    "embed_tokens": 0,
+    "cost_usd": 0.0023056046240000003
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change fixes a real authentication bug by renaming the GitHub App env vars to the names `server::auth::AppAuth::from_env` actually reads, makes them required, and mounts the server config file read-only. It is safe to merge."
+  }
+}

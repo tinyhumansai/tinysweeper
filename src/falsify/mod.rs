@@ -212,10 +212,17 @@ fn user_message(findings: &[Finding], rendered_diff: &str, looked_up: &str) -> S
     out.push_str("\n## The findings\n\n");
     let mut list = String::new();
     for (index, finding) in findings.iter().enumerate() {
+        // A path alone cannot distinguish separate claims about the same file.
+        // Preserve the reviewer's anchor; do not invent one for commit findings.
+        let location = match (finding.line, finding.end_line) {
+            (Some(start), Some(end)) => format!("{}:{start}-{end}", finding.path),
+            (Some(line), None) => format!("{}:{line}", finding.path),
+            (None, _) => finding.path.clone(),
+        };
         list.push_str(&format!(
             "{}. [{}] {}\n{}\n\n",
             index + 1,
-            finding.path,
+            location,
             finding.title,
             finding.body.trim()
         ));

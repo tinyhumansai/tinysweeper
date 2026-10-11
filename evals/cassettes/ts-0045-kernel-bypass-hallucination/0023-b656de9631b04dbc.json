@@ -1,0 +1,17 @@
+{
+  "key": "b656de9631b04dbc",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 11419,
+    "output_tokens": 1908,
+    "cached_tokens": 4947,
+    "embed_tokens": 0,
+    "cost_usd": 0.0047335402160000005
+  },
+  "value": {
+    "findings": [],
+    "summary": "This is a new opt-in development shim that patches MongoDB's kernel-compatibility check to a no-op by reading, string-replacing, and exec'ing the image's own entrypoint. The file it reads is inside the Docker image (not attacker-controlled), the patch fails loudly if the expected function is absent, and the approach is sound for its stated purpose. No reportable defects."
+  }
+}
