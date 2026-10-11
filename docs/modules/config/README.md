@@ -82,6 +82,11 @@ port, in the default build, where tinyagents is not linked at all. The place it
 would pay for itself is `GatewayModel`'s hand-rolled fallback chain, on the
 feature-gated side of the port.
 
+`models.request_timeout_ms` sets a positive physical completion request deadline
+in milliseconds (default `120000`). It applies independently to each route,
+allowing a transport timeout to fall back without disabling the whole-review
+deadline or cancellation. Agent reviewers retain their separate turn deadline.
+
 ## Review budget admission
 
 Every review lane reserves spend against `models.budget_usd_per_pr`, including

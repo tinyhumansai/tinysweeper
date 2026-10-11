@@ -361,6 +361,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "gateway",
             "base_url",
             "api_key_env",
+            "request_timeout_ms",
             "scan",
             "deep",
             "flash",
