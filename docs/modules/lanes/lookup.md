@@ -156,3 +156,9 @@ named in the summary as *worth a look*. The unbounded sibling read is missed
 by every one-shot configuration and by that model; `gpt-5.6-luna` on the
 box's ladder reaches it two runs in three at a fiftieth of the price
 (tinysweeper#157), which is why it became the `deep` tier.
+
+The operator CLI accepts `review --tree /path/to/checkout` to supply the same
+read-only tree evidence used by server reviews. The checkout must match the
+live PR head and have no tracked, submodule, or untracked changes. A mismatch
+fails before review; no target build, dependency installation, or script runs.
+Without `--tree`, the CLI continues to read through the forge API.

@@ -41,6 +41,12 @@ enum Command {
         #[arg(long)]
         config: Option<std::path::PathBuf>,
 
+        /// Read-only checkout at the PR head for repository lookups.
+        ///
+        /// Must be clean and match the live head; mismatches fail before review.
+        #[arg(long)]
+        tree: Option<std::path::PathBuf>,
+
         /// Only run these lanes, overriding the config.
         #[arg(long, value_delimiter = ',')]
         lanes: Vec<String>,
@@ -531,7 +537,19 @@ async fn dispatch(command: Command) -> Result<()> {
             lanes,
             dry_run,
             propose_to,
-        } => run_review(&repo, pr, config, lanes, dry_run, &propose_to).await,
+            tree,
+        } => {
+            run_review(
+                &repo,
+                pr,
+                config,
+                lanes,
+                dry_run,
+                &propose_to,
+                tree.as_deref(),
+            )
+            .await
+        }
         Command::Apply { repo, pr, findings } => run_apply(&repo, pr, &findings).await,
         Command::Triage { repo, pr, findings } => run_triage(&repo, pr, &findings).await,
         Command::Preview(command) => run_preview(command).await,
@@ -569,6 +587,7 @@ async fn run_review(
     lanes: Vec<String>,
     dry_run: bool,
     propose_to: &std::path::Path,
+    tree_path: Option<&std::path::Path>,
 ) -> Result<()> {
     use tinysweeper::forge::RepoId;
     use tinysweeper::forge::github::GitHubRead;
@@ -583,9 +602,28 @@ async fn run_review(
     }
 
     let forge = GitHubRead::from_env()?;
+    use tinysweeper::ports::forge::ForgeRead as _;
+    let tree = if let Some(path) = tree_path {
+        let head = forge.pull_request(&repo_id, pr).await?.head_sha;
+        Some(review_tree(path, &head).await?)
+    } else {
+        None
+    };
     let model = live_model(&loaded.config).await?;
-
-    let proposal = tinysweeper::app::review(&forge, model, &loaded.config, &repo_id, pr).await?;
+    let proposal = tinysweeper::app::review::review_with_tree(
+        &forge,
+        model,
+        &loaded.config,
+        &repo_id,
+        pr,
+        None,
+        None,
+        None,
+        None,
+        tree.as_ref()
+            .map(|tree| tree as &dyn tinysweeper::ports::tree::TreeReader),
+    )
+    .await?;
 
     println!("{}", render(&proposal));
 
@@ -607,11 +645,52 @@ async fn run_review(
     _lanes: Vec<String>,
     _dry_run: bool,
     _propose_to: &std::path::Path,
+    _tree_path: Option<&std::path::Path>,
 ) -> Result<()> {
     Err(tinysweeper::Error::FeatureDisabled(
         "reviewing a pull request",
         "github,harness",
     ))
+}
+
+/// Validate operator-supplied evidence before giving it to the review engine.
+///
+/// Git only reads repository metadata here; no contributor scripts are run.
+#[cfg(any(test, all(feature = "github", feature = "harness")))]
+async fn review_tree(
+    path: &std::path::Path,
+    head: &str,
+) -> Result<tinysweeper::ports::tree::DirTree> {
+    let revision = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .await
+        .map_err(|err| tinysweeper::Error::Git(err.to_string()))?;
+    if !revision.status.success() || String::from_utf8_lossy(&revision.stdout).trim() != head {
+        return Err(tinysweeper::Error::Git(
+            "review tree must be at the live pull request head".into(),
+        ));
+    }
+    let status = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args([
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ])
+        .output()
+        .await
+        .map_err(|err| tinysweeper::Error::Git(err.to_string()))?;
+    if !status.status.success() || !status.stdout.is_empty() {
+        return Err(tinysweeper::Error::Git(
+            "review tree must be clean, including submodules and untracked files".into(),
+        ));
+    }
+    Ok(tinysweeper::ports::tree::DirTree::new(path).at_revision(head))
 }
 
 /// The corpus commands. Only `run --record` and `add` need a network.
@@ -1847,6 +1926,63 @@ mod tests {
             }
             other => panic!("expected review, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn review_accepts_a_read_only_repository_tree() {
+        assert!(
+            Cli::try_parse_from([
+                "tinysweeper",
+                "review",
+                "--repo",
+                "tinyhumansai/tinysweeper",
+                "--pr",
+                "206",
+                "--tree",
+                "/checkout",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn review_tree_rejects_wrong_heads_and_modified_evidence() {
+        use tinysweeper::ports::tree::TreeReader as _;
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args([
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                ])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            String::from_utf8(output.stdout).unwrap()
+        };
+        git(&["init", "--initial-branch=main"]);
+        std::fs::write(dir.path().join("source.rs"), "original").unwrap();
+        git(&["add", "source.rs"]);
+        git(&["commit", "-m", "fixture"]);
+        let head = git(&["rev-parse", "HEAD"]);
+        let head = head.trim();
+        assert!(review_tree(dir.path(), "wrong").await.is_err());
+        let clean = review_tree(dir.path(), head).await.unwrap();
+        assert_eq!(clean.revision().as_deref(), Some(head));
+        std::fs::write(dir.path().join("source.rs"), "modified").unwrap();
+        assert!(review_tree(dir.path(), head).await.is_err());
+        std::fs::write(dir.path().join("source.rs"), "original").unwrap();
+        std::fs::write(dir.path().join("untracked.rs"), "new evidence").unwrap();
+        assert!(review_tree(dir.path(), head).await.is_err());
     }
 
     #[test]
