@@ -125,39 +125,6 @@ fn provider_options(effort: &str, routing: &ProviderRouting) -> serde_json::Valu
     options
 }
 
-/// The cost the gateway says it charged, when it says so.
-///
-/// Read out of the raw response body rather than the parsed usage, because the
-/// OpenAI wire shape has no cost field — this one is
-/// OpenRouter's extension, returned because [`provider_options`] asked for it.
-/// `None` means the gateway reported nothing and the estimate stands.
-fn gateway_cost(raw: Option<&serde_json::Value>) -> Option<f64> {
-    let usage = raw?.get("usage")?;
-    // Two spellings, from the two marketplaces the ladder dispatches to.
-    // OpenRouter reports `cost` in dollars; Surplus reports
-    // `buyer_cost_micro`, an integer count of micro-dollars, and reports it
-    // through the ladder verbatim — the router returns the upstream body as
-    // it came. Read either, so a call the ladder sent to Surplus is billed
-    // at what it cost rather than at the price table's fallback rate.
-    //
-    // Surplus first. Some of its sellers relay an OpenRouter-shaped usage
-    // block alongside their own, and in it `cost` is `0` with
-    // `is_byok: true` — the seller's key paid upstream, not ours — while
-    // `buyer_cost_micro` is what Surplus bills. Measured on
-    // `deepseek-v4-flash` via Alibaba: `cost: 0`, `buyer_cost_micro: 1`.
-    // Reading `cost` first billed every flash call as free.
-    let cost = match usage
-        .get("buyer_cost_micro")
-        .and_then(serde_json::Value::as_f64)
-    {
-        Some(micro) => micro / 1_000_000.0,
-        None => usage.get("cost")?.as_f64()?,
-    };
-    // A gateway that reports a nonsensical cost is a gateway to disbelieve: a
-    // negative figure would credit the budget rather than spend it.
-    (cost.is_finite() && cost >= 0.0).then_some(cost)
-}
-
 /// Whether reasoning took more than half of the output ceiling.
 ///
 /// No ceiling, no budget to consume half of: a routed model with
@@ -315,6 +282,12 @@ impl GatewayModel {
             .collect();
         CompletionRequest::new(&request.model, messages)
             .timeout_ms(self.request_timeout_ms)
+            // JSON-only gateways can still return malformed text. Give that mode
+            // one owner-managed repair; schema mode keeps its ceiling-doubling
+            // truncation ladder without an extra same-ceiling dispatch.
+            .structured_retries(u8::from(
+                self.structured_output == StructuredOutput::JsonObject,
+            ))
             .response_format(format)
     }
 
@@ -440,19 +413,17 @@ impl GatewayModel {
             ))
         })?;
         let totals = result.total_usage.unwrap_or_default();
-        let last = result.attempts.len().saturating_sub(1);
         let mut cost = 0.0;
-        for (index, attempt) in result.attempts.iter().enumerate() {
+        for attempt in &result.attempts {
             let usage = attempt.usage.clone().unwrap_or_default();
             let model = attempt
                 .answered_model
                 .as_deref()
                 .unwrap_or(&attempt.requested_model);
-            let reported = if index == last {
-                gateway_cost(response.raw.as_ref()).or(usage.cost_usd)
-            } else {
-                usage.cost_usd
-            };
+            // Embed already normalizes authoritative gateway charges and sums
+            // structured repair dispatches. The last raw response contains only
+            // its own bill, so preferring it would hide earlier paid attempts.
+            let reported = usage.cost_usd;
             cost += reported.unwrap_or_else(|| {
                 pricing::completion_cost(
                     model,
@@ -743,6 +714,146 @@ mod tests {
             max_tokens: 100,
         };
         (model, gateway, request)
+    }
+
+    #[tokio::test]
+    async fn malformed_json_is_repaired_once_and_every_paid_dispatch_is_counted() {
+        use crate::harness::fake_gateway::{FakeGateway, Reply};
+        let (mut model, _, request) = admission_fixture().await;
+        let gateway = FakeGateway::start(vec![
+            Reply::completion(
+                "b",
+                "{broken",
+                "stop",
+                json!({"prompt_tokens":5,"completion_tokens":2,"cost":0.125}),
+            ),
+            Reply::completion(
+                "b",
+                r#"{"summary":"checked"}"#,
+                "stop",
+                json!({"prompt_tokens":7,"completion_tokens":3,"cost":0.25}),
+            ),
+        ])
+        .await;
+        model.base_url = gateway.base_url.clone();
+        model.budget_prices.get_mut("b").unwrap().output = 5000.0;
+        model.budget = Some(crate::harness::budget::ledger(10.0));
+        model.structured_output = StructuredOutput::JsonObject;
+        let response = model
+            .complete(request)
+            .await
+            .expect("one bounded repair recovers malformed JSON");
+        assert_eq!(response.value["summary"], "checked");
+        assert_eq!(gateway.requests().len(), 2);
+        assert_eq!(response.usage.input_tokens, 12);
+        assert_eq!(response.usage.output_tokens, 5);
+        assert_eq!(
+            response.usage.cost_usd, 0.375,
+            "both paid answers must be reported"
+        );
+        let snapshot = model.budget.as_ref().unwrap().snapshot();
+        assert_eq!(snapshot.spent.cost_micros, 375_000);
+        assert_eq!(snapshot.reserved.cost_micros, 0);
+    }
+
+    #[tokio::test]
+    async fn json_object_truncation_repairs_once_before_growing_the_ceiling() {
+        use crate::harness::fake_gateway::{FakeGateway, Reply};
+        let (mut model, _, request) = admission_fixture().await;
+        let gateway = FakeGateway::start(vec![
+            Reply::completion(
+                "b",
+                "{truncated",
+                "length",
+                json!({"prompt_tokens":5,"completion_tokens":2,"cost":0.125}),
+            ),
+            Reply::completion(
+                "b",
+                "{still truncated",
+                "length",
+                json!({"prompt_tokens":7,"completion_tokens":3,"cost":0.25}),
+            ),
+            Reply::completion(
+                "b",
+                r#"{"summary":"checked"}"#,
+                "stop",
+                json!({"prompt_tokens":5,"completion_tokens":2,"cost":0.125}),
+            ),
+        ])
+        .await;
+        model.base_url = gateway.base_url.clone();
+        model.budget_prices.get_mut("b").unwrap().output = 5000.0;
+        model.budget = Some(crate::harness::budget::ledger(10.0));
+        model.structured_output = StructuredOutput::JsonObject;
+        let response = model
+            .complete(request)
+            .await
+            .expect("bounded owner ladder recovers truncation");
+        let requests = gateway.requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(
+            requests
+                .iter()
+                .map(|r| r["max_tokens"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![100, 100, 200]
+        );
+        assert_eq!(
+            requests[1]["messages"].as_array().unwrap().len(),
+            requests[0]["messages"].as_array().unwrap().len() + 1,
+            "repair adds an owner instruction"
+        );
+        assert_eq!(
+            requests[2]["messages"].as_array().unwrap().len(),
+            requests[0]["messages"].as_array().unwrap().len(),
+            "a new ceiling starts from the immutable prompt"
+        );
+        assert_eq!(response.usage.input_tokens, 17);
+        assert_eq!(response.usage.output_tokens, 7);
+        assert_eq!(response.usage.cost_usd, 0.5);
+        let snapshot = model.budget.as_ref().unwrap().snapshot();
+        assert_eq!(snapshot.spent.cost_micros, 500_000);
+        assert_eq!(snapshot.reserved.cost_micros, 0);
+    }
+
+    #[tokio::test]
+    async fn persistent_malformed_json_stops_after_one_repair_and_retains_paid_usage() {
+        use crate::harness::fake_gateway::{FakeGateway, Reply};
+        let (mut model, _, request) = admission_fixture().await;
+        let gateway = FakeGateway::start(vec![
+            Reply::completion(
+                "b",
+                "{broken",
+                "stop",
+                json!({"prompt_tokens":5,"completion_tokens":2,"cost":0.125}),
+            ),
+            Reply::completion(
+                "b",
+                "{still broken",
+                "stop",
+                json!({"prompt_tokens":7,"completion_tokens":3,"cost":0.25}),
+            ),
+        ])
+        .await;
+        model.base_url = gateway.base_url.clone();
+        model.budget_prices.get_mut("b").unwrap().output = 5000.0;
+        model.budget = Some(crate::harness::budget::ledger(10.0));
+        model.structured_output = StructuredOutput::JsonObject;
+        let error = model
+            .complete(request)
+            .await
+            .expect_err("no third dispatch or fabricated verdict");
+        assert!(error.to_string().contains("InvalidJson"), "{error}");
+        assert_eq!(gateway.requests().len(), 2);
+        let usage = error
+            .usage()
+            .expect("failed paid attempts retain accounting");
+        assert_eq!(usage.input_tokens, 12);
+        assert_eq!(usage.output_tokens, 5);
+        assert_eq!(usage.cost_usd, 0.375);
+        let snapshot = model.budget.as_ref().unwrap().snapshot();
+        assert_eq!(snapshot.spent.cost_micros, 375_000);
+        assert_eq!(snapshot.reserved.cost_micros, 0);
     }
 
     #[tokio::test]
@@ -1099,50 +1210,6 @@ mod tests {
         // The reasoning block is still there: the two travel in one object and
         // an overwrite would silently un-configure `reasoning_effort`.
         assert_eq!(options["reasoning"], json!({ "effort": "high" }));
-    }
-
-    #[test]
-    fn the_reported_cost_is_read_out_of_the_raw_body() {
-        let raw = json!({ "usage": { "cost": 0.0123, "prompt_tokens": 10 } });
-        assert_eq!(gateway_cost(Some(&raw)), Some(0.0123));
-    }
-
-    #[test]
-    fn a_gateway_that_reports_no_cost_leaves_the_estimate_standing() {
-        // Every gateway other than OpenRouter, and OpenRouter itself on an
-        // endpoint that does not honour `usage.include`.
-        assert_eq!(gateway_cost(None), None);
-        assert_eq!(gateway_cost(Some(&json!({ "usage": {} }))), None);
-        assert_eq!(gateway_cost(Some(&json!({}))), None);
-    }
-
-    #[test]
-    fn a_surplus_micro_dollar_cost_is_read_through_the_ladder() {
-        let raw = json!({ "usage": { "buyer_cost_micro": 4, "prompt_tokens": 16 } });
-        assert!((gateway_cost(Some(&raw)).unwrap() - 0.000004).abs() < 1e-12);
-    }
-
-    #[test]
-    fn a_relayed_byok_zero_does_not_hide_what_surplus_bills() {
-        // The body a Surplus seller relays from its own upstream: an
-        // OpenRouter-shaped `cost: 0` (their key paid) beside the
-        // `buyer_cost_micro` we are charged.
-        let raw = json!({ "usage": { "cost": 0, "is_byok": true, "buyer_cost_micro": 1 } });
-        assert!((gateway_cost(Some(&raw)).unwrap() - 0.000001).abs() < 1e-12);
-    }
-
-    #[test]
-    fn a_nonsensical_reported_cost_is_disbelieved() {
-        // A negative cost would credit the per-pull-request budget instead of
-        // spending it, which turns a hard stop into no stop at all.
-        assert_eq!(
-            gateway_cost(Some(&json!({ "usage": { "cost": -1.0 } }))),
-            None
-        );
-        assert_eq!(
-            gateway_cost(Some(&json!({ "usage": { "cost": "0.01" } }))),
-            None
-        );
     }
 
     #[test]
