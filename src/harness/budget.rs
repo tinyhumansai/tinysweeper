@@ -79,7 +79,8 @@ pub(crate) fn call(
             output_tokens,
             cost_micros,
         },
-    })
+    }
+    .wait_for_capacity())
 }
 
 #[cfg(test)]

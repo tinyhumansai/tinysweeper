@@ -369,7 +369,7 @@ fn unknown_failure_accounting_does_not_include_concurrent_reviewers() {
 }
 
 #[tokio::test]
-async fn concurrent_affordable_agent_reviews_wait_for_reservations_to_settle() {
+async fn fitting_agent_reviews_dispatch_together_using_inherited_capacity_wait() {
     use crate::ports::model::Model;
     let _guard = TEST_LOCK.lock().await;
     let lookup = Reply {
@@ -390,8 +390,10 @@ async fn concurrent_affordable_agent_reviews_wait_for_reservations_to_settle() {
         json!({"prompt_tokens":5,"completion_tokens":2,"cost":0.0021}),
     );
     // Each reviewer must successfully read source before its final answer.
-    // Admission spans both paid turns, including the borrowed tool dispatch.
-    let gateway = FakeGateway::start(vec![lookup.clone(), answer.clone(), lookup, answer]).await;
+    // Hold both first turns to prove child ledgers share capacity without
+    // serializing whole reviewers. Each must read before either final answer.
+    let (gateway, replies) =
+        FakeGateway::start_paused(vec![lookup.clone(), lookup, answer.clone(), answer]).await;
     let mut models = crate::config::types::Models {
         agentic_reviewers: true,
         base_url: gateway.base_url.clone(),
@@ -402,7 +404,7 @@ async fn concurrent_affordable_agent_reviews_wait_for_reservations_to_settle() {
         crate::config::types::BudgetPriceBound {
             input: 0.0,
             cached: 0.0,
-            output: 600.0,
+            output: 400.0,
         },
     );
     let model = crate::harness::embed::GatewayModel::with_key(&models, "fixture".into())
@@ -420,10 +422,23 @@ async fn concurrent_affordable_agent_reviews_wait_for_reservations_to_settle() {
     };
     let tree = MockTree::from_files([("src/lib.rs", "pub fn f() {}")]);
     let policy = LookupPolicy::default();
-    let (first, second) = tokio::join!(
-        model.review(request.clone(), &tree, &policy),
-        model.review(request, &tree, &policy),
-    );
+    let review = async {
+        tokio::join!(
+            model.review(request.clone(), &tree, &policy),
+            model.review(request.clone(), &tree, &policy),
+        )
+    };
+    let release = async {
+        let fitting = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while gateway.requests().len() < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        replies.add_permits(4);
+        fitting.expect("both fitting agent child reservations dispatch before settlement");
+    };
+    let ((first, second), ()) = tokio::join!(review, release);
     let first = first.expect("first affordable reviewer");
     let second = second.expect("second affordable reviewer waits for settlement");
     assert_eq!(first.value["summary"], "checked");
