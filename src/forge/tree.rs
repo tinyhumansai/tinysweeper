@@ -296,6 +296,14 @@ impl TreeReader for ForgeTree<'_> {
 
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
         match lookup {
+            Lookup::List { path } => {
+                self.explore(&TreeQuery::List {
+                    path: path.clone(),
+                    limit: crate::ports::tree::MAX_LIST_PATHS,
+                })
+                .await
+            }
+
             Lookup::Read { path, start, end } => {
                 if path.contains("..") || path.starts_with('/') {
                     return Ok(Found::NotFound);
@@ -329,7 +337,7 @@ impl TreeReader for ForgeTree<'_> {
 
     fn describe(&self) -> String {
         "Files can be read by path at the reviewed commit, including inside vendored \
-         submodules. Search is not available: name the path."
+         submodules. Directory paths can be listed without reading contents. Search is not available: name the path."
             .into()
     }
 }
@@ -670,6 +678,12 @@ mod tests {
         assert!(
             matches!(list, Found::Hits { hits, .. } if hits.len() == 1 && hits[0].path == "src/a.rs")
         );
+        let lookup = tree
+            .lookup(&Lookup::List { path: "src".into() })
+            .await
+            .unwrap();
+        assert!(matches!(lookup, Found::Hits { hits, .. } if hits.len() == 1
+            && hits[0].path == "src/a.rs" && !hits[0].text.contains("cursor")));
         let symbols = tree
             .explore(&TreeQuery::Symbol {
                 symbol: "cursor".into(),

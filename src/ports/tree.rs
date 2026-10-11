@@ -7,20 +7,21 @@
 //! doubt — *does the cursor this bound is passed to treat it as exclusive?* —
 //! had nowhere to take it, and filed nothing.
 //!
-//! The port is deliberately narrow. Two operations, both reads:
+//! The port is deliberately narrow. Three operations, all read-only:
 //!
 //! - [`Lookup::Read`] — a range of lines from one file at the reviewed
 //!   revision, and
 //! - [`Lookup::Search`] — a literal pattern over the tree, answered as
-//!   `path:line: text` hits.
+//!   `path:line: text` hits, and
+//! - [`Lookup::List`] — bounded file paths under a directory.
 //!
 //! Nothing here runs anything. The security boundary says contributor code is
-//! read and never executed, and a port whose only verbs are *read* and
-//! *search* cannot be argued into building, installing or running. It also
+//! read and never executed, and evidence reads, searches and listings
+//! cannot be argued into building, installing or running. The port also
 //! holds no write credential: every implementation is built over a read
 //! handle. That is why the reviewer can be given this and still not a shell.
 //!
-//! A backend that cannot do one of the two says so with
+//! A backend that cannot do one of the operations says so with
 //! [`Found::Unavailable`] rather than an error, and the reason reaches the
 //! model. A forge-only deployment reads files through the API and cannot
 //! search; the reviewer is told, and asks for a path instead.
@@ -45,10 +46,20 @@ pub const MAX_READ_LINES: u32 = 200;
 /// The most hits one [`Lookup::Search`] returns.
 pub const MAX_SEARCH_HITS: usize = 30;
 
+/// The most paths one [`Lookup::List`] returns.
+pub const MAX_LIST_PATHS: u32 = 32;
+
 /// One thing a reviewer asked to see.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Lookup {
+    /// Discover existing file paths under a relative directory, without reading contents.
+    ///
+    /// Uses the same bounded, sensitive-path-filtered listing as [`TreeQuery::List`].
+    List {
+        /// Repository-relative directory, or `.` for the root.
+        path: String,
+    },
     /// Lines `start..=end` of `path` at the reviewed revision.
     ///
     /// Both bounds are 1-based and inclusive. An absent `start` is line 1; an
@@ -86,6 +97,7 @@ impl Lookup {
     /// naturally in a JSON file.
     pub fn key(&self) -> String {
         match self {
+            Lookup::List { path } => format!("list:{path}:{MAX_LIST_PATHS}"),
             Lookup::Read { path, start, end } => {
                 format!(
                     "read {path}:{}-{}",
@@ -341,8 +353,7 @@ impl MockTree {
     /// A tree that answers only from recorded outcomes.
     ///
     /// What `eval run --record` wrote, replayed: a lookup it never saw is
-    /// `NotFound`, which the cassette will then miss on — loudly, which is the
-    /// point.
+    /// unavailable, preserving uncertainty rather than claiming a path is absent.
     pub fn from_recorded(recorded: std::collections::BTreeMap<String, Found>) -> Self {
         Self {
             files: Default::default(),
@@ -388,6 +399,16 @@ impl TreeReader for MockTree {
     }
 
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
+        if let Lookup::List { path } = lookup
+            && !(TreeQuery::List {
+                path: path.clone(),
+                limit: MAX_LIST_PATHS,
+            })
+            .valid()
+        {
+            return Ok(explore::unavailable());
+        }
+
         // Checked before the recorded map and before `self.files`: a
         // cassette can carry a `Lookup::Read` recorded before this guard
         // existed, or before whichever live backend produced it filtered
@@ -402,6 +423,20 @@ impl TreeReader for MockTree {
         }
 
         if let Some(found) = self.recorded.get(&lookup.key()) {
+            if let Lookup::List { path } = lookup {
+                return Ok(match found {
+                    Found::Hits {
+                        hits, truncated, ..
+                    } => exploration_paths(
+                        hits.iter().map(|hit| hit.path.clone()).collect(),
+                        path,
+                        MAX_LIST_PATHS,
+                        *truncated,
+                    ),
+                    Found::NotFound | Found::Unavailable { .. } => found.clone(),
+                    Found::Text { .. } => explore::unavailable(),
+                });
+            }
             return Ok(strip_sensitive_hits(found.clone()));
         }
         // A replay answers only what was recorded. "Not found" here would be
@@ -416,6 +451,13 @@ impl TreeReader for MockTree {
             });
         }
         Ok(match lookup {
+            Lookup::List { path } => {
+                self.explore(&TreeQuery::List {
+                    path: path.clone(),
+                    limit: MAX_LIST_PATHS,
+                })
+                .await?
+            }
             Lookup::Read { path, start, end } => match self.files.get(path) {
                 Some(content) => {
                     let (start, end) = Lookup::read_range(*start, *end);
@@ -1198,6 +1240,13 @@ impl TreeReader for DirTree {
 
     async fn lookup(&self, lookup: &Lookup) -> Result<Found> {
         Ok(match lookup {
+            Lookup::List { path } => {
+                self.explore(&TreeQuery::List {
+                    path: path.clone(),
+                    limit: MAX_LIST_PATHS,
+                })
+                .await?
+            }
             Lookup::Read { path, start, end } => {
                 if !safe_relative(path) || !self.within_root(path) || !self.allowed(path) {
                     return Ok(Found::NotFound);
@@ -2223,6 +2272,149 @@ mod tests {
             matches!(unknown, Found::Unavailable { .. }),
             "an unrecorded lookup stays unavailable past a reader that lacks the path: {unknown:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn directory_lookups_keep_the_existing_path_filters_and_fixed_cap() {
+        let mut files = (0..40)
+            .map(|n| (format!("pkg/{n:02}.py"), "private body".to_string()))
+            .collect::<Vec<_>>();
+        files.extend([
+            ("pkg/.env".into(), "secret".into()),
+            ("pkg/.git/config".into(), "private".into()),
+            ("../outside".into(), "escape".into()),
+        ]);
+        let tree = MockTree::from_files(files);
+        let found = tree
+            .lookup(&Lookup::List { path: "pkg".into() })
+            .await
+            .unwrap();
+        let Found::Hits {
+            hits, truncated, ..
+        } = found
+        else {
+            panic!("expected a bounded listing")
+        };
+        assert_eq!(hits.len(), MAX_LIST_PATHS as usize);
+        assert!(truncated);
+        assert!(hits.iter().all(|h| !h.path.contains(".env")
+            && !h.path.contains(".git")
+            && !h.text.contains("private body")));
+        assert!(matches!(
+            tree.lookup(&Lookup::List { path: "../".into() })
+                .await
+                .unwrap(),
+            Found::Unavailable { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_unrecorded_directory_lookup_cannot_claim_the_repository_is_empty() {
+        let replay = MockTree::from_recorded(Default::default());
+        assert!(
+            matches!(
+                replay
+                    .lookup(&Lookup::List { path: "src".into() })
+                    .await
+                    .unwrap(),
+                Found::Unavailable { .. }
+            ),
+            "A missing recording is not evidence that no directory module exists"
+        );
+    }
+
+    #[tokio::test]
+    async fn recorded_directory_lookups_replay_without_a_full_repository_tree() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(directory.path().join("src/falsify")).unwrap();
+        std::fs::write(
+            directory.path().join("src/falsify/mod.rs"),
+            "pub struct Falsifier;",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join("src/falsify/types.rs"),
+            "pub struct Verdict;",
+        )
+        .unwrap();
+        let live = DirTree::new(directory.path());
+        let recording = RecordingTree::new(&live);
+        let lookup = Lookup::List {
+            path: "src/falsify".into(),
+        };
+        let found = recording.lookup(&lookup).await.unwrap();
+        let replay = MockTree::from_recorded(recording.recorded());
+        assert_eq!(replay.lookup(&lookup).await.unwrap(), found);
+    }
+
+    #[tokio::test]
+    async fn recorded_directory_paths_are_scoped_scrubbed_and_capped() {
+        let lookup = Lookup::List { path: "src".into() };
+        let mut paths = (0..40)
+            .map(|n| format!("src/{n:02}.rs"))
+            .collect::<Vec<_>>();
+        paths.extend([
+            "src/.env".into(),
+            "src/.git/config".into(),
+            "../escape".into(),
+            "other/module.rs".into(),
+        ]);
+        let recording = Found::Hits {
+            hits: paths
+                .into_iter()
+                .map(|path| Hit {
+                    path,
+                    line: 90,
+                    text: "raw secret body".into(),
+                })
+                .collect(),
+            truncated: false,
+            skipped: vec!["private path".into()],
+        };
+        let replay = MockTree::from_recorded([(lookup.key(), recording)].into_iter().collect());
+        let Found::Hits {
+            hits,
+            truncated,
+            skipped,
+        } = replay.lookup(&lookup).await.unwrap()
+        else {
+            panic!("expected a safe listing");
+        };
+        assert!(truncated);
+        assert!(skipped.is_empty());
+        assert_eq!(hits.len(), MAX_LIST_PATHS as usize);
+        assert!(hits.iter().all(|h| h.path.starts_with("src/")
+            && !h.path.contains(".env")
+            && !h.path.contains(".git")
+            && h.line == 1
+            && !h.text.contains("raw secret")));
+    }
+
+    #[tokio::test]
+    async fn an_invalid_directory_recording_cannot_bypass_request_validation() {
+        let lookup = Lookup::List {
+            path: "../outside".into(),
+        };
+        let replay = MockTree::from_recorded(
+            [(
+                lookup.key(),
+                Found::Hits {
+                    hits: vec![Hit {
+                        path: "safe.rs".into(),
+                        line: 1,
+                        text: "metadata".into(),
+                    }],
+                    truncated: false,
+                    skipped: vec![],
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        assert!(matches!(
+            replay.lookup(&lookup).await.unwrap(),
+            Found::Unavailable { .. }
+        ));
     }
 }
 

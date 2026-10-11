@@ -1,0 +1,39 @@
+{
+  "key": "b1e7b6d0a6cc1c8b",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 9048,
+    "output_tokens": 224,
+    "cached_tokens": 3924,
+    "embed_tokens": 0,
+    "cost_usd": 0.0014999122319999999
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "pattern": "fn opened",
+        "why": "See EpisodeState::opened signature and what fields it sets, to verify the new watermark/round_start replacement matches the old semantics."
+      },
+      {
+        "kind": "search",
+        "pattern": "next_state",
+        "why": "See where next_state was used to confirm removing it doesn't break the test's surrounding assertions."
+      },
+      {
+        "kind": "search",
+        "pattern": "round_start",
+        "why": "See how round_start is consumed and whether Sequence(u64::MAX) is a valid sentinel value."
+      },
+      {
+        "end": 580,
+        "kind": "read",
+        "path": "crates/opencompany-core/src/hivemind/deliberation_test.rs",
+        "start": 500,
+        "why": "Read the surrounding test fixture and assertions that use these fields."
+      }
+    ]
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "key": "fd1c74dd1178182f",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 10669,
+    "output_tokens": 4973,
+    "cached_tokens": 4598,
+    "embed_tokens": 0,
+    "cost_usd": 0.010008562984
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "shorten(",
+        "why": "Find callers of `shorten` to determine whether any pass a hard length ceiling (e.g. a GitHub check-run title cap) and rely on the output being within `limit` characters rather than `limit + 1`."
+      },
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "first_sentence(",
+        "why": "Find callers of `first_sentence` to confirm the \". \"-only heuristic does not regress any existing behaviour they depend on."
+      }
+    ],
+    "summary": "The new `summarise.rs` implements `shorten` and `first_sentence` with character-aware slicing and includes tests for multibyte safety. The logic looks correct on its own, but the `shorten` doc claims the output is \"at most `limit` characters\" while the implementation can return up to `limit + 1` (truncated text plus the ellipsis); I want to check the callers to see whether any of them pass a hard ceiling that this overflow would breach."
+  }
+}

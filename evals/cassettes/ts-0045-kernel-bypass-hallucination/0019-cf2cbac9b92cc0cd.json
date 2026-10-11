@@ -1,0 +1,17 @@
+{
+  "key": "cf2cbac9b92cc0cd",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4723,
+    "output_tokens": 86,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000404327
+  },
+  "value": {
+    "findings": [],
+    "summary": "This overlay adds an environment variable and a bind-mounted entrypoint shim to work around a kernel compatibility issue in the MongoDB container. No security-sensitive sinks are introduced: the environment variable is a glibc tunable, the entrypoint is a local Python script mounted read-only, and both services already existed in the base compose file. The change is safe to merge."
+  }
+}

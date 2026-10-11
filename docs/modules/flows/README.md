@@ -92,7 +92,7 @@ property of the schema, and `subagent_test` pins it.
 ## Lookups
 
 The other follow-up, and the one that pays: a reviewer may end a turn with
-reads and searches of the repository instead of a verdict, and is asked again
+reads, searches and bounded directory listings instead of a verdict, and is asked again
 with what came back. The loop is host-owned — the model fills a JSON field,
 `flows::lookup` answers it through the `TreeReader` port — so the `Model`
 port stays one structured completion and every turn is a cassette can replay.

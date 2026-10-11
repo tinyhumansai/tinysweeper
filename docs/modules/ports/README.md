@@ -68,7 +68,7 @@ cost nobody had checked.
 | `index.rs` | `ChunkIndex` |
 | `graph.rs` | `GraphStore` |
 | `knowledge.rs` | `KnowledgeStore` |
-| `tree.rs` | `TreeReader` — read a file range, search a literal; `MockTree`, `DirTree`, `RecordingTree`, `ChainTree` |
+| `tree.rs` | `TreeReader` — read a file range, search a literal, list safe paths; `MockTree`, `DirTree`, `RecordingTree`, `ChainTree` |
 
 ## The retrieval ports
 
@@ -80,7 +80,8 @@ itself, why `ChunkIndex` needs deletes, and what MongoDB has to be — is in
 ## `TreeReader`
 
 What a reviewer may look up before it answers: a range of one file at the
-reviewed commit, or every line containing a literal. All operations are reads,
+reviewed commit, every line containing a literal, or up to 32 safe file paths
+under a directory. All operations are reads,
 so the port cannot be argued into running anything. `DirTree` serves a
 checkout and searches in-process; `forge::tree::ForgeTree` serves the
 forge API one file at a time, following one level of submodule through

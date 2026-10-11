@@ -1,0 +1,18 @@
+{
+  "key": "4cfb00c1ab0b3d27",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_description",
+  "usage": {
+    "input_tokens": 9012,
+    "output_tokens": 94,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00075992
+  },
+  "value": {
+    "findings": [],
+    "resolved": [],
+    "summary": "This change moves the default models to GLM 5.2, re-enables configurable reasoning effort, replaces the fallback chain with tested alternatives, and adds price entries for all named models. The code is well documented, all measured claims are backed by evidence, and every new value is covered by tests that assert the wiring it introduces. Safe to merge."
+  }
+}

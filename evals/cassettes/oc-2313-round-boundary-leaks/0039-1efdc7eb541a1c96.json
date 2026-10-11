@@ -1,0 +1,17 @@
+{
+  "key": "1efdc7eb541a1c96",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_description",
+  "usage": {
+    "input_tokens": 26026,
+    "output_tokens": 164,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0021768404
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request bumps the vendored openhuman and tinyhivemind submodules and adapts to their breaking changes. The openhuman change is a mechanical rename from `openhuman_core::openhuman` to `openhuman_core` as the package moved into a sub-crate. The tinyhivemind change migrates from one-turn-per-step to multi-turn rounds, updating the episode loop to run a round's turns in series, bound the pinboard to the round start to prevent intra-round leaks, and commit state only after all turns in the round are durable. The test fixtures are updated to match the new `HiveTurn::Speak` shape. The diff looks sound; no reportable defects found."
+  }
+}

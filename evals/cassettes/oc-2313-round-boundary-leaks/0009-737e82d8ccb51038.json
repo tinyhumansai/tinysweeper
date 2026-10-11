@@ -1,0 +1,17 @@
+{
+  "key": "737e82d8ccb51038",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 14117,
+    "output_tokens": 502,
+    "cached_tokens": 6008,
+    "embed_tokens": 0,
+    "cost_usd": 0.002662965544
+  },
+  "value": {
+    "findings": [],
+    "summary": "The diff corrects module paths by removing a redundant `openhuman::` segment from three calls into the vendored `openhuman_core` crate. The looked-up definitions confirm all three functions exist at the new paths (`security::keyring::init_workspace`, `config::Config::load_or_init`, `security::keyring::store::workspace_dir_for_file_backend`), so the change is safe to merge."
+  }
+}
