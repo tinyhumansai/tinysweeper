@@ -494,7 +494,32 @@ fn diff_args(diff_range: &[String]) -> Vec<String> {
     args
 }
 
-/// Run `git` in `dir` and return its stdout.
+/// The current HEAD of a clean checkout, including submodules and untracked files.
+///
+/// Uses the same hardened Git runner as diffs: ambient fsmonitor hooks and
+/// injected configuration cannot turn validation into contributor execution.
+/// Ignored files are excluded from status; callers must also restrict tree
+/// reads with [`reviewable_paths`].
+pub async fn clean_head(dir: &Path) -> Result<String> {
+    let head = git(dir, &["rev-parse", "HEAD"]).await?;
+    let status = git(
+        dir,
+        &[
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ],
+    )
+    .await?;
+    if !status.is_empty() {
+        return Err(Error::Git(
+            "review tree must be clean, including submodules and untracked files".into(),
+        ));
+    }
+    Ok(head.trim().to_string())
+}
+
 /// Every path git would let a review see: tracked files plus untracked ones
 /// that are not ignored. What `.gitignore` excludes — `.env`, a private key —
 /// is exactly what must not be read into a prompt, and this is the same set

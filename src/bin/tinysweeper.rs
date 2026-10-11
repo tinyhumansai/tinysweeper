@@ -661,36 +661,17 @@ async fn review_tree(
     path: &std::path::Path,
     head: &str,
 ) -> Result<tinysweeper::ports::tree::DirTree> {
-    let revision = tokio::process::Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .await
-        .map_err(|err| tinysweeper::Error::Git(err.to_string()))?;
-    if !revision.status.success() || String::from_utf8_lossy(&revision.stdout).trim() != head {
+    let revision = tinysweeper::evidence::git::clean_head(path).await?;
+    if revision != head {
         return Err(tinysweeper::Error::Git(
             "review tree must be at the live pull request head".into(),
         ));
     }
-    let status = tokio::process::Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args([
-            "status",
-            "--porcelain",
-            "--untracked-files=all",
-            "--ignore-submodules=none",
-        ])
-        .output()
-        .await
-        .map_err(|err| tinysweeper::Error::Git(err.to_string()))?;
-    if !status.status.success() || !status.stdout.is_empty() {
-        return Err(tinysweeper::Error::Git(
-            "review tree must be clean, including submodules and untracked files".into(),
-        ));
-    }
-    Ok(tinysweeper::ports::tree::DirTree::new(path).at_revision(head))
+    // Git status permits ignored local files. Match local-review's allowlist
+    // rather than letting a lookup turn those files into model evidence.
+    Ok(tinysweeper::ports::tree::DirTree::new(path)
+        .allowing(tinysweeper::evidence::git::reviewable_paths(path).await?)
+        .at_revision(head))
 }
 
 /// The corpus commands. Only `run --record` and `add` need a network.
@@ -1971,13 +1952,50 @@ mod tests {
         };
         git(&["init", "--initial-branch=main"]);
         std::fs::write(dir.path().join("source.rs"), "original").unwrap();
-        git(&["add", "source.rs"]);
+        std::fs::write(dir.path().join(".gitignore"), "operator-private.txt\n").unwrap();
+        git(&["add", "source.rs", ".gitignore"]);
         git(&["commit", "-m", "fixture"]);
         let head = git(&["rev-parse", "HEAD"]);
         let head = head.trim();
         assert!(review_tree(dir.path(), "wrong").await.is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let marker = dir.path().join(".git/fsmonitor-ran");
+            let hook = dir.path().join(".git/fsmonitor-fixture");
+            std::fs::write(
+                &hook,
+                format!(
+                    "#!/bin/sh\nprintf probe > '{}'\nprintf '1\\0'\n",
+                    marker.display()
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o700)).unwrap();
+            git(&["config", "core.fsmonitor", hook.to_str().unwrap()]);
+            review_tree(dir.path(), head).await.unwrap();
+            assert!(
+                !marker.exists(),
+                "review metadata must not execute fsmonitor hooks"
+            );
+        }
         let clean = review_tree(dir.path(), head).await.unwrap();
         assert_eq!(clean.revision().as_deref(), Some(head));
+        std::fs::write(
+            dir.path().join("operator-private.txt"),
+            "private local evidence",
+        )
+        .unwrap();
+        let clean = review_tree(dir.path(), head).await.unwrap();
+        let ignored = clean
+            .lookup(&tinysweeper::ports::tree::Lookup::Read {
+                path: "operator-private.txt".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(ignored, tinysweeper::ports::tree::Found::NotFound));
         std::fs::write(dir.path().join("source.rs"), "modified").unwrap();
         assert!(review_tree(dir.path(), head).await.is_err());
         std::fs::write(dir.path().join("source.rs"), "original").unwrap();
