@@ -51,6 +51,13 @@ path before it is ever scanned, because a redacted hit would still name the
 path and the line. This is the lookup loop's share of the same invariant that
 masks the diff before it is rendered; see `docs/modules/scan/README.md`.
 
+The description lane uses the same bounded read-only capability when a tree
+is available. It can read an unchanged guard to check a title or body claim
+against the complete implementation. Findings still refer to the pull request
+description and appear in its summary, never as inline code comments. Lookup
+rounds, text limits, secret filtering and the shared model budget still apply;
+this does not add a separate falsification round.
+
 ## The loop
 
 ```text
