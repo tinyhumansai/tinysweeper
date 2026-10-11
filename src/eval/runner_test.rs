@@ -587,3 +587,218 @@ fn agentic_review_and_price_bounds_change_the_evaluation_digest() {
     );
     assert_ne!(digest_of(&base), digest_of(&bounded));
 }
+
+#[tokio::test]
+async fn a_case_failing_after_paid_calls_reports_the_known_model_charge() {
+    let dir = corpus_dir(EXPECTATION);
+    let mut corpus = load(dir.path()).unwrap();
+    corpus.cases[0].case.budget.max_cost_usd = 0.005;
+    let mut config = config();
+    config.models.budget_usd_per_pr = 0.000001;
+    let model = Arc::new(MockModel::silent().with_usage(crate::ports::model::Usage {
+        input_tokens: 100,
+        output_tokens: 10,
+        cached_tokens: 20,
+        cost_usd: 0.01,
+        ..Default::default()
+    }));
+    let result = run(
+        &corpus,
+        &config,
+        Some(model.clone()),
+        &RunOptions {
+            out: dir.path().join("runs/test"),
+            record: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let score = &result.scores[0];
+    assert!(
+        score.error.is_some(),
+        "The budget failure remains a failure: {score:?}"
+    );
+    assert!(
+        score.cost_usd >= 0.01,
+        "The paid response cannot be reported as free: {score:?}"
+    );
+    assert!(score.over_budget);
+    assert!(score.input_tokens >= 100);
+    assert!(score.output_tokens >= 10);
+    assert!(score.cached_tokens >= 20);
+    assert!(!score.models.is_empty());
+    let rescored = rescore(&corpus, &dir.path().join("runs/test")).unwrap();
+    assert_eq!(rescored[0].cost_usd, score.cost_usd);
+    assert_eq!(rescored[0].over_budget, score.over_budget);
+    assert_eq!(rescored[0].input_tokens, score.input_tokens);
+    assert_eq!(rescored[0].output_tokens, score.output_tokens);
+    assert_eq!(rescored[0].cached_tokens, score.cached_tokens);
+    assert_eq!(rescored[0].models, score.models);
+    assert_eq!(rescored[0].error, score.error);
+    assert_eq!(rescored[0].wall_secs, score.wall_secs);
+}
+
+#[tokio::test]
+async fn malformed_description_preserves_other_lanes_and_holds_approval() {
+    use crate::ports::model::{ModelRequest, ModelResponse, Usage};
+    struct PartialReviewer;
+    #[async_trait::async_trait]
+    impl Model for PartialReviewer {
+        async fn complete(&self, request: ModelRequest) -> Result<ModelResponse> {
+            let value = match request.schema_name.as_str() {
+                "tinysweeper_description" => {
+                    json!({"summary": "Malformed", "findings": [{"path": "src/lib.rs"}]})
+                }
+                "tinysweeper_falsify" => json!({"incorrect": []}),
+                _ => json!({"summary": "An advisory finding.", "findings": [{
+                    "path": "src/lib.rs", "existing_code": "items[0]", "rule": "unchecked-index",
+                    "title": "Guard the index", "body": "This panics on an empty slice.",
+                    "severity": "medium", "confidence": 0.7
+                }]}),
+            };
+            Ok(ModelResponse {
+                value,
+                model: "observed-model".into(),
+                usage: Usage {
+                    input_tokens: 100,
+                    output_tokens: 10,
+                    cost_usd: 0.001,
+                    ..Default::default()
+                },
+            })
+        }
+    }
+    let dir = corpus_dir(EXPECTATION);
+    let mut corpus = load(dir.path()).unwrap();
+    corpus.cases[0].case.lanes = vec!["critique".into(), "description".into()];
+    corpus.cases[0].fixture.pull_request.body =
+        "Adds a complete deployment and lookup change with supporting context.".into();
+    let out = dir.path().join("runs/partial");
+    let config = config();
+    let result = run(
+        &corpus,
+        &config,
+        Some(Arc::new(PartialReviewer)),
+        &RunOptions {
+            out: out.clone(),
+            record: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        result.scores[0].error.is_none(),
+        "A malformed lane must not discard the review"
+    );
+    let proposal: Proposal =
+        serde_json::from_slice(&std::fs::read(out.join("ts-0001/proposal.json")).unwrap()).unwrap();
+    assert!(!proposal.complete());
+    assert!(proposal.usage().cost_usd >= 0.002);
+    assert!(
+        serde_json::to_string(&proposal)
+            .unwrap()
+            .contains("This panics on an empty slice")
+    );
+    let fixture = &corpus.cases[0].fixture;
+    let forge = crate::forge::mock::MockForge::new().with_pull_request(
+        fixture.pull_request.clone(),
+        fixture.files.clone(),
+        fixture.commits.clone(),
+    );
+    crate::app::apply::apply(&forge, &forge, &config, &proposal, None)
+        .await
+        .unwrap();
+    assert!(
+        !forge.writes().iter().any(|write| matches!(
+            write,
+            crate::forge::mock::Write::Review {
+                event: crate::forge::types::ReviewEvent::Approve,
+                ..
+            }
+        )),
+        "An unanswered lane cannot approve, even with only advisory findings"
+    );
+}
+
+#[tokio::test]
+async fn failed_case_marks_unreported_model_charges_unknown() {
+    let dir = corpus_dir(EXPECTATION);
+    let corpus = load(dir.path()).unwrap();
+    let cassette = Cassette::record(
+        Arc::new(MockModel::new().then_error("provider refused without usage")),
+        dir.path().join("cassettes"),
+    );
+    let request = crate::ports::model::ModelRequest {
+        model: "requested".into(),
+        messages: vec![],
+        schema: json!({}),
+        schema_name: "test".into(),
+        max_tokens: 10,
+    };
+    assert!(cassette.complete(request).await.is_err());
+    let out = dir.path().join("run");
+    let score = persist_failed_case(
+        &corpus.cases[0],
+        &out,
+        "review failed".into(),
+        std::time::Duration::from_secs(1),
+        &cassette,
+    )
+    .unwrap();
+    assert_eq!(score.cost_usd, 0.0, "Do not invent an unknown charge");
+    assert!(
+        score
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("charges for model calls without reported usage are unknown")
+    );
+    assert_eq!(rescore(&corpus, &out).unwrap()[0].error, score.error);
+}
+
+#[test]
+fn legacy_failure_markers_stay_failed_when_rescored() {
+    let dir = corpus_dir(EXPECTATION);
+    let corpus = load(dir.path()).unwrap();
+    let out = dir.path().join("runs/legacy");
+    std::fs::create_dir_all(out.join("ts-0001")).unwrap();
+    std::fs::write(
+        out.join("ts-0001/failure.json"),
+        serde_json::to_string("old failure").unwrap(),
+    )
+    .unwrap();
+    let score = rescore(&corpus, &out).unwrap().remove(0);
+    assert_eq!(score.error.as_deref(), Some("old failure"));
+    assert_eq!(score.missed, vec!["E1"]);
+    assert_eq!(score.cost_usd, 0.0);
+}
+
+#[tokio::test]
+async fn missing_cassette_supersedes_a_previous_success_when_rescored() {
+    let (dir, _) = record_then_replay(EXPECTATION, finder()).await;
+    let corpus = load(dir.path()).unwrap();
+    let out = dir.path().join("runs/test");
+    assert!(out.join("ts-0001/proposal.json").exists());
+    std::fs::remove_dir_all(dir.path().join("cassettes")).unwrap();
+    let outcome = run(
+        &corpus,
+        &config(),
+        None,
+        &RunOptions {
+            out: out.clone(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(outcome.scores[0].error.is_some());
+    let rescored = rescore(&corpus, &out).unwrap();
+    assert_eq!(
+        rescored[0].error, outcome.scores[0].error,
+        "A current failure cannot rescore the stale successful proposal"
+    );
+    assert!(!out.join("ts-0001/proposal.json").exists());
+    assert_eq!(rescored[0].cost_usd, 0.0, "No call was dispatched");
+}

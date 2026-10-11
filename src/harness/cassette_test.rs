@@ -356,3 +356,60 @@ fn replaying_a_directory_that_holds_no_cassette_says_how_to_make_one() {
     let err = Cassette::replay(dir.path().join("absent"), Mode::Strict).expect_err("no cassette");
     assert!(err.to_string().contains("eval run --record"), "{err}");
 }
+
+struct RefusingModel(Option<crate::ports::model::Usage>);
+
+#[async_trait::async_trait]
+impl Model for RefusingModel {
+    async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse> {
+        let error = crate::error::Error::Model("refused".into());
+        Err(match self.0 {
+            Some(usage) => error.with_usage(usage),
+            None => error,
+        })
+    }
+}
+
+#[tokio::test]
+async fn reported_refusal_usage_is_counted_without_inventing_an_answer_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let recorder = Cassette::record(
+        Arc::new(RefusingModel(Some(crate::ports::model::Usage {
+            input_tokens: 100,
+            output_tokens: 10,
+            cost_usd: 0.01,
+            ..Default::default()
+        }))),
+        dir.path(),
+    );
+    assert!(
+        recorder
+            .complete(request("requested-model", "review"))
+            .await
+            .is_err()
+    );
+    assert_eq!(recorder.cost_usd(), 0.01);
+    assert_eq!(recorder.spend().usage.input_tokens, 100);
+    assert!(recorder.spend().models.is_empty());
+    assert!(!recorder.has_unreported_usage());
+    assert_eq!(
+        recorder.flush().unwrap(),
+        0,
+        "A refusal is not an invented response cassette"
+    );
+}
+
+#[tokio::test]
+async fn unreported_refusal_charge_remains_explicitly_unknown() {
+    let dir = tempfile::tempdir().unwrap();
+    let recorder = Cassette::record(Arc::new(RefusingModel(None)), dir.path());
+    assert!(
+        recorder
+            .complete(request("requested-model", "review"))
+            .await
+            .is_err()
+    );
+    assert_eq!(recorder.cost_usd(), 0.0);
+    assert!(recorder.has_unreported_usage());
+    assert!(recorder.spend().models.is_empty());
+}
