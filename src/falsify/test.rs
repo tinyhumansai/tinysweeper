@@ -49,6 +49,45 @@ async fn filter(model: &MockModel, findings: Vec<Finding>) -> FalsifyOutcome {
 }
 
 #[tokio::test]
+async fn identical_claims_at_different_anchors_remain_distinguishable_to_the_falsifier() {
+    let mut standalone = finding("This scope assessment rejects the finding");
+    standalone.path = "src/falsify/test.rs".into();
+    standalone.line = Some(270);
+    let mut conflicting_array = standalone.clone();
+    conflicting_array.line = Some(294);
+    let first = super::user_message(&[standalone], DIFF, "");
+    let second = super::user_message(&[conflicting_array], DIFF, "");
+    assert_ne!(
+        first, second,
+        "The filter must know which concrete code the claim targets"
+    );
+    assert!(first.contains("1. [src/falsify/test.rs:270]"));
+    assert!(second.contains("1. [src/falsify/test.rs:294]"));
+}
+
+#[tokio::test]
+async fn falsifier_grounding_preserves_ranges_indices_and_unknown_locations() {
+    let model = MockModel::new().then(json!({"incorrect":[]}));
+    let mut ranged = finding("The two scope assessments conflict");
+    ranged.line = Some(294);
+    ranged.end_line = Some(295);
+    let mut unknown = finding("An observation without a line anchor");
+    unknown.line = None;
+    let originals = vec![ranged, unknown];
+    let outcome = filter(&model, originals.clone()).await;
+    assert_eq!(model.calls(), 1);
+    assert_eq!(outcome.findings, originals);
+    let request = &model.requests()[0];
+    assert!(
+        request.messages[1]
+            .content
+            .contains("1. [src/main.rs:294-295]")
+    );
+    assert!(request.messages[1].content.contains("2. [src/main.rs]"));
+    assert!(!request.messages[1].content.contains("[src/main.rs:0]"));
+}
+
+#[tokio::test]
 async fn a_disproved_finding_is_dropped_with_its_reason_recorded() {
     let model = MockModel::new().then(json!({
         "incorrect": [{"index": 2, "reason": "the diff bounds-checks `i` on the line above"}]
@@ -186,8 +225,8 @@ async fn findings_are_numbered_from_one_in_the_prompt() {
     filter(&model, vec![finding("first"), finding("second")]).await;
 
     let prompt = model.last_prompt().expect("recorded");
-    assert!(prompt.contains("1. [src/main.rs] first"), "{prompt}");
-    assert!(prompt.contains("2. [src/main.rs] second"), "{prompt}");
+    assert!(prompt.contains("1. [src/main.rs:2] first"), "{prompt}");
+    assert!(prompt.contains("2. [src/main.rs:2] second"), "{prompt}");
 }
 
 #[tokio::test]
@@ -238,7 +277,7 @@ async fn an_undefined_symbol_claim_is_left_to_the_model_not_rejected_on_text() {
     assert!(outcome.rejected.is_empty());
     let prompt = model.last_prompt().expect("recorded");
     assert!(
-        prompt.contains("1. [src/main.rs] `main` is not defined"),
+        prompt.contains("1. [src/main.rs:2] `main` is not defined"),
         "{prompt}"
     );
 }

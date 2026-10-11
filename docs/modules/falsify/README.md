@@ -45,6 +45,11 @@ a provider outage must not look like a clean review.
 
 Both properties are asserted directly in `src/falsify/test.rs`.
 
+Each finding retains its path and available line or line range in the filter's
+prompt, so claims about different code in one file remain distinguishable.
+An unknown line stays unknown. This adds no lookup or model call and preserves
+the original finding indices and content.
+
 ## No deterministic pass in front of the model
 
 An earlier version ran a textual pre-pass that dropped "will not compile" or
