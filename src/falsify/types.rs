@@ -29,6 +29,55 @@ pub struct Incorrect {
     pub reason: String,
 }
 
+/// Security separates whether a claim is false from whether it belongs in this lane.
+#[derive(Debug, Deserialize)]
+pub(crate) struct SecurityResponse {
+    /// Existing asymmetric factual disproofs.
+    #[serde(flatten)]
+    pub factual: FalsifyResponse,
+    /// Independent assessments of whether each observation belongs in security.
+    #[serde(default)]
+    pub security_scope: Vec<SecurityScope>,
+}
+
+/// An explicit scope decision, with the attack chain the finding actually claims.
+#[derive(Debug, Deserialize)]
+pub(crate) struct SecurityScope {
+    /// One-based position in the supplied findings.
+    pub index: u64,
+    /// Scope of the observation itself, independent of factual truth.
+    pub verdict: ScopeVerdict,
+    /// Attacker-controlled input the observation claims, empty if it claims none.
+    pub attacker_input: String,
+    /// Claimed sink or trust boundary, empty if none is claimed.
+    pub dangerous_operation: String,
+    /// Claimed exploit consequence, empty if none is claimed.
+    pub security_impact: String,
+    /// Evidence for the scope decision, not a replacement finding.
+    pub reason: String,
+}
+
+/// Uncertainty never removes a finding.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ScopeVerdict {
+    InScope,
+    OutOfScope,
+    Uncertain,
+}
+
+impl SecurityScope {
+    /// A scope rejection must explicitly attest to the absence of every attack-chain part.
+    pub fn rejection_reason(&self) -> Option<&str> {
+        (self.verdict == ScopeVerdict::OutOfScope
+            && self.attacker_input.trim().is_empty()
+            && self.dangerous_operation.trim().is_empty()
+            && self.security_impact.trim().is_empty()
+            && !self.reason.trim().is_empty())
+        .then_some(self.reason.as_str())
+    }
+}
+
 /// A finding the pass removed, kept for the run log.
 ///
 /// Recorded rather than discarded: a filter that silently deletes findings is
@@ -39,7 +88,7 @@ pub struct Rejection {
     pub lane: LaneId,
     /// The finding's title.
     pub title: String,
-    /// What the filter said disproves it.
+    /// The factual disproof or explicit security-scope rejection.
     pub reason: String,
 }
 
@@ -104,6 +153,30 @@ pub fn json_schema() -> Value {
             }
         }
     })
+}
+
+/// Security's additional scope decision shares the existing factual-filter call.
+pub fn security_json_schema() -> Value {
+    let mut schema = json_schema();
+    schema["required"] = json!(["incorrect", "security_scope"]);
+    schema["properties"]["security_scope"] = json!({
+        "type": "array",
+        "description": "One scope assessment per finding, with its claimed attack chain. A true generic correctness or test-coverage observation can be outside security. Missing visible exploit evidence alone is never grounds for rejection.",
+        "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["index", "verdict", "attacker_input", "dangerous_operation", "security_impact", "reason"],
+            "properties": {
+                "index": {"type": "integer", "minimum": 1},
+                "verdict": {"type": "string", "enum": ["in_scope", "out_of_scope", "uncertain"]},
+                "attacker_input": {"type": "string", "description": "The attacker-controlled input claimed by the finding, with its cited evidence. Empty only if no such input is claimed; do not invent one."},
+                "dangerous_operation": {"type": "string", "description": "The unsafe sink or authorization/trust boundary claimed by the finding. Empty only if none is claimed."},
+                "security_impact": {"type": "string", "description": "The claimed exploit consequence. Empty only if the finding asserts no security consequence."},
+                "reason": {"type": "string", "description": "Explain the scope verdict using the actual finding. For out_of_scope identify its nonsecurity claim; an absent proof of exploitation is not enough."}
+            }
+        }
+    });
+    schema
 }
 
 #[cfg(test)]
