@@ -31,7 +31,7 @@ use crate::chunk::types::{SkipReason, SkippedFile};
 use crate::chunk::{Chunker, Selector};
 use crate::error::{Error, Result};
 use crate::index::types::{Chunk, EmbedSignature, EmbeddedChunk};
-use crate::indexer::cost::{EmbedUsage, estimate_tokens};
+use crate::indexer::cost::EmbedUsage;
 use crate::indexer::types::{Claim, IndexLease, IndexOutcome, IndexReport, IndexedFile, Settled};
 use crate::ports::embed::Embedder;
 use crate::ports::index::ChunkIndex;
@@ -45,28 +45,15 @@ use crate::ports::manifest::IndexManifest;
 /// [`DEFAULT_MAX_BATCH_TOKENS`], which is the ceiling that actually binds.
 pub const DEFAULT_BATCH: usize = 64;
 
-/// Estimated-token ceiling on one embedding call, by default.
+/// Conservative token ceiling on one embedding call, by default.
 ///
-/// A count alone does not bound a request, and assuming it did is what broke
-/// indexing in production: 64 chunks of real source were rejected with
-/// `max_tokens_per_request` — 467,846 tokens against OpenAI's ceiling of
-/// 300,000 — so every large repository silently degraded to a diff-only
-/// review while small ones indexed fine.
-///
-/// The number carries two corrections on top of that 300,000.
-///
-/// [`estimate_tokens`](crate::indexer::cost::estimate_tokens) assumes four
-/// bytes to a token, which holds for prose and is roughly **half** the true
-/// rate for code, where punctuation is dense. The rejected batch is the
-/// measurement: 64 chunks capped at 14,400 chars is at most 230,400 estimated
-/// tokens, and the provider counted 467,846 — a little over 2x. So a budget
-/// expressed in estimated tokens must be halved before it means anything to a
-/// provider counting real ones.
-///
-/// 120,000 estimated tokens is therefore ~240,000 real ones at that ratio,
-/// leaving room under 300,000 for source denser than the sample. Deployments
-/// on a provider with a different ceiling set `embeddings.max_request_tokens`
-/// rather than editing this.
+/// Providers reject requests over 300,000 tokens. The billing estimate of four
+/// bytes per token is too optimistic for dense code and arbitrary UTF-8, so
+/// admission counts each source byte as one possible token instead. Keeping
+/// this bound at 120,000 leaves headroom without depending on a sampled ratio.
+/// It is not a tokenizer or measured usage; billing estimates remain separate.
+/// Deployments on a provider with a different ceiling set
+/// `embeddings.max_request_tokens` rather than editing this.
 pub const DEFAULT_MAX_BATCH_TOKENS: u64 = 120_000;
 
 /// How many files are carried in memory at once.
@@ -171,7 +158,7 @@ impl<'a> Indexer<'a> {
         self
     }
 
-    /// Set the estimated-token ceiling on one embedding call.
+    /// Set the conservative token ceiling on one embedding call.
     ///
     /// Zero is read as [`DEFAULT_MAX_BATCH_TOKENS`] rather than as "no limit":
     /// an unbounded batch is the bug this ceiling exists to prevent, so it is
@@ -938,17 +925,18 @@ fn batch_bounds(
     let mut tokens = 0_u64;
 
     for (position, (_, chunk)) in queue.iter().enumerate() {
-        let cost = estimate_tokens(&chunk.text);
+        // Bound admission independently of the cheaper billing estimate.
+        let cost = chunk.text.len() as u64;
         let full = position - start >= max_items;
         // `position > start` keeps an oversized lone chunk from closing an
         // empty batch, which would emit `(start, start)` forever.
-        let over = position > start && tokens + cost > max_tokens;
+        let over = position > start && tokens.saturating_add(cost) > max_tokens;
         if full || over {
             bounds.push((start, position));
             start = position;
             tokens = 0;
         }
-        tokens += cost;
+        tokens = tokens.saturating_add(cost);
     }
 
     if start < queue.len() {

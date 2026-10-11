@@ -345,3 +345,36 @@ fn ruby_methods_are_split_on_their_own_boundaries() {
         .expect("the total chunk");
     assert!(total.text.contains("value120"), "{}", total.text);
 }
+
+#[test]
+fn default_long_utf8_definition_fits_the_provider_bound_without_losing_source() {
+    let source = format!("fn dense() {{ let data = \"{}\"; }}\n", "€".repeat(8_000));
+    let chunks = split(&source, Language::Rust, &options()).expect("Rust parses");
+    assert!(chunks.iter().all(|chunk| chunk.text.len() <= 8_000));
+    assert_eq!(
+        chunks
+            .iter()
+            .map(|chunk| chunk.text.as_str())
+            .collect::<String>(),
+        source
+    );
+    assert!(
+        chunks
+            .iter()
+            .all(|chunk| chunk.method == ChunkMethod::Lines)
+    );
+}
+
+#[test]
+fn whitespace_spans_around_definitions_keep_every_byte_within_the_default_bound() {
+    let source = format!(
+        "{}\nfn value() {{}}\n{}",
+        " ".repeat(16_001),
+        " ".repeat(16_001)
+    );
+    let chunks = split(&source, Language::Rust, &options()).expect("Rust parses");
+    assert!(chunks.iter().all(|chunk| chunk.text.len() <= 8_000));
+    let joined: String = chunks.iter().map(|chunk| chunk.text.as_str()).collect();
+    assert_eq!(joined.len(), source.len(), "no source bytes may disappear");
+    assert_eq!(joined, source);
+}
