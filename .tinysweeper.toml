@@ -61,10 +61,14 @@ step that interpolates untrusted context into a shell.
 # `deep` is the ladder that reads logic — a mechanical rename is verified
 # before the fan-out and the reviewer looks up what the changed lines call
 # into, so this tier sees only the residue. It is `gpt-5.6-luna` on Surplus,
-# uncapped: measured 2026-09-15 on a 58-file pull request with two boundary
+# measured 2026-09-15 on a 58-file pull request with two boundary
 # bugs (tinysweeper#157), luna found one of the two every run and was the only
 # model to reach the second, at a thirteenth of gpt-5.3-codex's price.
-# `flash`/`scan` are the ladder's `flash`. No `fallback` here: the ladder is
+# The review tiers use the `deep` ladder. Live 2026-10-11 comparisons on
+# identical source and PR heads completed every lane in 183–191 seconds;
+# the flash scan route left lanes unanswered after 462–491 seconds. This
+# improves completion reliability; individual false findings still occur.
+# No `fallback` here: the ladder is
 # the failover, and a model name in this list would have to be another
 # ladder. No provider pin either — that is the ladder's job now — so the
 # routing table below is empty and the unpinned last resort is off, since an
@@ -76,8 +80,8 @@ gateway = "ladder"
 reasoning_effort = "gateway"
 base_url = "https://sweeper.tinyhumans.ai:7443/v1"
 api_key_env = "LADDER_API_KEY"
-scan = "flash"
-flash = "flash"
+scan = "deep"
+flash = "deep"
 deep = "deep"
 fallback = []
 
