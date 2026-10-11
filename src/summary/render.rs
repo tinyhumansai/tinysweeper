@@ -295,7 +295,7 @@ fn findings(out: &mut String, proposal: &Proposal) {
     let noted: Vec<_> = proposal
         .lanes
         .iter()
-        .flat_map(|lane| lane.noted.iter())
+        .flat_map(|lane| lane.noted.iter().filter(|finding| !finding.grouped))
         .collect();
     if !noted.is_empty() {
         out.push_str("\n**Lower-confidence notes**\n");
@@ -555,7 +555,11 @@ fn counts(proposal: &Proposal) -> (usize, usize, usize, usize) {
             })
             .sum::<usize>()
             + carried,
-        proposal.lanes.iter().map(|lane| lane.noted.len()).sum(),
+        proposal
+            .lanes
+            .iter()
+            .map(|lane| lane.noted.iter().filter(|finding| !finding.grouped).count())
+            .sum(),
         proposal.lanes.iter().map(|lane| lane.resolved.len()).sum(),
         proposal
             .lanes

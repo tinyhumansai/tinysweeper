@@ -1798,6 +1798,7 @@ const MAX_NOTED: usize = 5;
 /// own lane's check run and the review hub's findings list, both of which
 /// already list every finding a lane kept.
 fn group_co_located_findings(lanes: &mut [LaneProposal]) {
+    group_summary_notes(lanes);
     #[derive(Clone)]
     struct Located {
         lane_index: usize,
@@ -1897,6 +1898,55 @@ fn group_co_located_findings(lanes: &mut [LaneProposal]) {
                 "{} ({count} observation(s) share another lane's inline comment and are listed here only)",
                 lane.summary
             );
+        }
+    }
+}
+
+/// Keep summary evidence lossless while displaying a repeated concern once.
+/// Unlike inline co-location, matching position alone cannot hide a note:
+/// summary notes have no shared conversation in which to show both defects.
+fn group_summary_notes(lanes: &mut [LaneProposal]) {
+    let all: Vec<_> = lanes
+        .iter()
+        .enumerate()
+        .flat_map(|(lane, proposal)| {
+            proposal
+                .noted
+                .iter()
+                .enumerate()
+                .map(move |(note, finding)| (lane, note, Concern::of(finding)))
+        })
+        .collect();
+    let mut clusters: Vec<Vec<usize>> = Vec::new();
+    for index in 0..all.len() {
+        if let Some(cluster) = clusters.iter_mut().find(|cluster| {
+            cluster
+                .iter()
+                .all(|member| all[*member].2.same_as(&all[index].2))
+        }) {
+            cluster.push(index);
+        } else {
+            clusters.push(vec![index]);
+        }
+    }
+    for cluster in clusters.into_iter().filter(|cluster| cluster.len() > 1) {
+        let primary = *cluster
+            .iter()
+            .max_by(|left, right| {
+                let (left_lane, left_note, _) = &all[**left];
+                let (right_lane, right_note, _) = &all[**right];
+                finding_rank(
+                    &lanes[*left_lane].noted[*left_note],
+                    &lanes[*right_lane].noted[*right_note],
+                )
+                // Stable source order breaks equal ranks, so a repeated
+                // later lane does not move an unchanged visible note.
+                .then_with(|| right.cmp(left))
+            })
+            .expect("a non-empty note cluster");
+        for index in cluster.into_iter().filter(|index| *index != primary) {
+            let (lane, note, _) = &all[index];
+            lanes[*lane].noted[*note].grouped = true;
         }
     }
 }
@@ -2427,6 +2477,49 @@ mod tests {
             unanswered: vec![],
             overflow: vec![],
         }
+    }
+
+    #[test]
+    fn repeated_summary_notes_share_one_visible_note_without_becoming_inline() {
+        let mut left = grouped_finding(
+            LaneId::Critique,
+            "Enforce the character limit when no space is found",
+            21,
+            "1111111111111111",
+        );
+        left.body = "The no-space branch of shorten returns the entire input instead of enforcing the character limit.".into();
+        left.confidence = 0.70;
+        let mut right = left.clone();
+        right.lane = LaneId::Security;
+        right.title = "Respect the character limit when no space is found".into();
+        right.confidence = 0.75;
+        let mut lanes = vec![
+            grouped_lane(LaneId::Critique, left),
+            grouped_lane(LaneId::Security, right),
+        ];
+        for lane in &mut lanes {
+            lane.noted = std::mem::take(&mut lane.findings);
+            lane.highest_severity = None;
+            lane.conclusion = CheckConclusion::Success;
+        }
+        group_co_located_findings(&mut lanes);
+        assert_eq!(
+            lanes
+                .iter()
+                .flat_map(|lane| &lane.noted)
+                .filter(|finding| !finding.grouped)
+                .count(),
+            1
+        );
+        assert_eq!(
+            lanes.iter().map(|lane| lane.noted.len()).sum::<usize>(),
+            2,
+            "keep both original observations for audit"
+        );
+        assert!(lanes.iter().all(|lane| lane.findings.is_empty()
+            && lane.highest_severity.is_none()
+            && lane.conclusion == CheckConclusion::Success));
+        assert_eq!(lanes[1].noted[0].confidence, 0.75);
     }
 
     #[test]
