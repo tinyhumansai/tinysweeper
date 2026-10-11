@@ -1,0 +1,19 @@
+{
+  "key": "1a5f45001549b6f8",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4986,
+    "output_tokens": 70,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004234076
+  },
+  "value": {
+    "findings": [],
+    "lookups": [],
+    "resolved": [],
+    "summary": "The diff renames GitHub App environment variables to match what the binary reads and adds missing provider API keys.  It also mounts the server configuration file so that embeddings work by default.  No security defects are introduced."
+  }
+}

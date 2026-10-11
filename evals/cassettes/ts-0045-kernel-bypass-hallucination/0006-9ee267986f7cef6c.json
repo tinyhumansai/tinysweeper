@@ -1,0 +1,17 @@
+{
+  "key": "9ee267986f7cef6c",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 10568,
+    "output_tokens": 1125,
+    "cached_tokens": 4666,
+    "embed_tokens": 0,
+    "cost_usd": 0.003212853768
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change fixes environment variable names to match what the binary reads, adds missing provider API keys, and mounts the server config file into the container. It looks safe to merge based on what's visible; the one claim I could not verify is that `AppAuth::from_env` reads `TINYSWEEPER_APP_ID` and `TINYSWEEPER_APP_PRIVATE_KEY` verbatim, since the tree search was unavailable."
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "key": "441e03506e1c85fb",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 14748,
+    "output_tokens": 5329,
+    "cached_tokens": 6281,
+    "embed_tokens": 0,
+    "cost_usd": 0.011172848888
+  },
+  "value": {
+    "lookups": [
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "TINYSWEEPER_APP_ID",
+        "why": "Verify that the binary reads TINYSWEEPER_APP_ID (not TINYSWEEPER_GITHUB_APP_ID), since the compose file now forwards the former and the comment claims server::auth::AppAuth::from_env reads it verbatim."
+      },
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "TINYSWEEPER_GITHUB",
+        "why": "Check whether any code still reads the old TINYSWEEPER_GITHUB_* names, which would make the compose rename a regression."
+      },
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "AppAuth",
+        "why": "Read the from_env implementation to confirm which env var names it reads and whether the rename is correct."
+      },
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "shorten",
+        "why": "Determine whether shorten/first_sentence are actually called in the codebase, to assess whether the new module is reachable."
+      }
+    ]
+  }
+}

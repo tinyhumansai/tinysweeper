@@ -1,0 +1,17 @@
+{
+  "key": "7e9d58d995a49051",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 5130,
+    "output_tokens": 65,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000434476
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change introduces a `shorten` and `first_sentence` utility for truncating model-authored text to a length limit on a word boundary, with tests for multibyte safety. It looks sound for its stated purpose and contains no reportable security defects."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "85d204e251b67749",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 26084,
+    "output_tokens": 182,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0021846048
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change refactors the hive episode loop to support multi-turn rounds: the library's `HiveStep::Speak` now returns a `turns` vector and a `next_state` to commit once all turns are appended, rather than a single turn with its own `next_state`. The corresponding fixture updates in `deliberation_test.rs`, `moves_test.rs`, and `test.rs` reflect the new split of watermark/round_start out of the old nested `EpisodeState::opened`. The import-path fixups throughout the codebase adjust for a restructuring of the vendored `openhuman-core` crate. No test failures, uncovered branches, or regressions in changed behaviour are visible in the diff."
+  }
+}

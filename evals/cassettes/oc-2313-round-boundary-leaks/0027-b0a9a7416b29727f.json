@@ -1,0 +1,17 @@
+{
+  "key": "b0a9a7416b29727f",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 18418,
+    "output_tokens": 121,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.001541316
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change moves from a single-turn per `step` to a round-based model where multiple turns are authorized together and committed once after all are durably appended.  The host still runs them in series.  The diff looks sound: the round's length bounds the budget advance, `project_for` and `read_pinboard` correctly bound to `round_start`, failing turns produce system rows without advancing the round's commit prematurely, and the referral gate and aside logic are preserved.  No regression or new vulnerability is visible."
+  }
+}

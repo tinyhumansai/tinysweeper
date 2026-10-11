@@ -1,0 +1,45 @@
+{
+  "key": "e5d874efd665da7a",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 53011,
+    "output_tokens": 11143,
+    "cached_tokens": 47034,
+    "embed_tokens": 0,
+    "cost_usd": 0.023910946040000002
+  },
+  "value": {
+    "lookups": [
+      {
+        "end": 60,
+        "kind": "read",
+        "path": "crates/opencompany-core/src/hivemind/episode.rs",
+        "start": 1,
+        "why": "Find the read_pinboard function signature to confirm the bound parameter type and semantics"
+      },
+      {
+        "end": 100,
+        "kind": "read",
+        "path": "crates/opencompany-core/src/hivemind/test.rs",
+        "start": 1,
+        "why": "Check whether any tests exercise multi-turn rounds rather than width-one"
+      },
+      {
+        "end": 850,
+        "kind": "read",
+        "path": "crates/opencompany-core/src/hivemind/test.rs",
+        "start": 700,
+        "why": "Read the full fixture function that constructs test turns to confirm all use round_start u64::MAX"
+      },
+      {
+        "end": 560,
+        "kind": "read",
+        "path": "crates/opencompany-core/src/hivemind/deliberation_test.rs",
+        "start": 500,
+        "why": "Check whether deliberation tests cover multi-turn round pinboard bounding or commit-once"
+      }
+    ]
+  }
+}

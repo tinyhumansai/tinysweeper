@@ -1,0 +1,17 @@
+{
+  "key": "6305123a756957ab",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 22513,
+    "output_tokens": 1082,
+    "cached_tokens": 9635,
+    "embed_tokens": 0,
+    "cost_usd": 0.00483528664
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds four new model price entries to the MODEL_PRICES table and four tests that verify their cost calculations. The arithmetic in every test is correct against the table values, no untrusted input reaches a dangerous sink, and no logic paths are changed. Safe to merge."
+  }
+}
