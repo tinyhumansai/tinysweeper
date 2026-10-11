@@ -884,3 +884,50 @@ async fn a_paid_refusal_retains_answer_usage_and_capability_spend() {
     assert_eq!(answers[0].usage.cost_usd, 0.01);
     assert_eq!(llm.spend().cost_usd(), 0.01);
 }
+
+#[tokio::test]
+async fn a_directory_lookup_reaches_the_verdict_and_falsifier_evidence() {
+    // A guessed src/falsify.rs path is absent; its directory module still exists.
+    // Listing lets the model discover actual paths rather than infer absence.
+    let model = MockModel::new()
+        .then(json!({"summary": "Provisional missing-module claim", "findings": [{
+            "title": "Add the falsify module before importing it"
+        }], "lookups": [{"kind": "list", "path": "src/falsify", "why": "Locate the module implementation"}]}))
+        .then(json!({"summary": "The directory module exists", "findings": []}));
+    let tree = crate::ports::tree::MockTree::from_files([
+        ("src/falsify/mod.rs", "pub struct Falsifier;"),
+        ("src/falsify/types.rs", "pub struct Response;"),
+    ]);
+    let llm = lane_llm(Arc::new(model.clone()), &config(), 100.0);
+    let policy = lookup_policy(2);
+    let answers = ask_all(
+        llm,
+        LaneId::Critique,
+        &[call("a")],
+        &schema(),
+        Asking {
+            subagent_model: None,
+            tree: Some(&tree),
+            lookup: Some(&policy),
+            seed: &[],
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        answers[0].value.as_ref().unwrap()["findings"],
+        json!([]),
+        "The settled turn must replace the provisional missing-module claim"
+    );
+    assert_eq!(model.calls(), 2);
+    assert!(
+        model.requests()[1]
+            .messages
+            .iter()
+            .any(|m| m.content.contains("src/falsify/mod.rs"))
+    );
+    assert!(
+        answers[0].looked_up.contains("src/falsify/mod.rs"),
+        "The existing falsifier must receive the same listing evidence"
+    );
+}

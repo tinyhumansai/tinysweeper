@@ -1,0 +1,17 @@
+{
+  "key": "dca879d4eeb6a5c3",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 17531,
+    "output_tokens": 811,
+    "cached_tokens": 8532,
+    "embed_tokens": 0,
+    "cost_usd": 0.003588567464
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change makes the reasoning effort configurable instead of hard-disabling it, forwarding a `reasoning_effort` field from config through `reasoning_options` into the provider options. The logic, tests, and documentation are sound and consistent with the existing patterns in the file; no defects found."
+  }
+}

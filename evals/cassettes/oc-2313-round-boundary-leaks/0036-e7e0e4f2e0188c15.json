@@ -1,0 +1,42 @@
+{
+  "key": "e7e0e4f2e0188c15",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 52555,
+    "output_tokens": 4853,
+    "cached_tokens": 18605,
+    "embed_tokens": 0,
+    "cost_usd": 0.01684365748
+  },
+  "value": {
+    "lookups": [
+      {
+        "glob": "**/*.rs",
+        "kind": "search",
+        "pattern": "HiveStep::Speak",
+        "why": "Verify the new HiveStep::Speak variant's fields (turns, next_state) match what episode.rs destructures, and understand the round contract."
+      },
+      {
+        "glob": "**/*.rs",
+        "kind": "search",
+        "pattern": "round_start",
+        "why": "Check how round_start is used in project_for and whether the pinboard bound is actually applied correctly."
+      },
+      {
+        "end": 850,
+        "kind": "read",
+        "path": "crates/opencompany-core/src/hivemind/test.rs",
+        "start": 700,
+        "why": "Check whether existing tests exercise multi-turn rounds or only the degenerate single-turn case with round_start = u64::MAX."
+      },
+      {
+        "glob": "crates/opencompany-core/src/hivemind/*test*.rs",
+        "kind": "search",
+        "pattern": "round",
+        "why": "Find any tests that exercise the new round behavior (multiple turns per round, state committed once per round, pinboard bounded at round_start)."
+      }
+    ]
+  }
+}

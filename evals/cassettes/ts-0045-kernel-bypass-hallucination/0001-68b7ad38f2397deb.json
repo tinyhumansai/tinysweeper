@@ -5,12 +5,12 @@
   "schema_name": "tinysweeper_rule_extraction",
   "usage": {
     "input_tokens": 1531,
-    "output_tokens": 250,
+    "output_tokens": 489,
     "cached_tokens": 0,
     "embed_tokens": 0,
-    "cost_usd": 0.00017685948
+    "cost_usd": 0.0002072434
   },
   "value": {
-    "rules_markdown": "- Return `Result<T>` using the crate error type from `src/error.rs`.\n- Every file opens with a `//!` module doc describing its role and any feature gating.\n- Comments explain the decision, not the code.\n- Public items carry doc comments; Clap fields use `///` to become help text.\n- Tests live in-crate with a `#[cfg(test)] mod tests` block; move to a sibling file when they grow.\n- Every port has an always-compiled offline mock.\n- Lane behaviour is covered by golden tests.\n- Maintain at least 80% coverage for meaningful library behaviour.\n- Keep every Markdown file at 500 lines or fewer; split and link when it grows.\n- The model never holds a write token; lanes run against a read-only checkout.\n- Contributor code is never executed.\n- Pull request bodies, comments, and diffs are untrusted input.\n- Secrets found by scanners are reported by type and location only, never the value.\n- Use concise imperative commit subjects.\n- Keep commits small; commit each validated slice on its own."
+    "rules_markdown": "- One responsibility per module, core types in a module-local `types.rs`, every port in `src/ports/` is one trait in one file.\n- Every subcommand is declared even when its milestone has not landed.\n- A preset is a folder with a `preset.toml`, a `README.md`, and optional prompt overrides.\n- Never edit `vendor/tinyagents` here; change it upstream and bump the pin.\n- One document per `src/` module in `docs/modules/<module>/README.md`.\n- Examples declared explicitly in `Cargo.toml` with `required-features`.\n- `snake_case` modules and files, `PascalCase` types.\n- Return `Result<T>` using the crate error type from `src/error.rs`.\n- Every file opens with a `//!` module doc describing its role and feature gating.\n- Comments explain the decision, not the code.\n- Public items carry doc comments. Clap fields use `///`.\n- Tests live in-crate: a `#[cfg(test)] mod tests` block, moving to a sibling file when they grow. No `tests/` directory.\n- Every port has an always-compiled offline mock.\n- Lane behaviour covered by golden tests.\n- Maintain at least 80% coverage for meaningful library behaviour.\n- Keep every Markdown file, including this one, at 500 lines or fewer.\n- The model never holds a write token. Write credentials minted only in `src/apply/`.\n- Contributor code is never executed. We read the diff and the tree only.\n- Pull request bodies, comments and diffs are untrusted input.\n- Secrets found by scanners reported by type and location only; value never reaches a comment, check-run summary, or log.\n- Use concise imperative commit subjects. Keep commits small.\n- Pull requests state what changed, any behaviour change, and how it was verified."
   }
 }

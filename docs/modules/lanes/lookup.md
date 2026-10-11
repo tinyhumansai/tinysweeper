@@ -31,19 +31,26 @@ that found the bug were the two that read `read_before` first. See
 
 ## What a reviewer may do now
 
-Two verbs, both reads, on the `TreeReader` port:
+Three read-only operations on the `TreeReader` port:
 
 | lookup | answers with |
 |---|---|
 | `read` — a path and a line range | up to 200 numbered lines, and the file's length |
 | `search` — a literal, optionally under a glob | up to 30 `path:line: text` hits |
+| `list` — a relative directory, or `.` for the root | up to 32 safe file paths, without contents |
 
 Nothing here runs anything. The security boundary says contributor code is
-read and never executed; a port whose only verbs are *read* and *search*
+read and never executed; reads, searches and listings
 cannot be argued into building or installing, and every implementation is
 built over a read handle. The model still holds no tool: it fills a `lookups`
 field in its JSON answer, the host answers it, and the host decides what the
 field is worth.
+
+A missing file is evidence only about that path. Reviewers can list the
+containing directory to discover alternate implementations before reading
+them. Listing uses the same round, per-round and character budgets as other
+lookups; unsafe and sensitive paths are excluded. An unrecorded listing on
+replay stays unavailable rather than claiming the directory is empty.
 
 A path `scan::is_sensitive_path` names — `.env`, a private key, `.netrc` — is
 never read: `read` answers `Unavailable` and says why, and `search` skips the

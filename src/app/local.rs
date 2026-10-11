@@ -192,8 +192,9 @@ impl crate::ports::tree::TreeReader for GitTree {
                     None => Found::NotFound,
                 })
             }
-            Lookup::Search { .. } => Ok(Found::Unavailable {
+            Lookup::Search { .. } | Lookup::List { .. } => Ok(Found::Unavailable {
                 reason: "an explicit --head is read through git one file at a time; \
+                         search and directory listing are unavailable; \
                          name the path"
                     .into(),
             }),
@@ -201,7 +202,7 @@ impl crate::ports::tree::TreeReader for GitTree {
     }
 
     fn describe(&self) -> String {
-        "Files can be read by path at the reviewed commit. Search is not available: name \
+        "Files can be read by path at the reviewed commit. Search and listing are not available: name \
          the path."
             .into()
     }

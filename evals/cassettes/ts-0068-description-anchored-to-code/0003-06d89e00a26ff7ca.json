@@ -1,0 +1,41 @@
+{
+  "key": "06d89e00a26ff7ca",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 8919,
+    "output_tokens": 663,
+    "cached_tokens": 5444,
+    "embed_tokens": 0,
+    "cost_usd": 0.002133552184
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "src/config/types.rs",
+        "pattern": "struct ModelConfig",
+        "why": "Find the struct definition and surrounding context to understand its name and construction"
+      },
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "reasoning_effort",
+        "why": "See where reasoning_effort is constructed/used across the crate to detect missing initialization"
+      },
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "ModelConfig {",
+        "why": "Find struct-literal construction sites that would break when a new field is added without Default"
+      },
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "max_tokens",
+        "why": "Check how max_tokens is consumed to verify the doc comment claim about reasoning billing"
+      }
+    ]
+  }
+}

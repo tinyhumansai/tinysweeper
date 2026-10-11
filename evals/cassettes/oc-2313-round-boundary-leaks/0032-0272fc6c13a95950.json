@@ -1,0 +1,17 @@
+{
+  "key": "0272fc6c13a95950",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 3918,
+    "output_tokens": 93,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0003389904
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change narrows the path to the OpenHuman crate from the top-level vendor directory to the specific openhuman-core sub-crate. The path update is consistent with typical workspace layouts and introduces no new dependencies, no security-relevant input paths, and no behavioural changes. Safe to merge."
+  }
+}

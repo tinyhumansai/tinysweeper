@@ -1,0 +1,19 @@
+{
+  "key": "fbf1c85a8e64fdd7",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4633,
+    "output_tokens": 104,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0003998666
+  },
+  "value": {
+    "findings": [],
+    "lookups": [],
+    "resolved": [],
+    "summary": "This is purely a documentation update — renaming 'single turns' to 'rounds', clarifying that a round may authorize multiple speakers while still executing them serially, and adding the new terms 'round_width' and 'revealed_width'.  No code logic, unsafe operations, deserialization, network calls, or credential handling was touched.  The change is safe to merge."
+  }
+}

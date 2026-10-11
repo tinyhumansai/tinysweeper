@@ -1,0 +1,17 @@
+{
+  "key": "6c42f9787e9b2d6b",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 18374,
+    "output_tokens": 59,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0015274392
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change introduces round-level concurrency, running multiple turns in a series loop before committing the state once all are durable. The diff looks sound, with no security-relevant defects visible in the code or the lookups."
+  }
+}
