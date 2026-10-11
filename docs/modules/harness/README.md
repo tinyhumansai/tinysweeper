@@ -20,6 +20,12 @@ one stateless, structured completion against the configured OpenAI-compatible
 `base_url`. Council reviewers can instead opt into bounded read-only agent
 exploration with `models.agentic_reviewers`; see [agentic reviewers](AGENTIC-REVIEWERS.md).
 The default remains stateless completion, with no tools or session.
+Malformed `json_object` answers get one Embed-owned repair attempt per route
+and token ceiling. Each physical dispatch keeps its timeout and monetary
+admission; successful repairs and persistent refusals retain every paid bill.
+An invalid repair produces a typed refusal, which configured route fallback
+may still recover. After two truncated answers, the existing bounded ladder
+can increase the ceiling. Schema mode keeps its direct ceiling-doubling path.
 
 The request bodies this sends are pinned by `harness::parity_test`, which drives
 the adapter against a loopback fake gateway (`harness::fake_gateway`) and
