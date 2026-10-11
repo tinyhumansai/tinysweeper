@@ -233,6 +233,23 @@ pub fn failed(case: &Case, error: String, wall: Duration) -> CaseScore {
     }
 }
 
+/// A failed case retains known paid usage without inferring unknown charges or lane attribution.
+pub fn failed_with_spend(
+    case: &Case,
+    error: String,
+    wall: Duration,
+    spend: crate::ports::model::Spend,
+) -> CaseScore {
+    let mut score = failed(case, error, wall);
+    score.cost_usd = spend.cost_usd();
+    score.over_budget = score.cost_usd > case.budget.max_cost_usd;
+    score.input_tokens = spend.usage.input_tokens;
+    score.output_tokens = spend.usage.output_tokens;
+    score.cached_tokens = spend.usage.cached_tokens;
+    score.models = spend.models;
+    score
+}
+
 /// Every finding the proposal would actually post or summarise.
 ///
 /// Both tiers: a posted comment and a note in the check-run summary both
