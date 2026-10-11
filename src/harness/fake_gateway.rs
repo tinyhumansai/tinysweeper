@@ -68,17 +68,30 @@ impl FakeGateway {
     /// Start a gateway that assigns each HTTP request with complete headers
     /// the next reply in `script`, or a `500` once the script runs out.
     pub async fn start(script: Vec<Reply>) -> Self {
-        Self::start_script(script, false).await
+        Self::start_script(script, false, None).await
     }
 
     /// Record the first request without answering until its client closes.
     /// Subsequent requests consume normal scripted replies, allowing tests to
     /// prove physical transport deadlines and fallback without a real gateway.
     pub async fn start_with_stalled_first_reply(script: Vec<Reply>) -> Self {
-        Self::start_script(script, true).await
+        Self::start_script(script, true, None).await
     }
 
-    async fn start_script(script: Vec<Reply>, stall_first: bool) -> Self {
+    /// Hold responses until the test releases permits, while recording requests.
+    pub async fn start_paused(script: Vec<Reply>) -> (Self, Arc<tokio::sync::Semaphore>) {
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        (
+            Self::start_script(script, false, Some(gate.clone())).await,
+            gate,
+        )
+    }
+
+    async fn start_script(
+        script: Vec<Reply>,
+        stall_first: bool,
+        gate: Option<Arc<tokio::sync::Semaphore>>,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind loopback");
@@ -105,6 +118,7 @@ impl FakeGateway {
                     .pop_front()
                     .unwrap_or_else(|| Reply::error(500, "script exhausted"));
                 let recorded = recorded.clone();
+                let gate = gate.clone();
                 tokio::spawn(async move {
                     let Some(body) =
                         read_request_body(&mut stream, buffer, header_end, length).await
@@ -118,6 +132,12 @@ impl FakeGateway {
                         let mut closed = [0u8; 1];
                         let _ = stream.read(&mut closed).await;
                         return;
+                    }
+                    if let Some(gate) = gate {
+                        let Ok(permit) = gate.acquire().await else {
+                            return;
+                        };
+                        permit.forget();
                     }
                     let payload = reply.body.to_string();
                     let response = format!(

@@ -145,14 +145,15 @@ review deadline remain terminal. A timed-out paid call retains its conservative
 budget reservation because its actual charge is unknown. Agent reviewers retain
 their separate 60-second turn deadline.
 
-Scoped monetary ledgers queue paid work serially. Model clones sharing a ledger
-share admission, while a fresh scoped budget has its own queue. Each completion
-ladder or agent reviewer waits for the previous invocation to settle before
-reserving its worst-case call bound. This keeps affordable parallel lane work
-from failing merely because outstanding bounds temporarily exceed the limit.
-Cancellation releases queue admission; Embed retains responsibility for the
-reservation and any paid work. Unscoped calls remain concurrent. The conservative
-queue trades lane latency for reliable admission without raising the hard budget.
+Scoped monetary ledgers admit paid calls atomically when their conservative
+bounds fit. Calls that need capacity wait for outstanding reservations to settle,
+so affordable lane work does not fail merely because temporary bounds exceed the
+limit. Fitting calls run concurrently, including agent reviewer child ledgers.
+Cancellation before admission reserves and charges nothing; canceled or timed-out
+dispatched calls retain their unknown-charge bounds. Permanently unaffordable
+work fails before dispatch. Clones share the ledger; a fresh scope is isolated.
+Internal provider retries retain fail-fast admission and no completed call is
+replayed to recover capacity.
 
 Reasoning tokens are *not* separately priced: OpenRouter bills them as output
 tokens and reports them inside `output_tokens`, so they are already in the cost.
