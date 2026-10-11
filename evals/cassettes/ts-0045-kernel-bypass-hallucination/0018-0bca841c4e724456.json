@@ -1,0 +1,17 @@
+{
+  "key": "0bca841c4e724456",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 7178,
+    "output_tokens": 86,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00060711
+  },
+  "value": {
+    "findings": [],
+    "summary": "Adds an `[embeddings]` configuration section to `.tinysweeper.toml`, enabling retrieval via OpenRouter for the codebase's own reviews. Values are sensible defaults, match the existing Rust struct definition, and are consistent with the repository's own instruction about the model never holding write tokens. No bugs or regressions introduced."
+  }
+}

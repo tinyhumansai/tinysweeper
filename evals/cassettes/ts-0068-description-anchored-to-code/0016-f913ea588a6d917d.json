@@ -1,0 +1,17 @@
+{
+  "key": "f913ea588a6d917d",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 11225,
+    "output_tokens": 67,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0009382534
+  },
+  "value": {
+    "findings": [],
+    "summary": "No reportable defects. The diff adds price entries and tests; all inputs are compile-time constants or come from the repository's own defaults, not from untrusted caller-supplied strings. The tests verify cost logic with no observable side effects on the running system."
+  }
+}

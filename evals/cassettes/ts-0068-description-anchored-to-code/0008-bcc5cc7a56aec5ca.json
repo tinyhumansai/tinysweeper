@@ -1,0 +1,17 @@
+{
+  "key": "bcc5cc7a56aec5ca",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 20713,
+    "output_tokens": 2069,
+    "cached_tokens": 10240,
+    "embed_tokens": 0,
+    "cost_usd": 0.0013760334
+  },
+  "value": {
+    "findings": [],
+    "summary": "The diff looks sound: it adds a configurable `reasoning_effort` field, implements the corresponding gateway options builder, and covers the new paths with unit tests. No reportable defects found."
+  }
+}

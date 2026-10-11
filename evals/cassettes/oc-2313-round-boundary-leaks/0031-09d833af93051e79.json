@@ -1,0 +1,17 @@
+{
+  "key": "09d833af93051e79",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 14003,
+    "output_tokens": 924,
+    "cached_tokens": 6912,
+    "embed_tokens": 0,
+    "cost_usd": 0.00085254764
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change only relocates module paths from `openhuman_core::openhuman::*` to `openhuman_core::*`. No new security concerns are introduced: the same functions are called with the same arguments, and no untrusted input, authentication changes, network calls, deserialization, or other security‑sensitive operations are affected."
+  }
+}

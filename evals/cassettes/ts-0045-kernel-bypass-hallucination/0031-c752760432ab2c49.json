@@ -1,0 +1,17 @@
+{
+  "key": "c752760432ab2c49",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 10475,
+    "output_tokens": 1467,
+    "cached_tokens": 5120,
+    "embed_tokens": 0,
+    "cost_usd": 0.0007692538
+  },
+  "value": {
+    "findings": [],
+    "summary": "The new `shorten` and `first_sentence` utilities are sound; no security or rule violations introduced."
+  }
+}

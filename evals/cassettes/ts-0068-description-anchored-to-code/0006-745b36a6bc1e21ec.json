@@ -1,0 +1,17 @@
+{
+  "key": "745b36a6bc1e21ec",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 5118,
+    "output_tokens": 77,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004354672
+  },
+  "value": {
+    "findings": [],
+    "summary": "The diff adds a `reasoning_effort: String` field to the `Models` config struct, with doc comments explaining the intent, and the existing harness code already reads this field. The change is consistent with the caller in `src/harness/openrouter.rs` and introduces no new defect."
+  }
+}

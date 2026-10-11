@@ -1,0 +1,17 @@
+{
+  "key": "85408f042c2630b8",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_description",
+  "usage": {
+    "input_tokens": 19573,
+    "output_tokens": 2264,
+    "cached_tokens": 9728,
+    "embed_tokens": 0,
+    "cost_usd": 0.00134791636
+  },
+  "value": {
+    "findings": [],
+    "summary": "The pull request looks sound: the model switch is backed by measurements, reasoning is configurable, pricing entries are complete, and tests cover the new behaviour. No reportable defects found."
+  }
+}

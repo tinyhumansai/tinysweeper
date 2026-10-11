@@ -53,7 +53,9 @@ pub fn instruction(describe: &str, policy: &LookupPolicy) -> String {
          signature are what decide whether a bound is exclusive or inclusive, whether a \
          sibling read in the same loop is also bounded, what a field means — and to read \
          the unchanged code around the change that the diff's comments refer to. Put the \
-         lookups in `lookups` and stop; you will be asked again with what came back, and \
+         lookups in the one response JSON object alongside an empty `findings` array and \
+         a provisional `summary`, then stop. Never append a second object or a revised \
+         verdict in the same reply. You will be asked again with what came back, and \
          that later turn is the one your verdict is taken from, so a verdict on this turn \
          is provisional. Ask for line ranges, not whole files; a search for `fn name` finds \
          a definition. Use `list` to discover actual file paths under a directory when the \
@@ -90,12 +92,29 @@ pub fn lookups_schema(policy: &LookupPolicy) -> Value {
 
 /// Add the `lookups` key to a lane's response schema.
 pub fn with_lookups(mut schema: Value, policy: &LookupPolicy) -> Value {
-    if let Some(object) = schema.as_object_mut() {
-        object
+    if let Some(object) = schema.as_object_mut()
+        && let Some(properties) = object
             .entry("properties")
             .or_insert_with(|| json!({}))
             .as_object_mut()
-            .map(|properties| properties.insert("lookups".into(), lookups_schema(policy)));
+    {
+        properties.insert("lookups".into(), lookups_schema(policy));
+        // The base schema describes a finished single-turn review. Keeping
+        // that instruction here contradicts the lookup turn and has caused
+        // replies containing both a lookup object and a second verdict.
+        if let Some(summary) = properties.get_mut("summary").and_then(Value::as_object_mut) {
+            summary.insert("description".into(), json!("Return one JSON object per turn. When requesting lookups, write a provisional summary of what those reads would settle and leave findings empty; the host will ask again with the results. With no lookups, give your final verdict in one or two sentences. Do not claim a bug that is absent from findings and do not append a second object or verdict."));
+        }
+        if let Some(description) = properties
+            .get_mut("findings")
+            .and_then(Value::as_object_mut)
+            .and_then(|finding| finding.get_mut("description"))
+            .and_then(|value| value.as_str().map(str::to_owned))
+        {
+            properties["findings"]["description"] = json!(format!(
+                "When requesting lookups, this array must be empty. Otherwise: {description}"
+            ));
+        }
     }
     schema
 }
@@ -848,6 +867,30 @@ mod tests {
         let text = instruction("Search works.", &policy());
         assert!(text.contains("up to 2 such turn(s) of 2 lookups each"));
         assert!(text.contains("Search works."));
+    }
+
+    #[test]
+    fn lookup_turn_does_not_require_a_finished_review() {
+        let schema = with_lookups(crate::harness::schema::json_schema(), &policy());
+        let summary = schema["properties"]["summary"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(!summary.contains("there is no second turn"));
+        assert!(summary.contains("provisional"));
+        assert!(summary.contains("one JSON object"));
+        assert!(
+            schema["properties"]["findings"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("empty")
+        );
+        let original = crate::harness::schema::json_schema();
+        assert!(
+            original["properties"]["summary"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("there is no second turn")
+        );
     }
 
     #[tokio::test]

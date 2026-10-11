@@ -1,0 +1,17 @@
+{
+  "key": "3024b0b97d71abf9",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 14485,
+    "output_tokens": 755,
+    "cached_tokens": 7168,
+    "embed_tokens": 0,
+    "cost_usd": 0.0008475255599999999
+  },
+  "value": {
+    "findings": [],
+    "summary": "The diff correctly updates module paths after a refactor that moved items out of an `openhuman::` sub-namespace. Each new path resolves to the same function as before; no logic change, no regression."
+  }
+}

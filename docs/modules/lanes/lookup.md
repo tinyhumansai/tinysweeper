@@ -46,6 +46,12 @@ built over a read handle. The model still holds no tool: it fills a `lookups`
 field in its JSON answer, the host answers it, and the host decides what the
 field is worth.
 
+Each turn returns exactly one JSON object. A lookup request has a provisional
+summary and an empty findings list; the verdict follows after the host returns
+the evidence. The lookup-enabled schema uses that same contract rather than
+the finished-review instructions used by a single-turn response. Malformed or
+concatenated JSON replies remain failures, never best-effort verdicts.
+
 A missing file is evidence only about that path. Reviewers can list the
 containing directory to discover alternate implementations before reading
 them. Listing uses the same round, per-round and character budgets as other
@@ -150,3 +156,12 @@ named in the summary as *worth a look*. The unbounded sibling read is missed
 by every one-shot configuration and by that model; `gpt-5.6-luna` on the
 box's ladder reaches it two runs in three at a fiftieth of the price
 (tinysweeper#157), which is why it became the `deep` tier.
+
+The operator CLI accepts `review --tree /path/to/checkout` to supply the same
+read-only tree evidence used by server reviews. The checkout must match the
+live PR head and have no tracked, submodule, or untracked changes. A mismatch
+fails before review; no target build, dependency installation, or script runs.
+Reads and searches use Git's file allowlist, excluding ignored local files,
+and Git metadata uses the hardened runner that disables fsmonitor hooks and
+ambient configuration injection. Without `--tree`, the CLI continues to read
+through the forge API.

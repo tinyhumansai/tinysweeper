@@ -1,0 +1,17 @@
+{
+  "key": "4150b90b93d8ea5b",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 22383,
+    "output_tokens": 713,
+    "cached_tokens": 11008,
+    "embed_tokens": 0,
+    "cost_usd": 0.00123921476
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request adds new model price entries and tests. The prices are hardcoded constants, no untrusted input reaches a dangerous sink, no authentication, network, or deserialization changes. The tests are internal and use compile-time constants. No security or correctness regressions."
+  }
+}

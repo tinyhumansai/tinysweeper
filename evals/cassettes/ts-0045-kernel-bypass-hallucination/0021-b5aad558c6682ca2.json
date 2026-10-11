@@ -1,0 +1,30 @@
+{
+  "key": "b5aad558c6682ca2",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 14399,
+    "output_tokens": 4191,
+    "cached_tokens": 7168,
+    "embed_tokens": 0,
+    "cost_usd": 0.00140804916
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "`open(...).read()` does not explicitly close the file. While CPython often closes the file on garbage collection, it is not guaranteed and can cause a resource leak in long-running processes or tight loops. Use a `with` statement to guarantee cleanup:\n\n```python\nwith open(ENTRYPOINT, encoding=\"utf-8\") as f:\n    source = f.read()\n```",
+        "confidence": 1,
+        "existing_code": "    source = open(ENTRYPOINT, encoding=\"utf-8\").read()",
+        "path": "deploy/mongo/kernel-bypass-entrypoint.py",
+        "rule": "resource-leak",
+        "severity": "low",
+        "suggestion": "with open(ENTRYPOINT, encoding=\"utf-8\") as f:\n    source = f.read()",
+        "title": "Use a context manager to close the entrypoint file"
+      }
+    ],
+    "lookups": [],
+    "resolved": [],
+    "summary": "The entrypoint file is not closed after reading; use a `with` statement to ensure the file descriptor is released."
+  }
+}

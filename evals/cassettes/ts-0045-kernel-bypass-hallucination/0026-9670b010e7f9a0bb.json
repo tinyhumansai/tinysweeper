@@ -1,0 +1,17 @@
+{
+  "key": "9670b010e7f9a0bb",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4409,
+    "output_tokens": 59,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0003739302
+  },
+  "value": {
+    "findings": [],
+    "summary": "The diff adds a single `pub mod summarise;` declaration. No other changes are present. The added module has no visible content in this diff and no rules are violated. No reportable defects."
+  }
+}

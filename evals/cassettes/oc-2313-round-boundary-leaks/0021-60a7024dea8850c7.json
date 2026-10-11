@@ -1,0 +1,30 @@
+{
+  "key": "60a7024dea8850c7",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 18836,
+    "output_tokens": 450,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0016301936
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "`read_pinboard`'s `before` parameter is documented as an **exclusive** boundary — rows at or above this sequence are withheld. The diff passes `turn.round_start` as that bound, intending to hide pins laid down *concurrently* with the turn. But `HiveTurn::round_start` is the sequence the round was *folded at* (line 340 of `types.rs`), and `project_for` withholds peer rows strictly *above* `round_start`. The exclusive bound in `read_pinboard` will therefore *also* hide a pin written at exactly `round_start`, which is produced by a turn from the *same* round's fold — it is the turn's own foundation. No pin is ever written at that exact sequence (a pin is a later append, not the set-dressing message), but if a peer's row or an earlier turn's aside happened to land at that exact value, the pin it carries would be incorrectly hidden. The author's comment claims the boundary is the same reasoning as `project_for`, but `project_for` uses a *different* bound: it withholds rows *above* `round_start`, not at or above it. The exclusive `before` pinboard parameter is an off-by-one from the inclusive `project_for` semantics.",
+        "confidence": 0.85,
+        "existing_code": "                    Some(turn.round_start),",
+        "path": "crates/opencompany-core/src/hivemind/episode.rs",
+        "rule": "off-by-one",
+        "severity": "high",
+        "suggestion": "                    Some(turn.round_start.next()),",
+        "title": "Use strict exclusive bound for pinboard to match project_for semantics"
+      }
+    ],
+    "lookups": [],
+    "resolved": [],
+    "summary": "A misalignment between `read_pinboard`'s exclusive `before` and `project_for`'s inclusive `round_start` may incorrectly hide pins from the same round boundary; fix by passing `turn.round_start.next()`."
+  }
+}

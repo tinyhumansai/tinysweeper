@@ -1,0 +1,17 @@
+{
+  "key": "dba2d9434bc2bb4a",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 37699,
+    "output_tokens": 2891,
+    "cached_tokens": 18688,
+    "embed_tokens": 0,
+    "cost_usd": 0.00235662756
+  },
+  "value": {
+    "findings": [],
+    "summary": "Change from single-turn to round-based processing is structurally correct. No security issues or rule violations introduced."
+  }
+}

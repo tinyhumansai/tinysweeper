@@ -1,0 +1,27 @@
+{
+  "key": "5f91e800843716c3",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 16875,
+    "output_tokens": 2719,
+    "cached_tokens": 8192,
+    "embed_tokens": 0,
+    "cost_usd": 0.00130172644
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "When `rfind(' ')` returns `None`, the function returns `head` directly (which is `limit` characters) plus an ellipsis, yielding `limit + 1` characters. The doc comment states the result is \"at most `limit` characters\". For example, `shorten(\"abcdef\", 5)` (input after trimming) produces `\"abcde…\"` (6 characters). The test in `a_long_string_stops_on_a_word_boundary` only checks byte length (`out.len() <= 21`) and never triggers the no-space path, so the defect is not caught. The fix should reserve a character for the ellipsis when truncating, e.g., taking `limit.saturating_sub(1)` characters from the text.",
+        "confidence": 1.0,
+        "existing_code": "        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),",
+        "path": "src/findings/summarise.rs",
+        "rule": "off-by-one",
+        "severity": "medium",
+        "title": "Ensure shortened string respects the character limit"
+      }
+    ],
+    "summary": "Introduces a `shorten` function that can return a string longer than the requested limit when no space is found, violating its documented contract. This is a concrete bug: `shorten(\"abcde\", 5)` returns `\"abcde\"` (correct), but `shorten(\"abcdef\", 5)` returns `\"abcde…\"` (6 characters)."
+  }
+}

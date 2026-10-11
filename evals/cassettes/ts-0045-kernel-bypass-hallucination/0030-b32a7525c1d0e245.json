@@ -1,0 +1,17 @@
+{
+  "key": "b32a7525c1d0e245",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 9989,
+    "output_tokens": 1427,
+    "cached_tokens": 4864,
+    "embed_tokens": 0,
+    "cost_usd": 0.00073941868
+  },
+  "value": {
+    "findings": [],
+    "summary": "No reportable defects. The change fixes env var naming to match the binary's expectations, adds optional API keys for alternative providers, and mounts a config file read-only."
+  }
+}

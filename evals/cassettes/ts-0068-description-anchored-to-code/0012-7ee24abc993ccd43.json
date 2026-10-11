@@ -1,0 +1,17 @@
+{
+  "key": "7ee24abc993ccd43",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4840,
+    "output_tokens": 145,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000423738
+  },
+  "value": {
+    "findings": [],
+    "summary": "This diff only changes a configuration file (defaults.toml), swapping model names, updating comments, and adding a reasoning_effort setting. No code logic is changed, no untrusted input reaches a dangerous sink, no authentication/authorisation boundaries are crossed, no new network or subprocess calls are introduced, no deserialization path is touched, no path traversal is possible, no secrets are moved into code or logs, no dependency changes appear, and no CI permissions are widened. The new configuration values are static strings. No reportable defect exists."
+  }
+}

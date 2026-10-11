@@ -5,12 +5,12 @@
   "schema_name": "tinysweeper_rule_extraction",
   "usage": {
     "input_tokens": 3844,
-    "output_tokens": 169,
+    "output_tokens": 395,
     "cached_tokens": 0,
     "embed_tokens": 0,
-    "cost_usd": 0.0003454332
+    "cost_usd": 0.0003827684
   },
   "value": {
-    "rules_markdown": "- Use standard `rustfmt` output and Rust 2024 idioms.\n- Module and file names should be `snake_case`.\n- Public types should be `PascalCase`.\n- Functions, methods, fields, and local variables should be `snake_case`.\n- Return `Result<T>` using the crate error type from `src/error.rs`.\n- Prefer small modules with focused responsibilities.\n- Keep core type definitions in a dedicated `types.rs` file.\n- Package-local tests go in the module file or a dedicated `test.rs` file.\n- Keep tests near the module they exercise.\n- Maintain at least 80% coverage for meaningful library behavior.\n- Keep every Markdown file under 500 lines."
+    "rules_markdown": "- Prefer small modules with focused responsibilities.\n- Keep core type definitions in a dedicated `types.rs` file.\n- Organize public module surfaces in specific directories like `app/`, `server/`, `ledger/`, etc.\n- Use standard `rustfmt` output and Rust 2024 idioms.\n- Module and file names should be `snake_case`.\n- Public types should be `PascalCase`.\n- Functions, methods, fields, and local variables should be `snake_case`.\n- Return `Result<T>` using the crate error type from `src/error.rs`.\n- Add focused tests with every behavior change.\n- Keep tests near the module they exercise.\n- Maintain at least 80% coverage for meaningful library behavior.\n- Document any intentionally untested edge case in the PR description.\n- Keep Markdown files at 500 lines or fewer; split if needed.\n- Use concise, imperative commit subjects.\n- Keep commits small and concise, each a coherent slice.\n- Include PR summary, commands run locally, and API/behavior changes.\n- Updated examples or docs when public APIs or architecture change.\n- Run `cargo fmt --all -- --check` to verify formatting.\n- Run `cargo clippy --all-targets -- -D warnings` for lint checks.\n- Do not change explicit Rust toolchain pin to `stable`.\n- Do not drop `RUST_MIN_STACK = 8388608` from `.cargo/config.toml`.\n- New test files must be covered by a CI job with the correct features.\n- Feature-gated tests need a row in `scripts/ci/feature-lanes.txt`.\n- Package-local tests go in the module file or a dedicated `test.rs`."
   }
 }

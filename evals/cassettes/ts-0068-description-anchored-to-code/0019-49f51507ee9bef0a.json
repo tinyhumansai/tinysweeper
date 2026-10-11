@@ -1,0 +1,17 @@
+{
+  "key": "49f51507ee9bef0a",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 17529,
+    "output_tokens": 1931,
+    "cached_tokens": 8704,
+    "embed_tokens": 0,
+    "cost_usd": 0.0011917362799999998
+  },
+  "value": {
+    "findings": [],
+    "summary": "The diff adds a `reasoning_effort` field to the model configuration, wires it through the OpenRouter gateway, and adds comprehensive tests for the reasoning options function and for pricing coherence. The tests pin the behaviour of the escape-hatch value (`off`), the through‑path to the gateway, the invariant that every default model has a price, and the argument order of `completion_cost`. No regressions or unhandled edge cases are introduced, and all documented invariants are verified by new tests. No defects."
+  }
+}

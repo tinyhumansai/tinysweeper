@@ -1,0 +1,30 @@
+{
+  "key": "e3b265efeb023943",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_description",
+  "usage": {
+    "input_tokens": 14923,
+    "output_tokens": 4893,
+    "cached_tokens": 7424,
+    "embed_tokens": 0,
+    "cost_usd": 0.0015503854799999999
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The `first_sentence` function splits on the first occurrence of `. `. This incorrectly splits on abbreviations like 'e.g.' or 'i.e.' that are followed by a space and more text. For example, input `e.g. this is a test.` would return `e.g.` instead of the full first sentence. Since this function is used for one-line summaries of model-authored findings, such input is reachable. Consider a more robust sentence boundary detection, or document the limitation.",
+        "confidence": 0.9,
+        "existing_code": "match text.find(\". \") {\n    Some(end) => text[..end + 1].to_string(),\n    None => text.to_string(),\n}",
+        "late": false,
+        "path": "src/findings/summarise.rs",
+        "rule": "unhandled-edge-case",
+        "severity": "medium",
+        "suggestion": null,
+        "title": "Handle abbreviated punctuation in sentence extraction"
+      }
+    ],
+    "resolved": [],
+    "summary": "One issue found: `first_sentence` uses a naive split on `. ` that can be fooled by common abbreviations like 'e.g.', producing an incorrect summary."
+  }
+}

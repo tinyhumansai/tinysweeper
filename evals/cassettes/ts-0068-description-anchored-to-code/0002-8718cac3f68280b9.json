@@ -1,0 +1,17 @@
+{
+  "key": "8718cac3f68280b9",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 5081,
+    "output_tokens": 136,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004421578
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change updates model names and settings in the OpenRouter profile: sets both `scan` and `deep` to `z-ai/glm-5.2`, updates `fallback` to `deepseek/deepseek-v4-pro` and `minimax/minimax-m3`, and adds `reasoning_effort = \"high\"`. These are configuration values; the code that consumes them (not shown) is where validation would live. Nothing in the diff itself introduces a logic defect, regression, or rule violation — it is a data change only. No findings."
+  }
+}
