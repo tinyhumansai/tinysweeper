@@ -12,7 +12,9 @@
 //!    about one fact.
 //! 2. The model then looks for what a scanner cannot see: untrusted input
 //!    reaching a dangerous sink, an authorisation check that moved, a new
-//!    subprocess or deserialization site.
+//!    subprocess or deserialization site. Strictly anchored model proposals
+//!    are falsified against the diff and repository evidence they looked up,
+//!    before the scanner facts are merged back unchanged.
 //!
 //! A model verdict never *removes* a scanner finding. Adjudication adds
 //! context; it does not get to overrule a deterministic match, because the
@@ -31,6 +33,7 @@ use crate::config::types::LaneId;
 use crate::council;
 use crate::error::Result;
 use crate::evidence::diff::{FileDiff, render as render_diffs};
+use crate::falsify::Falsifier;
 use crate::findings::types::Finding;
 use crate::flows::panel::Call;
 use crate::flows::runner;
@@ -307,9 +310,15 @@ async fn review_group(
     // A group whose every reviewer failed is a group nobody read. Failing here
     // is what puts it in the fan-out's failure list, where the summary names
     // it — the alternative is an unreviewed group that reads as clean.
+    let responses = reviewer_responses(LaneId::Security, &reviewers, &answers)?;
+    let mut looked_up = responses
+        .iter()
+        .map(|response| response.looked_up.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     let Some(outcome) = aggregate_reviewer_responses(
         LaneId::Security,
-        reviewer_responses(LaneId::Security, &reviewers, &answers)?,
+        responses,
         group_diffs,
         Anchoring::Strict,
         config.council.corroboration,
@@ -320,17 +329,18 @@ async fn review_group(
         ));
     };
 
-    let mut findings = outcome.findings;
+    // Only model proposals enter this filter. Scanner facts are merged later
+    // and never depend on a model's ability to confirm them.
+    let filtered = Falsifier::new(llm.model().as_ref(), config)
+        .filter_with(LaneId::Security, outcome.findings, &evidence, &looked_up)
+        .await;
+    let mut findings = filtered.findings;
+    let mut rejected = filtered.rejected;
     let mut spend = outcome.spend;
+    spend.merge(filtered.spend);
 
-    // Adaptive coverage passes — see `lanes::coverage` and the identical gate
-    // in `lanes::critique`. Anchored the same way round one is, through
-    // `LaneOutcome::from_response`, rather than critique's quote-and-relocate
-    // `Positioner`: reusing round one's own anchoring here too, not inventing
-    // a third rule. No falsify call follows it, for the same reason round one
-    // has none — see `docs/modules/falsify/README.md`: this lane's model
-    // findings are adjudicating deterministic scanner matches, not proposing
-    // unverified ones the way `critique` does.
+    // Adaptive coverage uses the same strict anchoring and falsification as
+    // round one, judging only new proposals against the evidence already read.
     let mut added_by_coverage = 0usize;
     if config.review.passes > 1 && changed_lines(group_diffs) >= COVERAGE_PASS_MIN_LINES {
         let mut confirmed = findings.clone();
@@ -374,6 +384,8 @@ async fn review_group(
             let coverage_usage = coverage.usage;
             let coverage_elapsed = coverage.elapsed;
             spend.merge(coverage.spend);
+            looked_up.push('\n');
+            looked_up.push_str(&coverage.looked_up);
 
             let Some(response) = coverage.response else {
                 metrics.record(coverage_usage, coverage_elapsed, 0);
@@ -427,6 +439,18 @@ async fn review_group(
                 break;
             }
 
+            let filtered = Falsifier::new(llm.model().as_ref(), config)
+                .filter_with(LaneId::Security, new_findings, &evidence, &looked_up)
+                .await;
+            spend.merge(filtered.spend);
+            rejected.extend(filtered.rejected);
+            let new_findings = filtered.findings;
+            if new_findings.is_empty() {
+                metrics.record(coverage_usage, coverage_elapsed, 0);
+                metrics.stop(crate::lanes::coverage::StopReason::NonSurviving);
+                break;
+            }
+
             metrics.record(coverage_usage, coverage_elapsed, new_findings.len());
             added_by_coverage += new_findings.len();
             confirmed.extend(new_findings.clone());
@@ -435,8 +459,20 @@ async fn review_group(
         metrics.emit(LaneId::Security, group_paths);
     }
 
+    // The reviewer wrote its summary before filtering. Even a partial
+    // rejection can make that prose assert a bug we have now disproved.
+    let summary = if rejected.is_empty() {
+        outcome.summary
+    } else if findings.is_empty() {
+        "No model findings survived falsification.".to_string()
+    } else {
+        format!(
+            "{} model finding(s) survived falsification.",
+            findings.len()
+        )
+    };
     Ok(FileReview {
-        summary: coverage_note(&outcome.summary, added_by_coverage),
+        summary: coverage_note(&summary, added_by_coverage),
         findings,
         resolved: outcome.resolved,
         spend,
@@ -715,6 +751,7 @@ mod tests {
                 "summary": "…",
                 "findings": [finding_at_line("Guard the first index", 5)]
             }))
+            .then(json!({"incorrect": []}))
             .then(json!({"summary": "…", "findings": []}));
         let handle = model.clone();
 
@@ -722,8 +759,8 @@ mod tests {
 
         assert_eq!(
             handle.calls(),
-            2,
-            "round one's review, plus the coverage pass — security runs no falsify"
+            3,
+            "round one, its falsification, and the empty coverage pass"
         );
         let coverage_request = handle
             .requests()
@@ -799,6 +836,7 @@ mod tests {
                 "summary": "…",
                 "findings": [finding_at_line("Guard the first index", 5)]
             }))
+            .then(json!({"incorrect": []}))
             .then(json!({"summary": "…", "findings": [{"rule": "x"}]}));
 
         let outcome = run_with(model, &config_with_passes(2), &large_diffs(), &[]).await;
@@ -814,10 +852,12 @@ mod tests {
                 "summary": "…",
                 "findings": [finding_at_line("Guard the first index", 5)]
             }))
+            .then(json!({"incorrect": []}))
             .then(json!({
                 "summary": "…",
                 "findings": [finding_at_line("Guard the second index", 20)]
             }))
+            .then(json!({"incorrect": []}))
             .then(json!({"summary": "Nothing further.", "findings": []}));
         let handle = model.clone();
 
@@ -832,7 +872,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1, 2]
         );
-        assert_eq!(handle.calls(), 3);
+        assert_eq!(handle.calls(), 5);
         let prompt = handle
             .requests()
             .last()
@@ -853,10 +893,12 @@ mod tests {
                 "summary": "…",
                 "findings": [finding_at_line("Guard the first index", 5)]
             }))
+            .then(json!({"incorrect": []}))
             .then(json!({
                 "summary": "…",
                 "findings": [finding_at_line("Guard the second index", 20)]
             }))
+            .then(json!({"incorrect": []}))
             .then(json!({"summary": "…", "findings": [{"rule": "broken"}]}));
 
         let outcome = run_with(model, &config_with_passes(3), &large_diffs(), &[]).await;
@@ -871,13 +913,14 @@ mod tests {
                 "summary": "…",
                 "findings": [finding_at_line("Guard the first index", 5)]
             }))
+            .then(json!({"incorrect": []}))
             .then_error("provider unavailable");
         let handle = model.clone();
 
         let outcome = run_with(model, &config_with_passes(3), &large_diffs(), &[]).await;
 
         assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
-        assert_eq!(handle.calls(), 2, "failure must stop before pass three");
+        assert_eq!(handle.calls(), 3, "failure must stop before pass three");
     }
 
     #[tokio::test]
@@ -890,7 +933,8 @@ mod tests {
             .then(json!({
                 "summary": "…",
                 "findings": [finding_at_line("Guard the second index", 9)]
-            }));
+            }))
+            .then(json!({"incorrect": []}));
 
         let outcome = run_with(model, &config_with_passes(2), &large_diffs(), &[]).await;
 
@@ -1244,5 +1288,170 @@ mod tests {
                 .any(|f| f.rule == "workflow-write-all"),
             "{outcome:?}"
         );
+    }
+    #[tokio::test]
+    async fn a_true_test_coverage_proposal_is_not_a_security_finding() {
+        let model = MockModel::new()
+            .then(json!({"summary":"Add focused tests for the behavior change.", "findings":[{
+                "path":"src/handler.rs", "line":2, "rule":"repository-rule",
+                "title":"Add focused tests for the round behavior change",
+                "body":"The complete diff changes behavior without focused tests; add coverage for the new behavior.",
+                "severity":"medium", "confidence":0.99}]}))
+            .then(json!({"incorrect":[], "security_scope":[{
+                "index":1, "verdict":"out_of_scope", "attacker_input":"",
+                "dangerous_operation":"", "security_impact":"",
+                "reason":"This asks for generic behavior coverage, with no claimed attacker path or security impact."}]}));
+        let outcome = run_with(model, &config(), &diffs(), &[workflow_finding()]).await;
+        assert_eq!(outcome.findings.len(), 1, "{outcome:?}");
+        assert_eq!(outcome.findings[0].rule, "workflow-write-all");
+        assert!(
+            !outcome.summary.contains("Add focused tests"),
+            "{}",
+            outcome.summary
+        );
+    }
+
+    fn unsupported_proposal() -> serde_json::Value {
+        json!({"path":"src/handler.rs","line":2,"rule":"temporary-borrow",
+            "title":"Keep the temporary alive","body":"This temporary borrow cannot compile.",
+            "severity":"high","confidence":0.9})
+    }
+
+    fn disprove_first() -> serde_json::Value {
+        json!({"incorrect":[{"index":1,"reason":"The borrow ends within the statement."}]})
+    }
+
+    #[tokio::test]
+    async fn disproved_model_claims_leave_neither_findings_nor_stale_summary() {
+        let model = MockModel::new()
+            .then(json!({"summary":"The temporary borrow cannot compile.", "findings":[unsupported_proposal()]}))
+            .then(disprove_first());
+        let outcome = run_with(model, &config(), &diffs(), &[]).await;
+        assert!(outcome.findings.is_empty(), "{outcome:?}");
+        assert!(
+            !outcome.summary.contains("cannot compile"),
+            "{}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn disproving_model_claims_preserves_deterministic_scanner_facts() {
+        let model = MockModel::new()
+            .then(json!({"summary":"The temporary borrow cannot compile.", "findings":[unsupported_proposal()]}))
+            .then(disprove_first());
+        let outcome = run_with(model.clone(), &config(), &diffs(), &[workflow_finding()]).await;
+        assert_eq!(outcome.findings.len(), 1, "{outcome:?}");
+        assert_eq!(outcome.findings[0].rule, "workflow-write-all");
+        let requests = model.requests();
+        let prompt = &requests.last().unwrap().messages[1].content;
+        assert!(!prompt.contains("workflow-write-all"), "{prompt}");
+    }
+
+    #[tokio::test]
+    async fn a_failed_security_falsifier_keeps_the_original_model_finding() {
+        let model = MockModel::new()
+            .then(json!({"summary":"A potential bug.", "findings":[unsupported_proposal()]}))
+            .then_error("filter unavailable");
+        let outcome = run_with(model.clone(), &config(), &diffs(), &[]).await;
+        assert_eq!(outcome.findings.len(), 1, "{outcome:?}");
+        assert_eq!(outcome.findings[0].rule, "temporary-borrow");
+        assert_eq!(model.requests().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn disproved_coverage_proposals_do_not_unlock_another_pass() {
+        let model = MockModel::new()
+            .then(json!({"summary":"Nothing to report.", "findings":[]}))
+            .then(json!({"summary":"An invalid index.", "findings":[finding_at_line("Unsupported claim",5)]}))
+            .then(disprove_first());
+        let outcome = run_with(model.clone(), &config_with_passes(3), &large_diffs(), &[]).await;
+        assert!(outcome.findings.is_empty(), "{outcome:?}");
+        assert_eq!(model.requests().len(), 3);
+    }
+    #[tokio::test]
+    async fn partial_rejection_drops_stale_prose_and_preserves_the_other_finding() {
+        let mut genuine = unsupported_proposal();
+        genuine["line"] = json!(3);
+        genuine["rule"] = json!("shell-injection");
+        genuine["title"] = json!("Avoid request-derived shell commands");
+        genuine["body"] = json!("The request cmd parameter reaches sh -c without validation.");
+        let model = MockModel::new()
+            .then(json!({"summary":"The temporary borrow cannot compile.", "findings":[unsupported_proposal(),genuine]}))
+            .then(disprove_first());
+        let outcome = run_with(model, &config(), &diffs(), &[]).await;
+        assert_eq!(outcome.findings.len(), 1, "{outcome:?}");
+        assert_eq!(outcome.findings[0].rule, "shell-injection");
+        assert!(
+            !outcome.summary.contains("cannot compile"),
+            "{}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn out_of_scope_coverage_proposals_do_not_unlock_another_pass() {
+        let mut proposal = finding_at_line("Add focused tests for round behavior", 5);
+        proposal["body"] =
+            json!("The behavior changed without focused tests; add generic behavior coverage.");
+        let model = MockModel::new()
+            .then(json!({"summary":"Nothing to report.", "findings":[]}))
+            .then(json!({"summary":"Add focused tests.", "findings":[proposal]}))
+            .then(json!({"incorrect":[], "security_scope":[{
+                "index":1, "verdict":"out_of_scope", "attacker_input":"",
+                "dangerous_operation":"", "security_impact":"",
+                "reason":"Generic behavior-test coverage asserts no security exploit."}]}));
+        let outcome = run_with(model.clone(), &config_with_passes(3), &large_diffs(), &[]).await;
+        assert!(outcome.findings.is_empty(), "{outcome:?}");
+        assert_eq!(model.requests().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn security_falsification_receives_the_dependency_manifest_the_reviewer_read() {
+        let model = MockModel::new()
+            .then(json!({"summary":"Check the feature.", "findings":[],
+                "lookups":[{"kind":"read","path":"Cargo.toml","start":1,"end":2,"why":"dependency features"}]}))
+            .then(json!({"summary":"An unsupported feature.", "findings":[unsupported_proposal()]}))
+            .then(disprove_first());
+        let tree = crate::ports::tree::MockTree::from_files([(
+            "Cargo.toml",
+            "[dependencies]\nmongodb = { version = \"3.9.1\", features = [\"compat-3-3-0\"] }\n",
+        )]);
+        let config = config();
+        let policy = crate::config::types::LookupPolicy {
+            enabled: true,
+            rounds: 2,
+            per_round: 3,
+            max_chars: 10_000,
+            checkout: false,
+        };
+        let paths = vec!["src/handler.rs".to_string()];
+        let outcome = review_group(
+            runner::lane_llm(Arc::new(model.clone()), &config, 100.0),
+            &config,
+            None,
+            &[],
+            &[],
+            "",
+            "",
+            "",
+            runner::Asking {
+                tree: Some(&tree),
+                lookup: Some(&policy),
+                ..Default::default()
+            },
+            &paths,
+            &paths,
+            &diffs(),
+            &[],
+        )
+        .await
+        .expect("review runs");
+        assert!(outcome.findings.is_empty());
+        let requests = model.requests();
+        assert_eq!(requests.len(), 3);
+        let prompt = &requests[2].messages[1].content;
+        assert!(prompt.contains("compat-3-3-0"), "{prompt}");
+        assert!(prompt.contains("3.9.1"), "{prompt}");
     }
 }

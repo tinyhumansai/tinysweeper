@@ -242,3 +242,113 @@ async fn an_undefined_symbol_claim_is_left_to_the_model_not_rejected_on_text() {
         "{prompt}"
     );
 }
+
+#[tokio::test]
+async fn a_true_test_coverage_observation_is_removed_from_security_scope() {
+    let mut observation = finding("Add focused tests for the round behavior change");
+    observation.lane = LaneId::Security;
+    observation.rule = "repository-rule".into();
+    observation.body = "The complete diff changes round behavior without focused tests. Add tests for round state commitment.".into();
+    let model = MockModel::new().then(json!({
+        "incorrect": [],
+        "security_scope": [{"index": 1, "verdict": "out_of_scope",
+            "attacker_input": "", "dangerous_operation": "", "security_impact": "",
+            "reason": "The observation requests behavior tests and claims no attacker-controlled path or security impact."}]
+    }));
+    let config = config();
+    let outcome = Falsifier::new(&model, &config)
+        .filter(LaneId::Security, vec![observation], DIFF)
+        .await;
+    assert!(outcome.findings.is_empty(), "{outcome:?}");
+    assert_eq!(outcome.rejected.len(), 1);
+    assert!(outcome.rejected[0].reason.contains("security impact"));
+}
+
+fn scope(verdict: &str) -> serde_json::Value {
+    json!({"index":1, "verdict":verdict, "attacker_input":"",
+        "dangerous_operation":"", "security_impact":"",
+        "reason":"A generic behavior-test request without a claimed exploit."})
+}
+
+#[tokio::test]
+async fn ambiguous_missing_or_conflicting_security_scope_keeps_the_claim() {
+    let mut with_input = scope("out_of_scope");
+    with_input["attacker_input"] = json!("HTTP request supplied by the attacker");
+    let mut with_sink = scope("out_of_scope");
+    with_sink["dangerous_operation"] = json!("shell argument execution");
+    let mut with_impact = scope("out_of_scope");
+    with_impact["security_impact"] = json!("remote command execution");
+    let mut no_reason = scope("out_of_scope");
+    no_reason["reason"] = json!("  ");
+    let mut wrong_index = scope("out_of_scope");
+    wrong_index["index"] = json!(2);
+    for assessments in [
+        json!([]),
+        json!([scope("uncertain")]),
+        json!([scope("in_scope")]),
+        json!([with_input]),
+        json!([with_sink]),
+        json!([with_impact]),
+        json!([no_reason]),
+        json!([wrong_index]),
+        json!([scope("out_of_scope"), scope("in_scope")]),
+        json!([scope("out_of_scope"), scope("out_of_scope")]),
+    ] {
+        let model = MockModel::new().then(json!({"incorrect":[],"security_scope":assessments}));
+        let config = config();
+        let original = finding("Attacker input reaches a shell");
+        let outcome = Falsifier::new(&model, &config)
+            .filter(LaneId::Security, vec![original.clone()], DIFF)
+            .await;
+        assert_eq!(
+            outcome.findings,
+            vec![original],
+            "{assessments}: {outcome:?}"
+        );
+        assert!(outcome.rejected.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn malformed_scope_metadata_fails_open_instead_of_silencing_a_security_bug() {
+    let mut incomplete = scope("out_of_scope");
+    incomplete.as_object_mut().unwrap().remove("attacker_input");
+    let model = MockModel::new().then(json!({
+        "incorrect":[{"index":1,"reason":"A purported factual rejection."}],
+        "security_scope":[incomplete]}));
+    let config = config();
+    let original = finding("Attacker input reaches a shell");
+    let outcome = Falsifier::new(&model, &config)
+        .filter(LaneId::Security, vec![original.clone()], DIFF)
+        .await;
+    assert_eq!(outcome.findings, vec![original]);
+    assert!(outcome.failed_open.is_some());
+}
+
+#[tokio::test]
+async fn a_security_boundary_test_request_keeps_its_attested_exploit_path() {
+    let mut assessment = scope("in_scope");
+    assessment["attacker_input"] = json!("The request's untrusted command string");
+    assessment["dangerous_operation"] = json!("Command::new(\"sh\").arg(\"-c\")");
+    assessment["security_impact"] = json!("Execution of attacker-chosen shell commands");
+    let model = MockModel::new().then(json!({"incorrect":[],"security_scope":[assessment]}));
+    let config = config();
+    let mut original = finding("Add a regression for command injection");
+    original.body = "The request reaches sh -c without validation. Add a test that hostile requests cannot execute commands.".into();
+    let outcome = Falsifier::new(&model, &config)
+        .filter(LaneId::Security, vec![original.clone()], DIFF)
+        .await;
+    assert_eq!(outcome.findings, vec![original]);
+}
+
+#[tokio::test]
+async fn security_scope_does_not_change_the_critique_protocol_or_filter_its_findings() {
+    let model =
+        MockModel::new().then(json!({"incorrect":[],"security_scope":[scope("out_of_scope")]}));
+    let original = finding("Add focused behavior tests");
+    let outcome = filter(&model, vec![original.clone()]).await;
+    assert_eq!(outcome.findings, vec![original]);
+    let request = &model.requests()[0];
+    assert_eq!(request.schema, types::json_schema());
+    assert_eq!(request.messages[0].content, INSTRUCTIONS);
+}
