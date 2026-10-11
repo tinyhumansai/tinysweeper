@@ -1,0 +1,17 @@
+{
+  "key": "44f7b2f19051f130",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 11667,
+    "output_tokens": 1932,
+    "cached_tokens": 5632,
+    "embed_tokens": 0,
+    "cost_usd": 0.00091069804
+  },
+  "value": {
+    "findings": [],
+    "summary": "No defects found."
+  }
+}

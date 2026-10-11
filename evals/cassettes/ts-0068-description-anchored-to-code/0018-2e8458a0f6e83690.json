@@ -1,0 +1,17 @@
+{
+  "key": "2e8458a0f6e83690",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 8856,
+    "output_tokens": 250,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0007728056
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change is sound.  The `reasoning_options` function correctly handles the `\"off\"` special case by trimming whitespace and using an exhaustive match; the field is plumbed through `from_config` and the test coverage in `the_configured_effort_reaches_the_gateway` verifies the wire from config to gateway.  No reportable defect is introduced."
+  }
+}

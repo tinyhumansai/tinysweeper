@@ -1,0 +1,17 @@
+{
+  "key": "d0952608a31f1c27",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 9097,
+    "output_tokens": 76,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0007639674
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change looks correct — `reasoning_options` properly handles `\"off\"`/`\"\"` as disabling reasoning and passes through other values as effort. The field is wired from config through to the gateway options. Tests cover both the escape hatch and the full wire path. No bugs found."
+  }
+}

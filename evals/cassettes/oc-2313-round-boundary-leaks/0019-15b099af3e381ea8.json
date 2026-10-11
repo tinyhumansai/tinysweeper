@@ -1,0 +1,17 @@
+{
+  "key": "15b099af3e381ea8",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 8511,
+    "output_tokens": 1901,
+    "cached_tokens": 4096,
+    "embed_tokens": 0,
+    "cost_usd": 0.0007463901199999999
+  },
+  "value": {
+    "findings": [],
+    "summary": "The diff updates the path for the openhuman_core dependency to a subcrate path, which appears to be a correct restructuring. No defects found."
+  }
+}

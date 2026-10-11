@@ -1,0 +1,17 @@
+{
+  "key": "86a997247788b760",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 38305,
+    "output_tokens": 5075,
+    "cached_tokens": 18944,
+    "embed_tokens": 0,
+    "cost_usd": 0.00275056348
+  },
+  "value": {
+    "findings": [],
+    "summary": "The diff restructures the loop to process a round of turns, committing state once. No new defects found."
+  }
+}

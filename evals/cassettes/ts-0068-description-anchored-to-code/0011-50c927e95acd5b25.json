@@ -1,0 +1,17 @@
+{
+  "key": "50c927e95acd5b25",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 11466,
+    "output_tokens": 31,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0009522128
+  },
+  "value": {
+    "findings": [],
+    "summary": "All lookups consumed; the file is self-contained and no defects were found."
+  }
+}

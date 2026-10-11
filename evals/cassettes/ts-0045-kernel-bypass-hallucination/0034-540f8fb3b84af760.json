@@ -1,0 +1,26 @@
+{
+  "key": "540f8fb3b84af760",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_falsify",
+  "usage": {
+    "input_tokens": 2440,
+    "output_tokens": 133,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002235156
+  },
+  "value": {
+    "incorrect": [],
+    "security_scope": [
+      {
+        "attacker_input": "",
+        "dangerous_operation": "",
+        "index": 1,
+        "reason": "The finding concerns a test assertion using byte length instead of character count, which is a correctness/test-quality issue, not a security vulnerability. No attacker-controlled input, dangerous operation, or security consequence is asserted.",
+        "security_impact": "",
+        "verdict": "out_of_scope"
+      }
+    ]
+  }
+}

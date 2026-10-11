@@ -1,0 +1,17 @@
+{
+  "key": "a0fe377ad5ed57db",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 52845,
+    "output_tokens": 1534,
+    "cached_tokens": 26368,
+    "embed_tokens": 0,
+    "cost_usd": 0.0028760163599999998
+  },
+  "value": {
+    "findings": [],
+    "summary": "Pull request adjusts module paths after a crate-internal reorganization and updates the hivemind episode loop to support rounds of multiple turns. The changes are mechanically consistent, test fixtures align with the new round-based structure, and no reachable misbehaviour or regression is introduced."
+  }
+}

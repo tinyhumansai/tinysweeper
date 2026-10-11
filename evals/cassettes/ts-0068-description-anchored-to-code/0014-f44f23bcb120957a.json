@@ -1,0 +1,17 @@
+{
+  "key": "f44f23bcb120957a",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 8021,
+    "output_tokens": 92,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000677733
+  },
+  "value": {
+    "findings": [],
+    "summary": "Adds `reasoning_effort: String` field with documentation. The field type is a plain String without validation — a concern the repository's own coding rules may address if they specify type constraints. No concrete attacker-controlled input path reaches a dangerous sink; the field is deserialized from config. All callers in the diff read it as-is. No reportable defect."
+  }
+}

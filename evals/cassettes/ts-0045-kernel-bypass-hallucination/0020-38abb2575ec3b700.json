@@ -1,0 +1,18 @@
+{
+  "key": "38abb2575ec3b700",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 6975,
+    "output_tokens": 99,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0005924898
+  },
+  "value": {
+    "findings": [],
+    "resolved": [],
+    "summary": "This pull request adds a Docker Compose overlay that works around a kernel compatibility issue in the MongoDB community-server image by replacing the kernel-check function with a no-op and setting the `GLIBC_TUNABLES` environment variable. The change is opt-in, documented, and contains an explicit guard for when the image changes shape. No defects were found that meet the reporting criteria."
+  }
+}

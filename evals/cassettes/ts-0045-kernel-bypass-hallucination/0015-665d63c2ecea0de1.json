@@ -1,0 +1,17 @@
+{
+  "key": "665d63c2ecea0de1",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4274,
+    "output_tokens": 69,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0003644312
+  },
+  "value": {
+    "findings": [],
+    "summary": "Adds a `pub mod summarise` declaration to `src/findings/mod.rs`. The module itself is not yet shown and cannot be checked for correctness, but the declaration is structurally consistent with the other module declarations in the file. No defect is visible from this diff alone."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "54b0a4e504b8bb49",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 8664,
+    "output_tokens": 148,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000740096
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change updates the docker-compose.yml to forward additional API keys (OpenRouter, Cohere) for embedding providers, corrects the GitHub App environment variable names to match `AppAuth::from_env()`, and mounts the config file so embeddings work by default. It is safe to merge."
+  }
+}

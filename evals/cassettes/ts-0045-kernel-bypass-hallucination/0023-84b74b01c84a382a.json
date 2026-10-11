@@ -1,0 +1,17 @@
+{
+  "key": "84b74b01c84a382a",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 14557,
+    "output_tokens": 2300,
+    "cached_tokens": 7168,
+    "embed_tokens": 0,
+    "cost_usd": 0.00110870676
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change looks sound. No new reportable defects beyond the two already confirmed."
+  }
+}

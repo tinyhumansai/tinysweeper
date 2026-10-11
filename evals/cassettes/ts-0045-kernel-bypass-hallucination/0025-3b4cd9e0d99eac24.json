@@ -1,0 +1,21 @@
+{
+  "key": "3b4cd9e0d99eac24",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_falsify",
+  "usage": {
+    "input_tokens": 4848,
+    "output_tokens": 270,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004450488
+  },
+  "value": {
+    "incorrect": [
+      {
+        "index": 1,
+        "reason": "The diff shows the doc comment says 'Shorten `text` to at most `limit` characters, ending on a word boundary.' The None branch returns `format!(\"{head}…\")` where head has limit characters. The comment does not say the elision marker is included in the limit; it says 'ending on a word boundary' and the ellipsis is the way the word boundary is shown when no word boundary exists. A comment is not code, and the finding is based on interpreting the comment as if it requires the ellipsis to be inside the limit, which is not stated unambiguously in the comment.  Moreover, the diff's own test at line 48-49 checks that `out.ends_with('…')` and `out.len() <= 21` — that is, it allows one extra character for the ellipsis. This test demonstrates the intended behavior, and the code matches it. Thus the finding is disproved by the diff."
+      }
+    ]
+  }
+}

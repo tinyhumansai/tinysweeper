@@ -1,0 +1,31 @@
+{
+  "key": "12a3f82233c56206",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 10563,
+    "output_tokens": 5365,
+    "cached_tokens": 5120,
+    "embed_tokens": 0,
+    "cost_usd": 0.0014204722
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The test `a_multibyte_title_does_not_panic` asserts `out.len() <= 21`, but `len()` returns byte length. For the test input `\"café \".repeat(40).as_str()`, the truncated head at 20 characters includes multibyte `é` and space, resulting in a byte length of ~27 bytes, so the assertion fails. The correct check should use `out.chars().count()` to count characters, matching the function's character-based limit.",
+        "confidence": 1.0,
+        "existing_code": "            assert!(out.len() <= 21, \"{out}\");",
+        "late": false,
+        "path": "src/findings/summarise.rs",
+        "rule": "incorrect-assertion",
+        "severity": "critical",
+        "suggestion": "            assert!(out.chars().count() <= 21, \"{out}\");",
+        "title": "Use chars().count() instead of len() in multibyte test"
+      }
+    ],
+    "lookups": [],
+    "resolved": [],
+    "summary": "One test assertion incorrectly checks byte length instead of character count, causing a test failure for multibyte strings."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "b23d81805cedeff7",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 9077,
+    "output_tokens": 509,
+    "cached_tokens": 4352,
+    "embed_tokens": 0,
+    "cost_usd": 0.00054626684
+  },
+  "value": {
+    "findings": [],
+    "summary": "No reportable defects. The diff only adds configuration for embeddings, with no code logic, no dangerous sinks, and no secrets exposed."
+  }
+}

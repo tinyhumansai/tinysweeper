@@ -1,0 +1,17 @@
+{
+  "key": "2337fa44fb58d45b",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 9171,
+    "output_tokens": 988,
+    "cached_tokens": 4352,
+    "embed_tokens": 0,
+    "cost_usd": 0.00063316204
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change updates the path for the `openhuman_core` dependency to point to the crate's subdirectory within the vendor tree. It does not alter the dependency's package, features, or version. No security issue is introduced: no new network calls, subprocess executions, deserialization, or permission changes. Unchanged code remains unaffected. The change appears correct."
+  }
+}

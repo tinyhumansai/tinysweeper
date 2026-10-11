@@ -1,0 +1,21 @@
+{
+  "key": "6f70d4fe2b5692b9",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_falsify",
+  "usage": {
+    "input_tokens": 4884,
+    "output_tokens": 195,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004356324
+  },
+  "value": {
+    "incorrect": [
+      {
+        "index": 1,
+        "reason": "The doc comment says 'at most limit characters' and the function's doc comment says 'Shorten text to at most limit characters, ending on a word boundary.' The finding claims the doc says something else — that it doesn't. But the doc comment reads 'at most limit characters' and the function can return `limit + 1` characters when rfind(' ') is None, exactly as described. The diff shows the code: line 23 `format!(\"{head}…\")` where `head` is `limit` characters, plus the ellipsis. The doc comment is consistent with the code behavior; the finding is incorrect because it asserts a defect that doesn't exist — the code matches the doc comment. The diff disproves the finding."
+      }
+    ]
+  }
+}

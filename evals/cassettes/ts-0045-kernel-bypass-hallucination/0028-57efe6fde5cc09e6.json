@@ -1,0 +1,17 @@
+{
+  "key": "57efe6fde5cc09e6",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 9523,
+    "output_tokens": 961,
+    "cached_tokens": 4608,
+    "embed_tokens": 0,
+    "cost_usd": 0.00064086036
+  },
+  "value": {
+    "findings": [],
+    "summary": "The overlay is well-documented and introduces no untrusted input, credential exposure, or network/subprocess calls that could be exploited. The mount is read-only and the environment variable is a known mitigation, not a secret."
+  }
+}

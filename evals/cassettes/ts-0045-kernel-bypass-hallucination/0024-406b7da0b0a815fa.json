@@ -1,0 +1,28 @@
+{
+  "key": "406b7da0b0a815fa",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 11045,
+    "output_tokens": 7017,
+    "cached_tokens": 5376,
+    "embed_tokens": 0,
+    "cost_usd": 0.00171627932
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The doc comment says `Shorten \\`text\\` to at most \\`limit\\` characters`, but when `head.rfind(' ')` returns `None`, the code returns `format!(\"{head}…\")` where `head` has exactly `limit` characters, so the total is `limit+1` characters. This violates the documented bound. For example, `shorten(\"AimlesslyLongWordWithoutSpaces\", 20)` would return a 21-character string. Fix by taking `limit-1` characters in that branch before appending the ellipsis.",
+        "confidence": 0.9,
+        "existing_code": "    let head: String = text.chars().take(limit).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => format!(\"{head}…\"),\n    }",
+        "path": "src/findings/summarise.rs",
+        "rule": "doc-contract-violation",
+        "severity": "medium",
+        "suggestion": "    let head: String = text.chars().take(limit).collect();\n    match head.rfind(' ') {\n        Some(space) => format!(\"{}…\", &head[..space]),\n        None => {\n            let truncated: String = text.chars().take(limit.saturating_sub(1)).collect();\n            format!(\"{truncated}…\")\n        }\n    }",
+        "title": "Ensure returned length never exceeds `limit` characters"
+      }
+    ],
+    "summary": "`shorten` violates its documented bound when no space is found within the first `limit` characters, producing `limit+1` characters."
+  }
+}

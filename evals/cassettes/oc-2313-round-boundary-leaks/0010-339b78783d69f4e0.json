@@ -1,0 +1,17 @@
+{
+  "key": "339b78783d69f4e0",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 10123,
+    "output_tokens": 1221,
+    "cached_tokens": 4864,
+    "embed_tokens": 0,
+    "cost_usd": 0.0007164558799999999
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request updates comments only, renaming 'single turns' to 'rounds' and introducing the concepts of `round_width` and `revealed_width`. No code is changed, so there is no logic that could fail, no regression in behavior, and no violation of repository rules. The documentation change appears consistent with the module's intended design. No findings."
+  }
+}

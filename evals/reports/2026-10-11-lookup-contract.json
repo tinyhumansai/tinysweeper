@@ -1,0 +1,517 @@
+{
+  "source_commit": "68252333",
+  "binary_sha256": "f1ddb9fbc2f57449d8b17cbc61dd7ea7a9fc3384102ccefb209644a10085a203",
+  "review_producer": "scoped installation read token; normal app::apply only after actual complete clean proposal",
+  "canonical_config": "src/config/defaults.toml",
+  "labels_and_baseline_unchanged": true,
+  "canonical_fresh_tapes": [
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0020-38abb2575ec3b700.json",
+      "sha256": "8e3251d21144b74eabe5760031d696e694def01708898dfba0dbf50052adc8ec"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0028-57efe6fde5cc09e6.json",
+      "sha256": "2a2767b49a70c35bcbac049df81be0524e442c869fe782eff700e9af828e4ed2"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0034-540f8fb3b84af760.json",
+      "sha256": "7c397b5846683fb377b40350a34a9c44c134c4f55ea9ffcb20818969be6c419d"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0014-5f91e800843716c3.json",
+      "sha256": "10eab28128cb932de85945f61f03645bdc837656837a396ed372c5f2098b3de6"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0007-f15a45477091f12e.json",
+      "sha256": "6a8bbf77f73bf3e14989b16c9c3ffb5dded10feb46b271b53626f69d8488f1f5"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0005-4099178e714dd9e4.json",
+      "sha256": "cd3b3cd32cbfca0ddd5aefc3b7cd9d10c7f036e2b782ec8b2bbe124a710f4b8e"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0026-9670b010e7f9a0bb.json",
+      "sha256": "48733b95b8cad7c12e9a258192e08b48248eda097def2f1c37c2c967f66b8b3c"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0015-665d63c2ecea0de1.json",
+      "sha256": "337e9fd9f053b0c8a1c3cd39caa1d9dc6eab5e848c341616c3d6073daa0d4528"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0031-c752760432ab2c49.json",
+      "sha256": "bf8cfd2127517de15dbe44f0ba773b5d8d37a9dc1a19801c7fb03dacc844c413"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0030-b32a7525c1d0e245.json",
+      "sha256": "16d010a9ceae3b3d98341b62e794ae7588cb0351e41d63f9a804c61319cc773a"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0018-0bca841c4e724456.json",
+      "sha256": "5d0529d725183013e1bb335133bb95e1eaa5f0a47315c100468de57d70b111c6"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0010-9abb6cc952f74e16.json",
+      "sha256": "44b3c17e72b342186b12312e0784d541b1f16e0a21ae8ba44abfd326a3bd504a"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0029-1733c710131b3347.json",
+      "sha256": "1ffe09017432f03a1bd255d60ff206b831cbb8a1c170f9ad49550ee07fea28ef"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0036-e3b265efeb023943.json",
+      "sha256": "2b0e927ece43321e7055c7fce4fbb0c6bdea032c1cd5eada879bffb22d283483"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0035-155992c6c8d32c10.json",
+      "sha256": "6aa258c8b3d961e20e149852cbe42b610ffa05deca94f7263bc1c3bcb3df41c2"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0027-b23d81805cedeff7.json",
+      "sha256": "ecb888710ba3b7d75be9c8c038001ace04a0ea8fd2b7438b04994c8f55217967"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0013-93ef09fc8c46903b.json",
+      "sha256": "5797b9bd1897129827a63e8b5ed13824e40df92ce4b0e1a6fda963cc7d304882"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0017-6fcbbae7fdcdc001.json",
+      "sha256": "b9c9f6541756e9563526bc2ff43f807db1fdb6d3ddf1b3a57d0846113fcea582"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0009-a8dc8c685f0b1dc9.json",
+      "sha256": "c6ff6b0280cd9f8af8234426773ebdb9e4720fbbac718cc85b72d40aec9acbfc"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0004-1e05a8b96322b107.json",
+      "sha256": "c63f6735b88c3565770d4c1f7f56ace7a0f49b83aa5a025959a9a9807210fff4"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0033-12a3f82233c56206.json",
+      "sha256": "78c17537103a3d776542243155966011f99877a3dcb574e88959dc6b9930ef4d"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0022-0137d468c27c95cf.json",
+      "sha256": "5b2f90bebe8cc41bedd9226de4322234468c59516d768e54d0ec3c6a6f1bed56"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0008-54b0a4e504b8bb49.json",
+      "sha256": "4d019e3a8cd9337b78cb69195041eabcb9f2a0ed9bc261cb3bef7e75331813e2"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0024-406b7da0b0a815fa.json",
+      "sha256": "e75f3fd00d6eeb23277744b4363fbb11b2fed9ab9a3d86f4cc3ddec35c77316a"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0019-f40233a59d0ca8ce.json",
+      "sha256": "5f06884e0299b25972afdfdc20b9069c4c72fd74e7ef58d5c30fec898f44d1dd"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0032-44f7b2f19051f130.json",
+      "sha256": "541ac7fdc522a616b2590cc218f1f9b289da2382e18577c66739d625cdbbfb37"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0016-6f70d4fe2b5692b9.json",
+      "sha256": "e7910dc3eb69157bc75aa8c2c4b04e4837789d388d964ac8187ed555921faba8"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0003-983c6241aacab0e5.json",
+      "sha256": "9d28ae7215021fdda40c12b0b5f0ed893e4e914ef8afd886b1c91addd19bd915"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0012-4118cae10fbc0caa.json",
+      "sha256": "18861c931dfbee2ace2f7e6ed81c1572198eba9486d233adf6dbfa56e49e6f62"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0002-22b44ecf127a8120.json",
+      "sha256": "c74872732ffa8591b624d39dba0426a141bef041b32430d0d7f27edc5a71c5c1"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0023-84b74b01c84a382a.json",
+      "sha256": "7d148f4b18b2302cbc04a83ab885513e266a0f1a1c84f6ada3a38b5b4cf26703"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0011-81715e93da22a00c.json",
+      "sha256": "6ba81590c844cb626fa022478afa442898dba935b8788348fa9c4562d7f13f1b"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0001-68b7ad38f2397deb.json",
+      "sha256": "d665b83bbc2eb1763e9bee763712b0d5991a80b157c6478a771f78fd6e71192b"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0025-3b4cd9e0d99eac24.json",
+      "sha256": "ad82924437c9fda013536948b57e283c4985d991eb2a3cc84ecae660ff7d88eb"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0021-b5aad558c6682ca2.json",
+      "sha256": "254bec314f45b6f116be2d10c31fafc9af795f1a95390d575940580095156139"
+    },
+    {
+      "path": "evals/cassettes/ts-0045-kernel-bypass-hallucination/0006-c81a1525da7c6f5a.json",
+      "sha256": "e1fe8f8700db26a43ef321f04a780e2351ba41e52d77462982e97696adf29cbf"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0025-cd08228a88171360.json",
+      "sha256": "31c353c3c6daa81714d7dadcaa5fc8ffd846414e1afc4c7848472d1585eb226a"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0018-7ecc1ed7855594b2.json",
+      "sha256": "d6d2284a3b94228881352dc4b6a2513ab6d6bc039f3b089125944575322bf539"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0022-1509b1a0393d2e10.json",
+      "sha256": "7542a53a7e85ee0d70f7528accd64e136a88a53c629195210671c8ce19e40c88"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0026-3e87bd2c9dbb5f71.json",
+      "sha256": "45bd1c8b3d6078c34f9c772894c575823c7e7405ce6618e7fcbd56e369bffe46"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0023-86a997247788b760.json",
+      "sha256": "b35d8b8c0b14ad7d5aff9ab59ffd76f79fbc32e7bb909f32753924676219e1e4"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0020-090281ee179d8d61.json",
+      "sha256": "c717bd1bc91ab520e4c63022dba5ccb60301e75544e4483ddc955fe58fd7f808"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0034-2e59342052a4cb4f.json",
+      "sha256": "537d976604bb7afe509c583a50a166b2fb1f239d9b29aa4f15ede923529928ad"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0010-339b78783d69f4e0.json",
+      "sha256": "47a665e957f6181629185621d8a915f3504af7ee4adbb44ceff55eaa949b67bc"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0030-24a351b563092b9d.json",
+      "sha256": "552b78ef37a83521a6ca79a9908a4037a1e6d8bf5b769d25329607c7698c13db"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0035-dba2d9434bc2bb4a.json",
+      "sha256": "07b303db0189d8f6eb10c080f12169eafa0b4a12c33aa002888df4f17998d2b3"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0028-0aac6d72dca4de93.json",
+      "sha256": "075bdbca78c9a4ba8f775201a4691fd500da5e561f10096d0cf504bb971d3cc2"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0016-867696dca547ac80.json",
+      "sha256": "f268fbc91808f9e4db782aedc7d67e5e798ce314a0026a776239e885a3315106"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0014-620c08c9372cc5e0.json",
+      "sha256": "d90b09d9dd18f91a117baa1bc45a8b21f72d854ad844d9d06099f031a0c27a4b"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0029-0cc7375f169542a6.json",
+      "sha256": "f291e442426cbc37a850306f4ea452323132bf22834fd7c55d4810d93ee1284b"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0001-0dd32a78e6f21a32.json",
+      "sha256": "cece79793c1ea40809c9d3963a752ed69c1d9d3c1c04531a2497076edeea1bfc"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0005-8b395bf82e976a10.json",
+      "sha256": "a6f36e46ee7c00460b301c4d168780614716ae4a6d40d0a25cd89bae895f5229"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0009-962e17d1805f9791.json",
+      "sha256": "680aa0a1bc34a8cfed8ab563a22913f5c75b8f3142a431b42534ff0c7cf3a639"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0003-76c742d302d65cba.json",
+      "sha256": "66c25f12d199455dcf93fafb298d1054e8ca482645be32ab02c6b78b39e515f2"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0032-2337fa44fb58d45b.json",
+      "sha256": "2fb10189b4bca04040b68b1fd1f7ba0ddae6b5945ef0e01b20a23e9187287d29"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0036-a0fe377ad5ed57db.json",
+      "sha256": "c02d1fd99ab6cb5c2e5ecc611a6d92e2595f433929deddf57396d2371c90ee86"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0021-60a7024dea8850c7.json",
+      "sha256": "624d8021969e16fd2b07781e114b83856eed47d284c8da1a7d8c381dbecd6720"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0031-09d833af93051e79.json",
+      "sha256": "d7166777ea36f4374da82afe1383f23b0e5607ab22ff8f9eb044fa3294faf76a"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0012-93617c238cc24df6.json",
+      "sha256": "61bb0b7b5f0d1ff23a926f68e8a5d2524e05483e6d8b970d3a5839eb03ead7c6"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0027-81a9d5df5cc80401.json",
+      "sha256": "2a6dcde52ae3f7324b44399a4b80d8481571bd1e7c31f5ce3b49393a4596e18b"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0037-4313063b4057898c.json",
+      "sha256": "4eca0c509e3f6df377b66b489d8032a2c2d07e2ac9553b7dca75025cce58a81b"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0007-2ad72109bd9b1a50.json",
+      "sha256": "a2b0ede6ead2bb57889561e41974b3db07d6b70bd64eee7c6f94548e6278c770"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0011-c7844700a6b3c013.json",
+      "sha256": "cf0e2f2ef82317ed46f2357ebc5e35d68efa49ae904d4f6c6b491a1dbeba6929"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0033-799c6859f1c68945.json",
+      "sha256": "a64e0e777cbd857aef70ae27dc1ca61c0b4a814a4621be38f918abfdbd46d9bc"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0008-787b04ef9e09257f.json",
+      "sha256": "6cdaccc30839c7188d057bd76cc0db1e7fa9f53e84ba528ffc621beda77a566b"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0002-a6963f3bfc0a64c6.json",
+      "sha256": "792e142e927dfd616126a0edeac76ee1613545071f648f09ef0f50b0ffc48118"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0024-056f54bcd24dfaf0.json",
+      "sha256": "f72348ce8434c7e3e8cfd79c5bab0c28dd2d232a3c27f7b8e4a307a4d6d1c0ae"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0015-333512ce29bac464.json",
+      "sha256": "130895b627e4efa75e9f2c2414c8b82460a3f7afef9a597f130f7d2685df9fb4"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0004-88888b5f8eb49b49.json",
+      "sha256": "c5ccea83b26afd1ebb4e1192793c0ff8078f9341e18bd0e53ffa7f0e68e1369f"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0019-15b099af3e381ea8.json",
+      "sha256": "f64c78daaf3f9ab9489804b8a4b84f5858f1ee14a0a029cd42cd04a26ae5e704"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0017-def780a4cf9f3008.json",
+      "sha256": "bc8490db4995266d6b46aa3838c2ceda1c8046dc17b8bd7f22f8c48ba9fd0b2d"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0006-3024b0b97d71abf9.json",
+      "sha256": "3e376082e84cd367413b6467ee5e3fd85a48d23c827276f879266ca048298d08"
+    },
+    {
+      "path": "evals/cassettes/oc-2313-round-boundary-leaks/0013-b255375cbcaf8911.json",
+      "sha256": "381407e3e387b91ab45e583f5edf88e655cc05fd56dc420673aeb2c3bfea047d"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0017-b0b116421eee8b28.json",
+      "sha256": "88c13be59126ab04c8f77018449ab68c5a820fa275e93048070e759783f0062f"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0001-9d30d123b285e22c.json",
+      "sha256": "50b1a6ae89f9a9840063de648433d186ac664dd06914a6e866879cc0d98843f1"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0002-8718cac3f68280b9.json",
+      "sha256": "4381854812cc29684a0bf3a09679f59f0def9535169b9553a2cc3ada7cab8468"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0010-dba625fb2c920d58.json",
+      "sha256": "ae53946d88edcff4f8f8020e1d7b2f92446e00a03ee64406cdac764e892b8229"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0019-49f51507ee9bef0a.json",
+      "sha256": "657b511014d1fbdc106eee2a92d227d371e0de03421126fc43ebeeb9869fc25d"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0003-9d86755707e8f24f.json",
+      "sha256": "28a97b7e1cd17ea3a0ed897abd6370c19c47ca489ad41fb3fd3ed42f2ad2c042"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0009-d0952608a31f1c27.json",
+      "sha256": "611675b44824b28cf503cd60e72808773b8e34d79d0c8ccafea8f67d5fb728f4"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0006-745b36a6bc1e21ec.json",
+      "sha256": "242ad37433a3413270a27abc821db2d2b9ffc307bd996edc1a48b6d1cde079e5"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0005-b268cbe66b3345b9.json",
+      "sha256": "33e53e2802a13879428c8465f14ceb3211055e36359ee8b38494d8f65b21a040"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0015-4150b90b93d8ea5b.json",
+      "sha256": "1f5753f60bd935f99b74f97564ef459f4a8715a7d5aa339d65c074cfbd840ab9"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0014-f44f23bcb120957a.json",
+      "sha256": "f532282e89556f52e8f41eec6377a81d710f9ca6882bf38fa1148ee394372fbb"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0016-f913ea588a6d917d.json",
+      "sha256": "13e8ed030745ff66e9fb745132b531a269156565fec925d0a6550e7da0f768a1"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0004-0622ea6644e74b97.json",
+      "sha256": "4fcf542dc729e702c544d6f0c713a305c6bcb3a42e4752476f0317c212ac1b09"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0012-7ee24abc993ccd43.json",
+      "sha256": "879aa712070b944d025611bf50c6898b9bcbb2ad2aa82f283f4fdf9fa47fe593"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0018-2e8458a0f6e83690.json",
+      "sha256": "afa4812559c2605717a14191bbb59140ccdf034fdf3a538f235accbc78cdd9a3"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0008-bcc5cc7a56aec5ca.json",
+      "sha256": "c6e95fce585ccdb5f640d3f16ebcd2f962448068427b213baccc76d41cfae598"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0013-03f84064e77241d6.json",
+      "sha256": "24d0f46846a1432b1eb6b632851dc0a4ecc83faf0333e09422e7917922202bd4"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0011-50c927e95acd5b25.json",
+      "sha256": "bffaae2a6d0c40090a8e2c13610e2b13a133e0410b4a262ad8aa99e408f4ab4f"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0020-85408f042c2630b8.json",
+      "sha256": "5c4cc4591c11da87439a9484e2a47f964966f8a26006db652fbfb1d6f9f60d29"
+    },
+    {
+      "path": "evals/cassettes/ts-0068-description-anchored-to-code/0007-b3f2b275586bb561.json",
+      "sha256": "4b690c8a797490b8418948ced7adb194fe8a09254fbece23fc12bf31121a79a4"
+    }
+  ],
+  "retired_tapes_archived_under_target": 76,
+  "strict_scorecard": {
+    "corpus_digest": "e9045dd444bf0e1a",
+    "config_digest": "eddd07b520318633",
+    "loose_replays": 0,
+    "cases": [
+      {
+        "id": "oc-2313-round-boundary-leaks",
+        "true_positives": 1,
+        "missed": [
+          "E2"
+        ],
+        "false_positives": 0,
+        "unscored": 0,
+        "exhaustive": false,
+        "duplicates": 0,
+        "forbidden_hits": [],
+        "optional_hits": 0,
+        "judged": [
+          {
+            "lane": "critique",
+            "path": "crates/opencompany-core/src/hivemind/episode.rs",
+            "line": 489,
+            "title": "Use strict exclusive bound for pinboard to match project_for semantics",
+            "verdict": "true_positive",
+            "matched": "E1",
+            "reason": "path, line and wording all matched"
+          }
+        ],
+        "cost_usd": 0.037609861519999996,
+        "over_budget": false,
+        "input_tokens": 527364,
+        "output_tokens": 43955,
+        "cached_tokens": 199936,
+        "wall_secs": 0.112284366,
+        "models": [
+          "deepseek/deepseek-v4-flash"
+        ],
+        "lane_costs": {
+          "commits": 0.0,
+          "critique": 0.020062267959999998,
+          "description": 0.0037019502799999996,
+          "security": 0.010586858519999999,
+          "tests": 0.0028760163599999998
+        }
+      },
+      {
+        "id": "ts-0045-kernel-bypass-hallucination",
+        "true_positives": 0,
+        "missed": [],
+        "false_positives": 2,
+        "unscored": 0,
+        "exhaustive": true,
+        "duplicates": 0,
+        "forbidden_hits": [],
+        "optional_hits": 0,
+        "judged": [
+          {
+            "lane": "description",
+            "path": "(pull request description)",
+            "line": null,
+            "title": "Handle abbreviated punctuation in sentence extraction",
+            "verdict": "false_positive",
+            "reason": "nothing is expected in (pull request description)"
+          },
+          {
+            "lane": "critique",
+            "path": "deploy/mongo/kernel-bypass-entrypoint.py",
+            "line": 59,
+            "title": "Remove the attribute access on a module attribute that does not exist",
+            "verdict": "false_positive",
+            "reason": "nothing is expected in deploy/mongo/kernel-bypass-entrypoint.py"
+          }
+        ],
+        "cost_usd": 0.02726629304,
+        "over_budget": true,
+        "input_tokens": 310102,
+        "output_tokens": 54236,
+        "cached_tokens": 110592,
+        "wall_secs": 0.138464265,
+        "models": [
+          "deepseek/deepseek-v4-flash"
+        ],
+        "lane_costs": {
+          "commits": 0.0,
+          "critique": 0.01807339212,
+          "description": 0.0015503854799999999,
+          "security": 0.006385442559999999,
+          "tests": 0.00103578748
+        }
+      },
+      {
+        "id": "ts-0068-description-anchored-to-code",
+        "true_positives": 0,
+        "missed": [],
+        "false_positives": 0,
+        "unscored": 0,
+        "exhaustive": false,
+        "duplicates": 0,
+        "forbidden_hits": [],
+        "optional_hits": 0,
+        "judged": [],
+        "cost_usd": 0.01768809616,
+        "over_budget": false,
+        "input_tokens": 251606,
+        "output_tokens": 19975,
+        "cached_tokens": 96768,
+        "wall_secs": 0.071688742,
+        "models": [
+          "deepseek/deepseek-v4-flash"
+        ],
+        "lane_costs": {
+          "commits": 0.0,
+          "critique": 0.00938507808,
+          "description": 0.00134791636,
+          "security": 0.00556851204,
+          "tests": 0.0011917362799999998
+        }
+      }
+    ]
+  },
+  "live_206": {
+    "number": 206,
+    "head_sha": "846ac0f4fa3ed9c3e0320e5aebba0bddb5a9be2a",
+    "started_at_utc": "2026-10-11T01:22:00.485597+00:00",
+    "wall_secs": 282.544,
+    "exit_code": 0,
+    "config": "evals/runs/live-after-all-deep-config.toml",
+    "cost_usd": 0.18960213999999997,
+    "unreviewed": 0,
+    "findings": 1,
+    "unanswered": 0,
+    "skipped": null
+  },
+  "live_206_interpretation": "Complete but unsupported conditional byte-unit HIGH, plus pre-existing sub-four-byte cap note and false whitespace-prefix note. Withheld from publishing. This forge-only trial does not establish production checkout review quality.",
+  "canonical_interpretation": "One labelled boundary match, second still missed; two false findings on exhaustive clean case. No general precision improvement. Boundary match has a confused explanatory sentence despite matching the correct exclusive-bound defect and next() replacement."
+}

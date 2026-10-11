@@ -1,0 +1,17 @@
+{
+  "key": "b0b116421eee8b28",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 17645,
+    "output_tokens": 1320,
+    "cached_tokens": 8704,
+    "embed_tokens": 0,
+    "cost_usd": 0.00110038068
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change introduces configurable reasoning effort for OpenRouter models, with a function that safely handles \"off\" and empty string to disable reasoning, and passes other values through. The new field is cloned from config and tested. No security or regression issues found."
+  }
+}

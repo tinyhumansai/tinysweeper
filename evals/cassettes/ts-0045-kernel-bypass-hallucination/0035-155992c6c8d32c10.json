@@ -1,0 +1,17 @@
+{
+  "key": "155992c6c8d32c10",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 15025,
+    "output_tokens": 1727,
+    "cached_tokens": 7424,
+    "embed_tokens": 0,
+    "cost_usd": 0.00103578748
+  },
+  "value": {
+    "findings": [],
+    "summary": "The behavioural changes are either tested in the new summarise.rs module (which has in-crate tests covering truncation, word boundaries, and multibyte characters) or are deployment configuration/environment changes that fail loudly (the kernel bypass script exits with a message if the image changes shape) or are configuration-only (docker-compose environment variables and volume mount, .tinysweeper.toml). No change can silently regress in a way that would be caught by a missing test; the new tests earn their keep."
+  }
+}

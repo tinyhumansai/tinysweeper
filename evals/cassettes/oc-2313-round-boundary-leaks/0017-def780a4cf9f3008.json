@@ -1,0 +1,17 @@
+{
+  "key": "def780a4cf9f3008",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 10015,
+    "output_tokens": 1697,
+    "cached_tokens": 4864,
+    "embed_tokens": 0,
+    "cost_usd": 0.00078617028
+  },
+  "value": {
+    "findings": [],
+    "summary": "The documentation change introduces the concepts of rounds and per-round widths without logical contradiction. No reportable defects found."
+  }
+}

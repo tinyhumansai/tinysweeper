@@ -1,0 +1,17 @@
+{
+  "key": "24a351b563092b9d",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 5075,
+    "output_tokens": 181,
+    "cached_tokens": 2304,
+    "embed_tokens": 0,
+    "cost_usd": 0.00029684788
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change is a routine test-fixture update: it removes a call to `EpisodeState::opened(...)` and supplies the two fields (`watermark`, `round_start`) that the struct now expects directly, along with a comment explaining why a single-round seed is equivalent.  The lookup for `fn opened` returned a private helper in a different test file (`concurrency_test.rs:33`) that journals operator messages, which is unrelated to the `EpisodeState::opened` constructor being removed.  Nothing in the diff reaches untrusted input, changes authentication or authorization, introduces new network or subprocess calls, deserializes untrusted data, permits path traversal, moves secrets, or widens permissions.  No rule from `untrusted-repo-rules` is violated.  The change looks sound."
+  }
+}

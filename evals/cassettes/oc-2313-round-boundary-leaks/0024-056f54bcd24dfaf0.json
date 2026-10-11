@@ -1,0 +1,17 @@
+{
+  "key": "056f54bcd24dfaf0",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4463,
+    "output_tokens": 159,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0003949106
+  },
+  "value": {
+    "findings": [],
+    "summary": "The diff replaces a large inline struct (an EpisodeState::opened call with a nested Conversation) with two flat fields (watermark and round_start) plus a comment.  Nothing about this change introduces a security problem: no untrusted input path, no authentication/authorisation change, no new network or subprocess calls, no deserialization of untrusted data, no path traversal, no secrets moving into code or logs, no dependency change, and no CI-permission widening.  The new fields appear to be the direct decomposition of the former EpisodeState::opened constructor, so the behaviour is preserved.  No rule from AGENTS.md or CLAUDE.md is violated.  The change looks sound."
+  }
+}
