@@ -1,0 +1,17 @@
+{
+  "key": "4f8b289c055b39c7",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 5161,
+    "output_tokens": 74,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004385234
+  },
+  "value": {
+    "findings": [],
+    "summary": "This pull request adds two text-truncation functions for check-run titles and finding summaries. The implementation is correct and handles multibyte characters safely; the tests cover the edge cases that motivated the change. No security or correctness defects are present."
+  }
+}

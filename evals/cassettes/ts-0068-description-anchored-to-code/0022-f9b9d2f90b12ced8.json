@@ -1,0 +1,17 @@
+{
+  "key": "f9b9d2f90b12ced8",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_description",
+  "usage": {
+    "input_tokens": 20029,
+    "output_tokens": 2522,
+    "cached_tokens": 8008,
+    "embed_tokens": 0,
+    "cost_usd": 0.007231363504
+  },
+  "value": {
+    "findings": [],
+    "summary": "The PR switches scan and deep tiers to z-ai/glm-5.2, replaces the fallback chain, and makes reasoning effort configurable via a new `reasoning_effort` config field that is wired through to the OpenRouter gateway. The description accurately matches the diff, the new pricing entries and tests cover the changed behavior, and the code is correct as written."
+  }
+}

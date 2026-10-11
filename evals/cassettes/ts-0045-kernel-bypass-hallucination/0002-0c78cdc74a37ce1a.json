@@ -1,0 +1,17 @@
+{
+  "key": "0c78cdc74a37ce1a",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4882,
+    "output_tokens": 67,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004143216
+  },
+  "value": {
+    "findings": [],
+    "summary": "This file adds an optional Docker Compose overlay for kernel-bypass on Linux 6.19+. The change is syntactically valid and follows the expected Compose overlay pattern. There are no bugs, regressions, or rule violations in this diff."
+  }
+}

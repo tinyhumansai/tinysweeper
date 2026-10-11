@@ -1,0 +1,17 @@
+{
+  "key": "0ca7d99193efcef3",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4641,
+    "output_tokens": 113,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004020142
+  },
+  "value": {
+    "findings": [],
+    "summary": "This overlay adds environment variable `GLIBC_TUNABLES` and a Python shim entrypoint to work around a MongoDB kernel compatibility issue.  Both values are set by the overlay itself (not from user input), the Python shim is mounted from a project-owned script, and no new network, subprocess or deserialization is introduced.  The change is safe to merge."
+  }
+}

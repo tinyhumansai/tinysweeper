@@ -1,0 +1,42 @@
+{
+  "key": "3cb5041e0e920584",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_tests",
+  "usage": {
+    "input_tokens": 17989,
+    "output_tokens": 5023,
+    "cached_tokens": 7708,
+    "embed_tokens": 0,
+    "cost_usd": 0.011083678464
+  },
+  "value": {
+    "lookups": [
+      {
+        "end": 410,
+        "kind": "read",
+        "path": "src/config/types.rs",
+        "start": 370,
+        "why": "Check whether Models struct or reasoning_effort field has #[serde(default)] — if not, user configs omitting the new field would fail to deserialize"
+      },
+      {
+        "kind": "search",
+        "path": "src/harness/openrouter.rs",
+        "pattern": "fn from_config",
+        "why": "Confirm the from_config method is the wire that forwards reasoning_effort, and whether any test calls it"
+      },
+      {
+        "kind": "search",
+        "path": "src/harness/pricing.rs",
+        "pattern": "minimax/minimax-m3",
+        "why": "Verify the fallback model minimax/minimax-m3 has a price entry, since the new defaults select it and completion_cost fails closed on unpriced models"
+      },
+      {
+        "kind": "search",
+        "path": "src/config/types.rs",
+        "pattern": "fn load",
+        "why": "Understand how config is loaded — whether user configs can override defaults partially or must include all fields"
+      }
+    ]
+  }
+}

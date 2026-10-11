@@ -1,0 +1,17 @@
+{
+  "key": "4f7c669a3ac857c4",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4209,
+    "output_tokens": 85,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0003617054
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change restructures a test fixture to use `watermark` and a `round_start` field at `Sequence(u64::MAX)` instead of a full `EpisodeState::opened` call. All altered values are inside a test-only helper; the diff does not modify production logic, introduce new dependencies, or reach any dangerous sink.  No findings."
+  }
+}

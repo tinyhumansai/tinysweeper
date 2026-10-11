@@ -1,0 +1,19 @@
+{
+  "key": "6b7e4300a1c9ba4e",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 9694,
+    "output_tokens": 66,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0008116276
+  },
+  "value": {
+    "findings": [],
+    "lookups": [],
+    "resolved": [],
+    "summary": "The change adds a configurable reasoning effort field, replaces the hard-disabled reasoning block with a dynamic one, and includes tests covering off/empty/high paths. It looks safe to merge."
+  }
+}

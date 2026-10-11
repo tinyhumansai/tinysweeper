@@ -1,0 +1,17 @@
+{
+  "key": "dbc2b1510ed91f74",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 4418,
+    "output_tokens": 86,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000379134
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds an `[embeddings]` configuration section to `.tinysweeper.toml` enabling a vector retrieval feature through OpenRouter. The configuration looks sound: it references an environment variable for the API key rather than inlining the secret, and the feature gate is consistent with the existing design pattern. No security defects are introduced."
+  }
+}

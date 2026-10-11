@@ -1,0 +1,31 @@
+{
+  "key": "8878a292f357df47",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 9869,
+    "output_tokens": 710,
+    "cached_tokens": 4227,
+    "embed_tokens": 0,
+    "cost_usd": 0.002468349296
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "reasoning_effort",
+        "why": "Check whether the Rust code that deserializes this config knows about the new `reasoning_effort` field. If it doesn't, the field is either silently ignored (no effect) or causes a parse error with deny_unknown_fields."
+      },
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "deny_unknown_fields",
+        "why": "Check if the config deserialization rejects unknown fields, which would make the new `reasoning_effort` key a parse failure."
+      }
+    ],
+    "summary": "This change updates default model assignments and adds a `reasoning_effort` setting in the OpenRouter config block. I need to verify the code that parses this config handles the new field."
+  }
+}

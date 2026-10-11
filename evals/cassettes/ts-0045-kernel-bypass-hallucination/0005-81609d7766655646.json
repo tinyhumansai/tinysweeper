@@ -1,0 +1,39 @@
+{
+  "key": "81609d7766655646",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 10185,
+    "output_tokens": 712,
+    "cached_tokens": 4375,
+    "embed_tokens": 0,
+    "cost_usd": 0.0025014597200000003
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "pattern": "TINYSWEEPER_APP_ID",
+        "why": "Verify the env var names the binary actually reads match the new docker-compose entries"
+      },
+      {
+        "kind": "search",
+        "pattern": "TINYSWEEPER_GITHUB_APP_ID",
+        "why": "Check whether the old env var names were ever read by the binary"
+      },
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "AppAuth",
+        "why": "Find the from_env implementation to verify env var names"
+      },
+      {
+        "glob": "src/**/*.rs",
+        "kind": "search",
+        "pattern": "OPENROUTER_API_KEY",
+        "why": "Verify OPENROUTER_API_KEY and COHERE_API_KEY are actually read by the binary"
+      }
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "key": "357d5d9d5fdab34a",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 11120,
+    "output_tokens": 1197,
+    "cached_tokens": 4863,
+    "embed_tokens": 0,
+    "cost_usd": 0.003405517264
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change updates the OpenRouter default model configuration: it switches scan and deep tiers to `z-ai/glm-5.2`, changes the fallback list, and adds an explicit `reasoning_effort = \"high\"`. The `reasoning_effort` field already exists in `src/config/types.rs` and is handled by `src/harness/openrouter.rs`, so the new key is valid under `deny_unknown_fields`. Comments explain the rationale for the model and reasoning choices, consistent with the repository's \"say why for load-bearing flags\" rule. No defects found."
+  }
+}

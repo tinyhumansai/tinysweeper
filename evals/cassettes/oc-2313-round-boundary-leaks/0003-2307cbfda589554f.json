@@ -1,0 +1,17 @@
+{
+  "key": "2307cbfda589554f",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "deepseek/deepseek-v4-flash",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 7003,
+    "output_tokens": 167,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0006060362
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change relocates three path references from `openhuman_core::openhuman::security::keyring::` to `openhuman_core::security::keyring::` and one from `openhuman_core::openhuman::config::Config::load_or_init` to `openhuman_core::config::Config::load_or_init`, removing the now-unnecessary `openhuman` submodule from the path.  The lookups confirm that the new paths resolve to the same definitions as the old ones (the crate was reorganized away from the redundant `openhuman::` segment).  The change is sound; all four calls map correctly to their target functions, and no assumptions in the diff are contradicted by the source definitions."
+  }
+}

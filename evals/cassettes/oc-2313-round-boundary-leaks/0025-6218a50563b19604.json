@@ -1,0 +1,17 @@
+{
+  "key": "6218a50563b19604",
+  "model_requested": "deepseek/deepseek-v4-flash",
+  "model_answered": "z-ai/glm-5.2",
+  "schema_name": "tinysweeper_security",
+  "usage": {
+    "input_tokens": 8461,
+    "output_tokens": 589,
+    "cached_tokens": 3105,
+    "embed_tokens": 0,
+    "cost_usd": 0.00232012464
+  },
+  "value": {
+    "findings": [],
+    "summary": "This change updates a test fixture to match a struct whose `next_state` field was replaced with `watermark` and `round_start` fields. The fixture values are sensible for the described 'round of one' scenario, and the change is safe to merge."
+  }
+}
